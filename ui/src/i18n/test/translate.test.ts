@@ -50,6 +50,7 @@ describe("i18n", () => {
     ["en-US", "zh-CN", "zh-CN", "ltr"],
     ["fa-IR", null, "fa", "rtl"],
     ["ZH-hAnT-CN", null, "zh-TW", "ltr"],
+    ["ca-ES", null, "ca", "ltr"],
   ])("loads startup locale for browser %s and saved %s", async (language, saved, locale, dir) => {
     const documentElement = stubDocumentLocaleMetadata();
     vi.stubGlobal("navigator", { language });
@@ -62,7 +63,7 @@ describe("i18n", () => {
     expect(documentElement).toEqual({ lang: locale, dir });
     expect(localStorage.getItem("openclaw.i18n.locale")).toBe(saved);
     expect(await loadLazyLocaleTranslation(fresh.i18n.getLocale())).toMatchObject({
-      common: { health: fresh.t("common.health") },
+      common: { loading: fresh.t("common.loading") },
     });
   });
 
@@ -79,6 +80,8 @@ describe("i18n", () => {
     const documentElement = stubDocumentLocaleMetadata();
     await translate.i18n.setLocale("ar");
     expect(documentElement).toEqual({ lang: "ar", dir: "rtl" });
+    await translate.i18n.setLocale("ca");
+    expect(documentElement).toEqual({ lang: "ca", dir: "ltr" });
     await translate.i18n.setLocale("de");
     expect(documentElement).toEqual({ lang: "de", dir: "ltr" });
   });

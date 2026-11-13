@@ -96,14 +96,16 @@ it.for(["complete", "reject undefined", "native failure"] as const)(
     const ready = createDeferred<KillScope>();
     const finishRun = createDeferred();
     const runFinishing = createDeferred();
-    const entered = Array.from({ length: 3 }, () => createDeferred());
-    const gates = Array.from({ length: 3 }, () => createDeferred());
+    const entered = Array.from({ length: 2 }, () => createDeferred());
+    const gates = Array.from({ length: 2 }, () => createDeferred());
     const contexts: Array<string | undefined> = [];
     const accepted: Array<Promise<number>> = [];
     let observing = false;
     let finalReadSettled = false;
     let publishedBeforeJoin = false;
     let releasedBeforeJoin = false;
+    let consumedSnapshots = 0;
+    let copiedSnapshots = 0;
     const release = () => {
       gates.forEach((gate) => gate.resolve());
       finishRun.resolve();
@@ -119,14 +121,28 @@ it.for(["complete", "reject undefined", "native failure"] as const)(
           "sessionKeys" in scope &&
           scope.sessionKeys.includes(rootKey);
         const index = observe ? contexts.push(lane.getStore()) - 1 : -1;
-        return read(runs, select, consume, scope).then(async (result) => {
+        return read(
+          runs,
+          select,
+          (selection, snapshot) => {
+            consumedSnapshots++;
+            const entries = vi.spyOn(snapshot, Symbol.iterator);
+            try {
+              return consume(selection, snapshot);
+            } finally {
+              copiedSnapshots += entries.mock.calls.length;
+              entries.mockRestore();
+            }
+          },
+          scope,
+        ).then(async (result) => {
           if (index >= 0 && index < gates.length) {
             entered[index]!.resolve();
             await gates[index]!.promise;
             if (nativeFailure && index === 0) {
               throw failure;
             }
-            if (index === 2) {
+            if (index === 1) {
               finalReadSettled = true;
             }
           }
@@ -203,26 +219,15 @@ it.for(["complete", "reject undefined", "native failure"] as const)(
         return;
       }
       await register("first");
-      let middleSettled = false;
-      const middle = Promise.all(
-        ["second caller", "third caller", "fourth caller"].map(refresh),
-      ).then((counts) => {
-        middleSettled = true;
-        return counts;
-      });
+      await register("second");
+      const tail = Promise.all([refresh("second caller"), refresh("third caller")]);
       gates[0]!.resolve();
       await withinTest(entered[1]!.promise, signal);
       expect(firstSettled, "the first batch must not wait for its held successor").toBe(true);
       expect(await first).toBe(1);
-      await register("second");
-      const tail = Promise.all([refresh("fifth caller"), refresh("sixth caller")]);
-      gates[1]!.resolve();
-      await withinTest(entered[2]!.promise, signal);
-      expect(middleSettled, "each completed batch settles independently").toBe(true);
-      expect(await middle).toEqual([2, 2, 2]);
       finishRun.resolve();
       await withinTest(runFinishing.promise, signal);
-      gates[2]!.resolve();
+      gates[1]!.resolve();
       expect(await withinTest(tail, signal)).toEqual([3, 3]);
       expect(await outcome).toEqual(
         completion === "complete"
@@ -230,8 +235,10 @@ it.for(["complete", "reject undefined", "native failure"] as const)(
           : { ok: false, error: undefined },
       );
       await expect(scope.refresh()).rejects.toThrow("refresh scope is no longer active");
-      expect(contexts).toEqual(["kill-scope", "kill-scope", "kill-scope"]);
+      expect(contexts).toEqual(["kill-scope", "kill-scope"]);
       expect([publishedBeforeJoin, releasedBeforeJoin]).toEqual([false, false]);
+      expect(consumedSnapshots).toBeGreaterThan(0);
+      expect(copiedSnapshots, "discovery reads values without copying prepared snapshots").toBe(0);
     } finally {
       release();
       await Promise.allSettled([...accepted, stopped]);

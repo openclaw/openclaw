@@ -731,10 +731,7 @@ describe("google gemini cli backend auth bridge", () => {
     const backend = buildGoogleGeminiCliBackend();
     await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
       const preparation = backend.prepareExecution?.({
-        workspaceDir,
-        agentDir: path.join(workspaceDir, "agent"),
-        provider: "google-gemini-cli",
-        modelId: "gemini-3.1-flash-lite",
+        ...buildGeminiApiKeyPrepareContext(workspaceDir),
         authProfileId: "vercel-ai-gateway:default",
         authCredential: {
           type: "api_key",

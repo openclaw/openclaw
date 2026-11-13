@@ -8,9 +8,8 @@ import { createChangeListeners } from "../../../src/shared/listeners.js";
 import {
   GatewayRequestError,
   resolveGatewayErrorDetailCode,
-  type GatewayBrowserClient,
-  type GatewayHelloOk,
-} from "../api/gateway.ts";
+} from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { resolveGatewayReadRetryDelayMs } from "../lib/gateway-availability.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";

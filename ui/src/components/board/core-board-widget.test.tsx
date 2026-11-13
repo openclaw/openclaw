@@ -6,6 +6,7 @@ import {
   scheduleStaleChunkReload,
 } from "../../app/stale-chunk-reload.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
+import { createBoardWidget } from "../../lib/board/widget.test-support.ts";
 import { getPluginWidgetKindContribution } from "../../lib/board/widgets/index.ts";
 import * as storageAccess from "../../local-storage.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -35,17 +36,11 @@ it.each(["hide", "dispose"] as const)(
     const contribution = getPluginWidgetKindContribution("session:report", [
       { pluginId: "session", kind: "session:report", label: "Report" },
     ])!;
-    const widget: BoardWidget = {
+    const widget: BoardWidget = createBoardWidget({
       name: "report",
-      tabId: "main",
       contentKind: "plugin",
       pluginKind: "session:report",
-      sizeW: 6,
-      sizeH: 4,
-      position: 0,
-      grantState: "none",
-      revision: 1,
-    };
+    });
     const mounted = mountSolid(() => (
       <CoreBoardWidget widget={widget} contribution={contribution} active={active()} />
     ));

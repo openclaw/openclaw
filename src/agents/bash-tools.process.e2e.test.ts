@@ -11,6 +11,7 @@ import {
   test,
   vi,
 } from "vitest";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -38,7 +39,6 @@ import {
 } from "./bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { runEmbeddedAgent } from "./embedded-agent.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import { isToolResultError } from "./tool-result-error.js";
 
 // mock-isolation: Only model inference is synthetic; process and session-event custody are real.

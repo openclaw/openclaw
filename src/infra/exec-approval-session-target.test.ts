@@ -1,4 +1,3 @@
-// Covers approval session target resolution.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -78,77 +77,58 @@ function forwardingConfig(
   return { approvals: { exec: { enabled: true, mode, targets } } };
 }
 
+async function expectSelections(
+  options: Parameters<typeof selectAccount>[0],
+  selections: Record<string, boolean>,
+) {
+  for (const [accountId, selected] of Object.entries(selections)) {
+    expect(await selectAccount({ ...options, accountId })).toBe(selected);
+  }
+}
+
 describe("native approval account selection", () => {
-  it("selects only the sole eligible account when no owner is recorded", async () => {
-    expect(await selectAccount()).toBe(true);
-    expect(await selectAccount({ eligibleAccountIds: ["default", "ops"] })).toBe(false);
-  });
-
-  it("rejects foreign-channel fallback but preserves explicit forwarding", async () => {
-    const request = buildRequest({ turnSourceChannel: "whatsapp" });
-    const explicitTargetConfig = forwardingConfig("targets", [
-      { channel: "telegram", to: "owner" },
-    ]);
-    expect(await selectAccount({ request })).toBe(false);
-    expect(await selectAccount({ cfg: explicitTargetConfig, request })).toBe(true);
-  });
-
-  it("selects the recorded account even when several accounts are eligible", async () => {
-    const request = buildRequest({
-      turnSourceChannel: "telegram",
-      turnSourceAccountId: "ops",
-    });
-    const options = { request, eligibleAccountIds: ["default", "ops"] };
-    expect(await selectAccount({ ...options, accountId: "ops" })).toBe(true);
-    expect(await selectAccount(options)).toBe(false);
-  });
-
-  it("maps unscoped explicit targets to default and preserves scoped targets", async () => {
-    const cfg = forwardingConfig("targets", [
-      { channel: "telegram", to: "owner" },
-      { channel: "telegram", to: "ops-owner", accountId: "ops" },
-    ]);
-    for (const [accountId, selected] of [
-      ["default", true],
-      ["ops", true],
-      ["other", false],
-    ] as const) {
-      expect(
-        await selectAccount({ cfg, accountId, eligibleAccountIds: ["default", "ops", "other"] }),
-      ).toBe(selected);
-    }
-  });
-
-  it("selects the source account and explicit targets in both mode", async () => {
-    const cfg = {
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "both",
-          targets: [{ channel: "telegram", accountId: "audit" }],
-        },
-      },
-    } as OpenClawConfig;
-    const request = buildRequest({
-      turnSourceChannel: "telegram",
-      turnSourceAccountId: "ops",
-    });
-
-    for (const [accountId, selected] of [
-      ["ops", true],
-      ["audit", true],
-      ["other", false],
-    ] as const) {
-      expect(
-        await selectAccount({
-          cfg,
-          request,
-          accountId,
-          eligibleAccountIds: ["ops", "audit", "other"],
-        }),
-      ).toBe(selected);
-    }
-  });
+  const source = (channel: string, accountId?: string) =>
+    buildRequest({ turnSourceChannel: channel, turnSourceAccountId: accountId });
+  const targets = (mode: "targets" | "both", accounts: Array<string | undefined>) =>
+    forwardingConfig(
+      mode,
+      accounts.map((accountId) => ({ channel: "telegram", to: "owner", accountId })),
+    );
+  it.each([
+    ["sole owner", baseRequest, {}, ["default"], ["default"]],
+    ["ambiguous owner", baseRequest, {}, ["default", "ops"], []],
+    ["foreign source", source("whatsapp"), {}, ["default"], []],
+    [
+      "explicit foreign forwarding",
+      source("whatsapp"),
+      targets("targets", [undefined]),
+      ["default"],
+      ["default"],
+    ],
+    ["recorded owner", source("telegram", "ops"), {}, ["default", "ops"], ["ops"]],
+    [
+      "scoped and unscoped targets",
+      baseRequest,
+      targets("targets", [undefined, "ops"]),
+      ["default", "ops", "other"],
+      ["default", "ops"],
+    ],
+    [
+      "both mode",
+      source("telegram", "ops"),
+      targets("both", ["audit"]),
+      ["ops", "audit", "other"],
+      ["ops", "audit"],
+    ],
+  ] satisfies Array<[string, ExecApprovalRequest, OpenClawConfig, string[], string[]]>)(
+    "selects accounts for %s",
+    async (_, request, cfg, eligibleAccountIds, selected) => {
+      await expectSelections(
+        { request, cfg, eligibleAccountIds },
+        Object.fromEntries(eligibleAccountIds.map((id) => [id, selected.includes(id)])),
+      );
+    },
+  );
 });
 
 type SessionEntryFixture = Partial<SessionEntry> & {
@@ -161,25 +141,18 @@ type SessionEntryFixture = Partial<SessionEntry> & {
 
 async function writeStoreFile(
   storePath: string,
-  entries: Record<string, SessionEntryFixture>,
+  entry: SessionEntryFixture,
+  sessionKey = "agent:main:main",
   agentId?: string,
 ): Promise<OpenClawConfig> {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  await Promise.all(
-    Object.entries(entries).map(([sessionKey, entry]) =>
-      replaceSessionEntry(
-        {
-          storePath,
-          sessionKey,
-          agentId,
-        },
-        normalizeLegacySessionEntryDelivery({
-          sessionId: entry.sessionId ?? sessionKey,
-          updatedAt: entry.updatedAt ?? Date.now(),
-          ...entry,
-        } as SessionEntry),
-      ),
-    ),
+  await replaceSessionEntry(
+    { storePath, sessionKey, agentId },
+    normalizeLegacySessionEntryDelivery({
+      sessionId: sessionKey,
+      updatedAt: 1,
+      ...entry,
+    } as SessionEntry),
   );
   return { session: { store: storePath } };
 }
@@ -206,33 +179,10 @@ function buildPluginRequest(
   };
 }
 
-async function resolveSlackPluginOriginTarget(params: {
-  cfg: OpenClawConfig;
-  turnSourceTo: string;
-}) {
-  return await resolveApprovalRequestOriginTargetAsync({
-    cfg: params.cfg,
-    request: buildPluginRequest({
-      turnSourceChannel: "slack",
-      turnSourceTo: params.turnSourceTo,
-    }),
-    channel: "slack",
-    accountId: "default",
-    resolveTurnSourceTarget: (request) =>
-      request.request.turnSourceChannel === "slack" && request.request.turnSourceTo
-        ? { to: request.request.turnSourceTo }
-        : null,
-    resolveSessionTarget: (sessionTarget) => ({ to: sessionTarget.to }),
-    targetsMatch: (a, b) => a.to === b.to,
-  });
-}
-
 describe("exec approval session target", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-exec-approval-session-target-");
   const storeFixture = (entry: SessionEntryFixture) =>
-    writeStoreFile(path.join(sessionDirs.make(), "sessions.json"), {
-      "agent:main:main": { sessionId: "main", updatedAt: 1, ...entry },
-    });
+    writeStoreFile(path.join(sessionDirs.make(), "sessions.json"), { sessionId: "main", ...entry });
   const resolveTarget = (cfg: OpenClawConfig, request = baseRequest) =>
     resolveExecApprovalSessionTargetAsync({ cfg, request });
   const accountBinding = (cfg: OpenClawConfig, request = baseRequest, channel = "slack") => ({
@@ -275,50 +225,46 @@ describe("exec approval session target", () => {
   });
 
   it.each([
-    {
-      name: "uses the parsed session-key agent id for store-path placeholders",
-      relativeStoreDir: "helper",
-      request: buildRequest({ sessionKey: "agent:helper:main" }),
-      expected: {
+    [
+      "helper",
+      buildRequest({ sessionKey: "agent:helper:main" }),
+      {
         channel: "discord",
         to: "channel:123",
         accountId: "work",
         threadId: "777888999111222333",
       },
-    },
-    {
-      name: "falls back to request agent id for legacy session keys",
-      relativeStoreDir: "worker-1",
-      request: buildRequest({
-        agentId: "Worker 1",
-        sessionKey: "legacy-main",
-      }),
-      expected: {
+    ],
+    [
+      "worker-1",
+      buildRequest({ agentId: "Worker 1", sessionKey: "legacy-main" }),
+      {
         channel: "telegram",
         to: "-100123",
         accountId: undefined,
         threadId: 77,
       },
-    },
-  ])("$name", async ({ relativeStoreDir, request, expected }) => {
-    const tmpDir = sessionDirs.make();
-    const cfg = await writeStoreFile(
-      path.join(tmpDir, relativeStoreDir, "sessions.json"),
-      {
-        [request.request.sessionKey!]: {
+    ],
+  ] as const)(
+    "resolves store-path placeholders from parsed or legacy agent: %s",
+    async (relativeStoreDir, request, expected) => {
+      const tmpDir = sessionDirs.make();
+      const cfg = await writeStoreFile(
+        path.join(tmpDir, relativeStoreDir, "sessions.json"),
+        {
           sessionId: relativeStoreDir === "helper" ? "main" : "legacy-main",
-          updatedAt: 1,
           lastChannel: expected.channel,
           lastTo: expected.to,
           lastAccountId: expected.accountId ? " Work " : undefined,
           lastThreadId: expected.threadId,
         },
-      },
-      relativeStoreDir,
-    );
-    cfg.session = { store: path.join(tmpDir, "{agentId}", "sessions.json") };
-    expect(await resolveTarget(cfg, request)).toEqual(expected);
-  });
+        request.request.sessionKey!,
+        relativeStoreDir,
+      );
+      cfg.session = { store: path.join(tmpDir, "{agentId}", "sessions.json") };
+      expect(await resolveTarget(cfg, request)).toEqual(expected);
+    },
+  );
 
   it("ignores session conversation fallbacks for other channels", () => {
     const request = buildPluginRequest({
@@ -334,20 +280,16 @@ describe("exec approval session target", () => {
   });
 
   it("rejects mismatched channel bindings before account checks", async () => {
-    const cfg = {};
     const request = buildRequest({
       turnSourceChannel: "discord",
       turnSourceAccountId: "work",
     });
 
-    expect(
-      await resolveApprovalRequestAccountIdAsync({ cfg, request, channel: "slack" }),
-    ).toBeNull();
+    const binding = accountBinding({}, request);
+    expect(await resolveApprovalRequestAccountIdAsync(binding)).toBeNull();
     expect(
       await doesApprovalRequestMatchChannelAccountAsync({
-        cfg,
-        request,
-        channel: "slack",
+        ...binding,
         accountId: "work",
       }),
     ).toBe(false);
@@ -361,18 +303,14 @@ describe("exec approval session target", () => {
       lastAccountId: "ops",
     });
     const request = buildRequest({
-      sessionKey: "agent:main:main",
       turnSourceChannel: "discord",
       turnSourceTo: "channel:D123",
       turnSourceAccountId: "work",
     });
 
-    expect(
-      await resolveApprovalRequestAccountIdAsync({ cfg, request, channel: "matrix" }),
-    ).toBeNull();
-    expect(
-      await resolveApprovalRequestChannelAccountIdAsync({ cfg, request, channel: "matrix" }),
-    ).toBe("ops");
+    const binding = accountBinding(cfg, request, "matrix");
+    expect(await resolveApprovalRequestAccountIdAsync(binding)).toBeNull();
+    expect(await resolveApprovalRequestChannelAccountIdAsync(binding)).toBe("ops");
   });
 
   it.each([
@@ -401,7 +339,20 @@ describe("exec approval session target", () => {
     "reconciles %s plugin turn-source and stored origin targets",
     async (_, turnSourceTo, expected) => {
       const cfg = await storeFixture({ lastChannel: "slack", lastTo: "channel:C123" });
-      expect(await resolveSlackPluginOriginTarget({ cfg, turnSourceTo })).toEqual(expected);
+      expect(
+        await resolveApprovalRequestOriginTargetAsync({
+          cfg,
+          request: buildPluginRequest({ turnSourceChannel: "slack", turnSourceTo }),
+          channel: "slack",
+          accountId: "default",
+          resolveTurnSourceTarget: (request) =>
+            request.request.turnSourceChannel === "slack" && request.request.turnSourceTo
+              ? { to: request.request.turnSourceTo }
+              : null,
+          resolveSessionTarget: (target) => ({ to: target.to }),
+          targetsMatch: (a, b) => a.to === b.to,
+        }),
+      ).toEqual(expected);
     },
   );
 

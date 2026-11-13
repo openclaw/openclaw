@@ -35,7 +35,7 @@ export function createFollowupSpeechPreparer({
       accountId:
         route === "origin" ? turn.queued.originatingAccountId : turn.queued.run.agentAccountId,
     };
-    if (!shouldAttemptTtsPayload(context)) {
+    if (!(await shouldAttemptTtsPayload(context))) {
       return payload;
     }
     turn.operation.abortSignal.throwIfAborted();

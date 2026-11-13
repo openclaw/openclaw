@@ -399,7 +399,14 @@ describe("barnacle-auto-response", () => {
   const pings = "@openclaw/maintainer testflight";
   const teamMembers = ["alice", "bob", "carol"];
   it.each([
-    ["three maintainers", "@alice @bob @carol", "User", "reader", teamMembers, ["spam-ping"]],
+    [
+      "three maintainers",
+      "@alice @bob @carol",
+      "User",
+      "reader",
+      teamMembers,
+      ["spam-ping", "https://openclaw.ai/discord?from=github-openclaw-maintainer-warning"],
+    ],
     ["combined reply", pings, "User", "reader", [], ["spam-ping", "Not available"]],
     ["bot comment", pings, "Bot", "automation", [], []],
     ["maintainer comment", "testflight", "User", "maintainer", ["maintainer"], []],
@@ -538,6 +545,15 @@ describe("barnacle-auto-response", () => {
       file("extensions/example/openclaw.plugin.json"),
     ]);
     expectClosed(calls, 123, "ClawHub");
+  });
+
+  it("routes support replies through the registered placement without changing support guidance", async () => {
+    const calls = await runBarnacle(labeledContext("r: support"), []);
+    expectClosed(calls, 123, "https://openclaw.ai/discord?from=github-openclaw-support-reply");
+    expect(calls.createComment[0]?.body).toContain("ask in #help or #users-helping-users");
+    expect(calls.createComment[0]?.body).toContain(
+      "https://docs.openclaw.ai/help/faq-first-run#i-am-stuck-fastest-way-to-get-unstuck",
+    );
   });
 
   it("closes manually labeled BlueBubbles requests with imsg migration guidance", async () => {

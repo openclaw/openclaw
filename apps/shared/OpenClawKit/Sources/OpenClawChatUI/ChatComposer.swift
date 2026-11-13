@@ -195,6 +195,7 @@ struct OpenClawChatComposer: View {
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("chat-composer-model-sign-in-notice")
             }
+            self.viewModel.composerNotice.map(ChatComposerRestoredNotice.init)
             self.lifecycleComposer
             if self.viewModel.modelCatalogMessage != nil || self.showsModelSignInRow {
                 HStack {
@@ -310,6 +311,7 @@ struct OpenClawChatComposer: View {
     #else
     private var platformComposer: some View {
         self.styledComposer
+            .onChange(of: self.focusRequest) { _, _ in self.isFocused = true }
             .onChange(of: self.isComposerEnabled) { _, isEnabled in
                 if !isEnabled {
                     self.isFocused = false
@@ -1241,7 +1243,7 @@ extension OpenClawChatComposer {
 
     @ViewBuilder
     private var sendButton: some View {
-        if self.viewModel.pendingRunCount > 0, self.shouldShowStopButton {
+        if self.viewModel.pendingRunCount > 0 {
             Button {
                 self.viewModel.abort()
             } label: {
@@ -1262,7 +1264,9 @@ extension OpenClawChatComposer {
             .contentShape(Rectangle())
             .accessibilityLabel("Stop response")
             .disabled(self.viewModel.isAborting)
-        } else {
+            .modifier(ChatStopGuard())
+        }
+        if self.viewModel.pendingRunCount == 0 || self.viewModel.hasDraftToSend {
             Button {
                 self.sendDraftIfEnabled()
             } label: {
@@ -1288,6 +1292,24 @@ extension OpenClawChatComposer {
             .accessibilityLabel(Text(verbatim: "Send message"))
             .accessibilityIdentifier("chat-send-message")
             .disabled(!self.canSendMessage)
+            .contextMenu {
+                if self.canSendMessage {
+                    ForEach(self.inputModel?.sendModeChoices ?? [], id: \.self) { mode in
+                        Button {
+                            self.sendDraftIfEnabled(queueMode: mode)
+                        } label: {
+                            switch mode {
+                            case .steer:
+                                Label("Steer now", systemImage: "arrow.turn.up.right")
+                                    .font(OpenClawChatTypography.body)
+                            case .followup:
+                                Label("Queue next", systemImage: "clock")
+                                    .font(OpenClawChatTypography.body)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1303,7 +1325,17 @@ extension OpenClawChatComposer {
     }
 
     private var composerPadding: CGFloat {
-        self.style == .onboarding ? 5 : (self.composerChrome == .clean ? 4 : 6)
+        Self.padding(style: self.style, chrome: self.composerChrome)
+    }
+
+    private static func padding(style: OpenClawChatView.Style, chrome: OpenClawChatView.ComposerChrome) -> CGFloat {
+        style == .onboarding ? 5 : (chrome == .clean ? 4 : 6)
+    }
+
+    /// How far the visible composer sits inside its frame, so a card stacked on it can share its edges.
+    /// The clean surface is drawn inside the padding; the full background is drawn around it.
+    static func surfaceInset(style: OpenClawChatView.Style, chrome: OpenClawChatView.ComposerChrome) -> CGFloat {
+        chrome == .clean ? self.padding(style: style, chrome: chrome) : 0
     }
 
     #if os(iOS)
@@ -1614,15 +1646,8 @@ extension OpenClawChatComposer {
     }
     #endif
 
-    /// Preserve text and image draft controls while keeping completed voice notes abortable.
-    private var shouldShowStopButton: Bool {
-        !self.viewModel.hasDraftToSend || self.viewModel.attachments.contains {
-            $0.mimeType == "audio/mp4" && $0.durationSeconds != nil
-        }
-    }
-
-    private func sendDraftIfEnabled() {
+    private func sendDraftIfEnabled(queueMode: OpenClawChatQueueMode? = nil) {
         guard self.canSendMessage else { return }
-        self.inputModel?.send()
+        self.inputModel?.send(queueMode: queueMode)
     }
 }

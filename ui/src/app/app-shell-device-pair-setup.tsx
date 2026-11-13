@@ -50,16 +50,14 @@ function PairingDialogFallback(props: {
       description={t(props.failed ? "devices.pairing.loadFailed" : "common.loading")}
       onModal-cancel={() => props.onClose()}
     >
-      <section class="device-pair-setup" aria-busy={props.failed ? undefined : "true"}>
-        <header class="device-pair-setup__header">
-          <div>
-            <h2>{t("devices.pairing.title")}</h2>
-            <p role={props.failed ? undefined : "status"}>
-              {t(props.failed ? "devices.pairing.loadFailed" : "common.loading")}
-            </p>
-          </div>
+      <section class="oc-dialog device-pair-setup" aria-busy={props.failed ? undefined : "true"}>
+        <header class="oc-dialog__header">
+          <h2 class="oc-dialog__title">{t("devices.pairing.title")}</h2>
         </header>
-        <openclaw-modal-actions class="device-pair-setup__footer">
+        <div class="oc-dialog__body" role={props.failed ? undefined : "status"}>
+          {t(props.failed ? "devices.pairing.loadFailed" : "common.loading")}
+        </div>
+        <openclaw-modal-actions class="oc-dialog__footer device-pair-setup__footer">
           <button class="btn btn--ghost" type="button" onClick={() => props.onClose()}>
             {t("common.close")}
           </button>

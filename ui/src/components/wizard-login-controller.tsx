@@ -19,6 +19,7 @@ import {
 } from "../pages/model-setup/wizard-runner.ts";
 import { ModelSetupWizard, type WizardViewProps } from "../pages/model-setup/wizard-view-solid.tsx";
 import "../styles/model-setup.css";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 
 registerModelSetupEnglish();
 registerEnglishCatalog(registerSettingsEnglish);
@@ -164,17 +165,17 @@ export function createWizardLogin(options: {
       <Show when={!cancelling()}>
         <Errored
           fallback={(error) => (
-            <div class="callout warning" role="alert">
+            <InlineAlert tone="warning" role="alert">
               {t("modelSetup.wizard.cancelFailed", {
                 error: formatUiError(error(), options.requestFailedMessage()),
               })}
-            </div>
+            </InlineAlert>
           )}
         >
           <Show when={cancellationOutcome() === "running"}>
-            <div class="callout warning" role="alert">
+            <InlineAlert tone="warning" role="alert">
               {options.finishingMessage?.() ?? t("modelProviders.login.finishing")}
-            </div>
+            </InlineAlert>
           </Show>
         </Errored>
       </Show>
@@ -202,11 +203,12 @@ export function WizardLogin(props: {
   controller: WizardLoginState;
   busy?: boolean;
   options?: Parameters<WizardLoginState["viewProps"]>[0];
+  signInIcon?: WizardViewProps["signInIcon"];
 }) {
   const view = createMemo(() => props.controller.viewProps(props.options));
   return (
     <div onModal-cancel={(event: Event) => event.preventDefault()}>
-      <ModelSetupWizard {...view()} busy={props.busy} />
+      <ModelSetupWizard {...view()} busy={props.busy} signInIcon={props.signInIcon} />
     </div>
   );
 }

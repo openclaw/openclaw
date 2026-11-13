@@ -65,7 +65,7 @@ export function joinWithRunLivenessDeadline(input: {
       () => finish("timeout"),
       input.timeoutMs ?? RUN_LIVENESS_JOIN_TIMEOUT_MS,
     );
-    timer.unref?.();
+    timer.unref();
     if (input.runAbortSignal?.aborted) {
       finish("abort");
       return;

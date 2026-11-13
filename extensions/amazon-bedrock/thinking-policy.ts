@@ -28,12 +28,6 @@ export function isClaude5BedrockModel(model: Pick<ProviderRuntimeModel, "id" | "
   );
 }
 
-function isOpus5BedrockModelRef(modelRef: string): boolean {
-  return /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?(?:anthropic\.)?claude-opus-5(?:$|[-.:/])/i.test(
-    modelRef,
-  );
-}
-
 function isOpus47Or48BedrockModelRef(modelRef: string): boolean {
   return /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?(?:anthropic\.)?claude-opus-4[.-][78](?:$|[-.:/])/i.test(
     modelRef,
@@ -47,7 +41,11 @@ function isOpus46BedrockModelRef(modelRef: string): boolean {
 }
 
 export function isOpus47OrNewerBedrockModelRef(modelRef: string): boolean {
-  return isOpus5BedrockModelRef(modelRef) || isOpus47Or48BedrockModelRef(modelRef);
+  return (
+    /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?(?:anthropic\.)?claude-opus-5(?:$|[-.:/])/i.test(
+      modelRef,
+    ) || isOpus47Or48BedrockModelRef(modelRef)
+  );
 }
 
 function isMythosPreviewBedrockModelRef(modelRef: string): boolean {

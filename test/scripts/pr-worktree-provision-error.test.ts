@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatProvisionError } from "../../scripts/pr-lib/worktree-provision-error.mjs";
 import { markSqliteNativeOpenFailure } from "../../src/infra/sqlite-error-diagnostics.js";
@@ -114,6 +115,64 @@ describe("native PR provisioning diagnostics", () => {
       expect(formatProvisionError(value)).toBe(unavailable);
     }
   });
+
+  it.skipIf(process.platform === "win32").each([
+    { fault: "exit", status: 2, signal: null },
+    { fault: "signal", status: null, signal: "SIGTERM" },
+    { fault: "spawn", status: null, signal: null },
+  ] as const)(
+    "reports a lock-check $fault without provisioning a checkout",
+    ({ fault, status, signal }) => {
+      const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-lock-diagnostic-"), {
+        precreateWorktree: false,
+      });
+      const preload = join(f.root, "lock-check-fault.mjs");
+      const credential = ["sk", "fixturesecretabcdefghijklmnopqrstuvwxyz0123456789"].join("-");
+      writeFileSync(
+        preload,
+        `import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+if (process.argv[1]?.endsWith('/worktree-provision.mts')) {
+  const spawnSync = childProcess.spawnSync;
+  childProcess.spawnSync = (command, args, options) => {
+    if (args?.[2] !== 'pr-provision-authority') return spawnSync(command, args, options);
+    // Exercise real subprocess outcomes at the check boundary, not fabricated errors.
+    const fault = ${JSON.stringify(fault)};
+    if (fault === 'spawn') return spawnSync(${JSON.stringify(join(f.root, "missing-shell"))}, args, options);
+    const script = fault === 'signal' ? 'kill -TERM $$'
+      : ${JSON.stringify(`printf '%s\\n' 'synthetic lock-check refusal' 'Authorization: Bearer ${credential}' >&2; exit 2`)};
+    return spawnSync(command, ['-c', script], options);
+  };
+  syncBuiltinESMExports();
+}
+`,
+      );
+      f.env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href} ${f.env.NODE_OPTIONS ?? ""}`;
+      const result = f.run("review-init");
+      f.assertPrivateHandoffVerified();
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("[pr-worktree-provision] FAILED (exit 1)");
+      const report = result.stderr.split("\n").find((line) => line.startsWith('{"error":'));
+      expect(report, result.stderr).toBeDefined();
+      const out = JSON.parse(report!);
+      const root = out.error.nodes[out.error.root];
+      expect(root.message).toContain(
+        `PR operation lock check failed (status=${status}, signal=${signal})`,
+      );
+      expect(root.message).toContain("retain provisioning state for recovery");
+      if (fault === "exit") {
+        expect(root.message).toContain("synthetic lock-check refusal");
+        expect(report).not.toContain(credential);
+        expect(root.message).toContain("Authorization:");
+      } else if (fault === "spawn") {
+        expect(out.error.nodes[root.cause.ref]).toMatchObject({ code: "ENOENT" });
+      }
+      expect(existsSync(f.worktree)).toBe(false);
+      expect(f.git(f.canonical, "rev-parse", "refs/heads/temp/pr-42")).toBe(f.main);
+      expect(result.stderr).toContain("Released the operation lock for PR #42 after exit code 1");
+      expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "reports the real native storage failure, keeps its exit status, and releases the drained lock",

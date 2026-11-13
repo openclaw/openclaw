@@ -2,11 +2,12 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import type { AgentIdentity } from "../../lib/identity-avatar-view.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
+  resolveUiDefaultAgentId,
 } from "../../lib/sessions/session-key.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 
@@ -14,6 +15,10 @@ type ChatAgentIdentityState = ChatState & {
   assistantName: string;
   assistantAvatar: string | null;
 };
+
+export function selectedGlobalEventAgentId(state: ChatState, agentId: string | null): string {
+  return agentId ? normalizeAgentId(agentId) : resolveUiDefaultAgentId(state);
+}
 
 export function resolveChatAgentId(state: ChatState) {
   return normalizeAgentId(

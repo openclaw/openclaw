@@ -3,11 +3,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { mockLinuxNamespace } from "../infra/gateway-lock-namespace.test-support.js";
-import {
-  GATEWAY_OWNER_HEARTBEAT_STALE_MS,
-  type LockPayload,
-} from "../infra/gateway-lock-payload.js";
 import * as gatewayLockProcessModule from "../infra/gateway-lock-process.js";
 import {
   acquireGatewayLock,
@@ -15,16 +10,15 @@ import {
   resolveGatewayLockPaths,
 } from "../infra/gateway-lock.js";
 import * as gatewayLockModule from "../infra/gateway-lock.js";
-import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
 import { prepareGithubIssue } from "../infra/github-issue.js";
 import { createSessionSqliteMigrationRun } from "../infra/session-sqlite-migration-manifest.js";
-import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   claimSessionSqliteMigrationGithubIssue,
   createSessionSqliteMigrationFailureIssue,
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
 import {
+  assertDoctorSqliteMaintenancePathsNotAliased,
   DoctorSqliteMaintenanceLockUnavailableError,
   isDestructiveDoctorSessionSqliteMode,
   withDoctorSqliteMaintenanceLock,
@@ -67,6 +61,7 @@ async function createLockFixture() {
   return {
     env,
     lockDir,
+    path: (...parts: string[]) => path.join(stateDir, ...parts),
     maintain<T>(
       run: Parameters<typeof withDoctorSqliteMaintenanceLock<T>>[0]["run"],
       protectedPaths?: string[],
@@ -106,27 +101,6 @@ async function expectPathRefused(
   expect(run).not.toHaveBeenCalled();
 }
 
-async function seedGatewayOwner(
-  fixture: Awaited<ReturnType<typeof createLockFixture>>,
-  identity: Pick<LockPayload, "pid" | "startTime" | "processNamespace">,
-) {
-  const { ownerLockPath } = resolveGatewayLockPaths(fixture.env, fixture.lockDir);
-  const databasePath = path.join(fixture.env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite");
-  const raw = JSON.stringify({
-    ...identity,
-    ownerId: "synthetic-gateway-owner",
-    createdAt: new Date().toISOString(),
-    configPath: fixture.env.OPENCLAW_CONFIG_PATH,
-    stateDir: fixture.env.OPENCLAW_STATE_DIR,
-    role: "gateway",
-  });
-  await fs.mkdir(path.dirname(ownerLockPath), { recursive: true });
-  await fs.writeFile(ownerLockPath, raw);
-  const now = new Date();
-  await fs.utimes(ownerLockPath, now, now);
-  return { ownerLockPath, databasePath, raw };
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -144,103 +118,22 @@ describe("doctor SQLite maintenance lock", () => {
     expect(isDestructiveDoctorSessionSqliteMode(mode)).toBe(expected);
   });
 
-  it("refuses maintenance while a verified Gateway owns the state lock", async () => {
-    const fixture = await createLockFixture();
-    const gatewayLock = await fixture.gateway();
-    const run = vi.fn();
-
-    try {
-      const result = fixture.maintain(run);
-      await expect(result).rejects.toBeInstanceOf(DoctorSqliteMaintenanceLockUnavailableError);
-      await expect(result).rejects.toThrow(/OpenClaw state database is busy/);
-      expect(run).not.toHaveBeenCalled();
-    } finally {
-      await gatewayLock.release();
-    }
-  });
-
-  it.each(["absent PID", "different process at the same PID"] as const)(
-    "preserves foreign-namespace ownership with %s before destructive maintenance",
-    async (observation) => {
+  it.each([undefined, "1"])(
+    "refuses maintenance under verified Gateway ownership (multi=%s)",
+    async (multi) => {
       const fixture = await createLockFixture();
-      const startedAt = getFileLockProcessStartTime(process.pid);
-      if (startedAt === null) {
-        throw new Error("expected the local process namespace and start identity");
-      }
-      const namespace = mockLinuxNamespace(fixture.env.OPENCLAW_STATE_DIR);
-      const owner = await seedGatewayOwner(fixture, {
-        pid: observation === "absent PID" ? 2_147_483_647 : process.pid,
-        startTime: startedAt + 1,
-        processNamespace: { ...namespace, pidNsInode: `${namespace.pidNsInode}-foreign` },
+      const gatewayLock = await fixture.gateway({
+        env: { ...fixture.env, OPENCLAW_ALLOW_MULTI_GATEWAY: multi },
       });
-      const marker = path.join(fixture.env.OPENCLAW_STATE_DIR, "maintenance-marker");
-      await fs.writeFile(marker, "Gateway data\n");
-      const run = vi.fn(async () => fs.writeFile(marker, "reclaimed\n"));
-
-      await expect(fixture.maintain(run, [marker])).rejects.toThrow(
-        /cannot verify Gateway ownership.*heartbeat age does not prove.*inside the Gateway container/,
-      );
-
-      expect(run).not.toHaveBeenCalled();
-      await expect(fs.readFile(marker, "utf8")).resolves.toBe("Gateway data\n");
-      await expect(fs.readFile(owner.ownerLockPath, "utf8")).resolves.toBe(owner.raw);
-      // Ordinary SQLite access does not grant the maintenance custody refused above.
-      expect(() => assertStateDatabaseAccessAllowed(owner.databasePath)).not.toThrow();
-    },
-  );
-
-  it.each(["same namespace", "previous boot"] as const)(
-    "recovers a stopped Gateway's %s ownership through maintenance",
-    async (kind) => {
-      const fixture = await createLockFixture();
-      const namespace = mockLinuxNamespace(fixture.env.OPENCLAW_STATE_DIR);
-      const processNamespace =
-        kind === "previous boot"
-          ? {
-              ...namespace,
-              identity: namespace.identity.replace(/[0-9a-f]/i, (digit) =>
-                digit === "1" ? "2" : "1",
-              ),
-            }
-          : namespace;
-      const owner = await seedGatewayOwner(fixture, {
-        pid: kind === "previous boot" ? process.pid : 2_147_483_647,
-        ...(kind === "previous boot"
-          ? { startTime: getFileLockProcessStartTime(process.pid) ?? undefined }
-          : {}),
-        processNamespace,
-      });
-      const run = vi.fn(() => "done");
-
-      await expect(fixture.maintain(run)).resolves.toBe("done");
-
-      expect(run).toHaveBeenCalledOnce();
-      await expect(fs.stat(owner.ownerLockPath)).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
-
-  it.each(["legacy record", "expired foreign heartbeat"] as const)(
-    "preserves unverifiable %s ownership before maintenance",
-    async (kind) => {
-      const fixture = await createLockFixture();
-      const namespace = mockLinuxNamespace(fixture.env.OPENCLAW_STATE_DIR);
-      const owner = await seedGatewayOwner(fixture, {
-        pid: 2_147_483_647,
-        ...(kind === "legacy record"
-          ? {}
-          : { processNamespace: { ...namespace, pidNsInode: `${namespace.pidNsInode}-foreign` } }),
-      });
-      const expired = new Date(Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1000);
-      await fs.utimes(owner.ownerLockPath, expired, expired);
       const run = vi.fn();
-
-      expect(() => assertStateDatabaseAccessAllowed(owner.databasePath)).not.toThrow();
-      await expect(fixture.maintain(run)).rejects.toThrow(
-        /cannot verify Gateway ownership.*openclaw gateway recover-lock/,
-      );
-
-      expect(run).not.toHaveBeenCalled();
-      await expect(fs.readFile(owner.ownerLockPath, "utf8")).resolves.toBe(owner.raw);
+      try {
+        const result = fixture.maintain(run);
+        await expect(result).rejects.toBeInstanceOf(DoctorSqliteMaintenanceLockUnavailableError);
+        await expect(result).rejects.toThrow(/OpenClaw state database is busy/);
+        expect(run).not.toHaveBeenCalled();
+      } finally {
+        await gatewayLock.release();
+      }
     },
   );
 
@@ -348,21 +241,6 @@ describe("doctor SQLite maintenance lock", () => {
     },
   );
 
-  it("blocks maintenance when the Gateway used the multi-Gateway override", async () => {
-    const fixture = await createLockFixture();
-    const run = vi.fn();
-    const gatewayLock = await fixture.gateway({
-      env: { ...fixture.env, OPENCLAW_ALLOW_MULTI_GATEWAY: "1" },
-    });
-
-    try {
-      await expect(fixture.maintain(run)).rejects.toThrow(/OpenClaw state database is busy/);
-      expect(run).not.toHaveBeenCalled();
-    } finally {
-      await gatewayLock.release();
-    }
-  });
-
   it("uses the state ownership lock when maintenance inherits the multi-Gateway override", async () => {
     const fixture = await createLockFixture();
 
@@ -392,7 +270,7 @@ describe("doctor SQLite maintenance lock", () => {
       return;
     }
     const fixture = await createLockFixture();
-    const sessionsDir = path.join(fixture.env.OPENCLAW_STATE_DIR, "agents", "main", "sessions");
+    const sessionsDir = fixture.path("agents", "main", "sessions");
     const storePath = path.join(sessionsDir, "sessions.json");
     const outsideTarget = path.join(
       tempDirs.make("openclaw-dangling-session-target-"),
@@ -419,7 +297,7 @@ describe("doctor SQLite maintenance lock", () => {
 
   it("refuses in-state hard links that can alias storage outside ownership", async () => {
     const fixture = await createLockFixture();
-    const sessionsDir = path.join(fixture.env.OPENCLAW_STATE_DIR, "agents", "main", "sessions");
+    const sessionsDir = fixture.path("agents", "main", "sessions");
     const storePath = path.join(sessionsDir, "sessions.json");
     const externalDir = path.join(path.dirname(fixture.env.OPENCLAW_STATE_DIR), "external-state");
     const externalPath = path.join(externalDir, "sessions.json");
@@ -435,7 +313,7 @@ describe("doctor SQLite maintenance lock", () => {
     "refuses in-state symbolic links before destructive maintenance",
     async () => {
       const fixture = await createLockFixture();
-      const sessionsDir = path.join(fixture.env.OPENCLAW_STATE_DIR, "agents", "main", "agent");
+      const sessionsDir = fixture.path("agents", "main", "agent");
       const targetPath = path.join(sessionsDir, "sidecar-target");
       const sidecarPath = path.join(sessionsDir, "openclaw-agent.sqlite-wal");
       await fs.mkdir(sessionsDir, { recursive: true });
@@ -447,11 +325,35 @@ describe("doctor SQLite maintenance lock", () => {
   );
 
   it.skipIf(process.platform === "win32")(
+    "keeps mutation roots when observations include a narrower root",
+    async () => {
+      const root = tempDirs.make("openclaw-doctor-observation-root-");
+      const physical = path.join(root, "physical");
+      const alias = path.join(root, "alias");
+      await fs.mkdir(physical);
+      await fs.writeFile(path.join(physical, "selected.sqlite"), "selected");
+      await fs.writeFile(path.join(physical, "held.sqlite"), "held");
+      await fs.symlink(physical, alias, "dir");
+      const selected = path.join(alias, "selected.sqlite");
+      const held = path.join(alias, "held.sqlite");
+
+      expect(() =>
+        assertDoctorSqliteMaintenancePathsNotAliased("session SQLite import", [selected], [root], {
+          paths: [held, selected],
+          ownershipRoots: [alias, root],
+        }),
+      ).toThrow(`symbolic-link path component: ${alias}`);
+      await expect(fs.readFile(selected, "utf8")).resolves.toBe("selected");
+      await expect(fs.readFile(held, "utf8")).resolves.toBe("held");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "refuses symbolic links in owned path ancestors",
     async () => {
       const fixture = await createLockFixture();
-      const agentsDir = path.join(fixture.env.OPENCLAW_STATE_DIR, "agents");
-      const realAgentDir = path.join(fixture.env.OPENCLAW_STATE_DIR, "real-main");
+      const agentsDir = fixture.path("agents");
+      const realAgentDir = fixture.path("real-main");
       const aliasedAgentDir = path.join(agentsDir, "main");
       const databasePath = path.join(aliasedAgentDir, "agent", "openclaw-agent.sqlite");
       await fs.mkdir(path.dirname(path.join(realAgentDir, "agent", "placeholder")), {

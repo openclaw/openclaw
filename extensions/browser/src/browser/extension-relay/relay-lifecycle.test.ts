@@ -76,17 +76,9 @@ function createHandle(token: string, port = RELAY_PORT): ExtensionRelayHandle {
   };
 }
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 function mockPendingRelayStart() {
-  const startEntered = deferred();
-  const releaseStart = deferred();
+  const startEntered = Promise.withResolvers<void>();
+  const releaseStart = Promise.withResolvers<void>();
   const replacement = createHandle(ROTATED_TOKEN);
   startExtensionRelayServerMock.mockImplementationOnce(async () => {
     startEntered.resolve();

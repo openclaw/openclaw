@@ -6,6 +6,22 @@ const snapshotQueries = new WeakMap<Relay, ReturnType<typeof createPermitPool>>(
 
 type BuzzRelaySubscriptionParams = Omit<Parameters<Relay["prepareSubscription"]>[1], "abort">;
 
+/** NIP-01 rejects this subscription while leaving the relay connection usable. */
+export class BuzzRelayRateLimitError extends Error {
+  readonly retryAfterMs: number;
+
+  constructor(message: string, reason: string) {
+    super(message);
+    const hint = /(?:retry (?:in|after)|retry-after:?)\s*(\d+(?:\.\d+)?)\s*(ms|s|m)?\b/i.exec(
+      reason,
+    );
+    const unit = hint?.[2]?.toLowerCase();
+    const delay = Number(hint?.[1] ?? 2) * (unit === "ms" ? 1 : unit === "m" ? 60_000 : 1_000);
+    // Stay within Node's timer range; ordinary relay hints are honored without a short cap.
+    this.retryAfterMs = Math.min(2_147_483_647, Math.max(1, delay));
+  }
+}
+
 type BuzzRelaySnapshotParams<TResult> = {
   relay: Relay;
   filters: Filter[];
@@ -121,7 +137,12 @@ async function queryBuzzRelaySnapshotNow<TResult>(
       },
       onclose: (reason) => {
         if (reason !== params.closeReason) {
-          finish(new Error(params.closeMessage(reason)));
+          const message = params.closeMessage(reason);
+          finish(
+            /^rate-limited:/i.test(reason.trim())
+              ? new BuzzRelayRateLimitError(message, reason)
+              : new Error(message),
+          );
         }
       },
     });

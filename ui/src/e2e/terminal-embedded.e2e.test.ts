@@ -23,9 +23,7 @@ suite.define(() => {
       expect(await page.locator("openclaw-app-shell").count()).toBe(0);
       expect(await page.evaluate(() => document.fullscreenElement)).toBeNull();
 
-      await page
-        .getByText("The terminal is not available on this gateway.", { exact: true })
-        .waitFor();
+      await page.getByText("The terminal is unavailable.", { exact: true }).waitFor();
       const back = page.getByRole("button", { name: "Back", exact: true });
       await back.waitFor();
       await back.click();
@@ -79,7 +77,7 @@ suite.define(() => {
 
       expect(connect.params).toMatchObject({ auth: { token: "native-terminal-token" } });
       expect(await page.locator("openclaw-login-gate").count()).toBe(0);
-      expect(await page.locator("openclaw-terminal-panel").count()).toBe(1);
+      await page.locator("openclaw-terminal-panel").waitFor({ state: "attached" });
 
       await gateway.resolveDeferred("connect");
       const terminalOpen = await gateway.waitForRequest("terminal.open");

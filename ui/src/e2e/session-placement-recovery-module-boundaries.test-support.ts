@@ -3,6 +3,7 @@ import { sessionPlacementRecoveryExactStorageKey as recoveryStorageKey } from ".
 import type { SessionPlacementPendingRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { waitForControlUiInitialRoster } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { chatMessage, controlUiSessionUrl } from "./chat-flow.test-support.ts";
 import {
   type createControlUiE2eSuite,
@@ -49,6 +50,8 @@ export function defineSessionPlacementRecoveryModuleBoundaryTests(
           sessionInfo: { key: sessionKey, sessionId, hasActiveRun: false, status: "done" },
         };
         const gateway = await installMockGateway(page, {
+          // The offline reload below must return before this test reconnects.
+          awaitInitialRoster: false,
           methodResponses: {
             "sessions.list": createdSessionListResult(sessionKey),
             "chat.history": history,
@@ -63,6 +66,7 @@ export function defineSessionPlacementRecoveryModuleBoundaryTests(
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await waitForControlUiInitialRoster(page);
         const pane = page.locator(".chat-pane-cache__pane--active");
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         const requests = gateway.getRequests;
@@ -119,8 +123,8 @@ export function defineSessionPlacementRecoveryModuleBoundaryTests(
         await page.evaluate(() =>
           (window as unknown as { releaseRecoveryDigest: () => void }).releaseRecoveryDigest(),
         );
-        await runtime.request;
         if (recoveryKind !== "none") {
+          await runtime.request;
           expect(
             await pane.evaluate(
               ({ state }: HTMLElement & { state: ChatPageHost }) =>
@@ -151,10 +155,12 @@ export function defineSessionPlacementRecoveryModuleBoundaryTests(
           { params: { sessionKey, message: "queued while offline" } },
         ]);
         expect(await requests("chat.send")).toHaveLength(recoveryKind === "accepted" ? 2 : 1);
+        expect(runtime.requests()).toBe(recoveryKind === "none" ? 0 : 1);
         await expectNoRequests(gateway, "sessions.dispatch");
         if (recoveryKind === "accepted") {
           expect(await page.locator(".chat-group.user", { hasText: message }).count()).toBe(1);
         }
+        await waitForControlUiInitialRoster(page);
       });
     },
   );

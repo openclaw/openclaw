@@ -9,9 +9,11 @@ import {
   lazy,
   Loading,
   onCleanup,
+  onSettled,
   Show,
 } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionRefreshOutcome } from "../../lib/sessions/session-capability.ts";
@@ -342,6 +344,22 @@ export function createChatProviderReview(deps: {
 }
 
 export type ChatProviderReviewOwner = ReturnType<typeof createChatProviderReview>;
+/** Mounted once per pane only after its authoritative row contains a review. */
+export function ChatProviderReviewHost(
+  props: Parameters<typeof createChatProviderReview>[0] & {
+    onReady: (owner: ChatProviderReviewOwner) => void;
+  },
+) {
+  const owner = createChatProviderReview({
+    source: () => props.source(),
+    readState: () => props.readState(),
+  });
+  onSettled(() => {
+    props.onReady(owner);
+  });
+  return <ChatProviderReviewDialog owner={owner} />;
+}
+
 type ProviderReviewViewProps = { owner: ChatProviderReviewOwner };
 
 export function ChatProviderReviewNotice(props: ProviderReviewViewProps) {
@@ -467,9 +485,9 @@ export function ChatProviderReviewDialog(props: ProviderReviewViewProps) {
                       fallback={
                         <Errored
                           fallback={(error) => (
-                            <p class="callout danger" role="alert">
+                            <InlineAlert tone="danger" role="alert">
                               {formatUiError(error())}
-                            </p>
+                            </InlineAlert>
                           )}
                         >
                           {latest(props.owner.completed)}
@@ -478,9 +496,9 @@ export function ChatProviderReviewDialog(props: ProviderReviewViewProps) {
                       }
                     >
                       {(error) => (
-                        <p class="callout danger" role="alert">
+                        <InlineAlert tone="danger" role="alert">
                           {error()}
-                        </p>
+                        </InlineAlert>
                       )}
                     </Show>
                   </Show>

@@ -24,6 +24,9 @@ extension DashboardWindowController {
         // !important selectors also outrank the rules older app builds inject.
         let css = """
         \(DashboardDeviceSymbolStyle.css())
+        html.openclaw-native-macos.openclaw-native-web-chrome {
+          --openclaw-native-titlebar-height: \(DashboardWindowLayout.titlebarHeight)px;
+        }
         @media (min-width: 700px) {
           /* Both desktop navigation surfaces must clear AppKit's window controls
              and drag regions or their first interactive row becomes unreachable. */

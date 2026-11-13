@@ -1,21 +1,47 @@
+import { isAnthropicOAuthApiKey } from "@openclaw/ai/internal/anthropic";
+import { resolveAgentReasoningOption } from "../../packages/agent-core/src/reasoning.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import {
+  buildReplyUsageState,
+  recordReplyUsageState,
+} from "../auto-reply/reply/reply-usage-state.js";
+import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { AssistantMessageEvent, Message, Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
+import { estimateAggregateUsageCostAsync, resolveModelCostConfig } from "../utils/usage-format.js";
+import { assertOperatorModelAllowed } from "./admitted-run-context.js";
 import { buildBtwQuestionPrompt, buildBtwSystemPrompt } from "./btw-prompts.js";
 import type { RunBtwSideQuestionParams } from "./btw-runtime.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
+import { wrapStreamFnSanitizeMalformedToolCalls } from "./embedded-agent-runner/run/attempt-tool-call-replay-sanitization.js";
+import { materializeProviderContext } from "./embedded-agent-runner/run/images.js";
+import { wrapStreamFnWithMessageTransform } from "./embedded-agent-runner/run/message-transform-stream-wrapper.js";
+import { prepareEmbeddedSessionForkContext } from "./embedded-agent-runner/session-fork-context.js";
+import { runEmbeddedSessionFork } from "./embedded-agent-runner/session-fork.js";
 import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
+import { mapThinkingLevelForProvider, mapThinkingLevel } from "./embedded-agent-runner/utils.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
+import { resolveThinkingSelection } from "./model-thinking-default.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
+import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
-import { normalizeUsage, type NormalizedUsage } from "./usage.js";
+import { resolveTranscriptPolicy } from "./transcript-policy.js";
+import {
+  hasBillableUsage,
+  normalizeUsage,
+  toDiagnosticUsage,
+  type NormalizedUsage,
+} from "./usage.js";
 
 const log = createSubsystemLogger("agents/btw");
 
-export async function runLightweightBtwStream(input: {
+type SideQuestionStreamInput = {
   params: RunBtwSideQuestionParams;
   modelRegistry: Parameters<typeof getModelRegistryRuntime>[0];
   runtimeModel: Model;
@@ -24,11 +50,59 @@ export async function runLightweightBtwStream(input: {
   resolvedAuthProfileId?: string;
   sessionId: string;
   workspaceDir: string;
-  imageLimits: ImageSanitizationLimits;
-  messages: Message[];
-  inFlightPrompt?: string;
-  recordBtwUsage: (model: Model, usage?: NormalizedUsage) => void;
-}): Promise<ReplyPayload | undefined> {
+};
+
+export async function recordBtwUsage(
+  input: Pick<SideQuestionStreamInput, "params" | "runtimeModel" | "sessionId"> & {
+    agentId: string;
+  },
+  usage?: NormalizedUsage,
+): Promise<void> {
+  const { params, runtimeModel, sessionId, agentId } = input;
+  params.onUsage?.(usage);
+  if (params.onUsage) {
+    return;
+  }
+  if (!hasBillableUsage(usage)) {
+    return;
+  }
+  const usageState = buildReplyUsageState({
+    config: params.cfg,
+    turnUsd: await estimateAggregateUsageCostAsync({
+      usage,
+      prepareCost: () =>
+        resolveModelCostConfig({
+          provider: runtimeModel.provider,
+          model: runtimeModel.id,
+          config: params.cfg,
+          agentDir: params.agentDir,
+        }),
+    }),
+    agentId,
+    sessionId,
+    provider: runtimeModel.provider,
+    model: runtimeModel.id,
+    chatType: params.chatType,
+    usage,
+  });
+  // Delivery hooks use the reply correlation ID, not the side run's authority ID.
+  recordReplyUsageState(params.opts?.runId, usageState);
+  if (isDiagnosticsEnabled(params.cfg)) {
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      sessionKey: params.sessionKey,
+      sessionId,
+      channel: params.messageChannel,
+      agentId,
+      provider: runtimeModel.provider,
+      model: runtimeModel.id,
+      usage: toDiagnosticUsage(usage),
+      costUsd: usageState.turnUsd,
+    });
+  }
+}
+
+async function resolveSideQuestionStream(input: SideQuestionStreamInput) {
   const {
     params,
     modelRegistry,
@@ -38,10 +112,6 @@ export async function runLightweightBtwStream(input: {
     resolvedAuthProfileId,
     sessionId,
     workspaceDir,
-    imageLimits,
-    messages,
-    inFlightPrompt,
-    recordBtwUsage,
   } = input;
   const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
 
@@ -55,7 +125,7 @@ export async function runLightweightBtwStream(input: {
     agentDir: params.agentDir,
     workspaceDir,
     env: process.env,
-    wrapProviderStream: true,
+    wrapProviderStream: params.toolCalls !== "deny",
     auth,
     apiRegistry: modelRegistryRuntime.apiRegistry,
   });
@@ -69,6 +139,141 @@ export async function runLightweightBtwStream(input: {
     resolvedApiKey: apiKey,
     authProfileId: resolvedAuthProfileId,
   });
+
+  if (params.toolCalls !== "deny") {
+    return streamFn;
+  }
+  // Anthropic and OpenAI serve a fork the parent's cached prefix only at the parent's thinking
+  // config, so resolve the level as the parent's turn does: session override, then defaults.
+  // Other APIs keep the session override until their cache behavior is measured.
+  const thinkLevel =
+    runtimeModel.api === "anthropic-messages" || runtimeModel.api === "openai-responses"
+      ? resolveThinkingSelection({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          provider: runtimeModel.provider,
+          model: runtimeModel.id,
+          level: params.resolvedThinkLevel,
+          agentRuntime: "openclaw",
+        }).level
+      : params.resolvedThinkLevel;
+  const workspaceOnly = resolveEffectiveToolFsWorkspaceOnly({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  const agent = {
+    streamFn: wrapStreamFnWithMessageTransform(
+      streamFn,
+      (messages) => messages,
+      ({ context, signal }) =>
+        materializeProviderContext({
+          context,
+          signal,
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          workspaceOnly,
+          localRoots: workspaceOnly
+            ? undefined
+            : getAgentScopedMediaLocalRoots(params.cfg, params.agentId),
+        }),
+    ),
+  };
+  const thinkingLevel = mapThinkingLevelForProvider(thinkLevel, runtimeModel);
+  // Hosted tools change the provider prefix; apply the parent's configured tool policy, whose
+  // delegated envelope reads persisted ancestor rows the fork's own read did not prepare.
+  await withPreparedSessionCapabilityRead(() =>
+    applyExtraParamsToAgent(
+      agent,
+      params.cfg,
+      runtimeModel.provider,
+      runtimeModel.id,
+      undefined,
+      thinkingLevel,
+      params.agentId,
+      workspaceDir,
+      runtimeModel,
+      params.agentDir,
+      undefined,
+      { auth, nativeWebSearchPolicyContext: { sessionKey: params.sessionKey } },
+    ),
+  );
+  const preparedStream = agent.streamFn;
+  // The parent's agent loop derives its request reasoning from the level the same way.
+  const reasoning = resolveAgentReasoningOption(runtimeModel, mapThinkingLevel(thinkingLevel));
+  return (
+    model: Model,
+    context: Parameters<typeof streamFn>[1],
+    options: Parameters<typeof streamFn>[2],
+  ) => preparedStream(model, context, { reasoning, ...options });
+}
+
+export async function runBtwSessionFork(
+  input: SideQuestionStreamInput & {
+    sessionFile: string;
+    assertCurrent: () => void;
+  },
+): Promise<string> {
+  const { params, runtimeModel, apiKey, sessionId, workspaceDir, assertCurrent } = input;
+  const delivery = params.sessionEntry.delivery;
+  const externalDelivery = delivery?.kind === "external" ? delivery : undefined;
+  const { context, promptCacheKey, preparedRequest } = await prepareEmbeddedSessionForkContext({
+    target: {
+      agentId: params.agentId,
+      sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
+    sessionFile: input.sessionFile,
+    model: runtimeModel,
+    directApiKey: Boolean(apiKey) && !isAnthropicOAuthApiKey(apiKey),
+    config: params.cfg,
+    workspaceDir,
+    agentId: params.agentId,
+    agentDir: params.agentDir,
+    chatType: params.chatType ?? params.sessionEntry.chatType,
+    accountId: params.agentAccountId ?? externalDelivery?.route.accountId,
+    peerId: externalDelivery?.origin.nativeDirectUserId,
+    signal: params.opts?.abortSignal,
+    assertCurrent,
+  });
+  assertCurrent();
+  return runEmbeddedSessionFork({
+    context,
+    streamFn: await resolveSideQuestionStream(input),
+    options: { promptCacheKey },
+    preparedRequest,
+    question: params.question,
+    model: runtimeModel,
+    apiKey,
+    signal: params.opts?.abortSignal,
+    assertCurrent,
+    onUsage: params.onUsage,
+  });
+}
+
+export async function runLightweightBtwStream(
+  input: SideQuestionStreamInput & {
+    imageLimits: ImageSanitizationLimits;
+    messages: Message[];
+    inFlightPrompt?: string;
+    agentId: string;
+  },
+): Promise<ReplyPayload | undefined> {
+  const { params, runtimeModel, apiKey, imageLimits, messages, inFlightPrompt } = input;
+  const streamFn = wrapStreamFnSanitizeMalformedToolCalls(
+    await resolveSideQuestionStream(input),
+    undefined,
+    resolveTranscriptPolicy({
+      provider: runtimeModel.provider,
+      modelId: runtimeModel.id,
+      modelApi: runtimeModel.api,
+      model: runtimeModel,
+      config: params.cfg,
+      workspaceDir: input.workspaceDir,
+      directApiKey: Boolean(apiKey) && !isAnthropicOAuthApiKey(apiKey),
+    }),
+    runtimeModel.provider,
+  );
 
   const chunker =
     params.opts?.onBlockReply && params.blockReplyChunking
@@ -203,7 +408,13 @@ export async function runLightweightBtwStream(input: {
     throw new Error("No BTW response generated.");
   }
 
-  recordBtwUsage(runtimeModel, normalizeUsage(finalMessage?.usage));
+  await recordBtwUsage(input, normalizeUsage(finalMessage?.usage));
+  params.assertCurrent?.();
+  params.opts?.abortSignal?.throwIfAborted();
+  assertOperatorModelAllowed(params.operatorAuthority, {
+    provider: runtimeModel.provider,
+    model: runtimeModel.id,
+  });
 
   // Preserve the complete answer when streaming could not deliver every block.
   if (emittedBlocks > 0 && !blockEmitFailed) {

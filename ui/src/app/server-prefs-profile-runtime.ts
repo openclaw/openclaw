@@ -3,9 +3,13 @@ import {
   normalizeTabIconPreference,
   UI_APPEARANCE_PREFERENCE_KEYS,
 } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
+import { t } from "../i18n/index.ts";
 import type { RuntimeConfigExternalMutationResult } from "../lib/config/config-gateway-operations.ts";
+import { formatUiError } from "../lib/format-error.ts";
+import { registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import type { ApplicationContext } from "./context.ts";
 import { hasOperatorWriteAccess } from "./operator-access.ts";
 import type {
@@ -27,6 +31,7 @@ import { invalidateUserPreferences, saveUserPreferences } from "./user-prefs-cac
 import { loadUserPreferences } from "./user-prefs-request.ts";
 
 /** Presentation uses the same profile-only descriptors as the write owner. */
+
 export function canSyncAppearancePreference(
   context: Pick<ApplicationContext, "gateway" | "runtimeConfig">,
   key?: keyof typeof UI_APPEARANCE_PREFERENCE_KEYS,
@@ -109,11 +114,11 @@ export async function writeProfileAppearancePrefs(
           snapshot.entries[UI_NAVIGATION_PREFERENCE_KEYS.sidebarEntries] ?? DEFAULT_SIDEBAR_ENTRIES,
         );
         if (!observed || !prefValuesEqual(observed, base)) {
-          return failure(
-            "Shortcuts are saved only on this device because their previous sync state is missing. Edit a shortcut to sync again.",
-            "rejected",
-            { sidebarEntries: batch.sidebarEntries },
-          );
+          const { registerPreferencesEnglish } = await import("../i18n/locales/en-preferences.ts");
+          registerEnglishCatalog(registerPreferencesEnglish);
+          return failure(t("quickSettings.personal.shortcutsLocalOnly"), "rejected", {
+            sidebarEntries: batch.sidebarEntries,
+          });
         }
         if (!remote) {
           return failure("Navigation preferences are unavailable.");
@@ -179,10 +184,7 @@ export async function writeProfileAppearancePrefs(
     const rejected =
       error instanceof GatewayRequestError &&
       (error.gatewayCode === "INVALID_REQUEST" || error.gatewayCode === "FORBIDDEN");
-    return failure(
-      error instanceof Error ? error.message : String(error),
-      rejected ? "rejected" : "error",
-    );
+    return failure(formatUiError(error), rejected ? "rejected" : "error");
   } finally {
     if (writesTheme) {
       invalidateUserPreferences(client);

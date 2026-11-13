@@ -211,6 +211,7 @@ export function prepareCrabboxSourceCapsule(options: {
   syncRoot: string;
   base: string;
   reuseMirror?: boolean;
+  seedFromBase?: boolean;
   syncPlan: { command: string; args: string[]; windowsVerbatimArguments?: boolean };
 }): CrabboxSourceCapsule {
   const startedAt = Date.now();
@@ -279,18 +280,9 @@ export function prepareCrabboxSourceCapsule(options: {
     .split("\0")
     .filter(Boolean);
   const eligible = new Set(eligiblePaths.map(capsulePath));
-  function stamp(path: string) {
-    const entry = sourceStat(repoRoot, path);
-    return entry.kind === "present" ? mirrorStatStamp(entry.stat) : entry.kind;
-  }
-  // Source observations select reusable mirror files; this invocation uses the
-  // captured eligibility policy even if the checkout is edited while copying.
+  // Retention and copying record the source observations they actually consume.
+  // Eligibility stays captured even if the checkout is edited while copying.
   const observed = new Map<string, string>();
-  for (const path of new Set(
-    [...eligible].toSorted().concat([".crabboxignore", ".crabbox.yaml", "crabbox.yaml"]),
-  )) {
-    observed.set(path, stamp(path));
-  }
   mkdirSync(options.syncRoot, { recursive: true });
   const witness = captureSourceWitness(repoRoot, sourceSha);
   function allocateMirror() {
@@ -494,7 +486,9 @@ export function prepareCrabboxSourceCapsule(options: {
         removeFrozen(path);
         continue;
       }
-      const source = observed.get(path)!;
+      const entry = sourceStat(repoRoot, path);
+      const source = entry.kind === "present" ? mirrorStatStamp(entry.stat) : entry.kind;
+      observed.set(path, source);
       const sparse = tracked.get(path);
       const token =
         source === "missing" && sparse?.sparse ? `sparse:${sparse.mode}:${sparse.hash}` : source;
@@ -524,12 +518,22 @@ export function prepareCrabboxSourceCapsule(options: {
         { cause: error },
       );
     }
+    // Old namespaces are already removed; freeze-phase parents only accumulate.
+    // Deletion probes below prune parents and must not reuse this admission.
+    const frozenParents = new Set<string>();
+    function mkdirFrozenParent(destination: string) {
+      const parent = dirname(destination);
+      if (!frozenParents.has(parent)) {
+        mkdirSync(parent, { recursive: true });
+        frozenParents.add(parent);
+      }
+    }
     function writeFrozen(path: string, bytes: Buffer, mode: string) {
       const destination = join(directory, path);
       let blobPath = destination;
       let operation = "mkdir";
       try {
-        mkdirSync(dirname(destination), { recursive: true });
+        mkdirFrozenParent(destination);
         if (mode === "120000") {
           operation = "symlink";
           symlinkSync(bytes, destination);
@@ -593,7 +597,7 @@ export function prepareCrabboxSourceCapsule(options: {
         let operation = "mkdir";
         let output: number;
         try {
-          mkdirSync(dirname(destination), { recursive: true });
+          mkdirFrozenParent(destination);
           operation = "write file";
           output = openSync(destination, "wx");
         } catch (error) {
@@ -1062,6 +1066,11 @@ export function prepareCrabboxSourceCapsule(options: {
       privateEnv,
     );
     refreshIndex([...paths.filter((path) => !warm || !retained.has(path)), bundleFile]);
+    if (options.seedFromBase) {
+      // Boat seeds this disposable checkout from the base; the sealed capsule
+      // still carries the original source identity and exact candidate bytes.
+      git(directory, ["update-ref", "--no-deref", "HEAD", baseSha], privateEnv);
+    }
     if (cache) {
       copyFileSync(
         join(directory, ".git", "index"),

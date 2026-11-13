@@ -1,22 +1,20 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposure.js";
-import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import { listReadOnlyChannelPluginsForConfigAsync } from "../../channels/plugins/read-only.js";
 import { resolveChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import {
-  normalizeRuntimeChannelAccountSnapshots,
-  resolveChannelAccountStatusRows,
-  type RuntimeChannelStatusPayload,
-} from "../../channels/status/read-model.js";
+import { normalizeRuntimeChannelAccountSnapshots } from "../../channels/status/read-model.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolvePluginControlPlaneWorkspace } from "../../plugins/control-plane-workspace.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { listPluginContributionIds } from "../../plugins/plugin-registry.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { listTrustedChannelPluginCatalogEntries } from "../channel-setup/trusted-catalog.js";
 import {
   formatChannelAccountLabel,
@@ -24,14 +22,18 @@ import {
   requireValidChannelConfig,
 } from "./shared.js";
 
-async function readGatewayChannelStatus(): Promise<RuntimeChannelStatusPayload | null> {
+async function readGatewayChannelStatus(signal?: AbortSignal) {
   try {
-    return (await callGateway({
+    return await callGateway({
       method: "channels.status",
       params: { probe: false, timeoutMs: 5_000 },
       timeoutMs: 5_000,
-    })) as RuntimeChannelStatusPayload;
+      signal,
+    });
   } catch {
+    // A Ctrl+C cancels the pending read; keep the canonical abort outcome instead
+    // of reporting the gateway request as unreachable.
+    signal?.throwIfAborted();
     return null;
   }
 }
@@ -103,6 +105,8 @@ export async function channelsListCommand(
   },
   runtime: RuntimeEnv = defaultRuntime,
 ) {
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
   const cfg = await requireValidChannelConfig(runtime);
   if (!cfg) {
     return;
@@ -124,7 +128,7 @@ export async function channelsListCommand(
 
   // JSON needs only manifest-backed account ids. Text keeps setup-backed snapshots
   // because its credential/status details are part of the human output contract.
-  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+  const plugins = await listReadOnlyChannelPluginsForConfigAsync(cfg, {
     ...(!opts.json ? { includeSetupFallbackPlugins: true } : {}),
     metadataSnapshot,
   });
@@ -139,7 +143,8 @@ export async function channelsListCommand(
   const runtimeAccountsByChannel =
     opts.json === true
       ? new Map<string, ChannelAccountSnapshot[]>()
-      : normalizeRuntimeChannelAccountSnapshots(await readGatewayChannelStatus());
+      : normalizeRuntimeChannelAccountSnapshots(await readGatewayChannelStatus(signal));
+  signal?.throwIfAborted();
   // Installed ids are one prepared manifest fact set for the invocation. Rebuilding
   // discovery for each catalog row turns this read into a full filesystem walk per row.
   const manifestInstalledChannelIds = new Set<string>(
@@ -169,24 +174,28 @@ export async function channelsListCommand(
 
   for (const plugin of opts.json ? [] : renderedPlugins) {
     const accountIds = accountIdsByPlugin.get(plugin.id) ?? [];
-    let rows: Array<{ snapshot: ChannelAccountSnapshot }>;
+    let snapshots: ChannelAccountSnapshot[];
     if (accountIds.length > 0) {
       const runtimeAccounts = runtimeAccountsByChannel.get(plugin.id) ?? [];
-      rows = await resolveChannelAccountStatusRows({
-        localAccountIds: accountIds,
-        runtimeAccounts,
-        resolveLocalSnapshot: (accountId) =>
-          resolveChannelAccountSnapshot({ plugin, cfg, accountId }),
-      });
+      snapshots = [];
+      for (const accountId of uniqueStrings([
+        ...accountIds,
+        ...runtimeAccounts.map((account) => account.accountId),
+      ])) {
+        snapshots.push(
+          runtimeAccounts.find((account) => account.accountId === accountId) ??
+            (await resolveChannelAccountSnapshot({ plugin, cfg, accountId })),
+        );
+      }
     } else {
       // Unconfigured --all rows still inspect the default account before applying runtime facts.
       const snapshot = await resolveChannelAccountSnapshot({ plugin, cfg, accountId: "default" });
       const runtimeSnapshot = runtimeAccountsByChannel
         .get(plugin.id)
         ?.find((account) => account.accountId === "default");
-      rows = [{ snapshot: runtimeSnapshot ?? snapshot }];
+      snapshots = [runtimeSnapshot ?? snapshot];
     }
-    for (const { snapshot } of rows) {
+    for (const snapshot of snapshots) {
       accountLines.push({ plugin, snapshot, installed: isInstalled(plugin.id) });
     }
   }

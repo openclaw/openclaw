@@ -6,7 +6,6 @@ import type {
 } from "../../state/openclaw-agent-db.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type {
-  SessionArchivedTranscriptCleanupRule,
   SessionLifecycleArchivedTranscript,
   SessionResetBoundaryWrite,
 } from "./session-accessor.lifecycle-types.js";
@@ -36,6 +35,7 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import type { SessionCreationOperation } from "./session-creation-operation.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
@@ -134,6 +134,7 @@ export type ProjectedLifecycleCommitInput = {
 };
 
 type SessionLifecycleCreation = {
+  receipt?: { operation: SessionCreationOperation; sessionKey: string; entry: SessionEntry };
   preparedTranscript?: {
     sessionKey: string;
     sessionId: string;
@@ -151,10 +152,6 @@ export type SessionEntryLifecycleMutationParams = {
   activeSessionKey?: string;
   maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
   skipMaintenance?: boolean;
-  cleanupArchivedTranscripts?: {
-    rules: SessionArchivedTranscriptCleanupRule[];
-    nowMs?: number;
-  };
   captureArtifactCleanupError?: boolean;
   /** Doctor-only bypass while exact malformed rows are removed in the same transaction. */
   allowCanonicalRepair?: boolean;

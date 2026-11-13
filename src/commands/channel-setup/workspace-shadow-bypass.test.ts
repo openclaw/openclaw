@@ -1,6 +1,7 @@
 // GHSA-2qrv-rc5x-2g2h: setup discovery was missed by the initial channel-resolution fix.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createInstalledPluginIndexFixture } from "../../plugins/gateway-startup.test-helpers.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { createPluginManifestRecordFixture } from "../../plugins/plugin-metadata.test-support.js";
 
@@ -52,17 +53,9 @@ import { resolveChannelSetupEntries } from "./discovery.js";
 beforeEach(() => {
   vi.clearAllMocks();
   loadPluginManifestRegistryCore.mockReturnValue({ plugins: [], diagnostics: [] });
-  loadPluginRegistrySnapshot.mockReturnValue({
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test",
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  });
+  loadPluginRegistrySnapshot.mockReturnValue(
+    createInstalledPluginIndexFixture({ plugins: [], diagnostics: [] }),
+  );
   loadPluginRegistrySnapshotWithMetadata.mockImplementation((...args: unknown[]) => ({
     snapshot: loadPluginRegistrySnapshot(...args),
     source: "derived",

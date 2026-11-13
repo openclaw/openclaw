@@ -60,6 +60,9 @@ function runBasePreparation(repo: string, base: string, eventName: string) {
     '#!/bin/sh\nif [ "$1" = tee ]; then cat >/dev/null; fi\n',
   );
   fs.chmodSync(path.join(bin, "sudo"), 0o755);
+  fs.writeFileSync(path.join(bin, "readlink"), '#!/bin/sh\nprintf "%s\\n" "$2"\n', {
+    mode: 0o755,
+  });
   const actionPath = path.join(repo, ".github/actions/prepare-testbox-shell");
   const action = parse(fs.readFileSync(path.join(actionPath, "action.yml"), "utf8"));
   const actionStep: Step = action.runs.steps[0];
@@ -82,6 +85,7 @@ function runBasePreparation(repo: string, base: string, eventName: string) {
       ),
       PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
       RUNNER_OS: process.platform === "win32" ? "Windows" : "Linux",
+      RUNNER_TEMP: bin,
       GITHUB_ACTION_PATH: actionPath,
       GITHUB_EVENT_NAME: eventName,
       GITHUB_BASE_REF: "main",
@@ -134,3 +138,133 @@ it.each([
         : eventBase,
   );
 });
+
+it.each([false, true])(
+  "reuses hydrated pnpm paths with coincident tool paths: %s",
+  (coincident) => {
+    const root = createTempDir("openclaw-testbox-pnpm-");
+    const exposed = path.join(root, "bin");
+    const bin = coincident ? exposed : path.join(root, "prepared tools");
+    for (const directory of new Set([bin, exposed])) {
+      fs.mkdirSync(directory);
+    }
+    const writeTool = (name: string, text: string) =>
+      fs.writeFileSync(path.join(bin, name), text, { mode: 0o755 });
+    writeTool("node", '#!/bin/sh\nprintf "%s\\n" "$TESTBOX_NODE"\n');
+    for (const name of ["npm", "npx"]) {
+      writeTool(name, "#!/bin/sh\nexit 0\n");
+    }
+    writeTool("git", '#!/bin/sh\nprintf "%s\\n" fixture-base\n');
+    writeTool("sudo", '#!/bin/sh\nexec "$@"\n');
+    const recordCall =
+      'if [ -n "${TESTBOX_CALLS:-}" ]; then exec >>"$TESTBOX_CALLS"; fi\n' +
+      'printf "%s\\0" "${COREPACK_HOME-}" "${PNPM_CONFIG_STORE_DIR-}" "${PNPM_CONFIG_CACHE_DIR-}" "$@"\n' +
+      'exit "${TESTBOX_EXIT:-0}"\n';
+    const implementations = {
+      corepack: `#!/bin/bash\n${recordCall}`,
+      pnpm: `#!/bin/bash\nset -- pnpm "$@"\n${recordCall}`,
+    };
+    for (const [program, contents] of Object.entries(implementations)) {
+      const implementation = path.join(root, `${program}.cjs`);
+      fs.writeFileSync(implementation, contents, { mode: 0o755 });
+      fs.symlinkSync(implementation, path.join(bin, program));
+    }
+    const prepared = Object.fromEntries(
+      ["COREPACK_HOME", "PNPM_CONFIG_STORE_DIR", "PNPM_CONFIG_CACHE_DIR"].map((key) => [
+        key,
+        path.join(root, `${key} space ' quote`),
+      ]),
+    );
+    const action = parse(
+      fs.readFileSync(".github/actions/prepare-testbox-shell/action.yml", "utf8"),
+    );
+    const result = spawnSync(
+      "/bin/bash",
+      ["-euo", "pipefail", "-c", action.runs.steps[0].run.replaceAll("/usr/local/bin", exposed)],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ...prepared,
+          PATH: `${bin}:${process.env.PATH}`,
+          TESTBOX_NODE: path.join(bin, "node"),
+          RUNNER_TEMP: root,
+          GITHUB_EVENT_NAME: "workflow_dispatch",
+          TESTBOX_BASE_REF: "HEAD",
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    for (const first of new Set([exposed, bin])) {
+      const commandEnv = { PATH: `${first}:${exposed}:/usr/bin:/bin`, HOME: root };
+      for (const program of ["pnpm", "corepack"]) {
+        const overrides: Record<string, string>[] = [
+          {},
+          Object.fromEntries(Object.keys(prepared).map((key) => [key, `/explicit/${key}`])),
+        ];
+        for (const override of overrides) {
+          const args = [
+            ...(program === "corepack" ? ["pnpm"] : []),
+            "install",
+            "--offline",
+            "two words",
+          ];
+          for (const status of [0, 23]) {
+            const command = spawnSync("/bin/bash", ["-c", 'exec "$@"', "--", program, ...args], {
+              encoding: "utf8",
+              timeout: 5_000,
+              env: { ...commandEnv, ...override, TESTBOX_EXIT: String(status) },
+            });
+            expect(command.status, command.stderr).toBe(status);
+            expect(command.stdout.split("\0").slice(0, -1)).toEqual([
+              ...Object.values({ ...prepared, ...override }),
+              "pnpm",
+              "install",
+              "--offline",
+              "two words",
+            ]);
+          }
+        }
+      }
+      const calls = path.join(root, "install-calls");
+      fs.writeFileSync(calls, "");
+      const install = spawnSync(
+        "/bin/bash",
+        [path.resolve(".github/actions/setup-node-env/install-dependencies.sh")],
+        {
+          cwd: root,
+          encoding: "utf8",
+          timeout: 5_000,
+          env: {
+            ...commandEnv,
+            NODE_BIN: bin,
+            TESTBOX_NODE: path.join(bin, "node"),
+            TESTBOX_CALLS: calls,
+            GITHUB_WORKSPACE: root,
+            FROZEN_LOCKFILE: "true",
+            DEPENDENCY_CACHE: "false",
+            DEPENDENCY_CACHE_HIT: "false",
+          },
+        },
+      );
+      expect(install.status, install.stderr).toBe(0);
+      expect(fs.readFileSync(calls, "utf8").split("\0").slice(0, -1)).toEqual([
+        ...Object.values(prepared),
+        "pnpm",
+        "-v",
+        ...Object.values(prepared),
+        "pnpm",
+        "install",
+        "--config.ignore-scripts=false",
+        "--config.engine-strict=false",
+        "--config.enable-pre-post-scripts=true",
+        "--config.side-effects-cache=true",
+        "--frozen-lockfile",
+        "--prefer-offline",
+      ]);
+    }
+    for (const [program, contents] of Object.entries(implementations)) {
+      expect(fs.readFileSync(path.join(root, `${program}.cjs`), "utf8")).toBe(contents);
+    }
+  },
+);

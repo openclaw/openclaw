@@ -7,24 +7,31 @@ import type { Message } from "openclaw/plugin-sdk/llm";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createReadTool } from "../agents/sessions/tools/read.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  listSessionEntriesReadOnly,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease-inspection.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  getOpenClawAgentDatabaseIfOpen,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { captureEnv } from "../test-utils/env.js";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
 import {
   assistantMessage,
   assistantText,
+  createLargeTrajectoryUsage,
   messageEntry,
   sessionHeader,
   writeEntries,
@@ -178,6 +185,38 @@ afterAll(async () => {
 });
 
 describe("exportTrajectoryBundle", () => {
+  it.each(["agent:main:session-1", "session-1", " agent:main:session-1 "])(
+    "resolves legacy marker metadata without decoding saved session prompts (%s)",
+    async (sessionKey) => {
+      const { tmpDir, sessionTarget } = exportPaths();
+      const prompt = "trajectory-listing-saved-prompt".repeat(128);
+      for (const storedKey of [sessionTarget.sessionKey, "agent:main:unrelated"]) {
+        await replaceSessionEntry(
+          { ...sessionTarget, sessionKey: storedKey },
+          {
+            sessionId:
+              storedKey === sessionTarget.sessionKey ? sessionTarget.sessionId : "unrelated",
+            updatedAt: 1,
+            skillsSnapshot: { prompt, skills: [] },
+          },
+        );
+      }
+      await replaceTranscriptEvents(sessionTarget, simpleSessionEntries(tmpDir));
+      listSessionEntriesReadOnly({ ...sessionTarget, projection: "list" });
+      const parses = vi.spyOn(JSON, "parse");
+      try {
+        const bundle = await exportFrom(tmpDir, {
+          sessionFile: formatSqliteSessionFileMarker(sessionTarget),
+          sessionKey,
+        });
+        expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
+        expect(parses.mock.calls.filter(([text]) => text.includes(prompt))).toHaveLength(0);
+      } finally {
+        parses.mockRestore();
+      }
+    },
+  );
+
   it.each([
     {
       name: "different session",
@@ -337,13 +376,7 @@ describe("exportTrajectoryBundle", () => {
   });
 
   it("exports usage from truncated model completion runtime events", async () => {
-    const usage = {
-      input: 384_954,
-      output: 5_624,
-      cacheRead: 333_824,
-      reasoningTokens: 2_038,
-      total: 724_402,
-    };
+    const usage = createLargeTrajectoryUsage();
     const promptCache = { readTokens: 333_824, writeTokens: 51_130 };
     const artifacts = await exportRuntimeArtifacts([
       createRuntimeEvent("model.completed", {
@@ -593,6 +626,7 @@ describe("exportTrajectoryBundle", () => {
 
   it("redacts broad secret patterns from every exported bundle file", async () => {
     const { tmpDir, sessionTarget, outputDir } = exportPaths();
+    const promptBody = "retained context ".repeat(4_000);
     const rawSecrets = [
       "sk-exported-session-secret",
       "ghp_123456789012345678901234",
@@ -650,7 +684,7 @@ describe("exportTrajectoryBundle", () => {
       [
         "context.compiled",
         {
-          systemPrompt: `system includes ${rawSecrets[1]}`,
+          systemPrompt: `system prompt for ${path.join(tmpDir, "instructions.md")}\n${promptBody}${rawSecrets[1]} prompt-tail-marker`,
           tools: [{ name: "danger", description: `tool mentions ${rawSecrets[2]}` }],
         },
       ],
@@ -688,6 +722,10 @@ describe("exportTrajectoryBundle", () => {
       .map((file) => fs.readFileSync(path.join(outputDir, file), "utf8"))
       .join("\n");
     expect(exportedBundleText).toContain("keep-visible-marker");
+    for (const file of ["events.jsonl", "prompts.json", "system-prompt.txt"]) {
+      expect(readText(outputDir, file)).toContain(promptBody);
+      expect(readText(outputDir, file)).toContain("prompt-tail-marker");
+    }
     for (const secret of rawSecrets) {
       expect(exportedBundleText).not.toContain(secret);
     }
@@ -964,7 +1002,7 @@ describe("exportTrajectoryBundle", () => {
     const { tmpDir, sessionTarget } = exportPaths();
     const homeDir = makeTempDir();
     const outputDir = path.join(tmpDir, "bundle");
-    const previousHome = process.env.HOME;
+    const env = captureEnv(["HOME"]);
     await replaceTranscriptEvents(sessionTarget, simpleSessionEntries(tmpDir));
     appendSqliteTrajectoryRuntimeEvents(sessionTarget, [
       createRuntimeEvent("mixed-paths", {
@@ -985,11 +1023,7 @@ describe("exportTrajectoryBundle", () => {
       expect(bundle.manifest.sourceFiles.runtime).toBeUndefined();
       expect(eventTypes(bundle.events)).toContain("mixed-paths");
     } finally {
-      if (previousHome === undefined) {
-        delete process.env.HOME;
-      } else {
-        process.env.HOME = previousHome;
-      }
+      env.restore();
     }
 
     const events = fs.readFileSync(path.join(outputDir, "events.jsonl"), "utf8");
@@ -1001,6 +1035,8 @@ describe("exportTrajectoryBundle", () => {
 
   it("exports identical complete bundles from compressed, legacy, and mixed runtime rows", async () => {
     const { tmpDir, sessionTarget, outputDir } = exportPaths();
+    sessionTarget.storePath = path.join(tmpDir, "openclaw-agent.sqlite");
+    await replaceSessionEntry(sessionTarget, { sessionId: sessionTarget.sessionId, updatedAt: 1 });
     await replaceTranscriptEvents(sessionTarget, toolCallSessionEntries(tmpDir));
 
     const runtimeEvents = runtimeSeries([
@@ -1065,10 +1101,14 @@ describe("exportTrajectoryBundle", () => {
     appendSqliteTrajectoryRuntimeEvents(sessionTarget, runtimeEvents);
 
     const exportAtFixedTime = async (directory: string, useLegacyMarker = false) => {
+      await closeOpenClawAgentDatabasesAsync();
+      if (process.platform !== "win32") {
+        fs.chmodSync(sessionTarget.storePath, 0o640);
+      }
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(new Date("2026-04-22T09:00:00.000Z"));
       try {
-        return await exportFrom(tmpDir, {
+        const bundle = await exportFrom(tmpDir, {
           outputDir: directory,
           sessionTarget: useLegacyMarker ? undefined : sessionTarget,
           sessionFile: useLegacyMarker
@@ -1078,6 +1118,14 @@ describe("exportTrajectoryBundle", () => {
           systemPrompt: "fallback prompt",
           tools: [{ name: "fallback" }],
         });
+        expect(
+          getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: sessionTarget.storePath }),
+        ).toBeUndefined();
+        await expect(assertNoOpenClawAgentDatabaseLeasesReadOnly()).resolves.toBeUndefined();
+        if (process.platform !== "win32") {
+          expect(fs.statSync(sessionTarget.storePath).mode & 0o777).toBe(0o640);
+        }
+        return bundle;
       } finally {
         vi.useRealTimers();
       }

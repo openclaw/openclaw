@@ -5,21 +5,22 @@ import path from "node:path";
 import { gzipSync } from "node:zlib";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
+import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import { createBackupArchive } from "../infra/backup-create.js";
+import { withIsolatedBackupState } from "../infra/backup-create.test-support.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backupRestoreCommand } from "./backup-restore.js";
-import { buildBackupArchivePath } from "./backup-shared.js";
+import { encodeTarEntry } from "./backup-tar.test-support.js";
 import type { BackupManifest } from "./backup-verify-manifest.js";
 import { prepareBackupArchive, verifyBackupArchive } from "./backup-verify.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const withState = (run: Parameters<typeof withOpenClawTestState>[1]) =>
-  withOpenClawTestState({ layout: "state-only", scenario: "minimal", prefix: "oc-link-" }, run);
+const withState = (run: Parameters<typeof withIsolatedBackupState>[1]) =>
+  withIsolatedBackupState({ layout: "state-only", scenario: "minimal", prefix: "oc-link-" }, run);
 const DEFAULT_ARCHIVE_ROOT = "2026-08-12T00-00-00.000Z-openclaw-backup";
 const DEFAULT_PAYLOAD_PATH = buildBackupArchivePath(DEFAULT_ARCHIVE_ROOT, "/tmp/openclaw.json");
 const restore = (archive: string, target: string) =>
@@ -50,34 +51,6 @@ async function listFilesystemLeafEntries(root: string, relative = ""): Promise<s
     }
   }
   return entries.toSorted();
-}
-
-function encodeTarEntry(params: {
-  path: string;
-  contents?: string | Buffer;
-  type?: "File" | "Directory" | "Link" | "SymbolicLink";
-  linkpath?: string;
-}): Buffer {
-  const body = Buffer.isBuffer(params.contents)
-    ? params.contents
-    : Buffer.from(params.contents ?? "", "utf8");
-  const type = params.type ?? "File";
-  const header = new tar.Header({
-    path: params.path,
-    type,
-    size: type === "File" ? body.length : 0,
-    mode: type === "Directory" ? 0o700 : 0o600,
-    uid: 0,
-    gid: 0,
-    mtime: new Date(0),
-    ...(params.linkpath ? { linkpath: params.linkpath } : {}),
-  });
-  const headerBlock = Buffer.alloc(512);
-  header.encode(headerBlock);
-  if (type !== "File") {
-    return headerBlock;
-  }
-  return Buffer.concat([headerBlock, body, Buffer.alloc((512 - (body.length % 512)) % 512)]);
 }
 
 async function writeArchive(params: {
@@ -127,7 +100,7 @@ async function writeUnextractableArchive(archivePath: string) {
   await writeArchive({
     archivePath,
     extraEntries: [
-      encodeTarEntry({ path: directoryPath, type: "Directory" }),
+      encodeTarEntry({ path: directoryPath, type: "Directory", mode: 0o700 }),
       encodeTarEntry({
         path: `${DEFAULT_ARCHIVE_ROOT}/payload/directory-hardlink`,
         type: "Link",
@@ -138,6 +111,30 @@ async function writeUnextractableArchive(archivePath: string) {
 }
 
 describe("backupRestoreCommand", () => {
+  it.skipIf(process.platform === "win32")(
+    "escapes terminal controls and resolves symlinked parents while preserving the payload",
+    async () => {
+      await withState(async (state) => {
+        const text = "café\u001b[31m\nforged\tend\rrow\u0007 ";
+        const archive = `${state.path("link")}/../${text}.tar.gz `;
+        const target = state.path(`restored-${text}`);
+        await fs.mkdir(state.path("real", "sub"), { recursive: true });
+        await fs.symlink("real/sub", state.path("link"));
+        await writeUnextractableArchive(state.path(`${text}.tar.gz `));
+        await writeArchive({ archivePath: state.path("real", `${text}.tar.gz `) });
+        const runtime = createTestRuntime();
+        const result = await backupRestoreCommand(runtime, { archive, target });
+        const report = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+        expect(report).toContain("café\\nforged\\tend\\rrow");
+        expect(report.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+        expect(report).not.toContain("\nforged");
+        expect(result.targetPath).toBe(target);
+        expect(result.archivePath).toBe(archive);
+        expect(await fs.readFile(path.join(target, DEFAULT_PAYLOAD_PATH), "utf8")).toBe("{}\n");
+      });
+    },
+  );
+
   it("selects a captured config payload from a legacy relative alias without following live paths", async () => {
     await withState(async (state) => {
       const archiveRoot = "backup";
@@ -470,6 +467,34 @@ describe("backupRestoreCommand", () => {
     });
   });
 
+  it("refuses --postgres-connection-env without a usable variable or PostgreSQL stores", async () => {
+    await withState(async (state) => {
+      const archivePath = state.path("backup.tar.gz");
+      const target = state.path("restored");
+      await writeArchive({ archivePath });
+      const run = (postgresConnectionEnv: string) =>
+        backupRestoreCommand(createTestRuntime(), {
+          archive: archivePath,
+          target,
+          postgresConnectionEnv,
+        });
+      await expect(run("not a name")).rejects.toThrow(/requires an environment variable name/u);
+      delete process.env.OPENCLAW_RESTORE_TEST_UNSET_PG;
+      await expect(run("OPENCLAW_RESTORE_TEST_UNSET_PG")).rejects.toThrow(
+        /OPENCLAW_RESTORE_TEST_UNSET_PG is not set; nothing was restored/u,
+      );
+      process.env.OPENCLAW_RESTORE_TEST_SET_PG = "postgresql:///unused";
+      try {
+        await expect(run("OPENCLAW_RESTORE_TEST_SET_PG")).rejects.toThrow(
+          /requires an archive with PostgreSQL stores; nothing was restored/u,
+        );
+      } finally {
+        delete process.env.OPENCLAW_RESTORE_TEST_SET_PG;
+      }
+      await expect(fs.access(target)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
   it("refuses insufficient target capacity before extraction and counts hardlink data once", async () => {
     await withState(async (state) => {
       const archivePath = state.path("backup.tar.gz");
@@ -560,10 +585,7 @@ describe("backupRestoreCommand", () => {
     await withState(async (state) => {
       const archivePath = state.path("corrupt.tar.gz");
       const targetPath = state.path("restore-target");
-      await writeArchive({
-        archivePath,
-        manifest: "{not-json}\n",
-      });
+      await writeArchive({ archivePath, manifest: "{not-json}\n" });
       await fs.mkdir(targetPath);
 
       await expect(restore(archivePath, targetPath)).rejects.toThrow(

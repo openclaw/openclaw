@@ -6,7 +6,11 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { errorShapeFromError } from "../../error-shape.js";
 import { NodeRegistry } from "../../node-registry.js";
+import { GatewayOperatorAccessUnavailableError } from "../../operator-access-policy.js";
+import { handleGatewayRequest as dispatchGatewayRequest } from "../../server-methods.js";
+import { createLazyCoreHandlers } from "../../server-methods/lazy-core-handlers.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
 import { dispatchProfile } from "../client-fixtures.test-support.js";
 import type { GatewayWsClient } from "../ws-types.js";
@@ -110,6 +114,87 @@ function createDispatcher(
   return { socket, client, ...harness };
 }
 
+it.each(["admission", "preparation", "handler", "handler-response", "response"])(
+  "reports a policy error at %s without closing or promising a retry after execution",
+  async (phase) => {
+    const client = createOperatorWsClient();
+    const grant = new AbortController();
+    let failing = true;
+    let unavailable = phase === "admission";
+    const assertCurrent = () => {
+      grant.signal.throwIfAborted();
+      if (unavailable) {
+        throw new GatewayOperatorAccessUnavailableError();
+      }
+    };
+    client.internal = {
+      operatorAccessAuthority: {
+        signal: grant.signal,
+        assertCurrent,
+      },
+    };
+    let effects = 0;
+    const handler = vi.fn((options: GatewayRequestOptions) => {
+      if (!failing) {
+        options.respond(true, { recovered: true });
+        return;
+      }
+      effects++;
+      if (phase === "handler") {
+        throw new GatewayOperatorAccessUnavailableError();
+      }
+      if (phase === "handler-response") {
+        options.respond(
+          false,
+          undefined,
+          errorShapeFromError("UNAVAILABLE", new GatewayOperatorAccessUnavailableError()),
+        );
+        return;
+      }
+      unavailable = phase === "response";
+      options.respond(true, { privateResult: "must not disclose" });
+    });
+    const fixture = createDispatchTestHarness({
+      extraHandlers: createLazyCoreHandlers({
+        methods: ["health"],
+        loadHandlers: async () => {
+          unavailable = failing && phase === "preparation";
+          assertCurrent();
+          return { health: handler };
+        },
+      }),
+    });
+    handleGatewayRequest.mockImplementation(dispatchGatewayRequest);
+    await fixture.dispatcher.dispatch(requestFrame("failed", "health"), client);
+    const beforeExecution = phase === "admission" || phase === "preparation";
+    expect(await fixture.awaitResponseFrame("failed")).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        retryable: beforeExecution,
+        details: { code: "OPERATOR_ACCESS_UNAVAILABLE" },
+      },
+    });
+    expect(effects).toBe(beforeExecution ? 0 : 1);
+    if (!beforeExecution) {
+      expect((await fixture.awaitResponseFrame("failed")).error?.message).toContain(
+        "may have completed",
+      );
+    }
+    expect((await fixture.awaitResponseFrame("failed")).payload).toBeUndefined();
+    expect(fixture.close).not.toHaveBeenCalled();
+    expect(grant.signal.aborted).toBe(false);
+    unavailable = false;
+    failing = false;
+    await fixture.dispatcher.dispatch(requestFrame("recovered", "health"), client);
+    expect(await fixture.awaitResponseFrame("recovered")).toMatchObject({
+      ok: true,
+      payload: { recovered: true },
+    });
+    expect(fixture.close).not.toHaveBeenCalled();
+  },
+);
+
 describe("authenticated WebSocket request cancellation", () => {
   it.each([
     ["plugins.reload", { plugins: [{ pluginId: "demo" }] }, false],
@@ -178,43 +263,38 @@ describe("authenticated WebSocket request cancellation", () => {
     }
   });
 
-  it("forwards CLI socket closure to the actual first-party node cancel event", async () => {
-    const { frames, waitForFrameCount } = createPairedNode(true);
-    const { socket, awaitResponseFrame, client, dispatcher } = createDispatcher();
-    const dispatch = dispatcher.dispatch(nodeRequest("paired-node-cli-inference"), client);
-    try {
-      await waitForFrameCount(1);
-      expect(socket.listenerCount("close")).toBe(1);
-      socket.emit("close", 1000, Buffer.alloc(0));
-      await waitForFrameCount(2);
-      const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
-      expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
-        event: "node.invoke.cancel",
-        payload: { invokeId: request.payload?.id, nodeId: "paired-node" },
-      });
-      await awaitResponseFrame("paired-node-cli-inference");
-    } finally {
-      socket.emit("close", 1000, Buffer.alloc(0));
-      await dispatch;
-    }
-    expect(socket.listenerCount("close")).toBe(0);
-  });
-
-  it("does not cancel an authenticated control UI node invocation on socket close", async () => {
-    const { registry, frames, waitForFrameCount, complete } = createPairedNode();
-    const { socket, client, dispatcher } = createDispatcher(controlUi);
-    const dispatch = dispatcher.dispatch(nodeRequest("paired-node-ordinary-inference"), client);
-    try {
-      await waitForFrameCount(1);
-      expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+  it.each([
+    ["CLI", cli, true],
+    ["control UI", controlUi, false],
+  ] as const)(
+    "preserves %s node invocation policy on socket close",
+    async (_name, info, cancel) => {
+      const { registry, frames, waitForFrameCount, complete } = createPairedNode(cancel);
+      const { socket, awaitResponseFrame, client, dispatcher } = createDispatcher(info);
+      const dispatch = dispatcher.dispatch(nodeRequest("inference"), client);
+      try {
+        await waitForFrameCount(1);
+        expect(socket.listenerCount("close")).toBe(Number(cancel));
+        socket.emit("close", 1000, Buffer.alloc(0));
+        const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+        if (cancel) {
+          await waitForFrameCount(2);
+          expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
+            event: "node.invoke.cancel",
+            payload: { invokeId: request.payload?.id, nodeId: "paired-node" },
+          });
+          await awaitResponseFrame("inference");
+        } else {
+          expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+          expect(frames).toHaveLength(1);
+          expect(complete(request.payload?.id ?? "")).toBe(true);
+        }
+      } finally {
+        socket.emit("close", 1000, Buffer.alloc(0));
+        registry.unregister("paired-node-connection");
+        await dispatch;
+      }
       expect(socket.listenerCount("close")).toBe(0);
-      socket.emit("close", 1000, Buffer.alloc(0));
-      expect(frames).toHaveLength(1);
-      const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
-      expect(complete(request.payload?.id ?? "")).toBe(true);
-    } finally {
-      registry.unregister("paired-node-connection");
-      await dispatch;
-    }
-  });
+    },
+  );
 });

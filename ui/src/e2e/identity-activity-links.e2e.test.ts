@@ -1,13 +1,13 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
-import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const pageOptions = {
@@ -43,12 +43,7 @@ suite.define(() => {
       });
       const sessionList = {
         ...chatSessionListResponse([
-          {
-            key: selectedSessionKey,
-            kind: "direct",
-            label: "Selected session",
-            updatedAt: now - 5 * 60_000,
-          },
+          sessionRow(selectedSessionKey, "Selected session", now - 5 * 60_000),
           {
             key: sessionKey,
             kind: "direct",
@@ -106,8 +101,7 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
       const sidebar = page.locator("openclaw-app-sidebar");
       const ownerTitle = sidebar.locator("#sidebar-session-owner-title");
-      await expect.poll(() => ownerTitle.getAttribute("aria-label")).toBe("Owners: My sessions");
-      await selectAllSidebarSessions(page);
+      await expect.poll(() => ownerTitle.getAttribute("aria-label")).toBe("Owners: All owners");
       const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
       const card = page.locator(".session-progress-hovercard");
       await row.waitFor({ state: "visible" });

@@ -31,13 +31,13 @@ vi.mock("node:sqlite", () => ({ DatabaseSync: effects.forbidden }));
 vi.mock("node:child_process", () =>
   effects.forbid("spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"),
 );
-// mock-isolation: Fail if pure reply settlement reaches unrelated native retention or transfer effects.
+// mock-isolation: Settlement must not enter native retention or transfer owners.
 vi.mock("../state/openclaw-state-worker-error.js", () =>
   effects.forbid("retainOpenClawStateWorkerErrorPayload"),
 );
-// mock-isolation: Fail if pure reply settlement reaches unrelated native retention or transfer effects.
+// mock-isolation: Pure settlement must not retain native admission.
 vi.mock("./sqlite-transaction.js", () => effects.forbid("retainSqliteWriteAdmissionService"));
-// mock-isolation: Fail if pure reply settlement reaches unrelated native retention or transfer effects.
+// mock-isolation: Pure settlement must not create transfer owners.
 vi.mock("./sqlite-worker-transfer.js", () =>
   effects.forbid("createSqliteWorkerTransferOwner", "createSqliteWorkerTransferReceiver"),
 );
@@ -224,15 +224,17 @@ describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () =
       current.fail(nativeCleanup, outcome === "value" ? { value } : { error: original });
       const queuedError = slot.failed;
       expect(queuedError).toMatchObject({ code: "unavailable", message: nativeCleanup.message });
-      expectCalls(current);
+      expect(effects.events).toEqual([]);
       expect(queued.reject).not.toHaveBeenCalled();
       await current.retire(retired, retirementFailure);
-      expectCalls(current, {
-        settleNative: [
-          retired ? { kind: "completed" } : { kind: "unknown", error: retirementFailure },
-        ],
-        ...(outcome === "value" ? { resolve: [value] } : { reject: [original] }),
-      });
+      expect(current.settleNative).toHaveBeenCalledExactlyOnceWith(
+        retired ? { kind: "completed" } : { kind: "unknown", error: retirementFailure },
+      );
+      if (outcome === "value") {
+        await expect(current.result).resolves.toBe(value);
+      } else {
+        await expect(current.result).rejects.toBe(original);
+      }
       expect(queued.resolve).not.toHaveBeenCalled();
       expect(queued.reject).toHaveBeenCalledExactlyOnceWith(
         retired ? queuedError : expect.objectContaining({ cause: queuedError }),
@@ -256,7 +258,7 @@ describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () =
     settleSqliteWorkerJob(current.job, original);
 
     const outer = assertCleanupLineage(current.reject.mock.calls[0]?.[0], original);
-    expectCalls(current, { reject: [outer], settleNative: [{ kind: "completed" }] });
+    expect(current.settleNative).toHaveBeenCalledExactlyOnceWith({ kind: "completed" });
     expect("code" in outer).toBe(false);
     expectEvents("reject");
     expect(effects.warnings.length).toBe(0);

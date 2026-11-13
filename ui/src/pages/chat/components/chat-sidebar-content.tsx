@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, Match, Show, Switch } from "solid-js";
+import { createMemo, Match, onSettled, Show, Switch } from "solid-js";
 import { formatFencedCodeBlock } from "../../../../../src/shared/markdown-code.js";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
@@ -17,6 +17,7 @@ import {
   type SessionLinkTarget,
 } from "../../../components/markdown-session-links.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import type { McpAppViewElement } from "../../../components/mcp-app-view-types.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
@@ -25,12 +26,12 @@ import "../../../components/tooltip.ts";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
-import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import {
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
   type EmbedSandboxMode,
-} from "../../../lib/chat/tool-display.ts";
+} from "../../../lib/chat/canvas-embed-policy.ts";
+import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
@@ -39,7 +40,8 @@ import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileViewControls } from "./chat-file-reader-controls.ts";
 import { FileSessionMenu } from "./chat-file-session-menu.tsx";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
-import { openResolvedImage } from "./chat-message-image-open.ts";
+import { openResolvedImage } from "./chat-image-presentation.ts";
+import { isPdfAttachment } from "./chat-pdf-preview.tsx";
 import { SidebarAttachment } from "./chat-sidebar-attachment.tsx";
 import type {
   AttachmentSidebarRuntime,
@@ -99,6 +101,7 @@ export type SidebarPanelProps = {
   fileView?: FileViewControls;
   onClose: () => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
+  onBrowseFiles?: () => void;
   onViewRawText: () => void;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
@@ -113,6 +116,7 @@ export type SidebarPanelProps = {
 function sidebarTitle(content: ChatDetailPanelContent | null, showingRawText: boolean) {
   switch (content?.kind) {
     case "mcp-app":
+    case "mcp-app-preview":
       return content.title;
     case "canvas":
       return content.title?.trim() || t("chat.detailPanel.renderPreview");
@@ -193,6 +197,20 @@ function CanvasPreview(props: {
   );
 }
 
+function McpAppSidebarTarget(props: { view: McpAppViewElement }) {
+  let target!: HTMLDivElement;
+  onSettled(() => props.view.presentInSidebar(target));
+  return (
+    <div
+      class="mcp-app-sidebar-target"
+      style={{ width: "100%", height: "100%", "min-height": "160px" }}
+      ref={(element) => {
+        target = element;
+      }}
+    />
+  );
+}
+
 export function SidebarPanel(props: SidebarPanelProps) {
   const title = () => sidebarTitle(props.content, props.showingRawText);
   const mobileMedia = () =>
@@ -201,7 +219,15 @@ export function SidebarPanel(props: SidebarPanelProps) {
   const mobileReader = () =>
     mobileMedia() || (props.filePresentation === "mobile" && props.content?.kind === "file");
   const fillHost = () =>
-    ["file", "markdown", "attachment", "session-diff", "image"].includes(props.content?.kind ?? "");
+    [
+      "file",
+      "markdown",
+      "attachment",
+      "session-diff",
+      "image",
+      "canvas",
+      "mcp-app-preview",
+    ].includes(props.content?.kind ?? "");
   // Text attachments initialize their own asynchronously loaded Markdown.
   const markdownPresented = createMemo(() => props.content?.kind !== "attachment");
   return (
@@ -271,6 +297,13 @@ export function SidebarPanel(props: SidebarPanelProps) {
             }
           >
             <Switch fallback={<div class="muted">{t("chat.detailPanel.noContent")}</div>}>
+              <Match when={props.content?.kind === "mcp-app-preview" ? props.content : undefined}>
+                {(content) => (
+                  <Show when={content().view} keyed>
+                    {(view) => <McpAppSidebarTarget view={view} />}
+                  </Show>
+                )}
+              </Match>
               <Match when={props.content?.kind === "mcp-app" ? props.content : undefined}>
                 {(content) => (
                   <McpAppPanel
@@ -283,8 +316,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                 when={
                   props.filePresentation === "desktop" &&
                   props.fileView?.imagePreview &&
-                  props.content?.kind === "file" &&
-                  props.content.mimeType === "image/svg+xml"
+                  props.content?.kind === "file"
                     ? props.content
                     : undefined
                 }
@@ -321,6 +353,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                     }
                     active={props.active ?? content().presentation?.active ?? true}
                     openFileView={content().presentation?.openFileView ?? null}
+                    canEditFile={content().canEditFile ?? null}
                     onOpenMobilePage={content().presentation?.onOpenMobilePage ?? null}
                     scopeRequest={content().presentation?.scopeRequest ?? null}
                     onResult={content().onResult ?? null}
@@ -359,7 +392,9 @@ export function SidebarPanel(props: SidebarPanelProps) {
                   (props.content?.kind === "markdown" ||
                     (props.content?.kind === "attachment" &&
                       !props.content.src &&
-                      !props.content.resolveSource)) &&
+                      !props.content.resolveSource &&
+                      (props.content.download ||
+                        !isPdfAttachment(props.content.mimeType ?? "", props.content.title)))) &&
                   props.content.file
                     ? props.content.file
                     : undefined
@@ -452,6 +487,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                       mobile={props.filePresentation === "mobile"}
                       back={props.fileBack}
                       onOpenImage={props.onOpenImage}
+                      onBrowseFiles={props.onBrowseFiles}
                     />
                   </div>
                 )}

@@ -31,6 +31,9 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
 import { registerNodesCanvasCommands } from "./cli.js";
 
 const nodeList = { nodes: [{ nodeId: "mac-1", displayName: "Studio" }] };
+const localUrl = "openclaw://widget/local";
+const placement = { x: 10.5, y: -2, width: 640, height: 480 };
+const hostedUrl = "/__openclaw__/canvas/documents/cv_1/index.html";
 
 function requestError(
   overrides: Partial<ConstructorParameters<typeof GatewayClientRequestError>[0]> = {},
@@ -49,19 +52,6 @@ function runCanvas(args: string[], node = "mac-1") {
   return program.parseAsync(["nodes", "canvas", ...args, "--node", node], { from: "user" });
 }
 
-function expectInvoke(
-  params: unknown,
-  opts: unknown = expect.any(Object),
-  progress: unknown = expect.any(Object),
-) {
-  expect(gatewayMocks.callGatewayFromCli).toHaveBeenCalledWith(
-    "node.invoke",
-    opts,
-    params,
-    progress,
-  );
-}
-
 describe("nodes canvas CLI", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -73,54 +63,36 @@ describe("nodes canvas CLI", () => {
   });
 
   it.each([
-    ["present", [], {}],
-    ["hide", [], undefined],
+    ["present", [], {}, 30_000],
+    ["hide", [], undefined, 30_000],
+    ["navigate", [hostedUrl], { url: hostedUrl }, 30_000],
     [
-      "navigate",
-      ["/__openclaw__/canvas/documents/cv_1/index.html"],
-      { url: "/__openclaw__/canvas/documents/cv_1/index.html" },
+      "present",
+      [
+        "--target",
+        localUrl,
+        ...Object.entries(placement).flatMap(([key, value]) => [`--${key}`, String(value)]),
+      ],
+      { url: localUrl, placement },
+      30_000,
     ],
-  ] as const)("invokes canvas.%s and prints its acknowledgement", async (action, args, params) => {
+    ["hide", ["--invoke-timeout", "35000"], undefined, 35_000],
+  ] as const)("invokes %s with %j", async (action, args, params, timeoutMs) => {
     await runCanvas([action, ...args], "Studio");
 
-    expectInvoke(
+    expect(gatewayMocks.callGatewayFromCli).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.objectContaining({ timeout: String(timeoutMs + 10_000) }),
       {
         nodeId: "mac-1",
         command: `canvas.${action}`,
         params,
-        timeoutMs: 30_000,
+        timeoutMs,
         idempotencyKey: expect.any(String),
       },
-      expect.objectContaining({ timeout: "40000" }),
       { progress: true },
     );
     expect(runtime.log).toHaveBeenCalledWith(`canvas ${action} ok`);
-  });
-
-  it("preserves present target and placement fields", async () => {
-    await runCanvas([
-      "present",
-      "--target",
-      "openclaw://widget/local",
-      "--x",
-      "10.5",
-      "--y",
-      "-2",
-      "--width",
-      "640",
-      "--height",
-      "480",
-    ]);
-
-    expectInvoke(
-      expect.objectContaining({
-        command: "canvas.present",
-        params: {
-          url: "openclaw://widget/local",
-          placement: { x: 10.5, y: -2, width: 640, height: 480 },
-        },
-      }),
-    );
   });
 
   it("prints the full Gateway response in JSON mode", async () => {
@@ -132,16 +104,6 @@ describe("nodes canvas CLI", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it("keeps the Gateway deadline longer than an explicit node deadline", async () => {
-    await runCanvas(["hide", "--invoke-timeout", "35000"]);
-
-    expectInvoke(
-      expect.objectContaining({ timeoutMs: 35_000 }),
-      expect.objectContaining({ timeout: "45000" }),
-      { progress: true },
-    );
-  });
-
   it.each([
     ["--width", "640px", "--width must be a number."],
     ["--invoke-timeout", "20ms", "--invoke-timeout must be a positive integer."],
@@ -150,24 +112,20 @@ describe("nodes canvas CLI", () => {
     expect(gatewayMocks.callGatewayFromCli).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["an unknown-method rejection", requestError()],
-    ["an authorization rejection", requestError({ code: "FORBIDDEN" })],
-    ["a retryable unknown-method rejection", requestError({ retryable: true })],
-    [
-      "an unknown-method rejection for another method",
-      requestError({ message: "unknown method: node.list.extra" }),
-    ],
-    ["malformed request retry metadata", requestError({ retryAfterMs: -1 })],
-    [
-      "a malformed request-error lookalike",
-      Object.assign(new Error("unknown method: node.list"), {
+  it.each(
+    Object.entries({
+      unknownMethod: requestError(),
+      forbidden: requestError({ code: "FORBIDDEN" }),
+      retryable: requestError({ retryable: true }),
+      otherMethod: requestError({ message: "unknown method: node.list.extra" }),
+      invalidRetryMetadata: requestError({ retryAfterMs: -1 }),
+      lookalike: Object.assign(new Error("unknown method: node.list"), {
         name: "GatewayClientRequestError",
         gatewayCode: "INVALID_REQUEST",
       }),
-    ],
-    ["a plain unknown-method error", new Error("unknown method: node.list")],
-  ] as const)("preserves %s without resolving or invoking a stale node", async (_label, error) => {
+      plainError: new Error("unknown method: node.list"),
+    }),
+  )("preserves %s without resolving or invoking a stale node", async (_label, error) => {
     gatewayMocks.callGatewayFromCli.mockRejectedValueOnce(error).mockResolvedValueOnce({
       pending: [],
       paired: [{ nodeId: "stale-node", displayName: "Stale Node" }],

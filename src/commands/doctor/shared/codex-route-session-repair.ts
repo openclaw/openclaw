@@ -18,6 +18,7 @@ import {
   scanDoctorSessionEntriesStrict,
   scanDoctorSessionEntriesTolerant,
 } from "../../../config/sessions/session-accessor.js";
+import { prepareSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import {
   resolveAllAgentSessionStoreTargetsSync,
   resolveConfiguredAgentDatabaseTargets,
@@ -27,12 +28,16 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { readDeferredPluginMigrations } from "../../../infra/deferred-plugin-migrations.js";
 import { preserveDeferredPluginSessionSource } from "../../../infra/deferred-plugin-session-sources.js";
 import { loadJsonFileThroughSymlink } from "../../../infra/json-file.js";
+import { prepareArtifactPreservingSqliteRead } from "../../../infra/sqlite-snapshot-source.js";
 import {
   loadLegacySessionStore,
   updateLegacySessionStore,
 } from "../../../infra/state-migrations.legacy-session-store.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../../../sessions/agent-harness-session-key.js";
+import { isModelSelectionLocked } from "../../../sessions/model-overrides.js";
 import { createRetainedAgentDatabaseMatcher } from "../../../state/agent-deletion-discovery.js";
+import { isArtifactPreservingStateRead } from "../../../state/artifact-preserving-state-reads.js";
+import { getActiveOpenClawStateDatabaseReadSnapshotAsync } from "../../../state/openclaw-state-db-readonly.js";
 import { resolveLegacyAuthProfilesPath } from "../../doctor-auth-legacy-paths.js";
 import {
   isOpenAICodexAuthProfileRef,
@@ -51,6 +56,7 @@ import {
   migrateLegacyRuntimeModelRef,
   resolveLegacyRuntimeModelProviderAlias,
 } from "./legacy-runtime-model-providers.js";
+import { createModelAliasCanonicalizer } from "./model-alias-canonicalization.js";
 import { rewriteRenamedSessionRoutes, type ProviderRename } from "./provider-rename.js";
 import type { SessionModelRetirement } from "./retired-model-ref-repair.js";
 import { createRetiredModelRefRepairResolver } from "./retired-model-ref-repair.js";
@@ -260,12 +266,20 @@ function repairCodexSessionStoreRoutes(params: {
   retirement?: SessionModelRetirement;
   providerRenames?: readonly ProviderRename[];
   warnings?: string[];
+  onConstrainedSelection?: () => void;
 }): string[] {
   const now = Date.now();
   const sessionKeys: string[] = [];
   for (const [sessionKey, entry] of Object.entries(params.store)) {
     if (!entry) {
       continue;
+    }
+    if (
+      isModelSelectionLocked(entry) ||
+      entry.modelOverrideSource === "user" ||
+      entry.authProfileOverride
+    ) {
+      params.onConstrainedSelection?.();
     }
     if (params.authProfileOnly) {
       if (
@@ -464,8 +478,10 @@ function resolveVerifiedSessionAuthProfileIdMap(params: {
 export async function maybeRepairCodexSessionRoutes(params: {
   cfg: OpenClawConfig;
   retiredModelRefConfig?: Pick<OpenClawConfig, "agents" | "models">;
+  modelReplacements?: readonly import("./model-replacement.js").DoctorModelReplacement[];
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
+  canonicalizeModelAliasesOnly?: boolean;
   authProfileOnly?: boolean;
   providerRenameOnly?: boolean;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
@@ -477,6 +493,8 @@ export async function maybeRepairCodexSessionRoutes(params: {
     !params.providerRenameOnly && !params.shouldRepair && params.authProfileOnly === true;
   const shouldRepair = params.shouldRepair || authProfileOnly;
   const warnings: string[] = [];
+  let requiresFullDoctor = false;
+  await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env });
   const pending = readDeferredPluginMigrations({ env });
   const isRetained = createRetainedAgentDatabaseMatcher(env, () =>
     resolveConfiguredAgentDatabaseTargets(params.cfg, { env }),
@@ -490,12 +508,25 @@ export async function maybeRepairCodexSessionRoutes(params: {
       ? undefined
       : createRetiredModelRefRepairResolver({
           cfg: params.cfg,
+          modelReplacements: params.modelReplacements,
           checkModelPolicy: true,
           retiredModelRefConfig: params.retiredModelRefConfig,
           env,
           warnings,
           agentIds: [...new Set(sessionTargets.map((target) => target.agentId))],
         });
+  const canonicalize = createModelAliasCanonicalizer(params.cfg, params.modelReplacements ?? []);
+  if (isArtifactPreservingStateRead("agent")) {
+    for (const target of sessionTargets) {
+      const sqlite = await prepareSqliteTargetFromSessionStorePath(target.storePath, {
+        agentId: target.agentId,
+        env,
+      });
+      if (fs.existsSync(sqlite.path)) {
+        await prepareArtifactPreservingSqliteRead(sqlite.path);
+      }
+    }
+  }
   const targets = sessionTargets.flatMap((target) => {
     const defaultModelRef = resolveRetired
       ? resolveAgentEffectiveModelPrimary(params.cfg, target.agentId)
@@ -530,8 +561,28 @@ export async function maybeRepairCodexSessionRoutes(params: {
     if (authProfileOnly && !authProfileIdMap?.size) {
       return [];
     }
-    const repair = (store: Record<string, SessionEntry>) =>
-      repairCodexSessionStoreRoutes({
+    const repair = (store: Record<string, SessionEntry>) => {
+      if (params.canonicalizeModelAliasesOnly) {
+        const changed: string[] = [];
+        for (const [key, entry] of Object.entries(store)) {
+          if (!entry.modelOverride || isModelSelectionLocked(entry)) {
+            continue;
+          }
+          const raw = entry.providerOverride
+            ? entry.providerOverride + "/" + entry.modelOverride
+            : entry.modelOverride;
+          const canonical = canonicalize(raw, target.agentId);
+          if (!canonical) {
+            continue;
+          }
+          // The resolved identity is unchanged; preserve profile suffixes and runtime metadata.
+          entry.modelOverride = canonical;
+          delete entry.providerOverride;
+          changed.push(key);
+        }
+        return changed;
+      }
+      return repairCodexSessionStoreRoutes({
         store,
         blockedModelIdentities: params.blockedModelIdentities,
         authProfileIdMap,
@@ -540,7 +591,11 @@ export async function maybeRepairCodexSessionRoutes(params: {
         retirement,
         providerRenames,
         warnings,
+        onConstrainedSelection: () => {
+          requiresFullDoctor = true;
+        },
       });
+    };
     // Preview uses the same owner-bound repair against copies, preserving persisted entries.
     const scan = (store: Record<string, SessionEntry>) => repair(structuredClone(store));
     const staleSqliteSessionKeys: string[] = [];
@@ -581,6 +636,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
     });
     return {
       scannedStores: targets.length,
+      ...(requiresFullDoctor ? { requiresFullDoctor } : {}),
       warnings: [
         ...warnings,
         ...(stale.length > 0
@@ -641,6 +697,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
   const repairedScope = `${repairedSessions} session${repairedSessions === 1 ? "" : "s"} across ${repairedStores} store${repairedStores === 1 ? "" : "s"}`;
   return {
     scannedStores: targets.length,
+    ...(requiresFullDoctor ? { requiresFullDoctor } : {}),
     warnings,
     changes:
       repairedSessions > 0

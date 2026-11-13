@@ -55,6 +55,7 @@ export function createNativeCommandTestParams(
       params.resolveTelegramGroupConfig ??
       ((_chatId, _messageThreadId) => ({ groupConfig: undefined, topicConfig: undefined })),
     shouldSkipUpdate: params.shouldSkipUpdate ?? (() => false),
+    continuePluginCommandTurn: params.continuePluginCommandTurn ?? vi.fn(async () => {}),
     opts: {
       ...(params.opts ?? { token: "token" }),
       allowFrom: params.allowFrom ?? params.opts?.allowFrom ?? [],

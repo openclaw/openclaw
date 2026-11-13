@@ -1,12 +1,15 @@
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { expectText } from "./activity-assertions.test-support.ts";
 import { captureUiProof } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent model fallback ownership",
@@ -44,6 +47,14 @@ suite.define(() => {
         },
       };
       const gateway = await installMockGateway(page, {
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "agents.files.list",
+          "agents.files.get",
+          "agents.list",
+          "config.get",
+          "models.list",
+        ],
         methodResponses: {
           "agents.list": {
             defaultId: "main",
@@ -60,7 +71,7 @@ suite.define(() => {
               },
             ],
           },
-          "config.get": configSnapshot(config, "agent-model-fallback-ownership"),
+          "config.get": sourceConfigSnapshot(config, "agent-model-fallback-ownership"),
         },
       });
 
@@ -95,15 +106,11 @@ suite.define(() => {
         );
       }
 
-      await expectText(page.locator(".workspace-link")).toContain(writerWorkspace);
-      const modelDescription = page
-        .locator(".settings-kv dt")
-        .filter({ hasText: "Primary Model" })
-        .locator("xpath=following-sibling::dd[1]");
-      const displayedModel = expectedFallbacks.length
-        ? `${primaryModel} (+${expectedFallbacks.length} fallback)`
-        : primaryModel;
-      await expectText(modelDescription).toContain(displayedModel);
+      await expectText(page.locator(".agent-overview__workspace")).toContain(writerWorkspace);
+      const primaryTrigger = page.locator(
+        'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"]) .picker-select__trigger',
+      );
+      await expectText(primaryTrigger).toContain(primaryModel);
 
       const fallbacks = page.locator("openclaw-multi-select.agent-fallbacks");
       await fallbacks.waitFor({ timeout: 10_000 });

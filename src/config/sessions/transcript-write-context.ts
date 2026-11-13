@@ -1,27 +1,14 @@
 // Transcript write contexts carry the admitted run fence and teardown tracking
 // through nested session-manager callbacks.
 import path from "node:path";
-import type {
-  ModelChangeEntry,
-  ThinkingLevelChangeEntry,
-} from "../../agents/sessions/session-manager-types.js";
-import { AsyncContext } from "../../shared/async-context.js";
 import { runWithAsyncStore } from "../../shared/async-store.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
-import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import { getCliHistoryWriter, runWithCliHistoryWriter } from "./cli-history-boundary.js";
-import type {
-  SessionTranscriptContextVersion,
-  SessionTranscriptWriteScope,
-} from "./session-accessor.sqlite-contract.js";
-import type { SessionActor } from "./session-actor-contract.js";
+import { getCliHistoryWriter } from "./cli-history-boundary.js";
 import { readSessionActorEntryFacts } from "./session-actor-replica.js";
 import {
   assertSessionEntryCohortScope,
   matchSessionEntryCohortScope,
 } from "./session-entry-cohort-scope.js";
-import type { SessionEntryCohortReader } from "./session-entry-read-runtime.types.js";
-import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -39,9 +26,18 @@ import {
   captureSessionTranscriptTargetBinding,
   sameSessionTranscriptStorageEnvironment,
   sameSessionTranscriptTargetBinding,
-  type SessionTranscriptTargetBinding,
 } from "./transcript-target-binding.js";
-import type { SessionEntry } from "./types.js";
+import {
+  ownedTranscriptWriteContext,
+  type MetadataPublication,
+  type MetadataPublicationOwner,
+  type MetadataTarget,
+  type OwnedSessionTranscriptWriteContext,
+  type SessionMetadataChange,
+  type SessionMetadataCommit,
+  type SessionTranscriptWriteTarget,
+  type TranscriptSourcePublication,
+} from "./transcript-write-context-store.js";
 
 export { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 export type {
@@ -49,74 +45,10 @@ export type {
   SessionTranscriptWriterFence,
 } from "./session-transcript-writer.types.js";
 
-export type SessionMetadataChange =
-  | Pick<ModelChangeEntry, "type" | "provider" | "modelId">
-  | Pick<ThinkingLevelChangeEntry, "type" | "thinkingLevel">;
-
-type MetadataTarget = SessionTranscriptTargetBinding;
-type MetadataPublicationOwner = {
-  getSessionId(): string;
-  getSessionTarget(): MetadataTarget | undefined;
-};
-export type SessionMetadataCommit = {
-  entry: ModelChangeEntry | ThinkingLevelChangeEntry;
-  version: SessionTranscriptContextVersion | undefined;
-  target: MetadataTarget | undefined;
-};
-type MetadataPublication = {
-  owner: MetadataPublicationOwner;
-  sessionId: string;
-  target: MetadataTarget | undefined;
-  change: SessionMetadataChange;
-  publish: (commit: SessionMetadataCommit) => undefined;
-};
-
-type SessionTranscriptWriteTarget = {
-  agentId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  storePath?: string;
-  env?: Readonly<NodeJS.ProcessEnv>;
-  expectedLifecycleRevision?: string;
-  expectedWriterRunId?: string;
-  expectedOwner?: SessionTranscriptWriteScope["expectedOwner"];
-};
-
-export type OwnedSessionTranscriptWriteContext = {
-  sessionFile?: string;
-  sessionKey?: string;
-  sessionTarget?: SessionTranscriptWriteTarget;
-  initialWriter?: InitialSessionTranscriptWriter;
-  /** A committed first writer retained only while its terminal outcome is appended. */
-  settledInitialWriter?: InitialSessionTranscriptWriter;
-  sessionReader?: SessionEntryCohortReader;
-  sessionActor?: {
-    actor: SessionActor;
-    /** Retain the physical database owner, independently of the logical session agent. */
-    database: Readonly<OpenClawAgentDatabaseOptions & { agentId: string; path: string }>;
-  };
-  /** Revalidate the captured owner, including an absent writer, inside each commit. */
-  assertCommitAllowed?: SessionSourceAssertion;
-  withTranscriptWrite: <T>(run: () => Promise<T> | T) => Promise<T>;
-  /** Terminal bookkeeping through the retained writer after restart cancels execution. */
-  withRestartAbortWrite?: <T>(write: () => Promise<T>) => Promise<T>;
-  metadataPublication?: { current?: MetadataPublication };
-};
-
 type SessionTranscriptWriteRequest = Pick<
   OwnedSessionTranscriptWriteContext,
   "sessionFile" | "sessionKey" | "sessionTarget"
 >;
-
-type TranscriptSourcePublication = {
-  target: SessionTranscriptWriteTarget;
-  claimed: boolean;
-  publish?: (source: CapturedSessionEntryReadSource, entry: SessionEntry) => void;
-};
-
-const ownedTranscriptWriteContext = new AsyncContext<
-  OwnedSessionTranscriptWriteContext & { sourcePublication?: TranscriptSourcePublication }
->(Symbol("ownedTranscriptWriteContext"));
 
 /** Bind an initiating write's acknowledged source before fallible publication observers. */
 export async function withSessionTranscriptSourcePublication<T>(
@@ -479,11 +411,6 @@ export function withSessionTranscriptWriteAssertion<T>(
     },
     run,
   );
-}
-
-/** Runs detached work without retaining an attempt-owned transcript context. */
-export function runWithoutOwnedSessionTranscriptWrites<T>(run: () => T): T {
-  return ownedTranscriptWriteContext.exit(() => runWithCliHistoryWriter(undefined, run));
 }
 
 export function bindOwnedSessionTranscriptWrites<TArgs extends unknown[], TResult>(

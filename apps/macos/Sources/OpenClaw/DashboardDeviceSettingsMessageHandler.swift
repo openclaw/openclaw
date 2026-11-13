@@ -84,12 +84,12 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
     {
         // WebKit rejects the original Promise when cancellation drops an uncalled reply handler.
         // Keep it owned by this queued operation so retired documents cannot leave pending writes.
-        self.requests.enqueue { [weak self] in
+        self.requests.enqueueAdmission { [weak self] in
             guard let self, !self.observers.isEmpty, let owner = self.owner,
                   owner.canUseDeviceSettings(sourceID: sourceID)
             else {
                 replyHandler(nil, "The device settings document is no longer available.")
-                return
+                return nil
             }
             let setupAction: ChromeExtensionSetupAction? = switch request {
             case let .chromeExtensionSetup(action): action
@@ -104,7 +104,7 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
                     }
                     guard owner.canUseDeviceSettings(sourceID: sourceID), !Task.isCancelled else {
                         replyHandler(nil, "The device settings document is no longer available.")
-                        return
+                        return nil
                     }
                     // Preserve the released contract-1 projection without restoring an installer/decoder.
                     let data = try request == .installChromeExtension || request == .chromeExtensionStatus
@@ -114,39 +114,56 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
                 } catch {
                     replyHandler(nil, error.localizedDescription)
                 }
-                return
+                return nil
             }
             let previousNativeExperienceEnabled = AppStateStore.shared.nativeExperienceEnabled
+            let completion: Task<Void, Error>?
             do {
-                try await owner.applyDeviceSettingsRequest(request)
+                completion = try await owner.applyDeviceSettingsRequest(request)
             } catch {
                 replyHandler(nil, error.localizedDescription)
-                return
+                return nil
             }
-            let snapshot: DeviceSettingsSnapshot? = if case .set = request {
-                await owner.readDeviceSettingsSnapshot(sourceID: sourceID)
-            } else {
-                nil
-            }
-            guard owner.canUseDeviceSettings(sourceID: sourceID) else {
-                replyHandler(nil, "The device settings document is no longer available.")
-                return
-            }
-            do {
-                let reply: Any = try snapshot.map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) }
-                    ?? NSNull()
-                replyHandler(reply, nil)
-                if case let .set(.nativeExperienceEnabled, .boolean(enabled)) = request,
-                   enabled != previousNativeExperienceEnabled,
-                   enabled == AppStateStore.shared.nativeExperienceEnabled
-                {
-                    // Switching experiences hides this document and cancels its queue.
-                    // Acknowledge the saved preference before retiring its reply source.
-                    AppNavigationActions.experienceDidChange(nativeEnabled: enabled)
+            let reply: @MainActor () async -> Void = {
+                let snapshot: DeviceSettingsSnapshot? = if case .set = request {
+                    await owner.readDeviceSettingsSnapshot(sourceID: sourceID)
+                } else {
+                    nil
                 }
-            } catch {
-                replyHandler(nil, "Device settings could not be read. Try again.")
+                guard owner.canUseDeviceSettings(sourceID: sourceID) else {
+                    replyHandler(nil, "The device settings document is no longer available.")
+                    return
+                }
+                do {
+                    let reply: Any = try snapshot
+                        .map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) }
+                        ?? NSNull()
+                    replyHandler(reply, nil)
+                    if case let .set(.nativeExperienceEnabled, .boolean(enabled)) = request,
+                       enabled != previousNativeExperienceEnabled,
+                       enabled == AppStateStore.shared.nativeExperienceEnabled
+                    {
+                        // Switching experiences hides this document and cancels its queue.
+                        // Acknowledge the saved preference before retiring its reply source.
+                        AppNavigationActions.experienceDidChange(nativeEnabled: enabled)
+                    }
+                } catch {
+                    replyHandler(nil, "Device settings could not be read. Try again.")
+                }
             }
+            if let completion {
+                return {
+                    do {
+                        try await completion.value
+                    } catch {
+                        replyHandler(nil, error.localizedDescription)
+                        return
+                    }
+                    await reply()
+                }
+            }
+            await reply()
+            return nil
         }
     }
 

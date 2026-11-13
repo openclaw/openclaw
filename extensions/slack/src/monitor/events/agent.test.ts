@@ -23,11 +23,11 @@ import {
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSlackListenerWriteClient } from "../../client.js";
 import { appendSlackStream, markSlackStreamsStopped, startSlackStream } from "../../streaming.js";
+import { registerSlackWorkspaceEvents } from "../events.js";
 import * as sessionEventRouting from "../message-handler/prepare-routing.js";
 import { deliverSlackSlashReplies } from "../replies.js";
 import { getSlackSessionRuns, registerSlackSessionRun } from "../session-run-targets.js";
 import { getSlackSlashMocks, resetSlackSlashMocks } from "../slash.test-harness.js";
-import { registerSlackAgentEvents } from "./agent.js";
 import { createSlackSystemEventTestHarness } from "./system-event-test-harness.js";
 
 const { prepareSessionEntryPatch } = vi.hoisted(() => ({
@@ -111,7 +111,7 @@ function createSessionEventHarness(channelType: "im" | "channel" | "mpim" = "im"
   });
   Object.assign(harness.ctx.app, { client });
   setRuntimeConfigSnapshot(harness.ctx.cfg);
-  registerSlackAgentEvents({ ctx: harness.ctx });
+  registerSlackWorkspaceEvents({ ctx: harness.ctx });
   return {
     ...harness,
     storePath,
@@ -175,7 +175,7 @@ function expectNoSessionMutation(harness: ReturnType<typeof createSessionEventHa
   expect(harness.setSlackSessionStatus).not.toHaveBeenCalled();
 }
 
-describe("registerSlackAgentEvents", () => {
+describe("Slack agent lifecycle events", () => {
   beforeEach(() => {
     tempDir = sessionDirs.make();
     vi.clearAllMocks();
@@ -198,7 +198,7 @@ describe("registerSlackAgentEvents", () => {
       if (dropped) {
         harness.ctx.shouldDropMismatchedSlackEvent = () => true;
       }
-      registerSlackAgentEvents({ ctx: harness.ctx, trackEvent });
+      registerSlackWorkspaceEvents({ ctx: harness.ctx, trackEvent });
 
       await harness.getHandler("app_context_changed")?.({
         event: { type: "app_context_changed", user: "U123", context: { entities: [] } },

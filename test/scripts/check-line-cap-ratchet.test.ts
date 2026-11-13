@@ -13,6 +13,7 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const errors = vi.fn<typeof console.error>();
 beforeEach(() => {
+  vi.stubEnv("OPENCLAW_RELEASE_CONTEXT_REF", "main");
   vi.stubEnv("GITHUB_ACTIONS", "");
   errors.mockClear();
   vi.spyOn(console, "error").mockImplementation(errors);
@@ -79,6 +80,16 @@ it("warns for CI growth, writes the summary, and still rejects broken source", (
   );
   expect(fs.readFileSync(summary, "utf8")).toContain("5 -&gt; 6 counted lines");
   expectSource(root, "export const = broken;", 1);
+});
+
+it("skips line-cap growth on release branches but not main", () => {
+  vi.stubEnv("OPENCLAW_RELEASE_CONTEXT_REF", "");
+  const root = fixture();
+  write(root, 6);
+  git(root, "branch", "-m", "release/2026.11.4");
+  expect(check(root)).toBe(0);
+  git(root, "branch", "-m", "main");
+  expect(check(root)).toBe(1);
 });
 
 it("measures ignored repository-contained scratch while preserving explicit exclusions", () => {
@@ -188,24 +199,73 @@ it("uses qualified oxlint instead of a stale canonical bin in a code-only worktr
   expect(fs.existsSync(path.join(checkout, "node_modules"))).toBe(false);
 });
 
+function cliFixture(cliSource: string) {
+  const donor = createToolingDependencyFixture(tempDirs.make("openclaw-line-cap-admission-"));
+  const { env } = installLineCapToolingFixture(donor.checkout);
+  const root = fixture(2, "warn", [], donor.checkout);
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  donor.writePackage("tsx", "export {};", manifest.devDependencies.tsx);
+  donor.writePackage("json5", "export default JSON;", manifest.dependencies.json5);
+  const pkg = donor.writePackage("oxlint", cliSource, manifest.devDependencies.oxlint);
+  const binManifest = {
+    name: "oxlint",
+    version: manifest.devDependencies.oxlint,
+    type: "module",
+    exports: { "./package.json": "./package.json" },
+    bin: { oxlint: "index.mjs" },
+  };
+  write(root, 3);
+  git(root, "add", "src/file.ts");
+  return {
+    donor,
+    root,
+    pkg,
+    binManifest,
+    run: () => {
+      fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify(binManifest));
+      return spawnSync(
+        process.execPath,
+        ["scripts/check-line-cap-ratchet.mjs", "--staged", "--base", "HEAD"],
+        {
+          cwd: root,
+          env: { ...env, OPENCLAW_PR_TOOLING_ROOT: donor.tooling },
+          encoding: "utf8",
+          timeout: 20_000,
+        },
+      );
+    },
+  };
+}
+
+it.each([
+  { stdout: "", stderr: "Cannot load oxlint native binding", status: 1 },
+  { stdout: "invalid report", stderr: "Cannot load oxlint native binding", status: 1 },
+  { stdout: "Invalid oxlint configuration", stderr: "", status: 1 },
+  { stdout: "invalid report", stderr: "Successful child stderr", status: 0 },
+])(
+  "preserves failed child diagnostics for $status/$stdout/$stderr",
+  ({ stdout, stderr, status }) => {
+    const { root, run } = cliFixture(
+      `process.stdout.write(${JSON.stringify(stdout)}); process.stderr.write(${JSON.stringify(stderr)}); process.exitCode = ${status};`,
+    );
+    const result = run();
+    expect(result.status, result.stderr).toBe(1);
+    if (status !== 0) {
+      expect(result.stderr).toContain(stderr || stdout);
+    } else {
+      expect(result.stderr).not.toContain(stderr);
+      expect(result.stdout).not.toContain("Line-cap ratchet OK");
+    }
+    expect(result.stderr.trimEnd()).toMatch(/\[line-cap-ratchet\] FAILED \(exit 1\)$/u);
+    expect(fs.existsSync(path.join(root, "node_modules"))).toBe(false);
+  },
+);
+
 it.each(["bin traversal", "bin symlink"])(
   "rejects %s before executing the oxlint CLI",
   (invalid) => {
-    const donor = createToolingDependencyFixture(tempDirs.make("openclaw-line-cap-admission-"));
-    const { env } = installLineCapToolingFixture(donor.checkout);
-    const root = fixture(2, "warn", [], donor.checkout);
-    const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-    donor.writePackage("tsx", "export {};", manifest.devDependencies.tsx);
-    donor.writePackage("json5", "export default JSON;", manifest.dependencies.json5);
     const marker = 'console.error("UNQUALIFIED OXLINT EXECUTED"); process.exit(87);';
-    const pkg = donor.writePackage("oxlint", marker, manifest.devDependencies.oxlint);
-    const binManifest = {
-      name: "oxlint",
-      version: manifest.devDependencies.oxlint,
-      type: "module",
-      exports: { "./package.json": "./package.json" },
-      bin: { oxlint: "index.mjs" },
-    };
+    const { donor, root, pkg, binManifest, run } = cliFixture(marker);
     const outside = path.join(donor.tooling, "outside-cli.mjs");
     fs.writeFileSync(outside, marker);
     if (invalid === "bin traversal") {
@@ -214,19 +274,7 @@ it.each(["bin traversal", "bin symlink"])(
       fs.symlinkSync(outside, path.join(pkg, "cli.mjs"), "file");
       binManifest.bin.oxlint = "cli.mjs";
     }
-    fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify(binManifest));
-    write(root, 3);
-    git(root, "add", "src/file.ts");
-    const result = spawnSync(
-      process.execPath,
-      ["scripts/check-line-cap-ratchet.mjs", "--staged", "--base", "HEAD"],
-      {
-        cwd: root,
-        env: { ...env, OPENCLAW_PR_TOOLING_ROOT: donor.tooling },
-        encoding: "utf8",
-        timeout: 20_000,
-      },
-    );
+    const result = run();
     expect(result.status, result.stderr).toBe(1);
     expect(result.stderr).toContain(
       "The oxlint CLI bin must be a file inside its admitted package.",

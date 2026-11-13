@@ -64,12 +64,6 @@ const CAPTURE_QUERY_PRESETS = new Set([
   "error-bursts",
 ]);
 
-type QaStartupProbeStatus = {
-  url: string;
-  ok: boolean;
-  error?: string;
-};
-
 export function isCaptureQueryPreset(value: string): value is CaptureQueryPreset {
   return CAPTURE_QUERY_PRESETS.has(value);
 }
@@ -100,7 +94,7 @@ function defaultPortForProtocol(protocol: string): number {
   return 0;
 }
 
-async function probeTcpReachability(rawUrl: string): Promise<QaStartupProbeStatus> {
+async function probeTcpReachability(rawUrl: string) {
   const parsed = URL.parse(rawUrl);
   if (!parsed) {
     return {

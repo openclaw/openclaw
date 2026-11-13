@@ -14,7 +14,6 @@ import {
   expectCompleted,
   expectFailure,
   expectOriginalCodeModeMarker,
-  fakeTool,
   resetCodeModeTestState,
   resultDetails,
   resultText as text,
@@ -26,7 +25,6 @@ import {
 } from "./embedded-agent-runner/session-prompt-state.js";
 import { installToolResultContextGuard } from "./embedded-agent-runner/tool-result-context-guard.js";
 import { estimateToolResultTextChars } from "./embedded-agent-runner/tool-result-text-budget.js";
-import { truncateOversizedToolResultsInMessages } from "./embedded-agent-runner/tool-result-truncation.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "./harness/tool-surface-bridge.js";
 import { projectMcpCallToolResult } from "./mcp-content.js";
 import { Agent, type AgentMessage, type AgentToolResult } from "./runtime/index.js";
@@ -35,6 +33,7 @@ import { agentSessionQueuePromptContext } from "./sessions/agent-session-prompti
 import { SessionManager } from "./sessions/session-manager.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import type { ReadToolContinuation } from "./sessions/tools/tool-contracts.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { resolveLiveToolResultMaxChars } from "./tool-result-limits.js";
@@ -347,34 +346,33 @@ describe("fresh producer results through persistence and model guards", () => {
     expect(text(mcp)).toContain("Retry with a narrower query.");
   });
 
-  it("allows explicitly lossy aggregate reduction and smaller-context replay", () => {
-    const original = message(
-      JSON.stringify({ status: "completed", value: "x".repeat(20_000) }),
-      "exec",
-    );
-    const aggregate = truncateOversizedToolResultsInMessages(
-      [original, { ...original, toolCallId: "second" }],
-      128_000,
-      32_000,
-      32_000,
-    );
-    expect(aggregate.aggregateTruncatedCount).toBe(1);
-    expect(text(toolResult(aggregate.messages, 0))).not.toBe(text(original));
-    const smaller = truncateOversizedToolResultsInMessages([original], 8000);
-    expect(() => JSON.parse(text(toolResult(smaller.messages, 0)))).toThrow();
-    expect(() => JSON.parse(text(original))).not.toThrow();
-  });
-
-  it("refuses a whole skill that fits the byte cap but exceeds the model text budget", async () => {
+  it("pages an oversized skill through read continuations that survive the result guard", async () => {
     const locator = "node://fixture/skills/whole/SKILL.md";
-    const base = createReadTool("/");
-    const read = wrapReadToolWithSkillContent(
-      base,
-      [{ filePath: locator, readContent: "INSTRUCTIONS" + "中".repeat(9000) }],
-      { modelContextWindowTokens: contextWindow },
-    );
-    const result = await read.execute("skill", { path: locator, offset: 2, limit: 1 });
-    expect(text(result)).toContain("cannot be partially served");
-    expect(text(result)).not.toContain("INSTRUCTIONS");
+    const source = Array.from(
+      { length: 3000 },
+      (_, index) => `step ${index}: ${"中é".repeat(12)}`,
+    ).join("\n");
+    const skills = [{ filePath: locator, readContent: source }];
+    const read = wrapReadToolWithSkillContent(createReadTool("/"), skills, {
+      modelContextWindowTokens: contextWindow,
+    });
+    const pages: string[] = [];
+    let continuation: ReadToolContinuation | undefined;
+    do {
+      const page = await execute(
+        read,
+        `skill-${pages.length}`,
+        { path: locator, ...continuation },
+        "skill",
+      );
+      expect(
+        text(toolResult(await dispatch([page], contextWindow), 0)),
+        "pages must not be clipped",
+      ).toBe(text(page));
+      pages.push(resultDetails(page).content as string);
+      continuation = resultDetails(page).continuation as ReadToolContinuation | undefined;
+    } while (continuation && pages.length < 32);
+    expect(pages.length).toBeGreaterThan(1);
+    expect(pages.join("\n")).toBe(source);
   });
 });

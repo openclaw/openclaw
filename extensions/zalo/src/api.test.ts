@@ -1,8 +1,9 @@
-// Zalo tests cover api plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+// Zalo tests cover api plugin behavior.
+import { waitForEffectPreparation } from "../../test-support/effect-preparation.test-support.js";
 
 const effectGate = await vi.hoisted(async () =>
   (
@@ -125,12 +126,7 @@ describe("Zalo API request methods", () => {
         (error: unknown) => ({ error }),
       );
       try {
-        await Promise.race([
-          preparing.promise,
-          dispatched.promise.then(() => {
-            throw new Error("dispatched before preparation");
-          }),
-        ]);
+        await waitForEffectPreparation(preparing.promise, dispatched.promise);
         expect(fetch).not.toHaveBeenCalled();
         if (retired) {
           caller.abort(failure);
@@ -164,35 +160,25 @@ describe("Zalo API request methods", () => {
     });
   });
 
-  it("rejects an empty ZALO_API_URL", async () => {
-    vi.stubEnv("ZALO_API_URL", "   ");
-
-    await expect(
-      callZaloApi("getMe", "test-token", undefined, {
-        fetch: createOkFetcher(),
-      }),
-    ).rejects.toThrow("ZALO_API_URL must not be empty.");
-  });
-
-  it("rejects invalid alternate API URLs", async () => {
-    vi.stubEnv("ZALO_API_URL", "file:///tmp/zalo");
+  it.each([
+    ["rejects an empty ZALO_API_URL", "   ", "ZALO_API_URL must not be empty."],
+    [
+      "rejects invalid alternate API URLs",
+      "file:///tmp/zalo",
+      "ZALO_API_URL must use http:// or https://.",
+    ],
+    [
+      "rejects an API root with URL suffix components: https://proxy.example/zalo#provider",
+      "https://proxy.example/zalo#provider",
+      "ZALO_API_URL must not include a query string or fragment.",
+    ],
+  ] as const)("%s", async (_name, apiUrl, expectedError) => {
+    vi.stubEnv("ZALO_API_URL", apiUrl);
 
     await expect(
       callZaloApi("getMe", "test-token", undefined, { fetch: createOkFetcher() }),
-    ).rejects.toThrow("ZALO_API_URL must use http:// or https://.");
+    ).rejects.toThrow(expectedError);
   });
-
-  it.each(["https://proxy.example/zalo#provider"])(
-    "rejects an API root with URL suffix components: %s",
-    async (apiUrl) => {
-      vi.stubEnv("ZALO_API_URL", apiUrl);
-      await expect(
-        callZaloApi("getMe", "test-token", undefined, {
-          fetch: createOkFetcher(),
-        }),
-      ).rejects.toThrow("ZALO_API_URL must not include a query string or fragment.");
-    },
-  );
 
   it("uses POST for getWebhookInfo", async () => {
     await expectPostJsonRequest(getWebhookInfo);
@@ -334,7 +320,14 @@ describe("Zalo API request methods", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it("rejects non-http photo URLs", async () => {
+  it.each([
+    ["rejects non-http photo URLs", "file:///etc/passwd", "Zalo photo URL must use HTTP or HTTPS"],
+    [
+      "rejects non-URL strings",
+      "not a url",
+      "Zalo photo URL must be an absolute HTTP or HTTPS URL",
+    ],
+  ] as const)("%s", async (_name, photo, expectedError) => {
     const fetcher = createOkFetcher();
 
     await expect(
@@ -342,29 +335,11 @@ describe("Zalo API request methods", () => {
         "test-token",
         {
           chat_id: "chat-123",
-          photo: "file:///etc/passwd",
+          photo,
         },
         fetcher,
       ),
-    ).rejects.toThrow("Zalo photo URL must use HTTP or HTTPS");
-
-    expect(resolvePinnedHostnameWithPolicyMock).not.toHaveBeenCalled();
-    expect(fetcher).not.toHaveBeenCalled();
-  });
-
-  it("rejects non-URL strings", async () => {
-    const fetcher = createOkFetcher();
-
-    await expect(
-      sendPhoto(
-        "test-token",
-        {
-          chat_id: "chat-123",
-          photo: "not a url",
-        },
-        fetcher,
-      ),
-    ).rejects.toThrow("Zalo photo URL must be an absolute HTTP or HTTPS URL");
+    ).rejects.toThrow(expectedError);
 
     expect(resolvePinnedHostnameWithPolicyMock).not.toHaveBeenCalled();
     expect(fetcher).not.toHaveBeenCalled();

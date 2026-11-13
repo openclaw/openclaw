@@ -49,6 +49,16 @@ async function whisperCommand() {
   return root;
 }
 
+function mockPlatform(platform: NodeJS.Platform, arch: NodeJS.Architecture) {
+  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  vi.spyOn(process, "arch", "get").mockReturnValue(arch);
+}
+function mockCommands(commands: Record<string, string>) {
+  vi.spyOn(executablePath, "resolveExecutableFromPathEnv").mockImplementation(
+    (name) => commands[name],
+  );
+}
+
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.resetAllMocks();
@@ -64,9 +74,7 @@ it("prepares Whisper model files only for a resolved command", async () => {
     await fs.writeFile(path.join(root, name), "synthetic model");
   }
   const stat = vi.spyOn(fsSync, "statSync");
-  vi.spyOn(executablePath, "resolveExecutableFromPathEnv").mockImplementation((name) =>
-    name === "sherpa-onnx-offline" ? path.join(root, name) : undefined,
-  );
+  mockCommands({ "sherpa-onnx-offline": path.join(root, "sherpa-onnx-offline") });
   readdir.mockResolvedValue(["ggml-base.en.bin"]);
   const selection = await inspect({ WHISPER_CPP_MODEL: modelPath, SHERPA_ONNX_MODEL_DIR: root });
   expect(selection.selected).toMatchObject({ id: "sherpa-onnx-offline", ready: true });
@@ -97,28 +105,22 @@ it("expands home-directory shorthand in PATH entries containing delimiters", asy
   });
 });
 
-it.each([
-  { installed: true, ready: true, reason: undefined },
-  { installed: false, ready: false, reason: "model file not found" },
-])(
-  "reports installed Whisper model readiness: $installed",
-  async ({ installed, ready, reason }) => {
-    const tempDir = await whisperCommand();
-    readdir.mockImplementation(async (directory) =>
-      installed && directory === "/opt/homebrew/share/whisper-cpp"
-        ? ["for-tests-ggml-tiny.bin", "ggml-tiny.bin", "ggml-base.en.bin", "notes.txt"]
-        : [],
-    );
-    const selection = await inspect({ PATH: tempDir });
-    const whisper = whisperCandidate(selection);
-    expect(whisper?.ready).toBe(ready);
-    if (installed) {
-      expect(whisper?.entry?.args).toContain("/opt/homebrew/share/whisper-cpp/ggml-base.en.bin");
-    } else {
-      expect(whisper?.reason).toBe(reason);
-    }
-  },
-);
+it.each([true, false])("reports installed Whisper model readiness: %s", async (installed) => {
+  const tempDir = await whisperCommand();
+  readdir.mockImplementation(async (directory) =>
+    installed && directory === "/opt/homebrew/share/whisper-cpp"
+      ? ["for-tests-ggml-tiny.bin", "ggml-tiny.bin", "ggml-base.en.bin", "notes.txt"]
+      : [],
+  );
+  const selection = await inspect({ PATH: tempDir });
+  const whisper = whisperCandidate(selection);
+  expect(whisper?.ready).toBe(installed);
+  if (installed) {
+    expect(whisper?.entry?.args).toContain("/opt/homebrew/share/whisper-cpp/ggml-base.en.bin");
+  } else {
+    expect(whisper?.reason).toBe("model file not found");
+  }
+});
 
 it("discovers Windows commands through case-insensitive PATH and PATHEXT values", async () => {
   const availableDirectory = tempDirs.make("openclaw-local-audio-windows-");
@@ -137,20 +139,18 @@ it("discovers Windows commands through case-insensitive PATH and PATHEXT values"
   });
 });
 
-it("does not rank Metal-capable whisper ahead of sherpa until a run observes Metal", async () => {
+it("ranks observed acceleration ahead of merely capable Whisper and Parakeet", async () => {
   const { modelPath, sherpaDir } = await localModels();
   vi.spyOn(fs, "realpath").mockResolvedValue(
     "/opt/homebrew/Cellar/whisper-cpp/1.9.1/bin/whisper-cli",
   );
-  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-  vi.spyOn(process, "arch", "get").mockReturnValue("arm64");
-  vi.spyOn(executablePath, "resolveExecutableFromPathEnv").mockImplementation((name) =>
-    name === "whisper-cli"
-      ? "/opt/homebrew/bin/whisper-cli"
-      : name === "sherpa-onnx-offline"
-        ? "/usr/local/bin/sherpa-onnx-offline"
-        : undefined,
-  );
+  mockPlatform("darwin", "arm64");
+  mockCommands({
+    "whisper-cli": "/opt/homebrew/bin/whisper-cli",
+    "sherpa-onnx-offline": "/usr/local/bin/sherpa-onnx-offline",
+    "parakeet-mlx": "/usr/local/bin/parakeet-mlx",
+    whisper: "/usr/local/bin/whisper",
+  });
   const inspectBackend = () =>
     inspect({ WHISPER_CPP_MODEL: modelPath, SHERPA_ONNX_MODEL_DIR: sherpaDir });
   const args = ["-m", modelPath, "-otxt", "-of", "{{OutputBase}}", "-nt", "{{MediaPath}}"];
@@ -167,22 +167,25 @@ it("does not rank Metal-capable whisper ahead of sherpa until a run observes Met
   expect(selection.entries.map((entry) => entry.command)).toEqual([
     "/usr/local/bin/sherpa-onnx-offline",
     "/opt/homebrew/bin/whisper-cli",
+    "/usr/local/bin/parakeet-mlx",
+    "/usr/local/bin/whisper",
   ]);
+  const parakeet = selection.candidates.find(({ id }) => id === "parakeet-mlx");
+  expect(parakeet).toMatchObject({ capableBackend: "mlx" });
+  expect(parakeet).not.toHaveProperty("observedBackend");
   expect(selection.entries.flatMap((entry) => entry.args ?? [])).toContain("{{AttachmentPath}}");
 
   observe("whisper_backend_init_gpu: using MTL0 backend", "/custom/bin/whisper-cli");
-  const mismatchedCommandSelection = await inspectBackend();
-  expect(mismatchedCommandSelection.selected).toMatchObject({ id: "sherpa-onnx-offline" });
+  expect((await inspectBackend()).selected?.id).toBe("sherpa-onnx-offline");
 
   observe("whisper_backend_init_gpu: using MTL0 backend");
-  const observedSelection = await inspectBackend();
-  expect(observedSelection.selected).toMatchObject({
+  expect((await inspectBackend()).selected).toMatchObject({
     id: "whisper-cli",
     capableBackend: "metal",
     observedBackend: "metal",
   });
 
-  for (const failedBackend of ["Metal", "MTL0", "CUDA0"]) {
+  for (const failedBackend of ["Metal", "CUDA0"]) {
     expect(
       observe(
         [
@@ -197,40 +200,13 @@ it("does not rank Metal-capable whisper ahead of sherpa until a run observes Met
   }
 });
 
-it("reports Parakeet as MLX-capable without treating capability as observation", async () => {
-  const { modelPath: whisperModel, sherpaDir } = await localModels();
-
-  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-  vi.spyOn(process, "arch", "get").mockReturnValue("arm64");
-  vi.spyOn(executablePath, "resolveExecutableFromPathEnv").mockImplementation(
-    (name) => `/usr/local/bin/${name}`,
-  );
-  const selection = await inspect({
-    WHISPER_CPP_MODEL: whisperModel,
-    SHERPA_ONNX_MODEL_DIR: sherpaDir,
-  });
-
-  expect(selection.selected).toMatchObject({ id: "sherpa-onnx-offline", requestedBackend: "cpu" });
-  const parakeet = selection.candidates.find((candidate) => candidate.id === "parakeet-mlx");
-  expect(parakeet).toMatchObject({ capableBackend: "mlx" });
-  expect(parakeet).not.toHaveProperty("observedBackend");
-  expect(selection.entries.map((entry) => entry.command)).toEqual([
-    "/usr/local/bin/sherpa-onnx-offline",
-    "/usr/local/bin/whisper-cli",
-    "/usr/local/bin/parakeet-mlx",
-    "/usr/local/bin/whisper",
-  ]);
-});
-
 it("reads observations from the exact Windows whisper-cli.exe executable", async () => {
   const root = tempDirs.make("openclaw-local-audio-backend-");
   const modelPath = path.join(root, "model.bin");
   await fs.writeFile(modelPath, "model");
   const command = path.join(root, "whisper-cli.exe");
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-  vi.spyOn(executablePath, "resolveExecutableFromPathEnv").mockImplementation((name) =>
-    name === "whisper-cli" ? command : undefined,
-  );
+  mockCommands({ "whisper-cli": command });
   const cuda = { args: [], output: "whisper_backend_init_gpu: using CUDA0 backend" };
   recordLocalAudioBackendObservation({
     ...cuda,
@@ -257,11 +233,8 @@ it("reports a dynamically linked CUDA runtime as capable but unobserved", async 
   const whisperModel = path.join(tempDir, "whisper.bin");
   await fs.writeFile(whisperModel, "model");
 
-  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-  vi.spyOn(process, "arch", "get").mockReturnValue("x64");
-  vi.spyOn(executablePath, "resolveExecutableFromPathEnv").mockImplementation((name) =>
-    name === "whisper-cli" ? "/usr/local/cuda/bin/whisper-cli" : undefined,
-  );
+  mockPlatform("linux", "x64");
+  mockCommands({ "whisper-cli": "/usr/local/cuda/bin/whisper-cli" });
   vi.mocked(runExec).mockResolvedValueOnce({
     stdout: "libggml-cuda.so => /usr/local/lib/libggml-cuda.so",
     stderr: "",

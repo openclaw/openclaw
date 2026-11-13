@@ -295,6 +295,24 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  fun compactComposerRetainsSeparateMinimumTouchTargets() {
+    val height = mutableStateOf(720.dp)
+    showChat(viewportWidth = 320.dp, viewportHeight = { height.value })
+    composerEditor().performTextReplacement("Touch target draft")
+    composeRule.onNodeWithContentDescription(nativeString("Details")).assertDoesNotExist()
+    assertComposerControlsVisible(primaryAction = "Send")
+
+    composeRule.runOnIdle { height.value = 180.dp }
+    composeRule.onNodeWithContentDescription(nativeString("Details")).assertIsDisplayed()
+    assertComposerControlsVisible(primaryAction = "Send")
+    composerEditor().assertTextEquals("Touch target draft")
+
+    composeRule.runOnIdle { height.value = 720.dp }
+    composeRule.onNodeWithContentDescription(nativeString("Details")).assertDoesNotExist()
+    assertComposerControlsVisible(primaryAction = "Send")
+  }
+
+  @Test
   fun placeholderFollowsComposerOwnerWithoutChangingBoundDrafts() {
     val scale = mutableStateOf(1f)
     val model = showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp }, fontScale = { scale.value })
@@ -1117,6 +1135,39 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  @Config(sdk = [34], qualifiers = "w1000dp-h1000dp-mdpi")
+  fun slashNameSuggestionsCloseWhenEditingArgumentsAndReturnForTheCommandToken() {
+    val model = showChat(viewportHeight = { 800.dp })
+    val owner = model.captureChatShareOwner()
+    val editor = composerEditor()
+    editor.performTextReplacement("/lo")
+    composeRule.waitForIdle()
+    val suggestion = composeRule.onNodeWithText("/loop")
+    suggestion.assertIsDisplayed()
+    suggestion.performClick()
+    composeRule.waitForIdle()
+
+    editor.assertTextEquals("/loop ")
+    suggestion.assertDoesNotExist()
+    val draft = "/loop 5m check the build"
+    editor.performTextReplacement(draft)
+    composeRule.waitForIdle()
+    editor.assertTextEquals(draft)
+    suggestion.assertDoesNotExist()
+    composeRule.onNodeWithText(nativeString("No commands found")).assertDoesNotExist()
+    assertComposerControlsVisible(primaryAction = "Send")
+    composeRule.runOnIdle {
+      assertEquals(draft, model.chatComposerState.textDrafts[owner])
+      assertFalse(owner in model.chatComposerState.sendStates.value)
+    }
+
+    editor.performTextReplacement("/lo")
+    composeRule.waitForIdle()
+    suggestion.assertIsDisplayed()
+    editor.assertTextEquals("/lo")
+  }
+
+  @Test
   @Config(qualifiers = "w800dp-h800dp-mdpi")
   fun compactDetailsSlashSelectionClosesAndCompletesTheSameEditorWithoutSending() {
     val height = mutableStateOf(720.dp)
@@ -1175,6 +1226,25 @@ class ChatComposerLayoutTest {
   @Test
   fun physicalEnterPreservesTheDraftDuringTalkWithAnActiveRun() {
     assertPhysicalEnterDuringActiveRun(talkActive = true, expectedSends = 0)
+  }
+
+  @Test
+  fun talkMicrophoneMuteStaysAccessibleAlongsideEndTalkAndStop() {
+    val model = showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp }, talkActive = true)
+    assertComposerControlsVisible(talkActive = true)
+    captureComposerProof("talk-microphone-on")
+    composeRule.onNodeWithContentDescription(nativeString("Mute microphone")).assertIsDisplayed().performClick()
+    composeRule.runOnIdle { assertTrue(model.talkMicrophoneMuted.value) }
+    composeRule
+      .onNodeWithContentDescription(nativeString("Unmute microphone"))
+      .assertIsDisplayed()
+      .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, nativeString("Microphone muted")))
+    composeRule.onNodeWithText(nativeString("Talk · Microphone muted")).assertIsDisplayed()
+    assertComposerControlsVisible(talkActive = true)
+    captureComposerProof("talk-microphone-muted")
+    composeRule.onNodeWithContentDescription(nativeString("Unmute microphone")).performClick()
+    composeRule.runOnIdle { assertFalse(model.talkMicrophoneMuted.value) }
+    composeRule.onNodeWithContentDescription(nativeString("Mute microphone")).assertIsDisplayed()
   }
 
   @Test
@@ -3498,7 +3568,7 @@ class ChatComposerLayoutTest {
 
   @Test
   @Config(qualifiers = "w800dp-h800dp-mdpi")
-  fun effortCommandsRecheckAdminAndFastRunEligibility() =
+  fun effortCommandsRecheckWriteAndFastRunEligibility() =
     withEffortRequests { model, requests, _ ->
       openEffortSheet()
       val select = checkNotNull(effortSlider().fetchSemanticsNode().config[SemanticsActions.SetProgress].action)
@@ -3524,18 +3594,16 @@ class ChatComposerLayoutTest {
       composeRule.waitForIdle()
       assertEquals("A saved Switch callback must respect a newly active run", 0, requests.size)
       composeRule.runOnIdle {
-        @Suppress("UNCHECKED_CAST")
-        val scopes =
-          NodeRuntime::class.java
-            .getDeclaredField("_operatorScopes")
-            .apply { isAccessible = true }
-            .get(runtime) as MutableStateFlow<List<String>>
-        scopes.value = listOf("operator.read", "operator.write")
+        controllerFlow<Int>("_pendingRunCount").value = 0
+        runtimeScopes().value = listOf("operator.read")
       }
-      composeRule.waitUntil { "operator.admin" !in model.operatorScopes.value }
-      composeRule.runOnUiThread { select(2f) }
+      composeRule.waitUntil { model.pendingRunCount.value == 0 && "operator.write" !in model.operatorScopes.value }
+      composeRule.runOnUiThread {
+        select(2f)
+        fast()
+      }
       composeRule.waitForIdle()
-      assertEquals("Thinking must recheck admin instead of using the old enabled value", 0, requests.size)
+      assertEquals("Effort callbacks must recheck write access", 0, requests.size)
     }
 
   @Test
@@ -3632,7 +3700,11 @@ class ChatComposerLayoutTest {
         """{"session":{"key":"${controller.sessionKey.value}","thinkingLevel":"low","thinkingLevels":[{"id":"off","label":"off"},{"id":"low","label":"low"},{"id":"high","label":"high"}],"fastMode":false}}""",
       )
     }
-    composeRule.waitUntil { model.pendingRunCount.value == 0 && model.chatThinkingLevelSelection.value.options.size == 3 }
+    composeRule.runOnIdle { runtimeScopes().value = listOf("operator.read", "operator.write") }
+    composeRule.waitUntil {
+      model.pendingRunCount.value == 0 && model.chatThinkingLevelSelection.value.options.size == 3 &&
+        "operator.write" in model.operatorScopes.value && "operator.admin" !in model.operatorScopes.value
+    }
     withSessionPatchRequests { requests, release -> assertions(model, requests, release) }
   }
 
@@ -6491,6 +6563,10 @@ class ChatComposerLayoutTest {
             ),
         )
     val controlBounds = controls.map { it.getUnclippedBoundsInRoot() }.toMutableList()
+    if (talkActive) {
+      val mic = composeRule.onNode(hasContentDescription(nativeString("Mute microphone")) or hasContentDescription(nativeString("Unmute microphone")))
+      mic.assertIsDisplayed().assertHasClickAction()
+    }
     val primary = primaryAction?.let { composeRule.onNodeWithContentDescription(nativeString(it)).getUnclippedBoundsInRoot() }
     val dictation =
       composeRule.onNode(
@@ -6523,7 +6599,7 @@ class ChatComposerLayoutTest {
     controlBounds.forEach { bounds ->
       val retainsTouchTarget =
         with(composeRule.density) {
-          (bounds.right - bounds.left).roundToPx() >= (if (compact) 36.dp else 48.dp).roundToPx() &&
+          (bounds.right - bounds.left).roundToPx() >= 48.dp.roundToPx() &&
             (bounds.bottom - bounds.top).roundToPx() >= 48.dp.roundToPx()
         }
       assertTrue("Composer controls must retain their touch targets: $bounds inside $viewport", retainsTouchTarget)

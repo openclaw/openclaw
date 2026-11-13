@@ -120,3 +120,7 @@ export function claudeInputJsonDelta(partialJson: string, index?: number) {
 export function claudeTextDelta(text: string, index?: number | string) {
   return indexedEvent("content_block_delta", index, { delta: { type: "text_delta", text } });
 }
+
+export function createGeminiBackend(): CliJsonlStreamingParserOptions["backend"] {
+  return { command: "gemini", output: "jsonl", jsonlDialect: "gemini-stream-json" };
+}

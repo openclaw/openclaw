@@ -8,32 +8,13 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
-import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import { readConfigMachineState } from "../state/config-machine-state.js";
-import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import {
-  createGatewaySchedulerClock,
-  createTestGatewayScheduler,
-} from "../test-utils/gateway-scheduler-clock.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
-import { reserveTestPortListener } from "../test-utils/port-claims.js";
-import { readRestartSentinel, writeRestartSentinel } from "./restart-sentinel.js";
-import { UpdateCampaignController } from "./update-campaign.js";
-import {
-  createGatewayUpdateLifecycle,
-  currentUpdateCheckLifecycle,
-} from "./update-check-lifecycle.js";
+import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { UpdateCheckResult } from "./update-check.js";
-import { getUpdateRun, listUpdateRuns } from "./update-run-ledger.js";
-import type { AutoUpdateRunner } from "./update-startup-auto-run.js";
 import {
-  createDevGitStatus,
-  writeDevGitInstallReceipt,
-} from "./update-startup-git.test-support.js";
+  closeUpdateFixtureDatabases,
+  resetUpdateFixtureModules,
+} from "./update-fixture.test-support.js";
+import type { AutoUpdateRunner } from "./update-startup-auto-run.js";
 import {
   updateResult,
   matchingObject,
@@ -42,7 +23,42 @@ import {
   startedHandoff,
   idleActiveWorkInspectors,
   expectNoCalls,
+  type PersistedUpdateCheckState,
 } from "./update-startup-suite.test-support.js";
+
+let { runOutsideAsyncWorkScope } = await import("../shared/async-work-scope.js");
+let { isReportableUpdateRun } = await import("../shared/update-outcome-classification.js");
+let { writeConfigMachineState } = await import("../state/config-machine-state-write.js");
+let { readConfigMachineState } = await import("../state/config-machine-state.js");
+let { createGatewaySchedulerClock, createTestGatewayScheduler } =
+  await import("../test-utils/gateway-scheduler-clock.js");
+let { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+let { reserveTestPortListener } = await import("../test-utils/port-claims.js");
+let { readRestartSentinel, writeRestartSentinel } = await import("./restart-sentinel.js");
+let { UpdateCampaignController } = await import("./update-campaign.js");
+let { createGatewayUpdateLifecycle, currentUpdateCheckLifecycle } =
+  await import("./update-check-lifecycle.js");
+let { getUpdateRun, listUpdateRuns } = await import("./update-run-ledger.js");
+let { createDevGitStatus, writeDevGitInstallReceipt } =
+  await import("./update-startup-git.test-support.js");
+
+async function importUpdateFixtureModules() {
+  ({ runOutsideAsyncWorkScope } = await import("../shared/async-work-scope.js"));
+  ({ isReportableUpdateRun } = await import("../shared/update-outcome-classification.js"));
+  ({ writeConfigMachineState } = await import("../state/config-machine-state-write.js"));
+  ({ readConfigMachineState } = await import("../state/config-machine-state.js"));
+  ({ createGatewaySchedulerClock, createTestGatewayScheduler } =
+    await import("../test-utils/gateway-scheduler-clock.js"));
+  ({ createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js"));
+  ({ reserveTestPortListener } = await import("../test-utils/port-claims.js"));
+  ({ readRestartSentinel, writeRestartSentinel } = await import("./restart-sentinel.js"));
+  ({ UpdateCampaignController } = await import("./update-campaign.js"));
+  ({ createGatewayUpdateLifecycle, currentUpdateCheckLifecycle } =
+    await import("./update-check-lifecycle.js"));
+  ({ getUpdateRun, listUpdateRuns } = await import("./update-run-ledger.js"));
+  ({ createDevGitStatus, writeDevGitInstallReceipt } =
+    await import("./update-startup-git.test-support.js"));
+}
 
 const {
   cancelManagedServiceUpdateHandoffMock: cancelHandoff,
@@ -63,21 +79,6 @@ function commandSuccess(stdout = "") {
   return { stdout, stderr: "", code: 0, signal: null, killed: false, termination: "exit" as const };
 }
 
-type PersistedUpdateCheckState = {
-  lastCheckedAt?: string;
-  lastCheckedChannel?: "stable" | "extended-stable" | "beta" | "dev";
-  lastNotifiedVersion?: string;
-  lastNotifiedTag?: string;
-  lastAvailableVersion?: string;
-  lastAvailableTag?: string;
-  autoInstallId?: string;
-  autoFirstSeenVersion?: string;
-  autoFirstSeenTag?: string;
-  autoFirstSeenAt?: string;
-  autoLastAttemptVersion?: string;
-  autoLastAttemptAt?: string;
-};
-
 describe("update-startup", () => {
   let tempDir: string;
   let testState: OpenClawTestState;
@@ -91,15 +92,25 @@ describe("update-startup", () => {
   let resolveNpmChannelTag: (typeof import("./update-check.js"))["resolveNpmChannelTag"];
   let runCommandWithTimeout: (typeof import("../process/exec.js"))["runCommandWithTimeout"];
   let runGatewayUpdateCheckOwner: (typeof import("./update-startup.js"))["runGatewayUpdateCheck"];
-  let createGatewayUpdateCheck: (typeof import("./update-startup.js"))["createGatewayUpdateCheck"];
+  let createGatewayUpdateCheck: (typeof import("./update-startup-scheduler.js"))["createGatewayUpdateCheck"];
   let getUpdateAvailable: (typeof import("./update-status-state.js"))["getUpdateAvailable"];
   let getUpdateEffectiveChannel: (typeof import("./update-startup.js"))["getUpdateEffectiveChannel"];
   let getUpdateSchedule: (typeof import("./update-status-state.js"))["getUpdateSchedule"];
   let refreshGatewayUpdateStatus: (typeof import("./update-status-schedule.js"))["refreshGatewayUpdateStatus"];
-  let resetUpdateAvailableStateForTest: (typeof import("./update-startup.js"))["resetUpdateAvailableStateForTest"];
-  let loaded = false;
   let autoRun: typeof import("./update-startup-auto-run.js");
   const updateChecks = new Set<ReturnType<typeof createGatewayUpdateCheck>>();
+
+  async function importStartupModules() {
+    autoRun = await import("./update-startup-auto-run.js");
+    ({ resolveOpenClawPackageRoot } = await import("./openclaw-root.js"));
+    ({ checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js"));
+    ({ runCommandWithTimeout } = await import("../process/exec.js"));
+    ({ runGatewayUpdateCheck: runGatewayUpdateCheckOwner, getUpdateEffectiveChannel } =
+      await import("./update-startup.js"));
+    ({ createGatewayUpdateCheck } = await import("./update-startup-scheduler.js"));
+    ({ refreshGatewayUpdateStatus } = await import("./update-status-schedule.js"));
+    ({ getUpdateAvailable, getUpdateSchedule } = await import("./update-status-state.js"));
+  }
 
   type CheckOptions = {
     cfg: OpenClawConfig | (() => OpenClawConfig);
@@ -162,6 +173,8 @@ describe("update-startup", () => {
   }
 
   beforeEach(async () => {
+    await resetUpdateFixtureModules();
+    await importUpdateFixtureModules();
     versionRef.value = "1.0.0";
     clock = createGatewaySchedulerClock(Date.parse("2026-01-17T10:00:00Z"));
     vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
@@ -191,22 +204,7 @@ describe("update-startup", () => {
     };
     triage.mockReset().mockResolvedValue(triageResult);
 
-    // Perf: load mocked modules once (after clock/env are set up).
-    if (!loaded) {
-      autoRun = await import("./update-startup-auto-run.js");
-      ({ resolveOpenClawPackageRoot } = await import("./openclaw-root.js"));
-      ({ checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js"));
-      ({ runCommandWithTimeout } = await import("../process/exec.js"));
-      ({
-        runGatewayUpdateCheck: runGatewayUpdateCheckOwner,
-        createGatewayUpdateCheck,
-        getUpdateEffectiveChannel,
-        resetUpdateAvailableStateForTest,
-      } = await import("./update-startup.js"));
-      ({ refreshGatewayUpdateStatus } = await import("./update-status-schedule.js"));
-      ({ getUpdateAvailable, getUpdateSchedule } = await import("./update-status-state.js"));
-      loaded = true;
-    }
+    await importStartupModules();
     vi.mocked(resolveOpenClawPackageRoot).mockClear();
     vi.mocked(checkUpdateStatus).mockClear();
     telemetry.mockReset().mockResolvedValue(null);
@@ -231,20 +229,19 @@ describe("update-startup", () => {
     });
     cancelHandoff.mockReset().mockResolvedValue("restored-in-process");
     startHandoff.mockResolvedValue(startedHandoff());
-    resetUpdateAvailableStateForTest(scheduler);
     createTestUpdateCheck({ cfg: {} });
   });
 
   afterEach(async () => {
     await Promise.all([...updateChecks].map((check) => check.stop()));
     updateChecks.clear();
-    resetUpdateAvailableStateForTest(scheduler);
     await scheduler.stop();
+    await closeUpdateFixtureDatabases();
     vi.restoreAllMocks();
     await testState.cleanup();
   });
 
-  afterAll(closeStateDatabaseForTest);
+  afterAll(closeUpdateFixtureDatabases);
 
   it("retries install identity initialization after a failed probe", async () => {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
@@ -614,7 +611,14 @@ describe("update-startup", () => {
   it("does not resolve the npm channel for an extended-stable Git install", async () => {
     await seedExtendedStableAvailability();
     seedStableAutoRolloutState();
-    resetUpdateAvailableStateForTest(scheduler);
+    await Promise.all([...updateChecks].map((check) => check.stop()));
+    updateChecks.clear();
+    await scheduler.stop();
+    await resetUpdateFixtureModules();
+    await importUpdateFixtureModules();
+    await importStartupModules();
+    scheduler = createTestGatewayScheduler(clock.clock);
+    createTestUpdateCheck({ cfg: {} });
     vi.mocked(resolveOpenClawPackageRoot).mockClear();
     vi.mocked(checkUpdateStatus).mockClear();
     vi.mocked(resolveNpmChannelTag).mockClear();
@@ -1189,6 +1193,7 @@ describe("update-startup", () => {
         pending.resolve({
           ...startedHandoff({ logPath: "/tmp/late-handoff.log", handoffId: "late-handoff" }),
           status: joined ? "joined" : "started",
+          message: "Update blocked by another update lease.",
         });
       startHandoff.mockImplementationOnce(pauseAt(entered, pending));
       const log = { info: vi.fn() };
@@ -1370,6 +1375,13 @@ describe("update-startup", () => {
     await runAutoUpdateCheckWithDefaults({ cfg: autoConfig() });
 
     expectNoCalls(runCommandWithTimeout, startHandoff, restart);
+    expect(triage).not.toHaveBeenCalled();
+    const run = listUpdateRuns()[0]!;
+    expect(run).toMatchObject({
+      status: "skipped",
+      reason: "managed-service-handoff-unavailable",
+    });
+    expect(isReportableUpdateRun(run)).toBe(false);
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
     expect(getUpdateAvailable()).toMatchObject({ latestVersion: "2.0.0-beta.1" });
     expect((await readRestartSentinel())?.payload).toMatchObject({
@@ -1425,7 +1437,11 @@ describe("update-startup", () => {
   it("does not schedule another restart when auto-update joins an active handoff", async () => {
     mockPackageUpdateStatus("beta", "2.0.0-beta.1");
     supervisor.mockReturnValue("launchd");
-    startHandoff.mockResolvedValueOnce({ ...startedHandoff(), status: "joined" });
+    startHandoff.mockResolvedValueOnce({
+      ...startedHandoff(),
+      status: "joined",
+      message: "Update blocked by another update lease.",
+    });
 
     await runAutoUpdateCheckWithDefaults({ cfg: autoConfig() });
 
@@ -1435,6 +1451,7 @@ describe("update-startup", () => {
         trigger: "campaign",
         status: "skipped",
         reason: "managed-service-handoff-already-running",
+        origin: expect.objectContaining({ nextAction: "Update blocked by another update lease." }),
         finishedAtMs: expect.any(Number),
       }),
     );

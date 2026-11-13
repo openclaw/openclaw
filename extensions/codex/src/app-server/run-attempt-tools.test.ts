@@ -4,7 +4,8 @@ import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexDynamicToolSpecs, projectCodexDynamicTools } from "./dynamic-tool-catalog.js";
 import { resolveCodexDynamicToolsLoadingForRuntime } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
-import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonObject } from "./protocol.js";
+import { flattenSpecsWithNamespace } from "./dynamic-tools.test-support.js";
+import type { JsonObject } from "./protocol.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import { buildCodexThreadConfiguration } from "./thread-requests.js";
 
@@ -46,16 +47,6 @@ function createCodexToolBridgeForTest(
     signal: new AbortController().signal,
     directToolNames: resolveCodexDynamicToolDirectNames(params, registeredTools),
   });
-}
-
-function flattenSpecsWithNamespace(
-  specs: readonly CodexDynamicToolSpec[],
-): Array<CodexDynamicToolFunctionSpec & { namespace?: string }> {
-  return specs.flatMap((spec) =>
-    spec.type === "namespace"
-      ? spec.tools.map((tool) => ({ ...tool, namespace: spec.name }))
-      : [spec],
-  );
 }
 
 describe("Codex direct tool loading", () => {
@@ -116,6 +107,87 @@ describe("Codex direct tool loading", () => {
       });
     }
     expect(tool.execute).not.toHaveBeenCalled();
+  });
+
+  it("executes only fresh matching definitions under current owner authority", async () => {
+    const originalTools = ["unchanged", "description_changed", "schema_changed", "removed"].map(
+      createRuntimeDynamicTool,
+    );
+    const registeredSpecs = createCodexDynamicToolBridge({
+      tools: originalTools,
+      signal: new AbortController().signal,
+    }).specs;
+    const acceptedCatalog = JSON.stringify(registeredSpecs);
+    const unchanged = createRuntimeDynamicTool("unchanged");
+    vi.mocked(unchanged.execute).mockResolvedValue({
+      content: [{ type: "text", text: "fresh executor" }],
+      details: {},
+    });
+    const descriptionChanged = createRuntimeDynamicTool("description_changed");
+    descriptionChanged.description = "Different tool contract";
+    const schemaChanged = createRuntimeDynamicTool("schema_changed");
+    schemaChanged.parameters = {
+      type: "object",
+      properties: { optional: { type: "string" } },
+      additionalProperties: false,
+    };
+    const added = createRuntimeDynamicTool("added");
+    const currentTools = [unchanged, descriptionChanged, schemaChanged, added];
+    let current = true;
+    const params = {
+      tools: currentTools,
+      registeredSpecs,
+      requireExactRegisteredDefinitions: true,
+      signal: new AbortController().signal,
+      assertCurrentAsync: async () => {
+        if (!current) {
+          throw new Error("Synthetic owner authority revoked");
+        }
+      },
+    };
+    const bridge = createCodexDynamicToolBridge(params);
+    expect(JSON.stringify(bridge.specs)).toBe(acceptedCatalog);
+
+    for (const tool of ["removed", "added", "description_changed", "schema_changed"]) {
+      const result = await bridge.handleToolCall({
+        threadId: "retained-parent",
+        turnId: "next-turn",
+        callId: `denied-${tool}`,
+        namespace: "openclaw",
+        tool,
+        arguments: {},
+      });
+      expect(result).toMatchObject({ success: false, executionStarted: false });
+    }
+    const result = await bridge.handleToolCall({
+      threadId: "retained-parent",
+      turnId: "next-turn",
+      callId: "fresh-unchanged",
+      namespace: "openclaw",
+      tool: "unchanged",
+      arguments: {},
+    });
+    expect(result).toMatchObject({
+      success: true,
+      contentItems: [{ type: "inputText", text: "fresh executor" }],
+    });
+    expect(unchanged.execute).toHaveBeenCalledTimes(1);
+    current = false;
+    const revoked = await bridge.handleToolCall({
+      threadId: "retained-parent",
+      turnId: "next-turn",
+      callId: "revoked-unchanged",
+      namespace: "openclaw",
+      tool: "unchanged",
+      arguments: {},
+    });
+    expect(revoked).toMatchObject({ success: false, executionStarted: false });
+    expect(JSON.stringify(revoked)).toContain("Synthetic owner authority revoked");
+    expect(unchanged.execute).toHaveBeenCalledTimes(1);
+    for (const tool of [...originalTools, descriptionChanged, schemaChanged, added]) {
+      expect(tool.execute).not.toHaveBeenCalled();
+    }
+    expect(JSON.stringify(bridge.specs)).toBe(acceptedCatalog);
   });
 });
 

@@ -5,6 +5,7 @@ import {
   type ScheduledAdmissionFacts,
   type ScheduledExecutionFacts,
 } from "./execution-context.js";
+import { createTestCronOperatorSource } from "./execution-context.test-support.js";
 import type { CronStoredJob } from "./types.js";
 
 const PARENT_KEY = "agent:main:dashboard:parent";
@@ -75,38 +76,6 @@ function ready(j: CronStoredJob, f: ScheduledAdmissionFacts): ScheduledExecution
   return result.facts;
 }
 
-function operatorSource() {
-  return {
-    executionRevision: "exec-1",
-    source: {
-      version: 1,
-      agentId: "main",
-      sessionKey: PARENT_KEY,
-      sessionId: "parent-session",
-      lifecycleRevision: "rev-1",
-      sourceRunId: "source-run",
-      snapshot: {
-        profileId: "profile-1",
-        scopes: ["operator.admin"],
-        assignedRole: null,
-        githubLogin: null,
-        grant: null,
-        aliasBindingIds: [],
-        authPolicy: {
-          generation: "",
-          grantGeneration: "grant-gen",
-          role: "operator",
-          authMethod: "device-token",
-        },
-        device: { deviceId: "device-1", key: "a".repeat(64) },
-        controlUiAdmin: true,
-        localOperator: false,
-        sourceIngress: "control-ui",
-      },
-    },
-  } as unknown as NonNullable<CronStoredJob["operatorSource"]>;
-}
-
 describe("buildScheduledExecutionContext principals", () => {
   it("makes an exactly linked isolated job a child of its creating conversation", () => {
     const context = ready(parentLinked(), facts());
@@ -150,6 +119,20 @@ describe("buildScheduledExecutionContext principals", () => {
     expect(context.resources.memory).toMatchObject({ source: "parent", owner: false });
   });
 
+  it("keeps operator authority for a linked trusted-policy job without a recorded requester", () => {
+    // v2026.10.6 shape: an operator's `cron.add --session-key` stored the parent and a
+    // trusted policy but no createdActor.
+    const stored = parentLinked({
+      createdActor: undefined,
+      owner: undefined,
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+    });
+    const context = ready(stored, facts({ requesterCheck: undefined }));
+    expect(context.principal).toMatchObject({ kind: "parent", requester: { kind: "unknown" } });
+    expect(context.authority).toMatchObject({ owner: true, basis: "trusted-policy" });
+    expect(context.resources.memory).toMatchObject({ source: "parent", owner: true });
+  });
+
   it("fails closed when the caller did not run the requester check", () => {
     const context = ready(parentLinked(), facts({ requesterCheck: undefined }));
     expect(context.authority).toMatchObject({ owner: false, basis: "none" });
@@ -163,7 +146,7 @@ describe("buildScheduledExecutionContext principals", () => {
   it("prefers the operator source and names its exact incarnation", () => {
     const stored = parentLinked({
       sessionTarget: `session:${PARENT_KEY}`,
-      operatorSource: operatorSource(),
+      operatorSource: createTestCronOperatorSource(PARENT_KEY),
     });
     const context = ready(stored, facts({ runSessionKey: PARENT_KEY }));
     expect(context.principal).toMatchObject({

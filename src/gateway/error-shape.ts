@@ -1,8 +1,10 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { renderStorageFailureSummary } from "../agents/failover/assistant-request-failure-copy.js";
+import { ConfigReadOnlyError } from "../config/config-write-guard.js";
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
+import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import {
@@ -18,8 +20,14 @@ export function errorShapeFromError(
   opts?: Parameters<typeof errorShape>[2] & { message?: string },
 ) {
   const { message, ...metadata } = opts ?? {};
+  if (error instanceof ConfigReadOnlyError) {
+    metadata.details = { code: error.code };
+  }
   const outcomeUnknown = hasSqliteWorkerOutcomeUnknown(error);
   const candidates = collectNestedErrorCandidates(error);
+  const unavailableAuthority = candidates.find(
+    (candidate) => candidate instanceof GatewayOperatorAccessUnavailableError,
+  );
   const ended = candidates.find((candidate) => candidate instanceof IncognitoSessionEndedError);
   const storageFailure = classifyGatewayStorageFailure(error);
   const storageMessage =
@@ -29,8 +37,12 @@ export function errorShapeFromError(
     storageFailure === "57014"
       ? renderStorageFailureSummary(storageFailure)
       : undefined;
-  const shape =
-    error instanceof AgentDatabaseAdmissionError
+  const shape = unavailableAuthority
+    ? errorShape(ErrorCodes.UNAVAILABLE, unavailableAuthority.message, {
+        retryable: true,
+        details: { code: "OPERATOR_ACCESS_UNAVAILABLE" },
+      })
+    : error instanceof AgentDatabaseAdmissionError
       ? createAgentDatabaseAdmissionErrorShape(error.refusal)
       : ended instanceof IncognitoSessionEndedError
         ? errorShape(ErrorCodes.UNAVAILABLE, ended.message, {

@@ -149,10 +149,7 @@ async function withDeviceTimers<T>(
 ): Promise<T> {
   vi.useFakeTimers();
   try {
-    let shown!: () => void;
-    const ready = new Promise<void>((resolve) => {
-      shown = resolve;
-    });
+    const { promise: ready, resolve: shown } = Promise.withResolvers<void>();
     const pending = Promise.resolve(run(async () => shown()));
     expect(await Promise.race([ready.then(() => true), pending.then(() => false)])).toBe(true);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -292,7 +289,8 @@ describe("github-copilot plugin", () => {
     };
     runtimeAuth.mockResolvedValue(auth);
     const prepare = (headers?: Record<string, string>) =>
-      provider.prepareRuntimeAuth({
+      provider.prepareRuntimeAuthV2({
+        capability: "chat",
         config: {},
         env: {},
         provider: ID,
@@ -300,7 +298,7 @@ describe("github-copilot plugin", () => {
         model: { id: "gpt-5.4-mini", provider: ID, headers },
         apiKey: auth.apiKey,
         authMode: "token",
-      } as never);
+      });
     await expect(prepare()).resolves.toEqual(auth);
     await expect(prepare({ "X-Opaque": "inline-header-credential" })).resolves.toEqual({
       ...auth,

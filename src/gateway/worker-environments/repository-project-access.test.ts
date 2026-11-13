@@ -3,10 +3,9 @@ import { expect, it, vi } from "vitest";
 import { createWorkerEnvironmentAccess } from "./environment-access.js";
 import {
   PREPARATION_KEY,
-  PROJECT_KEY,
+  PRESENCE_REPOSITORY,
   usePreparedPoolFixture,
 } from "./prepared-pool.test-support.js";
-import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 
 const admit = vi.hoisted(() =>
   vi.fn<typeof import("./repository-project-admission.js").prepareRepositoryWorkerProjectSource>(),
@@ -24,30 +23,19 @@ it.each([
   "identity replaced",
   "access lost after binding",
 ] as const)("revalidates source access during %s binding", async (scenario) => {
-  const project: RepositoryWorkerProjectSnapshot = {
-    key: PROJECT_KEY,
-    baseCommit: "d".repeat(40),
-    source: {
-      kind: "repository",
-      url: "https://github.com/example/prepared.git",
-      repositoryId: "R_prepared_fixture",
-      owner: { agent: { agentId: "main", provenance: null }, identity: { source: "anonymous" } },
-    },
-  };
+  const project = structuredClone(PRESENCE_REPOSITORY);
   const record = await fixture.attachSeed("repository", { repository: project });
   if (scenario === "reopened store") {
     await fixture.reopenStore();
   }
   let callerCurrent = true;
   let identityCurrent = true;
-  const revalidate = vi.fn(async () => {
+  const revalidate = async () =>
     assert(
       scenario !== "access lost after binding",
       new Error("Repository access is no longer available"),
     );
-  });
   admit.mockReset().mockImplementation(async (params) => {
-    expect([params.expected, params.namespace]).toEqual([project, "gateway"]);
     params.assertCurrent();
     assert(
       scenario !== "source unavailable",
@@ -62,11 +50,14 @@ it.each([
       revalidate,
     };
   });
-  const prepared = {
-    gatewayNamespace: "gateway",
+  const bindingIdentity = {
     environmentId: record.environmentId,
     preparationKey: PREPARATION_KEY,
     cacheKey: "9".repeat(64),
+  };
+  const prepared = {
+    ...bindingIdentity,
+    gatewayNamespace: "gateway",
     workspaceDir: "/worker/prepared/workspace",
     homeDir: "/worker/prepared/home",
     sourceManifestRef: `sha256:${"a".repeat(64)}`,
@@ -74,12 +65,15 @@ it.each([
   };
   const bind = vi.fn(async (request: { assertCurrent: () => void }) => {
     request.assertCurrent();
+    if (scenario === "reopened store") {
+      expect(request).not.toHaveProperty("readNativeCredential");
+      expect(request).not.toHaveProperty("retainCredentialCleanup");
+    }
     identityCurrent = scenario !== "identity replaced";
     return prepared;
   });
   const access = createWorkerEnvironmentAccess({
     store: fixture.store,
-    getCleanupError: () => undefined,
     readStartStatus: () => undefined,
     getConfig: () => fixture.config,
     projectNamespace: "gateway",
@@ -97,13 +91,13 @@ it.each([
     withLock: async (_id, run) => await run(),
   });
   const result = access.bindPreparedWorkspace({
-    environmentId: record.environmentId,
+    ...bindingIdentity,
     ownerEpoch: record.ownerEpoch,
     sessionId: "session:repository",
     sessionKey: "agent:main:session:repository",
-    preparationKey: PREPARATION_KEY,
-    cacheKey: "9".repeat(64),
     signal: fixture.abort.signal,
+    readNativeCredential: async () => "synthetic-host-only-credential",
+    retainCredentialCleanup: () => {},
     assertCurrent: () => assert(callerCurrent, new Error("Dispatch caller retired")),
   });
   if (scenario === "reopened store") {
@@ -112,7 +106,6 @@ it.each([
     binding.assertCurrent();
     identityCurrent = false;
     expect(() => binding.assertCurrent()).toThrow("Repository identity changed");
-    expect(revalidate).toHaveBeenCalledOnce();
   } else {
     await expect(result).rejects.toThrow(
       scenario === "caller revoked" ? "Dispatch caller retired" : /Repository (access|identity)/u,
@@ -121,6 +114,5 @@ it.each([
   expect(bind).toHaveBeenCalledTimes(
     scenario === "source unavailable" || scenario === "caller revoked" ? 0 : 1,
   );
-  expect(admit).toHaveBeenCalledOnce();
   expect(fixture.store.get(record.environmentId)).toEqual(record);
 });

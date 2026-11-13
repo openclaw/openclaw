@@ -34,6 +34,8 @@ import {
   installScriptedRfbServer,
 } from "./desktop-rfb-test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
 const suite = createControlUiE2eSuite({
   name: "chat sidebar cold-open invariant",
   startServerBeforeBrowser: true,
@@ -335,7 +337,7 @@ async function readSlotColdOpenOutcome(
         .getByText(
           expectedOutcome === "content"
             ? "Build application"
-            : "No background processes in this conversation.",
+            : "No background processes in this session yet.",
           { exact: true },
         )
         .waitFor();
@@ -353,7 +355,7 @@ async function readSlotColdOpenOutcome(
           true,
         );
       } else {
-        await subagents.getByText("No subagents in this conversation.", { exact: true }).waitFor();
+        await subagents.getByText("No subagents yet.", { exact: true }).waitFor();
       }
     }
     if (label === "Side chat" && !expectedOutcome) {
@@ -543,7 +545,9 @@ suite.define(() => {
       await clickSidebarTab(page, "Desktop");
       await gateway.waitForRequest(INVENTORY);
       await desktop.getByText("Connecting to desktop…", { exact: true }).waitFor();
-      await page.screenshot({ path: path.join(artifactDir, "unified-loading.png") });
+      if (captureUiProof) {
+        await page.screenshot({ path: path.join(artifactDir, "unified-loading.png") });
+      }
       await gateway.resolveDeferred(INVENTORY, retainedDesktopEnvironment);
       await canvas.waitFor({ state: "visible" });
       await expect.poll(rfb.events).toEqual(["authenticated:1"]);
@@ -557,7 +561,9 @@ suite.define(() => {
           ),
         )
         .toEqual([24, 180, 160, 255]);
-      await page.screenshot({ path: path.join(artifactDir, "connected.png") });
+      if (captureUiProof) {
+        await page.screenshot({ path: path.join(artifactDir, "connected.png") });
+      }
       const originalCanvas = await canvas.elementHandle();
       const inventoryCount = (await gateway.getRequests(INVENTORY)).length;
       const observeCount = (await gateway.getRequests(OBSERVE)).length;
@@ -837,14 +843,14 @@ suite.define(() => {
         expect(outcome).toEqual({
           outcome: "generic-empty",
           heading: "Subagents",
-          description: "No subagents in this conversation.",
+          description: "No subagents yet.",
           emptyStateOffersAction: false,
         });
       } else if (label === "Processes") {
         expect(outcome).toEqual({
           outcome: "generic-empty",
           heading: "No processes",
-          description: "No background processes in this conversation.",
+          description: "No background processes in this session yet.",
           emptyStateOffersAction: false,
         });
       } else if (label === "Discussion") {

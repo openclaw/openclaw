@@ -1,7 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
-  errorShape,
   validateChatPredictParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/session-work-start.js";
@@ -20,6 +19,7 @@ import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { captureRpcSourceScopeMatcher } from "../session-runtime-scope.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
 import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
+import { respondError } from "./response.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -43,7 +43,9 @@ function conversationText(messages: unknown[]): string | undefined {
               })
               .join("\n")
           : "";
-    return text.trim() ? [{ role: message.role, text: text.slice(0, 2_000) }] : [];
+    // A reply usually ends with its question or recommendation, so keep the end of long turns.
+    const trimmed = text.trim();
+    return trimmed ? [{ role: message.role, text: trimmed.slice(-2_000) }] : [];
   });
   if (turns.at(-1)?.role !== "assistant" || !turns.some((turn) => turn.role === "user")) {
     return undefined;
@@ -74,13 +76,10 @@ export const chatPredictionHandlers: GatewayRequestHandlers = {
     }
     // This is a human composer affordance, not an alternate agent tool or system inference route.
     if (!client?.connId || !sessionAccessAuthority) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.FORBIDDEN,
-          "Composer predictions require a connected composer with session write access.",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.FORBIDDEN,
+        "Composer predictions require a connected composer with session write access.",
       );
       return;
     }
@@ -192,10 +191,11 @@ export const chatPredictionHandlers: GatewayRequestHandlers = {
           storePath,
           sessionAgentId: agentId,
           canonicalKey,
-          max: 12,
-          maxHistoryBytes: 24_000,
-          responseHistoryBytes: 24_000,
-          effectiveMaxChars: 2_000,
+          // Tool calls and results share this window; read past them to reach recent dialogue.
+          max: 100,
+          maxHistoryBytes: 200_000,
+          responseHistoryBytes: 200_000,
+          effectiveMaxChars: 8_000,
           toolResultMaxChars: 0,
           offset: undefined,
           messageId: undefined,
@@ -217,13 +217,10 @@ export const chatPredictionHandlers: GatewayRequestHandlers = {
       });
       assertCurrent();
       if (!operator) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.FORBIDDEN,
-            "Composer predictions require an authenticated operator.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.FORBIDDEN,
+          "Composer predictions require an authenticated operator.",
         );
         return;
       }
@@ -249,13 +246,10 @@ export const chatPredictionHandlers: GatewayRequestHandlers = {
         respond(false, undefined, error.error);
       } else {
         // Provider errors may contain credentials or prompt details; never forward them.
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "Composer predictions are unavailable for the selected model.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          "Composer predictions are unavailable for the selected model.",
         );
       }
     } finally {

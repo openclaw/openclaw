@@ -11,11 +11,7 @@ type NativeKeyFixture = {
 type NativeKeyCase = readonly [string, string, () => JSX.Element, boolean, NativeKeyFixture];
 
 function staticControl(markup: string) {
-  return () => {
-    const template = document.createElement("template");
-    template.innerHTML = markup;
-    return template.content;
-  };
+  return () => Object.assign(document.createElement("template"), { innerHTML: markup }).content;
 }
 const controls = [
   ["input", staticControl('<input value="Text">')],
@@ -25,13 +21,14 @@ const controls = [
 ] as const;
 const boundaryKeys = ["Home", "End"];
 const pageKeys = [...boundaryKeys, "PageUp", "PageDown"];
+const mac = { platform: "MacIntel" };
 export const nativeControlNavigationCases: NativeKeyCase[] = [];
 function addKeys(
   name: string,
   content: () => JSX.Element,
   keys: readonly string[],
   owned: boolean | ((key: string) => boolean),
-  fixture: NativeKeyFixture,
+  fixture: NativeKeyFixture = {},
 ): void {
   for (const key of keys) {
     const controlOwned = typeof owned === "function" ? owned(key) : owned;
@@ -39,47 +36,29 @@ function addKeys(
   }
 }
 
-for (const name of ["video", "audio"]) {
-  const content = staticControl(`<${name} controls></${name}>`);
-  const ownsKey = (key: string) => !key.startsWith("Page");
-  for (const [keys, fixture] of [
-    [[" ", "ArrowUp", "ArrowDown", ...pageKeys], {}],
-    [boundaryKeys, { shiftKey: true }],
-    [boundaryKeys, { ctrlKey: true }],
-  ] as const) {
-    addKeys(`${name} ${JSON.stringify(fixture)} `, content, keys, ownsKey, fixture);
-  }
-}
+const video = staticControl("<video controls></video>");
+addKeys("video {} ", video, ["Home", "PageUp"], (key) => key === "Home");
 for (const [name, content] of controls) {
   const ownsKey = (key: string) => name !== "input" || boundaryKeys.includes(key);
-  for (const platform of ["Win32", "Linux x86_64"]) {
-    addKeys(`${platform} ${name} `, content, pageKeys, ownsKey, { platform });
-    if (name === "select") {
-      addKeys(`${platform} select Ctrl+`, content, boundaryKeys, false, {
-        platform,
-        ctrlKey: true,
-      });
-    }
+  addKeys(`Win32 ${name} `, content, pageKeys, ownsKey, { platform: "Win32" });
+  if (name === "select") {
+    addKeys("Win32 select Ctrl+", content, boundaryKeys, false, {
+      platform: "Win32",
+      ctrlKey: true,
+    });
   }
-  addKeys(`Mac ${name} Shift+`, content, boundaryKeys, true, {
-    platform: "MacIntel",
-    shiftKey: true,
-  });
+  addKeys(`Mac ${name} Shift+`, content, boundaryKeys, true, { ...mac, shiftKey: true });
   if (name === "input" || name === "select") {
-    addKeys(`Mac ${name} `, content, boundaryKeys, false, { platform: "MacIntel" });
+    addKeys(`Mac ${name} `, content, boundaryKeys, false, mac);
   } else {
     for (const key of pageKeys) {
       for (const inside of [true, false]) {
-        nativeControlNavigationCases.push([
-          `Mac ${name} ${key} at ${inside ? "inner content" : "inner edge"}`,
-          key,
-          content,
-          inside,
-          {
-            platform: "MacIntel",
-            scrollTop: inside ? 240 : key === "Home" || key === "PageUp" ? 0 : 480,
-          },
-        ]);
+        const fixture = {
+          ...mac,
+          scrollTop: inside ? 240 : key === "Home" || key === "PageUp" ? 0 : 480,
+        };
+        const label = `Mac ${name} ${key} at ${inside ? "inner content" : "inner edge"}`;
+        nativeControlNavigationCases.push([label, key, content, inside, fixture]);
       }
     }
   }

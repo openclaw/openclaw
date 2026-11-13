@@ -1,7 +1,7 @@
 import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, assert, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   readOpenClawAgentDatabaseIdentity,
@@ -67,9 +67,10 @@ it.each([
     }
     registerOpenClawAgentDatabaseIdentity(db);
     const identity = readOpenClawAgentDatabaseIdentity({ db });
-    if (typeof identity.identity !== "string") {
-      throw new Error("Expected a file-backed creation publication fixture");
-    }
+    assert(
+      typeof identity.identity === "string",
+      "Expected a file-backed creation publication fixture",
+    );
     const file = {
       path: identity.canonicalPath,
       agentId: scope.agentId,
@@ -79,26 +80,22 @@ it.each([
     const source = runtimePath
       ? { file }
       : { database: { agentId: scope.agentId, path: databasePath, db } };
+    const valid = runtimePath
+      ? target
+      : {
+          ...target,
+          paths: new Set<string>(),
+          databaseIdentity: `file:${identity.identity}`,
+        };
+    const invalid = runtimePath
+      ? {
+          ...target,
+          paths: new Set([path.win32.join(path.win32.dirname(runtimePath), "other.sqlite")]),
+        }
+      : { ...target, databaseIdentity: "file:0:0" };
     const operation = await withPublication({ ...source, ...scope }, async (current) => {
-      publication(
-        current,
-        runtimePath
-          ? target
-          : {
-              ...target,
-              paths: new Set(),
-              databaseIdentity: `file:${identity.identity}`,
-            },
-      ).not.toThrow();
-      publication(
-        current,
-        runtimePath
-          ? {
-              ...target,
-              paths: new Set([path.win32.join(path.win32.dirname(runtimePath), "other.sqlite")]),
-            }
-          : { ...target, databaseIdentity: "file:0:0" },
-      ).toThrow(expired);
+      publication(current, valid).not.toThrow();
+      publication(current, invalid).toThrow(expired);
       return current;
     });
     publication(operation, target).toThrow(expired);

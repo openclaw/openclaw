@@ -42,6 +42,7 @@ export function createGatewayUpdateLifecycle(
   const { signal } = scheduled;
   let initialization: Promise<StartupInstallStatus> | undefined;
   let stopping: Promise<void> | undefined;
+  const schedules = new Map<string, object>();
 
   const run = <T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> =>
     scope.track(async () => {
@@ -51,7 +52,7 @@ export function createGatewayUpdateLifecycle(
     });
   const initialize = async () => {
     signal.throwIfAborted();
-    if (lifecycle.installStatus) {
+    if (lifecycle.installStatus && !lifecycle.installStatus.status.error) {
       return lifecycle.installStatus;
     }
     if (!initialization) {
@@ -61,20 +62,26 @@ export function createGatewayUpdateLifecycle(
         const result = await resolveStartupInstallStatus(false, signal);
         signal.throwIfAborted();
         // A fresh interactive probe may have already adopted the installation.
-        return (lifecycle.installStatus ??= result);
+        if (!lifecycle.installStatus || lifecycle.installStatus.status.error) {
+          lifecycle.installStatus = result;
+        }
+        return lifecycle.installStatus;
       });
       initialization = task;
-      void task.catch(() => {
+      const clearInitialization = () => {
         if (initialization === task) {
           initialization = undefined;
         }
-      });
+      };
+      void task.then(clearInitialization, clearInitialization);
     }
     return initialization;
   };
   const schedule = (id: string, work: () => Promise<number>) => {
+    const current = {};
+    schedules.set(id, current);
     const arm = (delayMs: number) => {
-      if (signal.aborted) {
+      if (signal.aborted || schedules.get(id) !== current) {
         return;
       }
       scheduled.schedule({

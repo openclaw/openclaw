@@ -46,7 +46,7 @@ case "${1:-}" in
       "$here/scripts/verify-xcode-trust.sh" \
       "$here/scripts/commit-driver-transaction.sh" --uninstall
     /bin/sh "$here/scripts/remove-user-artifacts.sh" "${HOME}" "${TMPDIR:-/tmp}"
-    printf 'Removed FaceTime audio and helper artifacts. Quit and reopen FaceTime and Phone before re-enabling the plugin.\n'
+    printf 'Removed FaceTime audio and helper artifacts. Quit and reopen FaceTime before re-enabling the plugin.\n'
     exit 0
     ;;
   ""|--ensure)

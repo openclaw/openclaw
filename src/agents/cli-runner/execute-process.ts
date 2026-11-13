@@ -298,6 +298,7 @@ export async function executeCliProcess(params: {
     : undefined;
   try {
     if (params.nodePlacement) {
+      await context.preparedBackend.prepareCredentialUse?.();
       const nodeRun = await executeNodeClaudeRun({
         context,
         nodePlacement: params.nodePlacement,
@@ -423,7 +424,13 @@ export async function executeCliProcess(params: {
               prepareSpawn: params.argsPrompt
                 ? context.cliHistoryWriter?.assertReadable
                 : undefined,
-              prepareInput: params.stdin ? context.cliHistoryWriter?.assertReadable : undefined,
+              prepareTargetSpawn: context.preparedBackend.prepareCredentialUse,
+              prepareInput: params.stdin
+                ? async () => {
+                    await context.cliHistoryWriter?.assertReadable();
+                    await context.preparedBackend.prepareCredentialUse?.();
+                  }
+                : undefined,
               runId: runParams.runId,
               scopeKey,
               replaceExistingScope: Boolean(params.useResume && scopeKey),
@@ -439,7 +446,9 @@ export async function executeCliProcess(params: {
               cwd: context.cwd ?? context.workspaceDir,
               env: params.env,
               input: params.stdin ?? "",
-              secretInput: context.preparedBackend.secretInput,
+              secretInput: runParams.nativeAuthOnly
+                ? undefined
+                : context.preparedBackend.secretInput,
               captureOutput: false,
               onStdout: consumeStdout,
               onStderr: consumeStderr,

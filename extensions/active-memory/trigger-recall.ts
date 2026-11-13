@@ -26,11 +26,16 @@ const MAX_TRIGGER_CONTEXT_CHARS = 1800;
 // for promoted entries; lowering it below ~0.6 starts admitting topic drift.
 const STRONG_TRIGGER_MATCH_SCORE = 0.65;
 const WORD_RE = /[\p{L}\p{N}_]+/gu;
+// These scripts do not separate words with spaces (Hangul attaches particles),
+// so a trigger word containing them matches anywhere in the message. Accepted
+// tradeoff: without word segmentation it can also match inside a longer word.
+const UNSPACED_SCRIPT_RE =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 
 type TriggerRecallMatch = MemorySearchHit & { matchScore: number };
 
-function normalizeWords(value: string): string[] {
-  return (value.toLowerCase().match(WORD_RE) ?? []).filter((word) => word.length > 1);
+function splitWords(lowercased: string): string[] {
+  return (lowercased.match(WORD_RE) ?? []).filter((word) => word.length > 1);
 }
 
 function splitTriggerPhrases(value: string): string[] {
@@ -41,17 +46,24 @@ function splitTriggerPhrases(value: string): string[] {
 }
 
 function prepareTriggerScorer(message: string): (entry: MemorySearchHit) => number {
+  let messageText: string | undefined;
   let messageWordSet: Set<string> | undefined;
+  const messageHas = (word: string): boolean => {
+    messageText ??= message.toLowerCase();
+    messageWordSet ??= new Set(splitWords(messageText));
+    return (
+      messageWordSet.has(word) || (UNSPACED_SCRIPT_RE.test(word) && messageText.includes(word))
+    );
+  };
   const scorePhrase = (phrase: string): number => {
-    const triggerWords = [...new Set(normalizeWords(phrase))];
+    const triggerWords = [...new Set(splitWords(phrase.toLowerCase()))];
     if (triggerWords.length === 0) {
       return 0;
     }
-    const words = (messageWordSet ??= new Set(normalizeWords(message)));
     if (triggerWords.length === 1) {
-      return words.has(triggerWords[0] ?? "") ? 0.85 : 0;
+      return messageHas(triggerWords[0] ?? "") ? 0.85 : 0;
     }
-    const overlap = triggerWords.filter((word) => words.has(word)).length;
+    const overlap = triggerWords.filter(messageHas).length;
     if (overlap === 0) {
       return 0;
     }

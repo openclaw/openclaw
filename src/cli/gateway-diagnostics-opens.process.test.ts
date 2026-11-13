@@ -138,6 +138,8 @@ record({ kind: "preload" });
       : [
           ["cron list", { jobs: [] }],
           ["gateway call cron.status", { enabled: true }],
+          ["gateway call diagnostics.cpuProfile", { captured: "cpu" }],
+          ["gateway call diagnostics.heapSnapshot", { captured: "heap" }],
         ];
     for (const online of [true, false]) {
       if (!online) {
@@ -168,7 +170,10 @@ record({ kind: "preload" });
               : {}),
           },
         });
-        expect(result, result.stderr).toMatchObject({ code: online ? 0 : 1, signal: null });
+        expect(result, `${command}: ${result.stderr}`).toMatchObject({
+          code: online ? 0 : 1,
+          signal: null,
+        });
         if (online) {
           expect(JSON.parse(result.stdout)).toMatchObject(expected);
         } else {
@@ -178,7 +183,7 @@ record({ kind: "preload" });
         const events = (await fs.readFile(opensPath, "utf8"))
           .trim()
           .split("\n")
-          .map((line) => JSON.parse(line) as { kind: string });
+          .map((line) => JSON.parse(line) as { kind: string; path?: string });
         expect(events).toContainEqual({ kind: "preload" });
         expect(
           events.filter((event) =>
@@ -187,7 +192,7 @@ record({ kind: "preload" });
               : event.kind !== "preload",
           ),
           `${online ? "online" : "offline"} ${command}`,
-        ).toEqual([]);
+        ).toEqual(message ? [] : [{ kind: "sqlite", path: ":memory:" }]);
       }
     }
   } finally {

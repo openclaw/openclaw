@@ -1,6 +1,7 @@
 import { For, Show, createMemo, type Element } from "solid-js";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import type { SessionCostTotal } from "../../../lib/session-context-report.ts";
 import { buildChatContextCategories } from "./chat-context-breakdown-model.ts";
 import {
   ChatContextReport,
@@ -25,15 +26,23 @@ export function ChatContextBreakdown(
             <Show
               when={result().report}
               fallback={
-                <p class="chat-context__note" role="status">
-                  {t(
-                    result().offline
-                      ? "chat.sessionDetails.contextOffline"
-                      : result().failed
-                        ? "chat.sessionDetails.contextError"
-                        : "chat.sessionDetails.contextUnavailable",
-                  )}
-                </p>
+                <div
+                  class="chat-context__bar"
+                  role="meter"
+                  aria-label={t("chat.sessionDetails.context")}
+                  aria-valuemin="0"
+                  aria-valuemax={props.limit}
+                  aria-valuenow={Math.min(props.used, props.limit)}
+                  aria-valuetext={t("chat.sessionDetails.contextExactCount", {
+                    used: (props.approximate ? "~" : "") + formatCompactTokenCount(props.used),
+                    limit: formatCompactTokenCount(props.limit),
+                  })}
+                >
+                  <span
+                    class="chat-context__segment chat-context__total"
+                    style={{ width: Math.min(100, (props.used / props.limit) * 100) + "%" }}
+                  />
+                </div>
               }
             >
               {(report) => {
@@ -80,8 +89,20 @@ export function ChatContextBreakdown(
               }}
             </Show>
           </Show>
+          <Show when={result().blockedReason}>{(reason) => <p class="muted">{reason()}</p>}</Show>
         </div>
       )}
+    </ChatContextReport>
+  );
+}
+
+/** Shares the breakdown's usage read, so the popover issues one request for both. */
+export function ChatSessionCost(
+  props: ContextReportProps & { children: (cost: () => SessionCostTotal) => Element },
+) {
+  return (
+    <ChatContextReport {...props}>
+      {(result) => <Show when={result().cost}>{(cost) => props.children(cost)}</Show>}
     </ChatContextReport>
   );
 }

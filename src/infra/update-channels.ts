@@ -1,7 +1,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { parse as parseSemver, type SemVer } from "semver";
-import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
-import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
+import { compareSemverStrings } from "./npm-registry-spec.js";
+import { normalizeLegacyDotBetaVersion } from "./semver.js";
 import type { UpdateInstallKind } from "./update-install-kind.js";
 
 const UPDATE_CHANNELS = ["stable", "extended-stable", "beta", "dev"] as const;
@@ -52,12 +52,7 @@ export function selectNpmChannelVersion<T extends { version: string | null }>(
   if (!beta.version) {
     return latest;
   }
-  const comparison =
-    compareOpenClawReleaseVersions(beta.version, latest.version) ??
-    compareValidSemver(
-      normalizeLegacyDotBetaVersion(beta.version),
-      normalizeLegacyDotBetaVersion(latest.version),
-    );
+  const comparison = compareSemverStrings(beta.version, latest.version);
   return comparison !== null && comparison < 0 ? latest : beta;
 }
 

@@ -8,6 +8,8 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import * as integrity from "../../infra/sqlite-integrity-worker.js";
 import * as writerQueue from "../../shared/store-writer-queue.js";
@@ -141,6 +143,12 @@ function closeCold(f: ReturnType<typeof fixture>) {
   evictHandle(f.databasePath);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
   revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
+}
+
+function requireSchemaRepair(databasePath: string) {
+  // Missing uniqueness still requires native verification before updater admission.
+  using database = openNodeSqliteDatabase(databasePath);
+  database.exec("DROP INDEX idx_agent_transcript_message_idempotency");
 }
 
 function nativeChecks(databasePath: string) {
@@ -367,6 +375,7 @@ it("retains FIFO, caller context and publication across cold admission", async (
   closeOpenClawAgentDatabaseByPath(f.databasePath);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
   revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
+  requireSchemaRepair(f.databasePath);
   const gate = holdWorkerValidation(f.databasePath);
   const contexts = new AsyncLocalStorage<string>();
   const order: string[] = [];
@@ -437,6 +446,7 @@ it.each(["dispose", "physical replacement"] as const)(
   async (mode) => {
     const f = fixture();
     closeCold(f);
+    requireSchemaRepair(f.databasePath);
     const gate = holdWorkerValidation(f.databasePath);
     const update = vi.fn(() => ({ label: "must not commit" }));
     const committed = vi.fn();
@@ -493,6 +503,7 @@ it.each(["cancel", "revoke"] as const)(
         f.scope,
         () => {
           closeCold(f);
+          requireSchemaRepair(f.databasePath);
           return { sessionId: "uncommitted" };
         },
         {
@@ -585,6 +596,6 @@ it.each(["relative native reopen"] as const)(
       label: "retained selected root",
     });
     expect(env.OPENCLAW_STATE_DIR).toBe("state");
-    expect(fs.readdirSync(successor, { recursive: true })).toEqual([]);
+    expect(listDirectoryTreeStrictSync(successor).map((entry) => entry.relativePath)).toEqual([]);
   },
 );

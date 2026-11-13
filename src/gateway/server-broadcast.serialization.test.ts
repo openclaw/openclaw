@@ -22,7 +22,10 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { makeClient as makePresenceClient } from "./server-broadcast.test-helpers.js";
-import { broadcastFor as broadcaster } from "./server-broadcast.test-support.js";
+import {
+  broadcastFor as broadcaster,
+  createBroadcastPeer,
+} from "./server-broadcast.test-support.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
@@ -40,10 +43,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
     ...actual,
     createSubsystemLogger: (subsystem: string) => {
       const logger = actual.createSubsystemLogger(subsystem);
-      if (subsystem !== "gateway/broadcast") {
-        return logger;
-      }
-      return { ...logger, error: warnSpy };
+      return subsystem === "gateway/broadcast" ? { ...logger, error: warnSpy } : logger;
     },
   };
 });
@@ -51,6 +51,13 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 const makeClient = (connId: string) => makePresenceClient(connId, "operator", ["operator.read"]);
 const frameSummaries = (peer: ReturnType<typeof makeClient>) =>
   sentFrames(peer).map(({ event, seq }: { event: string; seq: number }) => ({ event, seq }));
+const addPeers = (
+  connection: ReturnType<typeof createGatewayConnectionState>,
+  peers: ReturnType<typeof makeClient>[],
+) => {
+  connection.clients.clear();
+  peers.forEach(({ client }) => connection.clients.add(client));
+};
 function expectFrame(
   peer: ReturnType<typeof makeClient>,
   event: string,
@@ -148,6 +155,9 @@ const steeringNotice = (display = false) =>
       message: expect.objectContaining({
         ...(display ? { display: true } : {}),
         content: [{ type: "text", text: "Use the smaller patch." }],
+        __openclaw: expect.objectContaining({
+          pluginSteering: expect.objectContaining({ pluginId: "reviewer", pluginName: "Reviewer" }),
+        }),
       }),
     }),
   });
@@ -173,11 +183,8 @@ describe("broadcast serialization failures", () => {
       const { connection, projection } = await createProjectedConnection(() => cfg);
       const handler = transcriptHandler(connection, projection, peers);
       for (const order of [peers, peers.toReversed()]) {
-        connection.clients.clear();
-        for (const peer of order) {
-          peer.socket.send.mockClear();
-          connection.clients.add(peer.client);
-        }
+        addPeers(connection, order);
+        peers.forEach(({ socket }) => socket.send.mockClear());
         await handler({ target: scope, messageId: "steer", messageSeq: 1, message });
         for (const peer of peers) {
           const frames = sentFrames(peer);
@@ -186,11 +193,7 @@ describe("broadcast serialization failures", () => {
             peer.client.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI ? 1 : 0,
           );
           if (notices.length) {
-            expect(notices[0].payload.message).toMatchObject({
-              display: true,
-              content: [{ type: "text", text: "Use the smaller patch." }],
-              __openclaw: { pluginSteering: { pluginId: "reviewer", pluginName: "Reviewer" } },
-            });
+            expect(notices[0]).toEqual(steeringNotice(true));
           }
           expect(frames.some((frame) => frame.event === "sessions.changed")).toBe(true);
         }
@@ -230,9 +233,7 @@ describe("broadcast serialization failures", () => {
       const viewerPeer = makeControlUiPeer(viewer);
       const peers = [ownerPeer, viewerPeer];
       const { connection, projection } = await createProjectedConnection(() => cfg);
-      for (const peer of peers) {
-        connection.clients.add(peer.client);
-      }
+      addPeers(connection, peers);
       const handler = transcriptHandler(connection, projection, peers);
       const update = { target: scope, messageId: "steer", messageSeq: 1, message };
       await handler(update);
@@ -268,6 +269,64 @@ describe("broadcast serialization failures", () => {
       }
       expect(sentFrames(ownerPeer)).toEqual(expect.arrayContaining([steeringNotice(true)]));
       expect(viewerPeer.socket.send).not.toHaveBeenCalled();
+    });
+  });
+
+  it("checks real sharing authority for opted-in stdout before and after revocation", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const cfg: OpenClawConfig = {};
+      setRuntimeConfigSnapshot(cfg);
+      const owner = ensureProfileForEmail("stdout-owner@example.test");
+      const viewer = ensureProfileForEmail("stdout-viewer@example.test");
+      const scope = await seedSession("agent:main:stdout-revocation", {
+        sessionId: "stdout-revocation",
+        visibility: "draft",
+        createdActor: { type: "human", source: "profile", id: owner.id },
+      });
+      const peers = [owner, viewer].map((user) => {
+        const peer = createBroadcastPeer(user.id, true);
+        peer.client.authenticatedUserProfile = profile(user.id, user.displayName, user.updatedAt);
+        return peer;
+      });
+      const { connection } = await createProjectedConnection(() => cfg);
+      for (const peer of peers) {
+        connection.clients.add(peer.client);
+        connection.sessionMessageSubscribers.subscribe(peer.client.connId, scope.sessionKey, {
+          includeLiveToolOutput: true,
+        });
+      }
+      const recipients = new Set(peers.map(({ client }) => client.connId));
+      const send = (text: string) =>
+        connection.broadcastToConnIds(
+          "session.tool",
+          {
+            sessionKey: scope.sessionKey,
+            agentId: "main",
+            runId: "stdout-run",
+            stream: "tool",
+            data: {
+              toolCallId: "exec",
+              phase: "update",
+              outputOnly: true,
+              partialResult: { text },
+            },
+          },
+          recipients,
+        );
+      send("Private output");
+      expect(peers.map(({ frames }) => frames.length)).toEqual([1, 0]);
+      await patchSessionEntryCore(scope, () => ({ visibility: "shared" }));
+      send("Shared output");
+      expect(peers.map(({ frames }) => frames.length)).toEqual([2, 1]);
+      await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
+      send("Revoked output");
+      expect(peers.map(({ frames }) => frames.length)).toEqual([3, 1]);
+      expect(peers[0]!.frames.at(-1)?.payload).toMatchObject({
+        data: { partialResult: { text: "Revoked output" } },
+      });
+      expect(peers[1]!.frames[0]?.payload).toMatchObject({
+        data: { partialResult: { text: "Shared output" } },
+      });
     });
   });
 
@@ -309,6 +368,7 @@ describe("broadcast serialization failures", () => {
     broadcast("sessions.changed", { reason: "delete" });
     broadcast("users.prefs.changed", { profileId: "other", keys: ["ui.theme"] });
     broadcast("mentions.changed", { gatewayInstanceId: "gateway", revision: 1 });
+    broadcast("projects.checkoutOptions.changed", { projectId: "project" });
     broadcast("chat.metadata.changed", { content: "Hidden content" });
     broadcastToConnIds("sessions.changed", dynamic, recipients);
     expect(scoped.socket.send).not.toHaveBeenCalled();
@@ -325,12 +385,64 @@ describe("broadcast serialization failures", () => {
       { gatewayInstanceId: "gateway", revision: 1 },
       recipients,
     );
+    broadcastToConnIds("projects.checkoutOptions.changed", { projectId: "project" }, recipients);
     expect(frameSummaries(scoped)).toEqual([
       { event: "chat.metadata.changed", seq: 1 },
       { event: "sessions.changed", seq: 2 },
       { event: "users.prefs.changed", seq: 3 },
       { event: "mentions.changed", seq: 4 },
+      { event: "projects.checkoutOptions.changed", seq: 5 },
     ]);
+  });
+
+  it.each(["operator.sessions.read", "operator.sessions.write"])(
+    "delivers bounded mention invalidations only to targeted %s clients",
+    (scope) => {
+      const recipient = makeClient("recipient");
+      const other = makeClient("other");
+      recipient.client.connect.scopes = [scope];
+      other.client.connect.scopes = [scope];
+      const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+        clients: new GatewayClientRegistry([recipient.client, other.client]),
+      });
+      const payload = { gatewayInstanceId: "gateway", revision: 1 };
+      const recipients = new Set([recipient.client.connId]);
+
+      broadcast("mentions.changed", payload);
+      broadcastToConnIds("mentions.changed", { ...payload, content: "Hidden" }, recipients);
+      expect(recipient.socket.send).not.toHaveBeenCalled();
+      broadcastToConnIds("mentions.changed", payload, recipients);
+
+      expect(frameSummaries(recipient)).toEqual([{ event: "mentions.changed", seq: 1 }]);
+      expect(other.socket.send).not.toHaveBeenCalled();
+    },
+  );
+
+  it("delivers mention failures only to the targeted sender with current session access", () => {
+    const sender = makeClient("sender");
+    const other = makeClient("other");
+    for (const peer of [sender, other]) {
+      peer.client.connect.scopes = ["operator.sessions.read"];
+    }
+    let allowed = true;
+    const { broadcastToConnIds } = broadcaster([sender, other], {
+      canReceiveSessionEvent: (_client, keys) =>
+        allowed && keys.every((key) => key === "agent:main:visible"),
+    });
+    const recipients = new Set([sender.client.connId]);
+    const payload = {
+      sessionKey: "agent:main:visible",
+      errorMessage: "Your message was posted, but mention notifications could not be delivered.",
+    };
+    broadcastToConnIds("mentions.failed", payload, recipients);
+    expect(frameSummaries(sender)).toEqual([{ event: "mentions.failed", seq: 1 }]);
+    expect(other.socket.send).not.toHaveBeenCalled();
+
+    allowed = false;
+    broadcastToConnIds("mentions.failed", payload, recipients);
+    broadcastToConnIds("mentions.failed", { errorMessage: payload.errorMessage }, recipients);
+    expect(sender.socket.send).toHaveBeenCalledOnce();
+    expect(other.socket.send).not.toHaveBeenCalled();
   });
 
   it.each(["suppressed snapshot", "unprepared presence", "circular payload"] as const)(
@@ -523,7 +635,6 @@ describe("presence recipient projection", () => {
           sessionKey,
           {
             sessionId: `${agentId}-${sessionKey}`,
-            updatedAt: 1,
             visibility,
             createdVia: "operator",
             createdActor: { type: "human", source: "profile", id: "creator" },
@@ -551,8 +662,7 @@ describe("presence recipient projection", () => {
         [reader, admin],
         [admin, reader],
       ]) {
-        connection.clients.clear();
-        order.forEach((peer) => connection.clients.add(peer.client));
+        addPeers(connection, order);
         connection.broadcast("presence", payload, { stateVersion });
         expect(lastFrame(reader).payload.presence).toEqual([
           { ...person, watchedSessions: [sharedKey, "agent:work:global", "agent:work:unknown"] },
@@ -614,7 +724,6 @@ describe("presence recipient projection", () => {
       const key = "agent:main:private";
       await seedSession(key, {
         sessionId: "private",
-        updatedAt: 1,
         visibility: "draft",
         createdVia: "operator",
         createdActor: { type: "human", source: "profile", id: "creator" },

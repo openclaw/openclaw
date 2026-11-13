@@ -9,6 +9,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LogbookOperations } from "./store-contract.js";
 import { createSqliteWorkerBackend } from "./store.worker.js";
+import { cardDraft, frameInput } from "./test-fixtures.test-support.js";
 
 const reads = vi.hoisted(() => ({
   cardQueries: 0,
@@ -202,17 +203,14 @@ describe("Logbook native statement and read budgets", () => {
 
   it("reuses native write statements with fresh optional values and model coalescing", () => {
     const { backend } = openBackend();
-    const firstFrame = {
+    const firstFrame = frameInput({
       capturedAtMs: 1,
-      day,
       path: "first.jpg",
-      screenIndex: 0,
       width: 640,
       height: 480,
       byteSize: 10,
       contentHash: "first",
-      idle: false,
-    };
+    });
     expect(backend.execute({ type: "insertFrame", input: firstFrame })).toBe(1);
     expect(
       backend.execute({
@@ -243,15 +241,14 @@ describe("Logbook native statement and read budgets", () => {
     expect(
       backend.execute({
         type: "insertFrame",
-        input: {
+        input: frameInput({
           capturedAtMs: 2,
-          day,
           path: "second.jpg",
           screenIndex: 1,
           byteSize: 20,
           contentHash: "second",
           idle: true,
-        },
+        }),
       }),
     ).toBe(3);
     backend.execute({ type: "saveStandup", input: { day, text: "Revised standup 🦞" } });
@@ -308,16 +305,14 @@ describe("Logbook native statement and read budgets", () => {
 
   it("hydrates timeline cards once and counts cards without hydrating their payloads", () => {
     const { backend } = openBackend();
-    const drafts = Array.from({ length: 8 }, (_, index) => ({
-      day,
-      startMs: index * 60_000,
-      endMs: (index + 1) * 60_000,
-      title: `Card ${index} 🦞`,
-      summary: "Summary",
-      detail: "Detailed activity",
-      category: "coding",
-      distractions: [],
-    }));
+    const drafts = Array.from({ length: 8 }, (_, index) =>
+      cardDraft({
+        startMs: index * 60_000,
+        endMs: (index + 1) * 60_000,
+        title: `Card ${index} 🦞`,
+        detail: "Detailed activity",
+      }),
+    );
     backend.execute({
       type: "replaceCardsInWindow",
       input: { day, startMs: 0, endMs: Number.MAX_SAFE_INTEGER, drafts },
@@ -370,16 +365,9 @@ describe("Logbook native statement and read budgets", () => {
     );
     expect(reads.observationRows).toBe(200);
   });
-  const keyframeDrafts = [0, 40_000].map((startMs) => ({
-    day,
-    startMs,
-    endMs: startMs + 40_000,
-    title: `Card ${startMs}`,
-    summary: "Summary",
-    detail: "",
-    category: "coding",
-    distractions: [],
-  }));
+  const keyframeDrafts = [0, 40_000].map((startMs) =>
+    cardDraft({ startMs, endMs: startMs + 40_000, title: `Card ${startMs}` }),
+  );
   function insertCandidate(
     backend: SqliteWorkerBackend<LogbookOperations>,
     capturedAtMs: number,
@@ -387,17 +375,14 @@ describe("Logbook native statement and read budgets", () => {
   ) {
     return backend.execute({
       type: "insertFrame",
-      input: {
+      input: frameInput({
         capturedAtMs,
-        day,
         path: `captures/${"nested/".repeat(12)}${capturedAtMs}.jpg`,
-        screenIndex: 0,
         width: 640,
         height: 480,
         byteSize: 10,
-        contentHash: "synthetic",
         idle,
-      },
+      }),
     });
   }
 

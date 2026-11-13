@@ -7,6 +7,7 @@ import {
   type TextQuery,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { memoryPathPostgresExpressions } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   DatabaseSearchCapabilityUnavailableError,
   type MemorySource,
@@ -23,8 +24,13 @@ import {
   type MemorySearchRow,
   type SearchRowResult,
 } from "./manager-search-shared.js";
-import type { MemoryKeywordWorkerQuery, MemoryVectorWorkerQuery } from "./manager-search-types.js";
-import type { ExactPathSpecificity } from "./manager-search.js";
+import type {
+  BodyKeywordSearchResult,
+  ExactPathSpecificity,
+  MemoryKeywordWorkerQuery,
+  MemoryVectorWorkerQuery,
+  PathKeywordSearchResult,
+} from "./manager-search-types.js";
 
 type SearchDatabase = {
   memory_index_chunks: MemorySearchRow & { model: string; openclaw_search: unknown };
@@ -40,13 +46,6 @@ type VectorRow = MemorySearchRow & { dist: number };
 type KeywordRow = MemorySearchRow & { rank: number };
 type PathRow = KeywordRow & { specificity: ExactPathSpecificity };
 type KeywordBranchRow = PathRow & { branch: number };
-type BodyResult = SearchRowResult & { textScore: number; hasBodyMatch: true };
-type PathResult = SearchRowResult & {
-  textScore: 0;
-  pathScore: number;
-  exactPathSpecificity: ExactPathSpecificity;
-  hasBodyMatch: false;
-};
 
 function sessionExclusion(paths: readonly string[], alias?: string): RawBuilder<boolean> {
   const source = sql.ref(alias ? `${alias}.source` : "source");
@@ -196,7 +195,7 @@ function bodyStatement(
 function projectBodyRows(
   rows: KeywordRow[],
   query: MemoryKeywordWorkerQuery["body"],
-): BodyResult[] {
+): BodyKeywordSearchResult[] {
   // Native ranking stays engine-local; the manager keeps its shared hybrid weights.
   return rows.map((row) =>
     Object.assign(projectMemorySearchRow(row, query.snippetMaxChars, row.rank), {
@@ -210,7 +209,7 @@ function searchBody(
   database: EngineConnection,
   query: MemoryKeywordWorkerQuery["body"],
   matchAny = false,
-): BodyResult[] {
+): BodyKeywordSearchResult[] {
   const statement = bodyStatement(database, query, matchAny);
   return projectBodyRows(
     statement ? executeSqliteQuerySync<KeywordRow>(database, statement).rows : [],
@@ -259,22 +258,17 @@ function calibrateTextRank(
   return tokenizer === "trigram" ? rank : sql<number>`${rank} / (${rank} + 0.0027)`;
 }
 
-function pathSpecificity(query: string): RawBuilder<ExactPathSpecificity> {
-  const normalized = query
-    .trim()
-    .replaceAll("\\", "/")
-    .replace(/^\.\//, "")
-    .normalize("NFC")
-    .toLowerCase();
+function pathSpecificity(normalized: string): RawBuilder<ExactPathSpecificity> {
   if (!normalized || normalized === ".") {
     return sql<ExactPathSpecificity>`0`;
   }
-  const path = sql<string>`lower(normalize(regexp_replace(replace(btrim(s.path), E'\\\\', '/'), '^\\./', ''), NFC))`;
+  const expressions = memoryPathPostgresExpressions("s.path");
+  const path = sql.raw<string>(expressions.normalized);
   if (normalized.includes("/")) {
     return sql<ExactPathSpecificity>`CASE WHEN ${path} = ${normalized} THEN 3 ELSE 0 END`;
   }
-  const basename = sql<string>`regexp_replace(${path}, '^.*/', '')`;
-  const stem = sql<string>`regexp_replace(${basename}, '^(.+)\\.[^.]*$', '\\1')`;
+  const basename = sql.raw<string>(expressions.basename);
+  const stem = sql.raw<string>(expressions.stem);
   return sql<ExactPathSpecificity>`CASE WHEN ${path} = ${normalized} THEN 3 WHEN ${basename} = ${normalized} THEN 2 WHEN ${stem} = ${normalized} THEN 1 ELSE 0 END`;
 }
 
@@ -290,13 +284,41 @@ function pathStatements(database: EngineConnection, query: MemoryKeywordWorkerQu
     ? calibrateTextRank(textRank(fullText, index, intent, query.ftsTokenizer), query.ftsTokenizer)
     : sql<number>`0`;
   const k = getNodeSqliteKysely<SearchDatabase>(database);
-  const specificity = pathSpecificity(query.query);
+  const normalized = query.query
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^\.\//, "")
+    .normalize("NFC")
+    .toLowerCase();
+  const specificity = pathSpecificity(normalized);
   const select = (exact: boolean, limit: number) => {
     if (limit <= 0 || (!exact && !intent)) {
       return undefined;
     }
-    let paths = k
+    // Fresh-table estimates must not choose a broad source index before the exact-path lookup.
+    const candidates = k
       .selectFrom("memory_index_sources as s")
+      .select(["s.path", "s.source", "s.openclaw_search"]);
+    const source = exact
+      ? k
+          .with(
+            (cte) => cte("exact_candidates").materialized(),
+            () =>
+              candidates.where(
+                sql<boolean>`(${sql.join(
+                  memoryPathPostgresExpressions("s.path")
+                    .keys.slice(0, normalized.includes("/") ? 1 : undefined)
+                    .map((key) => sql`${sql.raw(key)} = pg_catalog.md5(${normalized})`),
+                  sql` OR `,
+                )})`,
+              ),
+          )
+          .selectFrom("exact_candidates")
+          .selectAll()
+          .as("s")
+      : candidates.as("s");
+    let paths = k
+      .selectFrom(source)
       .select(["s.path", "s.source", rank.as("rank"), specificity.as("specificity")])
       .where(specificity, exact ? ">" : "=", 0)
       .where((eb) =>
@@ -367,10 +389,13 @@ function pathStatements(database: EngineConnection, query: MemoryKeywordWorkerQu
   );
 }
 
-function projectPathRows(rows: PathRow[], query: MemoryKeywordWorkerQuery["path"]): PathResult[] {
+function projectPathRows(
+  rows: PathRow[],
+  query: MemoryKeywordWorkerQuery["path"],
+): PathKeywordSearchResult[] {
   const exactLimit = Math.max(0, Math.floor(query.exactPathLimit ?? query.limit));
   return rows
-    .map((row): PathResult =>
+    .map((row): PathKeywordSearchResult =>
       Object.assign(projectMemorySearchRow(row, query.snippetMaxChars, row.rank), {
         textScore: 0 as const,
         pathScore: row.rank,
@@ -384,7 +409,7 @@ function projectPathRows(rows: PathRow[], query: MemoryKeywordWorkerQuery["path"
 function searchPaths(
   database: EngineConnection,
   query: MemoryKeywordWorkerQuery["path"],
-): PathResult[] {
+): PathKeywordSearchResult[] {
   return projectPathRows(
     pathStatements(database, query).flatMap(
       (statement) => executeSqliteQuerySync<PathRow>(database, statement).rows,
@@ -451,8 +476,8 @@ export async function searchPostgresMemoryKeyword(
     }
   };
   let result: {
-    body: { rows: BodyResult[]; error?: string };
-    path: { rows: PathResult[]; error?: string };
+    body: { rows: BodyKeywordSearchResult[]; error?: string };
+    path: { rows: PathKeywordSearchResult[]; error?: string };
   };
   try {
     return searchIndependentBranches(database, query);

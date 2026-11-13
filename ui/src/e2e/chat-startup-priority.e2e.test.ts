@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -43,11 +44,12 @@ const task = (id: string, title: string, createdAt = Date.now()) => ({
 async function installStartupGateway(page: Page) {
   const config = { tools: { swarm: { enabled: true } } };
   return installMockGateway(page, {
+    subscriptionInitialHistory: false,
     sessionKey,
     sessions: [ownedSession(sessionKey, "Selected conversation")],
     historyMessages: [{ role: "assistant", content: historyText }],
-    deferredMethods: ["chat.startup"],
-    heldMethods: bulkMethods,
+    // Keep replacement startup reads held across visibility changes.
+    heldMethods: ["chat.startup", ...bulkMethods],
     featureMethods: [
       ...defaultControlUiFeatureMethods,
       "sessions.catalog.list",
@@ -59,12 +61,7 @@ async function installStartupGateway(page: Page) {
     sessionGroups: ["Client work"],
     sessionGroupDefaults: { "Client work": { cwd: "/workspace/client", worktree: true } },
     methodResponses: {
-      "agents.list": {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main" }, { id: "research" }],
-      },
+      "agents.list": makeBootRoster({ agents: [{ id: "main" }, { id: "research" }] }),
       "sessions.catalog.list": { catalogs: [] },
       "taskSuggestions.list": { suggestions: [] },
       "taskSuggestions.dismiss": { taskId: "explicit-suggestion", dismissed: true },
@@ -110,6 +107,7 @@ async function openPendingChat(page: Page, gateway: Gateway) {
   await page
     .locator(".chat-pane-cache__pane--active .chat-thread .lazy-view-state--loading")
     .waitFor();
+  expect(await page.getByText(historyText, { exact: true }).count()).toBe(0);
 }
 
 async function expectBulkReadsHeld(gateway: Gateway) {
@@ -253,7 +251,7 @@ suite.define(() => {
           },
         ],
       });
-      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+      await page.getByRole("button", { name: /^Filter & sort · /, exact: true }).click();
       await chooseSidebarMenuOption(page, "Status", "Archived");
       await closeSidebarMenu(page);
       await gateway.waitForRequest("sessions.list", {

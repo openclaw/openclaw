@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AgentsCreateResult } from "../../packages/gateway-protocol/src/schema/agents-create.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import * as configJournal from "../config/config-journal-snapshot.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as profileCheck from "../system-agent/setup-inference-profile.js";
@@ -21,14 +23,34 @@ import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
+import { createAuthorityGatewayTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const observation = vi.hoisted(() => ({
   settled: (_options: GatewayRequestOptions) => {},
+  configCandidateObserved: () => {},
   beforeDetachedChat: async (_options: GatewayRequestHandlerOptions) => {},
   detachedChatSettled: (_options: GatewayRequestHandlerOptions) => {},
   detachedChatResponse: (_options: GatewayRequestHandlerOptions, _ok: boolean) => {},
 }));
+
+// Keep the real watcher and observe its synchronous invalidation of the old config.
+vi.mock("./config-reload.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./config-reload.js")>();
+  return {
+    ...actual,
+    startGatewayConfigReloader: (...args: Parameters<typeof actual.startGatewayConfigReloader>) => {
+      const [options] = args;
+      return actual.startGatewayConfigReloader({
+        ...options,
+        onConfigCandidateObserved: () => {
+          options.onConfigCandidateObserved?.();
+          observation.configCandidateObserved();
+        },
+      });
+    },
+  };
+});
 
 // A revoked socket can lose its reply; retain original exports and join the real handler.
 vi.mock(
@@ -84,6 +106,7 @@ vi.mock("./server-methods/chat-send-handler.js", async (importOriginal) => {
 
 afterEach(() => {
   observation.settled = () => {};
+  observation.configCandidateObserved = () => {};
   observation.beforeDetachedChat = async () => {};
   observation.detachedChatSettled = () => {};
   observation.detachedChatResponse = () => {};
@@ -136,16 +159,7 @@ it(
       await withOpenClawTestState(
         {
           label: "agent-create-inference-authority",
-          env: {
-            OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_CRON: "1",
-            OPENCLAW_DISABLE_BONJOUR: "1",
-            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-            OPENCLAW_SKIP_CANVAS_HOST: "1",
-            OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          },
+          env: createAuthorityGatewayTestEnv(),
         },
         async (state) => {
           const recoveryRestart = vi.fn(() => {
@@ -233,11 +247,49 @@ it(
                 allowedIntroFinished.resolve();
               }
             };
+            const candidateObserved = createDeferredCore();
+            let creationContext: GatewayRequestOptions["context"] | undefined;
+            observation.settled = (options) => {
+              creationContext = options.context;
+            };
+            // Capture the live request context without bypassing WebSocket dispatch.
+            await client.request("agents.list", {});
+            observation.settled = () => {};
+            observation.configCandidateObserved = () => candidateObserved.resolve();
+            let heldPublishedWrite = false;
+            const upsertSnapshot = configJournal.upsertConfigSnapshotAuditRecordAsync;
+            const snapshotAudit = vi
+              .spyOn(configJournal, "upsertConfigSnapshotAuditRecordAsync")
+              .mockImplementation(async (...args) => {
+                const [record] = args;
+                if (
+                  !heldPublishedWrite &&
+                  record.configPath === state.configPath &&
+                  isRecord(record.authoredConfig) &&
+                  isRecord(record.authoredConfig.agents) &&
+                  isRecord(record.authoredConfig.agents.entries) &&
+                  Object.hasOwn(record.authoredConfig.agents.entries, "bot-allowed")
+                ) {
+                  heldPublishedWrite = true;
+                  // The file is already published, but the writer has not sent its receipt.
+                  // Let the real watcher invalidate preparation before post-write checks run.
+                  await withinTest(candidateObserved.promise, signal);
+                  expect(creationContext?.isConfigReloadSettled()).toBe(false);
+                }
+                return await upsertSnapshot(...args);
+              });
             const beforeAllowed = requests.length;
-            const allowed = await client.request<AgentsCreateResult>(
-              "agents.create",
-              createParams("bot-allowed"),
-            );
+            let allowed: AgentsCreateResult;
+            try {
+              allowed = await client.request<AgentsCreateResult>(
+                "agents.create",
+                createParams("bot-allowed"),
+              );
+              expect(heldPublishedWrite).toBe(true);
+            } finally {
+              snapshotAudit.mockRestore();
+              observation.configCandidateObserved = () => {};
+            }
             expect(allowed, JSON.stringify(allowed)).toMatchObject({
               agentId: "bot-allowed",
               onboarding: { status: "completed" },

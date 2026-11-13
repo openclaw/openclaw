@@ -19,7 +19,6 @@ import {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveLineAccount } from "./accounts.js";
-import { lineBindingsAdapter } from "./bindings.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { lineDoctor } from "./doctor.js";
@@ -50,6 +49,15 @@ const lineSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedLineAcc
   approveHint: "openclaw pairing approve line <code>",
   normalizeDmEntry: (raw) => raw.replace(/^line:(?:user:)?/i, ""),
 });
+
+function normalizeLineConversationId(raw?: string | null): string | null {
+  const trimmed = raw?.trim() ?? "";
+  if (!trimmed) {
+    return null;
+  }
+  const prefixed = trimmed.match(/^line:(?:(?:user|group|room):)?(.+)$/i)?.[1];
+  return (prefixed ?? trimmed).trim() || null;
+}
 
 function normalizeLineDirectoryId(entry: string, kind: "direct" | "group"): string | null {
   const id = normalizeLineMessagingTarget(entry);
@@ -121,7 +129,12 @@ export const linePlugin: LineChannelPlugin = createChatChannelPlugin({
           to: peerId,
         });
       },
-      resolveInboundConversation: lineBindingsAdapter.resolveInboundConversation,
+      resolveInboundConversation: (params) => {
+        const conversationId =
+          normalizeLineConversationId(params.conversationId) ??
+          normalizeLineConversationId(params.to);
+        return conversationId ? { conversationId } : null;
+      },
       targetResolver: {
         looksLikeId: (id) => {
           const trimmed = id?.trim();
@@ -171,7 +184,29 @@ export const linePlugin: LineChannelPlugin = createChatChannelPlugin({
     },
     message: lineMessageAdapter,
     actions: lineMessageActions,
-    bindings: lineBindingsAdapter,
+    bindings: {
+      compileConfiguredBinding: ({ conversationId }) => {
+        const normalized = normalizeLineConversationId(conversationId);
+        return normalized ? { conversationId: normalized } : null;
+      },
+      matchInboundConversation: ({ compiledBinding, conversationId }) => {
+        const normalizedIncoming = normalizeLineConversationId(conversationId);
+        if (!normalizedIncoming || compiledBinding.conversationId !== normalizedIncoming) {
+          return null;
+        }
+        return {
+          conversationId: normalizedIncoming,
+          matchPriority: 2,
+        };
+      },
+      resolveCommandConversation: (params) => {
+        const conversationId =
+          normalizeLineConversationId(params.originatingTo) ??
+          normalizeLineConversationId(params.commandTo) ??
+          normalizeLineConversationId(params.fallbackTo);
+        return conversationId ? { conversationId } : null;
+      },
+    },
     conversationBindings: {
       defaultTopLevelPlacement: "current",
     },

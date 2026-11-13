@@ -7,23 +7,28 @@ import {
   type DatabaseEngineSelection as Selection,
 } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
+import { createSqliteFamilyEngines } from "./selection-fixture.test-support.js";
 
-const sqliteEngines: Selection["effectiveEngines"] = {
-  state: "sqlite",
-  agent: "sqlite",
-  workboard: "sqlite",
-  logbook: "sqlite",
-  "team-reports": "sqlite",
-  quarantine: "sqlite",
-  "managed-update": "sqlite",
-  "package-activation": "sqlite",
-};
+const sqliteEngines: Selection["effectiveEngines"] = createSqliteFamilyEngines();
 const postgres = { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" };
 const selection = (family?: keyof Selection["effectiveEngines"], input = postgres): Selection => ({
   effectiveEngines: { ...sqliteEngines, ...(family ? { [family]: "postgres" } : {}) },
   ...(family ? { postgres: input } : {}),
 });
 afterEach(resetDatabaseEngineSelectionForTest);
+
+it("preserves read-only selection through async context and rejects a process mode change", async () => {
+  const reader = { ...selection("state"), postgres: { ...postgres, readOnly: true as const } };
+  install(reader);
+  await Promise.resolve();
+  expect(getInput("state")?.readOnly).toBe(true);
+  expect(() => install(selection("state"))).toThrow(/selection conflicts/);
+  await withSelection(selection("state"), async () => {
+    await Promise.resolve();
+    expect(getInput("state")?.readOnly).toBeUndefined();
+  });
+  expect(getInput("state")?.readOnly).toBe(true);
+});
 
 it.each([undefined, "state"] as const)(
   "publishes an immutable, idempotent selection: %s",

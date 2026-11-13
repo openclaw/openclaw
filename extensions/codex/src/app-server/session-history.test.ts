@@ -119,7 +119,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
   ])(
     "retains $reason in capture diagnostics (incognito=$incognito)",
     async ({ incognito, reason, count, text }) => {
-      const { marker, sessionTarget } = await writeSqliteSession({ incognito });
+      const { target, sessionTarget } = await writeSqliteSession({ incognito });
       const { settledMessages } = settledFixture();
       const extra = Array.from({ length: count }, (_, index) =>
         attachCodexMirrorIdentity(
@@ -140,9 +140,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       try {
         await expect(
           captureCodexSettledTurnFinalizationContext({
-            ...sessionTarget,
-            sessionTarget,
-            sessionFile: marker,
+            ...target,
             model: "gpt-5.6-luna",
             settledMessages,
             mirroredMessages: settledMessages,
@@ -166,7 +164,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
   ])(
     "projects native evidence within its budget ($oversized, incognito=$incognito)",
     async ({ oversized, incognito }) => {
-      const { marker, sessionTarget } = await writeSqliteSession({ incognito });
+      const { target, sessionTarget } = await writeSqliteSession({ incognito });
       const unreadMarker = "synthetic-unread-settled-payload:";
       if (oversized) {
         await appendSessionTranscriptMessagesByIdentity({
@@ -188,9 +186,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       let captured: CodexSettledTurnContext | undefined;
       try {
         captured = await captureCodexSettledTurnFinalizationContext({
-          ...sessionTarget,
-          sessionTarget,
-          sessionFile: marker,
+          ...target,
           model: "gpt-5.6-luna",
           settledMessages,
           mirroredMessages: settledMessages,
@@ -236,7 +232,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
   ])(
     "revalidates the captured prefix before accepting projection ($mutation, oversized=$oversized)",
     async ({ mutation, oversized, reason }) => {
-      const { marker, sessionTarget } = await writeSqliteSession();
+      const { target, sessionTarget } = await writeSqliteSession();
       const { settledMessages } = settledFixture();
       if (oversized) {
         settledMessages.splice(
@@ -278,9 +274,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       });
       try {
         const pending = captureCodexSettledTurnFinalizationContext({
-          ...sessionTarget,
-          sessionTarget,
-          sessionFile: marker,
+          ...target,
           model: "gpt-5.6-luna",
           settledMessages,
           mirroredMessages: settledMessages,
@@ -313,7 +307,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
             },
           );
         } else {
-          const target =
+          const writeTarget =
             mutation === "other-session"
               ? {
                   ...sessionTarget,
@@ -323,12 +317,12 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
               : sessionTarget;
           if (mutation === "other-session") {
             await upsertSessionEntry({
-              ...target,
-              entry: { sessionId: target.sessionId, updatedAt: 1 },
+              ...writeTarget,
+              entry: { sessionId: writeTarget.sessionId, updatedAt: 1 },
             });
           }
           await appendSessionTranscriptMessageByIdentity({
-            ...target,
+            ...writeTarget,
             message: makeUserMessage("appended while the read was pending", 500),
           });
         }
@@ -355,15 +349,11 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
   );
 
   it("reads incognito model context from the memory actor with a mixed-case session key", async () => {
-    const { marker, sessionTarget } = await writeSqliteSession({
+    const { target, sessionTarget } = await writeSqliteSession({
       incognito: true,
       sessionKey: "agent:main:dashboard:incognito-MiXeD",
     });
-    const result = await readCodexMirroredSessionHistoryMessages({
-      ...sessionTarget,
-      sessionTarget,
-      sessionFile: marker,
-    });
+    const result = await readCodexMirroredSessionHistoryMessages(target);
     expect(result).toMatchObject([
       { role: "user", content: "sqlite prompt" },
       { role: "assistant", content: "sqlite answer" },
@@ -372,7 +362,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
   });
 
   it("preserves native prompt evidence across model-context reads", async () => {
-    const { marker, sessionTarget } = await writeSqliteSession();
+    const { target, sessionTarget } = await writeSqliteSession();
     const upstreamUserText = "synthetic-native-prompt:" + "x".repeat(1024 * 1024);
     const message = {
       role: "user" as const,
@@ -386,7 +376,6 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       },
     };
     await appendSessionTranscriptMessageByIdentity({ ...sessionTarget, message });
-    const target = { ...sessionTarget, sessionTarget, sessionFile: marker };
     const hash = (text: string | undefined) =>
       createHash("sha256")
         .update(text ?? "")

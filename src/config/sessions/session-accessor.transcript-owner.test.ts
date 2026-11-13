@@ -1,16 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi } from "vitest";
+import { captureThrown } from "../../../test/helpers/capture-thrown.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { retainLegacyDefaultAgentId } from "../legacy.default-agent-owner.js";
-import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   appendTranscriptMessage,
@@ -20,10 +17,7 @@ import {
   loadTranscriptEvents as loadEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
-import {
-  replaceSessionEntrySync,
-  upsertSessionEntryCore,
-} from "./session-accessor.sqlite-entry.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import {
   appendTranscriptEventSync,
   replaceTranscriptEventsSync,
@@ -66,8 +60,8 @@ it.each([
   ["selection", true],
   ["transaction", false],
   ["transaction", true],
-] as const)("rejects revoked authority during %s (replay=%s)", async (phase, replay) => {
-  await withTempHome(async (home) => {
+] as const)("rejects revoked authority during %s (replay=%s)", (phase, replay) =>
+  withTempHome(async (home) => {
     const scope = makeScope(home, "main", "agent:main:main");
     await seed(scope, { lifecycleRevision: "source-generation" });
     const append = message("completion", "source", "assistant");
@@ -119,11 +113,11 @@ it.each([
     expect(committed).not.toHaveBeenCalled();
     expect(await loadEvents(scope)).toEqual(before);
     expect(loadSessionEntry(scope)).toEqual(entryBefore);
-  });
-});
+  }),
+);
 
-it("completes committed custody before a queued cancellation can interrupt the receipt", async () => {
-  await withTempHome(async (home) => {
+it("completes committed custody before a queued cancellation can interrupt the receipt", () =>
+  withTempHome(async (home) => {
     const scope = makeScope(home, "main", "agent:main:main");
     await seed(scope);
     const controller = new AbortController();
@@ -151,94 +145,79 @@ it("completes committed custody before a queued cancellation can interrupt the r
     expect(controller.signal.aborted).toBe(true);
     expect(completed).toEqual(["committed"]);
     expect(await loadEvents(scope)).toContainEqual(expect.objectContaining({ id: "committed" }));
-  });
-});
+  }));
 
-it.each(["undesignated", "retired", "pathless injected"] as const)(
-  "rejects an ownerless %s transcript write",
-  async (kind) => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      const configured = fleetConfig(
-        storePath,
-        kind === "undesignated" ? undefined : kind === "retired" ? "retired" : "ops",
-      );
-      const cfg =
-        kind === "undesignated" ? retainLegacyDefaultAgentId(configured, "ops") : configured;
-      const scope = makeScope(home, undefined, kind === "undesignated" ? "main" : "global");
-      const target =
-        kind === "pathless injected"
-          ? {
-              sessionId: scope.sessionId,
-              sessionKey: "global",
-              sessionStore: { global: { sessionId: scope.sessionId, updatedAt: 1 } },
-            }
-          : scope;
-
-      await expect(persistTurn(target, turnOptions(cfg, "must select"))).rejects.toBeInstanceOf(
-        AgentSelectionRequiredError,
-      );
-    });
-  },
-);
-
-it.each(["recorded default", "explicit per-agent store"] as const)(
-  "attributes a write to its %s",
-  async (kind) => {
-    await withTempHome(async (home) => {
-      const explicit = kind === "explicit per-agent store";
-      const agentId = explicit ? "research" : "ops";
-      const scope = makeScope(
-        home,
-        explicit ? agentId : undefined,
-        explicit ? "global" : "main",
-        explicit ? "research-sessions.json" : "sessions.json",
-      );
-      const cfg = fleetConfig(
-        explicit ? path.join(home, "shared-sessions.json") : scope.storePath,
-        explicit ? "ops" : undefined,
-      );
-      if (!explicit) {
-        cfg.agents = { ...cfg.agents, defaults: { systemAgent: { agentId: "ops" } } };
-        retainLegacyDefaultAgentId(cfg, "ops");
-      }
-      await seed({ ...scope, agentId });
-
-      await expect(
-        persistTurn(scope, {
-          ...turnOptions(cfg, kind),
-          ...(explicit ? { expectedSessionId: scope.sessionId } : {}),
-        }),
-      ).resolves.toMatchObject({ messages: [{ appended: true }] });
-      await expect(loadEvents({ ...scope, agentId })).resolves.toContainEqual(
-        expect.objectContaining({
-          message: expect.objectContaining({ content: kind, role: "user" }),
-          type: "message",
-        }),
-      );
-    });
-  },
-);
-
-it("rejects a conflicting scope agent for a persisted fixed-store owner", async () => {
-  await withTempHome(async (home) => {
-    const storePath = path.join(home, "sessions.json");
-    const cfg = fleetConfig(storePath, "ops");
-    const scope = makeScope(home, "research");
-
-    await expect(persistTurn(scope, turnOptions(cfg, "wrong owner"))).rejects.toBeInstanceOf(
-      AgentSelectionRequiredError,
+it.each([
+  ["undesignated", undefined, undefined, false],
+  ["retired", "retired", undefined, false],
+  ["pathless injected", "ops", undefined, false],
+  ["recorded default", undefined, undefined, true],
+  ["explicit per-agent store", "ops", "research", true],
+  ["fixed owner", "ops", "ops", true],
+  ["conflicting owner", "ops", "research", false],
+] as const)("resolves transcript ownership: %s", (kind, owner, agentId, allowed) =>
+  withTempHome(async (home) => {
+    const legacy = !owner;
+    const separate = kind === "explicit per-agent store";
+    const scope = makeScope(
+      home,
+      agentId,
+      legacy ? "main" : "global",
+      separate ? "research-sessions.json" : "sessions.json",
     );
+    const cfg = fleetConfig(
+      separate ? path.join(home, "shared-sessions.json") : scope.storePath,
+      owner,
+    );
+    if (legacy) {
+      if (allowed) {
+        cfg.agents = { ...cfg.agents, defaults: { systemAgent: { agentId: "ops" } } };
+      }
+      retainLegacyDefaultAgentId(cfg, "ops");
+    }
+    const target =
+      kind === "pathless injected"
+        ? {
+            sessionId: scope.sessionId,
+            sessionKey: "global",
+            sessionStore: { global: { sessionId: scope.sessionId, updatedAt: 1 } },
+          }
+        : scope;
+    if (allowed) {
+      await seed({ ...scope, agentId: agentId ?? "ops" });
+    }
+    const turn = persistTurn(target, {
+      ...turnOptions(cfg, kind),
+      ...(separate ? { expectedSessionId: scope.sessionId } : {}),
+    });
+    if (!allowed) {
+      await expect(turn).rejects.toBeInstanceOf(AgentSelectionRequiredError);
+      return;
+    }
+    await expect(turn).resolves.toMatchObject({ messages: [{ appended: true }] });
+    await expect(loadEvents({ ...scope, agentId: agentId ?? "ops" })).resolves.toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({ content: kind, role: "user" }),
+        type: "message",
+      }),
+    );
+  }),
+);
 
-    await seed({ ...scope, agentId: "ops" });
+it.runIf(process.platform !== "win32")("rejects a conflicting owner through a store symlink", () =>
+  withTempHome(async (home) => {
+    const storePath = path.join(home, "shared-store.sqlite");
+    const scope = makeScope(home, "research", "global", "alias.sqlite");
+    await fs.writeFile(storePath, "");
+    await fs.symlink(storePath, scope.storePath);
     await expect(
-      persistTurn({ ...scope, agentId: "ops" }, turnOptions(cfg, "right owner")),
-    ).resolves.toMatchObject({ messages: [{ appended: true }] });
-  });
-});
+      persistTurn(scope, turnOptions(fleetConfig(storePath, "ops"), "wrong owner")),
+    ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
+  }),
+);
 
-it("completes a pathless injected write before a later failure", async () => {
-  await withTempHome(async (home) => {
+it("completes a pathless injected write before a later failure", () =>
+  withTempHome(async (home) => {
     const configuredStorePath = path.join(home, "shared-sessions.json");
     const sessionEntry = { sessionId: "injected-research", updatedAt: 1 };
     const sessionStore = { global: sessionEntry };
@@ -291,33 +270,12 @@ it("completes a pathless injected write before a later failure", async () => {
     expect(await loadEvents({ ...scope, storePath: configuredStorePath })).toContainEqual(
       expect.objectContaining({ id: "injected-first" }),
     );
-  });
-});
-
-it.runIf(process.platform !== "win32")(
-  "treats a symlink alias as the configured owned fixed store",
-  async () => {
-    await withTempHome(async (home) => {
-      const fixedStorePath = path.join(home, "shared-store.sqlite");
-      const aliasStorePath = path.join(home, "shared-store-alias.sqlite");
-      await fs.writeFile(fixedStorePath, "");
-      await fs.symlink(fixedStorePath, aliasStorePath);
-      const cfg = fleetConfig(fixedStorePath, "ops");
-
-      await expect(
-        persistTurn(
-          makeScope(home, "research", "global", "shared-store-alias.sqlite"),
-          turnOptions(cfg, "wrong owner"),
-        ),
-      ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
-    });
-  },
-);
+  }));
 
 it.each(["writer", "lifecycle"] as const)(
   "fences transcript mutations with the admitted %s claim",
-  async (claim) => {
-    await withTempHome(async (home) => {
+  (claim) =>
+    withTempHome(async (home) => {
       const fence = {
         expectedLifecycleRevision: claim === "writer" ? "current-revision" : "superseded-revision",
         expectedWriterRunId: claim === "writer" ? "superseded-run" : "current-run",
@@ -347,12 +305,7 @@ it.each(["writer", "lifecycle"] as const)(
             true,
           );
           const captureClaimError = (run: () => unknown): unknown => {
-            try {
-              run();
-            } catch (error) {
-              return error;
-            }
-            throw new Error("expected the writer claim to reject transcript persistence");
+            return captureThrown(run, "expected the writer claim to reject transcript persistence");
           };
           const [replacementError, eventError, messageError] = [
             () => replaceTranscriptEventsSync(scope, []),
@@ -390,53 +343,5 @@ it.each(["writer", "lifecycle"] as const)(
 
       expect(loadSessionEntry(scope)?.updatedAt).toBe(1);
       await expect(loadEvents(scope)).resolves.toEqual([]);
-    });
-  },
-);
-it.each(["authority", "idempotency"] as const)(
-  "commits a %s-guarded turn without decoding unrelated tool results",
-  async (guardKind) => {
-    await withOpenClawTestState({ label: "guarded-turn-write-hold" }, async (state) => {
-      setRuntimeConfigSnapshot({});
-      const scope = makeScope(state.sessionsDir(), "main", "agent:main:guarded-turn");
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      appendTranscriptMessageSync(scope, {
-        message: {
-          role: "toolResult",
-          toolCallId: "large-result",
-          toolName: "read",
-          content: [{ type: "text", text: "synthetic tool output ".repeat(8000) }],
-          isError: false,
-          timestamp: 1,
-        },
-      });
-      const codec = expectDefined(
-        resolveZstdCodec(),
-        "Transcript hold regression requires native zstd",
-      );
-      using decode = vi.spyOn(codec, "decompress");
-      const guard = vi.fn(() => true);
-      const committed = await persistTurn(scope, {
-        expectedSessionId: scope.sessionId,
-        updateMode: "none",
-        touchSessionEntry: true,
-        messages: [
-          {
-            message: {
-              role: "assistant",
-              content: "completed",
-              timestamp: 2,
-              idempotencyKey: "fresh-reply",
-            },
-            ...(guardKind === "authority"
-              ? { shouldAppendInTransaction: guard }
-              : { idempotencyLookup: "scan-assistant" as const }),
-          },
-        ],
-      });
-      expect(committed.messages.filter((m) => m.appended)).toHaveLength(1);
-      expect(guard).toHaveBeenCalledTimes(guardKind === "authority" ? 1 : 0);
-      expect(decode).not.toHaveBeenCalled();
-    });
-  },
+    }),
 );

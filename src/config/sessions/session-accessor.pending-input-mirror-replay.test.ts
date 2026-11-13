@@ -14,6 +14,7 @@ import {
 } from "./session-accessor.js";
 import {
   stageSessionPendingInput,
+  prepareForeignLiveSessionPendingInputEntries,
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
@@ -105,11 +106,22 @@ it("replays a committed native prompt without duplicating the mirrored input", a
     ...original,
     provenance: { ...original.provenance, kind: "inter_session", sourceSessionKey: "worker-a" },
   });
+  expect(receipt.state).toBe("queued");
   expect(receipt.message).toEqual(committed);
+  const readForeign = await prepareForeignLiveSessionPendingInputEntries(scope);
+  expect(readForeign()).toEqual(new Map([[receipt.inputId, committed.idempotencyKey]]));
+  expect(
+    await receipt.runAsync!(async () =>
+      (await prepareForeignLiveSessionPendingInputEntries(scope))(),
+    ),
+  ).toEqual(new Map());
   expect(receipt.run(() => "continued")).toBe("continued");
   const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
   await expect(receipt.completeAsync!(outcome)).resolves.toEqual(outcome);
   expect(await loadTranscriptEvents(scope)).toEqual(transcript);
+  receipt.finish("interrupted");
+  await receipt.settled?.();
+  expect(readForeign()).toEqual(new Map());
 });
 
 it("still rejects changed completion content and requester facts against a native prompt", async () => {

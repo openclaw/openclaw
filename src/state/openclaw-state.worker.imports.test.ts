@@ -109,13 +109,22 @@ it.each([
 it("keeps shared-state and session-upstream workers independent of host runtime discovery", () => {
   expect(
     findSourceImportBackedges(
-      ["src/state/openclaw-state.worker.ts", "src/sessions/session-upstream-links.worker.ts"],
+      [
+        "src/state/openclaw-state.worker.ts",
+        "src/state/openclaw-state-read-handlers.ts",
+        "src/sessions/session-upstream-links.worker.ts",
+        // Loaded lazily by the shared-state worker; dynamic imports are separate entries.
+        "src/infra/update-run-dispatch.worker.ts",
+      ],
       [
         "src/config/io.snapshot.ts",
+        "src/cron/store/read-command.ts",
         "src/config/validation-core.ts",
         "src/plugins/loader-runtime-load.ts",
         "src/channels/plugins/registry.ts",
         "packages/gateway-protocol/src/validator-registry.ts",
+        // Update-result policy and network dispatch belong to the host owner.
+        "src/infra/update-result-telemetry.ts",
       ],
     ),
   ).toEqual([]);

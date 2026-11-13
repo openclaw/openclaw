@@ -58,10 +58,7 @@ describe("xAI generated video download", () => {
   });
 
   it("closes the upstream socket for a never-ending malformed response over a real connection", async () => {
-    let notifySocketClosed: ((closed: boolean) => void) | undefined;
-    const socketClosed = new Promise<boolean>((resolve) => {
-      notifySocketClosed = resolve;
-    });
+    const { promise: socketClosed, resolve: notifySocketClosed } = Promise.withResolvers<boolean>();
     await withServer(
       (request, response) => {
         request.socket.once("close", () => notifySocketClosed?.(true));

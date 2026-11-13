@@ -301,9 +301,28 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   if (grouping !== "category") {
     // Derived groups sort ahead of persisted zones; each group's first row owns its metadata.
     sections.push(
-      ...[...grouped.values()].toSorted((left, right) =>
-        compareSidebarGroups(left, right, options.selfOwnerId),
-      ),
+      ...[...grouped.values()].toSorted((left, right): number => {
+        const selfOwnerId = options.selfOwnerId;
+        if (left.project && right.project) {
+          return (
+            left.project.name.localeCompare(right.project.name) ||
+            left.project.path.localeCompare(right.project.path)
+          );
+        }
+        const rank = (owner: NonNullable<typeof left.personOwner>) =>
+          owner.identity?.type === "agent"
+            ? 2
+            : owner.identity?.type === "profile" && owner.id === selfOwnerId
+              ? 0
+              : 1;
+        const leftOwner = left.personOwner!;
+        const rightOwner = right.personOwner!;
+        return (
+          rank(leftOwner) - rank(rightOwner) ||
+          (leftOwner.label || leftOwner.id).localeCompare(rightOwner.label || rightOwner.id) ||
+          leftOwner.id.localeCompare(rightOwner.id)
+        );
+      }),
     );
   }
   orderedSections.push({ id: "ungrouped", rows: threads });
@@ -373,32 +392,6 @@ function sidebarRowGroup<Row extends SidebarGroupableRow>(
   return category
     ? (groups.get(`category:${category}`) ?? { id: `category:${category}`, category, rows: [] })
     : undefined;
-}
-
-function compareSidebarGroups(
-  left: SidebarSessionSection<unknown>,
-  right: SidebarSessionSection<unknown>,
-  selfOwnerId?: string | null,
-): number {
-  if (left.project && right.project) {
-    return (
-      left.project.name.localeCompare(right.project.name) ||
-      left.project.path.localeCompare(right.project.path)
-    );
-  }
-  const rank = (owner: NonNullable<typeof left.personOwner>) =>
-    owner.identity?.type === "agent"
-      ? 2
-      : owner.identity?.type === "profile" && owner.id === selfOwnerId
-        ? 0
-        : 1;
-  const leftOwner = left.personOwner!;
-  const rightOwner = right.personOwner!;
-  return (
-    rank(leftOwner) - rank(rightOwner) ||
-    (leftOwner.label || leftOwner.id).localeCompare(rightOwner.label || rightOwner.id) ||
-    leftOwner.id.localeCompare(rightOwner.id)
-  );
 }
 
 function orderedGroupIds(

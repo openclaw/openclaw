@@ -34,6 +34,10 @@ import { resolveSessionPublicShare } from "../config/sessions/session-public-sha
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as channelOutbound from "../plugin-sdk/channel-outbound.js";
 import * as ssrfRuntime from "../plugin-sdk/ssrf-runtime.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
 import { getPluginInstance, runPluginStreamConsumer } from "../plugins/plugin-instance-scope.js";
 import {
   getPluginRecordRegistry,
@@ -42,6 +46,7 @@ import {
   markPluginRegistryRetired,
 } from "../plugins/registry-lifecycle.js";
 import { createPluginRegistry } from "../plugins/registry.js";
+import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -55,6 +60,7 @@ import { isPublicSessionShareActive } from "./control-ui-public-session-read.js"
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { AUTH_TOKEN, createTestGatewayServer, sendRequest } from "./server-http.test-harness.js";
+import { createMockGatewayLifecycleRuntime } from "./server-lifecycle-runtime.test-support.js";
 import { sessionCreateHandlers } from "./server-methods/sessions-create.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
@@ -305,10 +311,11 @@ describe("X publication production-owner composition", () => {
       ],
     });
     gateway.resolveGatewayContext = () => gateway;
+    const sdkResources = new LegacyPluginSdkResourceHost();
+    bindLegacyPluginSdkResourceHost(gateway.resolveGatewayContext, sdkResources);
     // Registry completion must observe the real child, not the direct fixture's empty wait result.
-    vi.mocked(
-      expectDefined(gateway.recoveryRuntime, "Gateway recovery fixture").waitForAgent,
-    ).mockImplementation(
+    gateway.lifecycleRuntime = createMockGatewayLifecycleRuntime();
+    vi.mocked(gateway.lifecycleRuntime.waitForAgent).mockImplementation(
       async (params) => (await prepareAgentWaitForTurn(gateway, params).wait()).result,
     );
     gateway.readPreparedGatewayModelCatalog = async () => {
@@ -316,7 +323,7 @@ describe("X publication production-owner composition", () => {
       return { entries: catalog.entries, routeVariants: catalog.routeVariants };
     };
     const runtime = createPluginRuntime();
-    bindGatewayContextResolver(runtime.subagent, () => gateway);
+    bindGatewayContextResolver(runtime.subagent, gateway.resolveGatewayContext);
     let rejectMonitor: ((error: Error) => void) | undefined;
     const reportMonitorFailure = (message: string) => rejectMonitor?.(new Error(message));
     const logger = {
@@ -786,7 +793,14 @@ describe("X publication production-owner composition", () => {
           }
         }
         // Check the durable effect before delivery, so a reply failure cannot hide a grant.
-        expect(rows(), kind).toHaveLength(1);
+        expect(
+          rows(),
+          JSON.stringify({
+            kind,
+            outcome: outcomes.get(kind),
+            spawnError: spawnErrors.has(kind) ? String(spawnErrors.get(kind)) : undefined,
+          }),
+        ).toHaveLength(1);
         expect(
           rows().filter(({ entry }) => resolveSessionPublicShare(entry)),
           kind,
@@ -908,6 +922,8 @@ describe("X publication production-owner composition", () => {
         } finally {
           markPluginRegistryRetired(builder.registry);
           networkCase = undefined;
+          await disposePluginRegistryInstances(builder.registry);
+          await sdkResources.close();
         }
       }
     }

@@ -35,6 +35,7 @@ import "./app-shell-locale-recovery.ts";
 import type { FocusDashboardRouteState } from "./app-root-focus.ts";
 import { createLegacyFocusEscape } from "./app-root-lit.ts";
 import { ShellLoader } from "./app-shell-loader.tsx";
+import { adoptBootComposer, finishBootFrame } from "./boot-composer.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import type {
   createSolidControlUiReadiness,
@@ -88,6 +89,14 @@ const LoginGate = lazy(() => import("../components/login-gate-solid.tsx"), {
 
 /** Mount into index.html's plain host; the returned disposer owns this application epoch. */
 export function mountOpenClawApp(host: HTMLElement, runtime = bootstrapApplication()): () => void {
+  // The boot frame's composer survives its frame; Solid's loading frames reinsert it.
+  adoptBootComposer(runtime.documentMode === null && runtime.focusLocation === null);
+  if (!runtime.warmBoot) {
+    finishBootFrame();
+  }
+  // render() appends to existing children; retire the HTML frame in the same
+  // task as the first Solid commit so it cannot remain beside the live app.
+  host.replaceChildren();
   return render(() => OpenClawApp(host, runtime), host);
 }
 
@@ -170,15 +179,17 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     ((startupPending() && snapshot().phase === "stopped") ||
       snapshot().phase === "starting" ||
       (snapshot().phase === "connecting" && !loginGatePinned()));
-  const warmConnectPending = () =>
+  // A cold transport retry is not an authentication failure. Keep its admitted
+  // shell through both the scheduled wait and the next in-flight attempt.
+  const startedCold = !runtime.warmBoot;
+  const automaticConnectPending = () =>
     runtime.documentMode === null &&
-    runtime.warmBoot &&
+    (startedCold || runtime.warmBoot) &&
     !loginGatePinned() &&
-    (initialConnectPending() ||
+    !snapshot().lastErrorAuthReason &&
+    (snapshot().reconnectAt !== undefined ||
       (snapshot().phase === "connecting" &&
-        !snapshot().lastErrorAuthReason &&
         (snapshot().lastErrorCode === null || snapshot().lastErrorCode === "GATEWAY_BUSY")));
-  const coldPending = () => initialConnectPending() && !warmConnectPending();
   const showLoginGate = () => {
     const route = router.read();
     const browserSignInRecovery =
@@ -189,9 +200,10 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
       !(
         isRemoteControlUiIngress() ||
         browserSignInRecovery ||
+        initialConnectPending() ||
         snapshot().phase === "reconnecting" ||
         snapshot().phase === "reload-required" ||
-        warmConnectPending()
+        automaticConnectPending()
       )
     );
   };
@@ -347,6 +359,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     };
     onSettled(() => {
       readiness?.invalidate();
+      finishBootFrame();
       return retire;
     });
     const retry = async () => {
@@ -486,6 +499,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     );
   }
   function Login(): SolidJSX.Element {
+    onSettled(() => finishBootFrame());
     return (
       <LazyRootBoundary fallback={<Splash />}>
         <LoginGate
@@ -501,6 +515,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
               (snapshot().phase === "connecting" || snapshot().phase === "reconnecting"),
             lastErrorCode: snapshot().lastErrorCode,
             lastErrorAuthReason: snapshot().lastErrorAuthReason,
+            lastErrorPairing: snapshot().lastErrorPairing,
             hasToken: Boolean(loginToken().trim()),
             hasPassword: Boolean(loginPassword().trim()),
             gatewayUrl: loginGatewayUrl(),
@@ -523,6 +538,11 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
             onOpenGatewaySettings: context.gateway.hasStoredDeviceToken?.()
               ? () => context.navigate("connection")
               : undefined,
+            onBrowserPaired: (gatewayUrl: string) => {
+              setLoginGatePinned(true);
+              // Empty session credentials let connect select the stored device token.
+              context.gateway.connect({ gatewayUrl, token: "", password: "", bootstrapToken: "" });
+            },
             onConnect: () => {
               setLoginGatePinned(true);
               context.gateway.connect({
@@ -637,9 +657,6 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
                 )}
               />
             </LazyRootBoundary>
-          </Match>
-          <Match when={coldPending()}>
-            <Splash />
           </Match>
           <Match when={showLoginGate()}>
             <Login />

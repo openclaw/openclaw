@@ -1,16 +1,16 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
-  hasInternalDiagnosticEventInterest,
-  hasModelCallPromptStatsInterest,
-  onInternalDiagnosticEventInterest,
+  hasInternalDiagnosticEventInterest as hasInterest,
+  hasModelCallPromptStatsInterest as hasPromptStats,
+  onInternalDiagnosticEventInterest as onInterest,
 } from "./diagnostic-event-listener-presence.js";
 import {
-  emitDiagnosticEvent,
-  emitTrustedDiagnosticEvent,
-  onInternalDiagnosticEvent,
-  onTrustedInternalDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  waitForDiagnosticEventsDrained,
+  emitDiagnosticEvent as emit,
+  emitTrustedDiagnosticEvent as emitTrusted,
+  onInternalDiagnosticEvent as onInternal,
+  onTrustedInternalDiagnosticEvent as onTrusted,
+  resetDiagnosticEventsForTest as resetEvents,
+  waitForDiagnosticEventsDrained as drain,
 } from "./diagnostic-events.js";
 
 const queued = "message.queued";
@@ -19,76 +19,74 @@ const completed = "model.call.completed";
 const log = "log.record";
 function expectInterests(untrusted: string[], trusted: string[]) {
   const types = [queued, started, completed, log];
-  expect(types.filter((type) => hasInternalDiagnosticEventInterest(type))).toEqual(untrusted);
-  expect(types.filter((type) => hasInternalDiagnosticEventInterest(type, true))).toEqual(trusted);
+  expect(types.filter((type) => hasInterest(type))).toEqual(untrusted);
+  expect(types.filter((type) => hasInterest(type, true))).toEqual(trusted);
 }
 
-beforeEach(resetDiagnosticEventsForTest);
+beforeEach(resetEvents);
 afterEach(() => {
-  resetDiagnosticEventsForTest();
+  resetEvents();
   vi.restoreAllMocks();
 });
 
-it.each([onInternalDiagnosticEvent, onTrustedInternalDiagnosticEvent])(
-  "requests prompt stats only for interested subscribers over their lifetime (%#)",
-  (subscribe) => {
-    const listener = () => {};
-    subscribe(listener, { include: [started, completed], includePromptStats: false });
-    expect(hasInternalDiagnosticEventInterest(started, true)).toBe(true);
-    expect(hasModelCallPromptStatsInterest()).toBe(false);
-    subscribe(() => {}, { include: [log] });
-    subscribe(() => {}, { includeTrusted: [] });
-    expect(hasModelCallPromptStatsInterest()).toBe(false);
-    const stop = subscribe(() => {}, { includeTrusted: [completed] });
-    expect(hasModelCallPromptStatsInterest()).toBe(true);
-    stop();
-    expect(hasModelCallPromptStatsInterest()).toBe(false);
-    subscribe(listener);
-    expect(hasModelCallPromptStatsInterest()).toBe(true);
-    subscribe(listener, { exclude: [started, completed, "model.call.error"] });
-    expect(hasModelCallPromptStatsInterest()).toBe(false);
-    const stopBroad = subscribe(listener);
-    resetDiagnosticEventsForTest();
-    stopBroad();
-    expect(hasModelCallPromptStatsInterest()).toBe(false);
-  },
-);
+it("tracks prompt-stat interest through subscriber lifetime", () => {
+  const subscribe = onInternal;
+  const listener = () => {};
+  subscribe(listener, { include: [started, completed], includePromptStats: false });
+  expect(hasInterest(started, true)).toBe(true);
+  expect(hasPromptStats()).toBe(false);
+  subscribe(() => {}, { include: [log] });
+  subscribe(() => {}, { includeTrusted: [] });
+  expect(hasPromptStats()).toBe(false);
+  const stop = subscribe(() => {}, { includeTrusted: [completed] });
+  expect(hasPromptStats()).toBe(true);
+  stop();
+  expect(hasPromptStats()).toBe(false);
+  subscribe(listener);
+  expect(hasPromptStats()).toBe(true);
+  subscribe(listener, { exclude: [started, completed, "model.call.error"] });
+  expect(hasPromptStats()).toBe(false);
+  const stopBroad = subscribe(listener);
+  resetEvents();
+  stopBroad();
+  expect(hasPromptStats()).toBe(false);
+});
 
-it("notifies only newly interested producers across filters, unsubscribe, and reset", () => {
-  onInternalDiagnosticEvent(() => {}, { include: [queued] });
+it("notifies producers only on new interest, including after reset", () => {
+  onInternal(() => {}, { include: [queued] });
   const type = "gateway.event_loop.sample";
   const observations: boolean[] = [];
-  const stopObserving = onInternalDiagnosticEventInterest(type, () => {
-    observations.push(hasInternalDiagnosticEventInterest(type));
+  const stopObserving = onInterest(type, () => {
+    observations.push(hasInterest(type));
   });
   try {
-    onInternalDiagnosticEvent(() => {}, { include: ["diagnostic.heartbeat"] });
-    onTrustedInternalDiagnosticEvent(() => {}, { exclude: [type] });
+    onInternal(() => {}, { include: ["diagnostic.heartbeat"] });
+    onTrusted(() => {}, { exclude: [type] });
     expect(observations).toEqual([]);
-    const stopFirst = onInternalDiagnosticEvent(() => {}, { include: [type] });
-    const stopSecond = onTrustedInternalDiagnosticEvent(() => {}, { include: [type] });
+    const stopFirst = onInternal(() => {}, { include: [type] });
+    const stopSecond = onTrusted(() => {}, { include: [type] });
     expect(observations).toEqual([true]);
     stopFirst();
     expect(observations).toEqual([true]);
     stopSecond();
     expect(observations).toEqual([true]);
-    onTrustedInternalDiagnosticEvent(() => {}, { exclude: [log] });
+    onTrusted(() => {}, { exclude: [log] });
     expect(observations).toEqual([true, true]);
-    expect(hasInternalDiagnosticEventInterest("message.queued")).toBe(true);
-    resetDiagnosticEventsForTest();
-    const stopAfterReset = onInternalDiagnosticEvent(() => {}, { include: [type] });
+    expect(hasInterest("message.queued")).toBe(true);
+    resetEvents();
+    const stopAfterReset = onInternal(() => {}, { include: [type] });
     expect(observations).toEqual([true, true, true]);
     stopObserving();
     stopAfterReset();
-    onInternalDiagnosticEvent(() => {}, { include: [type] });
+    onInternal(() => {}, { include: [type] });
     expect(observations).toEqual([true, true, true]);
   } finally {
     stopObserving();
   }
 });
 
-it.each([onInternalDiagnosticEvent, onTrustedInternalDiagnosticEvent])(
-  "publishes trusted interest across filters, replacement, unsubscribe, and reset (%#)",
+it.each([onInternal, onTrusted])(
+  "tracks filtered trust across replacement and reset (%#)",
   (subscribe) => {
     const listener = () => {};
     subscribe(listener, {
@@ -97,16 +95,16 @@ it.each([onInternalDiagnosticEvent, onTrustedInternalDiagnosticEvent])(
     });
     expectInterests([queued, started, completed], [started, completed]);
     const stopUnfiltered = subscribe(() => {});
-    expect(hasInternalDiagnosticEventInterest(log)).toBe(true);
+    expect(hasInterest(log)).toBe(true);
     stopUnfiltered();
-    expect(hasInternalDiagnosticEventInterest(log)).toBe(false);
+    expect(hasInterest(log)).toBe(false);
 
     const stopOther = subscribe(() => {}, { include: [queued] });
     subscribe(listener, { include: [queued, started], includeTrusted: [started, completed] });
     expectInterests([queued, started], [queued, started]);
     stopOther();
-    expect(hasInternalDiagnosticEventInterest(queued, true)).toBe(false);
-    expect(hasInternalDiagnosticEventInterest(queued)).toBe(true);
+    expect(hasInterest(queued, true)).toBe(false);
+    expect(hasInterest(queued)).toBe(true);
 
     const stopEmpty = subscribe(listener, { includeTrusted: [] });
     expectInterests([queued, started, completed, log], []);
@@ -115,50 +113,46 @@ it.each([onInternalDiagnosticEvent, onTrustedInternalDiagnosticEvent])(
 
     const stopBroad = subscribe(listener);
     expectInterests([queued, started, completed, log], [queued, started, completed, log]);
-    resetDiagnosticEventsForTest();
+    resetEvents();
     expectInterests([], []);
     stopBroad();
     expectInterests([], []);
   },
 );
 
-it.each([onInternalDiagnosticEvent, onTrustedInternalDiagnosticEvent])(
-  "filters trusted event types before cloning without narrowing untrusted interest (%#)",
-  async (subscribe) => {
-    const seen: Array<{ type: string; trusted: boolean; seq: number }> = [];
-    const clone = vi.spyOn(globalThis, "structuredClone");
-    const stop = subscribe(
-      (event, metadata) => {
-        seen.push({ type: event.type, trusted: metadata.trusted, seq: event.seq });
-      },
-      { include: [queued, started, log], includeTrusted: [started, log], exclude: [log] },
-    );
-    expect(hasInternalDiagnosticEventInterest("message.queued")).toBe(true);
-    expect(hasInternalDiagnosticEventInterest("log.record")).toBe(false);
+it("filters before cloning without trusting public input", async () => {
+  const subscribe = onTrusted;
+  const seen: Array<{ type: string; trusted: boolean; seq: number }> = [];
+  const trace = { traceId: "a".repeat(32), spanId: "b".repeat(16) };
+  const clone = vi.spyOn(globalThis, "structuredClone");
+  const stop = subscribe(
+    (event, metadata) => {
+      seen.push({ type: event.type, trusted: metadata.trusted, seq: event.seq });
+    },
+    { include: [queued, started, log], includeTrusted: [started, log], exclude: [log] },
+  );
+  emitTrusted({ type: "message.queued", source: "core", trace });
+  expect(clone).not.toHaveBeenCalled();
+  emit(
+    Object.assign({ type: "message.queued" as const, source: "plugin", trace }, { trusted: true }),
+  );
+  emitTrusted({
+    type: "model.call.started",
+    runId: "run",
+    callId: "call",
+    provider: "test",
+    model: "test",
+    trace,
+  });
+  emitTrusted({ type: "log.record", level: "INFO", message: "ignored", trace });
+  emit({ type: "log.record", level: "INFO", message: "ignored", trace });
+  emit({ type: "model.usage", usage: { total: 1 } });
+  await drain();
 
-    emitTrustedDiagnosticEvent({ type: "message.queued", source: "core" });
-    expect(clone).not.toHaveBeenCalled();
-    emitDiagnosticEvent(
-      Object.assign({ type: "message.queued" as const, source: "plugin" }, { trusted: true }),
-    );
-    emitTrustedDiagnosticEvent({
-      type: "model.call.started",
-      runId: "run",
-      callId: "call",
-      provider: "test",
-      model: "test",
-    });
-    emitTrustedDiagnosticEvent({ type: "log.record", level: "INFO", message: "ignored" });
-    emitDiagnosticEvent({ type: "log.record", level: "INFO", message: "ignored" });
-    emitDiagnosticEvent({ type: "model.usage", usage: { total: 1 } });
-    await waitForDiagnosticEventsDrained();
-
-    expect(seen).toEqual([
-      { type: "message.queued", trusted: false, seq: 2 },
-      { type: "model.call.started", trusted: true, seq: 3 },
-    ]);
-    expect(clone).toHaveBeenCalledTimes(2);
-    stop();
-    expect(hasInternalDiagnosticEventInterest("message.queued")).toBe(false);
-  },
-);
+  expect(seen).toEqual([
+    { type: "message.queued", trusted: false, seq: 2 },
+    { type: "model.call.started", trusted: true, seq: 3 },
+  ]);
+  expect(clone).toHaveBeenCalledTimes(2);
+  stop();
+});

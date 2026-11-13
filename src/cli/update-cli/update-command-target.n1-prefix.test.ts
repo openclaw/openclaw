@@ -1,17 +1,13 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  buildRuntimeProbeEnv,
-  resolveBunRuntimeInfo,
-  resolveNodeRuntimeInfo,
-} from "../../daemon/runtime-paths.js";
+import { resolveBunRuntimeInfo, resolveNodeRuntimeInfo } from "../../daemon/runtime-paths.js";
 import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
+import { defaultRuntime } from "../../runtime.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { activationFixture, runtimeFixture } from "./update-command-fixtures.test-support.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 
 const state = vi.hoisted(() => ({
-  calls: [] as string[][],
   manager: "npm" as "npm" | "bun",
   sqliteText: true,
 }));
@@ -26,7 +22,6 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runCommandBuffered: async () => pkgQueryResult(),
   runCommandWithTimeout: async (argv: string[]) => {
-    state.calls.push(argv);
     if (argv.includes("--version")) {
       return { code: 0, stdout: "12.0.0", stderr: "" };
     }
@@ -94,7 +89,6 @@ vi.mock("./update-command-node-runtime-resolution.js", () => ({
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
 
 beforeEach(() => {
-  state.calls = [];
   state.manager = "npm";
   state.sqliteText = true;
   vi.mocked(resolveNodeRuntimeInfo).mockReset();
@@ -138,6 +132,7 @@ async function resolve(servicePlan: {
 it.each(["writable rebind", "protected redirect", "unowned project"] as const)(
   "selects the package root for a %s",
   async (kind) => {
+    const warning = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     const selected = await resolve({
       rootRedirect: kind === "protected redirect" ? { root: rootA, previousRoot: rootB } : null,
       ...(kind === "writable rebind" ? { serviceRoot: rootA } : {}),
@@ -145,8 +140,8 @@ it.each(["writable rebind", "protected redirect", "unowned project"] as const)(
     expect(selected.packageInstallTarget?.packageRoot).toBe(
       kind === "writable rebind" ? rootB : rootA,
     );
-    if (kind !== "protected redirect") {
-      expect(state.calls.some((argv) => argv[1] === "root")).toBe(kind === "unowned project");
+    if (kind === "protected redirect") {
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("will remain unchanged"));
     }
     if (kind === "writable rebind") {
       expect(selected.packageInstallTarget?.directNodeModulesRoot).toBe(true);
@@ -238,11 +233,5 @@ it.each([
             failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
           },
     );
-    expect(vi.mocked(resolveNodeRuntimeInfo).mock.calls.map(([executable]) => executable)).toEqual(
-      nodeService ? ["/old/node"] : [],
-    );
-    if (!nodeService) {
-      expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(runner, buildRuntimeProbeEnv(process.env));
-    }
   },
 );

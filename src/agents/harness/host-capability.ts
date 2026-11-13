@@ -26,11 +26,9 @@ import {
   readAdmittedRunOperatorAuthority,
   retainAdmittedRunBeforeToolCallRecovery,
 } from "../admitted-run-context.js";
+import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.async.js";
 import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
-import {
-  createOpenClawCodingToolsInternal,
-  createOpenClawCodingToolsInternalAsync,
-} from "../agent-tools.js";
+import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
@@ -417,6 +415,8 @@ export function createAgentHarnessHostCapabilities(params: {
         ...effectiveOptions,
         // Availability belongs to this prepared host, not mutable plugin inputs.
         githubPublicationAvailable,
+        // Native harnesses own creation-time listings and have no embedded prompt pin.
+        githubPublicationConfigurationAware: undefined,
         // One host owns selection and launch. A plugin's mutable config or exec
         // overrides cannot replace the identity captured before its handoff.
         exec: { ...effectiveOptions.exec, preparedRunEnvironment },
@@ -432,6 +432,8 @@ export function createAgentHarnessHostCapabilities(params: {
         pluginExecutionSkillsSnapshot: skillsSnapshot,
         assertInvocationCurrent: assertCurrent,
         nativeHarnessExecution: !denyToolCalls ? nativeLocalExecution : undefined,
+        // Tool creation cannot certify the harness's additional execution gates.
+        unverifiedExecutionPolicy: true as const,
       },
       skillReadResources: resolveSkillResourceCandidates(
         skillResourceSnapshot(options),
@@ -474,7 +476,7 @@ export function createAgentHarnessHostCapabilities(params: {
     retainSourceAuthority: () =>
       retainHarnessSource(attempt.admittedRunContext, assertActive, nativeModelPolicySupported),
     reportOutputTokens: (outputTokens) => {
-      assertActive();
+      assertActive.assertScopeCurrent();
       const data = emitAgentRunOutputTokens({
         runId,
         lifecycleGeneration,
@@ -492,9 +494,9 @@ export function createAgentHarnessHostCapabilities(params: {
     ...(annotateCurrentUserTurn ? { annotateCurrentUserTurn } : {}),
     ...media.capabilities,
     ...bindBoundedSeed(attempt, assertActive, withCaller, capabilityAbortController.signal, media),
-    ...bindHarnessTrajectory(attempt, assertActive, assertActive.assertScopeCurrent),
+    ...bindHarnessTrajectory(attempt, assertActive.assertScopeCurrent),
     preparedEnvironment: () => {
-      assertActive();
+      assertActive.assertScopeCurrent();
       return preparedRunEnvironment;
     },
     activeComputerContext: () => {
@@ -622,11 +624,15 @@ export function createAgentHarnessHostCapabilities(params: {
       assertActive();
       const result = await withCaller(
         async () =>
-          await callGatewayTool<{ id?: string } & Partial<AgentHarnessHostApprovalResult>>(
-            "plugin.approval.waitDecision",
-            { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
-            { id: request.approvalId },
-            { signal: request.signal },
+          await withGatewayToolApprovalOwner(
+            params.pluginId,
+            async () =>
+              await callGatewayTool<{ id?: string } & Partial<AgentHarnessHostApprovalResult>>(
+                "plugin.approval.waitDecision",
+                { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
+                { id: request.approvalId },
+                { requireAgentRuntimeIdentity: true, signal: request.signal },
+              ),
           ),
         request.signal,
       );
@@ -714,8 +720,6 @@ export function createAgentHarnessHostCapabilities(params: {
         release?.();
       }
     },
-    close: () => {
-      capabilityAbortController.abort();
-    },
+    close: () => capabilityAbortController.abort(),
   };
 }

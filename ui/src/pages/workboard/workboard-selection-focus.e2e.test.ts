@@ -1,15 +1,11 @@
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import {
-  createControlUiMockSameOriginGatewayScript,
-  installMockGateway,
-  startControlUiE2eServer,
-} from "../../test-helpers/control-ui-e2e.ts";
+import { createControlUiMockSameOriginGatewayScript } from "../../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../../test-helpers/control-ui-plugin-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 import { configSnapshot, makeBoard, makeCard } from "./workboard.e2e.test-support.ts";
 const suite = createControlUiE2eSuite({
   name: "Workboard selection focus",
-  startServer: () => startControlUiE2eServer(undefined, { source: true }),
 });
 suite.define(() => {
   it("returns keyboard focus to the selected card after clearing selection", async () => {
@@ -19,7 +15,7 @@ suite.define(() => {
         await page.addInitScript(createControlUiMockSameOriginGatewayScript());
         const board = makeBoard("default", { total: 1, active: 1 });
         const card = makeCard({ id: "focus-card", title: "Review release notes" });
-        await installMockGateway(page, {
+        await installNativePluginMockGateway(page, {
           ...workboardUi,
           methodResponses: {
             "config.get": configSnapshot("selection-focus"),

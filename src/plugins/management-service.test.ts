@@ -97,6 +97,7 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
 
 vi.mock("../infra/clawhub-plugin-catalog.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/clawhub-plugin-catalog.js")>()),
+  fetchClawHubPluginDetail: async () => ({}),
   fetchClawHubPluginVersionCategories: (...args: unknown[]) =>
     mocks.pluginVersionCategories(...args),
 }));
@@ -124,6 +125,25 @@ describe("plugin management service", () => {
     mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
     mocks.pluginVersionCategories.mockResolvedValue([]);
     mockHostedOfficialCatalog(mocks.officialCatalog, []);
+  });
+
+  it("projects third-party manifest recommendations into the cold management catalog", async () => {
+    const metadata = metadataSnapshot({
+      enabled: false,
+      id: "community-planner",
+      origin: "global",
+    });
+    const manifest = metadata.plugins[0]!;
+    manifest.recommendedPrompts = ["Plan my week. Prioritize commitments."];
+    mocks.metadata.mockReturnValue(metadata);
+    const catalog = await listManagedPlugins({
+      config: {},
+      env: {},
+      officialCatalog: { entries: [] },
+    });
+    expect(catalog.plugins[0]?.recommendedPrompts).toEqual([
+      "Plan my week. Prioritize commitments.",
+    ]);
   });
 
   it.each(["batch", "cross-owner"] as const)(

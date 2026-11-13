@@ -1,10 +1,11 @@
 import { createMemo, For, onSettled, Show, type Accessor } from "solid-js";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
+import { observeFontLoading } from "../../../lib/reactive/font-loading.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { listen } from "../../../lib/reactive/listener.ts";
 import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import "../../../styles/chat/composer-context-strip.css";
@@ -69,21 +70,19 @@ function mentionOverflow(
   }, sync);
   onSettled(() => {
     sync();
-    return document.fonts ? listen(document.fonts, "loadingdone", sync) : undefined;
+    return observeFontLoading(document.fonts, sync);
   });
   return (node: HTMLElement) => {
     element = node;
   };
 }
 
-type SelectedHumanMentionsProps = {
+export function SelectedHumanMentions(props: {
   text: string;
   mentions: readonly HumanMention[] | undefined;
   onRemove: () => void;
   avatarUrls?: ReadonlyMap<string, string>;
-};
-
-export function SelectedHumanMentions(props: SelectedHumanMentionsProps) {
+}) {
   const personElements = new Map<string, HTMLElement>();
   let more!: HTMLSpanElement;
   const people = createMemo(
@@ -168,16 +167,13 @@ export function SelectedHumanMentions(props: SelectedHumanMentionsProps) {
             hidden
           />
         </span>
-        <button
-          type="button"
+        <IconButton
+          size={28}
           class="chat-reply-preview__dismiss composer-context-strip__dismiss"
-          aria-label={t("chat.mentions.remove")}
+          icon="x"
+          label={t("chat.mentions.remove")}
           onClick={() => props.onRemove()}
-        >
-          <ComposerContent>
-            <Icon name="x" />
-          </ComposerContent>
-        </button>
+        />
       </div>
     </Show>
   );

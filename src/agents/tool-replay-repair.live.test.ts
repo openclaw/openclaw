@@ -11,13 +11,13 @@ import { discoverAuthStorageFacts, discoverModelsAsync } from "./agent-model-dis
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { sanitizeSessionHistory } from "./embedded-agent-runner/replay-history.js";
 import {
+  extractLiveResponseText,
   completeSimpleWithTimeout,
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   logLiveProgress,
   readLiveTestConfig,
   resolveLiveCredentialPrecedence,
-  type CompleteSimpleContent,
 } from "./live-test-helpers.js";
 import { getApiKeyForModelCore, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -221,16 +221,6 @@ function assistantToolCallIds(message: AgentMessage): string[] {
   return ids;
 }
 
-function responseText(content: CompleteSimpleContent): string {
-  const parts: string[] = [];
-  for (const block of content) {
-    if (block.type === "text") {
-      parts.push(block.text.trim());
-    }
-  }
-  return parts.join(" ").trim();
-}
-
 function isKnownLiveBlocker(errorMessage: string): boolean {
   return (
     /not supported when using codex with a chatgpt account/i.test(errorMessage) ||
@@ -290,7 +280,7 @@ async function completeReplay(
     { apiKey: requireApiKey(apiKeyInfo, model.provider), reasoning: "low", maxTokens: 96 },
     120_000,
   );
-  const text = responseText(response.content);
+  const text = extractLiveResponseText(response.content);
   const errorMessage =
     typeof (response as { errorMessage?: unknown }).errorMessage === "string"
       ? ((response as { errorMessage?: string }).errorMessage ?? "")

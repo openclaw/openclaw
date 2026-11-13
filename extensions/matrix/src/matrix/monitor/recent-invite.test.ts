@@ -26,24 +26,14 @@ describe("shouldPromoteRecentInviteRoom", () => {
     expect(
       shouldPromoteRecentInviteRoom({
         roomId: "!named:example.org",
-        roomInfo: {
-          name: "Ops Room",
-          altAliases: [],
-          nameResolved: true,
-          aliasesResolved: true,
-        },
+        roomInfo: { name: "Ops Room", ...unnamedRoomInfo() },
       }),
     ).toBe(false);
 
     expect(
       shouldPromoteRecentInviteRoom({
         roomId: "!aliased:example.org",
-        roomInfo: {
-          canonicalAlias: "#ops:example.org",
-          altAliases: [],
-          nameResolved: true,
-          aliasesResolved: true,
-        },
+        roomInfo: { canonicalAlias: "#ops:example.org", ...unnamedRoomInfo() },
       }),
     ).toBe(false);
   });

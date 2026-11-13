@@ -24,6 +24,10 @@ import {
   readResidentUserProfileId,
   readResidentUserProfileIdentity,
 } from "../../state/user-profile-list.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  openclawIdSubjectRolePolicy,
+} from "../openclaw-id/tunnel-principal.js";
 import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js";
@@ -118,11 +122,19 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
     }
     const cfg = context.getRuntimeConfig();
     const profile = readResidentUserProfileIdentity(canonicalId);
-    const policy = resolveOperatorRolePolicyForAssignment(
-      canonicalId,
-      profile?.role ?? null,
-      cfg,
-      profile?.githubLogin ?? null,
+    // An owner device attributed to its linked profile keeps owner authority (OCF-510).
+    const principal = (operatorAuthority ?? client.internal)?.openclawIdPrincipal;
+    const policy = openclawIdSubjectRolePolicy(
+      principal?.kind === "owner" && !isOpenClawIdTunnelPrincipalCurrent(principal)
+        ? undefined
+        : principal,
+      () =>
+        resolveOperatorRolePolicyForAssignment(
+          canonicalId,
+          profile?.role ?? null,
+          cfg,
+          profile?.githubLogin ?? null,
+        ),
     );
     if (
       ![
@@ -130,11 +142,15 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
         ...(operatorAuthority ? [operatorAuthority.scopes] : []),
         ...(policy ? [policy.scopes] : []),
       ].every((allowedScopes) =>
-        roleScopesAllow({ role: "operator", requestedScopes: ["operator.read"], allowedScopes }),
+        roleScopesAllow({
+          role: "operator",
+          requestedScopes: ["operator.sessions.read"],
+          allowedScopes,
+        }),
       )
     ) {
       throw new PersonalFileAccessError(
-        "Personal instructions require current operator.read permission.",
+        "Personal instructions require current operator.sessions.read permission.",
       );
     }
     if (policy && policy.agents !== "*" && !policy.agents.includes(agentId)) {

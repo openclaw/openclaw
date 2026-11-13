@@ -49,7 +49,7 @@ it.each(["allowed", "disposed", "disabled", "accepted-disposed"] as const)(
       builder.registry.plugins.push(record);
       const api = builder.createApi(record, {
         config: params.config ?? {},
-        hookPolicy: { allowPromptInjection: true },
+        hookPolicy: { allowPromptModification: true },
       });
       setActivePluginRegistry(builder.registry);
       return { api, record, registry: builder.registry };

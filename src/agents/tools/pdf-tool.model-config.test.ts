@@ -132,9 +132,9 @@ it.each([
   expect(resolve(configuredProvider(provider, primary, model))).toEqual(expected);
 });
 
-it("uses an authenticated custom provider's configured vision model", () => {
+it("preserves slashes in an authenticated custom provider's configured vision model", () => {
   available.add("hatchery");
   expect(
-    resolve(configuredProvider("hatchery", "hatchery/text-1", "vision-1", ["text", "image"])),
-  ).toEqual({ primary: "hatchery/vision-1" });
+    resolve(configuredProvider("hatchery", "hatchery/text-1", "org/team/v1", ["text", "image"])),
+  ).toEqual({ primary: "hatchery/org/team/v1" });
 });

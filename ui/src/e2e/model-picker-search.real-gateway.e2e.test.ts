@@ -4,8 +4,10 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
+import type { ConfigSnapshot } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const record = createRequireRecord("record", "expected-object-value");
@@ -21,9 +23,18 @@ const models = [
   "granite",
 ].map((id) => ({ id, name: id }));
 let owner: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>> | undefined;
 const suite = createControlUiE2eSuite({
   name: "Model picker search with a real Gateway",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(owner, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     owner = await createOpenClawTestInstance({
       name: "model-picker-search",
@@ -61,31 +72,20 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it("keeps an unsaved search current through real Gateway catalog replacement without writing the draft", async () => {
+    const gateway = client;
+    if (!gateway) {
+      throw new Error("Gateway fixture client is not connected");
+    }
     const mutations: string[] = [];
     const cli = async (args: string[]) => {
       const result = await owner.cli(args);
       expect(result.code, result.stderr).toBe(0);
       return result.stdout;
     };
-    const rpc = async (method: string, params: Record<string, unknown> = {}) =>
-      record(
-        JSON.parse(
-          await cli([
-            "gateway",
-            "call",
-            method,
-            "--port",
-            String(owner.port),
-            "--params",
-            JSON.stringify(params),
-            "--json",
-          ]),
-        ),
-      );
     const publish = async (nextModels: typeof models) => {
-      const current = await rpc("config.get");
+      const current = await gateway.request<ConfigSnapshot>("config.get", {});
       expect(typeof current.hash).toBe("string");
-      await rpc("config.patch", {
+      await gateway.request("config.patch", {
         raw: JSON.stringify({ models: { providers: { fixture: { models: nextModels } } } }),
         baseHash: current.hash,
         replacePaths: ["models.providers.fixture.models"],

@@ -9,7 +9,11 @@ import { findChatChannelMeta } from "../channels/chat-meta.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
+import {
+  normalizePluginId,
+  normalizePluginsConfig,
+  type NormalizedPluginsConfig,
+} from "../plugins/config-state.js";
 import { findUninspectedPluginDiagnostic } from "../plugins/discovery-availability.js";
 import { hasExplicitManifestOwnerTrust } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.types.js";
@@ -118,6 +122,7 @@ function resolvePluginAutoEnableCandidateReason(candidate: PluginAutoEnableCandi
 
 function isPluginExplicitlyDisabled(
   cfg: OpenClawConfig,
+  policy: NormalizedPluginsConfig,
   pluginId: string,
   manifestRegistry: PluginManifestRegistry,
 ): boolean {
@@ -129,29 +134,33 @@ function isPluginExplicitlyDisabled(
       return true;
     }
   }
-  return cfg.plugins?.entries?.[pluginId]?.enabled === false;
+  // Policy lives under the canonical lowercase key, not the manifest spelling.
+  return policy.entries[normalizePluginId(pluginId)]?.enabled === false;
 }
 
-function isPluginDenied(cfg: OpenClawConfig, pluginId: string): boolean {
-  const deny = cfg.plugins?.deny;
-  return Array.isArray(deny) && deny.includes(pluginId);
-}
-
-function isPluginExplicitlySelected(cfg: OpenClawConfig, pluginId: string): boolean {
-  const allow = cfg.plugins?.allow;
-  if (Array.isArray(allow) && allow.includes(pluginId)) {
+function isPluginExplicitlySelected(
+  cfg: OpenClawConfig,
+  policy: NormalizedPluginsConfig,
+  pluginId: string,
+): boolean {
+  const policyId = normalizePluginId(pluginId);
+  if (policy.allow.includes(policyId)) {
     return true;
   }
-  return hasMaterialPluginEntryConfig(cfg.plugins?.entries?.[pluginId]);
+  // Read raw entries: the normalized view drops apiKey and env. Any spelling of the id counts.
+  return Object.entries(cfg.plugins?.entries ?? {}).some(
+    ([key, entry]) => normalizePluginId(key) === policyId && hasMaterialPluginEntryConfig(entry),
+  );
 }
 
 function disableImplicitPreferredOverPlugin(params: {
   config: OpenClawConfig;
   originalConfig: OpenClawConfig;
+  originalPolicy: NormalizedPluginsConfig;
   pluginId: string;
   manifestRegistry: PluginManifestRegistry;
 }): OpenClawConfig {
-  if (isPluginExplicitlySelected(params.originalConfig, params.pluginId)) {
+  if (isPluginExplicitlySelected(params.originalConfig, params.originalPolicy, params.pluginId)) {
     return params.config;
   }
   // A built-in channel id can remain in the static channel catalog after its
@@ -162,14 +171,15 @@ function disableImplicitPreferredOverPlugin(params: {
   if (!params.manifestRegistry.plugins.some((plugin) => plugin.id === params.pluginId)) {
     return params.config;
   }
-  const existingEntry = params.config.plugins?.entries?.[params.pluginId];
+  const policyId = normalizePluginId(params.pluginId);
+  const existingEntry = params.config.plugins?.entries?.[policyId];
   return {
     ...params.config,
     plugins: {
       ...params.config.plugins,
       entries: {
         ...params.config.plugins?.entries,
-        [params.pluginId]: {
+        [policyId]: {
           ...asOptionalObjectRecord(existingEntry),
           enabled: false,
         },
@@ -197,14 +207,15 @@ function registerPluginEntry(
     };
   }
 
+  const policyId = normalizePluginId(entry.pluginId);
   return {
     ...cfg,
     plugins: {
       ...cfg.plugins,
       entries: {
         ...cfg.plugins?.entries,
-        [entry.pluginId]: {
-          ...cfg.plugins?.entries?.[entry.pluginId],
+        [policyId]: {
+          ...cfg.plugins?.entries?.[policyId],
           enabled: true,
         },
       },
@@ -218,7 +229,9 @@ export function hasMaterialPluginEntryConfig(entry: unknown): boolean {
   }
   return (
     entry.enabled === true ||
-    isRecord(entry.config) ||
+    // Validation materializes `{}` defaults for enabled plugins; an empty object carries
+    // no operator configuration and must not widen a restrictive plugins.allow.
+    (isRecord(entry.config) && Object.keys(entry.config).length > 0) ||
     isRecord(entry.hooks) ||
     isRecord(entry.subagent) ||
     isRecord(entry.llm) ||
@@ -257,7 +270,15 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
       .filter((plugin) => plugin.origin === "workspace")
       .map((plugin) => plugin.id),
   );
-  const normalizedConfig = normalizePluginsConfig(next.plugins);
+  const originalPolicy = normalizePluginsConfig(next.plugins);
+  let normalizedConfig = originalPolicy;
+  // Rewrites own a new policy snapshot; candidate reads share the current one.
+  const updateConfig = (config: OpenClawConfig) => {
+    if (config.plugins !== next.plugins) {
+      normalizedConfig = normalizePluginsConfig(config.plugins);
+    }
+    next = config;
+  };
   const preferenceCandidates = params.candidates.filter((entry) => {
     if (!workspacePluginIds.has(entry.pluginId)) {
       return true;
@@ -298,8 +319,8 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
       );
     })();
     if (
-      isPluginDenied(next, entry.pluginId) ||
-      isPluginExplicitlyDisabled(next, entry.pluginId, params.manifestRegistry)
+      normalizedConfig.deny.includes(normalizePluginId(entry.pluginId)) ||
+      isPluginExplicitlyDisabled(next, normalizedConfig, entry.pluginId, params.manifestRegistry)
     ) {
       continue;
     }
@@ -344,35 +365,42 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
       preferenceCandidates.some(
         (other) =>
           other.pluginId !== entry.pluginId &&
-          !isPluginDenied(next, other.pluginId) &&
-          !isPluginExplicitlyDisabled(next, other.pluginId, params.manifestRegistry) &&
+          !normalizedConfig.deny.includes(normalizePluginId(other.pluginId)) &&
+          !isPluginExplicitlyDisabled(
+            next,
+            normalizedConfig,
+            other.pluginId,
+            params.manifestRegistry,
+          ) &&
           getPreferredOverIds(other).includes(entry.pluginId),
       )
     ) {
-      next = disableImplicitPreferredOverPlugin({
-        config: next,
-        originalConfig: params.config ?? {},
-        pluginId: entry.pluginId,
-        manifestRegistry: params.manifestRegistry,
-      });
+      updateConfig(
+        disableImplicitPreferredOverPlugin({
+          config: next,
+          originalConfig: params.config ?? {},
+          originalPolicy,
+          pluginId: entry.pluginId,
+          manifestRegistry: params.manifestRegistry,
+        }),
+      );
       continue;
     }
 
     const allow = next.plugins?.allow;
     const hasRestrictiveAllowlist = Array.isArray(allow) && allow.length > 0;
-    const allowMissing = hasRestrictiveAllowlist && !allow.includes(entry.pluginId);
+    const policyId = normalizePluginId(entry.pluginId);
+    const allowMissing = hasRestrictiveAllowlist && !normalizedConfig.allow.includes(policyId);
     const alreadyEnabled =
       builtInChannelId != null
         ? asOptionalRecord(next.channels?.[builtInChannelId])?.enabled === true
-        : next.plugins?.entries?.[entry.pluginId]?.enabled === true;
+        : normalizedConfig.entries[policyId]?.enabled === true;
     if (alreadyEnabled && !allowMissing) {
       continue;
     }
 
-    next = registerPluginEntry(next, entry, builtInChannelId);
-    if (hasRestrictiveAllowlist) {
-      next = ensurePluginAllowlisted(next, entry.pluginId);
-    }
+    const enabled = registerPluginEntry(next, entry, builtInChannelId);
+    updateConfig(allowMissing ? ensurePluginAllowlisted(enabled, policyId) : enabled);
     const reason = resolvePluginAutoEnableCandidateReason(entry);
     if (!isBlockedObjectKey(entry.pluginId)) {
       (autoEnabledReasons[entry.pluginId] ??= []).push(reason);
@@ -396,31 +424,29 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
   }
 
   {
-    let configured = next;
     const manifestRegistry = params.manifestRegistry;
-    const allow = configured.plugins?.allow;
-    const entries = asOptionalObjectRecord(configured.plugins?.entries);
+    const allow = next.plugins?.allow;
+    const entries = asOptionalObjectRecord(next.plugins?.entries);
     if (Array.isArray(allow) && allow.length > 0 && entries) {
       for (const pluginId of Object.keys(entries).toSorted((left, right) =>
         left.localeCompare(right),
       )) {
         const entry = entries[pluginId];
+        const policyId = normalizePluginId(pluginId);
         if (
           isNativeSessionCatalogOptOutOnly(pluginId, entry) ||
           !hasMaterialPluginEntryConfig(entry) ||
-          isPluginDenied(configured, pluginId) ||
-          isPluginExplicitlyDisabled(configured, pluginId, manifestRegistry) ||
-          allow.includes(pluginId) ||
+          normalizedConfig.deny.includes(policyId) ||
+          isPluginExplicitlyDisabled(next, normalizedConfig, pluginId, manifestRegistry) ||
+          normalizedConfig.allow.includes(policyId) ||
           !isKnownPluginId(pluginId, manifestRegistry)
         ) {
           continue;
         }
-        configured = ensurePluginAllowlisted(configured, pluginId);
-        changes.push(`${pluginId} plugin config present, added to plugin allowlist.`);
+        updateConfig(ensurePluginAllowlisted(next, policyId));
+        changes.push(`${policyId} plugin config present, added to plugin allowlist.`);
       }
     }
-
-    next = configured;
   }
 
   if (next !== params.config) {

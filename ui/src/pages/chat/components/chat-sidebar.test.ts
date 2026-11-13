@@ -12,6 +12,7 @@ import {
 import "./chat-detail-panel.tsx";
 // Ownership tests start with preview code ready; chat-html-preview-loading.test.tsx covers cold imports.
 import "./chat-html-preview-element.tsx";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { setFileDraft } from "./chat-file-drafts.ts";
 import type { ChatHtmlPreviewElement } from "./chat-html-preview-element.tsx";
@@ -135,7 +136,7 @@ describe("markdown sidebar", () => {
     try {
       await panel.updateComplete;
       const rawButton = Array.from(panel.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "View Raw Text",
+        (button) => button.textContent?.trim() === "View raw text",
       );
       expect(rawButton).toBeDefined();
       rawButton!.click();
@@ -154,7 +155,7 @@ describe("markdown sidebar", () => {
       const writeText = vi.fn().mockResolvedValue(undefined);
       vi.stubGlobal("navigator", { clipboard: { writeText } });
       copyButton!.click();
-      await vi.waitFor(() => expect(copyButton!.getAttribute("aria-label")).toBe("Copied!"));
+      await vi.waitFor(() => expect(copyButton!.getAttribute("aria-label")).toBe("Copied"));
       expect(writeText).toHaveBeenCalledOnce();
 
       expect.soft(reader?.querySelectorAll("pre code")).toHaveLength(1);
@@ -170,7 +171,7 @@ describe("markdown sidebar", () => {
       expect(panel.querySelector(".sidebar-markdown-reader h2")?.textContent).toBe("Fresh preview");
       expect(
         panel.querySelector(".sidebar-markdown-shell__toolbar button")?.textContent?.trim(),
-      ).toBe("View Raw Text");
+      ).toBe("View raw text");
     } finally {
       for (const [index, [, delay]] of schedule.mock.calls.entries()) {
         if (delay === 1_500) {
@@ -720,6 +721,7 @@ describe("markdown sidebar", () => {
 });
 
 describe("file sidebar clipboard feedback", () => {
+  const copyFailure = "Couldn’t copy. Try again.";
   const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
 
   type FilePanel = HTMLElement & {
@@ -804,11 +806,7 @@ describe("file sidebar clipboard feedback", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    if (originalExecCommand) {
-      Object.defineProperty(document, "execCommand", originalExecCommand);
-    } else {
-      Reflect.deleteProperty(document, "execCommand");
-    }
+    restorePropertyDescriptor(document, "execCommand", originalExecCommand);
     document.body.replaceChildren();
   });
 
@@ -824,18 +822,18 @@ describe("file sidebar clipboard feedback", () => {
     await copyPathFromMenu(panel);
     await copyPathFromMenu(panel);
     await vi.waitFor(() =>
-      expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Copy failed"),
+      expect(panel.querySelector('[role="alert"]')?.textContent).toContain(copyFailure),
     );
     const currentAction = await openPathCopyAction(panel);
-    expect(currentAction.getAttribute("aria-label")).toBe("Copy failed");
+    expect(currentAction.getAttribute("aria-label")).toBe(copyFailure);
     finishFirstCopy();
     await Promise.resolve();
     await Promise.resolve();
     await panel.updateComplete;
 
     expect(writeText).toHaveBeenCalledTimes(2);
-    expect(currentAction.getAttribute("aria-label")).toBe("Copy failed");
-    expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Copy failed");
+    expect(currentAction.getAttribute("aria-label")).toBe(copyFailure);
+    expect(panel.querySelector('[role="alert"]')?.textContent).toContain(copyFailure);
   });
 
   it("keeps path and contents feedback reset timers independent", async () => {
@@ -847,17 +845,17 @@ describe("file sidebar clipboard feedback", () => {
     await copyPathFromMenu(panel);
     contentsButton.click();
     await vi.waitFor(() => {
-      expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Copy failed");
-      expect(contentsButton.getAttribute("aria-label")).toBe("Copy failed");
+      expect(panel.querySelector('[role="alert"]')?.textContent).toContain(copyFailure);
+      expect(contentsButton.getAttribute("aria-label")).toBe(copyFailure);
     });
 
     const pathButton = await openPathCopyAction(panel);
-    expect(pathButton.getAttribute("aria-label")).toBe("Copy failed");
+    expect(pathButton.getAttribute("aria-label")).toBe(copyFailure);
     timers.run(2_000, 1);
     await panel.updateComplete;
-    expect(pathButton.getAttribute("aria-label")).toBe("Copy failed");
+    expect(pathButton.getAttribute("aria-label")).toBe(copyFailure);
     expect(contentsButton.getAttribute("aria-label")).toBe("Copy file contents");
-    expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Copy failed");
+    expect(panel.querySelector('[role="alert"]')?.textContent).toContain(copyFailure);
 
     timers.run(2_000);
     await panel.updateComplete;
@@ -913,7 +911,7 @@ describe("file sidebar clipboard feedback", () => {
     const button = findCopyButton(panel, label);
 
     button.click();
-    await vi.waitFor(() => expect(button.getAttribute("aria-label")).toBe("Copied!"));
+    await vi.waitFor(() => expect(button.getAttribute("aria-label")).toBe("Copied"));
 
     panel.remove();
     // Let the bridge retire the disconnected root before reconnecting this host.
@@ -956,31 +954,38 @@ describe("file sidebar clipboard feedback", () => {
 });
 
 describe("file sidebar SVG preview", () => {
-  it("renders a desktop SVG without an optional lightbox callback", async () => {
-    const panel = document.createElement("openclaw-chat-detail-panel");
-    const source = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>';
-    panel.content = {
-      kind: "file",
-      path: "diagram.svg",
-      name: "diagram.svg",
-      mimeType: "image/svg+xml",
-      content: source,
-    };
-    container.append(panel);
-    await waitForSolid(() => {
-      const preview = expectDefined(
-        panel.querySelector<HTMLElement>(".sidebar-svg-file__view"),
-        "SVG preview",
-      );
-      expect(preview.hidden).toBe(false);
-      const image = expectDefined(preview.querySelector("img"), "SVG image");
-      expect(image.getAttribute("src")).toBe(
-        `data:image/svg+xml;charset=utf-8,${encodeURIComponent(source)}`,
-      );
-      expect(image.alt).toBe("diagram.svg");
-      expect(image.closest("button")).toBeNull();
-    });
-  });
+  it.each([
+    { name: "diagram.svg", mimeType: "image/svg+xml" },
+    { name: "diagram.SVG", mimeType: "text/plain" },
+    { name: "diagram.svg", mimeType: undefined },
+  ])(
+    "renders desktop $name ($mimeType) without a lightbox callback",
+    async ({ name, mimeType }) => {
+      const panel = document.createElement("openclaw-chat-detail-panel");
+      const source = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>';
+      panel.content = {
+        kind: "file",
+        path: name,
+        name,
+        mimeType,
+        content: source,
+      };
+      container.append(panel);
+      await waitForSolid(() => {
+        const preview = expectDefined(
+          panel.querySelector<HTMLElement>(".sidebar-svg-file__view"),
+          "SVG preview",
+        );
+        expect(preview.hidden).toBe(false);
+        const image = expectDefined(preview.querySelector("img"), "SVG image");
+        expect(image.getAttribute("src")).toBe(
+          `data:image/svg+xml;charset=utf-8,${encodeURIComponent(source)}`,
+        );
+        expect(image.alt).toBe(name);
+        expect(image.closest("button")).toBeNull();
+      });
+    },
+  );
 });
 
 describe("file sidebar HTML preview ownership", () => {

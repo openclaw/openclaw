@@ -125,19 +125,8 @@ it("returns redacted talk config for read scope", async () => {
 });
 
 it.each([
-  ["yes", { message: expect.stringContaining("invalid talk.config params") }],
-  [
-    true,
-    {
-      code: "FORBIDDEN",
-      message: "missing scope: operator.talk.secrets",
-      details: {
-        code: "MISSING_SCOPE",
-        missingScope: "operator.talk.secrets",
-        requiredScopes: ["operator.read", "operator.talk.secrets"],
-      },
-    },
-  ],
+  ["yes", { code: "INVALID_REQUEST" }],
+  [true, { code: "FORBIDDEN", details: { missingScope: "operator.talk.secrets" } }],
 ] as const)("rejects includeSecrets=%s with only read scope", async (includeSecrets, error) => {
   await writeTalkConfig({ apiKey: "secret-key-abc" });
   const response = await withConnection(["operator.read"], (ws) =>

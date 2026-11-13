@@ -1,11 +1,23 @@
+import { hasLiveAgentRunContext } from "../../../infra/agent-run-registry.js";
 import {
   abortSessionControllerInput,
   sessionControllerMailboxes,
 } from "../../../sessions/session-controller.mailbox.js";
-import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAuthority,
+} from "./subagent-child-owner-match.js";
+import { resolveAnnounceDeliveryDeadline } from "./subagent-registry-cleanup.js";
+import {
+  ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
+  safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments,
+} from "./subagent-registry-helpers.js";
+import type { CleanupBookkeepingParams } from "./subagent-registry-lifecycle-context.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { buildRequesterSettleWakeIdentity } from "./subagent-requester-settle-identity.js";
+import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 /** The stable reservation ID of a run's individual completion input. */
 export const subagentCompletionSourceId = (entry: SubagentRunRecord) =>
@@ -95,4 +107,74 @@ export function retireSubagentCompletionControllerInput(entry: SubagentRunRecord
       abortSessionControllerInput(input, new Error("Subagent completion delivery settled"));
     }
   }
+}
+
+/** Expired idle deliveries settle quietly; live producers and cohorts keep their custody. */
+export async function settleSubagentCompletionReservation(
+  entry: SubagentRunRecord,
+  now: number,
+  lifecycle: {
+    completeCleanupBookkeeping: (params: CleanupBookkeepingParams) => Promise<void>;
+    isCleanupOwnerCurrent: (entry: SubagentRunRecord) => boolean;
+    isTerminalTailActive: (entry: SubagentRunRecord) => boolean;
+    sessionEffectsHostCurrent: (entry: SubagentRunRecord) => boolean;
+    shouldSuppressSessionEffects: (entry: SubagentRunRecord) => Promise<boolean>;
+    discardTerminalDelivery: (entry: SubagentRunRecord, completedAt: number) => void;
+    resumedRuns: Set<object>;
+    clearPendingLifecycleError: (runId: string) => void;
+    clearPendingLifecycleTimeout: (runId: string) => void;
+  },
+): Promise<boolean> {
+  if (resolveSubagentChildAuthority(entry).status === "mismatch") {
+    retireSubagentCompletionControllerInput(entry);
+    return true;
+  }
+  if (
+    entry.execution.status !== "terminal" ||
+    typeof entry.execution.endedAt !== "number" ||
+    entry.expectsCompletionMessage !== true ||
+    (entry.delivery?.status !== "pending" && entry.delivery?.status !== "in_progress") ||
+    entry.delivery.queueId ||
+    entry.pauseReason === "sessions_yield" ||
+    entry.requesterSettleWake ||
+    entry.killIntent ||
+    entry.killReconciliation ||
+    subagentRuns.isCompletionAuthorityRetired(entry) ||
+    lifecycle.isTerminalTailActive(entry) ||
+    hasLiveAgentRunContext(entry.runId) ||
+    resolveAnnounceDeliveryDeadline(entry, now, ANNOUNCE_COMPLETION_HARD_EXPIRY_MS) > now
+  ) {
+    return false;
+  }
+  await lifecycle.completeCleanupBookkeeping({
+    runId: entry.runId,
+    entry,
+    cleanup: entry.cleanup,
+    completedAt: now,
+    skipRequesterSettleWake: true,
+    retainForCleanup: entry.cleanup === "delete",
+    isCurrent: () => lifecycle.isCleanupOwnerCurrent(entry),
+    finalizeDelivery: (draft) => {
+      lifecycle.discardTerminalDelivery(draft, now);
+      // The sweeper retains ownership of session and attachment deletion.
+      if (draft.cleanup === "delete") {
+        draft.archiveAtMs = now;
+      }
+    },
+  });
+  retireSubagentCompletionControllerInput(entry);
+  if (
+    entry.cleanup === "keep" &&
+    shouldRemoveSubagentAttachments(entry) &&
+    !(await lifecycle.shouldSuppressSessionEffects(entry))
+  ) {
+    await safeRemoveAttachmentsDir(
+      entry,
+      () => lifecycle.isCleanupOwnerCurrent(entry) && lifecycle.sessionEffectsHostCurrent(entry),
+    );
+  }
+  lifecycle.resumedRuns.delete(getSubagentRunRuntimeKey(entry));
+  lifecycle.clearPendingLifecycleError(entry.runId);
+  lifecycle.clearPendingLifecycleTimeout(entry.runId);
+  return true;
 }

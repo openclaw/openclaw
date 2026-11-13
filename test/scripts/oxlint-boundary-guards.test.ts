@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { posix } from "node:path";
 import { beforeAll, expect, it } from "vitest";
 import noForcedProcessExit from "../../scripts/lib/no-forced-process-exit.mjs";
+import noRecursiveReaddir from "../../scripts/lib/no-recursive-readdir.mjs";
 
 const FIXTURES = "test/fixtures/oxlint-boundary-guards";
 const forcedExit = "no-forced-process-exit";
@@ -24,6 +25,26 @@ const cases = [
   ["no-widen-then-assert", "widen-then-assert-violation.test.ts", 3, [3, 7, 13]],
   ["no-chained-type-assertions", "chained-type-assertions-violation.ts", 3],
 ] satisfies [string, string, number, number[]?][];
+
+const recursiveKinds = {
+  unsafe: expect.stringMatching(/^Recursive readdir /),
+  unverifiable: expect.stringMatching(/^Cannot verify nonrecursive readdir /),
+};
+const recursiveCases = [
+  [
+    "recursive-readdir-violation.ts",
+    {
+      unsafe: [3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 15, 16, 17, 19, 21, 23, 25],
+      unverifiable: [27],
+    },
+  ],
+  [
+    "recursive-readdir-mutation.ts",
+    { unsafe: [], unverifiable: [4, 7, 10, 14, 17, 20, 36, 38, 41, 48, 53, 59, 64, 69, 74] },
+  ],
+  ["recursive-readdir-builtins.ts", { unsafe: [4, 6, 7, 10, 12, 22], unverifiable: [] }],
+  ["recursive-readdir-import-equals.ts", { unsafe: [3, 4], unverifiable: [] }],
+] satisfies [string, Record<keyof typeof recursiveKinds, number[]>][];
 
 it.each([
   ["src/runtime.ts", true],
@@ -56,6 +77,7 @@ let diagnostics: Array<{
   filename: string;
   code: string;
   severity: string;
+  message: string;
   labels: Array<{ span: { line: number } }>;
 }>;
 
@@ -69,7 +91,11 @@ beforeAll(() => {
       "config/oxlint/boundary-guards.json",
       "--format",
       "json",
-      ...new Set(cases.map(([, file]) => posix.join(FIXTURES, file))),
+      ...new Set(
+        [...cases.map(([, file]) => file), ...recursiveCases.map(([file]) => file)].map((file) =>
+          posix.join(FIXTURES, file),
+        ),
+      ),
     ],
     { encoding: "utf8" },
   );
@@ -102,3 +128,40 @@ it.each(cases)(
     }
   },
 );
+
+it.each(recursiveCases)(
+  "reports recursive readdir diagnostic kinds by line in %s",
+  (file, kinds) => {
+    const actual = diagnostics
+      .filter(
+        (diagnostic) =>
+          diagnostic.filename.replaceAll("\\", "/") === posix.join(FIXTURES, file) &&
+          diagnostic.code === "openclaw-boundaries(no-recursive-readdir)",
+      )
+      .map((diagnostic) => ({
+        line: diagnostic.labels[0]?.span.line,
+        message: diagnostic.message,
+        severity: diagnostic.severity,
+      }))
+      .toSorted((a, b) => (a.line ?? 0) - (b.line ?? 0));
+    const expected = (Object.keys(recursiveKinds) as Array<keyof typeof recursiveKinds>)
+      .flatMap((kind) =>
+        kinds[kind].map((line) => ({ line, message: recursiveKinds[kind], severity: "error" })),
+      )
+      .toSorted((a, b) => a.line - b.line);
+    expect(actual).toEqual(expected);
+  },
+);
+
+it("does no scope or listener work when the source cannot mention readdir", () => {
+  expect(
+    noRecursiveReaddir.create({
+      sourceCode: {
+        text: "export const answer = 42;",
+        get scopeManager() {
+          throw new Error("unnecessary scope materialization");
+        },
+      },
+    }),
+  ).toEqual({});
+});

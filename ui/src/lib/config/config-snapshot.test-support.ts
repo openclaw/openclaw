@@ -5,3 +5,14 @@ export function configSnapshot(
 ) {
   return { config, raw, hash, valid: true, issues: [] };
 }
+
+export function sourceConfigSnapshot(config: object = {}, hash = "hash-1") {
+  return {
+    config,
+    sourceConfig: config,
+    raw: JSON.stringify(config),
+    hash,
+    valid: true,
+    issues: [],
+  };
+}

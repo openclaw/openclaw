@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
@@ -167,11 +166,12 @@ export async function publishSessionStateArchives(
   });
 }
 
-/** Removes canonical rows only after retention has removed their derived files. */
+/** The archive owner expires published files and rows together, preserving live references. */
 export async function prunePublishedSessionArchivesByRetention(params: {
   nowMs?: number;
   rules: readonly { olderThanMs: number; reason: "deleted" | "reset" }[];
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "path">;
+  assertCurrent?: () => void;
 }): Promise<number> {
   const rules = new Map(
     params.rules
@@ -197,15 +197,7 @@ export async function prunePublishedSessionArchivesByRetention(params: {
         }
         const removable = candidates.filter((row) => {
           const olderThanMs = rules.get(row.reason as "deleted" | "reset");
-          if (olderThanMs === undefined || now - row.created_at <= olderThanMs) {
-            return false;
-          }
-          const archivePath = path.resolve(archiveDirectory, row.archive_name);
-          return (
-            path.dirname(archivePath) === path.resolve(archiveDirectory) &&
-            path.basename(archivePath) === row.archive_name &&
-            !fs.existsSync(archivePath)
-          );
+          return olderThanMs !== undefined && now - row.created_at > olderThanMs;
         });
         let removedFromPage = 0;
         // Small reference sets use narrowed rechecks; each batch returns FIFO custody.
@@ -228,7 +220,24 @@ export async function prunePublishedSessionArchivesByRetention(params: {
           break;
         }
       }
+      const { cleanupArchivedSessionTranscripts } =
+        await import("../../gateway/session-archive.runtime.js");
+      await cleanupArchivedSessionTranscripts({
+        directories: [archiveDirectory],
+        rules: params.rules,
+        nowMs: now,
+        removeFile: (filePath) =>
+          archives.withWriter(async () => {
+            assertCurrent();
+            if ((await archives.removeLegacy(filePath)) === "failed") {
+              throw new Error(
+                "Session archive retention could not remove a legacy file; retry maintenance",
+              );
+            }
+          }),
+      });
       return removed;
     },
+    params.assertCurrent,
   );
 }

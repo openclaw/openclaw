@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { resolveChatModelSetup, requiresChatModelSetup } from "./chat-model-setup.ts";
 
 type ModelSetup = Parameters<typeof resolveChatModelSetup>[0];
@@ -18,19 +19,12 @@ it.each([
   expect(requiresChatModelSetup({ ...loaded, ...overrides })).toBe(required);
 });
 
-const active = {
-  state: "active" as const,
-  generation: 1,
-  createdAtMs: 1,
-  updatedAtMs: 1,
-  stateChangedAtMs: 1,
+const active = createActiveSessionPlacement({
   environmentId: "worker:test",
-  activeOwnerEpoch: 1,
-  workerBundleHash: "a".repeat(64),
   workspaceBaseManifestRef: "workspace-base",
   remoteWorkspaceDir: "/worker/workspace",
   inference: "worker" as const,
-};
+});
 
 it.each(["missing-auth", "auth-failed"] as const)(
   "ignores only Gateway provider credentials for a current worker placement (%s)",
@@ -91,3 +85,42 @@ it.each(["missing-auth", "auth-failed"] as const)(
     expect(banner(proxied)).toBeDefined();
   },
 );
+
+it("reads credential readiness from the session's selected runtime route", () => {
+  const route = (id: string, ready: boolean) => ({
+    agentRuntime: { id, source: "model" as const },
+    available: ready,
+    ...(ready ? {} : { unavailableReason: "missing-auth" as const }),
+  });
+  const banner = (base: boolean, choice: boolean, runtime?: string) =>
+    resolveChatModelSetup({
+      ...loaded,
+      agentModel: "anthropic/claude-opus-5-5",
+      chatModelCatalog: [
+        {
+          id: "claude-opus-5-5",
+          name: "Claude Opus 5.5",
+          provider: "anthropic",
+          ...route("openclaw", base),
+          runtimeChoices: [route("claude-cli", choice)],
+        },
+      ],
+      modelOverrides: {},
+      sessionKey: "agent:main:main",
+      sessionsResult: null,
+      catalogError: null,
+      onSetup: () => undefined,
+      activeSession: {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 1,
+        model: "claude-opus-5-5",
+        modelProvider: "anthropic",
+        ...(runtime ? { agentRuntime: { id: runtime, source: "session-key" as const } } : {}),
+      },
+    }).modelUnavailableBanner;
+
+  expect(banner(false, true, "claude-cli")).toBeUndefined();
+  expect(banner(false, true)).toBeDefined();
+  expect(banner(true, false, "claude-cli")).toBeDefined();
+});

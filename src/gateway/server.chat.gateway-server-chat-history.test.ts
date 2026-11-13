@@ -14,10 +14,12 @@ import {
   createGatewayHistoryText,
 } from "./session-history-fixtures.test-support.js";
 import { removeChatTestDirectory as removeTempDir } from "./session-test-directories.test-support.js";
+import { createResetKeptTailTranscriptFixture } from "./session-transcript-archive.test-support.js";
 import {
   agentDiscoveryMock,
   connectWebchatClient,
   dispatchInboundMessageMock,
+  mockGetReplyFromConfigOnce,
   rpcReq,
   testState,
   writeSessionStore,
@@ -92,6 +94,7 @@ describe("gateway server chat", () => {
       error: { message: expect.stringMatching(/null bytes/i) },
     });
 
+    mockGetReplyFromConfigOnce(async () => ({ text: "Sanitized input received." }));
     const sanitizedRes = await sendChat("idem-sanitized-1", { message: "Cafe\u0301\u0007\tline" });
     expect(sanitizedRes.ok).toBe(true);
     await waitForAgentRunDrained("idem-sanitized-1");
@@ -126,6 +129,7 @@ describe("gateway server chat", () => {
         },
       });
 
+      mockGetReplyFromConfigOnce(async () => ({ text: "WebChat reply." }));
       const webchatRes = await sendChat("idem-webchat-1", {}, webchatWs);
       expect(webchatRes.ok).toBe(true);
       await waitForAgentRunDrained("idem-webchat-1");
@@ -134,6 +138,7 @@ describe("gateway server chat", () => {
       webchatWs = undefined;
 
       testState.agentConfig = { timeoutSeconds: 123 };
+      mockGetReplyFromConfigOnce(async () => ({ text: "Reply within configured timeout." }));
       const timeoutRes = await sendChat("idem-timeout-1");
       expect(timeoutRes.ok).toBe(true);
       expect(timeoutRes.payload?.runId).toBe("idem-timeout-1");
@@ -283,31 +288,9 @@ describe("gateway server chat", () => {
 
   test("chat.history applies the reset kept-tail cut and preserves its marker", async () => {
     await withMainSessionStore(async () => {
-      const message = (id: string, parentId: string | null, role: string, content: string) => ({
-        type: "message",
-        id,
-        parentId,
-        message: { role, content },
+      await writeMainChatSessionTranscript(createResetKeptTailTranscriptFixture(), "sess-main", {
+        sessionKey: "main",
       });
-      await writeMainChatSessionTranscript(
-        [
-          message("old", null, "user", "old"),
-          message("kept-user", "old", "user", "kept question"),
-          message("kept-tool", "kept-user", "toolResult", "hidden tool"),
-          message("kept-assistant", "kept-tool", "assistant", "kept answer"),
-          {
-            type: "reset",
-            id: "reset-boundary",
-            parentId: "kept-assistant",
-            timestamp: "2026-07-22T00:00:00.000Z",
-            reason: "new",
-            firstKeptEntryId: "kept-user",
-          },
-          message("post-reset", "reset-boundary", "user", "new turn"),
-        ],
-        "sess-main",
-        { sessionKey: "main" },
-      );
 
       expect(collectHistoryTextValues((await readHistory())?.messages ?? [])).toEqual([
         "kept question",

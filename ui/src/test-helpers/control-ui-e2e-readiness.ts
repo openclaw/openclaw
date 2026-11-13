@@ -15,7 +15,10 @@ export function extendControlUiE2eWaitTimeoutForSourceServer(): void {
 }
 
 /** Selected descriptors and cached rows can render before the authoritative roster. */
-export async function waitForControlUiInitialRoster(page: Page): Promise<void> {
+export async function waitForControlUiInitialRoster(
+  page: Page,
+  timeout = controlUiE2eWaitTimeoutMs,
+): Promise<void> {
   try {
     await page
       .waitForFunction(
@@ -34,7 +37,7 @@ export async function waitForControlUiInitialRoster(page: Page): Promise<void> {
           return readiness?.ready || (offline && readiness?.booted === true);
         },
         undefined,
-        { timeout: controlUiE2eWaitTimeoutMs },
+        { timeout },
       )
       .then((ready) => ready.dispose());
   } catch (cause) {
@@ -111,4 +114,12 @@ export async function waitForConfirmModal(
     await element?.dispose();
   }
   return modal;
+}
+
+/** Answers the confirm named `title`, which can mount after a dialog that stays open behind it. */
+export async function answerConfirmModal(page: Page, title: string | RegExp, button: string) {
+  const has = page.getByRole("dialog", { name: title, exact: true });
+  const modals = page.locator("openclaw-modal-dialog").filter({ has });
+  const modal = await waitForConfirmModal(page, modals);
+  await modal.getByRole("button", { name: button, exact: true }).click();
 }

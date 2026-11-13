@@ -24,6 +24,16 @@ suite.define(() => {
       await suite.withPage(
         { colorScheme: viewport.width === 768 ? "light" : "dark", viewport },
         async ({ page }) => {
+          await page.addInitScript(() => {
+            const observer = new MutationObserver(() => {
+              const ring = document.querySelector(".context-ring");
+              if (ring) {
+                Reflect.set(window, "firstContextRingOpacity", getComputedStyle(ring).opacity);
+                observer.disconnect();
+              }
+            });
+            observer.observe(document, { childList: true, subtree: true });
+          });
           const sessionKey = "agent:main:context-meter";
           const session = {
             key: sessionKey,
@@ -62,7 +72,7 @@ suite.define(() => {
             },
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-          await gateway.waitForRequest("chat.startup");
+          await gateway.waitForRequest("sessions.messages.subscribe");
           if (viewport.width <= 900) {
             await page
               .locator(".agent-chat__composer-combobox > textarea")
@@ -71,6 +81,9 @@ suite.define(() => {
           }
           const ring = page.locator(".context-ring").filter({ visible: true });
           await ring.waitFor();
+          expect(await page.evaluate(() => Reflect.get(window, "firstContextRingOpacity"))).toBe(
+            "1",
+          );
           await ring.scrollIntoViewIfNeeded();
 
           for (const [percent, fresh, token] of [

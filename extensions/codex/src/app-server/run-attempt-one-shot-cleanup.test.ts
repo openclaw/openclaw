@@ -32,6 +32,7 @@ import {
 } from "./run-attempt-test-harness.js";
 import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import {
+  getLeasedSharedCodexAppServerClient,
   retainSharedCodexAppServerClientIfCurrent,
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
@@ -67,7 +68,11 @@ async function stopTaskOwnedProcess(pid: number, signal: AbortSignal): Promise<v
   await waitForTaskOwnedProcessExit(pid, signal);
 }
 
-function runOneShot(client: CodexAppServerClient, abortSignal?: AbortSignal) {
+function runOneShot(
+  client: CodexAppServerClient,
+  abortSignal?: AbortSignal,
+  forceSharedClient = false,
+) {
   vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(client);
   const params = createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
   setRuntimeConfigSnapshot(params.config ?? {});
@@ -76,7 +81,10 @@ function runOneShot(client: CodexAppServerClient, abortSignal?: AbortSignal) {
   if (abortSignal) {
     params.abortSignal = abortSignal;
   }
-  return runCodexAppServerAttempt(params, { bindingStore: testCodexAppServerBindingStore });
+  return runCodexAppServerAttempt(params, {
+    bindingStore: testCodexAppServerBindingStore,
+    ...(forceSharedClient ? { clientFactory: getLeasedSharedCodexAppServerClient } : {}),
+  });
 }
 
 setupRunAttemptTestHooks();
@@ -263,7 +271,7 @@ describe("Codex one-shot cleanup receipts", () => {
       const harness = createInferenceReadyClientHarness();
       const warning = vi.spyOn(embeddedAgentLog, "warn");
       let releasePeer: (() => void) | undefined;
-      const run = runOneShot(harness.client);
+      const run = runOneShot(harness.client, undefined, true);
       try {
         for (const [method, result] of Object.entries(responses())) {
           await replyTo(harness, method, result);
@@ -357,7 +365,7 @@ process.stdin.on("end", () => ${
         stdio: ["pipe", "pipe", "pipe"],
       });
       const exited = once(child, "exit");
-      const client = CodexAppServerClient.fromTransportForTests(child);
+      const client = CodexAppServerClient.fromTransport(child);
       if (shutdown === "unknown") {
         vi.spyOn(processSnapshot, "readCodexAppServerProcessSnapshot").mockRejectedValue(
           new processSnapshot.ProcessInspectionError("unavailable"),

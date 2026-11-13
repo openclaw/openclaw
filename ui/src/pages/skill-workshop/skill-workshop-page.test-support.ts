@@ -17,6 +17,7 @@ export function createRuntimeConfigStub(options?: {
       lastError: null as string | null,
     },
     ensureLoaded: vi.fn(async () => undefined),
+    ensureDisplayLoaded: vi.fn(async () => undefined),
     refresh: vi.fn(async () => undefined),
     patch: options?.patch ?? vi.fn(async () => true),
     subscribe: () => () => undefined,
@@ -31,13 +32,20 @@ export function createContext(
     runtimeConfig?: ReturnType<typeof createRuntimeConfigStub>;
     /** Route query, e.g. "?skill=deploy" from a chat notice link. */
     search?: string;
+    /** A Gateway without the skill-workshop plugin advertises none of its methods. */
+    withoutPlugin?: boolean;
   },
 ): ApplicationContext {
   const client = { request } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    hello: gatewayHelloForMethods(options?.methods ?? [], options?.scopes),
+    hello: gatewayHelloForMethods(
+      options?.withoutPlugin
+        ? (options.methods ?? [])
+        : ["skills.workshop.list", ...(options?.methods ?? [])],
+      options?.scopes,
+    ),
     assistantAgentId: "research",
     sessionKey: "global",
   });
@@ -65,15 +73,20 @@ export function createContext(
         return () => selectionListeners.delete(listener);
       },
     },
-    agentIdentity: {
-      get: () => ({ agentId: "research", name: "Research" }),
-      subscribe,
+    agentIdentity: { get: () => ({ agentId: "research", name: "Research" }), subscribe },
+    sessions: {
+      state: { result: null, loading: false },
+      presentation: {
+        result: null,
+        agentId: null,
+        resultCached: false,
+      } satisfies ApplicationContext["sessions"]["presentation"],
     },
-    sessions: { state: { result: null, loading: false } },
     runtimeConfig: options?.runtimeConfig ?? createRuntimeConfigStub(),
     chatSubmissions: { retain: vi.fn() },
     navigate: vi.fn(),
     router: {
+      subscribe,
       getState: () => ({
         location: { pathname: "/skills/workshop", search: options?.search ?? "" },
       }),

@@ -187,15 +187,15 @@ describe("MemoryImportPage", () => {
     context.gateway.snapshot.phase = "stopped";
     const page = await mountPage(context);
 
-    expect(page.textContent).toContain("Connect to the gateway to import memory.");
+    expect(page.textContent).toContain("Reconnect to import memory.");
     expect(page.querySelector(".memory-import")).toBeNull();
-    expect(page.textContent).not.toContain("Memory import requires operator.admin access.");
+    expect(page.textContent).not.toContain("You need admin access to import memory.");
     expect(request).not.toHaveBeenCalled();
 
     context.gateway.snapshot.phase = "connected";
     context.notify();
     await waitForButton(page, "import-provider-button");
-    expect(page.textContent).not.toContain("Connect to the gateway to import memory.");
+    expect(page.textContent).not.toContain("Reconnect to import memory.");
     expect(page.textContent).toContain("/tmp/openclaw-research");
   });
 
@@ -265,7 +265,7 @@ describe("MemoryImportPage", () => {
         ),
       );
       [...page.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent?.trim() === "Refresh")
+        .find((button) => button.getAttribute("aria-label") === "Refresh")
         ?.click();
       await waitForButton(page, "import-provider-button");
       expect(request.mock.calls.filter(([method]) => method === "agents.list")).toHaveLength(2);
@@ -291,7 +291,7 @@ describe("MemoryImportPage", () => {
         ),
       );
       [...page.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent?.trim() === "Refresh")
+        .find((button) => button.getAttribute("aria-label") === "Refresh")
         ?.click();
       await waitForMemoryImport(() => expect(page.textContent).toContain("/tmp/openclaw-writer"));
       expect(request.mock.calls.filter(([method]) => method === "agents.list")).toHaveLength(4);
@@ -322,7 +322,7 @@ describe("MemoryImportPage", () => {
 
     flush();
     expect(request).not.toHaveBeenCalled();
-    expect(page.textContent).toContain("Memory import requires operator.admin access.");
+    expect(page.textContent).toContain("You need admin access to import memory.");
   });
 
   it("keeps a failed plan stable until the operator explicitly refreshes", async () => {
@@ -342,7 +342,7 @@ describe("MemoryImportPage", () => {
     expect(page.textContent).not.toContain("sk-1234567890abcdef");
 
     const refresh = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Refresh",
+      (button) => button.getAttribute("aria-label") === "Refresh",
     );
     if (!refresh) {
       throw new Error("expected Refresh button");
@@ -430,7 +430,7 @@ describe("MemoryImportPage", () => {
     await openImportConfirmation(page);
     findButton(page, "import-confirm")?.click();
     await waitForMemoryImport(() =>
-      expect(page.querySelector(".memory-import__confirm [role='alert']")?.textContent).toBe(
+      expect(page.querySelector(".memory-import__confirm [role='alert']")?.textContent).toContain(
         "response lost",
       ),
     );

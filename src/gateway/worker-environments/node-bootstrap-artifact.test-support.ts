@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
 import { afterEach, expect, vi } from "vitest";
+import { collectPackageRootModules } from "../../../scripts/lib/package-root-modules.mts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
 
@@ -111,7 +112,7 @@ export function useNodeBootstrapArtifactFixtures() {
     }),
   );
   const createProvider = (options: Parameters<typeof createNodeBootstrapArtifactProvider>[0]) => {
-    const provider = createNodeBootstrapArtifactProvider(options);
+    const provider = createNodeBootstrapArtifactProvider({ install: "npm", ...options });
     providers.push(provider);
     return provider;
   };
@@ -132,13 +133,26 @@ export function useNodeBootstrapArtifactFixtures() {
       version,
       type: "module",
       files: [
+        "openclaw.mjs",
+        "node-version.mjs",
+        "node-sqlite.mjs",
+        "node-runtime-update.mjs",
+        "node-runtime-recovery.mjs",
+        "cli-parent-lifetime.mjs",
+        "node-runtime-env.mjs",
+        "cli-invocation.mjs",
+        "cli-root-options.mjs",
+        "gateway-run-argv.mjs",
+        "gateway-shutdown-budget.mjs",
+        "node-host-launcher.mjs",
+        "node-compile-cache.mjs",
         "dist/",
         "!dist/extensions/remote-runtime/**",
         "scripts/preinstall.mjs",
         "scripts/postinstall.mjs",
       ],
       dependencies: { "@fixture/ai": mode === "source" ? "workspace:*" : version },
-      ...(mode !== "source" ? { bundleDependencies: ["@fixture/ai"] } : {}),
+      bundleDependencies: mode === "source" ? false : ["@fixture/ai"],
       devDependencies: { "typescript-only": "workspace:*" },
       scripts: {
         prepare: "exit 91",
@@ -153,12 +167,7 @@ export function useNodeBootstrapArtifactFixtures() {
       'import "./cli-invocation.mjs"; import "./dist/entry.js";',
       { mode: 0o755 },
     );
-    for (const filename of [
-      "cli-invocation.mjs",
-      "cli-parent-lifetime.mjs",
-      "gateway-shutdown-budget.mjs",
-      "node-runtime-env.mjs",
-    ]) {
+    for (const filename of collectPackageRootModules(["cli-invocation.mjs"])) {
       await fs.copyFile(filename, path.join(packageRoot, filename));
     }
     await writeFiles(packageRoot, {
@@ -196,19 +205,30 @@ export function useNodeBootstrapArtifactFixtures() {
       "src/private.ts": "source-only",
       "extensions/remote-runtime/package.json": pluginPackage,
     });
+    await writeFiles(packageRoot, {
+      "node_modules/native-runtime/package.json": {
+        name: "native-runtime",
+        version: "1.2.3",
+        main: "index.js",
+      },
+      "node_modules/native-runtime/index.js": "module.exports = 42;",
+      "extensions/remote-runtime/node_modules/native-runtime/package.json": {
+        name: "native-runtime",
+        version: "1.2.3",
+        main: "index.js",
+      },
+      "extensions/remote-runtime/node_modules/native-runtime/index.js": "module.exports = 42;",
+    });
     const aiRoot =
       mode === "source"
         ? path.join(root, "ai-source")
         : mode === "linked-package"
           ? path.join(root, "node_modules/linked-project/ai-source")
           : path.join(packageRoot, "node_modules/@fixture/ai");
-    await write(aiRoot, "package.json", {
-      name: "@fixture/ai",
-      version,
-      type: "module",
-      exports: "./dist/index.js",
+    await writeFiles(aiRoot, {
+      "package.json": { name: "@fixture/ai", version, type: "module", exports: "./dist/index.js" },
+      "dist/index.js": 'export const name = "local-ai";',
     });
-    await write(aiRoot, "dist/index.js", 'export const name = "local-ai";');
     if (mode === "source" || mode === "linked-package") {
       await write(aiRoot, ".env", "FAKE_PRIVATE_VALUE=do-not-transfer");
       await write(aiRoot, "src/private.ts", "source-only");

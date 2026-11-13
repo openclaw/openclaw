@@ -1,9 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildReplyUsageState } from "../../auto-reply/reply/reply-usage-state.js";
 import { prepareSessionUsageUpdate } from "../../auto-reply/reply/session-usage.js";
 import * as runtimeConfig from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
+import {
+  resolveModelCostConfig,
+  estimateAggregateUsageCostAsync,
+} from "../../utils/usage-format.js";
+import * as modelsConfig from "../models-config-state.js";
 import type { NormalizedUsage } from "../usage.js";
 import { runEmbeddedAgentEntry, setupRunEntryTestState } from "./run-entry.test-harness.js";
 import {
@@ -45,40 +49,46 @@ const entryDefaults = {
   sessionOverride: { kind: "preserve" as const },
 };
 const billedZero = { total: 0, totalOrigin: "provider-billed" as const };
+const diagnosticUsage = [
+  { input: 150, cost: { total: 0.3 } },
+  { input: 250, cost: { total: 1.1 } },
+] as const;
 
-function usageConsumers(meta: Partial<EmbeddedAgentMeta>) {
-  const { provider, model, usage, lastCallUsage } = meta;
-  return {
-    reply: buildReplyUsageState({
+async function usageConsumers(meta: Partial<EmbeddedAgentMeta>) {
+  const prepareCost = () =>
+    resolveModelCostConfig({
       config: cfg,
       agentDir: "/nonexistent-fallback-accounting",
+      provider: meta.provider,
+      model: meta.model,
+    });
+  const turnUsd = await estimateAggregateUsageCostAsync({ usage: meta.usage, prepareCost });
+  return {
+    reply: buildReplyUsageState({
+      ...meta,
+      config: cfg,
+      turnUsd,
       agentId: "main",
       sessionId: "session-1",
-      provider,
-      model,
-      winnerProvider: provider,
-      winnerModel: model,
-      usage,
-      lastCallUsage,
+      winnerProvider: meta.provider,
+      winnerModel: meta.model,
     }),
     session: prepareSessionUsageUpdate({
-      cfg,
-      usage,
-      lastCallUsage,
-      providerUsed: provider,
-      modelUsed: model,
+      ...meta,
+      estimatedCostUsd: turnUsd,
+      providerUsed: meta.provider,
+      modelUsed: meta.model,
     }),
-    diagnosticCost: estimateAggregateUsageCost({
-      config: cfg,
-      provider,
-      model,
+    diagnosticCost: await estimateAggregateUsageCostAsync({
+      ...meta,
       usage: meta.diagnosticUsage,
+      prepareCost,
     }),
   };
 }
 
 async function runAccountedEntry(
-  primary: NormalizedUsage,
+  primary: NormalizedUsage | Error,
   fallback: NormalizedUsage,
   config = cfg,
   diagnostics?: readonly [NormalizedUsage, NormalizedUsage],
@@ -89,6 +99,9 @@ async function runAccountedEntry(
     selection: { cfg: config, provider: "primary-provider", model: "primary-model" },
     runCandidate: async (provider, model, options) => {
       const usage = options.isFallbackRetry ? fallback : primary;
+      if (usage instanceof Error) {
+        throw usage;
+      }
       const candidate = makeResult({
         provider,
         model,
@@ -113,94 +126,81 @@ async function runAccountedEntry(
   return result.meta.agentMeta!;
 }
 
-describe("fallback candidate accounting", () => {
-  it.each([null, { input: 0, output: 0, usageReport: { state: "available" as const } }])(
-    "does not treat discarded usage as the winner's context (%j)",
-    async (lastCallUsage) => {
-      const meta = await runAccountedEntry(
-        { input: 100, cost: { total: 0.2 } },
-        { input: 200, cost: { total: 0.7 } },
-        cfg,
-        undefined,
-        lastCallUsage,
-      );
-      const { reply } = usageConsumers({ usage: meta.usage, lastCallUsage: meta.lastCallUsage });
-      expect(meta.usage?.input).toBe(300);
-      expect(reply.contextUsedTokens).toBeUndefined();
-      expect(meta.lastCallUsage).toEqual(lastCallUsage ?? undefined);
-    },
-  );
-  it.each([
-    ["recorded costs", { total: 0.2 }, { total: 0.7 }, 0.9, undefined],
-    ["different configured prices", undefined, undefined, 0.00252, undefined],
-    ["provider-billed zero", billedZero, billedZero, 0, undefined],
-    ["unknown price before known price", { total: 0 }, { total: 0.7 }, undefined, undefined],
-    ["unknown price after known price", { total: 0.7 }, { total: 0 }, undefined, undefined],
-    [
-      "cumulative diagnostics separate from CLI billing",
-      { total: 0.2 },
-      { total: 0.7 },
-      0.9,
-      [
-        { input: 150, cost: { total: 0.3 } },
-        { input: 250, cost: { total: 1.1 } },
-      ],
-    ],
-  ] as const)(
-    "retains discarded work and %s across reply and session accounting",
-    async (_name, primary, fallback, expected, diagnostics) => {
-      const unknown = expected === undefined;
-      const meta = await runAccountedEntry(
-        { input: 100, output: diagnostics ? undefined : 10, cost: primary },
-        { input: 200, output: diagnostics ? undefined : 20, cost: fallback },
-        unknown ? {} : cfg,
-        diagnostics,
-      );
-      const output = diagnostics ? {} : { output: 30, total: 330 };
+it.each([null, { input: 0, output: 0, usageReport: { state: "available" as const } }])(
+  "does not treat discarded usage as the winner's context (%j)",
+  async (lastCallUsage) => {
+    const meta = await runAccountedEntry(
+      { input: 100, cost: { total: 0.2 } },
+      { input: 200, cost: { total: 0.7 } },
+      cfg,
+      undefined,
+      lastCallUsage,
+    );
+    const { reply } = await usageConsumers({
+      usage: meta.usage,
+      lastCallUsage: meta.lastCallUsage,
+    });
+    expect(meta.usage?.input).toBe(300);
+    expect(reply.contextUsedTokens).toBeUndefined();
+    expect(meta.lastCallUsage).toEqual(lastCallUsage ?? undefined);
+  },
+);
+it.each([
+  ["different configured prices", undefined, undefined, 0.00252, undefined],
+  ["provider-billed zero", billedZero, billedZero, 0, undefined],
+  ["unknown price before known price", { total: 0 }, { total: 0.7 }, undefined, undefined],
+  ["unknown price after known price", { total: 0.7 }, { total: 0 }, undefined, undefined],
+  ["separate diagnostic totals", { total: 0.2 }, { total: 0.7 }, 0.9, diagnosticUsage],
+] as const)(
+  "retains discarded work and %s across reply and session accounting",
+  async (_name, primary, fallback, expected, diagnostics) => {
+    using preparation = vi.spyOn(modelsConfig, "captureModelsJsonCostSource");
+    const unknown = expected === undefined;
+    const meta = await runAccountedEntry(
+      { input: 100, output: diagnostics ? undefined : 10, cost: primary },
+      { input: 200, output: diagnostics ? undefined : 20, cost: fallback },
+      unknown ? {} : cfg,
+      diagnostics,
+    );
+    if (_name === "provider-billed zero" || _name === "separate diagnostic totals") {
+      expect(preparation).not.toHaveBeenCalled();
+    }
+    const output = diagnostics ? {} : { output: 30, total: 330 };
+    expect(meta).toMatchObject({
+      usage: { input: 300, ...output },
+      ...fallbackRoute,
+      lastCallUsage: { input: 20, output: 2 },
+      assistantTurns: 3,
+      bridgeCalls: { search: 2, describe: 0, call: 4 },
+    });
+    const consumerMeta = unknown ? { ...meta, lastCallUsage: undefined } : meta;
+    const { reply, session, diagnosticCost } = await usageConsumers(consumerMeta);
+    expect(reply.usage).toMatchObject({ input: 300, ...(diagnostics ? {} : { output: 30 }) });
+    expect(reply.contextUsedTokens).toBe(unknown ? undefined : 20);
+    const cost = unknown ? undefined : expect.closeTo(expected, 9);
+    const costs = [reply.turnUsd, session?.estimatedCostUsd, diagnosticCost];
+    expect(costs).toEqual([cost, cost, diagnostics ? expect.closeTo(1.4, 9) : cost]);
+    if (diagnostics) {
       expect(meta).toMatchObject({
-        usage: { input: 300, ...output },
-        ...fallbackRoute,
-        lastCallUsage: { input: 20, output: 2 },
-        assistantTurns: 3,
-        bridgeCalls: { search: 2, describe: 0, call: 4 },
+        usage: { cost: { total: expect.closeTo(0.9, 9) } },
+        diagnosticUsage: { input: 400, cost: { total: expect.closeTo(1.4, 9) } },
       });
-      const consumerMeta = unknown ? { ...meta, lastCallUsage: undefined } : meta;
-      const { reply, session, diagnosticCost } = usageConsumers(consumerMeta);
-      expect(reply.usage).toMatchObject({ input: 300, ...(diagnostics ? {} : { output: 30 }) });
-      expect(reply.contextUsedTokens).toBe(unknown ? undefined : 20);
-      const cost = unknown ? undefined : expect.closeTo(expected, 9);
-      const costs = [reply.turnUsd, session?.estimateCost(), diagnosticCost];
-      expect(costs).toEqual([cost, cost, diagnostics ? expect.closeTo(1.4, 9) : cost]);
-      if (diagnostics) {
-        expect(meta).toMatchObject({
-          usage: { cost: { total: expect.closeTo(0.9, 9) } },
-          diagnosticUsage: { input: 400, cost: { total: expect.closeTo(1.4, 9) } },
-        });
-      }
-    },
-  );
+    }
+  },
+);
 
-  it("does not invent usage for an attempt that throws before returning", async () => {
-    state.runWithModelFallback.mockImplementationOnce(async (params) => {
-      await expect(
-        params.run(params.provider, params.model, initialAttemptOptions(params)),
-      ).rejects.toThrow("before result");
-      const { provider, model } = fallbackRoute;
-      const result = await params.run(provider, model, fallbackAttemptOptions(params, "unknown"));
-      return { outcome: "completed", result, provider, model, attempts: [] };
-    });
-    const { result } = await runEmbeddedAgentEntry({
-      ...entryDefaults,
-      identity: { runId: "run-accounting-throw", agentId: "main", sessionId: "session-1" },
-      runCandidate: async (provider, model) => {
-        if (provider === "primary-provider") {
-          throw new Error("before result");
-        }
-        const candidate = makeResult({ provider, model });
-        candidate.meta.agentMeta!.usage = { input: 7, cost: { total: 0.25 } };
-        return candidate;
-      },
-    });
-    expect(result.meta.agentMeta?.usage).toEqual({ input: 7, cost: { total: 0.25 } });
+it("does not invent usage for an attempt that throws before returning", async () => {
+  state.runWithModelFallback.mockImplementationOnce(async (params) => {
+    await expect(
+      params.run(params.provider, params.model, initialAttemptOptions(params)),
+    ).rejects.toThrow("before result");
+    const { provider, model } = fallbackRoute;
+    const result = await params.run(provider, model, fallbackAttemptOptions(params, "unknown"));
+    return { outcome: "completed", result, provider, model, attempts: [] };
   });
+  const meta = await runAccountedEntry(new Error("before result"), {
+    input: 7,
+    cost: { total: 0.25 },
+  });
+  expect(meta.usage).toEqual({ input: 7, cost: { total: 0.25 } });
 });

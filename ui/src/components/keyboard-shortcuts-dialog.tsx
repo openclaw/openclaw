@@ -14,7 +14,6 @@ import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
 import { KeyboardShortcut } from "./solid/kbd.tsx";
-import "./kbd.css";
 import "./keyboard-shortcuts-dialog.css";
 import "./modal-dialog.tsx";
 
@@ -41,6 +40,7 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
     keyboardShortcutEntry("debugOverlay", KEYBOARD_SHORTCUT_COMBOS.debugOverlay),
     keyboardShortcutEntry("appearanceSettings", KEYBOARD_SHORTCUT_COMBOS.appearanceSettings),
     keyboardShortcutEntry("startNewSession", KEYBOARD_SHORTCUT_COMBOS.sendMessage),
+    keyboardShortcutEntry("startNewSessionBackground", KEYBOARD_SHORTCUT_COMBOS.modifiedEnter),
     keyboardShortcutEntry("closeDialog", KEYBOARD_SHORTCUT_COMBOS.escape),
   ]),
   keyboardShortcutSection("chat", [
@@ -114,6 +114,7 @@ function resolveKeyboardShortcutSections(
             !(
               SEND_PREFERENCE_ENTRY_IDS.has(entry.id) ||
               entry.id === "paletteStartSession" ||
+              entry.id === "startNewSessionBackground" ||
               entry.id === "steerImmediately" ||
               entry.id === "saveQueuedMessage"
             ),
@@ -127,7 +128,10 @@ function resolveKeyboardShortcutSections(
                   sendShortcut === "modifier-enter" &&
                   SEND_PREFERENCE_ENTRY_IDS.has(entry.id)
                 ? keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.modifiedEnter)
-                : entry,
+                : sendShortcut === "modifier-enter" && entry.id === "startNewSessionBackground"
+                  ? // Send owns the modified chord, so Shift selects the background start.
+                    keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.approveAlways)
+                  : entry,
         ),
     ),
   );
@@ -218,7 +222,7 @@ export const KeyboardShortcutsDialog = defineSolidBridge<DialogProps, DialogMeth
                             <For each={entry.combos}>
                               {(combo) => (
                                 <span class="combo">
-                                  <KeyboardShortcut combo={combo} separateKeys />
+                                  <KeyboardShortcut combo={combo} separateKeys always />
                                 </span>
                               )}
                             </For>

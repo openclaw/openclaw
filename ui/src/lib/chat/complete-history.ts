@@ -1,10 +1,10 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
-import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
+import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
 import type { ChatHistoryResult } from "../../pages/chat/chat-history-snapshot.ts";
 import { nativeHistoryMessageIdentity } from "./history-message-identity.ts";
 
-registerSessionOrganizationEnglish();
+registerSessionOrganizationSharedEnglish();
 
 /** Read one coherent conversation independently of the rendered history window. */
 export async function loadCompleteChatHistory({

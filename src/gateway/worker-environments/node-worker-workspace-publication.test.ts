@@ -4,6 +4,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
@@ -195,9 +196,13 @@ it.each([
       if (!failPublication) {
         expect(payload.publicationStagingRoot).toBeDefined();
       }
-      expect(await fs.readFile(path.join(payload.stagingRoot, "result.txt"), "utf8")).toBe(
-        "checkpoint edit\n",
-      );
+      if (payload.baseManifestRef === base.manifestRef) {
+        expect(await fs.readFile(path.join(payload.stagingRoot, "result.txt"), "utf8")).toBe(
+          "checkpoint edit\n",
+        );
+      } else {
+        expect(await fs.readdir(payload.stagingRoot)).toEqual([]);
+      }
       const prepared = await stageSessionRepositoryCheckpoint({
         ...payload,
         store,
@@ -214,21 +219,23 @@ it.each([
       }
       return prepared;
     };
-    const reconcile = () =>
+    const reconcile = async () =>
       actions.reconcileWorkspace({
         remoteWorkspaceDir: workspaceDir,
         baseManifestRef: base.manifestRef,
         source: {
           kind: "repository",
           referenceManifestRef: base.manifestRef,
+          acceptedManifestRef: (await store.get(repository.workspaceId))?.manifestHash ?? undefined,
           prepareCheckpoint: checkpoint,
         },
       });
     let first: ReturnType<typeof reconcile> | undefined;
     const accept = async (pending: ReturnType<typeof reconcile>) => {
+      const before = await store.get(repository.workspaceId);
       const result = await pending;
       try {
-        expect(result.changed).toBe(true);
+        expect(result.changed).toBe(before?.manifestHash !== result.manifestRef);
         await result.verifyLocalStable();
         await result.publishStagedResult?.();
         expect((await store.get(repository.workspaceId))?.manifestHash).toBe(result.manifestRef);
@@ -271,9 +278,9 @@ it.each([
         expect((await fs.stat(cleanupRoot!)).isDirectory()).toBe(true);
       } else {
         expect(
-          (await fs.readdir(temporaryRoot, { recursive: true })).filter((entry) =>
-            path.basename(entry).startsWith("upload-"),
-          ),
+          (await listDirectoryTreeStrict(temporaryRoot))
+            .map((walkEntry) => walkEntry.relativePath)
+            .filter((entry) => path.basename(entry).startsWith("upload-")),
         ).toEqual([]);
       }
       failPublication = false;

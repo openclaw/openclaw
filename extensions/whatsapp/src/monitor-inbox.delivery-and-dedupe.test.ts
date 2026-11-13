@@ -19,9 +19,11 @@ import {
 import {
   buildNotifyMessageUpsert,
   DEFAULT_ACCOUNT_ID,
+  mockLoadConfig,
   resetWebInboundDedupeForTests,
   settleInboundWork,
   startInboxMonitor,
+  upsertPairingRequestMock,
   waitForMessageCalls,
   waitForInboundWorkDrained,
   type InboxOnMessage,
@@ -109,12 +111,118 @@ function dmUpsert(id: string, text = "ping", timestamp = 1_700_000_000, withName
   });
 }
 
+function expectRead(sock: Awaited<ReturnType<typeof startInboxMonitor>>["sock"], id: string) {
+  expect(sock.readMessages).toHaveBeenCalledWith([
+    { remoteJid: "999@s.whatsapp.net", id, participant: undefined, fromMe: false },
+  ]);
+}
+
 describe("web monitor inbox delivery and dedupe", () => {
   installStreamsInboundMessageHooks();
   beforeEach(() => {
     reactionStores.forEach((store) => store.clearForTest());
     approvalResolver.mockReset();
   });
+
+  it.each([
+    { domain: "lid", phone: "999" },
+    { domain: "hosted.lid", phone: "999" },
+    { domain: "lid", phone: "888" },
+    { domain: "hosted.lid", phone: "888" },
+  ])("retries unresolved @$domain DMs and authorizes mapped +$phone", ({ domain, phone }) =>
+    withRetryClock(async () => {
+      mockLoadConfig.mockReturnValue({
+        channels: { whatsapp: { dmPolicy: "allowlist", allowFrom: ["+999"] } },
+      });
+      const onMessage = vi.fn();
+      const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+      const { listener, sock } = await startInboxMonitor(onMessage, { durableInboundQueue: queue });
+      const mapping = sock.signalRepository.lidMapping.getPNForLID;
+      const upsert = buildNotifyMessageUpsert({
+        id: nextMessageId("unresolved-lid"),
+        remoteJid: `12345@${domain}`,
+        text: "late identity",
+        timestamp: 1_700_000_000,
+      });
+      try {
+        sock.ev.emit("messages.upsert", upsert);
+        await waitForInboundWorkDrained();
+        expect(await queue.listPending({ limit: "all" })).toMatchObject([{ attempts: 1 }]);
+        expect(onMessage).not.toHaveBeenCalled();
+        expect(sock.readMessages).not.toHaveBeenCalled();
+        expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+
+        mapping.mockResolvedValue(`${phone}@s.whatsapp.net`);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await waitForInboundWorkDrained();
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(onMessage.mock.calls.map(([msg]) => msg.payload.body)).toEqual(
+          phone === "999" ? ["late identity"] : [],
+        );
+        if (phone === "999") {
+          expect(inboundMessage(onMessage).admission?.conversation.id).toBe("+999");
+        }
+
+        // A completed redelivery with a lost mapping must not abort its batch sibling.
+        mapping.mockResolvedValue(null);
+        sock.ev.emit("messages.upsert", {
+          type: "notify",
+          messages: [
+            ...upsert.messages,
+            ...dmUpsert(nextMessageId("lid-sibling"), "sibling").messages,
+          ],
+        });
+        await waitForInboundWorkDrained();
+        expect(onMessage.mock.calls.map(([msg]) => msg.payload.body)).toEqual(
+          phone === "999" ? ["late identity", "sibling"] : ["sibling"],
+        );
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+      } finally {
+        await listener.close();
+      }
+    }),
+  );
+
+  it("dead-letters permanently unresolved LID DMs across monitor restarts", () =>
+    withRetryClock(async () => {
+      const onMessage = vi.fn();
+      const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+      let { listener, sock } = await startInboxMonitor(onMessage, { durableInboundQueue: queue });
+      const receivedAt = Date.now();
+      try {
+        sock.ev.emit(
+          "messages.upsert",
+          buildNotifyMessageUpsert({
+            id: nextMessageId("permanent-lid"),
+            remoteJid: "12345@hosted.lid",
+            text: "unmapped",
+            timestamp: 1_700_000_000,
+          }),
+        );
+        await waitForInboundWorkDrained();
+        expect(await queue.listPending({ limit: "all" })).toMatchObject([{ attempts: 1 }]);
+        for (let attempt = 2; attempt <= 8; attempt += 1) {
+          // Closing joins worker settlement before the next monitor recovers the row.
+          await listener.close();
+          await vi.advanceTimersByTimeAsync(3 * 60_000);
+          ({ listener, sock } = await startInboxMonitor(onMessage, { durableInboundQueue: queue }));
+          await waitForInboundWorkDrained();
+          expect(await queue.listPending({ limit: "all" })).toMatchObject([{ attempts: attempt }]);
+        }
+        await listener.close();
+        vi.setSystemTime(receivedAt + 24 * 60 * 60_000);
+        ({ listener, sock } = await startInboxMonitor(onMessage, { durableInboundQueue: queue }));
+        await waitForInboundWorkDrained();
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(await queue.listFailed?.()).toMatchObject([{ reason: "retry-limit-exceeded" }]);
+        expect(onMessage).not.toHaveBeenCalled();
+        expect(sock.readMessages).not.toHaveBeenCalled();
+        expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+      } finally {
+        await listener.close();
+      }
+    }));
 
   it("replays approval reactions after Gateway loss without losing batch siblings", () =>
     withRetryClock(async () => {
@@ -238,14 +346,7 @@ describe("web monitor inbox delivery and dedupe", () => {
     expect(sock.readMessages).not.toHaveBeenCalled();
     handlerGate.resolve();
     await vi.waitFor(() => {
-      expect(sock.readMessages).toHaveBeenCalledWith([
-        {
-          remoteJid: "999@s.whatsapp.net",
-          id: messageId,
-          participant: undefined,
-          fromMe: false,
-        },
-      ]);
+      expectRead(sock, messageId);
     });
 
     await listener.close();
@@ -271,13 +372,8 @@ describe("web monitor inbox delivery and dedupe", () => {
   it("delivery coordinator retries a transient persistence failure through the drain", async () => {
     const onMessage = vi.fn(async () => undefined);
     const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
-    // One transient rejection absorbs into the bounded retry; the message then
-    // flows durably. The retired live-dispatch fallback is gone: it bypassed
-    // drain dedupe and lane serialization once the replay guard was deleted.
     const durableInboundQueue = {
       ...queue,
-      // First attempt rejects; the bounded retry's second attempt must reach
-      // the real queue so the message flows durably.
       enqueue: vi.fn(queue.enqueue.bind(queue)).mockRejectedValueOnce(new Error("SQLITE_FULL")),
     };
 
@@ -291,14 +387,7 @@ describe("web monitor inbox delivery and dedupe", () => {
 
     expect(inboundMessage(onMessage).payload.body).toBe("ping");
     await vi.waitFor(() => {
-      expect(sock.readMessages).toHaveBeenCalledWith([
-        {
-          remoteJid: "999@s.whatsapp.net",
-          id: messageId,
-          participant: undefined,
-          fromMe: false,
-        },
-      ]);
+      expectRead(sock, messageId);
     });
 
     await listener.close();
@@ -494,14 +583,7 @@ describe("web monitor inbox delivery and dedupe", () => {
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
       expect(sock.readMessages).toHaveBeenCalledTimes(3);
       for (const id of [firstId, secondId, thirdId]) {
-        expect(sock.readMessages).toHaveBeenCalledWith([
-          {
-            remoteJid: "999@s.whatsapp.net",
-            id,
-            participant: undefined,
-            fromMe: false,
-          },
-        ]);
+        expectRead(sock, id);
       }
       expect(sock.end).toHaveBeenCalledTimes(1);
       expect(Math.max(...sock.readMessages.mock.invocationCallOrder)).toBeLessThan(
@@ -607,16 +689,7 @@ describe("web monitor inbox delivery and dedupe", () => {
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
 
     for (const [index, id] of ["in-2", "in-3"].entries()) {
-      sock.ev.emit(
-        "messages.upsert",
-        buildNotifyMessageUpsert({
-          id,
-          remoteJid: "999@s.whatsapp.net",
-          text: "Done.",
-          timestamp: 1_700_000_000 + index,
-          pushName: "Tester",
-        }),
-      );
+      sock.ev.emit("messages.upsert", dmUpsert(id, "Done.", 1_700_000_000 + index));
       await waitForMessageCalls(onMessage, index + 1);
     }
 

@@ -2,6 +2,7 @@ import { afterAll, beforeEach, expect, it, vi } from "vitest";
 import * as ingressHealth from "../../channels/message/ingress-queue-health.js";
 import * as deliveryQueueState from "../../infra/delivery-queue-sqlite.js";
 import { buildDeliveryQueueHealthSummary } from "./delivery-queue.js";
+import { createTelegramIngressPressure } from "./delivery-queue.test-support.js";
 
 const countOutbound = vi.fn();
 const countIngress = vi.fn();
@@ -15,21 +16,25 @@ const outboundFailed = [{ queueName: "outbound", count: 2, oldestFailedAt: 1_000
 const ingressFailed = [
   { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 2_000 },
 ];
-const ingressPressure = [
-  {
-    channelId: "telegram",
-    accountId: "ops",
-    laneCount: 1,
-    pendingCount: 56,
-    claimedCount: 0,
-    blockedCount: 55,
-    oldestReceivedAt: 1_000,
-  },
-];
+const ingressPressure = createTelegramIngressPressure();
 
 beforeEach(() => {
   countOutbound.mockReset().mockResolvedValue([]);
   countIngress.mockReset().mockResolvedValue({ failed: [], pressure: [] });
+});
+
+it("reads ingress health without waiting for outbound storage", async () => {
+  const outbound = Promise.withResolvers<typeof outboundFailed>();
+  countOutbound.mockReturnValueOnce(outbound.promise);
+  countIngress.mockResolvedValueOnce({ failed: ingressFailed, pressure: [] });
+  const summary = buildDeliveryQueueHealthSummary();
+  try {
+    expect(countIngress).toHaveBeenCalledTimes(1);
+  } finally {
+    outbound.resolve(outboundFailed);
+    await summary;
+  }
+  expect(await summary).toEqual({ failed: outboundFailed, ingressFailed });
 });
 
 it.each([

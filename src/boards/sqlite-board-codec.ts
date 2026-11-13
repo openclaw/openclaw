@@ -143,6 +143,7 @@ export function parseManifest(value: string): ParsedBoardManifest {
     const declared = normalizeBoardWidgetDeclared({
       ...(netOrigins?.length ? { netOrigins } : {}),
       ...(tools?.length ? { tools } : {}),
+      ...(parsed.queries !== undefined ? { queries: parsed.queries } : {}),
     });
     return {
       ...ownership,
@@ -451,6 +452,7 @@ export function rowToHtmlViewMetadata(
     sha256: row.sha256,
     viewGeneration,
     grantState: effectiveGrantState(row.grant_state, manifest),
-    ...(declared ? { declared } : {}),
+    // View metadata and the mutable widget snapshot have independent consumers.
+    ...(declared ? { declared: structuredClone(declared) } : {}),
   };
 }

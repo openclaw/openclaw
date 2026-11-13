@@ -2,14 +2,10 @@ import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const providerRuntimeMocks = vi.hoisted(() => ({
-  resolveProviderModernModelRef: vi.fn(),
-}));
+const resolveProviderRuntimePlugin = vi.hoisted(() => vi.fn());
 
 // mock-isolation: Model identity tests control provider claims without activating a runtime registry.
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderModernModelRef: providerRuntimeMocks.resolveProviderModernModelRef,
-}));
+vi.mock("../plugins/provider-hook-runtime.js", () => ({ resolveProviderRuntimePlugin }));
 
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import { isModernModelRef } from "./test-helpers/live-model-dynamic-candidates.js";
@@ -18,46 +14,49 @@ import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.
 const baseModel = (overrides: Partial<Model> = {}): Model =>
   makeProviderModelFixture({
     id: "glm-4.7",
-    name: "GLM-4.7",
     api: "openai-completions",
     provider: "zai",
     baseUrl: "https://api.z.ai/api/coding/paas/v4",
-    reasoning: true,
-    contextWindow: 8192,
-    maxTokens: 1024,
     ...overrides,
   });
-
-function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model>): void {
-  const model = baseModel(overrides);
-  const normalized = normalizeModelCompat(model);
-  expect(normalized).not.toBe(model);
-  expect(model.compat).toBeUndefined();
-  expect(normalized.compat).toMatchObject({
-    supportsDeveloperRole: false,
-    supportsUsageInStreaming: false,
-    supportsStrictMode: false,
-  });
-}
 
 beforeEach(() => {
   // Ignore stale dist manifests left by earlier builds.
   vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
-  providerRuntimeMocks.resolveProviderModernModelRef.mockReset();
-  providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(undefined);
+  resolveProviderRuntimePlugin.mockReset().mockReturnValue(undefined);
 });
 
 afterEach(vi.unstubAllEnvs);
 
 describe("isModernModelRef", () => {
   it("matches plugin-advertised modern models only for exact provider ids", () => {
-    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(
-      ({ provider, context }) =>
-        provider === "z.ai" && context.modelId === "glm-5" ? true : undefined,
+    resolveProviderRuntimePlugin.mockImplementation(({ provider }) =>
+      provider === "z.ai"
+        ? { isModernModelRef: ({ modelId }: { modelId: string }) => modelId === "glm-5" }
+        : undefined,
     );
 
     expect(isModernModelRef({ provider: "z.ai", id: "glm-5" })).toBe(true);
     expect(isModernModelRef({ provider: "z-ai", id: "glm-5" })).toBe(false);
+  });
+
+  it("retains the scoped owner, hook receiver, context, and exact true result", () => {
+    const scope = { provider: "demo", config: {}, workspaceDir: "/tmp/model-policy", env: {} };
+    const context = { provider: "demo", modelId: "model" };
+    const hook = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce("true");
+    const plugin = { isModernModelRef: hook };
+    resolveProviderRuntimePlugin.mockReturnValue(plugin);
+    const ref = { id: "model", ...scope };
+    expect(isModernModelRef(ref)).toBe(true);
+    expect(resolveProviderRuntimePlugin).toHaveBeenCalledExactlyOnceWith({ ...scope, context });
+    expect(isModernModelRef(ref)).toBe(false);
+    resolveProviderRuntimePlugin.mockReturnValue({});
+    expect(isModernModelRef(ref)).toBe(false);
+    expect(hook.mock.contexts).toEqual([plugin, plugin]);
+    expect(hook.mock.calls).toEqual([[context], [context]]);
+    resolveProviderRuntimePlugin.mockClear();
+    expect(isModernModelRef({ provider: "demo", id: "" })).toBe(false);
+    expect(resolveProviderRuntimePlugin).not.toHaveBeenCalled();
   });
 });
 
@@ -68,29 +67,26 @@ describe("normalizeModelCompat", () => {
       provider: "anthropic",
       baseUrl: "https://api.anthropic.com/v1/",
     });
-    const normalized = normalizeModelCompat(model);
-    expect(normalized.baseUrl).toBe("https://api.anthropic.com");
+    expect(normalizeModelCompat(model).baseUrl).toBe("https://api.anthropic.com");
   });
   it.each([
-    [
-      "Azure OpenAI chat completions",
-      { provider: "azure-openai", baseUrl: "https://my-deployment.openai.azure.com/openai" },
-    ],
-    [
-      "malformed baseUrl values",
-      { provider: "custom-cpa", baseUrl: "://api.openai.com malformed" },
-    ],
-  ] satisfies Array<[string, Partial<Model> | undefined]>)(
-    "forces supportsDeveloperRole off for %s",
-    (_name, overrides) => {
-      expectSupportsDeveloperRoleForcedOff(overrides);
-    },
-  );
+    ["azure-openai", "https://my-deployment.openai.azure.com/openai"],
+    ["custom-cpa", "://api.openai.com malformed"],
+  ])("defaults non-native capabilities off for %s (%s)", (provider, baseUrl) => {
+    const model = baseModel({ provider, baseUrl });
+    const normalized = normalizeModelCompat(model);
+    expect(normalized).not.toBe(model);
+    expect(model.compat).toBeUndefined();
+    expect(normalized.compat).toMatchObject({
+      supportsDeveloperRole: false,
+      supportsUsageInStreaming: false,
+      supportsStrictMode: false,
+    });
+  });
 
   it("leaves native api.openai.com model untouched", () => {
     const model = baseModel({ provider: "openai", baseUrl: "https://api.openai.com/v1" });
-    const normalized = normalizeModelCompat(model);
-    expect(normalized.compat).toBeUndefined();
+    expect(normalizeModelCompat(model).compat).toBeUndefined();
   });
 
   it.each(["supportsDeveloperRole", "supportsUsageInStreaming", "supportsStrictMode"] as const)(

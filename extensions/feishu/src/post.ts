@@ -291,7 +291,7 @@ export function renderPostContent(
 
     const title = escapeMarkdownText(payload.title.trim());
     const body = paragraphs.join("\n").trim();
-    const textContent = [title, body].filter(Boolean).join("\n\n").trim();
+    const textContent = [title, body].filter(Boolean).join("\n\n");
 
     return {
       textContent: textContent || (options.emptyTextFallback ?? FALLBACK_POST_TEXT),

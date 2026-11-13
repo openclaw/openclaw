@@ -161,9 +161,13 @@ suite.define(() => {
 
           const project = header.locator(".chat-pane__workspace-chip", { hasText: "openclaw" });
           await project.waitFor();
+          const titleBox = (await header.locator(".mobile-header__title-text").boundingBox())!;
+          const projectBox = (await project.boundingBox())!;
+          expect(titleBox.y).toBeLessThan(projectBox.y);
+          // The project reads as the title's subtitle: line centers stay within 17px.
           expect(
-            (await header.locator(".mobile-header__title-text").boundingBox())!.y,
-          ).toBeLessThan((await project.boundingBox())!.y);
+            projectBox.y + projectBox.height / 2 - (titleBox.y + titleBox.height / 2),
+          ).toBeLessThanOrEqual(17);
           await header.getByRole("button", { name: "People", exact: true }).waitFor();
 
           const details = await openChatDetails(page);
@@ -195,6 +199,10 @@ suite.define(() => {
             .first()
             .waitFor();
           expect((await files.boundingBox())!.width).toBeGreaterThanOrEqual(viewport.width - 24);
+          // Threshold rows cover entry; 320, 390 and short-landscape rows retain the full journey.
+          if (viewport.width === 349 || viewport.width === 350) {
+            return;
+          }
           const filesRoot = await files.elementHandle();
           await openChatDetails(page);
           expect(await files.isVisible()).toBe(false);
@@ -224,7 +232,7 @@ suite.define(() => {
           await page.getByRole("menuitem", { name: "Rename", exact: true }).waitFor();
           await page.keyboard.press("Escape");
           await header.locator(".mobile-header__navigation").click();
-          await page.getByRole("link", { name: "New conversation", exact: true }).waitFor();
+          await page.getByRole("link", { name: "New session", exact: true }).waitFor();
         },
       );
     });

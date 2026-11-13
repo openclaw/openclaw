@@ -137,13 +137,30 @@ describe("isolated completion account and daemon ownership", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(["chatgpt", "apiKey"])(
+  it.each(["chatgpt", "apiKey", "identity-only-profile"])(
     "keeps native %s authoritative over stored profile B",
-    async (accountType) => {
+    async (mode) => {
+      const accountType = mode === "identity-only-profile" ? "chatgpt" : mode;
       await withTempDir("codex-isolated-auth-", async (root) => {
         const boundary = createNativeBoundary(accountType);
         const pluginConfig = createPluginConfig(root, "user");
-        const pending = runCodexIsolatedCompletion(createParams(root), { pluginConfig });
+        const params = createParams(root);
+        if (mode === "identity-only-profile" && params.authorization.owner === "harness") {
+          const credential = storedProfile.profiles["openai:stored-b"];
+          if (credential?.type !== "oauth") {
+            throw new Error("fixture");
+          }
+          params.authorization.authProfileStore = {
+            version: 1,
+            profiles: {
+              "openai:stored-b": {
+                ...credential,
+                authFlow: "chatgpt-identity",
+              },
+            },
+          };
+        }
+        const pending = runCodexIsolatedCompletion(params, { pluginConfig });
         if (accountType === "apiKey") {
           await expect(pending).rejects.toThrow("requires ChatGPT auth in the native Codex home");
         } else {
@@ -168,7 +185,14 @@ describe("isolated completion account and daemon ownership", () => {
       await withTempDir("codex-isolated-proxy-", async (root) => {
         const boundary = createNativeBoundary();
         const pluginConfig = createPluginConfig(root, homeScope, true);
-        await runCodexIsolatedCompletion(createParams(root), { pluginConfig });
+        const result = await runCodexIsolatedCompletion(createParams(root), { pluginConfig });
+        if (homeScope === "user") {
+          expect(result.assistant.content).toEqual([
+            { type: "text", text: `Garden Planning (${nativeAccount})` },
+          ]);
+          expect(boundary.calls.some((call) => call.method === "account/read")).toBe(true);
+          expect(JSON.stringify(boundary.calls)).not.toContain("synthetic-stored-b-access");
+        }
 
         const start = readStart(boundary);
         expect(start).toMatchObject({

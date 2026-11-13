@@ -148,15 +148,18 @@ export function gatewayDiscoveryReadOptions(
   discovery?: GatewaySessionStoreDiscovery,
 ) {
   const excluded = createGatewayRetainedStoreMatcher(cfg, discovery);
+  const unavailable = discovery?.recoveryExclusions;
   return {
     ...discoveryReadOptions(discovery),
-    excludeTarget: (target: SessionStoreTarget) =>
-      Boolean(
-        excluded(
-          resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path,
-          target.agentId,
-        ),
-      ),
+    excludeTarget: (target: SessionStoreTarget) => {
+      const databasePath = resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path;
+      return (
+        unavailable?.agentIds.includes(target.agentId) === true ||
+        unavailable?.storePaths.includes(target.storePath) === true ||
+        unavailable?.databasePaths.includes(databasePath) === true ||
+        Boolean(excluded(databasePath, target.agentId))
+      );
+    },
   };
 }
 
@@ -187,8 +190,18 @@ export function createGatewayRetainedStoreMatcher(
 ) {
   const readOptions = discoveryReadOptions(discovery);
   const env = readOptions.env ?? process.env;
-  const readConfiguredTargets = () =>
-    resolveConfiguredAgentDatabaseTargets(cfg, { env, ...readOptions });
+  const readConfiguredTargets: Parameters<typeof createRetainedAgentDatabaseMatcher>[1] = (
+    excludeTarget,
+  ) =>
+    resolveConfiguredAgentDatabaseTargets(cfg, {
+      env,
+      ...readOptions,
+      excludeTarget: (target) =>
+        excludeTarget(
+          resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path,
+          target.agentId,
+        ),
+    });
   const prepared = discovery
     ? undefined
     : getPreparedAgentDeletionDiscovery(resolveOpenClawStateSqlitePath(env));

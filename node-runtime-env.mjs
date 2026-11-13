@@ -40,16 +40,38 @@ export function parseNodeOptionsEnvVar(value) {
 }
 
 /** Preloads can install module hooks and start an independent compiler/reaper. */
+function isNodeStartupHook(arg) {
+  return /^(?:--(?:import|require|(?:experimental-)?loader)(?:=|$)|-r)/u.test(
+    arg.replaceAll("_", "-"),
+  );
+}
+
 export function hasNodeStartupHooks(execArgv, nodeOptions) {
   const envArgs = parseNodeOptionsEnvVar(nodeOptions);
-  return (
-    envArgs === null ||
-    [...execArgv, ...envArgs].some((arg) =>
-      /^(?:--(?:import|require|(?:experimental-)?loader)(?:=|$)|-r)/u.test(
-        arg.replaceAll("_", "-"),
-      ),
-    )
-  );
+  return envArgs === null || [...execArgv, ...envArgs].some(isNodeStartupHook);
+}
+
+/** Dedicated process owners must not inherit the caller's instrumentation loaders. */
+export function stripNodeStartupHooks(nodeOptions) {
+  const args = parseNodeOptionsEnvVar(nodeOptions);
+  if (args === null) {
+    throw new Error("Invalid NODE_OPTIONS for process owner");
+  }
+  if (!args.some(isNodeStartupHook)) {
+    return nodeOptions;
+  }
+  const retained = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (isNodeStartupHook(arg)) {
+      if (arg === "-r" || (arg.startsWith("--") && !arg.includes("="))) {
+        index += 1;
+      }
+    } else {
+      retained.push('"' + arg.replaceAll("\\", "\\\\").replaceAll('"', '\\"') + '"');
+    }
+  }
+  return retained.join(" ");
 }
 
 export function nodeRuntimePathEntries(value) {

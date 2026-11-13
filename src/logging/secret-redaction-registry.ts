@@ -7,23 +7,26 @@ const MIN_SECRET_VALUE_LENGTH = 6;
 const MAX_SECRET_VALUES = 512;
 
 type SecretValueRedactor = (text: string, mask: (value: string, index: number) => string) => string;
-type SecretRedactionRegistryState = {
+// Native and source module copies share membership and matcher invalidation.
+const state = resolveGlobalSingleton<{
+  revision: number;
   registeredValues: Map<string, true>;
   registeredValueRedactor: SecretValueRedactor | undefined;
-};
-
-// Native and source module copies share membership and matcher invalidation.
-const state = resolveGlobalSingleton<SecretRedactionRegistryState>(
-  Symbol.for("openclaw.secretRedactionRegistry"),
-  () => ({
-    registeredValues: new Map<string, true>(),
-    registeredValueRedactor: undefined,
-  }),
-);
+}>(Symbol.for("openclaw.secretRedactionRegistry"), () => ({
+  revision: 0,
+  registeredValues: new Map<string, true>(),
+  registeredValueRedactor: undefined,
+}));
 
 type SecretRedactionRegistrySnapshot = { values: readonly string[] };
 function invalidateMatcher(): void {
+  state.revision += 1;
   state.registeredValueRedactor = undefined;
+}
+
+/** Invalidates prepared redacted facts when exact secret membership changes. */
+export function getSecretRedactionRegistryRevision(): number {
+  return state.revision;
 }
 
 function registerOneSecretValue(value: string): void {
@@ -69,6 +72,14 @@ export function hasRegisteredSecretValuesForRedaction(): boolean {
 /** Exact surface forms are already expanded; snapshots must not register them again. */
 export function captureSecretRedactionRegistrySnapshot(): SecretRedactionRegistrySnapshot {
   return { values: [...state.registeredValues.keys()] };
+}
+
+/** Install the request's already-expanded membership in an isolated redaction worker. */
+export function installSecretRedactionRegistrySnapshot(
+  snapshot: SecretRedactionRegistrySnapshot,
+): void {
+  state.registeredValues = new Map(snapshot.values.map((value) => [value, true]));
+  invalidateMatcher();
 }
 
 /** Replaces registered exact values while preserving the caller's mask convention. */

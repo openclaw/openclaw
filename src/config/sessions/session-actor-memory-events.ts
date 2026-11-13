@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
+import { readBackgroundResultPlacement } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
 import {
   advanceCliHistoryBoundary,
@@ -184,7 +185,7 @@ export function createSessionActorMemoryEvents(options: {
   const parent = (input: { parentId?: string | null; appendIntent?: "active-branch" }) =>
     resolveTranscriptAppendParent({
       ...input,
-      tailId: tree().appendParentId,
+      readTailId: () => tree().appendParentId,
       parentId: input.parentId,
       isAncestor,
     });
@@ -235,6 +236,7 @@ export function createSessionActorMemoryEvents(options: {
             message_role: message.role,
             context_free_command:
               message.excludeFromContext === true && internal?.contextFreeCommand === true ? 1 : 0,
+            human_addressed: internal?.humanAddressed === true ? 1 : 0,
             provenance_kind: provenance?.kind,
             provenance_source_channel: provenance?.sourceChannel,
           },
@@ -246,12 +248,16 @@ export function createSessionActorMemoryEvents(options: {
   };
   const appendRaw = (event: unknown, input: TranscriptEventAppendOptions = {}, bytes?: string) => {
     checkMutation(input.expectedMutationAt);
-    const resolved =
+    let resolved =
       isRecord(event) &&
       (event.parentId === null || typeof event.parentId === "string") &&
       input.appendIntent === "active-branch"
         ? { ...event, parentId: parent({ ...input, parentId: event.parentId }) }
         : event;
+    const placement = readBackgroundResultPlacement(resolved);
+    if (placement && isRecord(resolved)) {
+      resolved = { ...resolved, data: { ...placement, afterEntryId: resolved.parentId } };
+    }
     const appended = writeEvent(resolved, resolved === event ? bytes : undefined);
     return appended
       ? {
