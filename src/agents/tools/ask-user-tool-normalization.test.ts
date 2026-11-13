@@ -102,7 +102,7 @@ it.each([
     requiredAction: {
       reason: "Blocked",
       instructions: "Do the manual step",
-      url: "https://user:secret@example.test/",
+      url: "https://user:***@example.test/",
     },
   },
   {
