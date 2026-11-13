@@ -67,6 +67,8 @@ export async function update(ui: Page, snapshot: ScribeSnapshot, agentId: string
     markUpdating(ui, job, agentId, (next) => !needsUpdate(next));
     ui.announce(`${snapshot.scribe.title}: updating for this version of Knowledge…`);
   } catch (error) {
+    // Not sent: forget it so a later load asks again.
+    updatesAsked.delete(asked);
     ui.announce(`${snapshot.scribe.title}: the update was not sent. ${ui.errorText(error)}`);
   }
 }

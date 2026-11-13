@@ -89,6 +89,15 @@ describe("scribes catalog", () => {
     expect(prompt).toContain("leave it as it is and go to the last step");
     expect(prompt).toContain("Pass `enabled: true`");
     expect(prompt.endsWith("```text\nEdited run message\n```")).toBe(true);
+    // Only this agent's automations are cleared or declared.
+    expect(prompt).toContain("list automations for this agent (pass `agentId` from Runtime)");
+    expect(prompt).toContain("never remove another agent's automation");
+    expect(prompt).toContain("- agent: this agent's ID from Runtime");
+    // Options the prompt doesn't set are passed on, so re-declaring keeps them.
+    const saved = { model: "provider/model", activeHours: { start: "09:00", end: "17:00" } };
+    expect(
+      repairPrompt("claim-consolidation", { schedule: { kind: "cron" }, saved }, "update"),
+    ).toContain(`exactly as written: \`${JSON.stringify(saved)}\``);
     expect(
       repairPrompt("claim-consolidation", {
         schedule: { kind: "cron", expr: "5 1 * * 2", tz: "UTC" },

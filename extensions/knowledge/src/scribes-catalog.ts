@@ -329,22 +329,31 @@ const numbered = (steps: string[]) =>
 
 /**
  * Steps that declare an ongoing scribe's one automation in this conversation: clear same-key
- * jobs of other conversations (carrying a pause over), add, then check the target. `keep` is a
- * repair's condition for leaving a healthy automation alone.
+ * jobs of other conversations of this agent (carrying a pause over), add, then check the target.
+ * Another agent's automations are never touched. `keep` is a repair's condition for leaving a
+ * healthy automation alone; `saved` is an update's line for the options it carries over.
  */
 // `enabled` is how the added automation's enabled flag is set: setup keeps a pause, repair turns it on.
-function automationSteps(scribe: ScribeDefinition, schedule: string, enabled: string, keep = "") {
+function automationSteps(
+  scribe: ScribeDefinition,
+  schedule: string,
+  enabled: string,
+  keep = "",
+  saved?: string,
+) {
   const key = scribeDeclarationKey(scribe.id);
   return [
-    `With the automations tool, list automations including disabled ones and take those with declaration key \`${key}\`.${keep} Remove each one owned by another conversation, noting whether it was paused. If this conversation owns one whose session target is not \`${SCRIBE_SESSION_TARGET}\`, update its session target to \`${SCRIBE_SESSION_TARGET}\`.`,
+    `With the automations tool, list automations for this agent (pass \`agentId\` from Runtime), including disabled ones, and take those with declaration key \`${key}\` whose recorded \`owner.agentId\` is this agent's ID from Runtime. Leave any with another or missing owner agent unchanged; never remove another agent's automation.${keep} Remove each one owned by another conversation, noting whether it was paused. If this conversation owns one whose session target is not \`${SCRIBE_SESSION_TARGET}\`, update its session target to \`${SCRIBE_SESSION_TARGET}\`.`,
     [
       "Add the automation with the automations tool:",
+      "- agent: this agent's ID from Runtime",
       `- name: Knowledge scribe · ${scribe.title}`,
       `- declaration key: \`${key}\``,
       `- schedule: ${schedule}`,
       `- session target: \`${SCRIBE_SESSION_TARGET}\`, so each run starts in a fresh session of this conversation`,
       "- payload: an agent turn whose message is the run message below, exactly as written inside the fence",
       "- delivery: none; failure alert after 2 failed runs",
+      ...(saved ? [saved] : []),
       `Adding with an existing declaration key updates this conversation's automation in place. ${enabled}`,
     ].join("\n"),
     `Get the automation and check that its session target is \`${SCRIBE_SESSION_TARGET}\` and its session key is this conversation's.`,
@@ -442,16 +451,21 @@ export function setupPrompt(setup: ScribeSetup) {
   ].join("\n");
 }
 
+// The keys of a settings word table, typed: each table is a `Record` over exactly its choices.
+const choicesOf = <K extends string>(words: Record<K, string>) =>
+  // SAFETY: `words` is a Record<K, string> literal, so its own keys are exactly K.
+  Object.keys(words) as K[];
+
 // Every choice of the settings a run message spells out; a scribe without settings has one.
 function settingsChoices(id: ScribeId): ScribeOptions[ScribeId][] {
   if (id === "conversations") {
     return (["active", "all"] as const).flatMap((scope) =>
-      (Object.keys(SINCE_WORDS) as ConversationSince[]).map((since) => ({ scope, since })),
+      choicesOf(SINCE_WORDS).map((since) => ({ scope, since })),
     );
   }
   if (id === "granola") {
-    return (Object.keys(GRANOLA_MEETING_WORDS) as GranolaMeetings[]).flatMap((meetings) =>
-      (Object.keys(GRANOLA_SINCE_WORDS) as GranolaSince[]).map((since) => ({ meetings, since })),
+    return choicesOf(GRANOLA_MEETING_WORDS).flatMap((meetings) =>
+      choicesOf(GRANOLA_SINCE_WORDS).map((since) => ({ meetings, since })),
     );
   }
   return [defaultOptions(id)];
@@ -517,6 +531,11 @@ export const UPDATE_HEADING = "Update the Knowledge scribe";
 export type RepairSource = {
   schedule: { kind: string; expr?: string; tz?: string };
   runMessage?: string;
+  /**
+   * Options saved on the automation that the prompt doesn't set (payload model or thinking,
+   * active hours, pacing, idle-only): re-declaring would drop them, so the turn passes them on.
+   */
+  saved?: Record<string, unknown>;
 };
 
 /**
@@ -547,6 +566,10 @@ export function repairPrompt(
       ? check.current
       : (current.runMessage ?? runPrompt(scribeSetup(id, "ongoing", defaultOptions(id), timezone)));
   const repair = purpose === "repair";
+  const saved =
+    current.saved && Object.keys(current.saved).length
+      ? `- also these options saved on the current automation, exactly as written: \`${JSON.stringify(current.saved)}\``
+      : undefined;
   const healthy = `this conversation owns it, its session target is \`${SCRIBE_SESSION_TARGET}\` with this conversation's session key, its message is the run message below`;
   return [
     `${repair ? REPAIR_HEADING : UPDATE_HEADING} "${scribe.title}" in this conversation. Don't do its work in this turn. ${UNATTENDED}`,
@@ -567,6 +590,7 @@ export function repairPrompt(
         repair
           ? ` If exactly one exists, ${healthy} and it is enabled, leave it as it is and go to the last step.`
           : ` If exactly one exists and ${healthy}, leave it as it is and go to the last step.`,
+        saved,
       ),
       endStep("on", `one sentence: what the ${purpose} changed`),
     ]),

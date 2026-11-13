@@ -474,8 +474,26 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
     )
     .replace("; Timelines retired and left; pages reviewed, changed and left unchanged", "");
   const legacy = { ...reviewJob, sessionKey: "s-review", payload: { kind: "agentTurn" } };
-  const legacyJob = { ...legacy, payload: { kind: "agentTurn", message: earlier } };
+  const legacyJob = {
+    ...legacy,
+    payload: { kind: "agentTurn", message: earlier, thinking: "high" },
+    idleOnly: true,
+  };
   const unedited = fixture({ sessions: reviewSession, jobs: [legacyJob] });
+  // A send that fails is asked again on the next load.
+  const answer = unedited.request.getMockImplementation()!;
+  let failed = false;
+  unedited.request.mockImplementation(async (method, params) => {
+    if (method === "chat.send" && !failed) {
+      failed = true;
+      throw new Error("offline");
+    }
+    return answer(method, params);
+  });
+  await unedited.render();
+  expect(unedited.ui.announce).toHaveBeenCalledWith(
+    expect.stringContaining("the update was not sent"),
+  );
   await unedited.render();
   await unedited.render();
   // The turn's first write (the target) is not the whole update: still updating, not asked again.
@@ -493,6 +511,7 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
   });
   const prompt = String(sent[0]![1]!.message);
   expect(prompt).toMatch(/^Update the Knowledge scribe "Knowledge Consolidation"/);
+  expect(prompt).toContain('exactly as written: `{"thinking":"high","idleOnly":true}`');
   expect(prompt).toContain("Leave `enabled` out");
   expect(prompt.endsWith(`\`\`\`text\n${runMessage}\n\`\`\``)).toBe(true);
   Object.assign(legacyJob, {

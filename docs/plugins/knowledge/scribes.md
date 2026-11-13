@@ -124,7 +124,7 @@ Settings:
 
 Steps:
 1. Call knowledge_status. Go on when the scope is private and writes are enabled; a never-written store reports "unprovisioned" and is created by your first Knowledge call. Otherwise stop: ...
-2. With the automations tool, list automations including disabled ones and take those with declaration key `knowledge:scribe:claim-consolidation`. Remove each one owned by another conversation, ...
+2. With the automations tool, list automations for this agent (pass `agentId` from Runtime), including disabled ones, and take those with declaration key `knowledge:scribe:claim-consolidation` whose recorded `owner.agentId` is this agent's ID from Runtime. Leave any with another or missing owner agent unchanged; never remove another agent's automation. ...
 3. Add the automation with the automations tool:
    - name: Knowledge scribe · Knowledge Consolidation
    - declaration key: `knowledge:scribe:claim-consolidation`
@@ -171,6 +171,11 @@ made directly from the page would drop it. The update:
 - Replaces a run message that an earlier Knowledge generated, unchanged, with
   the new one for the same settings.
 - Keeps the schedule, and keeps a paused scribe paused.
+- Keeps options saved on the automation that the prompt doesn't set, such as a
+  model or thinking override, active hours, pacing and idle-only, by passing
+  them to the re-declaration.
+- Only touches this agent's automations; another agent's scribe with the same
+  declaration key is left alone.
 
 A saved run message that differs from what this version generates is never
 replaced on its own; the page can't tell who changed it. When it still carries

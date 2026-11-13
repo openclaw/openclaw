@@ -86,6 +86,7 @@ export async function repairScribe(
   const prompt = repairPrompt(scribe.id, {
     schedule: job.schedule,
     ...(job.payload?.message ? { runMessage: job.payload.message } : {}),
+    saved: savedOptions(job),
   });
   await host.request("chat.send", {
     sessionKey,
@@ -94,6 +95,25 @@ export async function repairScribe(
     idempotencyKey: `knowledge:scribe:${scribe.id}:repair:${crypto.randomUUID()}`,
   });
   return sessionKey;
+}
+
+// Payload fields a scribe prompt sets itself, or the scheduler derives; the rest are run options.
+const DECLARED_PAYLOAD = new Set(["kind", "message", "toolsAllow", "toolsAllowIsDefault"]);
+
+/** Options saved on the automation that a re-declaration would drop unless passed again. */
+function savedOptions(job: ScribeJob) {
+  const saved: Record<string, unknown> = {};
+  for (const [field, value] of Object.entries(job.payload ?? {})) {
+    if (!DECLARED_PAYLOAD.has(field) && value !== undefined) {
+      saved[field] = value;
+    }
+  }
+  for (const field of ["activeHours", "pacing", "idleOnly"] as const) {
+    if (job[field] !== undefined) {
+      saved[field] = job[field];
+    }
+  }
+  return saved;
 }
 
 // What a refused run means for the operator, by the scheduler's reason.
@@ -164,7 +184,7 @@ export async function updateScribe(
   const sessionKey = await conversation(host, snapshot, agentId);
   const prompt = repairPrompt(
     scribe.id,
-    { schedule: job.schedule, ...(runMessage ? { runMessage } : {}) },
+    { schedule: job.schedule, ...(runMessage ? { runMessage } : {}), saved: savedOptions(job) },
     "update",
   );
   await host.request("chat.send", {

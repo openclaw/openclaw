@@ -46,8 +46,11 @@ export type ScribeJob = {
   sessionKey?: string;
   schedule: { kind: string; expr?: string; tz?: string; everyMs?: number; at?: string };
   failureAlert?: false | { after?: number };
-  /** The run message is the prompt each scheduled run receives. */
-  payload?: { kind: string; message?: string };
+  /** The run message is the prompt each scheduled run receives; other fields are run options. */
+  payload?: { kind: string; message?: string } & Record<string, unknown>;
+  activeHours?: unknown;
+  pacing?: unknown;
+  idleOnly?: boolean;
   createdAtMs?: number;
   state: {
     nextRunAtMs?: number;
