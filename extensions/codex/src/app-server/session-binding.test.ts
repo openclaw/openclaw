@@ -681,6 +681,23 @@ describe("Codex app-server binding store", () => {
     expect(store.read(current)).toBeUndefined();
   });
 
+  it("deletes the later session when a retired generation still stores the old session id", async () => {
+    const { state, store } = await createSqliteFixture("retired-generation-delete");
+    const previous = makeStableSessionIdentity("session-1", "agent:main:telegram:chat-1");
+    const current = { ...previous, sessionId: "session-2" };
+    await setBinding(store, previous, thread("thread-old"));
+    await expect(store.retireSessionGeneration(previous)).resolves.toBe("applied");
+    expect(state.lookup(storeKey(previous))).toEqual(retiredRow(previous.sessionId));
+
+    await expect(
+      store.withSessionDeletion(
+        current,
+        () => {},
+        async () => true,
+      ),
+    ).resolves.toBe(true);
+  });
+
   it("fences a retired in-place generation until the authoritative session store verifies it", async () => {
     const { storePath } = await createSessionFixture("openclaw-codex-reset-reclaim-");
     const { values, store } = createBindingFixture();
