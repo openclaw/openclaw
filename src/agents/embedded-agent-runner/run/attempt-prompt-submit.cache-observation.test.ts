@@ -60,7 +60,9 @@ it("leaves the provider result for its consumer to read", async () => {
     promptActiveSession: async (_prompt, options) => {
       options?.preflightResult?.(true);
       const sent = await activeSession.agent.streamFn(testModel, { messages: [] });
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
       expect(read).not.toHaveBeenCalled();
       await sent.result();
       expect(read).toHaveBeenCalledTimes(1);
