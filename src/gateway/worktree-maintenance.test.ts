@@ -485,6 +485,28 @@ it("admits only one checkout or template removal per minute across cohorts and s
   await vi.waitFor(() => expect(removed).toHaveLength(4));
 });
 
+it("settles overlapping removal and checkpoint waits independently", async () => {
+  await using fixture = maintenanceFixture();
+  const { guard, release } = await fixture.runHeld();
+  await guard.beforeRemoval!(cleanupRecord);
+  const resumed: string[] = [];
+  const removal = guard.beforeRemoval!(cleanupRecord).then(() => resumed.push("removal"));
+  const checkpoint = (async () => {
+    for (let index = 0; index < 8; index++) {
+      await guard.checkpoint!(completedResult());
+    }
+    resumed.push("checkpoint");
+  })();
+  fixture.track(Promise.allSettled([removal, checkpoint]).then(() => {}));
+  await vi.waitFor(() => expect(fixture.clock.armedAtMs).toBe(1_000));
+  await fixture.clock.advanceBy(1_000);
+  await checkpoint;
+  expect(resumed).toEqual(["checkpoint"]);
+  await fixture.clock.advanceBy(59_000);
+  await vi.waitFor(() => expect(resumed).toEqual(["checkpoint", "removal"]));
+  release.resolve(completedResult());
+});
+
 it.each([
   ["checkout", "recover"],
   ["checkout", "stop"],

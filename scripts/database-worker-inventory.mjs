@@ -454,6 +454,32 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/config/sessions/tool-usage.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "readAgentToolUsageStateInDatabase",
+          "writeState",
+          "readAgentToolUsageLiveRunsInDatabase",
+          "retainLiveRun",
+          "pruneAgentToolUsageInDatabase",
+          "readAgentToolUsageInDatabase",
+          "mergeRows",
+          "resetAgentToolUsageInDatabase",
+        ],
+        evidence:
+          "Begin/flush run in session-actor-append.worker.ts inside the transcript actor transaction; prune/flush/reset/import run only in the toolUsage.* handlers that openclaw-agent-execution-operations.ts loads from openclaw-agent-execution-tool-usage.worker.ts in the agent execution worker; status and live-run reads run in tool-usage-read.worker.ts under session-history-read-operation.worker.ts. Host imports are types.",
+      },
+      {
+        tier: "T3",
+        operations: ["deleteAgentToolUsageInDatabase"],
+        evidence:
+          "Only commitSessionAgentPurgeInDatabase calls this deleter, from session-agent-purge.worker.ts or session-agent-purge.ts's native branch, which shares the purge kernels' worker or maintenance custody.",
+      },
+    ],
+  ],
+  [
     "src/agents/bash-durable-process-store.ts",
     [
       {
@@ -3585,6 +3611,7 @@ const workerModules = new Set([
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
   "src/skills/workshop-changes/changes.kernel.ts", // changes.worker.ts owns append/list SQL through the shared-state registry.
   "src/skills/runtime/skill-usage.kernel.ts", // skill-usage.worker.ts owns read/record SQL; host imports are type-only.
+  "src/config/sessions/tool-usage-read.worker.ts", // Only session-history-read-operation.worker.ts imports this module, for agent-tool-usage and agent-tool-usage-import reads.
   "src/config/sessions/conversation-delivery-store.kernel.ts", // Agent execution registry writes and session transcript worker reads only.
   "extensions/memory-core/src/memory-entry-origin-reads.ts", // Memory search worker origin-read commands only.
   "extensions/memory-core/src/memory-entry-origins-delete.ts", // Memory origin worker delete command only.

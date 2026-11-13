@@ -16,9 +16,9 @@ import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createInitializationContext } from "../chat-application-context.test-support.ts";
+import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { BrowserTabCardHost } from "./browser-tab-card.tsx";
-import * as inlineCommandPresentation from "./chat-inline-command-presentation.tsx";
 import { ActivityGroup } from "./chat-message-group-view.tsx";
 import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 
@@ -774,7 +774,7 @@ describe("browser tab card", () => {
       presentation: "standalone",
       options: {
         showReasoning: false,
-        inlineCommands: inlineCommandPresentation,
+        inlineCommands: await inlineCommandPresentation(),
         bubbleMode: true,
         isToolMessageExpanded: (id) => expanded.has(id),
         onToggleToolMessageExpanded: (id) => {
@@ -818,7 +818,7 @@ describe("browser tab card", () => {
         host,
         {
           groups: [browserResultGroup(messages)],
-          options: { showReasoning: false, inlineCommands: inlineCommandPresentation },
+          options: { showReasoning: false, inlineCommands: await inlineCommandPresentation() },
           presentation: "standalone",
         },
         gateway.context,
