@@ -1,5 +1,7 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import type { SessionSystemPromptReport } from "../../../src/config/sessions/session-system-prompt-report.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiFrameLayout } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
@@ -139,6 +141,69 @@ suite.define(() => {
       await summary.getByRole("button", { name: "Compact", exact: true }).waitFor();
       expect(await summary.isVisible()).toBe(true);
       expect(await draft.inputValue()).toBe("Keep this unsent draft");
+    });
+  });
+
+  it("separates the latest run's cost from the session's lifetime total", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
+      // A long cached session: each run is cheap, but the session has spent far more.
+      const session = {
+        key: sessionKey,
+        sessionId: "context-instance",
+        kind: "direct" as const,
+        label: "Context breakdown",
+        model: "demo-model",
+        modelProvider: "example",
+        contextTokens: 1000000,
+        totalTokens: 534677,
+        totalTokensFresh: true,
+        inputTokens: 4,
+        outputTokens: 9,
+        estimatedCostUsd: 0.116,
+      };
+      const usageRow = (totalCost: number, extra: object = {}) => ({
+        key: sessionKey,
+        sessionId: "context-instance",
+        contextWeight: report,
+        usage: { totalCost, missingCostEntries: 0 },
+        ...extra,
+      });
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "sessions.usage"],
+        sessionKey,
+        sessions: [session],
+        agentModel: "example/demo-model",
+        models: [
+          { id: "demo-model", provider: "example", name: "Demo model", contextWindow: 1000000 },
+        ],
+        historyMessages: [{ role: "assistant", content: "Ready when you are." }],
+        methodResponses: { "sessions.usage": { sessions: [usageRow(99.14)] } },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await gateway.waitForRequest("sessions.messages.subscribe");
+      await page.locator(".context-ring").filter({ visible: true }).click();
+      const summary = page.locator(".context-usage__popover").filter({ visible: true });
+      const total = summary.locator('[data-chat-session-cost="true"]');
+      await total.waitFor();
+      const latest = summary.locator(".context-usage__latest").first();
+      expect(await latest.textContent()).toMatch(/Latest run.*Cost\s*\$0\.116/);
+      expect(await total.textContent()).toMatch(/Session total\s*Cost\s*\$99\.14/);
+      const request = await gateway.waitForRequest("sessions.usage");
+      expect(request.params).toMatchObject({ key: sessionKey, range: "all", groupBy: "instance" });
+      expect(request.params).not.toHaveProperty("startDate");
+      await summary.screenshot({
+        path: path.join(createControlUiE2eArtifactDir("session-total-cost"), "popover.png"),
+      });
+
+      // The next run refreshes the lifetime total; a still-summarizing total is a lower bound.
+      await gateway.setMethodResponse("sessions.usage", {
+        sessions: [usageRow(99.31, { computing: true })],
+      });
+      const next = { ...session, totalTokens: 536000, estimatedCostUsd: 0.17, updatedAt: 2 };
+      await gateway.setSessionsListResponse({ sessions: [next] });
+      await gateway.emitGatewayEvent("sessions.changed", { ...next, sessionKey });
+      await expect.poll(() => total.textContent()).toMatch(/≥\s*\$99\.31/);
+      expect(await latest.textContent()).toContain("$0.17");
     });
   });
 
