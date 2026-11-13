@@ -1,8 +1,5 @@
 // Shared state database target for the generic copy-and-swap fallback.
-import fs from "node:fs";
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { VERSION } from "../version.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { migrateSingletonStateFoldInV12 } from "./openclaw-state-db-schema-v12-foldin.js";
@@ -13,12 +10,12 @@ import { getOpenClawStateFeatureSchemaSql } from "./openclaw-state-feature-schem
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
-  buildSqliteByCopy,
+  buildSqliteWithFoldIns,
+  type SqliteFoldInStep,
   type SqliteSwapMap,
   type SqliteSwapReport,
   type SqliteSwapTarget,
 } from "./sqlite-copy-swap.js";
-import { copySqliteFile, normalizeSqliteText } from "./state-upgrade-tree.js";
 
 const CANONICAL_TABLES = new Set(
   [...OPENCLAW_STATE_SCHEMA_SQL.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)].map(
@@ -31,13 +28,10 @@ const CANONICAL_TABLES = new Set(
  * private scratch copy before the name-matched copy; each one that throws is
  * reported and its rows are set aside instead.
  */
-const STATE_FOLD_IN_STEPS = [
+const STATE_FOLD_IN_STEPS: readonly SqliteFoldInStep[] = [
   { id: "v12-singleton-fold-in", run: migrateSingletonStateFoldInV12 },
   { id: "v13-json-canonical-rows", run: migrateJsonCanonicalWideRowsV13 },
-] as const satisfies ReadonlyArray<{
-  id: string;
-  run: (db: DatabaseSync, fromVersion: number) => boolean;
-}>;
+];
 
 /**
  * Meaning changes between released shared-state schemas (2026.7.1 to 2026.11.3)
@@ -112,44 +106,17 @@ export function createStateSwapTarget(): SqliteSwapTarget {
   };
 }
 
-/**
- * Generic rebuild of the shared state database. Row moves between tables run on a
- * private scratch copy first, so the source file is never written.
- */
+/** Generic rebuild of the shared state database. The source file is never written. */
 export function buildStateDatabaseByCopy(
   sourcePath: string,
   outPath: string,
   scratchDir: string,
 ): { report: SqliteSwapReport; foldInFailures: string[] } {
-  const { DatabaseSync } = requireNodeSqlite();
-  const scratch = path.join(scratchDir, "state-fold-in.sqlite");
-  copySqliteFile(sourcePath, scratch);
-  const foldInFailures: string[] = [];
-  try {
-    const db = new DatabaseSync(scratch);
-    try {
-      const fromVersion = Number(
-        (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
-      );
-      db.exec("PRAGMA foreign_keys = OFF");
-      normalizeSqliteText(db);
-      for (const step of STATE_FOLD_IN_STEPS) {
-        try {
-          db.exec("SAVEPOINT fold_in");
-          step.run(db, fromVersion);
-          db.exec("RELEASE fold_in");
-        } catch (error) {
-          db.exec("ROLLBACK TO fold_in; RELEASE fold_in");
-          foldInFailures.push(`${step.id}: ${(error as Error).message}`);
-        }
-      }
-    } finally {
-      db.close();
-    }
-    return { report: buildSqliteByCopy(createStateSwapTarget(), scratch, outPath), foldInFailures };
-  } finally {
-    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
-      fs.rmSync(`${scratch}${suffix}`, { force: true });
-    }
-  }
+  return buildSqliteWithFoldIns(
+    createStateSwapTarget(),
+    STATE_FOLD_IN_STEPS,
+    sourcePath,
+    outPath,
+    scratchDir,
+  );
 }

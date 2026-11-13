@@ -2,7 +2,7 @@
 // per-table row conservation against the untouched source files.
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 
 export type ShadowTarget = { kind: "state" | "agent"; path: string };
 
@@ -16,8 +16,7 @@ export class ChainStepError extends Error {
 }
 
 function openReadOnly(pathname: string): DatabaseSync {
-  const { DatabaseSync } = requireNodeSqlite();
-  return new DatabaseSync(pathname, { readOnly: true });
+  return openNodeSqliteDatabase(pathname, { readOnly: true });
 }
 
 // Tables the shipped chain retires or merges into other tables or files. Any

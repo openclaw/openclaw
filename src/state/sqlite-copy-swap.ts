@@ -6,9 +6,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue, SQLOutputValue } from "node:sqlite";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { castValue, jsonRow } from "./sqlite-copy-swap-values.js";
-import { fsyncPath } from "./state-upgrade-tree.js";
+import { vacuumSqliteInto, fsyncPath, normalizeSqliteText } from "./state-upgrade-tree.js";
 
 /** Meaning changes that a name-matched copy cannot express. Keep it small. */
 export type SqliteSwapMap = {
@@ -155,7 +155,6 @@ type Source = { db: DatabaseSync; close: () => void };
  * roll back, so that case reads a private copy instead.
  */
 function openSource(pathname: string): Source {
-  const { DatabaseSync } = requireNodeSqlite();
   let readPath = pathname;
   let scratchDir: string | undefined;
   if (fs.existsSync(`${pathname}-journal`) && fs.statSync(`${pathname}-journal`).size > 0) {
@@ -164,7 +163,7 @@ function openSource(pathname: string): Source {
     fs.copyFileSync(pathname, readPath);
     fs.copyFileSync(`${pathname}-journal`, `${readPath}-journal`);
   }
-  const db = new DatabaseSync(readPath, { readOnly: !scratchDir });
+  const db = openNodeSqliteDatabase(readPath, { readOnly: !scratchDir });
   db.exec("PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;");
   return {
     db,
@@ -514,7 +513,6 @@ export function buildSqliteByCopy(
   sourcePath: string,
   outPath: string,
 ): SqliteSwapReport {
-  const { DatabaseSync } = requireNodeSqlite();
   for (const suffix of ["", "-journal", "-wal", "-shm"]) {
     fs.rmSync(`${outPath}${suffix}`, { force: true });
   }
@@ -523,7 +521,7 @@ export function buildSqliteByCopy(
   try {
     const fromVersion = readUserVersion(source.db);
     const sourceTables = readTables(source.db);
-    built = new DatabaseSync(outPath);
+    built = openNodeSqliteDatabase(outPath);
     built.exec(
       // A crash discards this file, so durability waits for the final fsync. The
       // in-memory journal still undoes a failed statement.
@@ -633,4 +631,50 @@ function setAsideTable(context: CopyContext, table: TableInfo): SqliteSwapTableR
     context.setAside.push({ table: table.name, reason: "table removed", row: jsonRow(row) });
   }
   return { table: table.name, target: "", source: count, copied: 0, setAside: count };
+}
+
+/** A shipped step that moves rows between tables, run on a private scratch copy. */
+export type SqliteFoldInStep = {
+  id: string;
+  run: (db: DatabaseSync, fromVersion: number) => unknown;
+};
+
+/**
+ * Run shipped row-moving steps on a private scratch copy, then rebuild from it.
+ * A step that throws is rolled back and reported; its rows are set aside instead.
+ */
+export function buildSqliteWithFoldIns(
+  target: SqliteSwapTarget,
+  steps: readonly SqliteFoldInStep[],
+  sourcePath: string,
+  outPath: string,
+  scratchDir: string,
+): { report: SqliteSwapReport; foldInFailures: string[] } {
+  const scratch = path.join(scratchDir, `${path.basename(outPath)}.fold-in`);
+  vacuumSqliteInto(sourcePath, scratch);
+  const foldInFailures: string[] = [];
+  try {
+    const db = openNodeSqliteDatabase(scratch);
+    try {
+      const fromVersion = readUserVersion(db);
+      normalizeSqliteText(db);
+      for (const step of steps) {
+        try {
+          db.exec("SAVEPOINT fold_in");
+          step.run(db, fromVersion);
+          db.exec("RELEASE fold_in");
+        } catch (error) {
+          db.exec("ROLLBACK TO fold_in; RELEASE fold_in");
+          foldInFailures.push(`${step.id}: ${(error as Error).message}`);
+        }
+      }
+    } finally {
+      db.close();
+    }
+    return { report: buildSqliteByCopy(target, scratch, outPath), foldInFailures };
+  } finally {
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+      fs.rmSync(`${scratch}${suffix}`, { force: true });
+    }
+  }
 }

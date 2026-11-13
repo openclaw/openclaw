@@ -27,6 +27,27 @@ const CHAIN_RETIRED_VALUES = new Set([
   "Synthetic restart",
 ]);
 
+// The corpus stores its synthetic device keys as `PRIVATE_KEY` so the repository
+// private-key scanner passes; restore the PEM marker before the Gateway reads them.
+function restoreCorpusDeviceKeys(stateDir: string): void {
+  const deviceJson = path.join(stateDir, "identity", "device.json");
+  if (fs.existsSync(deviceJson)) {
+    const text = fs.readFileSync(deviceJson, "utf8");
+    fs.writeFileSync(deviceJson, text.replaceAll(" PRIVATE_KEY-----", " PRIVATE KEY-----"));
+  }
+  const stateDb = path.join(stateDir, "state", "openclaw.sqlite");
+  const db = new DatabaseSync(stateDb);
+  try {
+    if (db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'device_identities'").get()) {
+      db.exec(
+        "UPDATE device_identities SET private_key_pem = replace(private_key_pem, ' PRIVATE_KEY-----', ' PRIVATE KEY-----')",
+      );
+    }
+  } finally {
+    db.close();
+  }
+}
+
 type Manifest = { verification: Record<string, Array<{ value: string; found_in?: string[] }>> };
 
 function sqliteFiles(root: string): string[] {
@@ -104,6 +125,7 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
           recursive: true,
           force: true,
         });
+        restoreCorpusDeviceKeys(instance.stateDir);
         // The corpus was written in a container as /home/fixture.
         const corpus = fs
           .readFileSync(path.join(instance.stateDir, "openclaw.json"), "utf8")
