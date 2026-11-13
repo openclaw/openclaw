@@ -596,6 +596,8 @@ struct OpenClawApp: App {
             .removeObject(forKey: "share.defaultInstruction")
         // Settings used to persist pasted setup codes (which carry Gateway credentials) here.
         UserDefaults.standard.removeObject(forKey: "gateway.setupCode")
+        // Retired unattended deep-link key; no build reads it.
+        UserDefaults.standard.removeObject(forKey: "deeplink.agent.key")
         OpenClawType.installUIKitAppearance()
         let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false, restoringSavedGatewayRoute: true)
         #if DEBUG

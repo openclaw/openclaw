@@ -4,9 +4,14 @@ import { pendingSessionsYield } from "../chat-sessions-yield.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
 import { createProps, makeMessage } from "../chat-thread.test-support.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
-import { projectTranscriptChain } from "./chat-transcript-message-index.ts";
+import { projectTranscriptChain, projectTranscriptIndex } from "./chat-transcript-message-index.ts";
 
 const sessionKey = "agent:main:dashboard:0f6d5a1c-5a9e-4c1e-9b1a-2f3c4d5e6f70";
+const abortedSession = (lastRunId: string) => ({
+  key: sessionKey,
+  lastRunId,
+  abortedLastRun: true,
+});
 
 const chatItems = (overrides: Partial<BuildChatItemsProps>) =>
   buildChatItems(createProps({ sessionKey, ...overrides }));
@@ -30,6 +35,145 @@ const framesOf = (chain: Chain) =>
   chain.transcriptItems.filter((item) => item.kind === "agent-run-frame");
 const messagesIn = (items: readonly Parameters<typeof chatItemGroups>[0][]) =>
   items.flatMap(chatItemGroups).flatMap((group) => group.messages.map(({ message }) => message));
+
+describe("tool media and operation receipts", () => {
+  it.each([
+    { label: "published", text: "Published example/app: https://github.com/example/app/pull/1" },
+    { label: "failed", text: "Publication failed. Reconnect GitHub." },
+  ])("preserves a delayed $label report even without a subsequent answer", ({ text }) => {
+    for (const answered of [false, true]) {
+      const report = makeMessage("late-report", 3, {
+        role: "assistant",
+        runId: "publish-run",
+        provider: "openclaw",
+        model: "gateway-publication",
+        stopReason: "stop",
+        content: text,
+      });
+      const messages = [
+        makeMessage("request", 1, { role: "user", runId: "publish-run", content: "Publish this." }),
+        ...(answered
+          ? [
+              makeMessage("answer", 2, {
+                role: "assistant",
+                runId: "publish-run",
+                phase: "final_answer",
+                stopReason: "stop",
+                content: "Publication has started.",
+              }),
+            ]
+          : []),
+        report,
+      ];
+      for (const history of [messages, structuredClone(messages)]) {
+        const chain = projectHistory(history, { messages: history, persistCommentary: false });
+        const visible = chain.transcriptItems.flatMap((item) =>
+          item.kind === "agent-run-frame"
+            ? item.parts.filter((part) => part.kind === "group")
+            : item.kind === "group"
+              ? [item]
+              : [],
+        );
+        expect(messagesIn(visible)).toContainEqual(report);
+      }
+    }
+  });
+
+  it.each([0, 150, 300])(
+    "keeps a completed media reply together after %s earlier turns",
+    (earlierTurns) => {
+      const earlier = Array.from({ length: earlierTurns }, (_, index) => [
+        makeMessage("prior-request-" + index, index * 2, {
+          role: "user",
+          content: "Earlier request",
+          runId: "prior-" + index,
+        }),
+        makeMessage("prior-answer-" + index, index * 2 + 1, {
+          role: "assistant",
+          content: "Earlier answer",
+          stopReason: "stop",
+          runId: "prior-" + index,
+        }),
+      ]).flat();
+      let seq = earlier.length;
+      const entry = (id: string, message: Record<string, unknown>) =>
+        makeMessage(id, ++seq, { runId: "media-run", ...message });
+      const inspect = (id: string) => [
+        entry(id, {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id, name: "view_image", arguments: {} }],
+        }),
+        entry(id + "-result", {
+          role: "toolResult",
+          toolCallId: id,
+          toolName: "view_image",
+          content: [
+            { type: "image", artifactId: id + "-image", omitted: true, mimeType: "image/png" },
+          ],
+        }),
+      ];
+      const active = [
+        ...earlier,
+        entry("request", { role: "user", content: "Check both screenshots." }),
+        ...Array.from({ length: 40 }, (_, index) =>
+          entry("read-" + index, {
+            role: "toolResult",
+            toolCallId: "read-" + index,
+            toolName: "read",
+            content: "Checked source file.",
+          }),
+        ),
+        ...inspect("before"),
+        entry("receipt", {
+          role: "assistant",
+          stopReason: "stop",
+          content: "Published preview.",
+          provider: "openclaw",
+          model: "gateway-publication",
+        }),
+        ...inspect("after"),
+      ];
+      const answer = entry("answer", {
+        role: "assistant",
+        phase: "final_answer",
+        stopReason: "stop",
+        content: [
+          { type: "text", text: "Verified preview." },
+          { type: "image", artifactId: "delivered-image", omitted: true, mimeType: "image/png" },
+        ],
+      });
+      const working = framesOf(
+        projectHistory(active, {
+          messages: active,
+          runWorking: true,
+          activeRunId: "media-run",
+          runId: "media-run",
+        }),
+      ).at(-1)!;
+      expect(working.outcome.kind).toBe("active");
+      for (const messages of [[...active, answer], structuredClone([...active, answer])]) {
+        const chain = projectHistory(messages, { messages });
+        const frame = framesOf(chain).at(-1)!;
+        expect(frame.outcome.kind).toBe("completed");
+        expect(frame.parts.map((part) => part.kind)).toEqual(["work-group", "group"]);
+        expect(JSON.stringify(messagesIn([frame.parts[0]!]))).toContain("before-image");
+        expect(JSON.stringify(messagesIn([frame.parts[0]!]))).toContain("after-image");
+        expect(JSON.stringify(messagesIn([frame.parts[1]!]))).toContain("delivered-image");
+        const rows = projectTranscriptIndex(chain, new Map(), {
+          assistantName: "Agent",
+          currentAgentId: "main",
+        }).rows.filter(
+          (row) =>
+            row.kind === "item" &&
+            row.item.kind === "agent-run-frame" &&
+            row.item.runId === "media-run",
+        );
+        expect(rows).toHaveLength(earlierTurns ? 2 : 1);
+      }
+    },
+  );
+});
 
 describe("PR preparation handoff", () => {
   const prepareCall = {
@@ -193,7 +337,8 @@ describe("PR preparation handoff", () => {
         },
         ...messages.slice(3),
       ];
-      const frame = framesOf(projectHistory(entries, { messages: entries, showToolCalls }))[0];
+      const options = { messages: entries, showToolCalls, session: abortedSession("prepare-run") };
+      const frame = framesOf(projectHistory(entries, options))[0];
       expect(frame?.outcome.kind).toBe("interrupted");
       if (!showToolCalls) {
         expect(JSON.stringify(messagesIn([frame!]))).not.toContain("yielded");
@@ -258,7 +403,7 @@ describe("workspace publication handoff", () => {
     arguments: { action: "publish", workspacePath: "/work/app" },
   };
   const report =
-    "Published example/app branch fix/menus: https://github.com/example/app/pull/2 Using @bot (Agent override).";
+    "Published example/app branch fix/menus: https://github.com/example/app/pull/2 Using @bot (Own account).";
   const messages = [
     makeMessage("publish-request", 1, {
       role: "user",
@@ -386,7 +531,8 @@ describe("background media handoff", () => {
     { name: "unrelated tool", details: receipt, tool: "exec" },
   ])("does not hide an unfinished run with $name", ({ details, isError, tool }) => {
     const messages = mediaHistory(tool ?? "image_generate", details, isError);
-    expect(framesOf(projectHistory(messages, { messages }))[0]?.outcome.kind).toBe("interrupted");
+    const chain = projectHistory(messages, { messages, session: abortedSession("media-run") });
+    expect(framesOf(chain)[0]?.outcome.kind).toBe("interrupted");
   });
 
   it.each(["aborted", "error", "timeout"])("preserves a real %s after acceptance", (stopReason) => {

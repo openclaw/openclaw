@@ -502,7 +502,8 @@ export function buildCliRunResult(params: {
   usedHistoryPrompt: boolean;
   userTurnHandled: boolean;
   sessionBindingDisabled: boolean;
-  preparedContextAgentMeta: { contextTokens?: number };
+  /** Turn facts settled before the result: context size and the transcript-priced cost. */
+  preparedContextAgentMeta: { contextTokens?: number; costUsd?: number };
 }): EmbeddedAgentRunResult {
   const {
     assistantTranscriptOwned,

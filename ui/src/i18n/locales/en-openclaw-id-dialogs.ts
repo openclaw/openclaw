@@ -1,7 +1,7 @@
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
-// Strings of the OpenClaw ID dialogs (Make reachable, Your devices). They load
+// Strings of the OpenClaw ID dialogs (Make reachable, Your devices, device sign-in). They load
 // with the dialogs, not with the sidebar, and merge into the openclawId namespace.
 const enOpenClawIdDialogs = {
   openclawId: {
@@ -76,6 +76,8 @@ const enOpenClawIdDialogs = {
     step_reserve: "Setting up {host}",
     step_relay: "Connecting {name}",
     stepRelayOffline: "Remote access is not connected yet. This claw will keep trying.",
+    stepProfileNotLinked:
+      "Your OpenClaw ID isn't linked to your profile yet. Link it in Settings → Profile.",
     doneBody: "Your claw address is https://{host}. Keep your recovery kit safe.",
     publicationPending: "Setup is still in progress.",
     doneNeedsLinkCode:
@@ -109,6 +111,10 @@ const enOpenClawIdDialogs = {
       "Follow-up setup failed. Run {command} to check remote access. Do not move to new keys again.",
     regenExpiry: "End this browser's owner access after (days)",
     regenExpiryHint: "Leave empty for no expiry.",
+    deviceSignInTitle: "Sign in with OpenClaw ID",
+    deviceSignInBody: "Open OpenClaw ID, sign in, and confirm this code:",
+    deviceSignInOpen: "Open OpenClaw ID",
+    deviceSignInWaiting: "Waiting for you to confirm…",
   },
 } satisfies TranslationMap;
 

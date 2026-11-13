@@ -212,7 +212,7 @@ describe("session-entry compaction budgeting", () => {
   });
 
   it("omits private shell history from a genuine split-turn summary prefix", () => {
-    const latestRequest = `request-start ${"x".repeat(1_000)} request-end`;
+    const latestRequest = `request-start ${"x".repeat(1_000)} request-end token=FAKEtok12345`;
     const entries: SessionTreeEntry[] = [
       userEntry(latestRequest, 0),
       assistantEntry("earlier work", 1, 10),
@@ -235,7 +235,7 @@ describe("session-entry compaction budgeting", () => {
     });
     expect(preparation.latestUnresolvedUserRequest).toHaveLength(800);
     expect(preparation.latestUnresolvedUserRequest).toMatch(
-      /^request-start .+\[\.\.\. latest user request truncated \.\.\.\].+ request-end$/s,
+      /^request-start .+\[\.\.\. latest user request truncated \.\.\.\].+ request-end \[redacted\]$/s,
     );
     expect(preparation).not.toHaveProperty("splitTurnCompleted");
     expect(JSON.stringify(preparation)).not.toContain("private output");

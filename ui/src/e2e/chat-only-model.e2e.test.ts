@@ -72,10 +72,9 @@ suite.define(() => {
     const main = page.getByRole("main");
     const composer = main.locator(".agent-chat__composer-shell");
     const picker = composer.locator('[data-chat-model-select="true"]');
-    const badge = picker.locator(".chat-controls__model-capability-badge");
 
     await pollAttribute(picker, "data-chat-model-tools").toBe("unavailable");
-    await expect.poll(async () => (await badge.textContent())?.trim()).toBe("No tools");
+    await pollText(picker).not.toContain("No tools");
     await pollAttribute(picker, "aria-label").toContain("No tools");
 
     await picker.click();
@@ -96,7 +95,7 @@ suite.define(() => {
     const patch = await gateway.waitForRequest("sessions.patch");
     expect(patch.params).toMatchObject({ key: sessionKey, model: "openai/gpt-5.5" });
     await pollAttribute(picker, "data-chat-model-tools").toBe("available");
-    await pollCount(badge).toBe(0);
+    await pollText(picker).not.toContain("No tools");
 
     const pickerDetails = composer.locator("details.chat-controls__model-picker");
     if (!(await pickerDetails.evaluate((element: HTMLDetailsElement) => element.open))) {
@@ -104,6 +103,7 @@ suite.define(() => {
     }
     await selectChatModelOption(composer, "lmstudio/qwen3-8b");
     await pollAttribute(picker, "data-chat-model-tools").toBe("unavailable");
+    await pollText(picker).not.toContain("No tools");
     if (await pickerDetails.evaluate((element: HTMLDetailsElement) => element.open)) {
       await picker.click();
     }

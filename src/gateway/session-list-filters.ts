@@ -474,11 +474,8 @@ export function filterSessionEntries(
     ) {
       continue;
     }
-    if (agentFilter && storeKey !== "global") {
-      const ownerAgentId = normalizeAgentId(target.agentId);
-      if (ownerAgentId !== agentFilter) {
-        continue;
-      }
+    if (agentFilter && storeKey !== "global" && target.agentId !== agentFilter) {
+      continue;
     }
     if (selection.isPhantom) {
       continue;

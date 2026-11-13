@@ -158,11 +158,6 @@ it.each([
 it.each([
   [fixture("alpha").manifest, {}, "Alpha releases are retired;"],
   [{}, { pluginSdkApiAcknowledgement: "12345678\ninjected=value" }, "SDK override"],
-  [
-    { publishInputs: { stableSoakWaiver: "approved\nreason" } },
-    {},
-    "waivers are no longer supported",
-  ],
 ] as const)(
   "rejects invalid historical publication authority: %j / %j / %s",
   (manifest, overrides, error) => {

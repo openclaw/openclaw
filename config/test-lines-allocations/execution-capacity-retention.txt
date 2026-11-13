@@ -1,3 +1,0 @@
-# Completed tasks must collect while scheduled request contexts remain live;
-# one nine-run regression covers success, suspension/reacquisition, and failure.
-50

@@ -499,7 +499,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
           entry,
         });
     }
-    for (const wrapped of active) {
+    for (const [index, wrapped] of active.entries()) {
       try {
         const entryContext = { ...context, entry: wrapped.entry, phase: outcome.phase };
         if (wrapped.binding !== undefined) {
@@ -519,6 +519,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
               request,
               approvalKind,
               payload: result.payload,
+              remainingEntries: active.slice(index + 1).map((pending) => pending.entry),
             });
             break;
           case "delete":

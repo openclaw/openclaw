@@ -15,8 +15,8 @@ import { clearActivePluginRegistry, setActivePluginRegistry } from "../../plugin
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { withAuthorizedPromptBuildTurn } from "../authorized-prompt-build.js";
 import { forgetPromptBuildDrainCacheForRun } from "../plugin-turn-context.js";
+import { withAgentPromptProjects } from "../prompt-projects.js";
 import { awaitAgentHarnessAgentEndHook } from "./lifecycle-hook-helpers.js";
 import { resolveAgentHarnessBeforePromptBuildResult as buildBase } from "./prompt-compaction-hook-helpers.js";
 
@@ -184,30 +184,45 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect(retained[0]).not.toBe(retained[1]);
     expect(messages[0]!.content[0]!.arguments.nested.value).toBe("original");
   });
-  it("reports continuity once per logical turn across fallback candidates", async () => {
+  it("re-runs authorized enrichment for each fallback candidate of one turn", async () => {
+    // Synthetic stand-in for a recall owner that checks live eligibility per model.
+    const eligibleModels = new Set(["primary", "fallback"]);
     const seen: unknown[] = [];
     installHooks(
       promptHook(
-        (event) => {
-          seen.push((event as { continuity?: unknown }).continuity);
-          return { prependContext: `restored ${seen.length}` };
+        (event, ctx) => {
+          const { modelId } = ctx as PluginHookAgentContext;
+          seen.push([modelId, (event as { continuity?: unknown }).continuity]);
+          return eligibleModels.has(modelId ?? "")
+            ? { prependContext: `private recall for ${modelId}` }
+            : undefined;
         },
         { requiresToolAuthority: true },
       ),
     );
-    const build = (state: "resumed" | "invalidated") =>
+    const build = (modelId: string, state: "resumed" | "invalidated") =>
       buildPrompt({
+        ctx: { sessionKey: "agent:main:main", sessionId: "session-1", modelId },
         toolAuthority: toolAuthority(),
         continuity: { state, history: "none" },
       });
-    const prompts = await withAuthorizedPromptBuildTurn(async () => [
-      (await build("invalidated")).prompt,
-      (await build("invalidated")).prompt,
+    const prompts = await withAgentPromptProjects(async () => {
+      const primary = (await build("primary", "resumed")).prompt;
+      const fallback = (await build("fallback", "invalidated")).prompt;
+      // Eligibility revoked between attempts: the next candidate gets no enrichment.
+      eligibleModels.clear();
+      return [primary, fallback, (await build("fallback", "invalidated")).prompt];
+    });
+    expect(prompts).toEqual([
+      "private recall for primary\n\nhello",
+      "private recall for fallback\n\nhello",
+      "hello",
     ]);
-    expect(prompts).toEqual(["restored 1\n\nhello", "restored 1\n\nhello"]);
-    expect(seen).toEqual([{ state: "invalidated", history: "none" }]);
-    expect((await build("resumed")).prompt).toBe("restored 2\n\nhello");
-    expect(seen[1]).toEqual({ state: "resumed", history: "none" });
+    expect(seen).toEqual([
+      ["primary", { state: "resumed", history: "none" }],
+      ["fallback", { state: "invalidated", history: "none" }],
+      ["fallback", { state: "invalidated", history: "none" }],
+    ]);
   });
   it("preserves registration chaining while isolating prepare and authorized dispatches", async () => {
     const messages = [{ role: "user", content: [{ type: "text", text: "original" }] }];

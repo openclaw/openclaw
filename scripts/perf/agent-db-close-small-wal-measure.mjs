@@ -4,12 +4,16 @@
  *   --mode seed --state-dir .local/close-fixture --rows 1000000 --payload-bytes 36864
  * Measure: node --expose-gc --import ./scripts/tsx.mjs scripts/perf/agent-db-close-small-wal-measure.mjs
  *   --root .local/close-fixture --worker --scatter --shared-reader --samples 5
+ * Add --shutdown --history-readers to fence admission with worker leases/readers held.
+ * --database selects the agent file inside a synthetic team-shape fixture root.
+ * A cloned fixture without verification receives a real FULL check before sampling.
  * Run unchanged baseline/candidate sources serially in AB/BA order, plus A/A controls.
  * --allocation samples main-isolate JS only; process CPU includes workers, not child processes.
  * Native pragma tracing includes worker retirement. --profile records main-isolate CPU.
- * Acceptance: eliminate the shared-reader busy wait, preserve rows/seals, no CPU/allocation regression.
+ * A fix must reproduce its baseline wait, preserve rows/seals, and avoid CPU/allocation regressions.
  * --arm planner measures already-bounded planner work separately; it is not part of normal close.
- * Warm filesystem caches; no full Gateway, cold-cache, btrfs or production attribution claim.
+ * Warm filesystem caches; this is the shutdown storage owner, not a full Gateway.
+ * A btrfs fixture covers btrfs only on the measured host; production attribution needs its trace.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -25,6 +29,7 @@ import { install, labels } from "./agent-db-close-small-wal-trace.mjs";
 const { values } = parseArgs({
   options: {
     root: { type: "string" },
+    database: { type: "string", default: "agent.sqlite" },
     arm: { type: "string", default: "close" },
     mib: { type: "string", default: "28" },
     samples: { type: "string", default: "5" },
@@ -33,6 +38,8 @@ const { values } = parseArgs({
     scatter: { type: "boolean", default: false },
     worker: { type: "boolean", default: false },
     "shared-reader": { type: "boolean", default: false },
+    shutdown: { type: "boolean", default: false },
+    "history-readers": { type: "boolean", default: false },
   },
 });
 assert(["close", "truncate", "passive", "pinned", "planner", "paired"].includes(values.arm));
@@ -40,18 +47,25 @@ assert(globalThis.gc, "Run with --expose-gc");
 assert(Number.isSafeInteger(Number(values.samples)) && Number(values.samples) > 0);
 assert(Number.isFinite(Number(values.mib)) && Number(values.mib) > 0 && Number(values.mib) <= 1024);
 assert(values.root, "--root must name a synthetic derived-index-admission seed");
-const root = path.resolve(values.root);
-assert(fs.existsSync(path.join(root, "seed-proof.json")), "Only a synthetic seed is accepted");
+const root = fs.realpathSync(values.root);
+const databasePath = fs.realpathSync(path.resolve(root, values.database));
+assert(databasePath.startsWith(`${root}${path.sep}`), "--database must stay in the synthetic root");
+assert(
+  fs.existsSync(path.join(root, "seed-proof.json")) ||
+    fs.existsSync(path.join(root, "team-shape-summary.json")),
+  "Only a synthetic seed is accepted",
+);
 process.env.OPENCLAW_STATE_DIR = root;
 process.env.OPENCLAW_LOG_LEVEL = "silent";
 const sourceUrl = (p) => pathToFileURL(path.resolve(p)).href;
 const traceBuffer = new SharedArrayBuffer((2 + 2048 * 6) * 4);
 const traceView = new Int32Array(traceBuffer);
 const preload = sourceUrl("scripts/perf/agent-db-close-small-wal-trace.mjs");
-install(traceBuffer, root);
+install(traceBuffer, root, databasePath);
 Object.assign(globalThis, {
   __agentCloseMeasureTrace: traceBuffer,
   __agentCloseMeasureRoot: root,
+  __agentCloseMeasureDatabase: databasePath,
   __agentCloseMeasurePreload: preload,
 });
 registerHooks({
@@ -62,7 +76,7 @@ registerHooks({
       assert.equal(code.split(before).length, 2);
       code = code.replace(
         before,
-        `if(globalThis.__agentCloseMeasureTrace) options={...options,execArgv:[...(options?.execArgv??[]),'--import',globalThis.__agentCloseMeasurePreload],workerData:{...options?.workerData,agentCloseTrace:globalThis.__agentCloseMeasureTrace,agentCloseRoot:globalThis.__agentCloseMeasureRoot}}; ${before}`,
+        `if(globalThis.__agentCloseMeasureTrace) options={...options,execArgv:[...(options?.execArgv??[]),'--import',globalThis.__agentCloseMeasurePreload],workerData:{...options?.workerData,agentCloseTrace:globalThis.__agentCloseMeasureTrace,agentCloseRoot:globalThis.__agentCloseMeasureRoot,agentClosePath:globalThis.__agentCloseMeasureDatabase}}; ${before}`,
       );
       return {
         format: "module",
@@ -77,30 +91,51 @@ const owner = await import(sourceUrl("src/state/openclaw-agent-db.ts"));
 const state = await import(sourceUrl("src/state/openclaw-state-db.ts"));
 const admission = await import(sourceUrl("src/infra/sqlite-database-admission.ts"));
 const { DatabaseSync } = await import("node:sqlite");
+const shutdown = await import(sourceUrl("src/process/gateway-work-admission.ts"));
 const opts = {
   agentId: "main",
-  path: path.join(root, "agent.sqlite"),
+  path: databasePath,
   env: { ...process.env, OPENCLAW_STATE_DIR: root },
 };
 const inspector = new Session();
 if (values.profile || values.allocation) {
   inspector.connect();
 }
-const sourceHash = createHash("sha256")
-  .update(fs.readFileSync("src/state/openclaw-state-db-handle.ts"))
-  .digest("hex");
+const sourceDigest = createHash("sha256");
+for (const file of [
+  "src/state/openclaw-agent-db-close.ts",
+  "src/state/openclaw-agent-db-lifecycle.ts",
+  "src/state/openclaw-agent-db-resources.ts",
+  "src/state/openclaw-agent-db-lease.ts",
+  "src/state/openclaw-agent-execution-close.ts",
+  "src/state/openclaw-state-db-handle.ts",
+  "src/infra/sqlite-worker-broker-lifecycle.ts",
+]) {
+  sourceDigest.update(file).update(fs.readFileSync(file));
+}
+const sourceHash = sourceDigest.digest("hex");
 const requestedArm = values.arm;
 try {
   const seeded = owner.openOpenClawAgentDatabase(opts);
-  assert.equal(seeded.db.prepare("SELECT count(*) AS n FROM session_nodes").get().n, 10000);
-  assert.equal(seeded.db.prepare("SELECT count(*) AS n FROM transcript_events").get().n, 1000000);
+  if (!admission.readSqliteDatabaseIntegrityVerification(seeded.db)) {
+    const { assertSqliteIntegrity } = await import(sourceUrl("src/infra/sqlite-integrity.ts"));
+    assertSqliteIntegrity(seeded.db, "synthetic close fixture", { check: "full" });
+  }
+  const sessions = seeded.db.prepare("SELECT count(*) AS n FROM session_nodes").get().n;
+  const events = seeded.db.prepare("SELECT count(*) AS n FROM transcript_events").get().n;
+  const sessionKey = seeded.db
+    .prepare("SELECT session_key FROM session_nodes LIMIT 1")
+    .get()?.session_key;
+  assert(sessions >= 10000 && events > 0, "Expected a populated synthetic fixture");
   await owner.closeOpenClawAgentDatabasesAsync(root);
   for (let n = 0; n < Number(values.samples); n++) {
     if (requestedArm === "paired") {
       values.arm = ["close", "truncate", "truncate", "close"][n % 4];
     }
     const database = owner.openOpenClawAgentDatabase(opts);
-    await database.walMaintenance.stop();
+    if (!values.shutdown) {
+      await database.walMaintenance.stop();
+    }
     let execution;
     if (values.worker) {
       const { captureOpenClawAgentDatabaseExecution } = await import(
@@ -115,6 +150,27 @@ try {
       );
     }
     let sharedReader;
+    const historyReaders = [];
+    if (values["history-readers"]) {
+      const { retainSessionHistoryWorkerDatabase } = await import(
+        sourceUrl("src/config/sessions/session-transcript-worker-runtime.ts")
+      );
+      const { historyLane, projectionLane, maintenanceLane } = await import(
+        sourceUrl("src/config/sessions/session-transcript-worker-resources.ts")
+      );
+      for (const lane of [historyLane, projectionLane, maintenanceLane]) {
+        const held = retainSessionHistoryWorkerDatabase(opts, lane);
+        historyReaders.push(held);
+        assert(
+          await held.owner.readEntryPresence({
+            agentId: "main",
+            databaseAgentId: "main",
+            sessionKey,
+            storePath: opts.path,
+          }),
+        );
+      }
+    }
     if (values["shared-reader"]) {
       const shared = state.openOpenClawStateDatabase({ env: opts.env });
       sharedReader = new DatabaseSync(shared.path, { readOnly: true });
@@ -129,12 +185,24 @@ try {
     }
     database.db.exec("PRAGMA wal_autocheckpoint=0");
     const count = Math.ceil((Number(values.mib) * 1024 * 1024) / 36864);
+    const bounds = database.db
+      .prepare("SELECT min(rowid) AS first, max(rowid) AS last FROM transcript_events")
+      .get();
+    const selectRow = database.db.prepare(
+      "SELECT session_id, seq FROM transcript_events WHERE rowid >= ? ORDER BY rowid LIMIT 1",
+    );
+    const selectedRows = Array.from({ length: count }, (_, i) =>
+      selectRow.get(
+        bounds.first +
+          (values.scatter ? Math.floor((i * (bounds.last - bounds.first)) / count) : i),
+      ),
+    );
     owner.runOpenClawAgentWriteTransaction(() => {
       const write = database.db.prepare(
-        "UPDATE transcript_events SET event_json=? WHERE session_id=? AND seq=?",
+        "UPDATE transcript_events SET event_json=?, event_zstd=NULL, event_utf8_bytes=NULL, navigation_json=NULL WHERE session_id=? AND seq=?",
       );
       for (let i = 0; i < count; i++) {
-        const row = values.scatter ? Math.floor((i * 1000000) / count) : i;
+        const row = selectedRows[i];
         const result = write.run(
           JSON.stringify({
             type: "message",
@@ -148,13 +216,20 @@ try {
               ],
             },
           }),
-          `synthetic-${row % 10000}`,
-          Math.floor(row / 10000) + 1,
+          row.session_id,
+          row.seq,
         );
         assert.equal(Number(result.changes), 1);
       }
     }, opts);
     const walBefore = fs.statSync(`${opts.path}-wal`).size;
+    const shared = state.openOpenClawStateDatabase({ env: opts.env });
+    const leaseCount = () =>
+      shared.db
+        .prepare("SELECT count(*) AS n FROM agent_database_leases WHERE path = ?")
+        .get(opts.path).n;
+    const leasesBefore = leaseCount();
+    assert(leasesBefore >= (values.worker ? 2 : 1));
     globalThis.gc();
     if (values.profile) {
       await inspector.post("Profiler.enable");
@@ -171,6 +246,11 @@ try {
     Atomics.store(traceView, 0, 1);
     const cpu = process.cpuUsage();
     const start = performance.now();
+    if (values.shutdown) {
+      // SIGTERM's owner fences new work before draining retained readers and writers.
+      shutdown.markGatewayRestartDraining();
+      shutdown.beginGatewayShutdownCleanup();
+    }
     let passiveMs = 0;
     const pragmaResults = [];
     if (values.arm === "planner") {
@@ -194,6 +274,7 @@ try {
     const closeStart = performance.now();
     await owner.closeOpenClawAgentDatabasesAsync(root);
     const closeMs = performance.now() - closeStart;
+    const leasesAfter = leaseCount();
     Atomics.store(traceView, 0, 0);
     const used = process.cpuUsage(cpu);
     const elapsedMs = performance.now() - start;
@@ -212,8 +293,6 @@ try {
       );
     }
     const sealed = admission.readSqliteDatabaseCleanClose(opts.path);
-    assert.equal(database.db.isOpen, false);
-    assert.equal(sealed, values.arm !== "pinned");
     if (reader) {
       reader.close();
       owner.openOpenClawAgentDatabase(opts);
@@ -221,15 +300,19 @@ try {
       assert(admission.readSqliteDatabaseCleanClose(opts.path));
     }
     sharedReader?.close();
+    for (const held of historyReaders) {
+      held.release();
+    }
     await execution?.release();
     const trace = Array.from({ length: Math.min(Atomics.load(traceView, 1), 2048) }, (_, i) => {
       const off = 2 + i * 6;
       return {
         thread: traceView[off],
-        store: traceView[off + 5] === 1 ? "agent" : "shared",
+        store: ["lifecycle", "agent", "shared"][traceView[off + 5]],
         operation: labels[traceView[off + 1]],
         ms: traceView[off + 2] / 1000,
-        cpuMs: traceView[off + 3] / 1000,
+        cpuMs: traceView[off + 3] < 0 ? null : traceView[off + 3] / 1000,
+        startedMs: traceView[off + 4] / 1000,
       };
     });
     const row = {
@@ -242,8 +325,16 @@ try {
       n,
       arm: values.arm,
       worker: values.worker,
+      shutdown: values.shutdown,
+      historyReaders: values["history-readers"],
+      node: process.version,
+      resourcesAfterAgentClose: process.getActiveResourcesInfo(),
       databaseBytes: fs.statSync(opts.path).size,
+      sessions,
+      events,
       walBefore,
+      leasesBefore,
+      leasesAfter,
       closeMs,
       passiveMs,
       elapsedMs,
@@ -253,6 +344,12 @@ try {
       load: loadavg(),
     };
     console.log(JSON.stringify(row));
+    assert.equal(database.db.isOpen, false);
+    assert.equal(sealed, values.arm !== "pinned");
+    assert.equal(leasesAfter, 0);
+    if (values.shutdown) {
+      shutdown.resetGatewayWorkAdmission();
+    }
   }
 } finally {
   await owner.closeOpenClawAgentDatabasesAsync(root);

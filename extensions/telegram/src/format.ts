@@ -175,7 +175,10 @@ export function markdownToTelegramHtml(
 }
 
 const HTML_MODE_TAG_PATTERN = /^<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([^<>]*)>$/;
-const ESCAPED_HTML_TAG_PATTERN = /&lt;(\/?)([a-zA-Z][a-zA-Z0-9-]*)(.*?)&gt;/g;
+// Like findTelegramHtmlTagEnd, a later `&lt;` ends the candidate, so a bare `<` stays text.
+// Each start then scans only up to the next one, and the name never re-splits into attrs.
+const ESCAPED_HTML_TAG_PATTERN =
+  /&lt;(\/?)([a-zA-Z][a-zA-Z0-9-]*)(?![a-zA-Z0-9-])((?:(?!&[lg]t;).)*)&gt;/g;
 const TELEGRAM_HTML_ANCHOR_PATTERN =
   /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a\s*>/gi;
 const TELEGRAM_HTML_BREAK_PATTERN = /<br\s*\/?>/gi;

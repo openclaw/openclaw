@@ -345,9 +345,19 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       deferredHistoryRejection = error;
     }
   }
-  // The binding owner decides native continuity; thread startup may later replace a binding.
-  const initialNativeThreadId = mutable.startupBinding?.threadId;
+  // The binding owner decides native continuity. The connection may already have rotated
+  // the admitted binding away, and thread startup may later replace it.
+  const { initialNativeThreadId } = connection;
   let nativeThreadAction: "started" | "resumed" | "forked" | undefined;
+  const resolveContinuity = () =>
+    resolveCodexPromptContinuity({
+      initialNativeThreadId,
+      nativeThreadAction,
+      currentNativeThreadId: mutable.startupBinding?.threadId,
+      historyIncluded:
+        promptState.noEngineContinuityProjectionApplied || contextEngineBootstrapPromptApplied,
+    });
+  let reportedContinuity: ReturnType<typeof resolveContinuity> | undefined;
   // Refresh changes the transport prompt, but retains the admitted request's recorder.
   const buildPromptFromCurrentInputs = () =>
     resolveAgentHarnessBeforePromptBuildResult({
@@ -373,13 +383,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         // Shipped prompt-hook capabilities revalidate synchronously after awaits.
         assertActive: connection.assertLegacyCurrent,
       },
-      continuity: resolveCodexPromptContinuity({
-        initialNativeThreadId,
-        nativeThreadAction,
-        currentNativeThreadId: mutable.startupBinding?.threadId,
-        historyIncluded:
-          promptState.noEngineContinuityProjectionApplied || contextEngineBootstrapPromptApplied,
-      }),
+      continuity: (reportedContinuity = resolveContinuity()),
     });
   const decorateCodexTurnPromptText = (
     promptBuildResult: {
@@ -539,11 +543,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     }
     return await applyResumeStaleBindingContinuityProjection(binding);
   };
-  const applyNoContextEngineContinuityProjection = async (
+  const applyThreadContinuityProjection = async (
     action: "started" | "resumed" | "forked",
     binding?: NonNullable<typeof mutable.startupBinding>,
   ) => {
-    nativeThreadAction = action;
     // A bounded history can retain an answer after its user turn falls outside the window.
     // Fresh threads need that text (or summaries), but tool-only suffixes are not continuity.
     // Resumed bindings hand off only newer local conversation and durable notes.
@@ -602,6 +605,18 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       return true;
     }
     return false;
+  };
+  // Returns whether the turn prompt needs a rebuild, including when a resume fell back
+  // to a new thread: enrichment that saw `resumed` must run again and see `invalidated`.
+  const applyNoContextEngineContinuityProjection = async (
+    action: "started" | "resumed" | "forked",
+    binding?: NonNullable<typeof mutable.startupBinding>,
+  ) => {
+    nativeThreadAction = action;
+    return (
+      (await applyThreadContinuityProjection(action, binding)) ||
+      resolveContinuity().state !== reportedContinuity?.state
+    );
   };
   const precomputedStaleBindingContinuityProjectionApplied =
     await precomputeNoContextEngineStaleBindingProjection();

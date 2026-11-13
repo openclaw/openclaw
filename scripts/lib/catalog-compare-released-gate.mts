@@ -1,11 +1,7 @@
 // Publish gate over released OpenClaw readers: does each release that reads a feed
 // accept the candidate file, and keep every row the publisher emitted?
 
-export const ACCEPTED_REFRESH_STATUSES: ReadonlySet<string> = new Set([
-  "updated",
-  "unchanged",
-  "fresh",
-]);
+const ACCEPTED_REFRESH_STATUSES: ReadonlySet<string> = new Set(["updated", "unchanged", "fresh"]);
 
 /** The wire version a bundle declares; files without one are v1. */
 export function catalogSchemaVersion(bundle: unknown): number {

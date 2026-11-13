@@ -122,10 +122,15 @@ For the default profile, run these commands from the source checkout:
 
 ```bash
 openclaw gateway stop &&
+git pull --ff-only &&
+pnpm install --frozen-lockfile &&
 pnpm build &&
 openclaw doctor --fix &&
 openclaw gateway start
 ```
+
+The `git pull` and `pnpm install` steps move the checkout to new upstream source
+and its dependencies. Omit them when rebuilding local source changes only.
 
 Stop every listed sibling before building and start each one afterward. Preserve
 its profile and custom service overrides, or use the matching native service
@@ -428,9 +433,13 @@ Check `openclaw update status` for unfinished plugin upgrades and their repair
 commands. Normal CLI commands and Gateway startup do not apply deferred plugin
 migrations.
 
-OpenClaw 2026.10.10 and 2026.11.1 can report `spawnSync node ETIMEDOUT` while
+OpenClaw 2026.10.10 through 2026.11.2 can report `spawnSync node ETIMEDOUT` while
 probing SQLite headers in a large state directory, because they check every path
-in one child with a 10-second deadline. Candidate safety checks do not replace the
+in one child with a 10-second deadline. When the path list is too large to send to
+that child, the same probe instead fails with `Could not determine whether backup
+files are SQLite databases` and `Invalid string length`; warming the file cache does
+not help that form, so remove regenerable directories or go straight to the manual
+first hop described below. Candidate safety checks do not replace the
 installed updater's backup implementation: its original-state capture and update
 backup discovery still use the installed code, including its retained runtime.
 Selecting a candidate with the batched probe does not repair that running updater.
@@ -456,8 +465,9 @@ configured agent and workspace directories before replacing the package. Do not
 copy only the main file of a live SQLite database or edit installed distribution
 files to bypass the probe.
 
-The batched probe first shipped in 2026.11.5-beta.1. A release without it, including
-2026.11.1, can hit this timeout again on its own next update.
+The batched probe first shipped in 2026.11.5-beta.1 and stable 2026.11.3. A release
+without it, including 2026.11.1 and 2026.11.2, can hit this failure again on its own
+next update.
 
 On any platform, the published OpenClaw 2026.9.3 and 2026.9.4 updaters can exhaust
 their fixed 30-second baseline package-fingerprint budget before replacing any

@@ -66,24 +66,28 @@ describe("agent-created Template drafts", () => {
     },
   );
 
-  it("reviews and builds a paused automation without enabling it", async () => {
+  it.each([false, true, undefined])("preserves automation enabled=%s", async (enabled) => {
     const { prepare } = await draftFixture({
       ...proposal,
       manifest: proposal.manifest.replace(
         "---\nCompare",
-        'automations:\n  - id: weekly\n    enabled: false\n    schedule: { cron: "0 9 * * 1", timezone: UTC }\n    session: isolated\n    message: Prepare a brief.\n---\nCompare',
+        `automations:\n  - id: weekly\n    ${enabled === undefined ? "" : `enabled: ${enabled}\n    `}schedule: { cron: "0 9 * * 1", timezone: UTC }\n    session: isolated\n    message: Prepare a brief.\n---\nCompare`,
       ),
     });
     await using prepared = await prepare();
     expect(prepared.items.find((item) => item.kind === "automation")).toMatchObject({
       label: "weekly",
-      detail: "0 9 * * 1 · UTC · Paused",
+      detail: `0 9 * * 1 · UTC · ${enabled === false ? "Paused" : "Enabled"}`,
+      automation: { enabled: enabled !== false },
       included: true,
     });
     await using extracted = await extractBuiltTemplateArtifact(prepared.artifact);
-    expect(await readFile(join(extracted.packageRoot, "CLAW.md"), "utf8")).toContain(
-      "enabled: false",
-    );
+    expect(
+      parseTemplateMarkdown(await readFile(join(extracted.packageRoot, "CLAW.md")), "CLAW.md"),
+    ).toMatchObject({
+      ok: true,
+      value: { automations: [enabled === undefined ? { id: "weekly" } : { enabled }] },
+    });
   });
 
   it("keeps the package slug while showing a title-cased agent name", async () => {
