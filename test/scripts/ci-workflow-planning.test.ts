@@ -5683,8 +5683,7 @@ describe("ci workflow guards", () => {
       },
       {
         expected: "github",
-        expectedNode: "hybrid",
-        name: "untrusted fork first attempt plans Node shards with the configured hybrid backend",
+        name: "untrusted fork first attempt keeps hosted Node shards with configured hybrid",
         options: {
           authorAssociation: "NONE",
           configuredProfile: "hybrid",
@@ -5695,8 +5694,7 @@ describe("ci workflow guards", () => {
       },
       {
         expected: "github",
-        expectedNode: "blacksmith",
-        name: "untrusted fork first attempt plans Node shards for its Blacksmith runners",
+        name: "untrusted fork first attempt keeps hosted Node shards without repository variables",
         options: {
           authorAssociation: "FIRST_TIME_CONTRIBUTOR",
           eventName: "pull_request" as const,
@@ -5706,8 +5704,7 @@ describe("ci workflow guards", () => {
       },
       {
         expected: "github",
-        expectedNode: "blacksmith",
-        name: "trusted fork first attempt plans Node shards for its Blacksmith runners",
+        name: "trusted fork first attempt keeps hosted Node shards without repository variables",
         options: {
           authorAssociation: "CONTRIBUTOR",
           eventName: "pull_request" as const,
@@ -5717,8 +5714,7 @@ describe("ci workflow guards", () => {
       },
       {
         expected: "github",
-        expectedNode: "hybrid",
-        name: "trusted fork first attempt plans Node shards with the configured hybrid backend",
+        name: "trusted fork first attempt keeps hosted Node shards with configured hybrid",
         options: {
           authorAssociation: "CONTRIBUTOR",
           configuredProfile: "hybrid",
@@ -5736,6 +5732,15 @@ describe("ci workflow guards", () => {
           headRepository: "contributor/openclaw",
           runAttempt: 2,
           targetSupportsContract: true,
+        },
+      },
+      {
+        expected: "github",
+        name: "frozen fork without the marker still uses hosted runners",
+        options: {
+          eventName: "pull_request" as const,
+          headRepository: "contributor/openclaw",
+          targetSupportsContract: false,
         },
       },
       {
@@ -5779,11 +5784,10 @@ describe("ci workflow guards", () => {
       ...[
         { name: "trusted canonical PR", expected: "hybrid", expectedNode: "runson" },
         { name: "PR retry", expected: "hybrid", expectedNode: "hybrid", runAttempt: 2 },
-        // Trusted forks plan for their hybrid Blacksmith labels; RunsOn stays same-repository.
+        // Forks keep hosted runners; RunsOn stays same-repository.
         {
           name: "returning-contributor fork",
           expected: "github",
-          expectedNode: "hybrid",
           headRepository: "fork/openclaw",
         },
         {
@@ -6971,7 +6975,6 @@ describe("ci workflow guards", () => {
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
     const workflow = readCiWorkflow();
-    const twoCpu = "blacksmith-2vcpu-ubuntu-2404";
     const fourCpu = "blacksmith-4vcpu-ubuntu-2404";
     const buildArtifactsTestbox = readBuildArtifactsTestboxWorkflow();
     const plannerRunner = workflow.jobs["check-plan"]["runs-on"];
@@ -6988,41 +6991,66 @@ describe("ci workflow guards", () => {
       );
     }
     const typeRunner = workflow.jobs["check-test-types-hosted-core-shard"]["runs-on"];
-    const lintRunner = workflow.jobs["check-lint-hosted-core-shard"]["runs-on"];
-    for (const runnerBackend of ["", "blacksmith", "hybrid"] as const) {
-      for (const authorAssociation of ["NONE", "CONTRIBUTOR", "OWNER"]) {
+    for (const runnerBackend of ["", "blacksmith", "github", "hybrid", "runson", "boat"] as const) {
+      for (const runAttempt of [1, 2]) {
+        const profile = runRunnerProfileFixture({
+          configuredProfile: runnerBackend,
+          eventName: "pull_request",
+          headRepository: "contributor/openclaw",
+          runAttempt,
+          targetSupportsContract: true,
+        });
+        expect(profile.status, profile.output).toBe(0);
+        expect(profile.outputs).toMatchObject({
+          runner_profile: "github",
+          node_runner_backend: "github",
+          effective_runner_backend: "github",
+          placement_runner_backend: "github",
+        });
         const fork = {
           ...plannerContext,
           runnerBackend,
-          runnerProfile: "github" as const,
+          runAttempt,
           headRepository: "contributor/openclaw",
-          authorAssociation,
+          preflightOutputs: profile.outputs,
         };
-        const route = (
-          runner: string,
-          override: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
-        ) => evaluateWorkflowExpression(runner, { ...fork, ...override });
-        for (const runner of [plannerRunner, typeRunner, lintRunner]) {
-          expect(route(runner)).toBe(runner === typeRunner ? twoCpu : fourCpu);
-          for (const override of [
-            { runnerBackend: "github" },
-            { runAttempt: 2 },
-            { eventName: "workflow_dispatch" },
-            { repository: "contributor/openclaw" },
-          ] as const) {
-            expect(route(runner, override)).toBe("ubuntu-24.04");
+        for (const name of [
+          "preflight",
+          "pr-failure-report",
+          "security-fast",
+          "ci-gate",
+          "check-plan",
+          "build-artifacts",
+          "check-test-types-hosted-core-shard",
+          "check-lint-hosted-core-shard",
+        ]) {
+          expect(evaluateWorkflowExpression(workflow.jobs[name]["runs-on"], fork), name).toBe(
+            "ubuntu-24.04",
+          );
+        }
+        if (runnerBackend === "" && runAttempt === 1) {
+          const manifest = runCiManifestFixture({
+            bundledPlanner: true,
+            eventName: "pull_request",
+            scopeEnv: {
+              OPENCLAW_CI_HEAD_REPOSITORY: fork.headRepository,
+              OPENCLAW_CI_RUNNER_BACKEND: profile.outputs.placement_runner_backend,
+              OPENCLAW_CI_RUNNER_PROFILE: profile.outputs.runner_profile,
+              OPENCLAW_CI_NODE_RUNNER_BACKEND: profile.outputs.node_runner_backend,
+            },
+          });
+          expect(manifest.status, manifest.output).toBe(0);
+          const rows = readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include;
+          expect(rows.length).toBeGreaterThan(0);
+          for (const matrix of rows) {
+            expect(matrix.runner).toBe("ubuntu-24.04");
+            expect(
+              evaluateWorkflowExpression(
+                workflow.jobs["checks-node-core-test-nondist-shard"]["runs-on"],
+                { ...fork, matrix },
+              ),
+            ).toBe("ubuntu-24.04");
           }
-        }
-        const excludedTargets = { frozen_target: "", compatibility_target: "true" };
-        for (const [key, value] of Object.entries(excludedTargets)) {
-          expect(route(typeRunner, { preflightOutputs: { [key]: value } })).toBe(fourCpu);
-        }
-        // Frozen defaults retain their historical hosted route; hybrid owns its own layout.
-        for (const runner of runnerBackend === "hybrid" ? [lintRunner] : [typeRunner, lintRunner]) {
-          expect(route(runner, { frozenTarget: true })).toBe("ubuntu-24.04");
-        }
-        for (const stripe of [1, 2, 3, 4, 5]) {
-          expect(route(lintRunner, { matrix: { stripe } })).toBe(fourCpu);
         }
       }
     }
@@ -7078,9 +7106,13 @@ describe("ci workflow guards", () => {
           eventName: "pull_request",
           authorAssociation: "NONE",
           headRepository: "fork/openclaw",
+          preflightOutputs: {
+            effective_runner_backend: "github",
+            placement_runner_backend: "github",
+          },
         }),
         "build-artifacts: untrusted fork first attempt",
-      ).toBe(fourCpu);
+      ).toBe("ubuntu-24.04");
       for (const override of [
         { runnerBackend: "github" },
         { runnerBackend: "hybrid", runAttempt: 2 },
