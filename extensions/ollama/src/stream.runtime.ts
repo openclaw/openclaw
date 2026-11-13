@@ -17,6 +17,7 @@ import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth-marke
 import { readProviderResponseErrorText } from "openclaw/plugin-sdk/provider-http";
 import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import {
+  applyProviderPayloadHook,
   buildAssistantMessage as buildStreamAssistantMessage,
   createEmptyTransportUsage,
   mergeTransportHeaders,
@@ -478,8 +479,7 @@ function createRawOllamaStreamFn(
           options: ollamaOptions,
           requestParams,
         });
-        const replacement = await options?.onPayload?.(body, model);
-        const requestBody = replacement === undefined ? body : replacement;
+        const requestBody = await applyProviderPayloadHook(options, body, model);
         const headers =
           omitNullRequestHeaders(
             mergeTransportHeaders(

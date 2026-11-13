@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { MessageChannel } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import {
@@ -9,7 +10,9 @@ import {
   enrichAssistantTranscriptMediaForRun,
   publishAssistantTranscriptRewrite,
 } from "../../gateway/server-methods/chat-transcript-persistence.js";
+import { withSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
+import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
@@ -33,7 +36,9 @@ import { bindSessionWorkerBackend } from "./session-entry-patch.worker.js";
 import { rewritePreparedTranscriptMessageAtAnchor } from "./session-message-rewrite.js";
 import {
   applySessionMessageRewrite,
+  bindSqliteWorkerBackend,
   prepareSessionMessageRewrite,
+  type LockedTranscriptCommitted,
 } from "./session-message-rewrite.worker.js";
 import type { SessionMessageRewriteCommitted } from "./session-transcript-mutation.types.js";
 import {
@@ -83,6 +88,99 @@ function fixture(agentId = "main", storePath?: string) {
     rows: () => readTranscriptEventRows(database, scope.sessionId),
   };
 }
+
+it("refreshes a locked append snapshot without rereading its unchanged prefix", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const f = fixture();
+    const scope = resolveSqliteTranscriptScope(f.scope);
+    const before = f.rows();
+    let committed: LockedTranscriptCommitted | undefined;
+    let collector = createSqliteWorkerTransferCollector("patch", (value) => {
+      assert(isRecord(value) && value.kind === "session-transcript-locked");
+      // The real transfer owner decoded this worker operation's private receipt.
+      committed = value as LockedTranscriptCommitted;
+    });
+    const backend = runWithSqliteWorkerStateContext(
+      { environment: { ...state.env, OPENCLAW_STATE_DIR: state.stateDir } },
+      () =>
+        bindSqliteWorkerBackend(
+          { agentId: "main" },
+          {
+            database: f.database.db,
+            databasePath: f.database.path,
+            admit(stage, restriction) {
+              restriction?.({ stage, facts: {} }, ({ facts }) => {
+                assert(isRecord(facts));
+                const publication = facts.publication;
+                if (isRecord(publication) && publication.transfer) {
+                  collector.accept(publication.transfer);
+                }
+              });
+            },
+          },
+        ),
+    );
+    const { port1, port2 } = new MessageChannel();
+    const message = { role: "assistant", content: "appended", idempotencyKey: "locked-tail" };
+    const input = {
+      kind: "message" as const,
+      scope,
+      fence: {},
+      sources: [],
+      freshSources: [],
+      freshAuthorityPrepared: true,
+      sequenced: false,
+      snapshot: { kind: "current" as const, rows: before },
+      options: {
+        message: { idempotencyKey: message.idempotencyKey },
+        eventId: "locked-tail",
+        now: 1234,
+      },
+      preparedMessageJson: JSON.stringify(message),
+    };
+    const sql = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(f.database.db),
+      ["payload"],
+      (query) =>
+        query.startsWith(
+          'select "event_json", "event_zstd", "event_utf8_bytes", "seq" from "transcript_events"',
+        )
+          ? "payload"
+          : null,
+    );
+    try {
+      withSqliteWorkerOperationAdmission({ port: port1 }, () =>
+        backend.execute({
+          type: "session.transcript.lock.commit",
+          input,
+        }),
+      );
+      // One full conflict check and one tail row.
+      expect(sql.rowCounts.payload).toBe(before.length + 1);
+      expect(committed?.snapshot).toEqual({ kind: "current", rows: f.rows() });
+      expect(f.rows().slice(0, before.length)).toEqual(before);
+      const snapshot = committed?.snapshot;
+      assert(snapshot?.kind === "current");
+      collector = createSqliteWorkerTransferCollector("patch", (value) => {
+        assert(isRecord(value) && value.kind === "session-transcript-locked");
+        committed = value as LockedTranscriptCommitted;
+      });
+      withSqliteWorkerOperationAdmission({ port: port1 }, () =>
+        backend.execute({
+          type: "session.transcript.lock.commit",
+          input: { ...input, snapshot },
+        }),
+      );
+      expect(committed?.result?.appended).toBe(false);
+      expect(committed?.snapshot).toEqual(snapshot);
+    } finally {
+      sql.restore();
+      await backend.close();
+      port1.close();
+      port2.close();
+    }
+  });
+});
 
 it("commits the exact prepared rewrite without rereading its payload or generation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

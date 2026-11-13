@@ -76,7 +76,13 @@ function runtime(catalog = CATALOG): ToolSearchRuntime {
 const catalogRuntime = (catalog: Parameters<typeof entry>[0][]) => runtime(catalog.map(entry));
 const objectSchema = <T>(properties: T) => ({ type: "object", properties });
 const queryTerms = (query: string) => tokenizeQuery(query).map(({ term }) => term);
-const document = (value: string, text: string) => ({ value, terms: tokenizeDocument(text) });
+const document = (value: string, text: string) => {
+  const terms = new Map<string, number>();
+  for (const term of tokenizeDocument(text)) {
+    terms.set(term, (terms.get(term) ?? 0) + 1);
+  }
+  return { value, terms };
+};
 
 const searchField =
   (field: "name" | "id") =>
@@ -121,10 +127,10 @@ it("does not let a singular/plural collision invent an intent", () => {
 
 it("preserves exact scores for nonadjacent repeated terms and sparse document positions", () => {
   const index = buildLexicalIndex([
-    { value: "empty-first", terms: [] },
-    { value: "alpha-heavy", terms: ["alpha", "beta", "alpha"] },
-    { value: "empty-middle", terms: [] },
-    { value: "beta-heavy", terms: ["beta", "alpha", "beta"] },
+    document("empty-first", ""),
+    document("alpha-heavy", "alpha beta alpha"),
+    document("empty-middle", ""),
+    document("beta-heavy", "beta alpha beta"),
   ]);
   expect(index.averageLength).toBe(1.5);
   // Four documents, two matches per term, average length 1.5, matching length 3.
@@ -157,28 +163,40 @@ it("marks literal overlap so callers can rank it ahead of expansion-only hits", 
   expect(web?.matchedLiteral).toBe(false);
 });
 
-it.each(["client", "mcp"] as const)(
-  "never traverses parameters from the untrusted %s source",
-  async (source) => {
-    const properties = new Proxy(
-      {},
-      {
-        ownKeys: () => {
-          throw new Error("client properties must remain deferred");
-        },
+it("never traverses parameters from the untrusted client source", async () => {
+  const properties = new Proxy(
+    {},
+    {
+      ownKeys: () => {
+        throw new Error("client properties must remain deferred");
       },
-    );
-    const hostile = entry({
-      source,
-      name: "client_pick_file",
-      description: "Ask the client to pick a file",
-      parameters: objectSchema(properties),
-    });
-    const search = runtime([...CATALOG, hostile]);
+    },
+  );
+  const hostile = entry({
+    source: "client",
+    name: "client_pick_file",
+    description: "Ask the client to pick a file",
+    parameters: objectSchema(properties),
+  });
+  const search = runtime([...CATALOG, hostile]);
 
-    expect(await names(search, "pick a file")).toContain("client_pick_file");
-  },
-);
+  expect(await names(search, "pick a file")).toContain("client_pick_file");
+});
+
+it.each([
+  ["openclaw", true],
+  ["mcp", false],
+] as const)("ranks %s tools by parameter text: %s", async (source, ranked) => {
+  const remote = entry({
+    source,
+    name: "remote_helper",
+    description: "Unrelated helper",
+    parameters: objectSchema({ path: { type: "string", description: "Pick a file" } }),
+  });
+  expect(
+    (await names(runtime([...CATALOG, remote]), "pick a file")).includes("remote_helper"),
+  ).toBe(ranked);
+});
 
 it("refreshes metadata inside anyOf branches after edits", async () => {
   const leaf = { type: "string", description: "Collect apples" };

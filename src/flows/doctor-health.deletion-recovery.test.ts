@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -50,7 +51,6 @@ it("refreshes supplied missing-history discovery after maintenance admits a newe
       agents: { ownership: "explicit", entries: { main: {}, late: { agentDir: lateDir } } },
     };
     await state.writeConfig(after);
-    const bytes = [mainPath, latePath].map((file) => fs.readFileSync(file));
     mocks.config.mockReturnValue(after);
     fs.writeFileSync(state.path("package.json"), '{"name":"openclaw"}');
     mocks.packageRoot.mockReturnValue(state.root);
@@ -60,12 +60,7 @@ it("refreshes supplied missing-history discovery after maintenance admits a newe
     const loadConfig = vi.spyOn(configFlow, "loadAndMaybeMigrateDoctorConfig");
     const runtime = createDoctorRuntime();
     try {
-      await expect(
-        runDoctorHealthFlow(runtime, repairOptions, undefined, prepared),
-      ).rejects.toMatchObject({
-        name: "DoctorMaintenanceRefusalError",
-        refusal: { kind: "data-at-risk", reason: "incomplete-migration" },
-      });
+      await runDoctorHealthFlow(runtime, repairOptions, undefined, prepared);
       expect(runtime.exit).not.toHaveBeenCalled();
       expect(loadConfig).toHaveBeenCalledOnce();
       expect(
@@ -80,7 +75,19 @@ it("refreshes supplied missing-history discovery after maintenance admits a newe
         { agentId: "late", path: latePath, source: "configured" },
         { agentId: "main", path: mainPath, source: "configured" },
       ]);
-      expect([mainPath, latePath].map((file) => fs.readFileSync(file))).toEqual(bytes);
+      for (const [agentId, pathname] of Object.entries({ main: mainPath, late: latePath })) {
+        using database = openNodeSqliteDatabase(pathname, { readOnly: true });
+        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+        expect(
+          database.prepare("SELECT * FROM schema_meta WHERE meta_key = 'primary'").get(),
+        ).toMatchObject({
+          role: "agent",
+          agent_id: agentId,
+          schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+        });
+      }
     } finally {
       loadConfig.mockRestore();
       mocks.emulateNativeInstall = true;

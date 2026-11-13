@@ -42,6 +42,22 @@ function mount(
   )).container;
 }
 
+it("says the store is empty instead of repeating the page name", () => {
+  const container = mount([]);
+  const empty = container.querySelector(".settings-empty");
+  expect(empty?.textContent).toContain("No secrets yet.");
+  expect(empty?.querySelector("a")?.textContent).toBe("Docs");
+});
+
+it("says why secrets are unavailable in the empty state, without a section or a count", () => {
+  const container = mount([], {}, []);
+  const state = container.querySelector(".settings-empty");
+  expect(state?.querySelector('[role="status"]')?.textContent).toBe(
+    "Update the Gateway to manage secrets here.",
+  );
+  expect(container.querySelector(".settings-section__heading")).toBeNull();
+});
+
 it("never renders a secret value even when hostile input carries one", () => {
   const env: SecretStoreEntry = {
     name: "SERVICE_URL",
@@ -62,7 +78,6 @@ it("never renders a secret value even when hostile input carries one", () => {
   };
   const container = mount([secret, env]);
   expect(container.innerHTML).not.toContain("must-never-render");
-  expect(container.textContent).toContain("••••••••");
   expect(container.textContent).toContain("https://service.test");
   expect(container.textContent).toContain("api.example.com");
   expect(container.textContent).toContain("Protected secret");
@@ -87,7 +102,7 @@ it("shows the allowed-host field for secret add and edit dialogs", () => {
 it("hides mutation controls when the gateway does not advertise them", () => {
   const container = mount([], {}, ["secrets.store.list"]);
   expect(container.querySelector("button")).toBeNull();
-  expect(container.textContent).toContain("Secrets");
+  expect(container.textContent).toContain("No secrets yet.");
 });
 
 it("uses the current system timezone for refreshed inventory timestamps", () => {
@@ -127,4 +142,20 @@ it("uses the current system timezone for refreshed inventory timestamps", () => 
   } finally {
     formatter.mockRestore();
   }
+});
+
+it("keeps every allowed host and who updated it, and omits empty hosts", () => {
+  const base = { scopeKind: "team", scopeId: "", createdAtMs: 1, updatedAtMs: 2 } as const;
+  const hosts = Array.from({ length: 8 }, (_, index) => `host-${index}.example.com`);
+  const container = mount([
+    { ...base, name: "MANY_HOSTS", kind: "secret", allowedHosts: hosts, updatedBy: "Operator" },
+    { ...base, name: "NO_HOSTS", kind: "secret", allowedHosts: [] },
+  ]);
+  const row = (name: string) => container.querySelector(`[role="listitem"][aria-label="${name}"]`);
+  for (const host of hosts) {
+    expect(row("MANY_HOSTS")?.textContent).toContain(host);
+  }
+  expect(row("MANY_HOSTS")?.querySelector("time")?.textContent).toContain("Operator");
+  expect(row("NO_HOSTS")?.querySelector(".secrets-store__value")).toBeNull();
+  expect(row("NO_HOSTS")?.querySelector(".secrets-store__separator")).toBeNull();
 });

@@ -226,6 +226,14 @@ function coerceCompletionDestination(value: UnknownRecord) {
 
 function coerceFailureDestination(value: UnknownRecord) {
   const next = snapshotOwnCronRecord(value);
+  if (next.threadId != null) {
+    const threadId = parseDeliveryInput({ threadId: next.threadId }).threadId;
+    if (threadId !== undefined) {
+      next.threadId = threadId;
+    } else {
+      delete next.threadId;
+    }
+  }
   for (const [field, normalize] of [
     ["channel", normalizeOptionalLowercaseString],
     ["to", normalizeOptionalString],

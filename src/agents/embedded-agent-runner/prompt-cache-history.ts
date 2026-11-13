@@ -1,5 +1,6 @@
 import { hash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import type { Message } from "../../llm/types.js";
 import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
@@ -216,4 +217,137 @@ export function fingerprintMessage(
     envelope.message = immutableContent ? { content, fingerprint } : undefined;
   }
   return fingerprint;
+}
+
+// Known fields retain stable markers; other diagnostics name bounded keys, never values.
+const HISTORY_ENVELOPE_FIELDS = new Set([
+  "role",
+  "timestamp",
+  "idempotencyKey",
+  "usage",
+  "api",
+  "provider",
+  "model",
+  "stopReason",
+  "errorMessage",
+  "toolCallId",
+  "toolName",
+  "isError",
+  "runtimeContext",
+  "runtimeContextCarrier",
+  "operatorMessage",
+]);
+const HISTORY_BLOCK_FIELDS = new Set([
+  "type",
+  "text",
+  "textSignature",
+  "thinking",
+  "thinkingSignature",
+  "openclawReasoningReplay",
+  "id",
+  "name",
+  "arguments",
+  "partialJson",
+  "async",
+  "thoughtSignature",
+  "data",
+  "mimeType",
+  "index",
+]);
+
+function describeHistoryField(key: string, known: ReadonlySet<string>) {
+  return known.has(key) ? key : `other[${JSON.stringify(sanitizeForLog(key).slice(0, 80))}]`;
+}
+
+function unpackHistoryFingerprint(fingerprint: PromptHistoryFingerprint) {
+  // One kind byte and a 32-byte envelope digest precede the ordered content hashes.
+  // Text and field hashes also carry a one-byte domain tag.
+  const contentKind = fingerprint.packed[0] === "t" ? "string" : "blocks";
+  const blocks: string[] = [];
+  const width = contentKind === "string" ? 33 : 32;
+  for (let offset = 33; offset < fingerprint.identityLength; offset += width) {
+    blocks.push(fingerprint.packed.slice(offset, offset + width));
+  }
+  const layout: string[][] = JSON.parse(fingerprint.layout);
+  let offset = fingerprint.identityLength;
+  const fields = layout.map(
+    (keys) =>
+      new Map(
+        keys.map((key) => {
+          const digest = fingerprint.packed.slice(offset, offset + 33);
+          offset += 33;
+          return [key, digest];
+        }),
+      ),
+  );
+  return { contentKind, blocks, envelopeFields: fields[0]!, blockFields: fields.slice(1) };
+}
+
+/** Names the bounded fields that differ between two fingerprints, never their values. */
+export function describeHistoryChange(
+  previousFingerprint: PromptHistoryFingerprint,
+  nextFingerprint: PromptHistoryFingerprint | undefined,
+): string {
+  if (!nextFingerprint) {
+    return "message removed";
+  }
+  const previous = unpackHistoryFingerprint(previousFingerprint);
+  const next = unpackHistoryFingerprint(nextFingerprint);
+  const fields: string[] = [];
+  if (previous.contentKind !== next.contentKind) {
+    fields.push("content.type");
+  }
+  if (
+    previous.blocks.length !== next.blocks.length ||
+    previous.blocks.some((digest, index) => digest !== next.blocks[index])
+  ) {
+    if (previous.contentKind === "string" || next.contentKind === "string") {
+      fields.push("content");
+    } else {
+      if (previous.blocks.length !== next.blocks.length) {
+        fields.push("content.length");
+      }
+      for (
+        let index = 0;
+        index <
+        Math.min(MAX_HISTORY_DIFF_FIELDS, Math.max(previous.blocks.length, next.blocks.length));
+        index++
+      ) {
+        if (previous.blocks[index] !== next.blocks[index]) {
+          const before = previous.blockFields[index];
+          const after = next.blockFields[index];
+          const changed = [
+            ...new Set([...(before?.keys() ?? []), ...(after?.keys() ?? [])]),
+          ].filter((key) => before?.get(key) !== after?.get(key));
+          fields.push(
+            ...(changed.length
+              ? new Set(
+                  changed.map(
+                    (key) => `content[${index}].${describeHistoryField(key, HISTORY_BLOCK_FIELDS)}`,
+                  ),
+                )
+              : [`content[${index}]`]),
+          );
+        }
+      }
+      if (
+        previous.blocks.some(
+          (digest, index) => index >= MAX_HISTORY_DIFF_FIELDS && digest !== next.blocks[index],
+        ) ||
+        (previous.blocks.length !== next.blocks.length &&
+          Math.max(previous.blocks.length, next.blocks.length) > MAX_HISTORY_DIFF_FIELDS)
+      ) {
+        fields.push("content[remaining]");
+      }
+    }
+  }
+  for (const key of new Set([...previous.envelopeFields.keys(), ...next.envelopeFields.keys()])) {
+    if (previous.envelopeFields.get(key) !== next.envelopeFields.get(key)) {
+      const field = `envelope.${describeHistoryField(key, HISTORY_ENVELOPE_FIELDS)}`;
+      if (!fields.includes(field)) {
+        fields.push(field);
+      }
+    }
+  }
+  return `changed fields: ${fields.slice(0, MAX_HISTORY_DIFF_FIELDS).join(", ")}${fields.length > MAX_HISTORY_DIFF_FIELDS ? ", …" : ""}`;
 }

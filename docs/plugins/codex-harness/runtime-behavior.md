@@ -403,7 +403,9 @@ The Codex harness changes the low-level embedded agent executor only.
   those tools, so OpenClaw remains in the execution path.
 - Codex-native shell, patch, MCP, and native app tools are owned by Codex.
   OpenClaw can observe or block selected native events through the
-  supported relay, but it does not rewrite native tool arguments.
+  supported relay. A `before_tool_call` rewrite reaches Codex only for the
+  `command` of native shell and `apply_patch` calls and for MCP arguments;
+  any other rewrite blocks the call.
 - `gateway_exec` and `gateway_process` are OpenClaw-owned dynamic tools. They
   deliberately re-enter Gateway exec preparation for agent-readable Secret
   Store environment and protected egress; those values never flow into Codex

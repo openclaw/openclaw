@@ -4,6 +4,7 @@ import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.
 import { createAnchoredOverlay } from "../../lib/reactive/overlay-anchor.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { findMenuSearch, registerMenuShortcuts } from "../menu-shortcuts.ts";
+import { observeMenuSpacing } from "../menu-spacing.ts";
 import type { OverlayPlacement } from "../overlay-anchor.ts";
 import { createOverlay, type Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed, registryFor } from "../overlay-registry.ts";
@@ -287,22 +288,18 @@ export function Menu(props: BranchProps): JSX.Element {
     ids: { trigger: initialIdentity.triggerId },
     pointerFocus: () => props.pointerFocus ?? "menu",
   });
-  const searchControl = () =>
+  const searchInput = () =>
     registeredElements().find(
-      (node): node is HTMLInputElement | HTMLButtonElement =>
-        ((node instanceof HTMLInputElement && node.hasAttribute("data-search")) ||
-          (node instanceof HTMLButtonElement && node.hasAttribute("data-search-toggle"))) &&
+      (node): node is HTMLInputElement =>
+        node instanceof HTMLInputElement &&
+        node.hasAttribute("data-search") &&
         node.closest('[role="menu"]') === overlay.surface,
     );
-  const searchInput = () => {
-    const control = searchControl();
-    return control instanceof HTMLInputElement ? control : undefined;
-  };
   onSettled(() =>
     registerMenuShortcuts(
       overlay.surface,
       () => binding.items().map((element) => ({ element, key: element.dataset.shortcut })),
-      searchControl,
+      searchInput,
     ),
   );
   const searchKeydown = nativeListener(
@@ -327,7 +324,7 @@ export function Menu(props: BranchProps): JSX.Element {
         return;
       }
       const search = findMenuSearch(overlay.surface);
-      if (search instanceof HTMLInputElement) {
+      if (search) {
         search.focus({ preventScroll: true });
         // Keep native text insertion, but do not activate a parent shortcut or typeahead.
         event.stopImmediatePropagation();
@@ -416,18 +413,25 @@ export function Menu(props: BranchProps): JSX.Element {
   };
   onSettled(() => {
     const disconnectAnchor = anchor.connect();
-    const disconnectControl = control.connect(() =>
-      props.ref?.({
-        overlay,
-        open: () => overlay.request(true, "first"),
-        close: () => overlay.request(false, "return"),
-        focusFirst: () => focusItem("first"),
-        itemElements: ownItems,
-        itemElement: (id) => ownItems().find((item) => item.dataset.value === id),
-      }),
+    let disconnectSpacing: (() => void) | undefined;
+    const disconnectControl = control.connect(
+      () =>
+        props.ref?.({
+          overlay,
+          open: () => overlay.request(true, "first"),
+          close: () => overlay.request(false, "return"),
+          focusFirst: () => focusItem("first"),
+          itemElements: ownItems,
+          itemElement: (id) => ownItems().find((item) => item.dataset.value === id),
+        }),
+      (open) => {
+        disconnectSpacing?.();
+        disconnectSpacing = open ? observeMenuSpacing(surface) : undefined;
+      },
     );
     return () => {
       disconnectControl();
+      disconnectSpacing?.();
       disconnectAnchor();
     };
   });

@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
+import {
+  captureModelCostPricing,
+  estimateAggregateUsageCostAsync,
+} from "../../utils/usage-format.js";
 import type { NormalizedUsage } from "../usage.js";
 import type { EmbeddedAgentMeta } from "./types.js";
 import {
@@ -10,37 +13,40 @@ import {
 } from "./usage-accumulator.js";
 
 /** Resolve prices before combining work that may belong to different models. */
-export function mergeCompletedAgentUsage(params: {
+export async function mergeCompletedAgentUsage(params: {
   usage: UsageAccumulator;
   diagnosticUsage: UsageAccumulator;
-  agentMeta?: EmbeddedAgentMeta;
+  agentMetas: readonly (EmbeddedAgentMeta | undefined)[];
   config: OpenClawConfig;
   agentDir?: string;
 }) {
-  const candidate = params.agentMeta;
-  const priceUsage = (usage: NormalizedUsage | undefined): NormalizedUsage => {
-    const costUsd = estimateAggregateUsageCost({
-      usage,
-      provider: candidate?.provider,
-      model: candidate?.model,
-      config: params.config,
-      agentDir: params.agentDir,
-    });
-    return {
-      ...usage,
-      cost: costUsd === undefined ? undefined : { ...usage?.cost, total: costUsd },
-      costStatus: costUsd === undefined ? "unavailable" : "complete",
+  let pricing: ReturnType<typeof captureModelCostPricing> | undefined;
+  for (const candidate of params.agentMetas) {
+    const priceUsage = async (usage: NormalizedUsage | undefined): Promise<NormalizedUsage> => {
+      const costUsd = await estimateAggregateUsageCostAsync({
+        usage,
+        prepareCost: async () =>
+          (await (pricing ??= captureModelCostPricing(params.config, params.agentDir))).resolve(
+            candidate?.provider,
+            candidate?.model,
+          ),
+      });
+      return {
+        ...usage,
+        cost: costUsd === undefined ? undefined : { ...usage?.cost, total: costUsd },
+        costStatus: costUsd === undefined ? "unavailable" : "complete",
+      };
     };
-  };
-  const usage = priceUsage(candidate?.usage);
-  mergeUsageIntoAccumulator(params.usage, usage);
-  mergeUsageIntoAccumulator(
-    params.diagnosticUsage,
-    candidate?.diagnosticUsage && candidate.diagnosticUsage !== candidate.usage
-      ? priceUsage(candidate.diagnosticUsage)
-      : usage,
-  );
-  mergeAttemptRunStatsIntoAccumulator(params.usage, candidate ?? {});
+    const usage = await priceUsage(candidate?.usage);
+    mergeUsageIntoAccumulator(params.usage, usage);
+    mergeUsageIntoAccumulator(
+      params.diagnosticUsage,
+      candidate?.diagnosticUsage && candidate.diagnosticUsage !== candidate.usage
+        ? await priceUsage(candidate.diagnosticUsage)
+        : usage,
+    );
+    mergeAttemptRunStatsIntoAccumulator(params.usage, candidate ?? {});
+  }
 }
 
 /** Billing totals span requests; only the selected result owns live context. */

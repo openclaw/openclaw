@@ -52,6 +52,7 @@ type CronRuntimeState = Pick<
   | "lastStatus"
   | "runningAtMs"
   | "autoDisabled"
+  | "admissionDeferred"
   | "lastError"
   | "lastDurationMs"
   | "lastMeaningfulResult"
@@ -115,6 +116,7 @@ const compactCronJobsProjection: CronJobsProjection<CronCompactJob> = {
       lastRunStatus: lastRunStatus ?? lastStatus ?? null,
       runningAtMs,
       autoDisabled,
+      admissionDeferred: runtime.admissionDeferred,
       lastDurationMs: runtime.lastDurationMs,
       lastMeaningfulResult: runtime.lastMeaningfulResult,
       lastTriggerEvalAtMs: runtime.lastTriggerEvalAtMs,
@@ -176,6 +178,7 @@ function applyLegacyCronJobsEvent<Row extends CronInventoryJob>(
       lastStatus,
       runningAtMs,
       autoDisabled,
+      admissionDeferred: runtime.admissionDeferred,
       lastDurationMs: runtime.lastDurationMs,
       lastMeaningfulResult: runtime.lastMeaningfulResult,
       lastTriggerEvalAtMs: runtime.lastTriggerEvalAtMs,

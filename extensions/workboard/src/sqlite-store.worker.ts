@@ -100,6 +100,7 @@ export function createSqliteWorkerBackend(
         return { ok: false, failure: encodeWorkboardSqliteFailure(error) };
       }
     },
+    assertSettled: kernel.assertSettled,
     close: kernel.close,
   };
 }

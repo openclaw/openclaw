@@ -64,6 +64,7 @@ export type PendingInputMutation =
       kind: "finish";
       inputId: string;
       disposition: "cancelled" | "interrupted";
+      cancelledByUser?: true;
     });
 
 export type PendingInputMutationReceipt = PendingInputIdentity & {

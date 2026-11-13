@@ -45,6 +45,11 @@ import {
   serializeToolSearchControlResult,
 } from "./tool-search-control-result.js";
 import { getToolSearchLexicalIndex } from "./tool-search-index.js";
+import type {
+  CatalogVisibilityOptions,
+  ToolSearchConfig,
+  UnknownToolErrorOptions,
+} from "./tool-search-protocol.js";
 import { scoreLexical, tokenizeQuery } from "./tool-search-ranking.js";
 import {
   formatCatalogInputError,
@@ -56,14 +61,11 @@ import { readToolSearchLimit } from "./tool-search-request.js";
 import { runScheduledToolSearchCall } from "./tool-search-scheduling.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import type {
-  CatalogVisibilityOptions,
   ToolSearchCallOptions,
   ToolSearchCatalogEntry,
   ToolSearchCatalogSession,
   ToolSearchCatalogToolExecutor,
-  ToolSearchConfig,
   ToolSearchToolContext,
-  UnknownToolErrorOptions,
 } from "./tool-search-types.js";
 import { ToolSourceReplyCell } from "./tool-source-reply-completion.js";
 import { textResult, ToolInputError } from "./tools/common.js";
@@ -478,6 +480,7 @@ export class ToolSearchRuntime {
       try {
         const result = await executeTool({
           tool: executionTool,
+          toolId: entry.id,
           toolName: entry.name,
           source: entry.source,
           sourceName: entry.sourceName,
@@ -563,11 +566,14 @@ export function formatToolSearchControlResult<T>(
   options: {
     parentToolCallId?: string;
     terminalBatchStatus?: "waiting" | "completed" | "failed";
-    compact?: boolean;
+    /** Model-facing projection of payload; details keep the full payload. */
+    modelPayload?: unknown;
     images?: Extract<AgentToolResult<unknown>["content"][number], { type: "image" }>[];
   } = {},
 ): AgentToolResult<T> {
-  const serialized = serializeToolSearchControlResult(payload, options.compact);
+  const serialized = serializeToolSearchControlResult(
+    "modelPayload" in options ? options.modelPayload : payload,
+  );
   const networkContent = runtime?.hasNetworkContent(options.parentToolCallId) ?? false;
   const { text } = renderToolSearchControlText(serialized, networkContent);
   const result = textResult(text, payload);

@@ -105,7 +105,13 @@ const writeResult = Type.Union([
 ]);
 const resultSchemas = {
   download: Type.Union([
-    Type.Object({ status: Type.Literal("missing") }, { additionalProperties: false }),
+    Type.Object(
+      {
+        status: Type.Literal("missing"),
+        reason: Type.Optional(Type.Literal("outside_session_boundary")),
+      },
+      { additionalProperties: false },
+    ),
     Type.Object(
       {
         status: Type.Literal("ok"),

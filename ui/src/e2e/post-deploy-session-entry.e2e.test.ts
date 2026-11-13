@@ -429,7 +429,7 @@ describe("public-session post-deploy app handoff", () => {
         phaseDurationsMs: {},
       };
       const startup = createAgentDatabaseStartupObservation(new Map([["main", pending]]), signal);
-      const wait = startup.waitForAgentPreparation.bind(startup);
+      const wait = startup.waitForAgentPreparation;
       let observers = 0;
       const observedWait = vi
         .spyOn(startup, "waitForAgentPreparation")

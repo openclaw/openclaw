@@ -78,11 +78,31 @@ it("retains a saved unavailable model without offering it for another default se
   expect(onUtilityChange).not.toHaveBeenCalled();
   await choosePickerValue(utility, "__openclaw_automatic_utility__");
   expect(onUtilityChange).toHaveBeenCalledExactlyOnceWith(null);
-  const row = settingsRow(container, "Utility Fallback Model");
+  const row = settingsRow(container, "Utility fallback model");
   expect(row.textContent).toContain("1 more fallback after this one");
   const picker = row.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
   expect(picker.textContent).toContain("Ready");
   expect(row.querySelector(optionSelector("blocked"))).toBeNull();
   await choosePickerValue(picker, "fixture/last");
   expect(onUtilityFallbackChange).toHaveBeenLastCalledWith("fixture/last");
+});
+
+it("names agents with their own utility settings and opens their Overview", async () => {
+  const onOpenAgent = vi.fn();
+  const container = mount(
+    props({
+      utilityOverrides: [
+        { agentId: "forge", label: "Forge", model: "fixture/small", fallbacks: ["fixture/backup"] },
+        { agentId: "quiet", label: "Quiet", model: "", fallbacks: [] },
+      ],
+      onOpenAgent,
+    }),
+  );
+  const row = settingsRow(container, "Utility model");
+  expect(row.textContent).toContain("Forge: fixture/small · fallbacks: fixture/backup");
+  expect(row.textContent).toContain("Quiet: Disabled");
+  const link = row.querySelector<HTMLAnchorElement>('[data-agent-id="forge"] a')!;
+  expect(link.getAttribute("href")).toBe("/settings/agents/forge");
+  link.click();
+  expect(onOpenAgent).toHaveBeenCalledWith("forge");
 });

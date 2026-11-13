@@ -1,5 +1,5 @@
-import { queryObjects } from "node:v8";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { expectCollected, expectLiveObjects } from "../../../test-utils/retention.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.start.js";
 import type { EmbeddedAgentQueueHandle } from "../runs.js";
@@ -58,13 +58,15 @@ beforeEach(() => {
 });
 
 describe("embedded attempt abort", () => {
-  it("releases session callbacks when disposed controllers remain reachable", () => {
+  it("releases session callbacks when disposed controllers remain reachable", async () => {
     class SessionPayload {
       active = true;
     }
+    const payloads: WeakRef<SessionPayload>[] = [];
     const cleanupAfterEarlyAbort = async () => {};
     const createController = () => {
       const payload = new SessionPayload();
+      payloads.push(new WeakRef(payload));
       const controller = createEmbeddedAttemptExternalAbortController({
         abortSignal: new AbortController().signal,
         cleanupAfterEarlyAbort,
@@ -91,9 +93,9 @@ describe("embedded attempt abort", () => {
       controller.dispose();
       return controller;
     });
-    expect(queryObjects(SessionPayload)).toBe(1);
+    await expectLiveObjects(payloads, 1);
     active.dispose();
-    expect(queryObjects(SessionPayload)).toBe(0);
+    await expectCollected(...payloads);
     expect(completed).toHaveLength(20);
   });
 

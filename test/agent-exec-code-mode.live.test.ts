@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectRootPackageExcludedExtensionDirs } from "../scripts/lib/bundled-plugin-build-entries.mjs";
-import { vitestWorkerRuntimeAssets } from "../scripts/lib/vitest-worker-declarations.mts";
+import { vitestWorkerRuntimeAssets } from "../scripts/lib/package-root-modules.mts";
 import { isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
 import type { AgentExecEnvelope } from "../src/commands/agent-exec-result.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";

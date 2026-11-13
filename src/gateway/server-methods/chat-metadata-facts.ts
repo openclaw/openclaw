@@ -117,10 +117,36 @@ export function captureGenerationFacts(config: OpenClawConfig): PreparedGenerati
   };
 }
 
+type FactsScope = "metadata" | "catalog" | "catalog-notification" | "auth" | "commands";
+
+export function agentFactsMatch(
+  left: PreparedAgentFacts | undefined,
+  right: PreparedAgentFacts | undefined,
+  scope: FactsScope,
+): boolean {
+  return Boolean(
+    left &&
+    right &&
+    left.agentId === right.agentId &&
+    (scope === "commands"
+      ? left.skillsVersion === right.skillsVersion &&
+        left.owner.workspaceDir === right.owner.workspaceDir
+      : // Config stamping replaces the reader object without replacing its generation.
+        left.owner.isCurrent === right.owner.isCurrent &&
+        (scope === "catalog-notification"
+          ? left.authCatalogRevision === right.authCatalogRevision
+          : left.authStoreRevision === right.authStoreRevision) &&
+        // Full catalogs carry their own paired auth generation.
+        left.modelCatalog === right.modelCatalog &&
+        (scope === "auth" || left.catalogRefreshFailed === right.catalogRefreshFailed) &&
+        (scope !== "metadata" || left.skillsVersion === right.skillsVersion)),
+  );
+}
+
 export function generationFactsMatch(
   left: PreparedGenerationFacts,
   right: PreparedGenerationFacts,
-  scope: "metadata" | "catalog" | "catalog-notification" | "auth" | "commands" = "metadata",
+  scope: FactsScope = "metadata",
 ): boolean {
   if (
     left.configKey !== right.configKey ||
@@ -129,22 +155,5 @@ export function generationFactsMatch(
   ) {
     return false;
   }
-  return left.agents.every((agent, index) => {
-    const candidate = right.agents[index];
-    return (
-      candidate?.agentId === agent.agentId &&
-      (scope === "commands"
-        ? candidate.skillsVersion === agent.skillsVersion &&
-          candidate.owner.workspaceDir === agent.owner.workspaceDir
-        : // Config stamping replaces the reader object without replacing its generation.
-          candidate.owner.isCurrent === agent.owner.isCurrent &&
-          (scope === "catalog-notification"
-            ? candidate.authCatalogRevision === agent.authCatalogRevision
-            : candidate.authStoreRevision === agent.authStoreRevision) &&
-          // Full catalogs carry their own paired auth generation.
-          candidate.modelCatalog === agent.modelCatalog &&
-          (scope === "auth" || candidate.catalogRefreshFailed === agent.catalogRefreshFailed) &&
-          (scope !== "metadata" || candidate.skillsVersion === agent.skillsVersion))
-    );
-  });
+  return left.agents.every((agent, index) => agentFactsMatch(agent, right.agents[index], scope));
 }

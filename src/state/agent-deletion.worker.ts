@@ -4,7 +4,7 @@ import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
-import { readTemplateInstallRecordFromDatabase } from "../templates/provenance-read.kernel.js";
+import { readTemplateInstallRecordFromDatabase } from "../templates/provenance-read.worker.js";
 import {
   readAgentDeletionJournalAuthorityInDatabase,
   retireAgentDeletionJournalInDatabase,

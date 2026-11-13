@@ -147,6 +147,7 @@ export function captureSqliteWorkerOpen(
   const carrierUrl = resolveRuntimeWorkerGenerationUrl(carrier, options.runtimeGeneration);
   return {
     ...native,
+    carrierClass: custody.carrierClass ?? options.isolation,
     retireIdle: retireIdle ? () => inCaller(retireIdle) : undefined,
     maintenanceScope: custody.cleanupAccess
       ? undefined

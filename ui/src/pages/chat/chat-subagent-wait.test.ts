@@ -4,6 +4,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
+  countRunningSubagents,
   handoffSessionLinks,
   listResumedHandoffSessions,
   listSubagents,
@@ -358,6 +359,24 @@ describe("chat waiting on subagents", () => {
         ...input,
       }).running;
     expect(count()).toBe(2);
+    // Queued children have not started, so the running count matches Details' Working count.
+    const withQueued = [
+      ...roster,
+      {
+        ...child,
+        key: "agent:main:subagent:queued",
+        hasActiveRun: false,
+        status: "queued" as const,
+      },
+    ];
+    expect(count({ subagentSessions: withQueued })).toBe(2);
+    expect(
+      countRunningSubagents({
+        selectedSession: working,
+        subagentSessions: withQueued,
+        subagentSessionsHydrated: true,
+      }),
+    ).toBe(2);
     expect(count({ subagentSessions: [{ ...child, hasActiveRun: false }] })).toBe(0);
     expect(
       count({ subagentSessions: [...roster, { ...child, key: "agent:main:dashboard:opened" }] }),

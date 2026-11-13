@@ -334,6 +334,7 @@ export function selectLiveShardFiles(shard: string, files = collectAllLiveTestFi
       return files.filter(
         (file) =>
           file.startsWith("src/agents/") ||
+          file.startsWith("src/auto-reply/") ||
           file.startsWith("src/decisions/") ||
           file.startsWith("src/llm/") ||
           file.startsWith("src/skills/"),

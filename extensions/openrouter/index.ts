@@ -18,6 +18,7 @@ import {
 import {
   buildPassthroughGeminiSanitizingReplayPolicy,
   DEFAULT_CONTEXT_TOKENS,
+  resolveDefaultModelMaxTokens,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   getLoadedOpenRouterModelCapabilities,
@@ -168,7 +169,6 @@ function resolveOpenRouterToolFamily(modelId: string) {
 }
 
 const PROVIDER_ID = "openrouter";
-const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_FUSION_MODEL_ID = "openrouter/fusion";
 // Upstream families with OpenRouter prompt caching, so pruning waits out the cache TTL.
 // OpenRouter documents implicit Gemini caching only for the 2.5 series and newer.
@@ -380,7 +380,8 @@ export default defineSingleProviderPluginEntry({
           : {}),
         cost: capabilities?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: capabilities?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-        maxTokens: capabilities?.maxTokens ?? OPENROUTER_DEFAULT_MAX_TOKENS,
+        maxTokens:
+          capabilities?.maxTokens ?? resolveDefaultModelMaxTokens(capabilities?.contextWindow),
       };
     }
 

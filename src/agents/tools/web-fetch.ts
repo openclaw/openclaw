@@ -707,11 +707,10 @@ export function createWebFetchTool(options?: {
                 let errorText = detail;
                 const contentTypeLower = normalizeOptionalLowercaseString(contentType);
                 if (contentTypeLower?.includes("text/html") || looksLikeHtml(detail)) {
-                  const rendered = htmlToMarkdown(detail);
-                  const withTitle = rendered.title
+                  const rendered = htmlToMarkdown(detail, { extractMode: "text" });
+                  errorText = rendered.title
                     ? `${rendered.title}\n${rendered.text}`
                     : rendered.text;
-                  errorText = markdownToText(withTitle);
                 }
                 detail = truncateWebFetchText(errorText.trim(), DEFAULT_ERROR_MAX_CHARS).text;
               }

@@ -224,3 +224,27 @@ it("ModelsListResultSchema: accepts only a canonical lowercase model family toke
     withFamily(7),
   );
 });
+
+it("publishes only resolved provider presentation metadata", () => {
+  const model = { id: "local-model", name: "Local model", provider: "workstation" };
+  for (const providerIcon of [
+    { source: "builtin", name: "server" },
+    { source: "asset", url: "/__openclaw__/provider-icon/workstation?v=example" },
+  ]) {
+    const presentation = { providerName: "Workstation", providerIcon };
+    accepts(S.ModelsListResultSchema, {
+      models: [{ ...model, ...presentation }],
+      providerPresentations: { workstation: presentation },
+    });
+  }
+  rejects(
+    S.ModelsListResultSchema,
+    { models: [{ ...model, providerIcon: { source: "file", path: "/private/icon.png" } }] },
+    {
+      models: [],
+      providerPresentations: {
+        workstation: { providerIcon: { source: "url", url: "https://example.com/icon.png" } },
+      },
+    },
+  );
+});

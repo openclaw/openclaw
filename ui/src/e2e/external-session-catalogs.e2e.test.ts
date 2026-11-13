@@ -60,9 +60,11 @@ function makeCatalog(
   host: { hostId: string; label: string; kind: string; nodeId?: string },
   options: {
     canContinue?: boolean;
+    continuationUnavailableReason?: string;
     status?: string;
     archived?: boolean;
     sourceHomeId?: string;
+    sessionKey?: string;
     shareRoute?: typeof SHARE_ROUTE;
   } = {},
 ) {
@@ -83,12 +85,20 @@ function makeCatalog(
 }
 
 suite.define(() => {
-  it("opens a Visitor owned Beam cold link without shared catalog privileges", async () => {
+  it("continues from a Visitor owned Beam cold link without shared catalog privileges", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 720 } }, async ({ page }) => {
       const fullId = "a".repeat(32);
+      const handoffReason =
+        "This Beam is a read-only snapshot. Its authenticated original publisher must run beam handoff before you can continue here.";
       const gateway = await installMockGateway(page, {
         operatorScopes: ["operator.sessions.write"],
-        featureMethods: [...featureMethods, "beam.owned.list", "beam.owned.read"],
+        featureMethods: [
+          ...featureMethods,
+          "beam.owned.list",
+          "beam.owned.read",
+          "beam.owned.continue",
+          "beam.owned.resolve",
+        ],
         methodResponses: {
           "sessions.catalog.list": { catalogs: [] },
           "beam.owned.list": {
@@ -99,10 +109,19 @@ suite.define(() => {
                 fullId,
                 "Owned synthetic Beam",
                 { hostId: "gateway", label: "Beamed sessions", kind: "gateway" },
-                { shareRoute: SHARE_ROUTE },
+                {
+                  shareRoute: SHARE_ROUTE,
+                  canContinue: false,
+                  continuationUnavailableReason: handoffReason,
+                },
               ),
             ],
           },
+          "beam.owned.continue": {
+            sessionKey: "agent:main:publisher-continuation",
+            entry: { sharingRole: "owner" },
+          },
+          "beam.owned.resolve": { sessionKey: "agent:main:publisher-continuation" },
           "beam.owned.read": {
             hostId: "gateway",
             label: "Owned synthetic Beam",
@@ -116,7 +135,24 @@ suite.define(() => {
       });
       await page.goto(new URL("beam/owned-synthetic-beam-aaaaaaaaaaaa", suite.server.baseUrl).href);
       await exactText(page, "My owned Beam is readable without operator.read.").waitFor();
+      await exactText(page, handoffReason).waitFor();
       expect(await page.locator(`${visiblePane} textarea`).isDisabled()).toBe(true);
+      await page.screenshot({ path: ".openclaw/tmp/beam-talk-proof/before.png" });
+      await gateway.setMethodResponse("beam.owned.list", {
+        catalogs: [
+          makeCatalog(
+            "beam",
+            "Beam",
+            fullId,
+            "Owned synthetic Beam",
+            { hostId: "gateway", label: "Beamed sessions", kind: "gateway" },
+            { shareRoute: SHARE_ROUTE, canContinue: true },
+          ),
+        ],
+      });
+      await page.reload();
+      await exactText(page, "My owned Beam is readable without operator.read.").waitFor();
+      expect(await page.locator(`${visiblePane} textarea`).isDisabled()).toBe(false);
       expect((await gateway.getRequests("beam.owned.list")).length).toBeGreaterThan(0);
       expect((await gateway.getRequests("beam.owned.read")).at(-1)?.params).toMatchObject({
         catalogId: "beam",
@@ -125,6 +161,85 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(0);
       await page.reload();
       await exactText(page, "My owned Beam is readable without operator.read.").waitFor();
+      const composer = page.locator(`${visiblePane} .agent-chat__composer-combobox > textarea`);
+      await composer.fill("Continue my published conversation");
+      await page.screenshot({ path: ".openclaw/tmp/beam-talk-proof/after.png" });
+      await composer.press("Enter");
+      const adoption = await gateway.waitForRequest("beam.owned.continue");
+      expect(adoption.params).toMatchObject({
+        catalogId: "beam",
+        hostId: "gateway",
+        threadId: fullId,
+      });
+      expect(await gateway.getRequests("sessions.catalog.continue")).toHaveLength(0);
+      const sent = await gateway.waitForRequest("chat.send");
+      expect(sent.params).toMatchObject({
+        sessionKey: "agent:main:publisher-continuation",
+        message: "Continue my published conversation",
+      });
+      await waitForChat(page, "main/publisher-continuation");
+      await gateway.emitChatFinal({
+        runId: (sent.params as { idempotencyKey: string }).idempotencyKey,
+        sessionKey: "agent:main:publisher-continuation",
+        text: "Your published conversation continues here.",
+      });
+      await exactText(
+        page.locator(visiblePane).locator("p"),
+        "Your published conversation continues here.",
+      ).waitFor();
+      expect(await composer.isDisabled()).toBe(false);
+      await gateway.setMethodResponse("beam.owned.list", {
+        catalogs: [
+          makeCatalog(
+            "beam",
+            "Beam",
+            fullId,
+            "Owned synthetic Beam",
+            { hostId: "gateway", label: "Beamed sessions", kind: "gateway" },
+            {
+              shareRoute: SHARE_ROUTE,
+              canContinue: true,
+              sessionKey: "agent:main:publisher-continuation",
+            },
+          ),
+        ],
+      });
+      await gateway.setSessionsListResponse({
+        sessions: [
+          {
+            key: "agent:main:publisher-continuation",
+            sessionId: "publisher-continuation-session",
+            updatedAt: Date.now(),
+            kind: "direct",
+            sharingRole: "owner",
+            visibility: "draft",
+          },
+        ],
+      });
+      // The request audit belongs to each document; canonical rows survive reload.
+      // Retain the first send before navigation so both sends remain accounted for.
+      const firstSends = await gateway.getRequests("chat.send");
+      expect(firstSends).toHaveLength(1);
+      expect(await gateway.getRequests("beam.owned.continue")).toHaveLength(1);
+      await page.goto(new URL("beam/owned-synthetic-beam-aaaaaaaaaaaa", suite.server.baseUrl).href);
+      await expect
+        .poll(async () => (await paneStates(page.locator(visiblePane)))[0]?.sessionKey)
+        .toBe("agent:main:publisher-continuation");
+      await composer.fill("And continue with my next message");
+      await composer.press("Enter");
+      await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(1);
+      const reopenedSends = await gateway.getRequests("chat.send");
+      expect(reopenedSends[0]?.params).toMatchObject({
+        sessionKey: "agent:main:publisher-continuation",
+        message: "And continue with my next message",
+      });
+      expect(
+        [...firstSends, ...reopenedSends].map(
+          ({ params }) => (params as { sessionKey?: string }).sessionKey,
+        ),
+      ).toEqual(["agent:main:publisher-continuation", "agent:main:publisher-continuation"]);
+      expect(await gateway.getRequests("beam.owned.continue")).toHaveLength(0);
+      expect(await gateway.getRequests("beam.owned.resolve")).toHaveLength(1);
     });
   });
   it.each(["Riley"])(

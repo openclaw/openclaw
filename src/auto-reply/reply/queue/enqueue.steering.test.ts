@@ -247,3 +247,30 @@ it.each(["summarize", "new", "old"] as const)(
     }
   },
 );
+
+it("sheds ambient backlog after steering settles without evicting the active turn", async () => {
+  queue.settings = { ...queue.settings, cap: 2 };
+  const active = source("active");
+  active.currentInboundEventKind = "room_event";
+  const { gate, drained, delivered } = recordDelivery(3, active);
+  queue.enqueue(active);
+  await gate.entered;
+  try {
+    const request = source("request");
+    const reservation = await queue.admit(request);
+    const protectedRun = source("protected");
+    protectedRun.currentInboundEventKind = "room_event";
+    protectedRun.protectFromQueueOverflow = true;
+    queue.enqueue(protectedRun, false);
+    const ambient = source("ambient");
+    ambient.currentInboundEventKind = "room_event";
+    queue.enqueue(ambient, false);
+    reservation.fallback();
+    await queue.settle(ambient);
+    gate.resolve();
+    await drained;
+    expect(delivered).toEqual(["active", "request", "protected"]);
+  } finally {
+    gate.resolve();
+  }
+});

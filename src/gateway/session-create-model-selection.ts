@@ -45,6 +45,7 @@ export async function prepareSessionCreateRuntimeSelection(params: {
     "cfg" | "model" | "agentRuntime" | "requestingOperatorScopes" | "waitForModelCatalog"
   >;
   agentId: string;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   sessionKey: string;
   storePath: string;
   entry: SessionEntry;
@@ -63,6 +64,8 @@ export async function prepareSessionCreateRuntimeSelection(params: {
   const selection = await prepareSessionPatchRuntimeSelection({
     cfg: request.cfg,
     agentId: params.agentId,
+    operatorAuthority: params.operatorAuthority,
+    validateInheritedRuntime: true,
     callerCanConsent: request.requestingOperatorScopes?.includes(ADMIN_SCOPE) === true,
     patch: { key: sessionKey, agentRuntime: request.agentRuntime, model: request.model },
     entry,

@@ -3,19 +3,19 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
-import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
-import { showToast } from "../../lib/toast.ts";
+import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "../chat/components/chat-attachment-controls.types.ts";
-import "../../styles/new-session.css";
-import "../../styles/chat/composer.css";
 import {
   appendChatAttachmentFiles,
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
 } from "../chat/components/chat-attachments.ts";
+import "../../styles/new-session.css";
+import "../../styles/chat/composer.css";
+import type { ChatCommentAction } from "../chat/components/chat-selection-annotations.tsx";
+import { showBackgroundSessionCreated } from "./background-session-notice.ts";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import { NewSessionDraft } from "./draft.ts";
 import type { NewSessionRouteData } from "./location.ts";
@@ -23,7 +23,6 @@ import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
 import { PaletteSessionPreferences } from "./palette-session-preferences.ts";
 import { PaletteDraftSlot, PaletteReleasedStarts } from "./palette-session-starts.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
-import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-notice-owner.ts";
 import type { SubmissionPresentation } from "./submission-action.ts";
 
 registerCommandPaletteEnglish();
@@ -41,7 +40,7 @@ export class PaletteSessionDraft {
     this.callbacks.changed();
   }
   setSubmissionError(error: unknown) {
-    this.draft?.submission.setError(error instanceof Error ? error.message : String(error));
+    this.draft?.submission.setError(formatUiError(error));
   }
   private slot: PaletteDraftSlot | undefined;
   private get draft(): NewSessionDraft | undefined {
@@ -52,15 +51,16 @@ export class PaletteSessionDraft {
     return gateway ? gatewayPresentationScope(gateway) : undefined;
   });
   private attachmentIntent = false;
+  private attachmentCount = 0;
   private readonly changed = () => {
     const draft = this.draft?.submission.attachmentDraft;
     const previous = this.attachmentIntent;
+    const count = draft?.reads.project(draft.attachments).length ?? 0;
+    const admitted = count > this.attachmentCount;
+    this.attachmentCount = count;
     // Pending reads establish intent before they have a ready payload.
-    this.attachmentIntent = Boolean(
-      draft?.reads.project(draft.attachments).length ||
-      (this.attachmentIntent && this.message.trim()),
-    );
-    if (previous !== this.attachmentIntent) {
+    this.attachmentIntent = Boolean(count || (this.attachmentIntent && this.message.trim()));
+    if (admitted || previous !== this.attachmentIntent) {
       this.callbacks.onAttachmentModeChange?.();
     }
     this.callbacks.changed();
@@ -180,6 +180,8 @@ export class PaletteSessionDraft {
         this.read().context?.gateway.snapshot.hello?.policy,
       ),
       disabled: this.messageLocked,
+      // Transcript excerpts have no anchor here to reopen the comment editor against.
+      commentsEditable: false,
       getAttachments: () => attachmentDraft.attachments,
       readSignal,
       onPendingReadsChange: (delta) => attachmentDraft.reads.updatePending(readSignal, delta),
@@ -202,7 +204,7 @@ export class PaletteSessionDraft {
     this.synchronizePresentationScope();
     const props = this.attachmentProps();
     if (this.read().open && !this.messageLocked && props) {
-      handleChatAttachmentPaste(event, props, { imagesOnly: true });
+      handleChatAttachmentPaste(event, props);
     }
   };
 
@@ -233,6 +235,26 @@ export class PaletteSessionDraft {
         read().attachmentProps()?.onAttachmentsChange?.(attachments),
       onPendingReadsChange: (delta) => read().attachmentProps()?.onPendingReadsChange?.(delta),
     });
+  }
+
+  removeComment({ id, action }: ChatCommentAction) {
+    const props = this.attachmentProps();
+    if (action === "edit" || !props) {
+      return;
+    }
+    props.onAttachmentsChange?.(
+      (props.getAttachments?.() ?? []).filter((item) =>
+        action === "delete-all" ? !item.selectionAnnotation : item.id !== id,
+      ),
+    );
+  }
+
+  adoptAttachments(attachments: readonly ChatAttachment[]) {
+    const props = this.attachmentProps();
+    if (!this.read().open || this.messageLocked || !props) {
+      return;
+    }
+    props.onAttachmentsChange?.([...(props.getAttachments?.() ?? []), ...attachments]);
   }
 
   adoptAttachmentFiles(files: readonly File[], submitRequested = false) {
@@ -336,7 +358,16 @@ export class PaletteSessionDraft {
         },
         onAccepted: (result) => {
           slot.accepted = true;
-          this.accepted(result);
+          showBackgroundSessionCreated(
+            () => this.read().context,
+            result,
+            () => {
+              // The destination owns rejected-turn recovery; close the launcher over it.
+              if (this.read().open) {
+                this.callbacks.onClose();
+              }
+            },
+          );
         },
       },
     );
@@ -532,40 +563,5 @@ export class PaletteSessionDraft {
       this.draft?.submission.restoreMessage("");
     }
     this.owner = { gateway, url, scope };
-  }
-
-  private accepted(result: SessionCreateOutcome & { agentId: string }) {
-    const context = this.read().context;
-    if (!context) {
-      return;
-    }
-    const isCurrentOwner = captureSessionNoticeOwner(context);
-    const row = context.sessions.state.result?.sessions.find(
-      (candidate) => candidate.key === result.key,
-    );
-    const status =
-      result.initialRun.status === "rejected"
-        ? result.initialRun.error
-        : t(
-            result.initialRun.status === "started"
-              ? "sessionsView.statusRunning"
-              : "sessionsView.statusIdle",
-          );
-    const openSession = () => {
-      if (this.read().context !== context || !isCurrentOwner()) {
-        return;
-      }
-      openSessionNoticeTarget(context, result.key, result.agentId);
-      // The destination owns a rejected first turn and its retry; dismiss the launcher over it.
-      if (this.read().open) {
-        this.callbacks.onClose();
-      }
-    };
-    showToast({
-      fifo: true,
-      message: `${resolveSessionDisplayName(result.key, row)}: ${status}`,
-      actionLabel: t("sessionsView.openSession"),
-      onAction: openSession,
-    });
   }
 }

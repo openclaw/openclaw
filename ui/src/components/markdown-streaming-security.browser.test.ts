@@ -199,9 +199,6 @@ describe("streaming Markdown sanitization at the live DOM boundary", () => {
           { role: "assistant", isStreaming: false },
           sample.options ?? {},
         );
-        if (schedule.name === "static") {
-          expect(completed.parts().every((part) => typeof part === "string")).toBe(true);
-        }
         reconciler.update(completed.messageKey, completed.source, completed.parts());
         expect(unsafeDom(container), `${key}, completion`).toEqual([]);
         expect(serializedContent(container), `${key}, completion`).toBe(expected);

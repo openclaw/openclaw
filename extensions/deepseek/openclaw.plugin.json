@@ -37,16 +37,16 @@
         "models": [
           {
             "id": "deepseek-v4-flash",
-            "name": "DeepSeek V4 Flash",
+            "name": "DeepSeek V4.1 Flash (Legacy Alias)",
             "reasoning": true,
-            "thinkingLevelMap": { "xhigh": "max", "max": "max" },
-            "input": ["text"],
+            "thinkingLevelMap": { "xhigh": "high", "max": "max" },
+            "input": ["text", "image"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
             "cost": {
-              "input": 0.14,
-              "output": 0.28,
-              "cacheRead": 0.0028,
+              "input": 0.3,
+              "output": 1.2,
+              "cacheRead": 0.006,
               "cacheWrite": 0
             },
             "compat": {
@@ -62,14 +62,14 @@
             "id": "deepseek-v4-pro",
             "name": "DeepSeek V4 Pro",
             "reasoning": true,
-            "thinkingLevelMap": { "xhigh": "max", "max": "max" },
+            "thinkingLevelMap": { "xhigh": "high", "max": "max" },
             "input": ["text"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
             "cost": {
-              "input": 0.435,
-              "output": 0.87,
-              "cacheRead": 0.003625,
+              "input": 1.32,
+              "output": 3.96,
+              "cacheRead": 0.044,
               "cacheWrite": 0
             },
             "compat": {
@@ -83,16 +83,16 @@
           },
           {
             "id": "deepseek-v4-flash-vision-exp",
-            "name": "DeepSeek V4 Flash Vision (Experimental)",
+            "name": "DeepSeek V4.1 Flash (Legacy Vision Alias)",
             "reasoning": true,
-            "thinkingLevelMap": { "xhigh": "max", "max": "max" },
+            "thinkingLevelMap": { "xhigh": "high", "max": "max" },
             "input": ["text", "image"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
             "cost": {
-              "input": 0.44,
-              "output": 1.32,
-              "cacheRead": 0.014,
+              "input": 0.3,
+              "output": 1.2,
+              "cacheRead": 0.006,
               "cacheWrite": 0
             },
             "compat": {
@@ -108,7 +108,7 @@
             "id": "deepseek-flash",
             "name": "DeepSeek V4.1 Flash",
             "reasoning": true,
-            "thinkingLevelMap": { "xhigh": "max", "max": "max" },
+            "thinkingLevelMap": { "xhigh": "high", "max": "max" },
             "input": ["text", "image"],
             "contextWindow": 1000000,
             "maxTokens": 384000,

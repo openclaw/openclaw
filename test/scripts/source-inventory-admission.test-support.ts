@@ -18,7 +18,7 @@ export function prepareSourceInventoryAdmission(
   const envelope = JSON.parse(String(inputs.trusted_workflow_json));
   envelope.laneInputs = { qualification_baselines_json: qualificationBaselinesJson };
   inputs.trusted_workflow_json = JSON.stringify(envelope);
-  const proof = qualificationFixture(false, {
+  const options = {
     candidateSha: targetSha,
     candidateVersion: version,
     inputs,
@@ -32,7 +32,9 @@ export function prepareSourceInventoryAdmission(
     oldestSupportedBaseline: JSON.parse(
       readFileSync(join(tooling, "scripts/lib/upgrade-survivor-scenarios.json"), "utf8"),
     ).oldestSupportedBaseline,
-  });
+  };
+  const proof = qualificationFixture(false, options);
+  const archive = proof.archive();
   const responses: Record<string, string> = {};
   verifyQualificationAdmission({
     descriptor: proof.descriptor,
@@ -43,10 +45,12 @@ export function prepareSourceInventoryAdmission(
     inputs,
     runGh: (args) => {
       const raw = proof.runGh(args);
-      responses[JSON.stringify(args)] = raw;
+      if (typeof raw === "string") {
+        responses[JSON.stringify(args)] = raw;
+      }
       return raw;
     },
-    downloadArchive: () => proof.archive(),
+    downloadArchive: () => archive,
   });
   envelope.qualificationAdmission = proof.descriptor;
   inputs.trusted_workflow_json = JSON.stringify(envelope);
@@ -61,7 +65,6 @@ export function prepareSourceInventoryAdmission(
     }
   }
   writeFileSync(join(temporary, "qualification-responses.json"), JSON.stringify(responses));
-  const archive = proof.archive();
   if (fault === "wrong-archive") {
     archive[0] = archive[0]! ^ 1;
   }

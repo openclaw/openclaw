@@ -250,15 +250,16 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
   );
 
   it.each([
-    ["captured default", undefined, "alpha", "alpha"],
-    ["explicit job owner", "gamma", "alpha", "gamma"],
-    ["captured absence", undefined, undefined, undefined],
+    ["captured default", undefined, undefined, "alpha", "alpha"],
+    ["explicit job owner", "gamma", "agent:session-owner:main", "alpha", "gamma"],
+    ["session owner", undefined, "agent:session-owner:main", "alpha", "session-owner"],
+    ["captured absence", undefined, undefined, undefined, undefined],
   ])(
     "routes a failure alert using %s instead of the live default",
-    async (_name, jobAgentId, defaultAgentId, recipient) => {
+    async (_name, jobAgentId, sessionKey, defaultAgentId, recipient) => {
       const job = announceJob();
       job.agentId = jobAgentId;
-      job.sessionKey = "agent:session-owner:main";
+      job.sessionKey = sessionKey;
       const resolveCronAgent = vi.fn((requested?: string | null) => ({
         agentId: requested ?? "beta",
         cfg: {},

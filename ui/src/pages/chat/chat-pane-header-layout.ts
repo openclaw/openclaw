@@ -14,6 +14,7 @@ import {
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import type { ChatMobileHost, MobileDetailsRoute } from "./chat-mobile-host.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
+import { chatDetailsDockingLayout } from "./chat-snapshot-prewarm.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { listSubagents } from "./chat-subagent-wait.ts";
 import type { ChatProps } from "./chat-view.tsx";
@@ -301,6 +302,14 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
     const headerDetails: ChatDetailsViewProps | undefined = ownsSubagentsPanel
       ? {
           elements,
+          dockingLayout: chatDetailsDockingLayout([
+            window.innerWidth,
+            this.context.navigation.snapshot.navWidth,
+            this.context.navigation.snapshot.navCollapsed,
+            this.context.theme.settings.chatSplitLayout,
+            this.paneId,
+            sidebarLayout,
+          ]),
           chat: merge(paneChatProps, detailsActions, detailsOutputs, {
             cachedDetails: cached?.details,
             sessionFactsReady:
@@ -353,8 +362,10 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
                 }
               : undefined,
             progressCard:
-              detailsProgress?.card ??
-              (this.detailsProgressCardInitialLoading ? cached?.snapshot.progressCard : null),
+              this.cachedSessionStatePending() && this.cachedSessionState()?.archived
+                ? null
+                : (detailsProgress?.card ??
+                  (this.detailsProgressCardInitialLoading ? cached?.snapshot.progressCard : null)),
             progressCardIdentity: detailsProgress?.identity,
             progressCardLifetime: detailsProgress?.lifetime,
             progressCardInitialLoading: this.detailsProgressCardInitialLoading,

@@ -97,6 +97,9 @@ Use the built-in ACP client to sanity-check the bridge without an IDE. It spawns
 
 After a session is established, an unexpected server signal exit makes the client exit with status `1`. An explicit `exit` or `quit` remains successful when it stops the server by signal. Numeric server exit codes are propagated, including a nonzero code returned during an explicit quit. Closing interactive input, including Ctrl-D at an empty prompt, uses the same client-owned shutdown path; it does not wait for an in-flight response to finish.
 
+During startup, SIGINT or SIGTERM stops and joins the spawned server before the
+client exits with status `130` or `143`, respectively, without opening a prompt.
+
 ```bash
 openclaw acp client
 

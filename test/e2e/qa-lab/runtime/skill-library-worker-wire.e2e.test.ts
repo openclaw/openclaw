@@ -392,9 +392,9 @@ it("pins skill bundles through worker authoring and lifecycle changes", async (c
       });
       await settlement.wait(admin, remoteKey, signal);
       const authorOutput = provider.authorOutputs.get("bob-worker");
-      expect(authorOutput?.describedId).toEqual(expect.stringContaining("skill_workshop"));
+      expect(authorOutput?.describedId).toEqual(expect.stringContaining("skill_library"));
       if (!authorOutput?.created || !authorOutput.read || !authorOutput.updated) {
-        throw new Error("Worker did not return real Workshop create, read and update results");
+        throw new Error("Worker did not return real skill_library create, read and update results");
       }
       const created = JSON.parse(authorOutput.created) as SkillsLibraryReceipt;
       const authored = JSON.parse(authorOutput.updated) as SkillsLibraryReceipt;

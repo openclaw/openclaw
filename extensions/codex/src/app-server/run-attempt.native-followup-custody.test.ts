@@ -263,7 +263,7 @@ it.each([
           rawPayload,
         });
       await expect(invokeReceipt({ ...receipt, turn_id: "retired-root-turn" })).rejects.toThrow(
-        "Codex native submission parent registration is no longer current",
+        "native hook relay bridge stale registration",
       );
       expect(middleware).not.toHaveBeenCalled();
       expect(afterToolCall).not.toHaveBeenCalled();

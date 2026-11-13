@@ -61,10 +61,10 @@ import {
   migrateCronDefaultStoreIdentity,
   resolveCronIdentityMigrationDefaultStoreKey,
 } from "./openclaw-state-db-cron-identity-migration.js";
+import { stateEngineInput } from "./openclaw-state-db-engine-input.js";
 import {
   admitStatePostgres,
   inspectStateSqlite,
-  stateEngineInput,
   stateEngineSchema,
 } from "./openclaw-state-db-engine.js";
 import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
