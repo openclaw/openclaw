@@ -1288,9 +1288,10 @@ class ChatController internal constructor(
     bootstrap(sessionKey = nextKey, generation = generation)
   }
 
-  /** Refreshes chat history, sessions, and model choices without clearing optimistic messages first. */
+  /** Refreshes chat history, questions, sessions, and model choices without clearing optimistic messages first. */
   fun refresh() {
     syncSessionReactions(force = true)
+    refreshQuestions()
     synchronized(gatewayScopeApplyLock) {
       if (!isChatMetadataNotice(_errorText.value)) updateErrorText(null)
     }

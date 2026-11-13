@@ -216,6 +216,78 @@ class ChatQuestionTest {
   }
 
   @Test
+  fun manualRefreshRecoversQuestionsAfterInitialRetriesAreExhausted() {
+    runTest {
+      val pending = record()
+      var available = false
+      var listCalls = 0
+      val controller =
+        createScriptedChatController {
+          respond("chat.history", historyResponse(sessionId = "main", messages = emptyList()))
+          respond("question.list") {
+            listCalls += 1
+            if (!available) error("Temporary question service failure")
+            json.encodeToString(QuestionListResult(listOf(pending)))
+          }
+        }
+
+      controller.onGatewayConnected()
+      advanceUntilIdle()
+      assertEquals(4, listCalls)
+      assertTrue(controller.questions.value.isEmpty())
+      val selectedSession = controller.sessionKey.value
+
+      available = true
+      controller.refresh()
+      runCurrent()
+
+      assertEquals(listOf(pending.id), controller.questions.value.map { it.record.id })
+      assertEquals(5, listCalls)
+      assertEquals(ChatQuestionStatus.Pending, controller.onlyQuestion.status())
+      assertEquals(selectedSession, controller.sessionKey.value)
+    }
+  }
+
+  @Test
+  fun manualRefreshPreservesPendingDraftAndRecoversRemoteAnswer() {
+    runTest {
+      val pending = record()
+      val answers = QuestionAnswers(mapOf("meal" to listOf("Tacos")))
+      val answered = pending.copy(status = "answered", answers = answers)
+      var listed = listOf(pending)
+      var getCalls = 0
+      val controller =
+        createScriptedChatController {
+          respond("chat.history", historyResponse(sessionId = "main", messages = emptyList()))
+          respond("question.list") { json.encodeToString(QuestionListResult(listed)) }
+          respond("question.get") {
+            getCalls += 1
+            json.encodeToString(QuestionGetResult(answered))
+          }
+        }
+
+      controller.handleGatewayEvent("question.requested", json.encodeToString(pending))
+      runCurrent()
+      controller.updateQuestionDraft(controller.onlyQuestion) { it.toggle(question, "Pizza") }
+      val draft = controller.onlyQuestion.draft
+      controller.refresh()
+      runCurrent()
+      assertEquals(draft, controller.onlyQuestion.draft)
+      assertEquals(ChatQuestionStatus.Pending, controller.onlyQuestion.status())
+      assertEquals(0, getCalls)
+
+      listed = emptyList()
+      controller.refresh()
+      runCurrent()
+
+      assertEquals(ChatQuestionStatus.AnsweredElsewhere, controller.onlyQuestion.status())
+      assertEquals(answers, controller.onlyQuestion.record.answers)
+      assertEquals(ChatQuestionDraft(), controller.onlyQuestion.draft)
+      assertEquals(1, getCalls)
+    }
+  }
+
+  @Test
   fun staleQuestionListCannotOverwriteNewerEvent() =
     runTest {
       val listStarted = CompletableDeferred<Unit>()
