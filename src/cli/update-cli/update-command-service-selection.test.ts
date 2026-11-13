@@ -33,6 +33,7 @@ type Scenario = {
   runtime?: "node" | "bun";
   definition?: "plain" | "empty" | "managedDefinition" | "managedOverrides";
   sameRoot?: boolean;
+  noRestart?: boolean;
 };
 const cases: Scenario[] = [
   { platform: "linux", fault: "missing manager UID" },
@@ -46,6 +47,8 @@ const cases: Scenario[] = [
   { platform: "win32", sameRoot: true },
   { platform: "linux", definition: "managedOverrides" },
   { platform: "linux", definition: "managedDefinition" },
+  { platform: "linux", definition: "managedOverrides", runtime: "bun" },
+  { platform: "linux", definition: "managedOverrides", noRestart: true },
   { platform: "linux", definition: "empty" },
   { platform: "linux", definition: "empty", runtime: "bun" },
   { platform: "linux", fault: "app owner" },
@@ -55,7 +58,7 @@ const cases: Scenario[] = [
 
 it.each(cases)(
   "selects verified service state: %j",
-  ({ platform, fault, runtime = "node", definition = "plain", sameRoot }) =>
+  ({ platform, fault, runtime = "node", definition = "plain", sameRoot, noRestart }) =>
     withServiceHome(async (home) => {
       const recorded = path.join(home, "service");
       const requested = sameRoot ? recorded : path.join(home, "invoking");
@@ -148,7 +151,11 @@ it.each(cases)(
         expect(pin).not.toHaveBeenCalled();
         return;
       }
-      if (definition === "managedOverrides" || definition === "managedDefinition") {
+      if (
+        (definition === "managedOverrides" || definition === "managedDefinition") &&
+        runtime === "node" &&
+        !noRestart
+      ) {
         // Operator drop-ins own the service definition; a cross-root update
         // cannot rebind the service, so it must refuse instead of silently
         // redirecting at the managed service root (split-version + shared
@@ -159,7 +166,10 @@ it.each(cases)(
         });
         return;
       }
-      const prepared = await prepareUpdateCommand({ dryRun: true });
+      const prepared = await prepareUpdateCommand({
+        dryRun: true,
+        ...(noRestart ? { restart: false } : {}),
+      });
       const admissionRoot = resolveUpdateCommandAdmissionRoot(prepared);
       const env = await resolveUpdateCommandAdmissionEnv({ root: admissionRoot, opts: {} });
       const selected = !fault || fault === "sealed definition";

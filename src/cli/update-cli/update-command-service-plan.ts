@@ -483,21 +483,21 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   if (serviceRoot && differentRoot) {
     // Only an owned, writable definition can move from serving A to invoking B.
     // Bun and protected definitions retain the existing service-root update path.
-    if (
+    const canRebind =
       !serviceBun &&
       params.rebind !== false &&
       process.platform !== "win32" &&
-      !hasGatewayServiceDefinitionOverrides(command) &&
-      inspected.verdict.refreshDefinition
-    ) {
+      inspected.verdict.refreshDefinition;
+    if (canRebind && !hasGatewayServiceDefinitionOverrides(command)) {
       plan.serviceRoot = serviceRoot;
-    } else if (hasGatewayServiceDefinitionOverrides(command)) {
+    } else if (canRebind && hasGatewayServiceDefinitionOverrides(command)) {
       // Operator drop-ins own the service definition, so the update cannot
       // rebind the service to the invoking root. Redirecting the update at the
       // managed service root alone silently splits versions: the shared
       // ~/.openclaw/npm/projects plugin generations move to the new release
       // while the invoking CLI stays on the old one. Refuse with guidance
-      // instead of creating that state.
+      // instead of creating that state. Bun, Windows, explicit no-restart,
+      // and non-refreshable verdicts keep the documented service-root route.
       throw new GatewayServiceUpdateOwnershipError(
         [
           "The Gateway service definition carries operator drop-in overrides, so `openclaw update` cannot rebind the service to the invoking install root.",
