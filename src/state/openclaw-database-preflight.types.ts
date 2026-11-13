@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SqliteCleanCloseSealRefusal } from "../infra/sqlite-clean-close-seal.js";
 import type { SqliteSchemaIssue } from "../infra/sqlite-schema-contract.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import type { AgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
@@ -10,6 +11,12 @@ export type AgentDatabasePreflightStats = {
   schemaProcessCount: number;
   schemaInspectionCount: number;
   schemaSnapshotCount: number;
+  statePreflightMs?: number;
+  agentPreflightMs?: number;
+  stateIntegrityCheckCount?: number;
+  stateIntegrityMs?: number;
+  stateSealCount?: number;
+  stateIntegrityReason?: SqliteCleanCloseSealRefusal | "maintenance" | "startup-not-ready";
 };
 
 export type IncompatibleOpenClawDatabase = {
@@ -43,6 +50,8 @@ export type OpenClawDatabaseSchemaPreflight = {
   indeterminate: IndeterminateOpenClawDatabase[];
   agentRefusals?: AgentDatabaseAdmissionRefusal[];
   pendingMigrations?: Omit<IncompatibleOpenClawDatabase, "writerAppVersion">[];
+  /** Current owned schemas that need no repair; full integrity may still be pending. */
+  readReadyAgentPaths?: string[];
   deferredSchemaPublications?: DeferredStateSchemaPublication[];
 };
 
@@ -101,3 +110,19 @@ export type OpenClawDatabasePreflightOptions = {
   agentAdmissionConfig?: OpenClawConfig;
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
 };
+
+export type OpenClawDatabaseReadinessOptions = {
+  env: NodeJS.ProcessEnv;
+  onAgentInspection?: (stats: AgentDatabasePreflightStats) => void;
+  onRegisteredAgentDatabases?: OpenClawDatabasePreflightOptions["onRegisteredAgentDatabases"];
+} & (
+  | {
+      operation: "doctor";
+      configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
+      config?: OpenClawConfig;
+      onDeferredSchemaPublication?: (publication: DeferredStateSchemaPublication) => void;
+      onVerified?: (schemas: OpenClawDatabaseSchemaPreflight) => void;
+    }
+  | { operation: "gateway-restart"; config?: OpenClawConfig }
+  | { operation: "gateway-startup"; config: OpenClawConfig }
+);

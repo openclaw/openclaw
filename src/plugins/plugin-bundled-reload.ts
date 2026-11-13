@@ -48,15 +48,46 @@ export function resolveBundledPluginReloadSource(rootDir: string): BundledPlugin
   };
 }
 
+/** Attach ownership facts when an opted-in development reload selected this bundled plugin. */
+export function withBundledPluginReloadSource<
+  T extends {
+    origin: string;
+    rootDir: string;
+    reloadBundledCode?: boolean;
+    bundledReloadSource?: BundledPluginReloadSource;
+  },
+>(input: T): T {
+  return input.origin === "bundled" && input.reloadBundledCode && !input.bundledReloadSource
+    ? { ...input, bundledReloadSource: resolveBundledPluginReloadSource(input.rootDir) }
+    : input;
+}
+
+/**
+ * Canonical cache root for a captured plugin. Bundled reload captures from the host
+ * root, so its plugin keeps its own root instead of aliasing the host's cache record.
+ */
+export function pluginCacheRootFor(
+  params: { rootDir: string; bundledReloadSource?: BundledPluginReloadSource },
+  capturedSourceRoot: string,
+): string {
+  return params.bundledReloadSource ? params.rootDir : capturedSourceRoot;
+}
+
 /** Select source roots for a fresh capture or a recovered bundled generation. */
-export function bundledPluginCaptureInputs(
-  rootDir: string,
-  source: string,
-  policy: BundledPluginReloadSource | undefined,
-  recovering: boolean,
-  standalone: boolean | undefined,
-): [string, string | string[] | undefined] {
-  const root = policy && !recovering ? policy.hostRoot : rootDir;
+export function bundledPluginCaptureInputs({
+  rootDir,
+  source,
+  bundledReloadSource: policy,
+  recoverySourceMap,
+  standalone,
+}: {
+  rootDir: string;
+  source: string;
+  bundledReloadSource?: BundledPluginReloadSource;
+  recoverySourceMap?: unknown;
+  standalone?: boolean;
+}): [string, string | string[] | undefined] {
+  const root = policy && !recoverySourceMap ? policy.hostRoot : rootDir;
   const entries = policy
     ? policy.ownedPaths.map((relative) => path.join(root, relative))
     : standalone
@@ -92,4 +123,14 @@ export function resolveBundledSharedModule(
     return undefined;
   }
   return path.resolve(policy.hostRoot, relative);
+}
+
+/** Artifact resolver for imports that must keep the host's canonical module identity. */
+export function bundledSharedModuleResolver(
+  policy: BundledPluginReloadSource | undefined,
+  sourceRoot: string,
+): ((importer: string, specifier: string) => string | undefined) | undefined {
+  return policy
+    ? (importer, specifier) => resolveBundledSharedModule(policy, sourceRoot, importer, specifier)
+    : undefined;
 }

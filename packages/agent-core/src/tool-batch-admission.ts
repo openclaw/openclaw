@@ -1,4 +1,3 @@
-import type { InternalToolBatchLifecycle } from "./internal-hooks.js";
 import type { AgentTool, AgentToolCall, AgentToolResult, InternalToolBatchCall } from "./types.js";
 
 /** Validation outcomes read by whole-batch admission; agent-loop owns the full shapes. */
@@ -44,32 +43,4 @@ export function admittedEntryIds(entries: readonly ToolBatchEntry[]): string[] {
       ? [entry.toolCall.id]
       : [],
   );
-}
-
-/**
- * Rejected calls never start, so they launch as lifecycle commits when the
- * launch cursor passes their assistant-order position. Admission then records
- * them between the prepared calls that commit as their implementations start.
- */
-export function createRejectedToolCallLauncher(
-  entries: readonly ToolBatchEntry[],
-  lifecycle: InternalToolBatchLifecycle | undefined,
-): (end: number) => { index: number; error: unknown } | undefined {
-  let next = 0;
-  return (end) => {
-    for (; next < end; next += 1) {
-      const entry = entries[next];
-      if (entry?.errorKind !== "argument-validation") {
-        continue;
-      }
-      try {
-        lifecycle?.commitReadyCalls?.([
-          { toolCallId: entry.toolCall.id, args: entry.toolCall.arguments },
-        ]);
-      } catch (error) {
-        return { index: next, error };
-      }
-    }
-    return undefined;
-  };
 }

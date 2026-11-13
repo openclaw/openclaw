@@ -1,16 +1,15 @@
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
+import { projectGatewayUrlForDiagnostics } from "../gateway/connection-details.js";
 import { describeDatabaseEngineSelection } from "../infra/database-engine/report.js";
 import { readUpdateRunStatus } from "../infra/update-run-status.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
 import { collectRecoveryDiskUsage } from "./recovery-disk-usage.js";
-import {
-  buildGatewayStatusJsonPayload,
-  resolveStatusUpdateChannelInfo,
-} from "./status-all/format.js";
+import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
 import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import {
-  reportStatusScanFailure,
+  reportStatusScanFailureUnlessInterrupted,
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
@@ -27,7 +26,10 @@ type StatusJsonCommandOptions = {
 /** Prevents --agent from implying that the aggregate status report itself is agent-scoped. */
 export function assertStatusUsageAgentScope(opts: StatusJsonCommandOptions): void {
   if (opts.agent !== undefined && opts.usage !== true) {
-    throw new Error("--agent is only valid with --usage");
+    throwExpectedCliError("--agent is only valid with --usage");
+  }
+  if (opts.agent !== undefined && !opts.agent.trim()) {
+    throwExpectedCliError("--agent must not be blank");
   }
 }
 
@@ -48,7 +50,12 @@ export async function runStatusJsonCommand(params: {
         params.runtime,
       ),
     )
-    .catch((error: unknown) => reportStatusScanFailure(error, params.runtime, opts.timeoutMs));
+    .catch((error: unknown) =>
+      reportStatusScanFailureUnlessInterrupted(error, params.runtime, opts.timeoutMs),
+    );
+  if (!scan) {
+    return;
+  }
   const updateRunStatus = await readUpdateRunStatus();
   const includeSecurityAudit = opts.all === true || opts.deep === true;
   const inspectionReason = "Local plugin inspection is not collected in online status.";
@@ -107,7 +114,7 @@ export async function runStatusJsonCommand(params: {
     ...scan.summary,
     recoveryCopies:
       scan.recoveryCopies ??
-      collectRecoveryDiskUsage({ cfg: scan.cfg, env: scan.env ?? process.env }),
+      (await collectRecoveryDiskUsage({ cfg: scan.cfg, env: scan.env ?? process.env })),
     os: scan.osSummary,
     update: surface.update,
     updateChannel: channelInfo.channel,
@@ -120,7 +127,20 @@ export async function runStatusJsonCommand(params: {
       families: databaseFamilies,
       ...databaseEngines,
     },
-    gateway: buildGatewayStatusJsonPayload(surface),
+    gateway: {
+      mode: surface.gatewayMode,
+      url: projectGatewayUrlForDiagnostics(surface.gatewayConnection.url),
+      urlSource: surface.gatewayConnection.urlSource,
+      misconfigured: surface.remoteUrlMissing,
+      reachable: surface.gatewayReachable,
+      ...(surface.gatewayProbe?.startupPhase
+        ? { readiness: "still-starting", startupPhase: surface.gatewayProbe.startupPhase }
+        : {}),
+      connectLatencyMs: surface.gatewayProbe?.connectLatencyMs ?? null,
+      self: surface.gatewaySelf ?? null,
+      error: surface.gatewayProbe?.error ?? null,
+      authWarning: surface.gatewayProbeAuthWarning ?? null,
+    },
     gatewayService: surface.gatewayService,
     nodeService: surface.nodeService,
     agents: scan.agentStatus,

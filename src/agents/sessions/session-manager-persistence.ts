@@ -25,6 +25,7 @@ import {
   withOwnedSessionTranscriptWriterFence,
   withSessionTranscriptWriteAssertion,
 } from "../../config/sessions/transcript-write-context.js";
+import { readUserTurnMentionInvitation } from "../../sessions/user-turn-transcript-admission.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -61,11 +62,28 @@ type CommittedMetadataAppend = Extract<MetadataAppend["snapshot"], { ok: true }>
   result: NonNullable<Extract<MetadataAppend["snapshot"], { ok: true }>["value"]["result"]>;
 };
 
+function requireCommittedMetadataAppend(
+  snapshot: MetadataAppend["snapshot"],
+  entry: SessionEntry | SessionLeafControl,
+): CommittedMetadataAppend {
+  if (
+    !snapshot.ok ||
+    !snapshot.value.result ||
+    (entry.type !== "message" && !snapshot.value.result.appended)
+  ) {
+    throw new Error(`Session transcript entry was not persisted: ${entry.id}`, {
+      cause: snapshot.ok ? undefined : snapshot.error,
+    });
+  }
+  return { ...snapshot.value, result: snapshot.value.result };
+}
+
 export class SessionManagerPersistence extends SessionManagerNativePersistence {
   protected async persistWorkerRecord(
     entry: SessionEntry | SessionLeafControl,
     appendIntent: "active-branch" | undefined,
     writeAdmission: SessionManagerAppendAdmission,
+    view: "reload" | "none",
     message?: Omit<
       NonNullable<SessionMetadataWorkerOperations["session.metadata.append"]["input"]["message"]>,
       "messageJson"
@@ -179,6 +197,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           cwd: message.cwd,
           validateTurn: message.validateTurn,
           idempotencyLookup: message.idempotencyLookup,
+          mentionInvitation: message.mentionInvitation,
         }
       : undefined;
     const projectAppend = (
@@ -245,9 +264,11 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
       const append = (mutationAt: number | null | undefined) =>
         appendSessionManagerActor({
           actor,
+          toolUsageRecorder: writeAdmission.toolUsageRecorder,
           assertCurrent,
           beforeFreshMessageCommit,
           toolResult: entry.type === "message" && entry.message.role === "toolResult",
+          message: entry.type === "message" ? entry.message : null,
           append: {
             kind: "metadata",
             ...(modelPromptProjection ? { modelPromptProjection } : {}),
@@ -263,12 +284,16 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
                   ? { expectedMutationAt: mutationAt }
                   : {}),
               },
-              view: {
-                loadedVersion,
-                limits: this.boundedContextLimits,
-                admission,
-                questionAnswers: questionAnswers?.answers,
-              },
+              ...(view === "reload"
+                ? {
+                    view: {
+                      loadedVersion,
+                      limits: this.boundedContextLimits,
+                      admission,
+                      questionAnswers: questionAnswers?.answers,
+                    },
+                  }
+                : {}),
             },
             ...(this.persistenceHeaderPending || (initialWriter && !initialWriter.committedFence)
               ? {
@@ -351,21 +376,12 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
         }
         const value = outcome.committed.value;
         const snapshot = value.snapshot;
-        if (
-          !snapshot.ok ||
-          !snapshot.value.result ||
-          (entry.type !== "message" && !snapshot.value.result.appended)
-        ) {
-          throw new Error(`Session transcript entry was not persisted: ${entry.id}`, {
-            cause: snapshot.ok ? undefined : snapshot.error,
-          });
-        }
         const projected = projectAppend(
-          { ...snapshot.value, result: snapshot.value.result },
+          requireCommittedMetadataAppend(snapshot, entry),
           value.reload,
           outcome.failure,
           loadedVersion,
-          true,
+          view === "reload",
           value.initialModelParentId,
         );
         if (value.projectionNeedsReconcile && !outcome.failure) {
@@ -466,7 +482,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
                   ...(intent ? { appendIntent: intent } : {}),
                   ...(mutationAt !== undefined ? { expectedMutationAt: mutationAt } : {}),
                 },
-                ...(event.type !== "session"
+                ...(view === "reload" && event.type !== "session"
                   ? {
                       view: {
                         loadedVersion: this.transcriptVersion,
@@ -519,17 +535,8 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           loadedVersion = this.transcriptVersion;
           const outcome = await appendEvent(entry, wireEvent, mutationAt, appendIntent);
           const snapshot = outcome.snapshot;
-          if (
-            !snapshot.ok ||
-            !snapshot.value.result ||
-            (entry.type !== "message" && !snapshot.value.result.appended)
-          ) {
-            throw new Error(`Session transcript entry was not persisted: ${entry.id}`, {
-              cause: snapshot.ok ? undefined : snapshot.error,
-            });
-          }
           return {
-            committed: { ...snapshot.value, result: snapshot.value.result },
+            committed: requireCommittedMetadataAppend(snapshot, entry),
             initialModelParentId: outcome.initialModelParentId,
             reload: outcome.reload,
             failure: outcome.failure,
@@ -601,12 +608,14 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
                 cwd: this.cwd,
                 validateTurn: false,
                 idempotencyLookup: options?.idempotencyLookup,
+                mentionInvitation: readUserTurnMentionInvitation(options?.beforeFreshMessageCommit),
               }
             : undefined;
         const committed = await this.persistWorkerRecord(
           canonical,
           options?.appendIntent,
           admission,
+          "none",
           message,
           options?.beforeFreshMessageCommit,
           options?.expectedMutationAt,

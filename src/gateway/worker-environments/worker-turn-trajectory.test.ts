@@ -13,6 +13,7 @@ import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
+  openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -25,6 +26,7 @@ import {
   createWorkerSessionTurnPlacementProvider,
   createWorkerTurnTunnel,
   placements,
+  reconcileUnchangedLocalWorkspace,
   root,
   seedActivePlacement,
   sessionTarget,
@@ -69,9 +71,8 @@ describe("worker turn trajectory authority", () => {
           recorder.recordEvent("session.started", { backend: "cloud-worker" });
           const options = toDatabaseOptions(resolveSqliteReadScope(source.sessionTarget));
           const pathname = resolveOpenClawAgentSqlitePath(options);
-          const cached = getOpenClawAgentDatabaseIfOpen(options);
-          assert(cached, "expected the turn's cached host database before eviction");
-          // Evict the host handle without draining this callback's accepted turn custody.
+          // Recording need not open a host handle; establish the fixture's eviction target.
+          const cached = openOpenClawAgentDatabase(options);
           closeCachedOpenClawAgentDatabase(cached);
           expect(cached.db.isOpen).toBe(false);
           expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
@@ -112,9 +113,8 @@ describe("worker turn trajectory authority", () => {
       );
       const tunnel = createWorkerTurnTunnel({
         launchTurn,
-        quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
+        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
       });
       const provider = createWorkerSessionTurnPlacementProvider({
         placements,

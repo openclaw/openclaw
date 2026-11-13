@@ -23,14 +23,12 @@ type AppViewCallbacks = {
   refreshWidgetAppView: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
 };
 
-type LifecycleHost = {
+export function createBoardMcpAppLifecycle(host: {
   active: () => boolean;
   connected: () => boolean;
   sessionKey: () => string;
   widget: () => BoardWidget | undefined;
-};
-
-export function createBoardMcpAppLifecycle(host: LifecycleHost) {
+}) {
   let state: BoardWidgetAppViewState | undefined;
   let loading = false;
   let callbacks: AppViewCallbacks | undefined;

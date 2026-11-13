@@ -122,7 +122,10 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
       if (!runtime.tracesEnabled) {
         return;
       }
-      const spanAttrs: Record<string, string | number | boolean> = { ...attrs };
+      const spanAttrs: Record<string, string | number | boolean> = {
+        ...attrs,
+        ...(evt.skillFingerprint ? { "openclaw.skill.fingerprint": evt.skillFingerprint } : {}),
+      };
       runtime.addRunAttrs(spanAttrs, evt);
       const span = runtime.spanWithDuration("openclaw.skill.used", spanAttrs, 0, {
         parentContext: runtime.activeTrustedParentContext(evt, metadata),
@@ -142,6 +145,9 @@ export function createToolAndSystemRecorders(runtime: DiagnosticsRecorderRuntime
         ...toolExecutionBaseAttrs(evt),
         ...runtime.paramsSummaryAttrs(evt.paramsSummary),
       };
+      // Stamp identity at span start: a shutdown or reload before the terminal
+      // event would otherwise export this span outside the conversation grouping.
+      runtime.addRunAttrs(spanAttrs, evt);
       assignOtelToolIdentityAttributes(spanAttrs, evt);
       runtime.trackInternalOrTrustedSpan(
         evt,

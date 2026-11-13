@@ -93,6 +93,30 @@ describe("statusAllCommand diagnosis", () => {
     ]);
   });
 
+  it("strips terminal controls from channel issues in the diagnostic report", async () => {
+    // Hostile channel runtime data must not reach the operator's Diagnosis line.
+    const lines = await runStatusAllReport({
+      overview: {
+        channelsStatus: {},
+        channelIssues: [
+          {
+            channel: "evil\u0007channel",
+            accountId: "acct\u0007",
+            kind: "runtime",
+            message: "gateway\u0007 down",
+            fix: "restart\u0007",
+          },
+        ],
+      },
+    });
+
+    const output = lines.join("\n");
+    expect(output).toContain("Channel issues (1)");
+    // stripAnsi keeps BEL (0x07), so its absence proves the sanitizer ran.
+    expect(output).not.toContain("\u0007");
+    expect(output).toContain("evilchannel[acct] runtime: gateway down · fix: restart");
+  });
+
   it("keeps DNS context while daemon state remains unobserved", async () => {
     const output = await reportText({ overview: { tailscaleDns: "box.tail.ts.net" } });
     expectReport(

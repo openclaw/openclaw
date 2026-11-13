@@ -1,16 +1,24 @@
-import assert from "node:assert/strict";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import {
   isSessionEntryDataSql,
   observeHostDataSql,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { resolveSessionResetPolicy } from "../../config/sessions/reset-policy.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntry,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { withSessionSendDelivery } from "../session-send-delivery.js";
+import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
 import { persistAgentSessionPhase } from "./agent-session-persist.js";
 
 type PersistParams = Parameters<typeof persistAgentSessionPhase>[0];
@@ -34,7 +42,6 @@ const withPersistFixture = (
       mainSessionKey: "agent:main:main",
       creation: { via: "run" },
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      isRestartRecoveryResumeRun: false,
       agentId: "main",
       suppressVisibleSessionEffects: false,
       initialPatchBuild: {
@@ -63,102 +70,43 @@ const withPersistFixture = (
       assertGatewayWorkAdmissionAllowed: vi.fn(),
       respondToGatewayAdmissionOutcome: () => false,
       setCronContinuationClaim: vi.fn(),
-      setMainRestartRecoveryOwnerLease: vi.fn(),
       respond: vi.fn(),
     };
     await body(params, profile.id);
   });
 
-it.each([false, true])(
-  "sandboxes a synthetic run and preserves interrupted recovery ownership (queued peer: %s)",
-  (queuedPeer) =>
-    withPersistFixture(
-      {
-        sessions: { others: "view" },
-        agents: ["main"],
-        scopes: ["operator.write"],
+it("sandboxes a synthetic run using current creation authority", () =>
+  withPersistFixture(
+    {
+      sessions: { others: "view" },
+      agents: ["main"],
+      scopes: ["operator.write"],
+      sandbox: "required",
+    },
+    async (params, profileId) => {
+      const target = {
+        agentId: "main",
+        sessionKey: params.canonicalSessionKey,
+        storePath: params.storePath,
+      };
+      const sql = observeHostDataSql();
+      const committed = vi.fn((entry: { sessionId: string }) => {
+        sql.restore();
+        expect(loadSessionEntry(target)?.sessionId).toBe(entry.sessionId);
+      });
+      params.onSessionCommitted = committed;
+      const result = await persistAgentSessionPhase(params).finally(sql.restore);
+
+      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+      expect(result?.sessionEntry).toMatchObject({
+        createdVia: "run",
+        createdActor: { type: "human", id: profileId },
         sandbox: "required",
-      },
-      async (params, profileId) => {
-        const { runId, canonicalSessionKey: sessionKey, storePath } = params;
-        const target = { agentId: "main", sessionKey, storePath };
-        const sql = observeHostDataSql();
-        const committed = vi.fn((entry: { sessionId: string }) => {
-          sql.restore();
-          expect(loadSessionEntry(target)?.sessionId).toBe(entry.sessionId);
-        });
-        const setMainRestartRecoveryOwnerLease = vi.fn();
-        params.onSessionCommitted = committed;
-        params.setMainRestartRecoveryOwnerLease = setMainRestartRecoveryOwnerLease;
-        const result = await persistAgentSessionPhase(params).finally(sql.restore);
-
-        expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
-        expect(result?.sessionEntry).toMatchObject({
-          createdVia: "run",
-          createdActor: { type: "human", id: profileId },
-          sandbox: "required",
-        });
-        expect(committed).toHaveBeenCalledOnce();
-        expect(committed.mock.calls[0]?.[0].sessionId).toBe(result?.sessionEntry?.sessionId);
-        expect(loadSessionEntry(target)).toMatchObject({ sandbox: "required" });
-
-        assert(result?.sessionEntry, "Fixture requires a persisted session");
-        const interruptedRun = {
-          runId: "interrupted-before-send",
-          lifecycleGeneration: "previous-generation",
-        };
-        const interrupted = {
-          ...result.sessionEntry,
-          abortedLastRun: true,
-          restartRecoveryRuns: [interruptedRun],
-        };
-        await replaceSessionEntry(target, interrupted);
-        const resumedPatch = { ...params.initialPatchBuild, isNewSession: false };
-        const persist = () =>
-          persistAgentSessionPhase({
-            ...params,
-            onSessionCommitted: undefined,
-            entry: interrupted,
-            initialPatchBuild: resumedPatch,
-            buildSessionPatch: async () => resumedPatch,
-            state: { ...result, sessionEntry: interrupted, isNewSession: false },
-          });
-        if (queuedPeer) {
-          await withSessionSendDelivery(
-            {
-              delivery: {
-                version: 1,
-                runId,
-                source: {
-                  agentId: "main",
-                  sessionKey: "agent:main:sender",
-                  sessionId: "sender-session",
-                },
-                target: { agentId: "main", sessionKey, sessionId: interrupted.sessionId },
-                sandboxed: true,
-                message: "sandboxed",
-              },
-            },
-            persist,
-          );
-        } else {
-          await persist();
-        }
-        const current = loadSessionEntry(target);
-        expect(current?.restartRecoveryRuns).toContainEqual(interruptedRun);
-        if (queuedPeer) {
-          expect(current?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
-          expect(current?.restartRecoveryRuns).toEqual([interruptedRun]);
-          expect(setMainRestartRecoveryOwnerLease).not.toHaveBeenCalled();
-        } else {
-          expect(
-            Object.values(current?.mainRestartRecovery?.foregroundClaims?.runIdsByClaimId ?? {}),
-          ).toContain(runId);
-          expect(setMainRestartRecoveryOwnerLease).toHaveBeenCalledOnce();
-        }
-      },
-    ),
-);
+      });
+      expect(committed).toHaveBeenCalledOnce();
+      expect(loadSessionEntry(target)).toMatchObject({ sandbox: "required" });
+    },
+  ));
 
 it.each([false, true])(
   "surfaces creation denial when role authority forbids the agent (revoked during preparation: %s)",
@@ -167,8 +115,6 @@ it.each([false, true])(
     await withPersistFixture(
       { sessions: { others: "none" }, agents: allowedAgents, scopes: [] },
       async (params) => {
-        const respond = vi.fn<PersistParams["respond"]>();
-        params.respond = respond;
         params.buildSessionPatch = async () => {
           await Promise.resolve();
           allowedAgents.length = 0;
@@ -176,7 +122,7 @@ it.each([false, true])(
         };
         await expect(persistAgentSessionPhase(params)).resolves.toBeUndefined();
 
-        expect(respond).toHaveBeenCalledWith(
+        expect(params.respond).toHaveBeenCalledWith(
           false,
           undefined,
           expect.objectContaining({
@@ -187,4 +133,98 @@ it.each([false, true])(
       },
     );
   },
+);
+
+it.each([
+  { mode: "idle", rejection: undefined, writer: "running" },
+  { mode: "idle", rejection: undefined, writer: "queued" },
+  { mode: "daily", rejection: undefined, writer: undefined },
+  { mode: "idle", rejection: "superseded", writer: undefined },
+  { mode: "idle", rejection: "denied", writer: undefined },
+  { mode: "daily", rejection: "owner-settled", writer: "running" },
+] as const)("$mode reset (rejection: $rejection, writer: $writer)", ({ mode, rejection, writer }) =>
+  withPersistFixture(
+    { sessions: { others: "view" }, agents: ["main"], scopes: [] },
+    async (params) => {
+      const now = new Date(2026, 9, 20, 12).getTime();
+      const expiredAt = new Date(2026, 9, 19, 12).getTime();
+      const target = {
+        agentId: "main",
+        sessionKey: params.canonicalSessionKey,
+        sessionId: "durable-transcript",
+        storePath: params.storePath,
+      };
+      const entry = {
+        sessionId: target.sessionId,
+        lifecycleRevision: "before-expiry",
+        updatedAt: expiredAt,
+        sessionStartedAt: expiredAt,
+        lastInteractionAt: expiredAt,
+      };
+      await replaceSessionEntry(target, entry);
+      await appendTranscriptMessage(target, {
+        message: makeUserMessage("Before: AMBER731", expiredAt),
+      });
+      await replaceSessionEntry(target, entry);
+      params.entry = entry;
+      params.buildSessionPatch = (freshEntry) =>
+        buildAgentSessionPatch({
+          ...params,
+          freshEntry,
+          initialEntry: entry,
+          normalizedSpawned: {},
+          requestDeliveryHint: undefined,
+          hasRestoredCronContinuation: false,
+          resetPolicy: resolveSessionResetPolicy({
+            sessionCfg: { reset: mode === "idle" ? { mode, idleMinutes: 1 } : { mode, atHour: 4 } },
+            resetType: "direct",
+          }),
+          now,
+          isSystemGatewayRun: false,
+          visibleRequest: true,
+          touchInteraction: true,
+        });
+      const turn = writer ? createReplyOperation({ ...target, resetTriggered: false }) : undefined;
+      turn?.setPhase(writer ?? "running");
+      params.initialPatchBuild = await params.buildSessionPatch(entry);
+      if (rejection === "owner-settled") {
+        turn?.complete();
+        await turn?.ownerSettlement;
+      } else if (rejection === "superseded") {
+        await replaceSessionEntry(target, { ...entry, lifecycleRevision: "newer-reset" });
+      } else if (rejection === "denied") {
+        params.request.deliver = true;
+        params.cfg.session = { sendPolicy: { default: "deny" } };
+      }
+      const result = await persistAgentSessionPhase(params);
+      expect(turn?.abortSignal.aborted).not.toBe(true);
+      turn?.complete();
+      const reset = !rejection && writer !== "running";
+      await appendTranscriptMessage(target, { message: makeUserMessage("After: COBALT942", now) });
+      const events = await loadTranscriptEvents(target);
+      expect(events.filter((event) => isRecord(event) && event.type === "reset")).toEqual(
+        reset ? [expect.objectContaining({ reason: mode })] : [],
+      );
+      expect(events.filter((event) => isRecord(event) && event.type === "message")).toMatchObject([
+        { message: { content: "Before: AMBER731" } },
+        { message: { content: "After: COBALT942" } },
+      ]);
+      if (rejection) {
+        expect(result).toBeUndefined();
+        expect(params.respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: rejection === "denied" ? "INVALID_REQUEST" : "UNAVAILABLE",
+          }),
+        );
+        return;
+      }
+      expect(result?.sessionEntry).toMatchObject({
+        sessionId: target.sessionId,
+        sessionStartedAt: reset ? now : expiredAt,
+      });
+      expect(result?.sessionEntry?.lifecycleRevision === entry.lifecycleRevision).toBe(!reset);
+    },
+  ),
 );

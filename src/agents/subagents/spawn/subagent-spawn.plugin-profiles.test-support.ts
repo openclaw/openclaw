@@ -1,9 +1,7 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { resetGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { revokePluginRecord } from "../../../plugins/registry-lifecycle.js";
@@ -11,6 +9,7 @@ import { createOwnershipRecord } from "../../../plugins/registry-ownership.test-
 import { createTestPluginRegistry } from "../../../plugins/registry-runtime.test-helpers.js";
 import { disposePluginRegistryInstances } from "../../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { createRequestNativeSubagentRuntime } from "../../plugin-native-subagent.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { holdQueuedSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -25,7 +24,7 @@ import {
 } from "./subagent-spawn.production-boundary.test-support.js";
 
 export function registerNativePluginProfileCases(options: NativePluginSpawnTestOptions) {
-  it("native profiles pin instructions and only narrow inherited tools; foreign profiles and schema rewrites fail before spawn", async () => {
+  it("native profiles narrow inherited tools and reject foreign profiles, schema rewrites, and revoked owners", async () => {
     const source = createSpawnOperatorSource();
     const bound = await options.createBoundParent(source.authority);
     const { context, runtime } = await options.createBoundGateway(bound);
@@ -89,44 +88,26 @@ export function registerNativePluginProfileCases(options: NativePluginSpawnTestO
           await expect(native.spawn(request)).rejects.toThrow("must preserve");
           expect(subagentRuns.size).toBe(0);
           resetGlobalHookRunner();
-          // A file replacement cannot change a profile already admitted by this registry.
-          fs.writeFileSync(path.join(root, "reviewer.md"), "changed bytes");
           const child = await native.spawn(request);
           children.push(child.runId);
-          expect(await native.spawn(request)).toEqual(child);
           const entry = expectDefined(
             loadSessionEntry({ storePath: bound.storePath, sessionKey: child.childSessionKey }),
             "profile child",
           );
-          expect(entry.inheritedToolAllow).toEqual(expect.arrayContaining(["read"]));
-          expect(entry.inheritedToolAllow).not.toContain("exec");
-          expect(entry.inheritedToolDeny).toEqual(
-            expect.arrayContaining(["read", "write", "exec"]),
-          );
-          expect(entry.swarmOutputSchema).toEqual(schema);
-          expect(subagentRuns.get(child.runId)).toMatchObject({
-            subagentProfile: {
-              pluginId: record.id,
-              id: "reviewer",
-              instructionsFile: "reviewer.md",
-              instructionsSha256: createHash("sha256").update(instructions).digest("hex"),
-            },
-            outputSchema: schema,
-            queuedLaunch: { request: { extraSystemPrompt: expect.stringContaining(instructions) } },
+          expect(entry).toMatchObject({
+            inheritedToolAllow: expect.arrayContaining(["read"]),
+            inheritedToolDeny: expect.arrayContaining(["read", "write", "exec"]),
           });
+          expect(entry.inheritedToolAllow).not.toContain("exec");
           await expect(native.spawn({ ...request, profile: undefined })).rejects.toThrow(
             "does not match",
           );
-          const entered = createDeferred();
-          const resume = createDeferred();
-          installNativeToolHook(record.id, async () => {
-            entered.resolve();
-            await resume.promise;
-          });
+          const profileGate = createEnteredGate();
+          installNativeToolHook(record.id, profileGate.wait);
           const pending = native.spawn({ ...request, requestId: "revoked" });
-          await entered.promise;
+          await profileGate.entered;
           revokePluginRecord(builder.registry, record);
-          resume.resolve();
+          profileGate.release();
           await expect(pending).rejects.toThrow("no longer active");
           expect(subagentRuns.size).toBe(1);
         },

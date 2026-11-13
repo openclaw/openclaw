@@ -30,14 +30,11 @@ function normalizedKind(payload: ClickClackItemEventPayload): string {
 }
 
 function progressText(payload: ClickClackItemEventPayload): string {
-  if (payload.kind !== "preamble" && payload.title) {
-    return payload.title;
-  }
   const line = buildChannelProgressDraftLine({
     ...payload,
     event: "item",
     itemKind: payload.kind,
-  })?.text?.trim();
+  })?.text;
   if (line) {
     return line;
   }

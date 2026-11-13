@@ -5,6 +5,7 @@ import type {
   OpenClawPluginToolContext,
   ProviderFailoverErrorContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
@@ -27,15 +28,13 @@ import {
   createCodeExecutionToolDefinition,
 } from "./code-execution-tool-shared.js";
 import {
+  createLazyXaiImageGenerationProvider,
+  createLazyXaiMediaUnderstandingProvider,
   createLazyXaiRealtimeTranscriptionProvider,
   createLazyXaiRealtimeVoiceProvider,
   createLazyXaiSpeechProvider,
-} from "./lazy-capability-provider-factories.js";
-import {
-  createLazyXaiImageGenerationProvider,
-  createLazyXaiMediaUnderstandingProvider,
   createLazyXaiVideoGenerationProvider,
-} from "./lazy-capability-providers.js";
+} from "./lazy-capability-provider-factories.js";
 import { normalizeNativeXaiModelId } from "./model-compat.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import {
@@ -54,12 +53,17 @@ import {
   resolveCodeExecutionEnabled,
 } from "./src/code-execution-config.js";
 import {
+  hasXaiSubscriptionToolAuth,
   isXaiToolEnabled,
   resolveFallbackXaiAuth,
   type XaiToolAuthContext,
 } from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
-import { wrapXaiProviderStream } from "./stream.js";
+import {
+  wrapXaiProviderStream,
+  wrapXaiSimpleCompletionStream,
+  XAI_GROK_OAUTH_CLIENT_VERSION,
+} from "./stream.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 import {
   buildMissingXSearchApiKeyPayload,
@@ -73,7 +77,6 @@ import {
 
 const SUPERGROK_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const SUPERGROK_CLIENT_MODE = "cli";
-const SUPERGROK_CLIENT_VERSION = "1.0.4";
 const MAX_PLAN_CHARS = 128;
 const MAX_EXACT_INTEGER = 9_007_199_254_740_991;
 
@@ -224,15 +227,14 @@ function classifyXaiFailoverReason({
   if (XAI_RATE_LIMIT_RE.test(errorMessage)) {
     return "rate_limit" as const;
   }
-  if (
-    status === undefined &&
+  return status === undefined &&
     code === undefined &&
-    errorType === undefined &&
-    XAI_PROVIDER_INTERNAL_ERROR_RE.test(errorMessage)
-  ) {
-    return "server_error" as const;
-  }
-  return undefined;
+    (errorType === undefined
+      ? XAI_PROVIDER_INTERNAL_ERROR_RE.test(errorMessage)
+      : errorType === "error" &&
+        /^internal error during token generation$/i.test(errorMessage.trim()))
+    ? ("server_error" as const)
+    : undefined;
 }
 
 function isCodeExecutionEnabled(
@@ -302,8 +304,27 @@ function createLazyCodeExecutionTool(ctx: OpenClawPluginToolContext) {
   );
 }
 
+/**
+ * Grok OAuth runs x_search on the user's SuperGrok/X Premium subscription, so a known
+ * non-xAI model needs no cross-provider billing opt-in. Execution then uses only that
+ * OAuth credential; an explicit `enabled: false` still wins.
+ */
+function canExposeXSearchWithSubscription(ctx: OpenClawPluginToolContext): boolean {
+  const enabled = resolveEffectiveXSearchConfig(ctx.runtimeConfig ?? ctx.config)?.enabled;
+  return (
+    Boolean(ctx.activeModel?.provider?.trim()) &&
+    enabled === undefined &&
+    hasXaiSubscriptionToolAuth(ctx)
+  );
+}
+
 function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
-  if (!canExposeXaiBilledTool(ctx, resolveEffectiveXSearchConfig, isXSearchEnabled)) {
+  const subscriptionOnly = !canExposeXaiBilledTool(
+    ctx,
+    resolveEffectiveXSearchConfig,
+    isXSearchEnabled,
+  );
+  if (subscriptionOnly && !canExposeXSearchWithSubscription(ctx)) {
     return null;
   }
 
@@ -315,6 +336,7 @@ function createLazyXSearchTool(ctx: OpenClawPluginToolContext) {
       config: ctx.config as never,
       runtimeConfig: (ctx.runtimeConfig as never) ?? null,
       auth: ctx,
+      subscriptionOnly,
     });
     if (!tool) {
       return jsonResult(buildMissingXSearchApiKeyPayload());
@@ -327,7 +349,7 @@ export default defineSingleProviderPluginEntry({
   id: "xai",
   name: "xAI Plugin",
   description: "Bundled xAI plugin",
-  provider: (pluginApi) => ({
+  provider: () => ({
     label: "xAI",
     aliases: ["x-ai"],
     docsPath: "/providers/xai",
@@ -420,10 +442,8 @@ export default defineSingleProviderPluginEntry({
     },
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
-    wrapStreamFn: (ctx) =>
-      wrapXaiProviderStream(ctx, {
-        clientVersion: pluginApi.runtime.version,
-      }),
+    wrapStreamFn: (ctx) => wrapXaiProviderStream(ctx),
+    wrapSimpleCompletionStreamFn: (ctx) => wrapXaiSimpleCompletionStream(ctx),
     // Provider-specific fallback auth stays owned by the xAI plugin so core
     // auth/discovery code can consume it generically without parsing xAI's
     // private config layout. Callers may receive a real key from the active
@@ -458,7 +478,7 @@ export default defineSingleProviderPluginEntry({
             Authorization: `Bearer ${ctx.token}`,
             Accept: "application/json",
             "x-grok-client-mode": SUPERGROK_CLIENT_MODE,
-            "x-grok-client-version": SUPERGROK_CLIENT_VERSION,
+            "x-grok-client-version": XAI_GROK_OAUTH_CLIENT_VERSION,
           },
         },
         ctx.timeoutMs,
@@ -530,7 +550,9 @@ export default defineSingleProviderPluginEntry({
   register(api) {
     api.registerWebSearchProvider(createXaiWebSearchProvider());
     api.registerMediaUnderstandingProvider(createLazyXaiMediaUnderstandingProvider());
-    api.registerVideoGenerationProvider(createLazyXaiVideoGenerationProvider());
+    api.registerVideoGenerationProvider(
+      createLazyXaiVideoGenerationProvider({ isProviderApiKeyConfiguredAsync }),
+    );
     api.registerImageGenerationProvider(createLazyXaiImageGenerationProvider());
     api.registerSpeechProvider(createLazyXaiSpeechProvider);
     api.registerRealtimeTranscriptionProvider(createLazyXaiRealtimeTranscriptionProvider);

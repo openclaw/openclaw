@@ -82,7 +82,10 @@ export function pathKey(path: Array<string | number>): string {
   return path.filter((segment) => typeof segment === "string").join(".");
 }
 
-const wildcardHintCache = new WeakMap<ConfigUiHints, Array<[string[], ConfigUiHint]>>();
+const wildcardHintCache = new WeakMap<
+  ConfigUiHints,
+  Map<number, Array<[string[], ConfigUiHint]>>
+>();
 
 type ResolvedConfigUiHint = {
   hint: ConfigUiHint;
@@ -101,16 +104,20 @@ function resolveHintForPath(
   const segments = path.map(String);
   let wildcardHints = wildcardHintCache.get(hints);
   if (!wildcardHints) {
-    wildcardHints = Object.entries(hints).flatMap(([hintKey, hint]) =>
-      hintKey.includes("*") ? [[hintKey.split("."), hint]] : [],
-    );
+    wildcardHints = new Map();
+    for (const [hintKey, hint] of Object.entries(hints)) {
+      if (!hintKey.includes("*")) {
+        continue;
+      }
+      const parts = hintKey.split(".");
+      const bucket = wildcardHints.get(parts.length) ?? [];
+      bucket.push([parts, hint]);
+      wildcardHints.set(parts.length, bucket);
+    }
     wildcardHintCache.set(hints, wildcardHints);
   }
-  for (const [hintSegments, hint] of wildcardHints) {
-    if (
-      hintSegments.length === segments.length &&
-      hintSegments.every((segment, index) => segment === "*" || segment === segments[index])
-    ) {
+  for (const [hintSegments, hint] of wildcardHints.get(segments.length) ?? []) {
+    if (hintSegments.every((segment, index) => segment === "*" || segment === segments[index])) {
       return { hint, hintPath: hintSegments.join(".") };
     }
   }
@@ -119,6 +126,31 @@ function resolveHintForPath(
 
 export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) {
   return resolveHintForPath(path, hints)?.hint;
+}
+
+/** The schema marks some array rows as list[].field rather than list.*.field. */
+function arrayHintKey(path: ReadonlyArray<string | number>): string {
+  return path.reduce<string>(
+    (key, segment) =>
+      typeof segment === "number" ? `${key}[]` : key ? `${key}.${segment}` : segment,
+    "",
+  );
+}
+
+/** The schema's own marking decides; the nearest explicit hint on the path wins. */
+export function isSecretConfigField(
+  path: ReadonlyArray<string | number>,
+  hints: ConfigUiHints,
+): boolean {
+  for (let end = path.length; end > 0; end -= 1) {
+    const prefix = path.slice(0, end);
+    const sensitive =
+      hintForPath(prefix, hints)?.sensitive ?? hints[arrayHintKey(prefix)]?.sensitive;
+    if (sensitive !== undefined) {
+      return sensitive;
+    }
+  }
+  return false;
 }
 
 export function localizedHintForPath(path: Array<string | number>, hints: ConfigUiHints) {
@@ -197,16 +229,17 @@ function patchPathValue(
   path: Array<string | number>,
   index: number,
   replacement: unknown,
-  mode: "copy" | "copy-set" | "set" | "remove",
+  mode: "copy" | "copy-set" | "copy-remove" | "set" | "remove",
 ): PathPatchResult {
   const segment = path[index];
   if (segment === undefined) {
     return { ok: false };
   }
   const last = index === path.length - 1;
-  const copy = mode === "copy" || mode === "copy-set";
-  const remove = mode === "remove" || (mode === "copy" && replacement === undefined);
-  if (mode === "remove" && current == null) {
+  const copy = mode === "copy" || mode === "copy-set" || mode === "copy-remove";
+  const remove =
+    mode === "remove" || mode === "copy-remove" || (mode === "copy" && replacement === undefined);
+  if ((mode === "remove" || mode === "copy-remove") && current == null) {
     return { ok: false };
   }
 
@@ -272,10 +305,10 @@ export function copyWithPathPatch(
   current: unknown,
   path: Array<string | number>,
   replacement: unknown,
-  mode: "copy" | "copy-set" = "copy",
+  mode: "copy" | "copy-set" | "copy-remove" = "copy",
 ): PathPatchResult {
   if (path.length === 0) {
-    return { ok: true, value: mode === "copy-set" ? current : replacement };
+    return { ok: true, value: mode === "copy" ? replacement : current };
   }
   return patchPathValue(current, path, 0, replacement, mode);
 }
@@ -293,4 +326,21 @@ export function removePathValue(
   path: Array<string | number>,
 ) {
   patchPathValue(obj, path, 0, undefined, "remove");
+}
+
+/**
+ * The named fields of a setting whose string form is shorthand for its `primary` field, such as a
+ * model and its fallbacks. Those fields describe the setting better than a raw JSON box can.
+ */
+export function objectFormOfUnion(schema: JsonSchema): JsonSchema | undefined {
+  const branches = (schema.anyOf ?? schema.oneOf ?? []).filter(
+    (branch) => schemaType(branch) !== "null",
+  );
+  const object = branches.find(
+    (branch) => schemaType(branch) === "object" && branch.properties?.primary !== undefined,
+  );
+  const string = branches.find(
+    (branch) => schemaType(branch) === "string" && !branch.enum && branch.const === undefined,
+  );
+  return branches.length === 2 && string ? object : undefined;
 }

@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   prepareProviderDynamicModel: vi.fn(),
-  resolveProviderModernModelRef: vi.fn(),
   runProviderDynamicModel: vi.fn(),
 }));
 
@@ -15,6 +15,10 @@ vi.mock("./model-discovery-normalize.js", () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => providerRuntimeMocks);
+// mock-isolation: Candidate fixtures supply dynamic hooks without activating provider runtimes.
+vi.mock("../plugins/provider-hook-runtime.js", () => ({
+  resolveProviderRuntimePlugin: vi.fn(() => undefined),
+}));
 
 import { appendLiveModelCandidates } from "./test-helpers/live-model-dynamic-candidates.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
@@ -33,17 +37,9 @@ function model(provider: string, id: string): Model {
   });
 }
 
-const config: OpenClawConfig = {
-  models: {
-    providers: {
-      [DYNAMIC_PROVIDER]: {
-        api: "openai-completions",
-        baseUrl: "https://configured.example/v1",
-        models: [],
-      },
-    },
-  },
-};
+const config: OpenClawConfig = configFor(DYNAMIC_PROVIDER, "https://configured.example/v1", {
+  api: "openai-completions",
+});
 const agentDir = "/tmp/openclaw-agent";
 const ref = { provider: DYNAMIC_PROVIDER, id: "glm-5" };
 function candidates(overrides: Partial<CandidateOptions> = {}) {
@@ -60,7 +56,6 @@ describe("appendLiveModelCandidates", () => {
   beforeEach(() => {
     normalizeDiscoveredAgentModelMock.mockClear();
     providerRuntimeMocks.prepareProviderDynamicModel.mockReset().mockResolvedValue(undefined);
-    providerRuntimeMocks.resolveProviderModernModelRef.mockReset().mockReturnValue(undefined);
     providerRuntimeMocks.runProviderDynamicModel.mockReset().mockReturnValue(undefined);
   });
 

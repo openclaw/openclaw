@@ -400,8 +400,7 @@ export async function preauthenticateRfb(params: {
   const timeout = setTimeout(
     () => controller.abort(new RfbPreauthTimeoutError()),
     DEFAULT_PREAUTH_TIMEOUT_MS,
-  );
-  timeout.unref?.();
+  ).unref();
   try {
     await Promise.all([
       negotiateServer({ peer: currentPeer(server), preauth: params.preauth, signal }),

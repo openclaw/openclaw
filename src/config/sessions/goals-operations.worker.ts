@@ -5,7 +5,7 @@ import { applySessionGoalOperation } from "./goals-operation-policy.js";
 import {
   readSessionGoalOperationReceipt,
   writeSessionGoalOperationReceipt,
-} from "./goals-operations.js";
+} from "./goals-operation-receipts.js";
 import {
   SessionGoalOperationError,
   type SessionGoalManagementCommit,
@@ -13,7 +13,7 @@ import {
 } from "./goals-operations.types.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import {
   bindSessionWorkerBackend,
   transferSessionEntryWorkerCandidate,

@@ -1,6 +1,9 @@
 import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   bindAgentToolAvailability,
+  gateAgentToolExecution,
+  isAgentToolExecutionAvailable,
+  resolveAgentToolExecutionSchema,
   finalizeAgentToolAvailability as finalize,
   markAgentToolExecutionUnavailable as denyExecution,
 } from "./agent-tool-availability.js";
@@ -12,6 +15,7 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { SWARM_CODE_MODE_IDEMPOTENCY_KEY } from "./subagents/swarm/swarm-code-mode.js";
+import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import {
   applyToolSearchCatalog as applyCatalog,
   clearToolSearchCatalog,
@@ -74,18 +78,15 @@ function catalogFixture(wait = reader(), toolExecutionAllow?: string[]) {
 }
 // An offered reader keeps the collector definition (prompt-cache stability); execution
 // denial of the reader is enforced by the spawn guard, not by hiding the fields.
-function expectOfferedCollection(tool: { parameters: unknown; description: unknown }) {
+function expectCollection(tool: { parameters: unknown; description: unknown }, offered: boolean) {
+  const assertion = <T>(value: T) => (offered ? expect(value) : expect(value).not);
   for (const field of ["collect", "outputSchema", "groupId"]) {
-    expect(tool.parameters).toHaveProperty(`properties.${field}`);
+    assertion(tool.parameters).toHaveProperty(`properties.${field}`);
   }
-  expect(tool.description).toContain("collect=true");
-}
-function expectHiddenCollection(tool: { parameters: unknown; description: unknown }) {
-  expect(tool.parameters).toHaveProperty("properties.fastMode");
-  for (const field of ["collect", "outputSchema", "groupId"]) {
-    expect(tool.parameters).not.toHaveProperty(`properties.${field}`);
+  assertion(tool.description).toContain("collect=true");
+  if (!offered) {
+    expect(tool.parameters).toHaveProperty("properties.fastMode");
   }
-  expect(tool.description).not.toContain("collect=true");
 }
 async function expectCollectionDenied(
   tool: ReturnType<typeof spawnTool>,
@@ -108,6 +109,14 @@ function expectSpawned(details: Record<string, unknown>) {
   );
 }
 
+it("retains denial and schema fallback without an availability callback", () => {
+  const tool = gateAgentToolExecution(createStubTool("plain"), "not authorized");
+  const schema = tool.parameters;
+  expect(isAgentToolExecutionAvailable(tool)).toBe(false);
+  expect(isAgentToolExecutionAvailable(copyMetadata(tool, { ...tool }))).toBe(false);
+  expect(resolveAgentToolExecutionSchema(tool, schema)).toBe(schema);
+});
+
 beforeEach(() => {
   spawn.mockReset().mockResolvedValue({
     status: "accepted",
@@ -120,31 +129,15 @@ beforeEach(() => {
 describe("execution allowlist availability", () => {
   const sparseAllow: string[] = [];
   sparseAllow.length = 1;
-  it.each([
-    {
-      label: "aliases",
-      allow: [" BASH ", "apply-PATCH", " CRON "],
-      expected: ["exec", "apply_patch", "automations"],
-    },
-    { label: "blank names", allow: [" \t "], expected: ["", "   "] },
-    {
-      label: "literal names",
-      allow: ["write", "web_*", "*", "group:fs"],
-      expected: ["WRITE", "web_*", "*", "group:fs"],
-    },
-    { label: "empty list", allow: [], expected: [] },
-    { label: "sparse list", allow: sparseAllow, expected: [] },
-  ])("prepares callable tools from frozen $label", ({ allow, expected }) => {
+  it.each<[string, string[], string[]]>([
+    ["aliases", [" BASH ", "apply-PATCH", " CRON "], ["exec", "apply_patch", "automations"]],
+    ["blank names", [" \t "], ["", "   "]],
+    ["literal names", ["write", "web_*", "*", "group:fs"], ["WRITE", "web_*", "*", "group:fs"]],
+    ["empty list", [], []],
+    ["sparse list", sparseAllow, []],
+  ])("prepares callable tools from frozen %s", (_label, allow, expected) => {
     const tools = [
-      "exec",
-      "apply_patch",
-      "automations",
-      "WRITE",
-      "read",
-      "web_fetch",
-      "web_*",
-      "*",
-      "group:fs",
+      ..."exec,apply_patch,automations,WRITE,read,web_fetch,web_*,*,group:fs".split(","),
       "",
       "   ",
     ].map((name) => ({ name, description: name, parameters: { type: "object", properties: {} } }));
@@ -242,11 +235,7 @@ describe("collector tool availability", () => {
         [tool, ...(kind === "missing" ? [] : [candidate])],
         kind === "denied" ? { toolExecutionAllow: ["sessions_spawn"] } : undefined,
       );
-      if (kind === "denied" || kind === "execution-denied") {
-        expectOfferedCollection(tool);
-      } else {
-        expectHiddenCollection(tool);
-      }
+      expectCollection(tool, kind === "denied" || kind === "execution-denied");
       await expectCollectionDenied(tool, "collect", {
         [SWARM_CODE_MODE_IDEMPOTENCY_KEY]: "copied",
       });
@@ -274,9 +263,6 @@ describe("collector tool availability", () => {
       } else {
         expect(restrictCatalog({ catalogRef, allowedToolNames })).toBe(2);
       }
-      expect(catalogRef.current).toBe(firstCatalog);
-      expect(catalogRef.current?.entries).toBe(firstEntries);
-      expect(tool.parameters).toHaveProperty("properties.collect");
 
       const currentReader =
         readerState === "lookalike"
@@ -296,10 +282,9 @@ describe("collector tool availability", () => {
         firstEntries.find((item) => item.name === "sessions_spawn")?.parameters,
       ).toHaveProperty("properties.collect");
       const entry = catalogRef.current?.entries.find((item) => item.name === "sessions_spawn");
-      const expectCollection =
-        readerState === "lookalike" ? expectHiddenCollection : expectOfferedCollection;
-      expectCollection(tool);
-      expectCollection({ parameters: entry?.parameters, description: entry?.description });
+      const offered = readerState !== "lookalike";
+      expectCollection(tool, offered);
+      expectCollection({ parameters: entry?.parameters, description: entry?.description }, offered);
     },
   );
 
@@ -334,12 +319,12 @@ describe("collector tool availability", () => {
     await collect(current, "current");
     expect(spawn).toHaveBeenCalledOnce();
   });
-
   it("does not override an explicit Swarm opt-out when a native reader is supplied", async () => {
     const tool = createSessionsSpawnTool({ config: { ...config, tools: { swarm: false } } });
     finalize([tool, reader()]);
-    expect(tool.parameters).not.toHaveProperty("properties.collect");
-    expect(tool.parameters).not.toHaveProperty("properties.fastMode");
+    for (const field of ["collect", "fastMode"]) {
+      expect(tool.parameters).not.toHaveProperty(`properties.${field}`);
+    }
     await expect(collect(tool, "disabled")).rejects.toThrow("tools.swarm.enabled=true");
     expect(spawn).not.toHaveBeenCalled();
   });

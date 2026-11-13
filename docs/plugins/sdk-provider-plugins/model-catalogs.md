@@ -53,7 +53,10 @@ transport SecretRefs and applies its existing private-network, proxy, and TLS po
 The authored configuration keeps its original secret references.
 
 If your provider exposes an OpenAI-compatible `/models` API, opt the
-single-provider helper into shared discovery:
+single-provider helper into shared discovery. Bundled providers with such an
+API must list models live, through this option or a `buildProvider` that
+discovers, so the account's listing decides which models appear and new vendor
+models need no OpenClaw release:
 
 ```typescript
 catalog: {
@@ -86,6 +89,8 @@ behaviors:
 
 Relative catalog cache TTLs start when a successful load completes. Cache hits
 preserve that deadline, and explicit absolute provider deadlines remain unchanged.
+Expired response-cache payloads are released even when the account is no longer
+queried; catalogs already published to callers keep their own lifetime.
 Pending loads retain their initial expiry so stalled work can be replaced.
 An explicit refresh through the prepared catalog owner bypasses completed
 response-cache entries only for the keys acquired by that request. Repeated
@@ -96,8 +101,10 @@ Passive model-list reads that wait for a configuration replacement resume agains
 the newly committed catalog and configuration. They do not retry with the retired
 configuration. Exact runtime acquisitions remain bound to their requested configuration.
 
-Bundled providers set `discoveryMode: "strict"` in their catalog options.
-This code option keeps successful empty results empty and reports failed
+Bundled providers also set `discoveryMode: "strict"` in their catalog options.
+It changes only how discovery reports results and never enables discovery:
+with a static or manifest-backed `buildProvider` and no `liveModelDiscovery`
+or custom `run`, the provider serves its static rows. This code option keeps successful empty results empty and reports failed
 acquisition through `ProviderCatalogResult.outcomes`, rather than returning
 seed models as a successful refresh. HTTP 401/403 produces a catalog-scoped
 `auth-rejected` outcome; other acquisition failures produce `unavailable`.
@@ -324,6 +331,12 @@ receive an optional `signal`. Shutdown and plugin/config replacement abort it.
 Stop awaited acquisition when it aborts and finish resource cleanup before the
 hook settles. OpenClaw discards cancelled results and joins cleanup before a
 replacement can acquire the same agent resources.
+
+A native-login synthetic auth result can include optional `nativeAuth.display`
+metadata: `kind: "subscription" | "api" | "native"` and a validated `plan` label.
+Use only non-secret facts reported by the native runtime. This display metadata
+travels with the prepared auth generation; it does not grant authority, create
+a saved profile, or change the native runtime's token/refresh ownership.
 
 For a separate authoritative metadata feed, the same
 `provider-catalog-live-runtime` subpath exposes `ProviderCatalogSnapshot`:

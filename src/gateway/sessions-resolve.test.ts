@@ -1,7 +1,5 @@
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -12,15 +10,6 @@ import * as facadeRuntime from "../plugin-sdk/facade-runtime.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-
-const hoisted = vi.hoisted(() => ({ listAgentIdsMock: vi.fn() }));
-
-vi.mock("../agents/agent-scope.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/agent-scope.js")>(
-    "../agents/agent-scope.js",
-  );
-  return { ...actual, listAgentIds: hoisted.listAgentIdsMock };
-});
 
 const { resolveSessionKeyFromResolveParams: resolveWithClient } =
   await import("./sessions-resolve.js");
@@ -47,8 +36,7 @@ const resolve = (p: ResolveParams["p"], cfg: OpenClawConfig = {}) => {
 };
 
 describe("resolveSessionKeyFromResolveParams", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  let storePath: string;
+  const storePath = "sessions-resolve";
 
   function setStore(store: Record<string, SessionEntry>, owners?: Record<string, string>) {
     selectedStore = {
@@ -82,7 +70,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
 
   beforeEach(() => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
-    storePath = path.join(tempDirs.make("sessions-resolve-"), "sessions.json");
     setStore({});
     projections = [];
     onTestFinished(() => {
@@ -91,8 +78,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
       }
       clearRuntimeConfigSnapshot();
     });
-    hoisted.listAgentIdsMock.mockReset();
-    hoisted.listAgentIdsMock.mockReturnValue(["main"]);
   });
 
   it("uses a display-name slug only to narrow a short-id tie", () => {
@@ -168,8 +153,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
   });
 
   it("supports allowMissing for short ids", () => {
-    setStore({});
-
     expect(resolve({ shortId: "deadbeef", allowMissing: true })).toEqual({
       ok: true,
       missing: true,
@@ -177,7 +160,6 @@ describe("resolveSessionKeyFromResolveParams", () => {
   });
 
   it("resolves a configured global alias with its stored non-default owner", () => {
-    hoisted.listAgentIdsMock.mockReturnValue(["main", "work"]);
     setStore(
       {
         global: session("work-global", { displayName: "Work dashboard", boardFace: "dashboard" }),
@@ -187,7 +169,10 @@ describe("resolveSessionKeyFromResolveParams", () => {
     expect(
       resolve(
         { reference: { key: "agent:work:primary" }, agentId: "work", includeGlobal: true },
-        { session: { scope: "global", mainKey: "primary" } },
+        {
+          agents: { entries: { main: {}, work: {} } },
+          session: { scope: "global", mainKey: "primary" },
+        },
       ),
     ).toEqual({
       ok: true,
@@ -224,30 +209,23 @@ describe("resolveSessionKeyFromResolveParams", () => {
   it("bounds named-reference ambiguity after excluding deleted agents and non-UUID titles", () => {
     const store = candidates(() => ({ displayName: "Shared dashboard", boardFace: "dashboard" }));
     const keys = Object.keys(store);
+    const display = { displayName: "Shared dashboard", boardFace: "dashboard" as const };
     store["agent:deleted:thread:12345678-ffff-4000-8000-000000000000"] = session(
       "deleted-dashboard",
-      {
-        updatedAt: 200,
-        displayName: "Shared dashboard",
-        boardFace: "dashboard",
-      },
+      { ...display, updatedAt: 200 },
     );
     store["agent:main:literal"] = session("literal-dashboard", {
+      ...display,
       updatedAt: 300,
-      displayName: "Shared dashboard",
-      boardFace: "dashboard",
     });
     setStore(store, Object.fromEntries(Object.keys(store).map((key) => [key, "main"])));
     expect(resolve({ reference: { key: "agent:main:missing", slug: "shared-dashboard" } })).toEqual(
       {
         ok: true,
         ambiguous: true,
-        candidates: keys.slice(0, 10).map((key) => ({
-          key,
-          agentId: "main",
-          displayName: "Shared dashboard",
-          boardFace: "dashboard",
-        })),
+        candidates: keys
+          .slice(0, 10)
+          .map((key) => Object.assign({ key, agentId: "main" }, display)),
       },
     );
   });

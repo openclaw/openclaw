@@ -1,4 +1,5 @@
 import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
+import { isIconName } from "../../components/icon-data.ts";
 import type { IconName } from "../../components/solid/icon.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
@@ -66,7 +67,7 @@ export function sidebarPanelDefinitions(
         variant:
           textKey === "conversation" || textKey === "companion"
             ? "chat"
-            : textKey === "subagents" || textKey === "processes"
+            : textKey === "subagents" || textKey === "processes" || textKey === "context"
               ? "file-list"
               : textKey === "portal"
                 ? "browser"
@@ -99,6 +100,7 @@ export function sidebarPanelDefinitions(
     definePanel("conversation", "messageSquare", false),
     definePanel("subagents", "bot"),
     definePanel("processes", "terminal"),
+    definePanel("context", "layers"),
     definePanel("detail", "diff", Boolean(data?.detailContent)),
     definePanel("terminal", "terminal", Boolean(state?.terminalAvailable)),
     {
@@ -143,7 +145,8 @@ export function sidebarPanelDefinitions(
     ...[...pluginPanels].map(([slot, entry]): SidebarPanelDefinition => ({
       slot,
       label: entry?.value.label ?? slot.slice("plugin:".length),
-      icon: "plug",
+      icon: isIconName(entry?.value.icon) ? entry.value.icon : "plug",
+      iconSvg: entry?.panelIcon,
       available: entry !== undefined,
       content: null,
       view: entry ? data : undefined,

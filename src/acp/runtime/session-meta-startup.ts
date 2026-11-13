@@ -2,20 +2,19 @@ import { AgentSelectionRequiredError, listAgentIds } from "../../agents/agent-sc
 import { SessionStoreMigrationRequiredError } from "../../config/sessions/migration-required.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
-  getSessionKysely,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { parseSqliteSessionEntryRecord } from "../../config/sessions/session-entry-json.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import {
+  resolveConfiguredAgentDatabaseCandidatePaths,
+  resolveConfiguredAgentDatabaseTargets,
+} from "../../config/sessions/targets.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
-import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawAgentDatabasePathMatcher,
@@ -50,8 +49,12 @@ export async function assertAcpSessionKeysMigratedForStartup(
   const admittedPath = admittedDatabase
     ? resolveOpenClawAgentSqlitePath(admittedDatabase)
     : undefined;
-  // Unknown owners still require validation. Only the admission owner's explicit
-  // refusals defer a physical store, and its preparation borrow restores the check.
+  // Historical ACP rows do not admit retired stores. Keep physical shared stores
+  // in scope, and let the admission owner's refusals defer configured stores.
+  const configuredPaths = [
+    ...resolveConfiguredAgentDatabaseTargets(cfg, { env }).map((target) => target.path),
+    ...resolveConfiguredAgentDatabaseCandidatePaths(cfg, { env }),
+  ];
   const refusedPaths = admittedDatabase
     ? []
     : listAgentDatabaseAdmissionRefusals({ env }).flatMap(
@@ -63,10 +66,10 @@ export async function assertAcpSessionKeysMigratedForStartup(
       toDatabaseOptions(resolveSqliteReadScope({ agentId, storePath, sessionKey, env })),
     );
   const ownsPath = (agentId: string, storePath: string, sessionKey: string) => {
-    if (admittedPath === undefined && refusedPaths.length === 0) {
-      return true;
-    }
     const pathname = candidatePath(agentId, storePath, sessionKey);
+    if (!configuredPaths.some((configuredPath) => matchesPath(pathname, configuredPath))) {
+      return false;
+    }
     return admittedPath === undefined
       ? !refusedPaths.some((refusedPath) => matchesPath(pathname, refusedPath))
       : matchesPath(pathname, admittedPath);
@@ -145,29 +148,14 @@ export async function assertAcpSessionKeysMigratedForStartup(
   }
 }
 
-/** Boot admission only; ordinary reads never probe or normalize embedded metadata. */
+/** Refuse the startup scan's finding after legacy repair and canonical admission. */
 export function assertEmbeddedAcpMetadataMigratedForStartup(
   options: OpenClawAgentDatabaseOptions,
+  sessionKey: string | undefined,
 ): void {
-  const inspected = withEngineStoreAdmission(() =>
-    withOpenClawAgentDatabaseReadOnly((database) => {
-      const db = getSessionKysely(database.db);
-      for (const row of iterateSqliteQuerySync(
-        database.db,
-        db
-          .selectFrom("session_nodes")
-          .select(["session_key", "entry_json", "current_session_id", "updated_at"]),
-      )) {
-        if (parseSqliteSessionEntryRecord(row)?.acp != null) {
-          return { session_key: row.session_key };
-        }
-      }
-      return undefined;
-    }, options),
-  );
-  if (inspected.found && inspected.value) {
+  if (sessionKey !== undefined) {
     migrationRequired(
-      `agent ${JSON.stringify(options.agentId)} session ${JSON.stringify(inspected.value.session_key)}`,
+      `agent ${JSON.stringify(options.agentId)} session ${JSON.stringify(sessionKey)}`,
     );
   }
 }

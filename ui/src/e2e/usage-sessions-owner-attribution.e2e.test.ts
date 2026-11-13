@@ -18,6 +18,7 @@ import {
   waitForControlUiGatewayReady,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI usage sessions owner attribution",
@@ -117,16 +118,7 @@ const ownerSuite = createControlUiE2eSuite({
       signal.throwIfAborted();
       const state = await createOpenClawTestState({
         label: "usage-sessions-owner-attribution",
-        env: {
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-          VITEST: "1",
-        },
+        env: { ...deviceGatewayEnv },
       });
       ownerFixture = state;
       setLoggerOverride({
@@ -244,6 +236,12 @@ ownerSuite.define(() => {
           await confirmation
             .getByRole("button", { name: `Switch to 127.0.0.1:${ownerPort}`, exact: true })
             .click();
+          const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+          await agentScope.locator(".agent-select__trigger").click();
+          await agentScope
+            .locator(".agent-select__option[data-agent-option]")
+            .filter({ hasText: "All agents" })
+            .click();
           // The dismissed dialog can leave the pointer over a row and lift its title.
           await page.mouse.move(0, 0);
 
@@ -317,16 +315,7 @@ suite.define(() => {
           signal.throwIfAborted();
           const state = await createOpenClawTestState({
             label: "usage-detail-instance",
-            env: {
-              OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-              OPENCLAW_SKIP_CANVAS_HOST: "1",
-              OPENCLAW_SKIP_CHANNELS: "1",
-              OPENCLAW_SKIP_CRON: "1",
-              OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-              OPENCLAW_SKIP_PROVIDERS: "1",
-              OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-              VITEST: "1",
-            },
+            env: { ...deviceGatewayEnv },
           });
           fixture = state;
           setLoggerOverride({
@@ -499,6 +488,9 @@ suite.define(() => {
               ]);
               await page.goto(new URL("usage", suite.server.baseUrl).toString());
               await waitForControlUiGatewayReady(page);
+              const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+              await agentScope.locator(".agent-select__trigger").click();
+              await agentScope.locator('[data-agent-option][value="opus"]').click();
               const selected = page.locator(
                 `.session-bar-row[title="${key}"] .session-bar-selection`,
               );

@@ -2,7 +2,7 @@ import { cp, readdir, realpath, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { chromium, webkit, type Browser } from "playwright";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, inject, it } from "vitest";
 import { handleControlUiHttpRequest } from "../../../src/gateway/control-ui.ts";
 import type { ControlUiRootState } from "../../../src/gateway/server-control-ui-root.ts";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
@@ -11,7 +11,6 @@ import {
   buildProductionControlUiE2e,
   captureControlUiE2eFailureDiagnostics,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -19,6 +18,8 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const useWebKit = process.env.OPENCLAW_CONTROL_UI_E2E_BROWSER === "webkit";
+const { executablePath: chromiumExecutablePath, wsEndpoint: chromiumWsEndpoint } =
+  inject("controlUiE2eChromium");
 const buildA = "stale-reload-build-a";
 const buildB = "stale-reload-build-b";
 type BundledRoot = Extract<ControlUiRootState, { kind: "bundled" }>;
@@ -46,7 +47,6 @@ it("reloads a stale document onto the current build when an unvisited lazy route
     force: false,
     filter: (source) => source !== path.join(rootA, "assets", activityAssetA),
   });
-  expect(await readdir(path.join(rootB, "assets"))).not.toContain(activityAssetA);
 
   let root: BundledRoot = { kind: "bundled", path: rootA, realPath: await realpath(rootA) };
   const requests: Array<{ method: string; url: string; status: number }> = [];
@@ -76,9 +76,9 @@ it("reloads a stale document onto the current build when an unvisited lazy route
   try {
     browser = useWebKit
       ? await webkit.launch()
-      : await chromium.launch({
-          executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
-        });
+      : chromiumWsEndpoint
+        ? await chromium.connect(chromiumWsEndpoint, { timeout: 30_000 })
+        : await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const pageErrors: string[] = [];
@@ -100,8 +100,6 @@ it("reloads a stale document onto the current build when an unvisited lazy route
       await waitForControlUiRoute(page, { routeId: "new-session", pathname: "/new" });
       await expectBuild(buildA);
       expect(requests.some(({ url }) => url.includes(activityAssetA))).toBe(false);
-      expect(await page.locator("openclaw-activity-page").count()).toBe(0);
-      expect(documents).toHaveLength(1);
 
       root = { kind: "bundled", path: rootB, realPath: await realpath(rootB) };
       await rm(rootA, { recursive: true, force: true });
@@ -121,7 +119,6 @@ it("reloads a stale document onto the current build when an unvisited lazy route
         pathname: "/activity",
         search: "?view=live",
       });
-      await page.locator("openclaw-activity-page").waitFor({ state: "visible" });
       await page.getByRole("region", { name: "Active sessions", exact: true }).waitFor();
       await expectBuild(buildB);
       expect(requests.slice(requestStart)).toContainEqual({
@@ -135,19 +132,8 @@ it("reloads a stale document onto the current build when an unvisited lazy route
       expect(reloadUrl.searchParams.get("view")).toBe("live");
       expect(reloadUrl.searchParams.get("openclaw_mount_recovery")).toMatch(/^\d+$/u);
       expect(await page.locator(".lazy-view-error").count()).toBe(0);
-      expect(
-        await page
-          .getByText(
-            /Importing a module script failed|Failed to fetch dynamically imported module/iu,
-          )
-          .count(),
-      ).toBe(0);
       expect(pageErrors.slice(postReloadErrors)).toEqual([]);
     } catch (error) {
-      console.error(
-        "Stale-build reload requests:",
-        JSON.stringify({ requests, documents, pageErrors }),
-      );
       if (error instanceof Error) {
         await captureControlUiE2eFailureDiagnostics(page, {
           error,

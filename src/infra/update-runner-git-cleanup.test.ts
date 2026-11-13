@@ -80,16 +80,13 @@ it.each(["result", "exception", "uncertain-warning"] as const)(
           reason: "preflight-no-good-commit",
           recovery: { serviceRestartSafe: true, buildId: "retained-build" },
         });
-        expect(result.steps.filter(isFailedUpdateStep).map((step) => step.name)).toEqual([
-          "preflight-update-clean-check",
-        ]);
-        expect(result.steps).toContainEqual(
-          expect.objectContaining({
+        expect(result.steps.filter(isFailedUpdateStep)).toMatchObject([
+          {
             name: "preflight-update-clean-check",
             exitCode: 128,
             stderrTail: "fatal: not a git repository: (null)",
-          }),
-        );
+          },
+        ]);
       }
       expect(fixture.git(fixture.install, "rev-parse", "HEAD")).toBe(before);
       const warning = observed.find((step) =>
@@ -118,15 +115,13 @@ it.each(["none", "start", "complete", "uncertain"] as const)(
         : new Error(
             'Could not record update step "preflight-cleanup": undergoing offline maintenance',
           );
-    let validated = false;
+    const validateCandidate = vi.fn(async () => {});
     const doctor = vi.fn();
     const error = await fixture
       .run({
-        validateCandidate: async () => {
-          validated = true;
-        },
+        validateCandidate,
         beforeGitMutation: async () => {
-          expect(validated).toBe(true);
+          expect(validateCandidate).toHaveBeenCalledOnce();
           throw original;
         },
         runGitDoctor: doctor,
@@ -138,15 +133,16 @@ it.each(["none", "start", "complete", "uncertain"] as const)(
       .catch((caught: unknown) => caught);
     expect(fixture.git(fixture.install, "rev-parse", "HEAD")).toBe(before);
     expect(doctor).not.toHaveBeenCalled();
-    if (reportingFails === "uncertain") {
+    if (reportingFails !== "none") {
       expect(error).toMatchObject({ cause: original, errors: [original, reporting] });
+    }
+    if (reportingFails === "uncertain") {
       expect(hasCommandProcessCleanupError(error)).toBe(true);
       expect(removals(fixture)).toEqual([]);
       return;
     }
     expect(removals(fixture)).toHaveLength(1);
     if (reportingFails !== "none") {
-      expect(error).toMatchObject({ cause: original, errors: [original, reporting] });
       const fact = createUpdateErrorFact("update", error);
       expect(fact.message).toContain("SYNTHETIC_POST_STOP_FAILURE");
       expect(fact.message).toContain("offline maintenance");
@@ -169,6 +165,16 @@ it("keeps a successful update successful when cleanup reporting is unavailable",
   });
   expect(result.status).toBe("ok");
   expect(fixture.git(fixture.install, "rev-parse", "HEAD")).toBe(fixture.target);
+  const cleanup = removals(fixture);
+  expect(cleanup).toHaveLength(1);
+  const command = cleanup[0]!;
+  expect(command.slice(4, -1)).toEqual(["worktree", "remove", "--force", "--force"]);
+  expect(command[3]).toBe(`--git-dir=${command[2]}`);
+  expect(fixture.calls.some((argv) => argv.includes("worktree") && argv.includes("prune"))).toBe(
+    false,
+  );
+  expect(fs.existsSync(path.dirname(command.at(-1)!))).toBe(false);
+  expect(fs.existsSync(path.dirname(command[2]!))).toBe(false);
   expect(result.steps.find(({ name }) => name === "preflight-cleanup-reporting")).toMatchObject({
     exitCode: 0,
     advisory: { kind: "recoverable-maintenance" },

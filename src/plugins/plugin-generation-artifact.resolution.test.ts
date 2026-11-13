@@ -4,15 +4,84 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  captureRetainedNativeWorkerSource,
+  closeDefaultRetainedNativeWorkerSource,
+} from "../infra/worker-native-lifecycle.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import * as jitiFactory from "./jiti-factory.js";
 import { createPluginCaptureResolver } from "./plugin-capture-resolution.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
-import { captureResources, writeTree } from "./plugin-generation-capture.test-support.js";
+import { captureResources } from "./plugin-generation-capture.test-support.js";
 import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
+import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await closeDefaultRetainedNativeWorkerSource();
+});
+
+const silenceWarnings = () => vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+
+it("initializes the package resolver only when capture needs it", async () => {
+  expect(process.env.JITI_TSCONFIG_PATHS).toBeUndefined();
+  await using resources = captureResources();
+  const root = temp.make("plugin-lazy-resolution-");
+  writeTree(root, {
+    "package.json": { name: "fixture", type: "module" },
+    "index.js": "export const value = 42;",
+    "peer.js": "export const value = 7;",
+  });
+  const createResolver = vi.spyOn(jitiFactory, "createJiti");
+  const artifact = resources.keep(capturePluginGenerationArtifact(root, undefined, (run) => run()));
+  const entry = artifact.resolve(path.join(root, "index.js"));
+  artifact.prepareModule(entry);
+  expect(createResolver).not.toHaveBeenCalled();
+  for (let repeat = 0; repeat < 2; repeat++) {
+    const selected = artifact.captureModule(entry, "./peer.js", ["node", "import"]);
+    expect(selected && "target" in selected && fs.readFileSync(selected.target, "utf8")).toBe(
+      "export const value = 7;",
+    );
+  }
+  expect(createResolver).toHaveBeenCalledTimes(1);
+});
+
+it.each([
+  ["read-only URL", "", false],
+  [
+    "dynamic URL loop",
+    "export function locate(files) { const urls = []; for (const file of files) urls.push(new URL(file, import.meta.url)); return urls; }",
+    false,
+  ],
+  [
+    "metadata URL input",
+    "export const self = () => new URL(import.meta.url, import.meta.url);",
+    true,
+  ],
+  ["URL assignment", "import.meta.url = 'https://localhost';", true],
+  ["URL destructuring", "({ href: import.meta.url } = new URL('https://localhost'));", true],
+  ["dirname", "export const directory = import.meta.dirname;", true],
+  ["meta object", "export const meta = import.meta;", true],
+] as const)("captures native assets with %s metadata", async (_name, extra, transformed) => {
+  await using resources = captureResources();
+  const root = temp.make("plugin-native-meta-");
+  const entry = path.join(root, "index.mjs");
+  writeTree(root, {
+    "package.json": { name: "fixture", type: "module" },
+    "index.mjs": `${extra}
+      export const read = () => [new URL('./asset.txt', import.meta.url), import.meta.url];`,
+    "asset.txt": "captured",
+    "private.txt": "not selected",
+  });
+  const createResolver = vi.spyOn(jitiFactory, "createJiti");
+  const artifact = resources.keep(capturePluginGenerationArtifact(root, entry, (run) => run()));
+  expect(createResolver.mock.calls.length > 0).toBe(transformed);
+  fs.writeFileSync(path.join(root, "asset.txt"), "changed");
+  expect(fs.readFileSync(artifact.resolve(path.join(root, "asset.txt")), "utf8")).toBe("captured");
+  expect(artifact.hasSource(path.join(root, "private.txt"))).toBe(false);
+});
 
 it.each([false, true])(
   "bounds resolution work for fifty TypeScript imports (custody: %s)",
@@ -36,16 +105,49 @@ it.each([false, true])(
       resolutionErrors += Error.stackTraceLimit === Infinity ? 1 : 0;
       captureStack(target, constructor);
     });
+    const workerCounts = new Int32Array(new SharedArrayBuffer(8));
+    const nativeSource = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+    const create = nativeSource.create.bind(nativeSource);
+    if (custody) {
+      vi.spyOn(nativeSource, "create").mockImplementation((filename, options = {}, ...rest) =>
+        create(
+          new URL("./doctor-capture-probe.test-support.ts", import.meta.url),
+          {
+            ...options,
+            workerData: {
+              ...options.workerData,
+              doctorCaptureWorkerUrl: String(filename),
+              doctorResolutionCounts: workerCounts,
+            },
+          },
+          ...rest,
+        ),
+      );
+    }
     const capture = async () => {
       await using resources = captureResources();
-      const artifact = resources.keep(capturePluginGenerationArtifact(root, entry, (run) => run()));
+      const artifact = resources.keep(
+        custody
+          ? (
+              await preparePluginGenerationArtifact({
+                rootDir: root,
+                source: entry,
+                standalone: true,
+              })
+            ).artifact
+          : capturePluginGenerationArtifact(root, entry, (run) => run()),
+      );
       for (let index = 0; index < 25; index++) {
         expect(
           fs.readFileSync(artifact.resolve(path.join(root, `part-${index}/value.ts`)), "utf8"),
         ).toBe(`export const value = ${index};`);
       }
-      expect.soft(createResolver.mock.calls.length).toBeLessThanOrEqual(custody ? 3 : 1);
-      expect(resolutionErrors).toBe(0);
+      const resolverCount = custody
+        ? Atomics.load(workerCounts, 0)
+        : createResolver.mock.calls.length;
+      expect(resolverCount).toBeGreaterThan(0);
+      expect.soft(resolverCount).toBeLessThanOrEqual(custody ? 3 : 1);
+      expect(resolutionErrors + Atomics.load(workerCounts, 1)).toBe(0);
     };
     await (custody ? withPluginGenerationSourceCustody(capture) : capture());
   },
@@ -136,7 +238,7 @@ it.each(["relative symlink", "absolute junction"])(
       layout === "absolute junction" ? "junction" : "dir",
     );
     expect(fs.existsSync(link)).toBe(false);
-    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const warning = silenceWarnings();
     const rename = fs.renameSync;
     let publishedAtomically = false;
     vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
@@ -162,38 +264,31 @@ it.each(["relative symlink", "absolute junction"])(
   },
 );
 
-it("replaces a live link to another target without changing that target", async () => {
+it.each([false, true])("preserves existing dependency contents (link: %s)", async (isLink) => {
   await using resources = captureResources();
   const { artifact, entry, link, root } = fixture(resources);
-  const previous = path.join(root, "previous");
+  const previous = isLink ? path.join(root, "previous") : link;
   writeTree(previous, {
     "package.json": { main: "index.cjs" },
     "index.cjs": "module.exports = 'previous dependency';",
   });
-  fs.symlinkSync(previous, link, "junction");
-  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
-
+  if (isLink) {
+    fs.symlinkSync(previous, link, "junction");
+  }
+  const warning = silenceWarnings();
   artifact.prepareDependency(entry, "dependency");
-  expect(createRequire(entry)("dependency")).toBe("captured dependency");
+  expect(createRequire(entry)("dependency")).toBe(
+    isLink ? "captured dependency" : "previous dependency",
+  );
   expect(fs.readFileSync(path.join(previous, "index.cjs"), "utf8")).toContain(
     "previous dependency",
   );
-  expect(warning).toHaveBeenCalledWith(expect.stringContaining("Replacing"));
-});
-
-it("preserves a real dependency directory", async () => {
-  await using resources = captureResources();
-  const { artifact, entry, link } = fixture(resources);
-  writeTree(link, {
-    "package.json": { main: "index.cjs" },
-    "index.cjs": "module.exports = 'nested install';",
-  });
-  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
-
-  artifact.prepareDependency(entry, "dependency");
-  expect(fs.lstatSync(link).isDirectory()).toBe(true);
-  expect(createRequire(entry)("dependency")).toBe("nested install");
-  expect(warning).not.toHaveBeenCalled();
+  if (isLink) {
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("Replacing"));
+  } else {
+    expect(fs.lstatSync(link).isDirectory()).toBe(true);
+    expect(warning).not.toHaveBeenCalled();
+  }
 });
 
 it.each(["EPERM", "EISDIR"])(
@@ -222,7 +317,7 @@ it.each(["EPERM", "EISDIR"])(
       }
       symlink(destination, filename, type);
     });
-    vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    silenceWarnings();
 
     withMockedPlatform("win32", () => artifact.prepareNativeScopes(entry));
     expect(recreated).toBe(true);
@@ -243,16 +338,10 @@ it("marks a capture unprepared after dependency link creation fails", async () =
     }
     symlink(destination, filename, type);
   });
-
-  expect(() => artifact.prepareDependency(entry, "dependency")).toThrowError(
-    /Cannot prepare dependency dependency for plugin/,
-  );
-  expect(() => artifact.assertModuleAvailable(link)).toThrowError(
-    /Cannot prepare dependency dependency for plugin/,
-  );
+  const error = /Cannot prepare dependency dependency for plugin/;
+  expect(() => artifact.prepareDependency(entry, "dependency")).toThrowError(error);
+  expect(() => artifact.assertModuleAvailable(link)).toThrowError(error);
   failure.mockRestore();
-  expect(() => artifact.prepareDependency(entry, "dependency")).toThrowError(
-    /Cannot prepare dependency dependency for plugin/,
-  );
+  expect(() => artifact.prepareDependency(entry, "dependency")).toThrowError(error);
   expect(fs.readdirSync(path.dirname(link))).toEqual(["dependency"]);
 });

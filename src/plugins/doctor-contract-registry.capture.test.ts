@@ -4,38 +4,84 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { collectPluginDoctorStateMigrationPlans } from "../infra/state-migrations.plugin-doctor.js";
-import { listPluginDoctorStateMigrationEntries } from "./doctor-contract-registry.js";
+import {
+  captureRetainedNativeWorkerSource,
+  closeDefaultRetainedNativeWorkerSource,
+} from "../infra/worker-native-lifecycle.js";
+import { preparePluginDoctorContractModules } from "./doctor-contract-preparation.js";
+import {
+  listPluginDoctorLegacyConfigRules,
+  listPluginDoctorSessionRouteStateOwners,
+  listPluginDoctorStateMigrationEntries,
+} from "./doctor-contract-registry.js";
+import { createDoctorGenerationFixture } from "./doctor-generation.test-support.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { writeTree } from "./plugin-generation-capture.test-support.js";
+import {
+  createPluginGenerationMetrics,
+  withPluginGenerationMetrics,
+} from "./plugin-generation-metrics.js";
+import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
+import { withPreparedPluginSetupRead } from "./plugin-setup-module.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await closeDefaultRetainedNativeWorkerSource();
+});
+
+const migrationInput = (root: string) => createDoctorGenerationFixture(root, "fixture").input;
+
+it("prepares manifest-owned session routes without capturing broken runtime source", async () => {
+  const rootDir = dirs.make("doctor-manifest-routes-");
+  writeTree(rootDir, {
+    "package.json": { type: "module" },
+    "index.mjs": "this is not valid JavaScript",
+    "doctor-contract-api.mjs": "throw new Error('manifest routes must not load this module');",
+  });
+  const owner = { id: "manifest-owner", label: "Manifest owner" };
+  const manifestRegistry = {
+    plugins: [
+      createPluginManifestRecordFixture({
+        id: "manifest-routes",
+        rootDir,
+        source: path.join(rootDir, "index.mjs"),
+        origin: "config",
+        doctorContract: { sessionRouteStateOwners: true },
+        sessionRouteStateOwners: [owner],
+      }),
+    ],
+    diagnostics: [],
+  };
+  const metrics = createPluginGenerationMetrics();
+  await using cache = createPluginCache();
+  await withPluginGenerationMetrics(metrics, () =>
+    withPluginCache(cache, async () => {
+      await preparePluginDoctorContractModules({
+        manifestRegistry,
+        surfaces: ["sessionRouteStateOwners"],
+      });
+      expect(listPluginDoctorSessionRouteStateOwners({ manifestRegistry })).toEqual([owner]);
+    }),
+  );
+  expect(metrics.captures).toBe(0);
+  expect(metrics.originalBytes).toBe(0);
+});
 
 it("retains direct dependency resource reads for dedicated Doctor callbacks", async () => {
   const rootDir = fs.realpathSync(dirs.make("doctor-dependency-resource-"));
-  const write = (name: string, body: string) => {
-    const filename = path.join(rootDir, name);
-    fs.mkdirSync(path.dirname(filename), { recursive: true });
-    fs.writeFileSync(filename, body);
-    return filename;
-  };
-  write(
-    "package.json",
-    JSON.stringify({ type: "module", dependencies: { "data-package": "1.0.0" } }),
-  );
-  write(
-    "node_modules/data-package/package.json",
-    JSON.stringify({ name: "data-package", type: "module", main: "index.mjs" }),
-  );
-  write(
-    "node_modules/data-package/index.mjs",
-    "throw new Error('resource access must not execute the dependency');",
-  );
-  write("node_modules/data-package/schema.json", '{"version":"captured-before"}');
-  const source = write(
-    "doctor-contract-api.mjs",
-    `import { readFileSync } from 'node:fs';
+  writeTree(rootDir, {
+    "package.json": { type: "module", dependencies: { "data-package": "1.0.0" } },
+    "node_modules/data-package/package.json": {
+      name: "data-package",
+      type: "module",
+      main: "index.mjs",
+    },
+    "node_modules/data-package/index.mjs":
+      "throw new Error('resource access must not execute the dependency');",
+    "node_modules/data-package/schema.json": { version: "captured-before" },
+    "doctor-contract-api.mjs": `import { readFileSync } from 'node:fs';
     export const stateMigrations = [{
       id: 'resource-state', label: 'Dependency resource',
       detectLegacyState() {
@@ -43,11 +89,11 @@ it("retains direct dependency resource reads for dedicated Doctor callbacks", as
       },
       migrateLegacyState() { return { changes: [], warnings: [] }; },
     }];`,
-  );
+  });
   const record = createPluginManifestRecordFixture({
     id: "resource-fixture",
     rootDir,
-    source,
+    source: path.join(rootDir, "doctor-contract-api.mjs"),
     origin: "config",
     doctorContract: { stateMigrations: [{ id: "resource-state" }] },
   });
@@ -58,19 +104,8 @@ it("retains direct dependency resource reads for dedicated Doctor callbacks", as
     }),
   );
   const entry = expectDefined(entries[0], "dedicated Doctor migration");
-  write("node_modules/data-package/schema.json", '{"version":"installed-after"}');
-  const input = {
-    config: {},
-    env: {},
-    stateDir: rootDir,
-    oauthDir: rootDir,
-    context: {
-      openPluginStateKeyedStore() {
-        throw new Error("fixture must not open state");
-      },
-    },
-  };
-  expect(await entry.migration.detectLegacyState(input)).toEqual({
+  writeTree(rootDir, { "node_modules/data-package/schema.json": { version: "installed-after" } });
+  expect(await entry.migration.detectLegacyState(migrationInput(rootDir))).toEqual({
     preview: ['{"version":"captured-before"}'],
   });
 });
@@ -104,18 +139,22 @@ it("keeps other plugin migrations available after a dependency link cannot be cr
   });
   fs.mkdirSync(path.join(roots[0]!, "node_modules"));
   fs.symlinkSync(dependency, path.join(roots[0]!, "node_modules", "broken-dependency"), "junction");
-  const symlink = fs.symlinkSync;
-  vi.spyOn(fs, "symlinkSync").mockImplementation((destination, filename, type) => {
-    if (
-      String(filename).includes("openclaw-plugin-build-") &&
-      path.basename(String(filename)).startsWith("broken-dependency")
-    ) {
-      throw Object.assign(new Error("fixture dependency link permission denied"), {
-        code: "EACCES",
-      });
-    }
-    symlink(destination, filename, type);
-  });
+  const nativeSource = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  const create = nativeSource.create.bind(nativeSource);
+  vi.spyOn(nativeSource, "create").mockImplementation((filename, options = {}, ...rest) =>
+    create(
+      new URL("./doctor-capture-probe.test-support.ts", import.meta.url),
+      {
+        ...options,
+        workerData: {
+          ...options.workerData,
+          doctorDependencyLinkFailure: true,
+          doctorCaptureWorkerUrl: String(filename),
+        },
+      },
+      ...rest,
+    ),
+  );
   const warnings: string[] = [];
   await using cache = createPluginCache();
   const collected = await withPluginCache(cache, () =>
@@ -138,17 +177,40 @@ it("keeps other plugin migrations available after a dependency link cannot be cr
   expect(collected.requiredPluginIds).toEqual(new Set(["unprepared-plugin", "healthy-plugin"]));
   expect(collected.plans.map((plan) => plan.pluginId)).toEqual(["healthy-plugin"]);
   expect(warnings).toEqual([expect.stringContaining("Plugin unprepared-plugin is not prepared")]);
-  expect(
-    await collected.plans[0]!.migration.migrateLegacyState({
-      config: {},
-      env: {},
-      stateDir: roots[1]!,
-      oauthDir: roots[1]!,
-      context: {
-        openPluginStateKeyedStore() {
-          throw new Error("fixture must not open state");
-        },
-      },
+  expect(await collected.plans[0]!.migration.migrateLegacyState(migrationInput(roots[1]!))).toEqual(
+    { changes: ["healthy migration ran"], warnings: [] },
+  );
+});
+
+it("prepares only the raw diagnostic read's selected sources before resuming", async () => {
+  const records = ["first", "second"].map((id) => {
+    const rootDir = dirs.make(`doctor-raw-${id}-`);
+    writeTree(rootDir, {
+      "package.json": { type: "module" },
+      "doctor-contract-api.mjs": `export const legacyConfigRules = [{
+        path: ["${id}"], message: "${id} legacy value"
+      }];`,
+    });
+    return createPluginManifestRecordFixture({
+      id,
+      rootDir,
+      source: path.join(rootDir, "doctor-contract-api.mjs"),
+      origin: "config",
+      doctorContract: { configRepair: true },
+    });
+  });
+  await using cache = createPluginCache();
+  await withPluginCache(cache, () =>
+    withPluginGenerationSourceCustody(async () => {
+      const read = () =>
+        listPluginDoctorLegacyConfigRules({
+          manifestRegistry: { plugins: records, diagnostics: [] },
+        });
+      expect(() => read()).toThrow("Doctor source must be prepared");
+      const rules = await withPreparedPluginSetupRead(read);
+      expect(rules.map((rule) => rule.path)).toEqual([["first"], ["second"]]);
+      expect(cache.setupModules.size).toBe(2);
+      expect(read()).toEqual(rules);
     }),
-  ).toEqual({ changes: ["healthy migration ran"], warnings: [] });
+  );
 });

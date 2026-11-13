@@ -1,5 +1,1 @@
-export {
-  createReasoningTagTextPartitioner,
-  type ReasoningTagTextDelta,
-  type ReasoningTagTextPartitioner,
-} from "../../../markdown-core/src/reasoning-tags.js";
+export { createReasoningTagTextPartitioner } from "../../../markdown-core/src/reasoning-tags.js";

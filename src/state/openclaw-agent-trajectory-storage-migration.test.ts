@@ -1,8 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import { describe, expect, it } from "vitest";
-import { AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { expect, it } from "vitest";
+import { AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION as version } from "./openclaw-agent-db-contract.js";
 import { getOpenClawAgentMigrationSchema } from "./openclaw-agent-db-schema-helpers.js";
-import { assertOpenClawMigrationWitnessPreserved } from "./openclaw-migration-witness.js";
+import { assertOpenClawMigrationWitnessPreserved as assertPreserved } from "./openclaw-migration-witness.js";
 import {
   agentWitness,
   expectVersion,
@@ -18,7 +18,7 @@ const legacyJson = ` { "type": "legacy", "data": ${JSON.stringify("日本語🦞
 const withFixture = migrationFixture({
   seed,
   predecessor,
-  target: AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION,
+  target: version,
   scope,
 });
 
@@ -61,68 +61,52 @@ function legacyRows(database: DatabaseSync) {
     .all();
 }
 
-describe("agent trajectory payload migration", () => {
-  it.each(["commit", "rollback"] as const)(
-    "preserves legacy bytes and undeclared tables with atomic version publication (%s)",
-    async (outcome) => {
-      await withFixture("trajectory-storage.sqlite", async ({ database, migrate }) => {
-        const originalRows = legacyRows(database);
-        const originalLayout = layout(database);
-        const witness = agentWitness(database);
-        await migrate(outcome);
-        expect(legacyRows(database)).toEqual(originalRows);
-        expect(rows(database, "PRAGMA foreign_key_check")).toEqual([]);
-        const expectedVersion =
-          outcome === "rollback" ? predecessor : AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION;
-        expectVersion(database, expectedVersion);
-        if (outcome === "rollback") {
-          expect(layout(database)).toEqual(originalLayout);
-        } else {
-          expect(
-            rows(
-              database,
-              "SELECT event_json, event_utf8_bytes, event_payload, event_codec FROM trajectory_runtime_events",
-            ),
-          ).toEqual([
-            {
-              event_json: legacyJson,
-              event_utf8_bytes: null,
-              event_payload: null,
-              event_codec: null,
-            },
-          ]);
-          expect(assertOpenClawMigrationWitnessPreserved(witness, agentWitness(database))).toEqual({
-            warnings: [],
-          });
-          database.exec(
-            "SAVEPOINT changed_payload; UPDATE trajectory_runtime_events SET event_json = '{}' ",
-          );
-          expect(() =>
-            assertOpenClawMigrationWitnessPreserved(witness, agentWitness(database)),
-          ).toThrow(/changed or lost/u);
-          database.exec("ROLLBACK TO changed_payload; RELEASE changed_payload");
-        }
-        // Historical ACP diagnostics still belong to their session window.
-        const acpRows = () =>
-          database.prepare("SELECT event_json FROM acp_parent_stream_events").all();
-        expect(acpRows()).toEqual([{ event_json: '{"type":"retained"}' }]);
-        database.prepare("DELETE FROM session_windows WHERE session_id = ?").run("session");
-        expect(acpRows()).toEqual([]);
-      });
-    },
-  );
+it.each(["commit", "rollback"] as const)(
+  "preserves legacy bytes and undeclared tables with atomic version publication (%s)",
+  async (outcome) => {
+    await withFixture("trajectory-storage.sqlite", async ({ database, migrate }) => {
+      const originalRows = legacyRows(database);
+      const originalLayout = layout(database);
+      const witness = agentWitness(database);
+      await migrate(outcome);
+      expect(legacyRows(database)).toEqual(originalRows);
+      expect(rows(database, "PRAGMA foreign_key_check")).toEqual([]);
+      expectVersion(database, outcome === "rollback" ? predecessor : version);
+      if (outcome === "rollback") {
+        expect(layout(database)).toEqual(originalLayout);
+      } else {
+        expect(
+          rows(
+            database,
+            "SELECT event_json, event_utf8_bytes, event_payload, event_codec FROM trajectory_runtime_events",
+          ).map(Object.values),
+        ).toEqual([[legacyJson, null, null, null]]);
+        expect(assertPreserved(witness, agentWitness(database))).toEqual({ warnings: [] });
+        database.exec(
+          "SAVEPOINT changed_payload; UPDATE trajectory_runtime_events SET event_json = '{}' ",
+        );
+        expect(() => assertPreserved(witness, agentWitness(database))).toThrow(/changed or lost/u);
+        database.exec("ROLLBACK TO changed_payload; RELEASE changed_payload");
+      }
+      // Historical ACP diagnostics still belong to their session window.
+      const acpRows = () => rows(database, "SELECT event_json FROM acp_parent_stream_events");
+      expect(acpRows()).toEqual([{ event_json: '{"type":"retained"}' }]);
+      database.prepare("DELETE FROM session_windows WHERE session_id = ?").run("session");
+      expect(acpRows()).toEqual([]);
+    });
+  },
+);
 
-  it("restores the scoped predecessor without overwriting later unrelated writes", async () => {
-    await withFixture(
-      "trajectory-storage-restore.sqlite",
-      async ({ database, restore }) => {
-        await restore(() => ({
-          rows: legacyRows(database),
-          layout: layout(database),
-          version: row(database, "PRAGMA user_version"),
-        }));
-      },
-      "state",
-    );
-  });
+it("restores the scoped predecessor without overwriting later unrelated writes", async () => {
+  await withFixture(
+    "trajectory-storage-restore.sqlite",
+    async ({ database, restore }) => {
+      await restore(() => ({
+        rows: legacyRows(database),
+        layout: layout(database),
+        version: row(database, "PRAGMA user_version"),
+      }));
+    },
+    "state",
+  );
 });

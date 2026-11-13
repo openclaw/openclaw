@@ -27,7 +27,7 @@ it.each(["deepseek-v4-pro", "mimo-v2.5-pro"])(
     const payload = {
       messages: [{ role: "assistant", content: "Earlier answer", tool_calls: [] }],
     };
-    let headers: Record<string, string> | undefined;
+    let headers: NonNullable<Parameters<StreamFn>[2]>["headers"];
     const base: StreamFn = async (requestModel, _context, options) => {
       headers = options?.headers;
       await options?.onPayload?.(payload, requestModel);

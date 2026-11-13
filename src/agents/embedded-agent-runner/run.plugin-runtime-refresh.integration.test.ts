@@ -1,5 +1,7 @@
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
+import { expectCallCount as expectCalls } from "../../test-utils/mock-call-assertions.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 import type { BlockReplyPayload } from "../embedded-agent-payloads.js";
@@ -14,10 +16,13 @@ import {
   mockedBuildEmbeddedRunPayloads as buildPayloads,
   mockedRunEmbeddedAttempt as attempt,
   createOverflowRunParams,
-  resetSharedRunIntegrationHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
-import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import {
+  createFreshRunIntegrationState,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
+import type { CompactionAccountingFact } from "./run/internal-params.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let state: OpenClawTestState;
@@ -53,11 +58,6 @@ const userMessage = (content: string, timestamp = 1) => ({
 const completedItem = { startedCount: 1, completedCount: 1, activeCount: 0 };
 const textPayloads = ({ assistantTexts }: { assistantTexts: string[] }) =>
   assistantTexts.map((text) => ({ text }));
-function expectCalls(count: number, ...mocks: ReturnType<typeof vi.fn>[]) {
-  for (const mock of mocks) {
-    expect(mock).toHaveBeenCalledTimes(count);
-  }
-}
 function delivered(payload: { text: string; mediaUrls?: string[] }, to = "telegram:123") {
   return {
     toolMetas: succeeded("message", "plugins"),
@@ -134,11 +134,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  resetSharedRunIntegrationHarnessMocks();
-  const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-  state = await createOpenClawTestState({ label: "plugin-runtime-refresh" });
-  const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-  setRuntimeConfigSnapshot({});
+  state = await createFreshRunIntegrationState("plugin-runtime-refresh");
 });
 
 afterEach(async () => {
@@ -174,7 +170,53 @@ it.each([false, true])(
   },
 );
 
-it("retains settled work from an overloaded attempt through a later plugin refresh", async () => {
+it("publishes the persisted writer before initial model admission can fail", async () => {
+  const { loadSessionEntry, replaceSessionEntry } =
+    await import("../../config/sessions/session-accessor.js");
+  const target = {
+    agentId: "main",
+    sessionId: "initial-model-refusal",
+    sessionKey: "agent:main:initial-model-refusal",
+    storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+  };
+  await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+  const params = {
+    ...fixtureRunParams(),
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+    sessionTarget: target,
+  };
+  const observe = vi.fn<(fact: CompactionAccountingFact | undefined) => void>();
+  const refusal = new OwnerNotPublishedError("Model runtime replacement is in progress", {
+    admissionBlocked: true,
+  });
+  acquire.mockImplementationOnce(async () => {
+    const entry = loadSessionEntry({
+      ...target,
+      readConsistency: "latest",
+    });
+    expect(entry?.activeWriterRunId).toBe(params.runId);
+    expect(observe).toHaveBeenCalledExactlyOnceWith({
+      kind: "durable",
+      count: 0,
+      target: {
+        ...target,
+        lifecycleRevision: entry?.lifecycleRevision,
+        activeWriterRunId: params.runId,
+      },
+    });
+    throw refusal;
+  });
+  await expect(run({ ...params, onCompactionAccounting: observe })).rejects.toMatchObject({
+    admissionBlocked: true,
+    cause: refusal,
+  });
+  expect(acquire).toHaveBeenCalledOnce();
+  expect(attempt).not.toHaveBeenCalled();
+});
+
+it("retains settled native work from an overloaded attempt through a later plugin refresh", async () => {
+  useOpenAIPlatformAuthFixture();
   const originalPrompt = "write the receipt, reload the plugin, then report the receipt ID";
   const originalMessage = userMessage(originalPrompt);
   const settledMessages = settledWrite();
@@ -211,7 +253,12 @@ it("retains settled work from an overloaded attempt through a later plugin refre
     expect(params.continuation).toBeUndefined();
     return makeAttemptResult({ assistantTexts: ["Receipt AMBER-731 verified."] });
   });
-  const result = await run({ prompt: originalPrompt });
+  const result = await run({
+    prompt: originalPrompt,
+    agentHarnessId: "codex",
+    provider: "openai",
+    model: "gpt-5.6-luna",
+  });
   expect(result.meta.error).toBeUndefined();
   expect(attempt).toHaveBeenCalledTimes(3);
 });
@@ -219,7 +266,7 @@ it("retains settled work from an overloaded attempt through a later plugin refre
 it.each([true, false])("preserves refresh usage totals (CLI priced: %s)", async (priced) => {
   const cliDispatch = await import("./cli-backend-dispatch.js");
   const terminalUsage = tokenUsage(30, 3, priced ? 0.2 : undefined);
-  const dispatch = vi
+  using dispatch = vi
     .spyOn(cliDispatch, "runEmbeddedAgentViaCliBackendIfEligible")
     .mockResolvedValueOnce(undefined)
     .mockResolvedValueOnce({
@@ -244,38 +291,34 @@ it.each([true, false])("preserves refresh usage totals (CLI priced: %s)", async 
     attemptUsage: tokenUsage(100, 10, 0.1),
   });
 
-  try {
-    const result = await run();
+  const result = await run();
 
-    expect(result.payloads).toEqual([{ text: "Receipt verified." }]);
-    expect(result.meta.agentMeta).toMatchObject({
-      provider: "cli-provider",
-      model: "cli-model",
-      contextTokens: 64_000,
-      promptTokens: 30,
-      usage: { input: 130, output: 13, total: 143 },
-      diagnosticUsage: { input: 400, output: 40, total: 440 },
-      lastCallUsage: terminalUsage,
+  expect(result.payloads).toEqual([{ text: "Receipt verified." }]);
+  expect(result.meta.agentMeta).toMatchObject({
+    provider: "cli-provider",
+    model: "cli-model",
+    contextTokens: 64_000,
+    promptTokens: 30,
+    usage: { input: 130, output: 13, total: 143 },
+    diagnosticUsage: { input: 400, output: 40, total: 440 },
+    lastCallUsage: terminalUsage,
+  });
+  for (const [usage, expected] of [
+    [result.meta.agentMeta?.usage, 0.3],
+    [result.meta.agentMeta?.diagnosticUsage, 0.5],
+  ] as const) {
+    const cost = estimateAggregateUsageCost({
+      usage,
+      cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 },
     });
-    for (const [usage, expected] of [
-      [result.meta.agentMeta?.usage, 0.3],
-      [result.meta.agentMeta?.diagnosticUsage, 0.5],
-    ] as const) {
-      const cost = estimateAggregateUsageCost({
-        usage,
-        cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 },
-      });
-      if (priced) {
-        expect(cost).toBeCloseTo(expected, 9);
-      } else {
-        expect(cost).toBeUndefined();
-      }
+    if (priced) {
+      expect(cost).toBeCloseTo(expected, 9);
+    } else {
+      expect(cost).toBeUndefined();
     }
-    expect(attempt).toHaveBeenCalledOnce();
-    expect(dispatch).toHaveBeenCalledTimes(2);
-  } finally {
-    dispatch.mockRestore();
   }
+  expect(attempt).toHaveBeenCalledOnce();
+  expect(dispatch).toHaveBeenCalledTimes(2);
 });
 
 it("preserves same-route text delivery dedupe across refresh", async () => {

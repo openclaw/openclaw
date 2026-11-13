@@ -71,7 +71,7 @@ it("explains an unsupported mention result without exposing schema issues", asyn
   );
   await waitForSolid(() =>
     expect(container.querySelector('[role="alert"]')?.textContent).toBe(
-      "This app returned an unsupported resource list",
+      "Couldn’t load this app’s resources. Try again.",
     ),
   );
   expect(request).toHaveBeenCalledWith("mcp.app.mention", {
@@ -105,6 +105,7 @@ it("only closes the resource picker when a consumer claims the selected resource
   let detail: McpAppResourceMentionDetail | undefined;
   container.addEventListener(MCP_APP_RESOURCE_MENTION_EVENT, (event) => {
     event.preventDefault();
+    expect(event.target).toBe(container.querySelector("openclaw-mcp-app-resources"));
     // SAFETY: The component emits this event with its exported detail contract.
     detail = (event as CustomEvent<McpAppResourceMentionDetail>).detail;
   });

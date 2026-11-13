@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import fs, { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import fs, { mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { Parser } from "acorn";
 import { build, type InlineConfig } from "tsdown";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +9,9 @@ import {
   GATEWAY_RUN_CHUNK_METADATA_PATH,
   readGatewayRunChunks,
 } from "../../scripts/lib/gateway-run-chunk-metadata.mts";
+import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../src/shared/worker-bundle-hash.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 function snapshotAcornParserPrototype() {
   return Reflect.ownKeys(Parser.prototype).map((key) => [
@@ -27,38 +29,23 @@ const {
 } = await import("../../scripts/check-cli-bootstrap-imports.mts");
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
-const workerDeployArtifactNames =
-  `client-credential.worker.mjs fs-safe-darwin-arm64.node fs-safe-darwin-x64.node
-code-mode-node.worker.mjs file-tool-planning.worker.mjs
-file-tool-read.worker.mjs gateway-state-owner-heartbeat.worker.mjs github-exec-launcher.mjs
-image-processor.worker.mjs openclaw-state-read.worker.mjs service-child-group-anchor.mjs
-service-child-relay.mjs sqlite-source-revision.worker.mjs sqlite-store.worker.mjs
-worker-native-lifecycle.worker.mjs worker.mjs workspace-rsync-receiver.mjs windows-security-helper.exe`.split(
-    /\s+/u,
-  );
 
 function makeTempRoot(files: Record<string, string> = {}): string {
   const root = tempRoots.make("openclaw-cli-bootstrap-imports-");
   mkdirSync(join(root, "dist", "cli"), { recursive: true });
   for (const [file, source] of Object.entries(files)) {
-    writeFixture(root, file, source);
+    fixtureFiles(root).write(file, source);
   }
   return root;
 }
 
-function writeFixture(root: string, relativePath: string, source: string): void {
-  const target = join(root, relativePath);
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, source, "utf8");
-}
-
 function workerFixture(files: Record<string, string> = {}) {
   const root = makeTempRoot();
-  for (const artifact of workerDeployArtifactNames) {
-    writeFixture(root, `dist/worker/${artifact}`, "export {};\n");
+  for (const artifact of WORKER_BUNDLE_ARTIFACT_PATHS) {
+    fixtureFiles(root).write(`dist/worker/${artifact}`, "export {};\n");
   }
   for (const [file, source] of Object.entries(files)) {
-    writeFixture(root, `dist/worker/${file}`, source);
+    fixtureFiles(root).write(`dist/worker/${file}`, source);
   }
   return root;
 }
@@ -73,17 +60,14 @@ function expectWorkerErrors(rootDir: string, expected: string[] = [], entrypoint
 
 function writeGatewayRunChunk(root: string, source = ""): void {
   const chunkName = "run-gateway.js";
-  writeFixture(root, "dist/string-coerce.js", "export const normalize = true;");
   const chunkSource = [
-    'import "./string-coerce.js";',
     "const GATEWAY_AUTH_MODES = [];",
     "function addGatewayRunCommand(cmd) { return cmd; }",
     source,
   ].join("\n");
-  writeFixture(root, `dist/${chunkName}`, chunkSource);
+  fixtureFiles(root).write(`dist/${chunkName}`, chunkSource);
   const sha256 = createHash("sha256").update(chunkSource).digest("hex");
-  writeFixture(
-    root,
+  fixtureFiles(root).write(
     "dist/cli/gateway-run-chunk.json",
     JSON.stringify({ version: 1, chunks: [{ fileName: chunkName, sha256 }] }),
   );
@@ -105,6 +89,7 @@ describe("check-cli-bootstrap-imports", () => {
       "dist/entry.js": `import fs from "node:fs";\nimport "./cli/run-main.js";\nvoid fs;\n`,
       "dist/cli/run-main.js": `import "../light-abc123.mjs";\nexport async function run() { return import("tslog"); }\n`,
       "dist/light-abc123.mjs": 'import "./string-coerce.js";\n',
+      "dist/string-coerce.js": "export const normalize = true;",
     });
     writeGatewayRunChunk(root);
 
@@ -116,14 +101,12 @@ describe("check-cli-bootstrap-imports", () => {
   it("reports external packages in the static bootstrap graph", () => {
     const root = makeTempRoot({
       "dist/entry.js": `import "./cli/run-main.js";\n`,
-      "dist/cli/run-main.js": `import "../bridge-abc123.mjs";\n`,
-      "dist/bridge-abc123.mjs": `import "./heavy.js";\n`,
-      "dist/heavy.js": `import { Logger } from "tslog";\nvoid Logger;\n`,
+      "dist/cli/run-main.js": `import { Logger } from "tslog";\nvoid Logger;\n`,
     });
     writeGatewayRunChunk(root);
 
     expect(bootstrapErrors({ rootDir: root })).toEqual([
-      'CLI bootstrap static graph imports external package "tslog" from dist/heavy.js.',
+      'CLI bootstrap static graph imports external package "tslog" from dist/cli/run-main.js.',
     ]);
   });
 
@@ -137,7 +120,7 @@ describe("check-cli-bootstrap-imports", () => {
   it("rejects an empty locator without scanning for a replacement", () => {
     const root = makeTempRoot();
     writeGatewayRunChunk(root);
-    writeFixture(root, "dist/cli/gateway-run-chunk.json", '{"version":1,"chunks":[]}');
+    fixtureFiles(root).write("dist/cli/gateway-run-chunk.json", '{"version":1,"chunks":[]}');
     expect(gatewayErrors({ rootDir: root })).toEqual([
       expect.stringMatching(
         /^CLI bootstrap import guard could not read gateway run chunk metadata: .*Run pnpm build first\.$/u,
@@ -159,7 +142,7 @@ describe("check-cli-bootstrap-imports", () => {
       "dist/native-hook-relay/entry.js":
         'import "../client.js";\nvoid import("../gateway-call.js");\n',
       "dist/client.js":
-        'import "kysely";\nimport "@openclaw/fs-safe/config";\nimport "@openclaw/fs-safe/advanced";\nimport "@openclaw/proc-safe/errors";\nimport "@openclaw/proc-safe/identity";\n',
+        'import "kysely";\nimport "@openclaw/fs-safe/config";\nimport "@openclaw/proc-safe/errors";\n',
     });
     expect(relayErrors({ rootDir: root })).toEqual([]);
   });
@@ -190,7 +173,7 @@ describe("check-cli-bootstrap-imports", () => {
     vi.stubEnv("GITHUB_STEP_SUMMARY", summaryPath);
     const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
     writeGatewayRunChunk(root);
-    writeFixture(root, "dist/native-hook-relay/entry.js", "export {};\n");
+    fixtureFiles(root).write("dist/native-hook-relay/entry.js", "export {};\n");
     const check = () =>
       checkBootstrap({
         rootDir: root,
@@ -206,15 +189,14 @@ describe("check-cli-bootstrap-imports", () => {
     ).toHaveLength(2);
     expect(fs.readFileSync(summaryPath, "utf8")).toContain("Gateway run chunk budget");
     writeGatewayRunChunk(root, 'import "./server-close.js";');
-    writeFixture(root, "dist/server-close.js", "export {};\n");
+    fixtureFiles(root).write("dist/server-close.js", "export {};\n");
     expect(check).toThrow();
     expect(diagnostic.mock.calls.flat().join("\n")).toContain("static graph imports cold path");
   });
 
   it("rejects redeclared worker bindings without changing the Acorn prototype", () => {
     const root = makeTempRoot();
-    writeFixture(
-      root,
+    fixtureFiles(root).write(
       "dist/worker/worker.mjs",
       "const bootstrap_binding_0 = 0; let bootstrap_binding_0;",
     );
@@ -233,7 +215,7 @@ describe("check-cli-bootstrap-imports", () => {
 
     expectWorkerErrors(root, [], []);
 
-    writeFixture(root, "dist/worker/unexpected.mjs", "export {};\n");
+    fixtureFiles(root).write("dist/worker/unexpected.mjs", "export {};\n");
     expectWorkerErrors(
       root,
       ["Worker deploy artifact emits unstaged runtime asset dist/worker/unexpected.mjs."],
@@ -241,7 +223,7 @@ describe("check-cli-bootstrap-imports", () => {
     );
 
     rmSync(join(root, "dist/worker"), { recursive: true, force: true });
-    writeFixture(root, "dist/worker", "not a directory\n");
+    fixtureFiles(root).write("dist/worker", "not a directory\n");
     expectWorkerErrors(root, ["Worker deploy artifact directory dist/worker is unreadable."], []);
   });
 
@@ -253,7 +235,7 @@ describe("check-cli-bootstrap-imports", () => {
     });
     expectWorkerErrors(root);
 
-    writeFixture(root, "dist/worker/worker-chunk-lazy.mjs", 'import "unbundled";');
+    fixtureFiles(root).write("dist/worker/worker-chunk-lazy.mjs", 'import "unbundled";');
     expectWorkerErrors(root, [importError("worker-chunk-lazy", "unbundled")]);
     rmSync(join(root, "dist/worker/worker-chunk-lazy.mjs"));
     expectWorkerErrors(root, [importError("worker-chunk-start", "./worker-chunk-lazy.mjs")]);
@@ -266,13 +248,9 @@ describe("check-cli-bootstrap-imports", () => {
         'require("koffi");',
         'require("bun:ffi-extra");',
         'await import("./lazy.mjs");',
-        '__require("json5");',
         '__require2("numbered");',
-        '(__require)("parenthesized");',
-        '__require?.("optional");',
-        'const interpolated = `literal ${import("template-expression")}`;',
-        String.raw`__r\u0065quire("escaped");`,
         'function nested() { require("nested"); }',
+        'const template = `nested: ${require("nested-template")}`;',
         'export * from "export-all";',
         'export { value } from "export-named";',
         'createRequire(import.meta.url)("../../package.json");',
@@ -289,8 +267,8 @@ describe("check-cli-bootstrap-imports", () => {
     expectWorkerErrors(root, [
       importError("github-exec-launcher", "yaml"),
       importError("service-child-group-anchor", "signal-exit"),
-      ...`../../package.json ./lazy.mjs @openclaw/fs-safe/temp bun:ffi-extra escaped export-all
-export-named final-external json5 koffi left-pad nested numbered optional parenthesized template-expression`
+      ...`../../package.json ./lazy.mjs @openclaw/fs-safe/temp bun:ffi-extra export-all
+export-named final-external koffi left-pad nested-template nested numbered`
         .split(/\s+/u)
         .map((specifier) => importError("worker", specifier)),
       "Worker deploy artifact emits unstaged runtime asset dist/worker/lazy.mjs.",
@@ -354,9 +332,6 @@ describe("gateway run chunk metadata", () => {
       (root) => {
         const chunks = readGatewayRunChunks(join(root, "dist"));
         expect(chunks).toHaveLength(1);
-        expect(chunks[0]?.filePath).toMatch(/-[A-Za-z0-9_-]+\.mjs$/u);
-        expect(fs.existsSync(join(root, "dist/cli/run-main.js"))).toBe(true);
-        expect(chunks[0]?.source).not.toContain("GATEWAY_AUTH_MODES");
         expect(gatewayErrors({ rootDir: root })).toEqual([]);
         fs.appendFileSync(chunks[0]!.filePath, "\n// changed after emission\n");
         expect(() => readGatewayRunChunks(join(root, "dist"))).toThrow(

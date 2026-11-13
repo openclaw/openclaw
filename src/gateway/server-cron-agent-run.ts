@@ -1,6 +1,5 @@
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import type { CronServiceDeps } from "../cron/service/state.js";
 import { executeScheduledPluginCommandDispatch } from "../plugins/plugin-command-runtime.js";
 import { listPluginCommandScheduleHosts } from "../plugins/plugin-command-schedule-hosts.js";
@@ -31,7 +30,7 @@ export function createGatewayCronAgentDeps(
 }
 
 /** Select the reserved command path before any ordinary cron prompt processing. */
-export function createGatewayCronAgentJobRunner(
+function createGatewayCronAgentJobRunner(
   params: GatewayCronAgentParams,
 ): CronServiceDeps["runIsolatedAgentJob"] {
   return async (request) => {
@@ -48,6 +47,7 @@ export function createGatewayCronAgentJobRunner(
     if (pluginCommandResult) {
       return pluginCommandResult;
     }
+    const { runCronIsolatedAgentTurn } = await import("../cron/isolated-agent.js");
     return await runCronIsolatedAgentTurn({
       ...request,
       cfg,

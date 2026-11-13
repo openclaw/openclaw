@@ -8,6 +8,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { createWebPushCapability } from "../../app/web-push.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import {
   createApplicationGateway,
   createSolidApplicationContextProvider,
@@ -21,11 +22,7 @@ const originalServiceWorker = Object.getOwnPropertyDescriptor(navigator, "servic
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  if (originalServiceWorker) {
-    Object.defineProperty(navigator, "serviceWorker", originalServiceWorker);
-  } else {
-    Reflect.deleteProperty(navigator, "serviceWorker");
-  }
+  restorePropertyDescriptor(navigator, "serviceWorker", originalServiceWorker);
 });
 
 it("leaves the notifications route before an admitted Web Push command settles", async () => {

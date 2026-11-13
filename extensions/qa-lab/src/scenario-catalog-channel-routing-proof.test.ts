@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { formatTransportTranscript, recentOutboundSummary } from "./suite-runtime-transport.js";
@@ -77,43 +77,32 @@ function runRoutingScenario(scenario: ChannelRoutingScenario, leak: RouteLeak) {
   });
 }
 
-it.each(routingScenarios)(
-  "accepts replies delivered only to their originating conversation in $scenarioId",
-  async (scenario) => {
+describe.each(routingScenarios)("$scenarioId", (scenario) => {
+  it("accepts replies only in their originating conversation", async () => {
     await expect(runRoutingScenario(scenario, "none")).resolves.toMatchObject({ status: "pass" });
-  },
-);
-
-it.each(routingScenarios)(
-  "rejects and identifies replies leaked into another conversation in $scenarioId",
-  async (scenario) => {
-    const result = runRoutingScenario(scenario, "conversation");
-
+  });
+  const leaks =
+    scenario.routes.length > 1
+      ? (["conversation", "conversation-kind", "account"] as const)
+      : (["conversation"] as const);
+  it.each(leaks)("rejects and identifies %s leakage", async (leak) => {
+    const result = runRoutingScenario(scenario, leak);
     await expect(result).rejects.toThrow(scenario.expectedFailure);
-    for (const route of scenario.routes) {
-      await expect(result).rejects.toThrow(route[2].split(":")[1]);
+    if (leak === "conversation") {
+      for (const route of scenario.routes) {
+        await expect(result).rejects.toThrow(route[2].split(":")[1]);
+      }
+    } else {
+      const [target] = scenario.routes[0];
+      const conversationId = target.split(":")[1];
+      const kind = target.startsWith("dm:") ? "direct" : "group";
+      const leakedKind =
+        leak === "conversation-kind" ? (kind === "direct" ? "group" : "direct") : kind;
+      const account = leak === "account" ? "foreign-account" : "qa-channel";
+      await expect(result).rejects.toThrow(`qa-channel:${kind}:${conversationId}:`);
+      await expect(result).rejects.toThrow(`${account}:${leakedKind}:${conversationId}:`);
     }
-  },
-);
-
-it.each(
-  routingScenarios
-    .slice(0, 2)
-    .flatMap((scenario) =>
-      (["conversation-kind", "account"] as const).map((leak) => ({ scenario, leak })),
-    ),
-)("rejects a same-ID $leak route collision in $scenario.scenarioId", async ({ scenario, leak }) => {
-  const result = runRoutingScenario(scenario, leak);
-  const [target] = scenario.routes[0];
-  const conversationId = target.split(":")[1];
-  const expectedKind = target.startsWith("dm:") ? "direct" : "group";
-  const leakedKind =
-    leak === "conversation-kind" ? (expectedKind === "direct" ? "group" : "direct") : expectedKind;
-  const leakedAccount = leak === "account" ? "foreign-account" : "qa-channel";
-
-  await expect(result).rejects.toThrow(scenario.expectedFailure);
-  await expect(result).rejects.toThrow(`qa-channel:${expectedKind}:${conversationId}:`);
-  await expect(result).rejects.toThrow(`${leakedAccount}:${leakedKind}:${conversationId}:`);
+  });
 });
 
 it("reports the blocked actor reply instead of crashing while formatting its transcript", async () => {

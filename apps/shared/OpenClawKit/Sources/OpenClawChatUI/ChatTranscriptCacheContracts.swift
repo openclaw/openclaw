@@ -157,6 +157,8 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
     /// Thinking level captured when the command was queued, so a later flush
     /// never borrows the setting of whichever session is visible then.
     public let thinking: String
+    /// A per-message choice; nil leaves the Gateway's session queue mode in charge.
+    public let queueMode: OpenClawChatQueueMode?
     /// Permission and tool state captured with this command. Durable replay
     /// must use this command-owned fence, never the currently visible session.
     public let expectedSessionSettings: OpenClawChatSessionSettingsExpectation?
@@ -180,6 +182,7 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
         text: String,
         attachments: [OpenClawChatOutboxAttachment] = [],
         thinking: String,
+        queueMode: OpenClawChatQueueMode? = nil,
         expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil,
         createdAt: Double,
         status: Status,
@@ -197,6 +200,7 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
         self.text = text
         self.attachments = attachments
         self.thinking = thinking
+        self.queueMode = queueMode
         self.expectedSessionSettings = expectedSessionSettings
         self.createdAt = createdAt
         self.status = status
@@ -241,6 +245,8 @@ public protocol OpenClawChatCommandOutbox: Sendable {
     /// Availability-aware read used by the FIFO restoration gate. Nil means
     /// storage was not readable, not that the queue was empty.
     func loadCommandsIfAvailable() async -> [OpenClawChatOutboxCommand]?
+    /// Payload-free observation with the same staleness and availability semantics.
+    func loadCommandStatusesIfAvailable() async -> [(id: String, status: OpenClawChatOutboxCommand.Status)]?
     /// Crash safety: rows stuck in 'sending' from a previous process become
     /// failed once per store lifetime. Delivery is ambiguous after a crash,
     /// so only explicit user retry may replay them; acknowledged rows stay

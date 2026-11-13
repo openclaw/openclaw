@@ -40,9 +40,9 @@ function owner() {
 beforeEach(() => {
   cache = new Map();
   configRef = {};
-  now = 1_000;
+  now = 0;
   vi.useRealTimers();
-  vi.spyOn(Date, "now").mockImplementation(() => now);
+  vi.spyOn(performance, "now").mockImplementation(() => now);
   loader.mockReset().mockResolvedValue(summary());
 });
 afterEach(async () => {
@@ -104,8 +104,11 @@ it("retains a stale refresh after its cache entry is replaced", async () => {
   const gate = blocked();
   const params = query("stale");
   const first = await original.track(() => load(params));
-  expect(cache.get(params.cacheKey)?.updatedAt).toBe(now);
+  const wall = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3_600_000);
+  expect(await original.track(() => load(params))).toBe(first);
+  expect(loader).toHaveBeenCalledTimes(1);
   now = 31_000;
+  wall.mockReturnValue(Date.now() - 7_200_000);
   loader.mockReturnValueOnce(gate.promise);
   expect(await original.track(() => load(params))).toEqual(first);
   const refresh = cache.get(params.cacheKey)?.inFlight;

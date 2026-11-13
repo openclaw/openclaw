@@ -167,7 +167,6 @@ export function createSlackChannelE2e(params: {
     }
   };
   const driver: QaChannelE2eDriver = {
-    signal: params.signal,
     assertActive,
     async doctor() {
       const result = await doctor();

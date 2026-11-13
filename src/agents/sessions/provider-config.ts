@@ -44,12 +44,13 @@ interface ProviderModelConfig
       | "maxTokens"
       | "parameterCount"
       | "family"
-      | "headers"
       | "compat"
     >,
     Partial<Pick<Model, "api" | "baseUrl">> {
   /** Cost per token (for tracking, can be 0). */
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  /** Authored catalog headers remain strings; deletion sentinels are request-time only. */
+  headers?: Record<string, string>;
   /** Maximum context window size in tokens. */
   contextWindow: number;
 }

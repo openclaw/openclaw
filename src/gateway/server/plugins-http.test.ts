@@ -88,15 +88,11 @@ async function dispatchPluginRequest(
   {
     path = SECURE_HOOK_PATH,
     authContext = trusted,
-  }: { path?: string; authContext?: PluginRequestAuthContext } = {},
+    req = { url: path } as IncomingMessage,
+  }: { path?: string; authContext?: PluginRequestAuthContext; req?: IncomingMessage } = {},
 ) {
   const response = makeMockHttpResponse();
-  const handled = await handler(
-    { url: path } as IncomingMessage,
-    response.res,
-    undefined,
-    authContext,
-  );
+  const handled = await handler(req, response.res, undefined, authContext);
   return { handled, ...response };
 }
 async function invoke(
@@ -201,6 +197,11 @@ describe("plugin HTTP route runtime scopes", () => {
         hasAvatar: false,
         updatedAt: 1,
       };
+      const device = {
+        kind: "owner" as const,
+        peerKey: `iroh:${"ef".repeat(32)}`,
+        authority: { clawId: "route-claw", rootPub: "route-root", listedSeq: 1 },
+      };
       let scope: RuntimeScope;
       const response = await invoke(
         {
@@ -217,12 +218,17 @@ describe("plugin HTTP route runtime scopes", () => {
             trustDeclaredOperatorScopes: false,
             authenticatedUserProfile: profile,
             operatorRoleActor: { kind: "system" },
+            openclawIdPrincipal: device,
           },
         },
       );
       expect(response.handled).toBe(true);
       expect(scope?.client?.internal?.operatorRoleActor).toEqual(
         auth === "gateway" ? { kind: "system" } : undefined,
+      );
+      // Durable work dispatched from the route keeps the relayed device that authorized it.
+      expect(scope?.client?.internal?.openclawIdPrincipal).toEqual(
+        auth === "gateway" ? device : undefined,
       );
       expect(scope?.client?.authenticatedUserProfile).toEqual(
         auth === "gateway" ? profile : undefined,
@@ -447,14 +453,15 @@ async function withCookieSessionReader(
             authGeneration: "http-generation",
           });
           expect(authorized).not.toBeNull();
-          const response = makeMockHttpResponse();
-          expect(
-            await handler(req, response.res, undefined, {
+          const response = await dispatchPluginRequest(handler, {
+            req,
+            authContext: {
               gatewayAuthSatisfied: true,
               gatewayRequestAuth: authorized!.requestAuth,
               gatewayRequestOperatorScopes: authorized!.operatorScopes,
-            }),
-          ).toBe(true);
+            },
+          });
+          expect(response.handled).toBe(true);
           return { statusCode: response.res.statusCode, result };
         };
         const dispatch: SessionDispatch = async (method, key) => {

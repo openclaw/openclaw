@@ -364,14 +364,14 @@ describe("runDoctorSessionSqlite", () => {
   );
 });
 
-function retireRecovery(
+async function retireRecovery(
   cfg: ReturnType<typeof createSharedRecoveryFixture>["cfg"],
   env: NodeJS.ProcessEnv,
 ) {
   closeDatabases();
   return retireSessionSqliteRecovery({
     env,
-    preview: inspectSessionSqliteRecovery({ cfg, env }),
+    preview: await inspectSessionSqliteRecovery({ cfg, env }),
     readConfig: async () => cfg,
     confirm: async () => true,
   });

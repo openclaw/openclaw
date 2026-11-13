@@ -1,13 +1,12 @@
 /** @jsxImportSource @solidjs/web */
 
-import type { JSX } from "@solidjs/web";
 import type {
   ControlUiChannelSettingsContext,
   ControlUiChannelSettingsSnapshot,
 } from "openclaw/plugin-sdk/control-ui";
 import { asNullableRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createMemo, For, Show, onSettled } from "solid-js";
-import { SettingsRow, SettingsSection, SettingsStatus } from "./components.tsx";
+import { SettingsRow, SettingsStatus } from "./components.tsx";
 import type { createProfileController } from "./controller.ts";
 import { createTranslator } from "./i18n/index.ts";
 import { createNostrProfileForm } from "./profile-form.tsx";
@@ -15,6 +14,7 @@ import type { NostrProfile, NostrStatus } from "./types.ts";
 
 type ChannelAccountSnapshot = ControlUiChannelSettingsSnapshot["accounts"][number];
 type Controller = ReturnType<typeof createProfileController>;
+const PROFILE_FIELDS = ["name", "displayName", "about", "nip05"] as const;
 
 export function createProfileCard(
   context: ControlUiChannelSettingsContext,
@@ -26,46 +26,10 @@ export function createProfileCard(
   const NostrProfileForm = createNostrProfileForm(t);
   const boolStatusKind = (value: boolean | null | undefined) =>
     value === true ? ("ok" as const) : ("muted" as const);
-  const booleanChannelFact = (
-    field: "configured" | "running",
-    value: boolean | null | undefined,
-  ) => ({
-    label: t(`common.${field}`),
-    value: t(value == null ? "common.na" : value ? "common.yes" : "common.no"),
-    kind: boolStatusKind(value),
-  });
-  function ChannelFacts(props: {
-    rows: readonly { label: string; value: JSX.Element; kind?: "ok" | "muted" }[];
-  }) {
-    return (
-      <dl class="settings-kv">
-        <For each={props.rows}>
-          {(row) => (
-            <>
-              <dt>{row.label}</dt>
-              <dd>
-                <Show when={row.kind} fallback={row.value}>
-                  {(kind) => <SettingsStatus kind={kind()} label={row.value} />}
-                </Show>
-              </dd>
-            </>
-          )}
-        </For>
-      </dl>
-    );
-  }
   function ChannelError(props: { message: unknown }) {
     return (
-      <SettingsRow
-        title={<SettingsStatus kind="danger" label={t("channels.lastError")} />}
-        description={context.formatError(props.message)}
-      />
-    );
-  }
-  function ChannelActions(props: { children: JSX.Element }) {
-    return (
-      <div class="settings-row settings-row--actions">
-        <div class="settings-row__control">{props.children}</div>
+      <div class="callout danger" role="alert">
+        {context.formatError(props.message)}
       </div>
     );
   }
@@ -81,16 +45,19 @@ export function createProfileCard(
       <div class="settings-row">
         <div class="settings-row__text">
           <span class="settings-row__title">{props.title}</span>
-          <span class="settings-row__desc">{[props.accountId, ...props.facts].join(" · ")}</span>
+          <span class="settings-row__desc">
+            {[
+              props.accountId,
+              ...props.facts,
+              ...(props.lastInboundAt ? [formatRelativeTimestamp(props.lastInboundAt)] : []),
+            ].join(" · ")}
+          </span>
           <Show when={props.lastError}>
             <span class="settings-row__desc">{context.formatExternalText(props.lastError!)}</span>
           </Show>
         </div>
         <div class="settings-row__control">
           <SettingsStatus {...props.status} />
-          <span class="settings-row__value">
-            {props.lastInboundAt ? formatRelativeTimestamp(props.lastInboundAt) : t("common.na")}
-          </span>
         </div>
       </div>
     );
@@ -164,16 +131,16 @@ export function createProfileCard(
         | undefined;
       return accountProfile ?? nostr()?.profile ?? null;
     });
-    const renderProfileSection = () => {
-      const { name, displayName, about, picture, nip05 } = profile() ?? {};
-      const hasAnyProfileData = name || displayName || about || picture || nip05;
+    function ProfileSection() {
+      const hasAnyProfileData = () =>
+        profile()?.picture || PROFILE_FIELDS.some((field) => profile()?.[field]);
 
       return (
         <>
           <SettingsRow
             title={t("channels.nostr.profile")}
             description={
-              hasAnyProfileData ? undefined : (
+              hasAnyProfileData() ? undefined : (
                 <>
                   {t("channels.nostr.noProfile")} {t("channels.nostr.noProfileHint")}
                 </>
@@ -187,101 +154,91 @@ export function createProfileCard(
               ) : undefined
             }
           />
-          {hasAnyProfileData ? (
+          <Show when={hasAnyProfileData()}>
             <dl class="settings-kv">
-              {picture ? (
-                <>
-                  <dt>{t("channels.nostr.profilePicture")}</dt>
-                  <dd>
-                    <img
-                      style={{
-                        width: "48px",
-                        height: "48px",
-                        "border-radius": "50%",
-                        "object-fit": "cover",
-                      }}
-                      src={picture}
-                      alt={t("channels.nostr.profilePicture")}
-                      onError={(event) => {
-                        event.currentTarget.style.display = "none";
-                      }}
-                    />
-                  </dd>
-                </>
-              ) : undefined}
-              <For
-                each={[
-                  [t("channels.nostr.name"), name],
-                  [t("channels.nostr.displayName"), displayName],
-                  [t("channels.nostr.about"), about],
-                  ["NIP-05", nip05],
-                ]}
-              >
-                {([label, value]) =>
-                  value ? (
-                    <>
-                      <dt>{label}</dt>
-                      <dd>{value}</dd>
-                    </>
-                  ) : undefined
-                }
+              <Show when={profile()?.picture} keyed>
+                {(picture) => (
+                  <>
+                    <dt>{t("channels.nostr.profilePicture")}</dt>
+                    <dd>
+                      <img
+                        style={{
+                          width: "48px",
+                          height: "48px",
+                          "border-radius": "50%",
+                          "object-fit": "cover",
+                        }}
+                        src={picture}
+                        alt={t("channels.nostr.profilePicture")}
+                        onError={(event) => {
+                          event.currentTarget.style.display = "none";
+                        }}
+                      />
+                    </dd>
+                  </>
+                )}
+              </Show>
+              <For each={PROFILE_FIELDS}>
+                {(field) => (
+                  <Show when={profile()?.[field]}>
+                    {(value) => (
+                      <>
+                        <dt>{field === "nip05" ? "NIP-05" : t(`channels.nostr.${field}`)}</dt>
+                        <dd>{value()}</dd>
+                      </>
+                    )}
+                  </Show>
+                )}
               </For>
             </dl>
-          ) : undefined}
+          </Show>
         </>
       );
-    };
+    }
 
     return (
-      <SettingsSection
-        title={t("channels.nostr.title")}
-        description={t("channels.nostr.subtitle")}
-        count={accounts().length >= 2 ? accounts().length : undefined}
-      >
-        {accounts().length > 1 ? (
-          <For each={accounts()} keyed={(account) => account.accountId}>
-            {(account) => <NostrAccount account={account()} />}
-          </For>
-        ) : (
-          <ChannelFacts
-            rows={[
-              booleanChannelFact("configured", configured()),
-              booleanChannelFact("running", nostr()?.running ?? primaryAccount()?.running ?? false),
-              {
-                label: t("common.publicKey"),
-                value: <code title={publicKey() ?? ""}>{truncatePubkey(publicKey())}</code>,
-              },
-              {
-                label: t("common.lastStart"),
-                value: lastStart() ? formatRelativeTimestamp(lastStart()) : t("common.na"),
-              },
-            ]}
-          />
-        )}
+      <>
         {lastError() ? <ChannelError message={lastError()} /> : undefined}
-        <Show when={form()} fallback={renderProfileSection()}>
-          {(formState) => (
-            <NostrProfileForm
-              state={formState()}
-              connected={state().snapshot.connected}
-              accountId={accountId()}
-              callbacks={{
-                onFieldChange: (field, value) => controller.field(field, value),
-                onSave: () => void controller.save(),
-                onImport: () => void controller.import(),
-                onCancel: () => controller.cancel(),
-                onToggleAdvanced: () => controller.toggleAdvanced(),
-              }}
-            />
+        <div class="settings-group">
+          {accounts().length > 1 ? (
+            <For each={accounts()} keyed={(account) => account.accountId}>
+              {(account) => <NostrAccount account={account()} />}
+            </For>
+          ) : (
+            <Show when={publicKey() || lastStart()}>
+              <dl class="settings-kv">
+                <Show when={publicKey()}>
+                  <dt>{t("common.publicKey")}</dt>
+                  <dd>
+                    <code title={publicKey() ?? ""}>{truncatePubkey(publicKey())}</code>
+                  </dd>
+                </Show>
+                <Show when={lastStart()}>
+                  <dt>{t("common.lastStart")}</dt>
+                  <dd>{formatRelativeTimestamp(lastStart())}</dd>
+                </Show>
+              </dl>
+            </Show>
           )}
-        </Show>
+          <Show when={form()} fallback={<ProfileSection />}>
+            {(formState) => (
+              <NostrProfileForm
+                state={formState()}
+                connected={state().snapshot.connected}
+                accountId={accountId()}
+                callbacks={{
+                  onFieldChange: (field, value) => controller.field(field, value),
+                  onSave: () => void controller.save(),
+                  onImport: () => void controller.import(),
+                  onCancel: () => controller.cancel(),
+                  onToggleAdvanced: () => controller.toggleAdvanced(),
+                }}
+              />
+            )}
+          </Show>
+        </div>
         <ConfigSlot />
-        <ChannelActions>
-          <button class="btn" onClick={() => void context.refresh(false)}>
-            {t("common.refresh")}
-          </button>
-        </ChannelActions>
-      </SettingsSection>
+      </>
     );
   }
 

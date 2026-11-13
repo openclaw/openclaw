@@ -182,10 +182,22 @@ prevent the turn from completing still appear through normal error delivery.
 Set it to `true` for the rolling tool log. Successful background-process polls
 and internal waits do not add routine rows. Failed calls still follow the
 selected tool-progress policy; `/verbose` retains their diagnostic summaries.
+Known operations use concise action labels and relevant context rather than
+request IDs and timeout flags: for example, `Remember knowledge`,
+`Read session history`, or `Start subagent: Check streaming`. Node invocations
+include the requested operation and target, without their argument payload.
+These labels describe a tool operation, not a successful task or publication.
+Subagent rows and session targets show a four-character UUID suffix such as
+`…2633` when the full identity is available, alongside any task label. This is
+a visual cue, not a unique identifier: routing, lifecycle keys, and verbose
+diagnostics retain the full identity. Native worker thread IDs are shortened
+independently; they are not inferred from task paths or mapped to session IDs.
 
 On Telegram, the quiet draft keeps one current-operation status and bounded
 delegated-task status rows. These use public operation names and
-task labels, never command text, arguments, child prose, or results. A late
+task labels, never command text, arguments, child prose, or results. The
+operation row is the tool log's own row without its detail, such as
+`🛠️ Exec running`, and drops its status once the operation finishes. A late
 completion for an older operation cannot replace the currently displayed one.
 Other progress channels retain their existing presentation. With the tool log
 enabled, lifecycle updates reuse a row for each worker. Messages to workers get
@@ -392,8 +404,8 @@ too; approval requests remain visible.
 Progress lines are compacted automatically to reduce chat-bubble reflow while
 the draft is edited, and OpenClaw truncates long lines so repeated draft edits
 do not wrap differently on every update. The default per-line budget is 120
-characters; prose cuts at a word boundary, while long details such as paths or
-raw commands are shortened with a middle ellipsis so the suffix stays visible.
+Unicode code points; prose keeps complete words that fit, while long details such
+as paths or raw commands are shortened with a middle ellipsis so the suffix stays visible.
 The same budget applies to prepared tool titles, including paths embedded in a
 Read title, rather than only to separate tool details.
 On Telegram, the budget includes the tool icon, label, and status as well as the

@@ -13,10 +13,7 @@ function hasAuthenticatedControlUiIdentity(clients: GatewayClientRegistry): bool
       client.socket.readyState === WEBSOCKET_OPEN_READY_STATE &&
       client.internal?.authenticatedControlUi === true &&
       Boolean(client.authenticatedUserId || client.authenticatedUserProfile) &&
-      authorizeOperatorScopesForMethod(
-        "sessions.create",
-        Array.isArray(client.connect.scopes) ? client.connect.scopes : [],
-      ).allowed &&
+      authorizeOperatorScopesForMethod("sessions.create", client.connect.scopes ?? []).allowed &&
       isBrowserOperatorUiClient(client.connect.client),
   );
 }

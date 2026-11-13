@@ -1,8 +1,6 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   resetConfigRuntimeState,
@@ -15,12 +13,12 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
+import { git } from "./git-fixture.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
-import { listTemplatesAsync } from "./template-registry-async.js";
+import { listTemplatesAsync, readTemplateAsync } from "./template-registry-async.js";
 
 vi.mock("./filesystem-backend.js", () => ({ detectWorktreeFilesystemBackend: vi.fn() }));
-const exec = promisify(execFile);
 const sessionDirs = useSessionStoreTempDirs(afterAll, "source-only-filters-");
 afterEach(() => {
   vi.restoreAllMocks();
@@ -28,8 +26,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 const initialize = useManagedWorktreeTestRepository();
-const git = async (cwd: string, ...args: string[]) =>
-  (await exec("git", ["-C", cwd, ...args])).stdout.trim();
 let root: string,
   repo: string,
   globalConfig: string,
@@ -137,6 +133,22 @@ it("keeps source-only clones away from an inherited external Git index", async (
   expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
 });
 
+it("keeps ordinary and source-only templates warm when their callers interleave", async () => {
+  for (const [index, sourceOnly] of [false, true, false, true].entries()) {
+    const created = await service.create({
+      repoRoot: repo,
+      name: `interleaved-${index}`,
+      baseRef: "HEAD",
+      runSetupScript: false,
+      provisionIgnoredFiles: !sourceOnly,
+    });
+    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    expect(await git(created.path, "status", "--porcelain")).toBe("");
+    await fs.writeFile(path.join(created.path, "README.md"), `task ${index}\n`);
+  }
+  expect(backend.createTemplate).toHaveBeenCalledTimes(2);
+});
+
 it("reuses and refreshes source-only templates without running host filters", async () => {
   await configure("repository", "smudge", repo);
   const first = await createSourceOnly("template-first");
@@ -147,14 +159,15 @@ it("reuses and refreshes source-only templates without running host filters", as
   expect(await fs.readFile(path.join(second.path, "README.md"), "utf8")).toBe("base\n");
   expect(backend.createTemplate).toHaveBeenCalledTimes(1);
   expect(backend.cloneTemplate).toHaveBeenCalledTimes(2);
-  expect((await listTemplatesAsync(process.env))[0]?.id).toBe(original?.id);
+  expect((await readTemplateAsync(process.env, original!.cacheKey))?.id).toBe(original?.id);
 
   await git(repo, "config", "core.autocrlf", "true");
   const policy = await createSourceOnly("template-policy");
   expect(await fs.readFile(path.join(policy.path, "README.md"), "utf8")).toBe("base\r\n");
   expect(backend.createTemplate).toHaveBeenCalledTimes(2);
-  const policyId = (await listTemplatesAsync(process.env))[0]?.id;
-  expect(policyId).not.toBe(original?.id);
+  const policyTemplate = await readTemplateAsync(process.env, original!.cacheKey);
+  expect(policyTemplate?.status).toBe("ready");
+  expect(policyTemplate?.id).not.toBe(original?.id);
 
   await fs.writeFile(path.join(repo, "README.md"), "new revision\n");
   await git(repo, "add", "README.md");
@@ -162,8 +175,11 @@ it("reuses and refreshes source-only templates without running host filters", as
   const third = await createSourceOnly("template-third");
   expect(await fs.readFile(path.join(third.path, "README.md"), "utf8")).toBe("new revision\r\n");
   expect(backend.createTemplate).toHaveBeenCalledTimes(2);
-  expect(backend.cloneTemplate).toHaveBeenCalledTimes(4);
-  expect((await listTemplatesAsync(process.env))[0]?.id).toBe(policyId);
+  expect(backend.cloneTemplate).toHaveBeenCalledTimes(5); // Refresh stages an independent generation.
+  expect((await readTemplateAsync(process.env, original!.cacheKey))?.id).not.toBe(
+    policyTemplate?.id,
+  );
+  expect(await fs.readFile(path.join(policyTemplate!.path, "README.md"), "utf8")).toBe("base\r\n");
   await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
@@ -305,9 +321,9 @@ it("does not execute a clean filter inserted after publication preflight", async
     await git(created.path, "rev-parse", "--git-path", "index"),
   );
   const before = await fs.readFile(index);
-  const run = commands.runCommandWithTimeout;
+  const run = commands.runCommandBuffered;
   let injected = false;
-  vi.spyOn(commands, "runCommandWithTimeout").mockImplementation(async (...args) => {
+  vi.spyOn(commands, "runCommandBuffered").mockImplementation(async (...args) => {
     if (!injected && args[0][0] === "git" && args[0].includes("add") && args[0].includes("-A")) {
       injected = true;
       await configure("repository", "clean", created.path);

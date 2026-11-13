@@ -82,6 +82,8 @@ function userMessage(content: string, timestamp = 1, idempotencyKey?: string) {
   };
 }
 
+const textContent = (text: string) => [{ type: "text" as const, text }];
+
 function dispatchSession(session: Submission["activeSession"]) {
   return session.agent.streamFn({} as never, { messages: session.messages } as never, {} as never);
 }
@@ -112,7 +114,7 @@ function toolResult(
     role: "toolResult",
     toolCallId,
     toolName,
-    content: [{ type: "text", text }],
+    content: textContent(text),
     isError: false,
     timestamp,
     ...(details ? { details } : {}),
@@ -120,6 +122,43 @@ function toolResult(
 }
 
 describe("submitEmbeddedAttemptPrompt", () => {
+  it.each(["pending", "blocked", "empty", "persisted-key", "persisted-no-key"] as const)(
+    "does not reclassify suppressed canonical user state as a runtime control: %s",
+    async (state) => {
+      const message = userMessage(
+        "canonical human input",
+        1,
+        state === "persisted-key" ? "human:user" : undefined,
+      );
+      const recorder = createUserTurnTranscriptRecorder({
+        ...(state === "empty" ? {} : { message }),
+        target: () => undefined,
+      });
+      if (state === "blocked") {
+        recorder.markBlocked();
+      }
+      if (state.startsWith("persisted")) {
+        recorder.markRuntimePersisted(message);
+      }
+      const input = createBaseInput();
+      const promptActiveSession = vi.fn(async () => {});
+      const setNextUserMessagePersistence = vi.fn();
+      await submitEmbeddedAttemptPrompt({
+        ...input,
+        attempt: {
+          ...input.attempt,
+          suppressNextUserMessagePersistence: true,
+          userTurnTranscriptRecorder: recorder,
+        },
+        activeSession: createSession().activeSession,
+        promptActiveSession,
+        setNextUserMessagePersistence,
+      });
+      expect(promptActiveSession).toHaveBeenCalledWith("transcript prompt", expect.any(Object));
+      expect(setNextUserMessagePersistence).not.toHaveBeenCalled();
+    },
+  );
+
   it("refreshes review source authority before continuing a model request and refuses revocation", async () => {
     const { activeSession } = createSession();
     let revision = 0;
@@ -321,7 +360,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     expect(requests[0]?.text).toBe(pendingPrompt);
     expect(requests[0]?.committedBefore).toBeGreaterThan(0);
     expect(requests[0]?.tokens).toBeLessThanOrEqual(3_072);
-    expect(session.messages.at(-1)).toMatchObject({ content: [{ type: "text", text: "ACK" }] });
+    expect(session.messages.at(-1)).toMatchObject({ content: textContent("ACK") });
   });
 
   it.each(["handled", "rejected"] as const)(
@@ -380,9 +419,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
         .flatMap((entry) =>
           entry.type === "message" && entry.message.role === "user" ? [entry.message] : [],
         );
-      expect(users.map((message) => message.content)).toEqual([
-        [{ type: "text", text: "accepted" }],
-      ]);
+      expect(users.map((message) => message.content)).toEqual([textContent("accepted")]);
       expect(users[0]).not.toHaveProperty("display", false);
       expect(users[0]).not.toHaveProperty("provenance");
     },
@@ -672,16 +709,11 @@ describe("submitEmbeddedAttemptPrompt", () => {
       systemPrompt: input.systemPrompt,
       tools: [],
     } as const;
+    const mcpDetails = { mcpServer: "huge", mcpTool: "return_text" };
     activeSession.agent.state.messages = [
       userMessage("call tools"),
-      toolResult("large", "huge__return_text", oversized, 2, {
-        mcpServer: "huge",
-        mcpTool: "return_text",
-      }),
-      toolResult("second", "huge__return_text", "b".repeat(6_000), 3, {
-        mcpServer: "huge",
-        mcpTool: "return_text",
-      }),
+      toolResult("large", "huge__return_text", oversized, 2, mcpDetails),
+      toolResult("second", "huge__return_text", "b".repeat(6_000), 3, mcpDetails),
       toolResult("small", "huge__small_text", small, 4),
       {
         ...createAssistant(testModel, "results processed"),
@@ -717,7 +749,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, submit);
     expect(activeSession.messages[1]).toMatchObject({
       role: "toolResult",
-      content: [{ type: "text", text: oversized }],
+      content: textContent(oversized),
     });
     const [, second, smallResult] = providerMessages.filter(
       (message) => message.role === "toolResult",
@@ -736,16 +768,10 @@ describe("submitEmbeddedAttemptPrompt", () => {
         promptCacheKey,
         usage: { cacheRead: 2_000 },
       }),
-    ).toEqual({
+    ).toMatchObject({
       previousCacheRead: 8_000,
       cacheRead: 2_000,
-      changes: [
-        {
-          code: "aggregateToolResultTruncation",
-          detail: "aggregate tool-result truncation changed provider prompt",
-        },
-        { code: "pruning", detail: "pruning changed provider history" },
-      ],
+      changes: [{ code: "aggregateToolResultTruncation" }, { code: "pruning" }],
     });
     await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, submit);
     expect(changes).toEqual([

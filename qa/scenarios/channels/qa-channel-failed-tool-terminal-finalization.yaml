@@ -32,7 +32,7 @@ scenario:
       requiredProviderMode: mock-openai
       channelId: qa-failed-terminal
       promptSnippet: Failed tool terminal recovery QA check
-      retryNeedle: "Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step:"
+      retryNeedle: "Do not repeat completed tool calls or restart from scratch. Do not call tools in this step."
       expectedMarker: QA-FAILED-TOOL-FINALIZED-OK
       expectedReply: "The requested file could not be read: ENOENT. QA-FAILED-TOOL-FINALIZED-OK"
 
@@ -69,7 +69,7 @@ flow:
           saveAs: inbound
         - set: inboundEvents
           value:
-            expr: "state.getSnapshot().events.filter((event) => event.kind === 'inbound-message' && event.accountId === transport.accountId && event.message.id === inbound.id)"
+            expr: "state.getSnapshot().events.filter((event) => event.kind === 'inbound-message' && event.accountId === transport.accountId && event.message.id === inbound.id && event.message.conversation.kind === inbound.conversation.kind && event.message.conversation.id === inbound.conversation.id)"
         - assert:
             expr: "inbound.accountId === transport.accountId && inboundEvents.length === 1 && Number.isSafeInteger(inboundEvents[0].cursor) && inboundEvents[0].cursor > 0"
             message: expected one account-qualified inbound event cursor
@@ -79,7 +79,7 @@ flow:
         - call: waitForCondition
           args:
             - lambda:
-                expr: "state.getAcknowledgedPollCursor(transport.accountId) >= inboundCursor ? true : undefined"
+                expr: "state.hasCompletedInboundEvent(transport.accountId, inboundCursor) || undefined"
             - 60000
         - set: settled
           value:

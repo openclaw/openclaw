@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { commandResult } from "../test-support/command-result.test-support.js";
 import { azLoginDeviceCodeWithOptions } from "./cli.js";
 
 const runUtf8CommandWithTimeoutMock = vi.hoisted(() => vi.fn());
@@ -29,15 +30,12 @@ describe("azLoginDeviceCodeWithOptions", () => {
         };
         writeSplitUtf8("stderr", "😊");
         writeSplitUtf8("stdout", "🚀");
-        return {
+        return commandResult({
           stdout: "🚀",
           stderr: "😊",
           code: 1,
-          signal: null,
-          killed: false,
-          termination: "exit",
           noOutputTimedOut: false,
-        };
+        });
       },
     );
     const stdoutWriteSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -58,15 +56,9 @@ describe("azLoginDeviceCodeWithOptions", () => {
   });
 
   it("allows post-auth work after the 15-minute device-code lifetime", async () => {
-    runUtf8CommandWithTimeoutMock.mockResolvedValueOnce({
-      stdout: "",
-      stderr: "",
-      code: 124,
-      signal: null,
-      killed: true,
-      termination: "timeout",
-      noOutputTimedOut: false,
-    });
+    runUtf8CommandWithTimeoutMock.mockResolvedValueOnce(
+      commandResult({ code: 124, killed: true, termination: "timeout", noOutputTimedOut: false }),
+    );
 
     const err = await azLoginDeviceCodeWithOptions({}).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);

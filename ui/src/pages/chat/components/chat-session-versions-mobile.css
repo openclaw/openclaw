@@ -4,13 +4,7 @@
   align-content: start;
 }
 
-.chat-session-versions-mobile__help {
-  margin: 12px 0;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 18px;
-}
-
+.chat-session-versions-mobile__help,
 .chat-session-versions-mobile__note {
   margin: 12px 0;
   color: var(--muted);
@@ -74,21 +68,6 @@
 .chat-session-versions-mobile__select:focus-visible {
   outline: var(--control-ui-focus-ring);
   outline-offset: -3px;
-}
-
-.chat-session-versions-mobile__radio {
-  box-sizing: border-box;
-  width: 19px;
-  height: 19px;
-  flex: none;
-  border: 1.5px solid var(--muted);
-  border-radius: 50%;
-}
-
-.chat-session-versions-mobile__select[aria-checked="true"] .chat-session-versions-mobile__radio {
-  border-color: var(--accent);
-  background: var(--accent);
-  box-shadow: inset 0 0 0 4px var(--bg-hover);
 }
 
 .chat-session-versions-mobile__copy {

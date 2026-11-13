@@ -196,6 +196,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 
 | Provider                                | Id                               | Auth env                                       | Example model                                              |
 | --------------------------------------- | -------------------------------- | ---------------------------------------------- | ---------------------------------------------------------- |
+| [Abliteration](/providers/abliteration) | `abliteration`                   | `ABLITERATION_API_KEY` or `ABLIT_KEY`          | `abliteration/abliterated-model-large-flash`               |
 | [Arcee](/providers/arcee)               | `arcee`                          | `ARCEEAI_API_KEY` or `OPENROUTER_API_KEY`      | `arcee/trinity-large-thinking`                             |
 | BytePlus                                | `byteplus` / `byteplus-plan`     | `BYTEPLUS_API_KEY`                             | `byteplus-plan/ark-code-latest`                            |
 | Cerebras                                | `cerebras`                       | `CEREBRAS_API_KEY`                             | `cerebras/gpt-oss-120b`                                    |

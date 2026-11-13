@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   serveOwnedWorkerTasks as serveRuntimeWorkerTasks,
   type WorkerTaskHandler,
+  type SynchronousWorkerTaskHandler,
 } from "@openclaw/worker-runtime/worker";
 import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import { loggingState } from "../logging/state.js";
@@ -15,6 +16,7 @@ import {
 } from "./agent-database-readers.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
+import { bindPostgresPool, postgresPoolWorkerFailure } from "./postgres-sync/pool-state.js";
 import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission-context.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
@@ -29,7 +31,7 @@ export type { WorkerTaskChannel } from "@openclaw/worker-runtime/worker";
 
 /** Pool dispatch is serial per worker; handlers finish cleanup before returning their result. */
 export function serveWorkerTasks<Output, Input = unknown>(
-  handler: WorkerTaskHandler<Output, Input>,
+  handler: WorkerTaskHandler<Output, Input> | SynchronousWorkerTaskHandler<Output, Input>,
   options: {
     transferList?: (value: Output) => Transferable[];
     retireOnError?: boolean;
@@ -42,7 +44,7 @@ export function serveWorkerTasks<Output, Input = unknown>(
 
 /** Every served worker closes its agent database readers by path between tasks; owners may add more. */
 export function serveOwnedWorkerTasks<Output, Input = unknown>(
-  handler: WorkerTaskHandler<Output, Input>,
+  handler: WorkerTaskHandler<Output, Input> | SynchronousWorkerTaskHandler<Output, Input>,
   options: {
     transferList?: (value: Output) => Transferable[];
     closeResource?: (key?: string) => void | Promise<void>;
@@ -85,16 +87,31 @@ export function serveOwnedWorkerTasks<Output, Input = unknown>(
       : run();
   };
   serveRuntimeWorkerTasks<Output, WorkerTaskContext, Input>(
-    (input, channel, control) =>
-      withSqliteDatabaseAdmissionWait(
-        {
-          deadlineAtMs: databaseAdmissionDeadlineAtMs,
-          assertActive: () => control.throwIfCancelled(),
-        },
-        () => runWithTaskContext(() => handler(input, channel, control)),
-      ),
+    typeof handler !== "function"
+      ? handler
+      : (input, channel, control) =>
+          withSqliteDatabaseAdmissionWait(
+            {
+              deadlineAtMs: databaseAdmissionDeadlineAtMs,
+              assertActive: () => control.throwIfCancelled(),
+            },
+            () =>
+              runWithTaskContext(async () => {
+                const result = await handler(input, channel, control);
+                // Some handlers encode database failures as results; their dead endpoints
+                // still require the same retirement as a thrown transport failure.
+                const failure = postgresPoolWorkerFailure();
+                if (failure) {
+                  throw failure;
+                }
+                return result;
+              }),
+          ),
     {
       ...options,
+      get retireOnError() {
+        return options.retireOnError || postgresPoolWorkerFailure() !== undefined;
+      },
       closeResource: (key) =>
         runWithTaskContext(async () => {
           const request = decodeAgentDatabaseReaderRequest(key);
@@ -139,6 +156,9 @@ export function serveOwnedWorkerTasks<Output, Input = unknown>(
         memorySamples?.setTaskMetrics(context.collectWorkerMetrics === true);
         databaseAdmissionDeadlineAtMs = context.databaseAdmissionDeadlineAtMs;
         databaseEngineSelection = context.databaseEngineSelection;
+        if (context.postgresPool) {
+          bindPostgresPool(context.postgresPool);
+        }
         installDeletedAgentDatabaseFences(context.deletedAgentDatabaseFences);
         if (context.databaseAdmissionPort) {
           bindSqliteDatabaseAdmissionUpstream(context.databaseAdmissionPort);

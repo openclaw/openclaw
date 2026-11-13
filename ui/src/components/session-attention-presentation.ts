@@ -40,15 +40,9 @@ export function sessionAttentionSubtitle(
     case "approval":
       return translate("sessionsView.waitingForApproval");
     case "error":
-      return translate(
-        attention.childLabel === undefined
-          ? "sessionsView.runFailedReason"
-          : "sessionsView.childRunFailedReason",
-        {
-          label: attention.childLabel ?? "",
-          reason: formatWebUiIconErrorText(attention.reason),
-        },
-      );
+      return translate("sessionsView.runFailedReason", {
+        reason: formatWebUiIconErrorText(attention.reason),
+      });
     case "agent":
       return attention.note;
     case "none":

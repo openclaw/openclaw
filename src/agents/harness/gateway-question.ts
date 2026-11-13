@@ -502,7 +502,7 @@ function runAgentHarnessSecretInput(
     };
     const onAbort = () => finish();
     const timeout = setTimeout(onAbort, params.timeoutMs);
-    timeout.unref?.();
+    timeout.unref();
     const state: PendingAgentSecretInput = {
       kind: "secret",
       sessionKey,

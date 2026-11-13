@@ -99,9 +99,9 @@ describe("webchat admission to plugin node duplex authority", () => {
         attachedEnvironment,
         createWorkerSessionTurnPlacementProvider,
         ENVIRONMENT_ID,
-        MANIFEST_REF,
         OWNER_EPOCH,
         placements,
+        reconcileUnchangedLocalWorkspace,
         root,
         seedActivePlacement,
         SESSION_ID,
@@ -225,20 +225,7 @@ describe("webchat admission to plugin node duplex authority", () => {
         runWorkspaceCommand: vi.fn(async () => success()),
         syncWorkspace: vi.fn(),
         quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
-        reconcileWorkspace: async (request) => {
-          if (request.source.kind !== "local") {
-            throw new Error("expected a local workspace source");
-          }
-          await request.source.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-            publishStagedResult: async () => {},
-            discardPreparedStagedResult: async () => {},
-          };
-        },
+        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
         stop: async () => {},
       };
       const environment = {

@@ -1,20 +1,38 @@
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeBackgroundPreference,
   USER_BACKGROUND_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/background-preferences.js";
 import {
+  normalizeGitCoauthorOrganizationIdentity,
+  GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+} from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
+import {
+  parseSidebarSessionReference,
+  UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
+  UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+} from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
+import {
   GIT_COAUTHOR_PREFERENCE_KEY,
   USER_PREFS_PROFILE_KEY_LIMIT,
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  iterateSqliteQuerySync,
+} from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema-ensure.js";
 import { isOwnedBackgroundPreference } from "./user-background.store.js";
-import { publishUserPreferencesChange } from "./user-preferences-publication.js";
+import {
+  assertUserPreferenceWriteNotHeld,
+  publishUserPreferencesChange,
+} from "./user-preferences-publication.js";
 import type {
   PreparedUserPreferenceUpdate,
   UserPreferenceError,
@@ -22,6 +40,10 @@ import type {
 import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
 
 type UserPreferencesDatabase = Pick<OpenClawStateKyselyDatabase, "user_preferences">;
+const personalPinPreferenceKeys: readonly string[] = [
+  UI_RAIL_SHORTCUTS_PREFERENCE_KEY,
+  UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY,
+];
 
 export const ensureUserPreferencesSchema = createOpenClawStateSchemaEnsurer({
   table: "user_preferences",
@@ -29,9 +51,17 @@ export const ensureUserPreferencesSchema = createOpenClawStateSchemaEnsurer({
 });
 
 export function updatesGitCoauthorPreference(update: PreparedUserPreferenceUpdate): boolean {
+  const keys = new Set([GIT_COAUTHOR_PREFERENCE_KEY, GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY]);
   return (
-    update.serialized.some(({ prefKey }) => prefKey === GIT_COAUTHOR_PREFERENCE_KEY) ||
-    update.deletionKeys.includes(GIT_COAUTHOR_PREFERENCE_KEY)
+    update.serialized.some(({ prefKey }) => keys.has(prefKey)) ||
+    update.deletionKeys.some((key) => keys.has(key))
+  );
+}
+
+export function updatesPersonalSessionPins(update: PreparedUserPreferenceUpdate): boolean {
+  return (
+    update.serialized.some(({ prefKey }) => personalPinPreferenceKeys.includes(prefKey)) ||
+    update.deletionKeys.some((key) => personalPinPreferenceKeys.includes(key))
   );
 }
 
@@ -41,6 +71,9 @@ export function deleteUserPreference(
   key: string,
 ): void {
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
+  if (personalPinPreferenceKeys.includes(key)) {
+    assertUserPreferenceWriteNotHeld(database);
+  }
   if (!tableExists(database, "user_preferences")) {
     return;
   }
@@ -75,6 +108,49 @@ export function selectUserPreferenceValues(
   );
 }
 
+/** Worker-side union keeps another profile's reference protective when one person unpins. */
+export function selectPersonalPinnedSessionKeys(database: EngineConnection): string[] {
+  if (!tableExists(database, "user_preferences")) {
+    return [];
+  }
+  const keys = new Set<string>();
+  const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
+  for (const row of iterateSqliteQuerySync(
+    database,
+    db
+      .selectFrom("user_preferences")
+      .select(["pref_key", "value_json"])
+      .where("pref_key", "in", personalPinPreferenceKeys),
+  )) {
+    const entries: unknown = JSON.parse(row.value_json);
+    if (!Array.isArray(entries)) {
+      continue;
+    }
+    if (row.pref_key === UI_PERSONAL_SESSION_GROUPS_PREFERENCE_KEY) {
+      for (const group of entries) {
+        if (!isRecord(group) || !Array.isArray(group.sessionKeys)) {
+          continue;
+        }
+        // Group membership stores raw session keys, unlike sidebar shortcut references.
+        for (const value of group.sessionKeys) {
+          const key = normalizeOptionalString(value);
+          if (key) {
+            keys.add(key);
+          }
+        }
+      }
+      continue;
+    }
+    for (const entry of entries) {
+      const key = parseSidebarSessionReference(entry);
+      if (key) {
+        keys.add(key);
+      }
+    }
+  }
+  return [...keys].toSorted();
+}
+
 function readPreferenceKeys(database: EngineConnection, profileId: string): Set<string> {
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
   return new Set(
@@ -83,6 +159,11 @@ function readPreferenceKeys(database: EngineConnection, profileId: string): Set<
       db.selectFrom("user_preferences").select("pref_key").where("profile_id", "=", profileId),
     ).rows.map((row) => row.pref_key),
   );
+}
+
+function userPreferenceKeyCount(keys: ReadonlySet<string>): number {
+  // One protected, bounded proxy-metadata pair cannot consume a user's preference allowance.
+  return keys.size - Number(keys.has(GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY));
 }
 
 /** Moves one retired profile's preferences without overwriting the merge target's choices. */
@@ -95,6 +176,7 @@ export function mergeUserPreferences(
     return;
   }
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(database);
+  assertUserPreferenceWriteNotHeld(database);
   const targetKeys = readPreferenceKeys(database, targetProfileId);
   const rows = executeSqliteQuerySync(
     database,
@@ -108,8 +190,11 @@ export function mergeUserPreferences(
     if (targetKeys.has(row.pref_key)) {
       continue;
     }
-    if (targetKeys.size >= USER_PREFS_PROFILE_KEY_LIMIT) {
-      break;
+    if (
+      row.pref_key !== GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY &&
+      userPreferenceKeyCount(targetKeys) >= USER_PREFS_PROFILE_KEY_LIMIT
+    ) {
+      continue;
     }
     // A discarded source upload must not leave its custom selection dangling on the target.
     const background =
@@ -166,7 +251,11 @@ export function writeUserPreferences(
   profileId: string,
   update: PreparedUserPreferenceUpdate,
 ): Result<void, UserPreferenceError> {
-  const { serialized, deletionKeys, expected } = update;
+  const { expected } = update;
+  let { serialized, deletionKeys } = update;
+  if (updatesPersonalSessionPins(update)) {
+    assertUserPreferenceWriteNotHeld(sqlite);
+  }
   const background = serialized.find((entry) => entry.prefKey === USER_BACKGROUND_PREFERENCE_KEY);
   if (background || deletionKeys.includes(USER_BACKGROUND_PREFERENCE_KEY)) {
     if (!expected.some((entry) => entry.prefKey === USER_BACKGROUND_PREFERENCE_KEY)) {
@@ -185,6 +274,23 @@ export function writeUserPreferences(
       profileId,
       expected.map(({ prefKey }) => prefKey),
     );
+    if (update.organizationPolicy !== undefined) {
+      const organization = normalizeGitCoauthorOrganizationIdentity(
+        current[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY],
+      );
+      if (!organization || organization.policy !== update.organizationPolicy) {
+        // Match the policy-filtered read. Enabling GitHub fallback must not revive dormant credit.
+        delete current[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY];
+        if (
+          serialized.some(
+            ({ prefKey, valueJson }) =>
+              prefKey === GIT_COAUTHOR_PREFERENCE_KEY && valueJson === "true",
+          )
+        ) {
+          deletionKeys = [...deletionKeys, GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY];
+        }
+      }
+    }
     for (const { prefKey, valueJson } of expected) {
       if (
         valueJson === null
@@ -196,17 +302,38 @@ export function writeUserPreferences(
       }
     }
   }
+  const suppliedCredit = serialized.find(
+    ({ prefKey }) => prefKey === GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+  );
+  const choosesConsent =
+    serialized.some(({ prefKey }) => prefKey === GIT_COAUTHOR_PREFERENCE_KEY) ||
+    deletionKeys.includes(GIT_COAUTHOR_PREFERENCE_KEY);
+  if (suppliedCredit && !choosesConsent) {
+    const previous = readUserPreferences(sqlite, profileId, [
+      GIT_COAUTHOR_PREFERENCE_KEY,
+      GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+    ]);
+    if (
+      previous[GIT_COAUTHOR_PREFERENCE_KEY] === true &&
+      normalizeGitCoauthorOrganizationIdentity(previous[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY])
+        ?.policy !==
+        normalizeGitCoauthorOrganizationIdentity(JSON.parse(suppliedCredit.valueJson))?.policy
+    ) {
+      // An old or absent proxy mapping cannot authorize disclosure under a replacement policy.
+      serialized = [...serialized, { prefKey: GIT_COAUTHOR_PREFERENCE_KEY, valueJson: "false" }];
+    }
+  }
   const db = getNodeSqliteKysely<UserPreferencesDatabase>(sqlite);
   if (serialized.length > 0) {
     const currentKeys = readPreferenceKeys(sqlite, profileId);
     const nextKeys = new Set(currentKeys);
     deletionKeys.forEach((key) => nextKeys.delete(key));
     serialized.forEach((entry) => nextKeys.add(entry.prefKey));
-    if (nextKeys.size > USER_PREFS_PROFILE_KEY_LIMIT) {
+    if (userPreferenceKeyCount(nextKeys) > USER_PREFS_PROFILE_KEY_LIMIT) {
       return err({
         code: "profile-key-limit",
         limit: USER_PREFS_PROFILE_KEY_LIMIT,
-        currentCount: currentKeys.size,
+        currentCount: userPreferenceKeyCount(currentKeys),
       });
     }
   }

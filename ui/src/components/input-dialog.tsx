@@ -7,13 +7,43 @@ import {
   createSignal,
   onSettled,
 } from "solid-js";
+import type { ApplicationGateway } from "../app/gateway.ts";
 import { formatUiError, UserFacingError } from "../lib/format-error.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import type { InputDialogOptions } from "./input-dialog-types.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
+import { DialogHeader } from "./solid/dialog-header.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 
-export type { InputDialogOptions } from "./input-dialog-types.ts";
+export type InputDialogOptions = {
+  title: string;
+  label?: string;
+  defaultValue?: string;
+  submitLabel?: string;
+  cancelLabel?: string;
+  signal?: AbortSignal;
+  /** Keep the draft editable while Gateway-backed submission is unavailable. */
+  gateway?: ApplicationGateway;
+  /**
+   * Trims the value and blocks submission while it is empty. Callers that treat
+   * an empty entry as meaningful (clearing a custom session label) leave this
+   * off and keep receiving the raw value.
+   */
+  requireValue?: boolean;
+  /**
+   * Holds submission closed while the entry still equals `defaultValue`, so a
+   * rename that would change nothing cannot be submitted.
+   */
+  requireChange?: boolean;
+  /** Explicit admission may allow a same-identity deferred action while offline. */
+  canSubmit?: () => boolean;
+  /**
+   * Runs the operation the dialog was opened for. `null` resolves the dialog; a
+   * message keeps it open with the typed value, so a rejected attempt stays
+   * visible and retryable instead of discarding what the operator wrote.
+   */
+  submit?: (value: string) => Promise<string | null>;
+};
 
 let inputActive = false;
 
@@ -124,48 +154,50 @@ function renderInputDialog(
       }}
     >
       <form
-        class="exec-approval-card"
+        class="oc-dialog input-dialog"
         onSubmit={(event) => {
           // The outcome slot observes rejection; consume it even if the modal retires.
           void submit(event).catch(() => undefined);
         }}
       >
-        <div class="exec-approval-header">
-          <div class="exec-approval-title">{options.title}</div>
+        <DialogHeader title={options.title} closeDisabled={saving()} onClose={() => finish(null)} />
+        <div class="oc-dialog__body">
+          <label class="field">
+            <span class={{ "sr-only": !options.label || options.label === options.title }}>
+              {options.label ?? options.title}
+            </span>
+            <input
+              ref={(element) => {
+                input = element;
+              }}
+              name="value"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              value={rawValue()}
+              disabled={saving()}
+              aria-invalid={!saving() && invalid() ? "true" : undefined}
+              onInput={(event) => setRawValue(event.currentTarget.value)}
+              autofocus
+            />
+          </label>
+          <Show when={!saving()}>
+            <Errored
+              fallback={(error) => (
+                <InlineAlert tone="danger" role="alert">
+                  {formatUiError(error())}
+                </InlineAlert>
+              )}
+            >
+              <Show when={message()}>
+                <InlineAlert tone="danger" role="alert">
+                  {message()}
+                </InlineAlert>
+              </Show>
+            </Errored>
+          </Show>
         </div>
-        <label class="field input-dialog__field">
-          <span>{options.label ?? options.title}</span>
-          <input
-            ref={(element) => {
-              input = element;
-            }}
-            name="value"
-            type="text"
-            autocomplete="off"
-            spellcheck="false"
-            value={rawValue()}
-            disabled={saving()}
-            aria-invalid={!saving() && invalid() ? "true" : undefined}
-            onInput={(event) => setRawValue(event.currentTarget.value)}
-            autofocus
-          />
-        </label>
-        <Show when={!saving()}>
-          <Errored
-            fallback={(error) => (
-              <div class="exec-approval-error" role="alert">
-                {formatUiError(error())}
-              </div>
-            )}
-          >
-            <Show when={message()}>
-              <div class="exec-approval-error" role="alert">
-                {message()}
-              </div>
-            </Show>
-          </Errored>
-        </Show>
-        <openclaw-modal-actions class="exec-approval-actions">
+        <openclaw-modal-actions class="oc-dialog__footer">
           <button type="button" class="btn" disabled={saving()} onClick={() => finish(null)}>
             {options.cancelLabel ?? t("common.cancel")}
           </button>

@@ -19,6 +19,11 @@ This design applies equally to an orchestrator spawned from an interactive
 session and one spawned from an isolated cron run. Cron owns delivery of the
 scheduled result, while the registry owns the nested orchestrator's continuation.
 
+An accepted yield stops new steering immediately. Tool calls in the same model
+response settle before the execution ends, preserving each call's own result.
+Stop, timeouts, and permission revocation can still cancel those calls while
+they settle. The handoff does not start another model request.
+
 ## Ownership through the handoff
 
 | Phase                | Owner                                         | Required handoff                                                                                                                                                       |
@@ -57,10 +62,32 @@ An outcome the yield already recorded stays: a collector an earlier version left
 `ok` settles as done with the reply its yielded turn ended on, the same result a
 collector that yields now gets. Only a run with no recorded outcome settles as an
 `error` that says why, and its collector completion carries
-`reason: "yielded_without_result"`. Every other paused run stays continuable however long it has been
-paused: a declared message wait, a leaf that an earlier version left paused, and an
-orchestrator waiting on descendants are not bounded by this settlement. A kill
+`reason: "yielded_without_result"`. A declared message wait belongs to its
+requester session across turns until a watched continuation claims it. A claimed
+wait closes with a recorded error when its requester task finishes. Completion
+follows an adopted execution of that task and retains its committed end when a
+later turn replaces the session row. Unrelated pause notices and tool-handoff
+turns do not abandon the waiting child. Missing or archived requester sessions
+close both claimed and unclaimed waits, including restored waits. The sweeper
+also reconciles claims whose requester finished before the child parked.
+Waiting for a live requester or owned descendants has no elapsed-time limit.
+The yielded batch retains the original requester run ID after releasing its
+execution binding. If completion delivery permanently fails without admitting a
+successor, settlement closes that exact parked lifecycle with a recorded error.
+A newer turn, Stop, or reset rejects the stale terminal write.
+Older batches without that run ID record the same delivery-failure notice without
+changing the current lifecycle: a replacement turn may already own it. Their
+failure notice identifies the batch, rather than guessing its original writer.
+A leaf that an earlier version left paused without a recorded wait keeps its
+existing continuation behavior. A kill
 claim on a paused run is never settled over; cancellation stays with the kill path.
+
+Session rows show a continuable paused run as `subagentRunState: "paused"`
+while its recorded `status` stays unchanged, so the parent's lists can tell it
+from a finished child. `isSubagentRunPausedForContinuation` owns that test for
+both the session row and the `/subagents` waiting label. See
+[sessions.list rows](/gateway/protocol/rpc-bootstrap-and-events) for the client
+contract.
 
 Private child results wait for their spawning turn to settle before individual
 announcement admission. Normal settlement resumes each finished private child,
@@ -69,6 +96,29 @@ first, then resumes child cleanup under that owner. Late announcement failures
 cannot replace the batch's delivery state; already committed delivery evidence
 remains valid. Restart activation reconciles retained requester-turn bindings
 before resuming child completion.
+
+Restart restores ready completion reservations in requester FIFO order. A cohort
+still waiting for a child or descendant stays with the registry without reserving
+the requester's mailbox, so ordinary user input can run in FIFO order while it
+waits. The existing settlement events make its continuation eligible when ready.
+Interrupted terminal deliveries also wait for their recovery owner to reconcile
+them before reserving the mailbox. Retained recovery records from an older child
+execution must not block a ready continuation after another Gateway restart.
+When a restored wave needs no further delivery, the registry releases its unclaimed
+mailbox reservations after its settlement commits. Already delivered waves must
+not hold later yielded cohorts behind an unprepared input. Claimed turns keep
+their existing execution owner.
+
+For retired cancellation records, recovery reconciles a late kill marker against
+the terminal run's current generation before resuming its pending completion.
+A kill request recorded after execution ended does not reopen execution or prevent
+completion from settling. A newer child run keeps its own completion ownership.
+
+Restored delivery preparation uses the bounded background budget only until the
+Gateway accepts the input. Waiting for mailbox dispatch or requester completion
+does not hold a preparation slot: earlier FIFO inputs may need that same budget
+to become ready. The registry retains the delivery lifetime and records its
+outcome after the requester finishes.
 
 For a nested requester, settlement persists its paused run together with the
 child wake batch before scheduling the continuation. This also covers a child
@@ -245,9 +295,18 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   an observed terminal delivery outcome, the registry settles that outcome
   without resending an ambiguously committed result. If persistence fails, it
   retains the observed receipt and retries bookkeeping, not the send. The
-  outbound durable delivery queue keeps its own transport retry policy.
+  same rule covers private parent completions resumed by restart recovery:
+  their captured successful result settles the original input, including a
+  silent result, without starting another requester turn. Failed or missing
+  recovery evidence does not establish successful consumption.
+  Before that result exists, the original private completion owner resumes its
+  interrupted input; its own pending recovery claim does not block the replay.
+  The outbound durable delivery queue keeps its own transport retry policy.
   Delivery bookkeeping for executions that ended before the current batch's
   earliest child was created cannot block its continuation.
+  After a restart, saved interrupted results finish their own cleanup even if
+  the child session has since run a newer task. That cleanup releases the older
+  mailbox reservation without changing the newer task's session or execution.
   A private handoff's observation timeout does not cancel the underlying Gateway
   turn. When the Gateway reports that turn as
   in flight, settlement observes the same request without spending failure

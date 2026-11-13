@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTestModelDefinition } from "../commands/test-runtime-config-helpers.js";
 import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
@@ -20,8 +21,10 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 function writeProviderPlugin(root: string, prefix: string) {
   const id = `${prefix}-normalizer`;
-  fs.mkdirSync(root, { recursive: true });
-  fs.writeFileSync(path.join(root, "index.js"), "throw new Error('metadata only');\n");
+  fs.mkdirSync(root, { recursive: true, mode: 0o755 });
+  fs.writeFileSync(path.join(root, "index.js"), "throw new Error('metadata only');\n", {
+    mode: 0o644,
+  });
   const files = {
     "package.json": { name: id, openclaw: { extensions: ["./index.js"] } },
     "openclaw.plugin.json": {
@@ -34,7 +37,7 @@ function writeProviderPlugin(root: string, prefix: string) {
     },
   };
   for (const [name, content] of Object.entries(files)) {
-    fs.writeFileSync(path.join(root, name), JSON.stringify(content));
+    fs.writeFileSync(path.join(root, name), JSON.stringify(content), { mode: 0o644 });
   }
 }
 
@@ -61,17 +64,7 @@ it("preserves global provider policies across workspace changes without executin
       providers: {
         custom: {
           baseUrl: "https://example.test",
-          models: [
-            {
-              id: "latest",
-              name: "Latest",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 8192,
-              maxTokens: 4096,
-            },
-          ],
+          models: [createTestModelDefinition("latest", { name: "Latest" })],
         },
       },
     },

@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { validateChatMessageGetParams } from "../../../packages/gateway-protocol/src/index.js";
@@ -5,7 +6,8 @@ import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../packages/gateway-pro
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { readSessionPendingInput } from "../../config/sessions/session-accessor.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
-import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.history.js";
+import { createChannelMentionProjector } from "../chat-display-projection.channel-mentions.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
   projectChatDisplayMessage,
@@ -153,9 +155,16 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
           [resolved.message],
           context.cronStorePath,
         );
+        const displayed = asOptionalRecord(
+          (
+            await createChannelMentionProjector(context, client, canonicalKey).project([
+              resolved.message,
+            ])
+          )[0],
+        );
         await withCurrentSession(() => {
-          const projectedMessage = resolved.message
-            ? projectChatDisplayMessage(resolved.message, {
+          const projectedMessage = displayed
+            ? projectChatDisplayMessage(displayed, {
                 includeCommentaryFallbacks: true,
                 includePluginSteering,
                 maxChars: effectiveMaxChars,

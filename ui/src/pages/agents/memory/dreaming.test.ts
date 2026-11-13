@@ -394,38 +394,21 @@ describe("dreaming controller", () => {
     await expect(updateDreamingEnabled(state, config, true)).resolves.toBe(false);
     expect(config.patch).not.toHaveBeenCalled();
     expect(config.lookupSchemaPath).not.toHaveBeenCalled();
-    expect(state.dreamingStatusError).toBe("Config hash missing; refresh and retry.");
+    expect(state.dreamingStatusError).toBe("Couldn’t save settings. Refresh and try again.");
   });
 
-  it("loads dream diary content", async () => {
-    const { state, request } = createState();
-    request.mockResolvedValue({
-      found: true,
-      path: "DREAMS.md",
-      content: "## Dream Diary\n- recurring glacier thoughts",
-    });
-
-    await loadDreamingResource(state, "dreamDiary");
-
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
-    expect(state.dreamDiaryPath).toBe("DREAMS.md");
-    expect(state.dreamDiaryContent).toBe("## Dream Diary\n- recurring glacier thoughts");
-    await expect(state.resourceReads.dreamDiary?.promise).resolves.toBeUndefined();
-  });
-
-  it("handles missing dream diary without error", async () => {
-    const { state, request } = createState();
-    request.mockResolvedValue({
-      found: false,
-      path: "DREAMS.md",
-    });
-
-    await loadDreamingResource(state, "dreamDiary");
-
-    expect(state.dreamDiaryPath).toBe("DREAMS.md");
-    expect(state.dreamDiaryContent).toBeNull();
-    await expect(state.resourceReads.dreamDiary?.promise).resolves.toBeUndefined();
-  });
+  it.each(["## Dream Diary\n- recurring glacier thoughts", null])(
+    "loads dream diary content %s",
+    async (content) => {
+      const { state, request } = createState();
+      request.mockResolvedValue({ found: content !== null, path: "DREAMS.md", content });
+      await loadDreamingResource(state, "dreamDiary");
+      expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
+      expect(state.dreamDiaryPath).toBe("DREAMS.md");
+      expect(state.dreamDiaryContent).toBe(content);
+      await expect(state.resourceReads.dreamDiary?.promise).resolves.toBeUndefined();
+    },
+  );
 
   it("records dream diary request errors", async () => {
     const { state, request } = createState();
@@ -466,8 +449,14 @@ describe("dreaming controller", () => {
       { action: "reset", removedEntries: 79 },
       { found: false, path: "DREAMS.md" },
     );
+    const previous = createDeferred<unknown>();
+    request.mockImplementationOnce(() => previous.promise);
+    const loading = loadDreamingResource(state, "dreamDiary");
 
     await expectActionReload(state, request, "doctor.memory.resetDreamDiary", null);
+    previous.resolve({ found: true, path: "DREAMS.md", content: "removed entry" });
+    await loading;
+    expect(state.dreamDiaryContent).toBeNull();
   });
 
   it("clears grounded staged entries and reloads only dreaming status", async () => {
@@ -533,7 +522,7 @@ describe("dreaming controller", () => {
 
   it.each([
     { copied: true, kind: "success", text: "Archive path copied." },
-    { copied: false, kind: "error", text: "Could not copy archive path." },
+    { copied: false, kind: "error", text: "Couldn’t copy the archive path. Try again." },
   ])("reports clipboard result: $kind", async ({ copied, kind, text }) => {
     const { state } = createState();
     state.dreamDiaryActionArchivePath = "/tmp/openclaw/archive";

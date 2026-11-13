@@ -18,6 +18,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocket, WebSocketServer, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import { canonicalizeVoiceCallMediaBase64 } from "./media-base64.js";
+import { decodeTwilioMediaMessage, type TwilioMediaMessage } from "./media-message.js";
 
 export interface MediaStreamConfig {
   transcriptionProvider: RealtimeTranscriptionProviderPlugin;
@@ -82,13 +83,15 @@ function sanitizeLogText(value: string, maxChars: number): string {
   return `${truncateUtf16Safe(sanitized, maxChars)}...`;
 }
 
-function parseTwilioMediaMessage(data: RawData): TwilioMediaMessage {
+function parseTwilioMediaMessage(data: RawData): TwilioMediaMessage | null {
   const raw = rawDataToString(data);
+  let parsed: unknown;
   try {
-    return JSON.parse(raw) as TwilioMediaMessage;
+    parsed = JSON.parse(raw);
   } catch (cause) {
     throw new Error("Twilio media stream message was malformed JSON", { cause });
   }
+  return decodeTwilioMediaMessage(parsed);
 }
 
 export class MediaStreamHandler {
@@ -194,6 +197,9 @@ export class MediaStreamHandler {
     ws.on("message", (data: RawData) => {
       try {
         const message = parseTwilioMediaMessage(data);
+        if (!message) {
+          return;
+        }
 
         switch (message.event) {
           case "connected":
@@ -213,8 +219,8 @@ export class MediaStreamHandler {
             break;
 
           case "media":
-            if (session && message.media?.payload) {
-              const canonicalPayload = canonicalizeVoiceCallMediaBase64(message.media.payload);
+            if (session && message.payload) {
+              const canonicalPayload = canonicalizeVoiceCallMediaBase64(message.payload);
               if (!canonicalPayload) {
                 break;
               }
@@ -237,8 +243,8 @@ export class MediaStreamHandler {
             break;
 
           case "mark":
-            if (session && message.mark?.name) {
-              this.acknowledgePlaybackMark(session.streamSid, message.mark.name);
+            if (session && message.name) {
+              this.acknowledgePlaybackMark(session.streamSid, message.name);
             }
             break;
 
@@ -269,16 +275,16 @@ export class MediaStreamHandler {
 
   private handleStart(
     ws: WebSocket,
-    message: TwilioMediaMessage,
+    message: Extract<TwilioMediaMessage, { event: "start" }>,
     streamToken?: string,
   ): StreamSession | null {
-    const streamSid = message.streamSid || "";
-    const callSid = message.start?.callSid || "";
+    const streamSid = message.streamSid;
+    const callSid = message.callSid;
 
     // Prefer token from start message customParameters (set via TwiML <Parameter>),
     // falling back to query string token. Twilio strips query params from WebSocket
     // URLs but reliably delivers <Parameter> values in customParameters.
-    const effectiveToken = message.start?.customParameters?.token ?? streamToken;
+    const effectiveToken = message.token ?? streamToken;
 
     console.log(`[MediaStream] Stream started: ${streamSid} (call: ${callSid})`);
     if (!callSid) {
@@ -472,9 +478,7 @@ export class MediaStreamHandler {
         `[MediaStream] Closing pre-start idle connection after ${this.preStartTimeoutMs}ms (${ip})`,
       );
       ws.close(1008, "Start timeout");
-    }, this.preStartTimeoutMs);
-
-    timeout.unref?.();
+    }, this.preStartTimeoutMs).unref();
     this.pendingConnections.set(ws, { ip, timeout });
     this.pendingByIp.set(ip, pendingForIp + 1);
     return true;
@@ -588,8 +592,7 @@ export class MediaStreamHandler {
           pending();
         },
         Math.max(1, audioDurationMs + PLAYBACK_MARK_TIMEOUT_GRACE_MS),
-      );
-      timeout.unref?.();
+      ).unref();
       const onAbort = () => {
         const reason =
           signal.reason instanceof Error
@@ -741,19 +744,4 @@ export class MediaStreamHandler {
       controller.abort();
     }
   }
-}
-
-interface TwilioMediaMessage {
-  event: "connected" | "start" | "media" | "stop" | "mark" | "clear";
-  streamSid?: string;
-  start?: {
-    callSid: string;
-    customParameters?: Record<string, string>;
-  };
-  media?: {
-    payload?: string;
-  };
-  mark?: {
-    name: string;
-  };
 }

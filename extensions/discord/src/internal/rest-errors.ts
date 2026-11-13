@@ -188,7 +188,6 @@ export class DiscordError extends Error {
   readonly status: number;
   readonly statusCode: number;
   readonly rawBody: unknown;
-  readonly rawError: unknown;
   discordCode?: number;
 
   constructor(response: Response, body: unknown) {
@@ -205,7 +204,6 @@ export class DiscordError extends Error {
     this.status = response.status;
     this.statusCode = response.status;
     this.rawBody = redactedBody;
-    this.rawError = redactedBody;
     // Classification consumes only a parsed non-negative integer and must not
     // depend on diagnostic depth/node truncation in the sanitized raw body.
     this.discordCode = readDiscordCode(body);
@@ -215,7 +213,6 @@ export class DiscordError extends Error {
 export class RateLimitError extends DiscordError {
   readonly retryAfter: number;
   readonly scope: string | null;
-  readonly bucket: string | null;
 
   constructor(
     response: Response,
@@ -225,6 +222,5 @@ export class RateLimitError extends DiscordError {
     this.name = "RateLimitError";
     this.retryAfter = readRetryAfter(body, response);
     this.scope = body.global ? "global" : readDiscordRateLimitScope(response);
-    this.bucket = readDiscordRateLimitBucket(response);
   }
 }

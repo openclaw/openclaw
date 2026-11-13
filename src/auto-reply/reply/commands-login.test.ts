@@ -16,6 +16,7 @@ import {
   blockReplyOpts,
   buildLoginParams,
   dispatchLoginCommand,
+  loginResult,
   patchSessionEntryMock,
   runModelsAuthLoginFlowMock,
   setupLoginCommandTests,
@@ -39,16 +40,6 @@ const refreshedMessage = "Sign-in status refreshed. Send /models to see availabl
 
 function stoppedReply(text: string) {
   return { shouldContinue: false, reply: { text } };
-}
-
-function loginResult(profileId = "openai:owner", authRefresh = "refreshed") {
-  const provider = profileId.split(":")[0];
-  return {
-    providerId: provider,
-    methodId: provider === "openrouter" ? "oauth" : "device-code",
-    authRefresh,
-    profiles: [{ profileId, provider, mode: provider === "openrouter" ? "api_key" : "oauth" }],
-  };
 }
 
 function loginParams(overrides: Parameters<typeof buildLoginParams>[1] = {}) {
@@ -118,7 +109,10 @@ it("keeps registered login pending until saved credentials finish refreshing", a
   });
   runModelsAuthLoginFlowMock.mockImplementationOnce(async (opts: ModelsAuthLoginFlowOptions) => {
     await expectDefined(opts.refreshAfterLogin, "registered login refresh callback")("main");
-    return loginResult();
+    return {
+      ...loginResult(),
+      modelAccess: { message: "Added openai/* to allowed models.", applied: true },
+    };
   });
   const params = buildLoginParams("/login openai", { opts: blockReplyOpts() });
   const login = dispatchLoginCommand(params);
@@ -139,7 +133,9 @@ it("keeps registered login pending until saved credentials finish refreshing", a
   }
   expect(await login).toMatchObject({
     shouldContinue: false,
-    reply: { text: "OpenAI login complete. Try your request again now." },
+    reply: {
+      text: "OpenAI login complete. Try your request again now. Added openai/* to allowed models.",
+    },
   });
   expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
 });

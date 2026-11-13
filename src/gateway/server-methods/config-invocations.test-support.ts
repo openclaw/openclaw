@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness } from "./config.test-helpers.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export async function invokeConfigPatch(args: {
   raw: unknown;
@@ -23,11 +24,13 @@ export async function invokeConfigPatch(args: {
 }
 
 export function startConfigWrite(
-  method: "config.patch" | "config.apply",
+  method: "config.set" | "config.patch" | "config.apply",
   args: { raw: unknown; baseHash?: string },
+  overrides?: Partial<GatewayRequestHandlerOptions>,
 ) {
   const harness = createConfigHandlerHarness({
     method,
+    ...(overrides ? { overrides } : {}),
     params: {
       raw: JSON.stringify(args.raw),
       ...(args.baseHash ? { baseHash: args.baseHash } : {}),

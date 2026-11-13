@@ -1,7 +1,7 @@
 import type { TSchema } from "typebox";
+import { copyInternalToolExecutionPreparer } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { copyCodeModeControlToolIdentity } from "../../code-mode-control-tools.js";
 import type { AgentTool } from "../../runtime/index.js";
-import { copyInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { copyAgentToolReplaySafety } from "../../tool-replay-safety.js";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.js";
 
@@ -18,6 +18,7 @@ function toolDefinitionMetadata<TParams extends TSchema>(
     ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
     prepareArguments: tool.prepareArguments,
     executionMode: tool.executionMode,
+    interruptible: tool.interruptible,
     ...(tool.async === false ? { async: false as const } : {}),
   };
 }

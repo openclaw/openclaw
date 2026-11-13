@@ -29,14 +29,14 @@ export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdAst {
       throw new OcPathEditError("unresolved");
     }
     const end = value.range[1];
-    const ending = source.slice(0, end).match(/\r?\n$/)?.[0] ?? "";
+    const separator = source.slice(0, end).match(/\r?\n$/)?.[0] ?? (source[end] === "#" ? " " : "");
     const anchor = !isAlias(value) && value.anchor ? `&${value.anchor} ` : "";
     const idx = ast.frontmatter.indexOf(existing);
     return replaceMdSource(
       ast,
       offset + prefix.length,
       offset + end,
-      (prefix.endsWith(":") ? " " : "") + anchor + formatFrontmatterValue(newValue) + ending,
+      (prefix.endsWith(":") ? " " : "") + anchor + formatFrontmatterValue(newValue) + separator,
       (shifted) => ({
         ...shifted,
         frontmatter: shifted.frontmatter.map((entry, index) =>
@@ -60,8 +60,14 @@ export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdAst {
   if (item.kv.key.toLowerCase() !== unquoteSeg(path.field).toLowerCase()) {
     throw new OcPathEditError("unresolved");
   }
+  if (newValue.trim() === "") {
+    throw new OcPathEditError("parse-error", "Markdown item fields require a nonblank value");
+  }
+  if (item.textLine === null) {
+    throw new OcPathEditError("not-writable");
+  }
   const key = item.kv.key;
-  const offset = sourceLineOffset(ast.raw, item.line);
+  const offset = sourceLineOffset(ast.raw, item.textLine);
   const prefix = new RegExp(`^([\\s\\S]*?${escapeRegExp(item.kv.key)}[ \\t]*:\\s*)`).exec(
     ast.raw.slice(offset),
   )?.[1];
@@ -69,7 +75,7 @@ export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdAst {
     throw new OcPathEditError("unresolved");
   }
   const start = offset + prefix.length;
-  const lastLine = item.line + prefix.split("\n").length + item.kv.value.split("\n").length - 2;
+  const lastLine = item.textLine + prefix.split("\n").length + item.kv.value.split("\n").length - 2;
   const lineEnd = sourceLineOffset(ast.raw, lastLine + 1);
   const ending = ast.raw.slice(start, lineEnd).match(/\r?\n$/)?.[0] ?? "";
   const blockIdx = ast.blocks.indexOf(block);

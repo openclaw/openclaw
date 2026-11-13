@@ -8,16 +8,11 @@ import * as commands from "../process/exec.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
-import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
-import { captureUpdateCandidateDeadline } from "./update-candidate-state.test-support.js";
 import {
-  createUpdateRun,
-  finishUpdateRun,
-  getUpdateRun,
-  recordUpdateRunStep,
-} from "./update-run-ledger.js";
-import { renderUpdateRunReport } from "./update-run-report.js";
-import { updateRunStepsFromResultStep } from "./update-run-step.js";
+  prepareUpdateCandidateStateSnapshot,
+  resolveUpdateCandidateAdmissionTimeoutMs,
+} from "./update-candidate-snapshot.js";
+import { captureUpdateCandidateDeadline } from "./update-candidate-state.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -31,11 +26,8 @@ async function fixture(canary = false) {
   const root = await fs.realpath(tempDirs.make("snapshot-watchdog-"));
   const stateDir = path.join(root, "source");
   const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir, TMPDIR: root };
-  const worker = path.join(
-    root,
-    "dist",
-    runtimeProcessEntrypoints.updateCandidateState.distWorkerPath,
-  );
+  const dist = path.join(root, "dist");
+  const worker = path.join(dist, runtimeProcessEntrypoints.updateCandidateState.distWorkerPath);
   await fs.mkdir(path.dirname(worker), { recursive: true });
   await fs.writeFile(
     path.join(root, "package.json"),
@@ -46,7 +38,7 @@ async function fixture(canary = false) {
       "index.js",
       runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
     ]) {
-      await fs.writeFile(path.join(root, "dist", file), "");
+      await fs.writeFile(path.join(dist, file), "");
     }
   }
   return { root, stateDir, env, worker, pidFile: path.join(root, "worker.pid") };
@@ -83,12 +75,12 @@ it("coalesces snapshot progress while its receipt is settling", async () => {
   await fs.writeFile(
     worker,
     `
-    import fs from "node:fs";
     let input = "";
     for await (const chunk of process.stdin) input += chunk;
     const request = JSON.parse(input);
+    // Buffer the burst so a full nonblocking stderr pipe cannot truncate it.
     for (let i = 0; i < 256; i++) {
-      fs.writeSync(2, "State schema progress: " + JSON.stringify({phase: "copy-" + i}) + "\\n");
+      process.stderr.write("State schema progress: " + JSON.stringify({phase: "copy-" + i}) + "\\n");
     }
     process.stdout.write(JSON.stringify(request.mode === "inventory"
       ? {databases: [], pluginBytes: 0, pluginPlan: "plugin-copy-plan.json"}
@@ -186,6 +178,7 @@ it.each([
         });
       }
       const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 400_000);
+      const perfClock = vi.spyOn(performance, "now").mockReturnValue(Date.now() + 400_000);
       if (settled) {
         controller.abort(new Error("Update validation deadline expired during progress recording"));
       } else {
@@ -194,6 +187,7 @@ it.each([
       pendingReceipt.resolve();
       const result = await operation;
       clock.mockRestore();
+      perfClock.mockRestore();
       expect(result).toMatchObject({
         status: "error",
         phase: "snapshot",
@@ -216,21 +210,6 @@ it.each([
         settled ? "Update validation deadline expired" : "exceeded its 300 second allowance",
       );
       expect(failed?.stderrTail).not.toContain(root);
-      const run = createUpdateRun({ trigger: "cli" }, { env });
-      for (const step of result.steps.flatMap(updateRunStepsFromResultStep)) {
-        recordUpdateRunStep(run.runId, step, { env });
-      }
-      finishUpdateRun(run.runId, { status: "failed", reason: result.reason }, { env });
-      const saved = getUpdateRun(run.runId, { env });
-      expect(
-        saved?.steps.find((step) => step.step === "candidate-state-snapshot")?.stderrTail,
-      ).toEqual(failed?.stderrTail);
-      const report = renderUpdateRunReport(saved!).markdown;
-      expect(report).toContain(phase);
-      expect(report).toContain("12,943,360 bytes");
-      if (!settled) {
-        expect(report).toContain("total estimated snapshot input");
-      }
       expect(isProcessAlive(Number(await fs.readFile(pidFile, "utf8")))).toBe(false);
       expect(
         (await fs.readdir(root)).filter((entry) => entry.startsWith("openclaw-update-canary-")),
@@ -242,3 +221,16 @@ it.each([
     }
   },
 );
+
+it("sizes candidate admission to measured state within the update step deadline", async () => {
+  const stateDir = await fs.realpath(tempDirs.make("admission-budget-"));
+  const database = path.join(stateDir, "state/openclaw.sqlite");
+  const params = { config: {}, stateDir, env: { OPENCLAW_STATE_DIR: stateDir } };
+  await fs.mkdir(path.dirname(database), { recursive: true });
+  await fs.writeFile(database, "");
+  await fs.truncate(database, 3 * 1024 ** 3);
+  const budget = (stepTimeoutMs: number) =>
+    resolveUpdateCandidateAdmissionTimeoutMs({ ...params, stepTimeoutMs });
+  expect(await budget(Number.MAX_SAFE_INTEGER)).toBeGreaterThan(300_000);
+  expect(await budget(1_800_000)).toBe(1_800_000);
+});

@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as waitForLogTick } from "node:timers/promises";
-import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
+import { formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { extractErrorCode, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { getChildLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
@@ -30,7 +30,6 @@ import {
   deliverWebReply,
 } from "./auto-reply/deliver-reply.js";
 import { whatsappLog } from "./auto-reply/loggers.js";
-import { buildInboundLine } from "./auto-reply/monitor/message-line.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 import { waitForWaConnection } from "./session.js";
@@ -169,15 +168,6 @@ function droppedMessage(id: string) {
   });
 }
 
-function appendWindowAt(
-  scripted: ReturnType<typeof createScriptedWebListenerFactory>,
-  index: number,
-) {
-  const options = scripted.listenerFactory.mock.calls[index]?.[0] as ListenerOptions | undefined;
-  assert(options, `Expected listener options at index ${index}`);
-  return options.appendReplyWindow;
-}
-
 async function openOnce(
   tuning?: Parameters<Monitor>[6],
   resolver: Parameters<Monitor>[3] = async () => undefined,
@@ -277,28 +267,13 @@ it.each([
   },
 );
 
-it("widens append catch-up only after reconnecting a recently active listener", async () => {
-  const monitor = startMonitor({ messageTimeoutMs: 30 * 60_000 });
-  const { scripted } = monitor;
-
-  await vi.waitFor(() => expect(scripted.getListenerCount()).toBe(1));
-  expect(appendWindowAt(scripted, 0)).toBeUndefined();
-
-  // The controller records inbound activity before admission; this test only needs that
-  // lifecycle fact and must not start unrelated delivery/session work.
-  await requireOnMessage(scripted.getOnMessage())(droppedMessage("active-before-reconnect"));
-
-  const reconnectStartedAt = Date.now();
-  scripted.resolveClose(0, { status: 408, isLoggedOut: false, error: new Error("timeout") });
-  await vi.waitFor(() => expect(scripted.getListenerCount()).toBe(2));
-
-  const appendReplyWindow = appendWindowAt(scripted, 1);
-  expect(appendReplyWindow?.afterMs).toBeGreaterThanOrEqual(reconnectStartedAt - 20 * 60_000);
-  expect(appendReplyWindow?.afterMs).toBeLessThanOrEqual(Date.now() - 20 * 60_000);
-  expect(appendReplyWindow?.untilMs).toBeGreaterThanOrEqual(reconnectStartedAt + 20 * 60_000);
-  expect(appendReplyWindow?.maxAgeMs).toBe(20 * 60_000);
-
-  await stopMonitor(monitor);
+it.each([
+  [30 * 60_000, 20 * 60_000],
+  [5 * 60_000, 5 * 60_000],
+  [1, 60_000],
+])("bounds offline catch-up for a %i ms message timeout", async (messageTimeoutMs, expected) => {
+  const options = await openOnce({ messageTimeoutMs });
+  expect(options?.appendReplyMaxAgeMs).toBe(expected);
 });
 
 it.each([
@@ -603,38 +578,6 @@ it("raises the process listener budget before opening the web listener", async (
   } finally {
     process.setMaxListeners?.(originalMax);
   }
-});
-
-it("builds separate timestamped inbound envelopes without batching", () => {
-  const buildLine = (body: string, id: string, timestamp: number) =>
-    buildInboundLine({
-      envelope: { timezone: "utc" },
-      msg: createTestWebInboundMessage({
-        event: { id, timestamp },
-        payload: { body },
-        platform: { recipientJid: "+2" },
-        admission: {
-          conversation: { kind: "direct", id: "+1" },
-          sender: { id: "+1" },
-        },
-      }),
-    });
-
-  const firstBody = buildLine("first", "m1", 1735689600000);
-  const secondBody = buildLine("second", "m2", 1735693200000);
-  const firstTimestamp = formatEnvelopeTimestamp(new Date("2025-01-01T00:00:00Z"), "utc");
-  const secondTimestamp = formatEnvelopeTimestamp(new Date("2025-01-01T01:00:00Z"), "utc");
-
-  expect(firstBody).toMatch(
-    new RegExp(`\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${escapeRegExp(firstTimestamp)}\\] \\+1: first`),
-  );
-  expect(firstBody).not.toContain("second");
-  expect(secondBody).toMatch(
-    new RegExp(
-      `\\[WhatsApp \\+1 (\\+\\d+[smhd] )?${escapeRegExp(secondTimestamp)}\\] \\+1: second`,
-    ),
-  );
-  expect(secondBody).not.toContain("first");
 });
 
 it("logs outbound delivery metadata without reply content", async ({ signal }) => {

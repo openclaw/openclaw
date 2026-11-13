@@ -1,10 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
+import * as protocol from "../../../packages/gateway-protocol/src/index.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionEventSubscriberRegistry } from "../server-chat-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -47,6 +53,44 @@ async function startup(
 }
 
 describe("chat.startup short references", () => {
+  it("rejects malformed direct history before reading the session", async () => {
+    const context = createDirectChatContext();
+    const respond = await requestHistory("chat.history", { sessionKey: key, limit: 0 }, context);
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+  });
+
+  it.each(["sessionKey", "shortId"] as const)(
+    "validates %s input once before reading history",
+    async (selector) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
+        await seed("validated-startup", {}, "Validated history");
+        const context = createDirectChatContext();
+        await initializeSessionReadContext(context);
+        const params =
+          selector === "sessionKey"
+            ? { sessionKey: key }
+            : { shortId: "12345678", agentId: "main" };
+        const validation = vi.spyOn(protocol, "validateChatHistoryParams");
+        try {
+          const invalid = await requestHistory("chat.startup", { ...params, limit: 0 }, context);
+          expect(invalid.mock.calls[0]?.[0]).toBe(false);
+          const valid = await requestHistory("chat.startup", params, context);
+          expect(valid.mock.calls[0]?.[1]).toMatchObject({
+            messages: [expect.objectContaining({ content: "Validated history" })],
+          });
+          expect(validation).not.toHaveBeenCalled();
+        } finally {
+          validation.mockRestore();
+        }
+      });
+    },
+  );
+
   it.each([true, false])(
     "establishes observation before reading only for a live connection (%s)",
     async (live) => {
@@ -145,7 +189,38 @@ describe("chat.startup short references", () => {
       const context = createDirectChatContext();
       await initializeSessionReadContext(context);
       const call = (shortId: string) => startup(context, null, shortId, 80);
-      expect(await call("12345678")).toHaveBeenCalledWith(
+      const phases: Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>[] = [];
+      const stop = onTrustedInternalDiagnosticEvent(
+        (event) => {
+          if (event.type === "diagnostic.phase.completed") {
+            phases.push(event);
+          }
+        },
+        { include: ["diagnostic.phase.completed"] },
+      );
+      let response;
+      try {
+        response = await call("12345678");
+        await waitForDiagnosticEventsDrained();
+      } finally {
+        stop();
+      }
+      expect(phases.map(({ name }) => name)).toEqual(
+        expect.arrayContaining([
+          "chat.startup.session_entry",
+          "chat.startup.pending_inputs",
+          "chat.startup.history_page",
+          "chat.startup.startup_projection",
+          "chat.startup.projection_final",
+          "chat.startup.session_info",
+        ]),
+      );
+      expect(phases.every(({ durationMs }) => durationMs !== undefined && durationMs >= 0)).toBe(
+        true,
+      );
+      expect(phases.every(({ details }) => details === undefined)).toBe(true);
+      expect(JSON.stringify(phases)).not.toContain(key);
+      expect(response).toHaveBeenCalledWith(
         true,
         expect.objectContaining({
           sessionKey: key,

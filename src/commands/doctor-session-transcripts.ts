@@ -25,6 +25,7 @@ import type {
   PreparedPostSessionPluginMigration,
 } from "../infra/state-migrations.types.js";
 import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
+import { repairLegacyDashboardChatTypes } from "./doctor-session-dashboard-chat-type.js";
 import {
   repairCanonicalSessionDeliveryStates,
   repairLegacySessionEntryStates,
@@ -253,11 +254,12 @@ export async function noteSessionTranscriptHealth(options?: {
       targets: previewTargets ?? listExistingAgentDatabaseTargets(repairParams.cfg, params.env),
     };
     // Canonical-key ties compare complete entry JSON, so select their winner before stripping it.
-    const resolvedSkillsReport = repairCanonicalSessionResolvedSkills(rowRepairParams);
+    const resolvedSkillsReport = await repairCanonicalSessionResolvedSkills(rowRepairParams);
     // Import may create the first durable SQLite row for a colliding legacy key.
     const reservedKeyReport = await repairReservedIncognitoSessionKeys(rowRepairParams);
-    const deliveryReport = repairCanonicalSessionDeliveryStates(rowRepairParams);
-    repairLegacySessionExecPolicy(rowRepairParams);
+    const deliveryReport = await repairCanonicalSessionDeliveryStates(rowRepairParams);
+    await repairLegacySessionExecPolicy(rowRepairParams);
+    await repairLegacyDashboardChatTypes(rowRepairParams);
     const acpKeyReport = await repairAcpSessionMetaKeysForDoctor({
       ...rowRepairParams,
       authority: maintenanceAuthority,

@@ -1,9 +1,11 @@
 import { ok } from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
-import { parse } from "yaml";
-import { readCiWorkflow } from "./ci-workflow.test-support.js";
+import {
+  evaluateWorkflowRunner,
+  readCiWorkflow,
+  readWorkflow,
+} from "./ci-workflow.test-support.js";
 
 type Job = {
   if?: string;
@@ -14,10 +16,7 @@ type Job = {
 };
 type Workflow = { permissions: Record<string, string>; jobs: Record<string, Job> };
 
-function readWorkflow(filename: string): Workflow {
-  return parse(readFileSync(`.github/workflows/${filename}`, "utf8")) as Workflow;
-}
-const qualification = readWorkflow("android-release-e2e.yml");
+const qualification = readWorkflow(".github/workflows/android-release-e2e.yml") as Workflow;
 const qualify = qualification.jobs.qualify;
 ok(qualify, "Android validation must have its qualification job");
 const selectionDir = "${{ env.GATEWAY_SELECTION_DIR }}";
@@ -61,7 +60,9 @@ it.each([
 it.each(["success", "failure", "cancelled", "skipped"])(
   "gates store signing/upload on qualification: %s",
   (result) => {
-    const { qualify: storeQualify, release } = readWorkflow("android-store-release.yml").jobs;
+    const { qualify: storeQualify, release } = (
+      readWorkflow(".github/workflows/android-store-release.yml") as Workflow
+    ).jobs;
     ok(storeQualify, "Android store release must have its qualification job");
     ok(release, "Android store release must have its release job");
     const context = {
@@ -83,9 +84,33 @@ it.each(["success", "failure", "cancelled", "skipped"])(
   },
 );
 
+it.each(["", "blacksmith", "hybrid", "runson", "github", "boat"] as const)(
+  "keeps Android Store runner routing stable across retries for backend %s",
+  (runnerBackend) => {
+    const release = readWorkflow(".github/workflows/android-store-release.yml").jobs.release;
+    for (const runAttempt of [1, 2]) {
+      expect(
+        evaluateWorkflowRunner(release["runs-on"], {
+          runnerBackend,
+          runAttempt,
+        }),
+      ).toBe(runnerBackend === "boat" ? "boat-xlarge" : "blacksmith-8vcpu-ubuntu-2404");
+    }
+  },
+);
+
 it("publishes only credential-free qualification evidence", () => {
   expect(qualification.permissions).toEqual({ actions: "read", contents: "read" });
-  const uploads = qualify.steps?.filter((step) =>
+  const selection = readWorkflow(".github/actions/prepare-mobile-release-gateway/action.yml") as {
+    runs: { steps: NonNullable<Job["steps"]> };
+  };
+  const prepare = qualify.steps?.find(
+    (step) => step.uses === "./.github/actions/prepare-mobile-release-gateway",
+  );
+  expect(prepare?.with).toEqual({
+    "artifact-name": "android-release-gateway-selection-${{ github.run_id }}",
+  });
+  const uploads = [...selection.runs.steps, ...(qualify.steps ?? [])].filter((step) =>
     step.uses?.startsWith("actions/upload-artifact@"),
   );
   expect(uploads?.map((step) => step.with?.path?.trim().split("\n"))).toEqual([
@@ -97,35 +122,4 @@ it("publishes only credential-free qualification evidence", () => {
       `${runnerTemp}/android-release-e2e/screenshots/*.png`,
     ],
   ]);
-});
-
-it("requires the same immutable Gateway selection on reruns", async () => {
-  const script = qualify.steps?.find(
-    (step) => step.name === "Find this run's stable Gateway selection",
-  )?.with?.script;
-  expect(script).toBeDefined();
-  const outputs = new Map<string, string>();
-  const run = (artifacts: unknown[]) =>
-    runInNewContext(`(async () => { ${script} })()`, {
-      context: { runId: 123, repo: { owner: "example", repo: "project" } },
-      process: { env: { GITHUB_RUN_ATTEMPT: "2", TARGET_SHA: sha } },
-      core: { setOutput: (key: string, value: string) => outputs.set(key, value) },
-      github: {
-        paginate: async () => artifacts,
-        rest: { actions: { listWorkflowRunArtifacts: () => undefined } },
-      },
-    }) as Promise<void>;
-  await expect(run([])).rejects.toThrow("no saved stable Gateway selection");
-  const artifact = {
-    id: 456,
-    name: "android-release-gateway-selection-123",
-    expired: false,
-    workflow_run: { id: 123, head_sha: sha },
-  };
-  await expect(run([{ ...artifact, expired: true }])).rejects.toThrow("expired");
-  await expect(
-    run([{ ...artifact, workflow_run: { id: 123, head_sha: "b".repeat(40) } }]),
-  ).rejects.toThrow("another source/run");
-  await run([artifact]);
-  expect(Object.fromEntries(outputs)).toEqual({ create: "false", "artifact-id": "456" });
 });

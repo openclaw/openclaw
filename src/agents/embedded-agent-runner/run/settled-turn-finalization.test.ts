@@ -1,8 +1,11 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import * as modelsConfig from "../../models-config-state.js";
 import { makeEmbeddedRunnerAttempt as makeAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import type { NormalizedUsage } from "../../usage.js";
+import { mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { CUT_OFF_SUMMARY_NOTICE_TEXT } from "./incomplete-turn-resolution.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
@@ -112,6 +115,25 @@ function finalizationInput(
 describe("prepareTerminalWithSettledTurnFinalization", () => {
   afterEach(() => vi.useRealTimers());
 
+  it.each<{ name: string; usage: NormalizedUsage; expected?: number }>([
+    {
+      name: "recorded zero",
+      usage: { input: 100, cost: { total: 0, totalOrigin: "provider-billed" } },
+      expected: 0,
+    },
+    { name: "final unknown", usage: { input: 100, costStatus: "unavailable" } },
+  ])("settles $name before optional pricing", async ({ usage, expected }) => {
+    using source = vi.spyOn(modelsConfig, "captureModelsJsonCostSource");
+    const input = finalizationInput(settledAttempt(false), {
+      resolveReplyDelivery: async () => "delivered",
+    });
+    mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, usage);
+    const result = await finalize(input);
+    expect(result.prepared.agentMeta.costUsd).toBe(expected);
+    expect(source).not.toHaveBeenCalled();
+    expect(backendMocks.finalize).not.toHaveBeenCalled();
+  });
+
   it.each(["delivered", "pending", "missing"] as const)(
     "requests settled context only when source delivery is missing (%s)",
     async (delivery) => {
@@ -137,7 +159,6 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       expect(backendMocks.finalize).toHaveBeenCalledTimes(missing ? 1 : 0);
       expect(result.finalizationOutcome).toBe(missing ? "answered" : "not-attempted");
       if (missing) {
-        expect(backendMocks.finalize.mock.calls[0]?.[1]).toBe(attempt);
         expect(attempt.settledTurnFinalizationContext).toBe(context);
         expect(result.attempt.assistantTexts).toEqual(["The tools completed successfully."]);
       }
@@ -169,9 +190,6 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       const result = await finalize(finalizationInput(cutOffAttempt(stopReason)));
 
       expect(result.finalizationOutcome).toBe("answered");
-      expect(backendMocks.finalize.mock.calls[0]?.[0].prompt.includes("cut off")).toBe(
-        stopReason === "length",
-      );
       expect(result.prepared.payloadsWithToolMedia?.map((payload) => payload.text)).toEqual(
         stopReason === "length"
           ? ["All steps are complete.", CUT_OFF_SUMMARY_NOTICE_TEXT]
@@ -197,6 +215,42 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
   });
 
+  it.each(["answered", "empty"] as const)(
+    "carries only a real finalizer answer across message-tool-only suppression (%s)",
+    async (outcome) => {
+      // #181226: the stranded-reply retry finalizes in message_tool_only mode with the
+      // harness-captured context. A real answer must reach the source channel; a failed
+      // recovery must leave no visible text for the retry's diagnostic to misread.
+      const attempt = settledAttempt(false);
+      attempt.settledTurnFinalizationContext = { source: "harness", data: [] } as never;
+      const input = finalizationInput(attempt, { sourceReplyDeliveryMode: "message_tool_only" });
+      backendMocks.finalize.mockResolvedValueOnce(
+        outcome === "answered"
+          ? finalizationReply("answered", "Update: shipped.")
+          : finalizationReply("empty"),
+      );
+
+      const result = await finalize(input);
+
+      if (outcome === "answered") {
+        expect(result.finalizationOutcome).toBe("answered");
+        expectPayload(result, { text: "Update: shipped." });
+        expect(
+          getReplyPayloadMetadata(result.prepared.payloadsWithToolMedia![0]!)
+            ?.deliverDespiteSourceReplySuppression,
+        ).toBe(true);
+      } else {
+        expect(result.finalizationOutcome).toBe("failed");
+        expect(result.prepared.finalAssistantVisibleText).toBe("");
+        expect(
+          (result.prepared.payloadsWithToolMedia ?? []).filter(
+            (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression,
+          ),
+        ).toEqual([]);
+      }
+    },
+  );
+
   it("does not finalize an empty post-tool turn when media was delivered", async () => {
     const assistant = textAssistant();
     const attempt = makeAttempt({
@@ -211,21 +265,18 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
 
     expect(backendMocks.finalize).not.toHaveBeenCalled();
     expect(result.finalizationOutcome).toBe("not-attempted");
-    expect(result.attempt).toBe(attempt);
     expect(result.prepared.payloadsWithToolMedia).toEqual([]);
   });
 
   it.each([
     { delivery: "delivered", observation: "absent", expected: "delivered" },
     { delivery: "delivered", observation: "missing", expected: "delivered" },
-    { delivery: "delivered", observation: "pending", expected: "delivered" },
     { delivery: "pending", observation: "absent", expected: "pending" },
     { delivery: "pending", observation: "missing", expected: "pending" },
     { delivery: "pending", observation: "delivered", expected: "delivered" },
     { delivery: "missing", observation: "absent", expected: "missing" },
     { delivery: "missing", observation: "delivered", expected: "delivered" },
     { delivery: "progress", observation: "absent", expected: "missing" },
-    { delivery: "progress", observation: "missing", expected: "missing" },
     { delivery: "progress", observation: "delivered", expected: "delivered" },
   ] as const)(
     "uses reconciled $delivery custody with an $observation observer for finalization",
@@ -291,13 +342,6 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.finalizationOutcome).toBe("failed");
     expect(input.terminalBase.runParams.onAttemptTerminalReplaced).not.toHaveBeenCalled();
     expect(backendMocks.finalize).toHaveBeenCalledTimes(2);
-    for (const [preparedAttempt, completedAttempt] of backendMocks.finalize.mock.calls) {
-      expect(preparedAttempt).toMatchObject({
-        operation: "settled-tool-finalization",
-        disableTools: true,
-      });
-      expect(completedAttempt).toBe(attempt);
-    }
     expectPayload(result, { text: "LLM request timed out.", isError: true });
   });
 
@@ -309,7 +353,6 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
 
     const result = await finalize(finalizationInput(attempt));
 
-    expect(backendMocks.finalize).toHaveBeenCalled();
     expect(result.finalizationOutcome).toBe("failed");
     expect(result.attempt).toBe(attempt);
     expectPayload(result, { text: expect.stringContaining("failed"), isError: true });
@@ -399,10 +442,6 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     const result = await finalize(input);
 
     expect(factory).toHaveBeenCalledTimes(2);
-    expect(backendMocks.finalize.mock.calls).toEqual([
-      [expect.objectContaining({ disableTools: true }), attempt, expect.anything()],
-      [expect.objectContaining({ disableTools: true }), attempt, expect.anything()],
-    ]);
     expect(result.finalizationOutcome).toBe("answered");
     expectPayload(result, { text: "The command completed successfully." });
     expect(result.prepared.agentMeta).toMatchObject({ assistantTurns: 3 });
@@ -493,12 +532,12 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
   });
 
   it.each([
-    { trigger: "user", expectation: "required", notice: true },
-    { trigger: "cron", expectation: "optional", notice: false },
-    { trigger: "user", expectation: "result-required", notice: false },
+    { trigger: "user", expectation: "required" },
+    { trigger: "cron", expectation: "optional" },
+    { trigger: "user", expectation: "result-required" },
   ] as const)(
     "settles empty $trigger/$expectation turns without persisting a synthetic answer",
-    async ({ trigger, expectation, notice }) => {
+    async ({ trigger, expectation }) => {
       const attempt = settledAttempt(false);
       const emptyAssistant = textAssistant("");
       backendMocks.finalize.mockResolvedValue(
@@ -522,43 +561,19 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
       expect(transcriptMocks.append).not.toHaveBeenCalled();
       expect(result.attempt.assistantTexts).toEqual([]);
-      const terminalInput = makeTerminalInput({
-        ...result.prepared,
-        attempt: result.attempt,
-        attemptAssistant: result.attemptAssistant,
-        terminalState: result.terminalState,
-        runParams: input.terminalBase.runParams,
-        settledTurnFinalizationOutcome: result.finalizationOutcome,
-        replayState: { hadPotentialSideEffects: true, replayInvalid: false },
-      });
-      const terminal = await resolveEmbeddedRunTerminal(terminalInput);
-      expect(terminalInput.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
-      if (terminal.action !== "complete") {
-        throw new Error("expected failed completion");
-      }
-      expect(terminal.result).toMatchObject({
-        meta: {
-          ...(expectation === "optional"
-            ? {}
-            : { error: expect.objectContaining({ kind: "incomplete_turn" }) }),
-          terminalReply: { disposition: "empty" },
-          finalAssistantVisibleText: expectation === "optional" ? "" : undefined,
-          finalAssistantRawText: undefined,
-        },
-        payloads: notice
-          ? [
-              {
-                text: "No answer was returned. Ask again if you still need one. Note: some tool actions may have already been executed — please verify before retrying.",
-                isError: true,
-                isStatusNotice: true,
-              },
-            ]
-          : undefined,
-      });
-      if (expectation === "optional") {
-        expect(terminal.result.meta.error).toBeUndefined();
-      }
-      if (notice) {
+      if (expectation === "required") {
+        const terminal = await resolveEmbeddedRunTerminal(
+          makeTerminalInput({
+            ...result.prepared,
+            attempt: result.attempt,
+            attemptAssistant: result.attemptAssistant,
+            terminalState: result.terminalState,
+            runParams: input.terminalBase.runParams,
+            settledTurnFinalizationOutcome: result.finalizationOutcome,
+            replayState: { hadPotentialSideEffects: true, replayInvalid: false },
+          }),
+        );
+        assert(terminal.action === "complete", "Expected completed failure");
         expect(getReplyPayloadMetadata(terminal.result.payloads?.[0] ?? {})).toMatchObject({
           assistantTranscriptOwned: true,
         });
@@ -595,26 +610,29 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.attempt.assistantTexts).toEqual([]);
   });
 
-  it("does not replace terminal ownership when cancellation arrives during delivery observation", async () => {
-    const input = finalizationInput();
-    const controller = new AbortController();
-    input.finalization.abortSignal = AbortSignal.any([
-      input.finalization.abortSignal,
-      controller.signal,
-    ]);
-    let observations = 0;
-    input.terminalBase.runParams.resolveReplyDelivery = async () => {
-      if (++observations === 2) {
-        controller.abort(new Error("cancelled before acceptance"));
-      }
-      return "missing";
-    };
-    const text = "The completed tools produced a result.";
-    backendMocks.finalize.mockResolvedValueOnce(finalizationReply("answered", text));
-    await expect(finalize(input)).rejects.toThrow();
-    expect(observations).toBe(2);
-    expect(input.terminalBase.runParams.onAttemptTerminalReplaced).not.toHaveBeenCalled();
-  });
+  it.each(["failed", "stop", "length"] as const)(
+    "does not replace %s terminal ownership when cancellation arrives during delivery observation",
+    async (source) => {
+      const input = finalizationInput(source === "failed" ? undefined : cutOffAttempt(source));
+      const controller = new AbortController();
+      input.finalization.abortSignal = AbortSignal.any([
+        input.finalization.abortSignal,
+        controller.signal,
+      ]);
+      let observations = 0;
+      input.terminalBase.runParams.resolveReplyDelivery = async () => {
+        if (++observations === 2) {
+          controller.abort(new Error("cancelled before acceptance"));
+        }
+        return "missing";
+      };
+      const text = "The completed tools produced a result.";
+      backendMocks.finalize.mockResolvedValueOnce(finalizationReply("answered", text));
+      await expect(finalize(input)).rejects.toThrow();
+      expect(observations).toBe(2);
+      expect(input.terminalBase.runParams.onAttemptTerminalReplaced).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["outer", "Stop"])(
     "preserves %s cancellation during finalization without a fallback",

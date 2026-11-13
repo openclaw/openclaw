@@ -1,6 +1,6 @@
 import { expect, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { CronJob } from "../cron/types.js";
+import type { CronJob, CronStoredJob } from "../cron/types.js";
 import type {
   ManagedRun,
   ProcessSupervisor,
@@ -25,8 +25,8 @@ export const streamStateArgs = (patch: Partial<CronJob["state"]>) => [
   expect.any(String),
 ];
 
-export function job(overrides: Partial<CronJob> = {}): CronJob {
-  const base: CronJob = {
+export function job(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
+  const base: CronStoredJob = {
     id: "stream-job",
     agentId: "main",
     name: "stream job",
@@ -38,15 +38,13 @@ export function job(overrides: Partial<CronJob> = {}): CronJob {
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "base" },
     state: {},
+    ...overrides,
   };
-  const merged = { ...base, ...overrides };
-  return {
-    ...merged,
-    state: {
-      streamSourceIdentity: `source:${merged.id}`,
-      ...overrides.state,
-    },
+  base.state = {
+    streamSourceIdentity: `source:${base.id}`,
+    ...overrides.state,
   };
+  return base;
 }
 
 export function createCronStreamMatchingJob(match: string): CronJob {

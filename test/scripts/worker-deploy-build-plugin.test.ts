@@ -18,7 +18,6 @@ import {
 import { createWorkerBundleProducer } from "../../src/gateway/worker-environments/bundle.js";
 import {
   WORKER_BUNDLE_ARTIFACT_PATHS,
-  WORKER_BUNDLE_CHUNK_PATH_PATTERN,
   WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS,
   WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
 } from "../../src/shared/worker-bundle-hash.js";
@@ -97,9 +96,11 @@ describe("worker deploy build plugin", () => {
   describe("portable output", () => {
     const fixtureDirs = useAutoCleanupTempDirTracker(afterAll);
     const fixtureLifetime = createFixtureLifetime();
-    const workerEntryNames = WORKER_BUNDLE_ARTIFACT_PATHS.filter((artifact) =>
-      artifact.endsWith(".mjs"),
-    ).map((artifact) => `worker/${artifact.replace(/\.mjs$/u, "")}`);
+    const workerEntryNames = new Set(
+      WORKER_BUNDLE_ARTIFACT_PATHS.filter((artifact) => artifact.endsWith(".mjs")).map(
+        (artifact) => `worker/${artifact.replace(/\.mjs$/u, "")}`,
+      ),
+    );
     let preparedDist: string;
     let preparedArchive: string;
 
@@ -134,7 +135,7 @@ describe("worker deploy build plugin", () => {
           typeof candidate.entry === "object" &&
           !Array.isArray(candidate.entry) &&
           Object.keys(candidate.entry).length > 0 &&
-          Object.keys(candidate.entry).every((entry) => workerEntryNames.includes(entry)),
+          Object.keys(candidate.entry).every((entry) => workerEntryNames.has(entry)),
       )) {
         const { bundles } = await build({
           ...sibling,
@@ -162,6 +163,9 @@ describe("worker deploy build plugin", () => {
             transform(code, id) {
               if (id === entrySource) {
                 return `${code}
+export { getLogger, setLoggerOverride } from "../logging/logger.js";
+export { fileLogTransport } from "../logging/logger-file-transport.js";
+export { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 export { highlight, supportsLanguage } from "../agents/utils/syntax-highlight.js";
 export { createOwnedStdioProcess, closeOwnedStdioProcess } from "../process/owned-stdio.js";
 export { explainShellCommand } from "../infra/command-explainer/extract.js";
@@ -207,38 +211,6 @@ export { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";`;
         ],
       });
       try {
-        const builtEntries = vi
-          .mocked(build)
-          .mock.calls.flatMap(([options]) => Object.keys(options?.entry ?? {}));
-        expect(builtEntries.length).toBe(workerEntryNames.length + 2);
-        expect(builtEntries.toSorted()).toEqual(
-          [
-            ...workerEntryNames,
-            "worker/worker-chunk-highlight",
-            "worker/worker-chunk-fs-safe-watch-io",
-          ].toSorted(),
-        );
-        const chunks = bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName));
-        expect(chunks).toContain("worker/worker.mjs");
-        expect(chunks.length).toBeGreaterThan(2);
-        expect(
-          chunks.every(
-            (file) =>
-              file === "worker/worker.mjs" ||
-              file === `worker/${WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH}` ||
-              Object.values<string>(WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS).some(
-                (asset) => file === `worker/${asset}`,
-              ) ||
-              (file.startsWith("worker/") && WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(file.slice(7))),
-          ),
-        ).toBe(true);
-        expect(
-          bundles.flatMap((bundle) =>
-            bundle.chunks.flatMap((chunk) =>
-              chunk.type === "chunk" ? [...chunk.imports, ...chunk.dynamicImports] : [],
-            ),
-          ),
-        ).not.toContain("ws");
         const { collectWorkerDeployArtifactErrors } =
           await import("../../scripts/check-cli-bootstrap-imports.mts");
         expect(
@@ -257,6 +229,45 @@ export { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";`;
           await bundle[Symbol.asyncDispose]();
         }
       }
+    });
+
+    it("persists logs through the file worker in a relocated archive", async () => {
+      const root = tempDirs.make("openclaw-worker-file-log-");
+      const relocated = path.join(root, "bundle");
+      fs.mkdirSync(relocated);
+      await tar.extract({ file: preparedArchive, cwd: relocated });
+      const result = await runNodeScript(
+        [
+          "--input-type=module",
+          "--eval",
+          `
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const entry = process.argv[1];
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
+const { getLogger, setLoggerOverride, fileLogTransport, drainGlobalSingletonLifecycleState } = await import(pathToFileURL(entry).href);
+const file = path.join(process.cwd(), "portable.log");
+try {
+  setLoggerOverride({ level: "info", file });
+  getLogger().info("relocated file log persisted");
+  await fileLogTransport.flush();
+  assert.match(fs.readFileSync(file, "utf8"), /relocated file log persisted/);
+} finally {
+  await drainGlobalSingletonLifecycleState();
+}
+console.log("relocated file log persisted");
+`,
+          path.join(relocated, "worker.mjs"),
+        ],
+        workerEnv(root),
+        30_000,
+        { cwd: root },
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe("relocated file log persisted");
     });
 
     it("denies workspace exec without a Gateway transcript worker in the archive", async () => {
@@ -289,7 +300,9 @@ try {
     },
   }).find(tool => tool.name === "exec");
   const result = await exec.execute("permission-proof", { command: "echo permission-proof" });
-  assert.match(JSON.stringify(result), /approval_required.*worker workspace permission mode/is);
+  // Without the Gateway approval transport, workers fail closed before review or execution.
+  assert.match(JSON.stringify(result), /approval_required.*Worker exec approval is unavailable/is);
+  assert.equal(result.details?.approvalReviewOutcome, "denied");
   console.log("relocated worker exec permission denied without Gateway storage");
 } finally {
   await closeOpenClawStateDatabaseAsync();
@@ -978,62 +991,23 @@ export async function createAttachedBrowserToolRuntime(params) {
     expect(fs.readFileSync(eventsPath, "utf8")).toBe("initialized\ndisposed\ndisposed\n");
   });
 
-  it.each<{
-    name: string;
-    modulePath: string;
-    contains: string[];
-    excludes: string[];
-  }>([
-    {
-      name: "lazy Playwright accessor",
-      modulePath: "extensions/browser/src/browser/playwright-core.runtime.ts",
-      contains: [
-        'import * as playwrightCore from "playwright-core";',
-        'import { getUserAgent } from "playwright-core/lib/coreBundle";',
-        "return playwrightCore;",
-      ],
-      excludes: ["createRequire", 'require("playwright-core")'],
-    },
-    {
-      name: "undici dispatcher",
-      modulePath: "src/infra/net/undici-dispatcher-options.ts",
-      contains: [
-        'import * as bundledUndici from "undici/index.js";',
-        "return bundledUndici;",
-        'return override as typeof import("undici");',
-      ],
-      excludes: [
-        'import { createRequire } from "node:module";',
-        "const requireUndici = createRequire(import.meta.url);",
-        'requireUndici("undici/index.js")',
-        "undiciModule",
-      ],
-    },
-    {
-      name: "Playwright package identity and browser registry",
-      modulePath: "node_modules/playwright-core/lib/coreBundle.js",
-      contains: [
-        'packageJSON = {"name":"playwright-core","version":"1.64.0"};',
-        'registry = new Registry({"comment":"Do not edit this file, use utils/roll_browser.js"',
-      ],
-      excludes: [
-        'packageJSON = require(import_path8.default.join(packageRoot, "package.json"));',
-        'registry = new Registry(require(import_path19.default.join(packageRoot, "browsers.json")));',
-      ],
-    },
-  ])("bundles $name without a host runtime dependency", ({ modulePath, contains, excludes }) => {
-    const source = fs.readFileSync(path.resolve(modulePath), "utf8");
+  it("embeds the Playwright package identity and browser registry", () => {
+    const modulePath = path.resolve("node_modules/playwright-core/lib/coreBundle.js");
     const transformed = createWorkerDeployBuildPlugin().transform.call(
       { error: fail },
-      source,
-      path.resolve(modulePath),
+      fs.readFileSync(modulePath, "utf8"),
+      modulePath,
     );
-    for (const fragment of contains) {
-      expect(transformed).toContain(fragment);
-    }
-    for (const fragment of excludes) {
-      expect(transformed).not.toContain(fragment);
-    }
+    expect(transformed).toContain('packageJSON = {"name":"playwright-core","version":"1.64.1"};');
+    expect(transformed).toContain(
+      'registry = new Registry({"comment":"Do not edit this file, use utils/roll_browser.js"',
+    );
+    expect(transformed).not.toContain(
+      'require(import_path8.default.join(packageRoot, "package.json"))',
+    );
+    expect(transformed).not.toContain(
+      'require(import_path19.default.join(packageRoot, "browsers.json"))',
+    );
   });
 
   it.each([

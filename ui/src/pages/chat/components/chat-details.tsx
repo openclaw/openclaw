@@ -10,7 +10,6 @@ import {
 } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
-import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
@@ -20,8 +19,10 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.tsx";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
-import type { ChatDetailsProps } from "./chat-details-types.ts";
+import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
+import { ChatDetailsLoading } from "./chat-details-loading.tsx";
 import "../../../styles/chat/details.css";
+import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -32,9 +33,6 @@ const ChatDetailsProgress = lazy(() => import("./chat-details-progress.tsx"), {
 
 const ChatDetailsSession = lazy(() => import("./chat-details-session.tsx"), {
   export: "ChatDetailsSession",
-});
-const ChatDetailsDesktopComposition = lazy(() => import("./chat-details-session.tsx"), {
-  export: "ChatDetailsDesktopComposition",
 });
 const ChatDetailsMobileHostContent = lazy(() => import("../chat-details-mobile-host-content.tsx"), {
   export: "ChatDetailsMobileHostContent",
@@ -52,11 +50,13 @@ export type ChatDetailsViewProps = {
   chat?: ChatDetailsProps;
   elements?: ChatDetailsElements;
   presentation: PresentationValue;
+  dockingLayout?: string;
   setRef: (details: ChatDetails | undefined) => void;
   mobile: boolean;
   nativePresentation?: "desktop" | "mobile";
   mobileHost?: ChatMobileHost;
   mobileBindings?: MobileDetailsBindings;
+  contentPending?: boolean;
   conversationVisible?: boolean;
   conversationMain?: boolean;
   externalTrigger?: boolean;
@@ -115,16 +115,23 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   const intent = () => choice().intent;
   const desktop = () => props.nativePresentation === "desktop" && !isMobile() && !props.mobileHost;
   let manualChange = false;
+  let entrancePending = true;
   const setIntent = (nextIntent: "auto" | "open" | "closed", manual = false) => {
     manualChange = manual && (nextIntent === "open") !== opened();
     setChoice((previous) => ({ ...previous, intent: nextIntent }));
   };
-  const [wideEnough, setWideEnough] = createSignal(false);
-  const canDock = () => !isMobile() && isConversationAnchor() && wideEnough();
+  // Seed once; data publications must not replace subsequently measured geometry.
+  const [wideEnough, setWideEnough] = createSignal<boolean>(
+    (previous) =>
+      previous ??
+      (props.chat?.cachedDetails?.docking?.layout === props.dockingLayout &&
+        props.chat?.cachedDetails?.docking?.wide === true),
+  );
+  const canDock = (wide = wideEnough()) => !isMobile() && isConversationAnchor() && wide;
   const opened = () =>
     isPresented() &&
     (props.mobileHost
-      ? props.mobileHost.open &&
+      ? (props.mobileHost.open || props.mobileHost.exiting) &&
         !props.mobileHost.suspended &&
         props.mobileHost.destination.area === "details" &&
         (!props.mobileHost.destination.page || Boolean(props.mobileHost.destination.page.details))
@@ -132,8 +139,15 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   const outputsDemand = createMemo(() =>
     desktop() && opened() && props.chat?.outputs ? props.chat.retainOutputs : undefined,
   );
-  // Load on first presentation, then retain disclosure state while closed.
-  const [sessionOpened] = createSignal<boolean>((previous) => previous === true || opened());
+  // Mount cached chrome with the transcript; retain disclosure state while closed.
+  const cachedReady = () =>
+    props.chat?.cachedDetails?.subagents !== undefined &&
+    props.chat.cachedDetails.automations !== undefined;
+  const [sessionOpened] = createSignal<boolean>(
+    (previous) =>
+      previous ||
+      (opened() && (!props.contentPending || cachedReady() || intent() === "open" || !desktop())),
+  );
   const docked = () => opened() && canDock();
   const surface = document.createElement("div");
   surface.style.display = "contents";
@@ -162,6 +176,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     detailsMount: props.mobileHost?.detailsMount,
     isDesktop: desktop(),
     open: opened(),
+    presented: isPresented(),
   });
   const mountSurface = ({
     mobile,
@@ -189,15 +204,12 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     mobileHost,
     isDesktop,
     open,
+    presented,
   }: ReturnType<typeof readLayout>) => {
     if (mobileHost) {
       return;
     }
-    const pane = elements?.pane;
-    const frame = elements?.frame;
-    const footerBounds = conversationVisible
-      ? elements?.footer?.getBoundingClientRect()
-      : undefined;
+    const { pane, frame } = elements ?? {};
     const bounds = (
       mobile ? (pane ?? frame) : conversationVisible ? frame : (pane ?? host)
     )?.getBoundingClientRect();
@@ -228,13 +240,27 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     if (isDesktop) {
       frame?.style.setProperty("--chat-details-frame-width", `${dockingWidth}px`);
     }
-    setWideEnough(dockingWidth >= DETAILS_DOCK_MIN_WIDTH);
+    const wide = dockingWidth >= DETAILS_DOCK_MIN_WIDTH;
+    // A visible narrow pane has already settled; a later resize is not its entrance.
+    if (presented && dockingWidth > 0 && !wide) {
+      entrancePending = false;
+    }
+    setWideEnough(wide);
+    if (isDesktop && props.dockingLayout) {
+      // Hidden conversation widths must not prewarm a closed destination.
+      props.chat?.onDetailsSnapshot?.({
+        docking: { layout: props.dockingLayout, wide: canDock(wide) },
+      });
+    }
+    if (!open) {
+      return;
+    }
+    const footerBounds = conversationVisible
+      ? elements?.footer?.getBoundingClientRect()
+      : undefined;
     if (isDesktop) {
       // Measure the conversation owner, never the moving Details surface. Its
       // reservation changes the composer width, but not this frame's width.
-      if (!open) {
-        return;
-      }
       const composer = conversationVisible
         ? elements?.getComposerInput?.()?.getBoundingClientRect()
         : undefined;
@@ -388,6 +414,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         desktop(),
         isPresented(),
         layoutElements(),
+        props.chat?.connected,
       ] as const,
     { equals: (before, after) => before.every((value, index) => value === after[index]) },
   );
@@ -419,10 +446,11 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         detailsMount,
         isDesktop,
         open,
+        presented,
       };
       const frame = elements?.frame;
-      // Only a direct open/close gesture enables motion for this transition.
-      // Automatic docking and retained presentation always take their final state.
+      // A fresh panel enters alongside the conversation; cached/retained panes
+      // restore their geometry immediately instead of replaying that entrance.
       const manual =
         manualChange &&
         previous &&
@@ -430,7 +458,11 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         presented === previous[9] &&
         open !== previous[1];
       manualChange = false;
-      panel.toggleAttribute("data-restoring", isDesktop && !manual);
+      const arriving = open && entrancePending && !props.chat?.cachedDetails;
+      if (open) {
+        entrancePending = false;
+      }
+      panel.toggleAttribute("data-restoring", isDesktop && !manual && !arriving);
       if (
         !open ||
         (previous &&
@@ -463,13 +495,10 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         "--chat-details-space",
         dock ? `${DETAILS_WIDTH + (isDesktop ? DETAILS_DESKTOP_INLINE_INSET : 0)}px` : "0px",
       );
-      if (open && isDesktop) {
+      if (open && (isDesktop || (!dock && !mobileHost))) {
         position(layout);
       }
       if (open && (!isDesktop || !conversationVisible) && !dock && !mobileHost) {
-        if (!isDesktop) {
-          position(layout);
-        }
         // Keep native Tab entry beside its header trigger after portaling the content.
         if (!panel.matches(":popover-open")) {
           panel.showPopover({
@@ -484,7 +513,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     mountSurface(layout);
     position(layout);
   };
-  createResizeObserver(
+  // Parent snapshots may change while these native observation targets stay the same.
+  const resizeTargets = createMemo(
     () =>
       [
         props.elements?.pane,
@@ -493,8 +523,14 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         props.elements?.footer,
         props.elements?.getComposerInput?.(),
       ].filter((element): element is HTMLElement => Boolean(element)),
-    reposition,
+    {
+      lazy: true,
+      equals: (before, after) =>
+        before.length === after.length &&
+        before.every((element, index) => element === after[index]),
+    },
   );
+  createResizeObserver(resizeTargets, reposition);
   onSettled(() => {
     props.setRef({ open: openFrom, close: () => close(true) });
     const pane = layoutElements()?.pane;
@@ -504,7 +540,13 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     if (pane && desktop()) {
       layout.observe(pane, { attributes: true, attributeFilter: ["class", "style"] });
     }
-    reposition();
+    const initialLayout = readLayout();
+    mountSurface(initialLayout);
+    // Open surfaces already measured in the presentation effect. Closed ones
+    // still need their destination width before the first resize delivery.
+    if (!initialLayout.open) {
+      position(initialLayout);
+    }
     const stop = [
       listen(window, "resize", reposition),
       listen(document, "pointerdown", outside),
@@ -534,14 +576,16 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       surface.remove();
     };
   });
+  const hideProgress = () => {
+    // The top-layer inspector must not cover the Undo toast.
+    if (!docked()) {
+      close(true);
+    }
+  };
   function SessionContent(content: { children: Element }) {
     return (
       <Show when={sessionOpened()}>
-        <ChatLazyBoundary
-          fallback={
-            <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
-          }
-        >
+        <ChatLazyBoundary fallback={!cachedReady() && <ChatDetailsLoading />}>
           {content.children}
         </ChatLazyBoundary>
       </Show>
@@ -628,12 +672,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                         >
                           <ChatLazyBoundary>
                             <ChatDetailsProgress
-                              onHideProgress={() => {
-                                // The top-layer inspector must not cover the Undo toast.
-                                if (!docked()) {
-                                  close(true);
-                                }
-                              }}
+                              onHideProgress={hideProgress}
                               menuRef={(menu) => {
                                 progressMenu = menu;
                               }}
@@ -660,21 +699,18 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                   </Show>
                 }
               >
-                <SessionContent>
-                  <ChatDetailsDesktopComposition
-                    props={props.chat}
+                <Show when={sessionOpened()}>
+                  <ChatDetailsDesktopContent
+                    chat={props.chat}
                     presented={isPresented() && opened()}
                     dismissed={intent() === "closed"}
+                    cachedReady={cachedReady()}
                     progressMenuRef={(menu) => {
                       progressMenu = menu;
                     }}
-                    onHideProgress={() => {
-                      if (!docked()) {
-                        close(true);
-                      }
-                    }}
+                    onHideProgress={hideProgress}
                   />
-                </SessionContent>
+                </Show>
               </Show>
             )}
           </Show>

@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { resolveEmbeddingInputFormatVersion } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
   resolveUserPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { resolveEmbeddingInputFormatVersion } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import {
   MEMORY_CHUNKING_VERSION,
   type MemorySyncParams,
@@ -48,6 +48,7 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
     providerKey: string | null;
     publishedIdentity: string | null;
     progress: MemoryReindexProgress;
+    startedAt: number;
   };
 
   protected override get reindexProgress(): MemoryReindexProgress | undefined {
@@ -59,11 +60,17 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
     if (!state) {
       return;
     }
-    await state.shadow.closeShadow();
-    this.reindexState = undefined;
-    if (!state.shadow.postgresStageId) {
-      state.shadow.assertShadowPath();
-      await removeMemoryDatabaseFiles(state.tempDbPath);
+    try {
+      if (state.progress.cachePrunePending) {
+        await this.withPublishedDatabase(() => this.pruneEmbeddingCacheIfNeeded(true));
+      }
+    } finally {
+      await state.shadow.closeShadow();
+      this.reindexState = undefined;
+      if (!state.shadow.postgresStageId) {
+        state.shadow.assertShadowPath();
+        await removeMemoryDatabaseFiles(state.tempDbPath);
+      }
     }
   }
 
@@ -132,8 +139,10 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
         originalRetryState,
         providerKey: this.syncProviderGeneration?.providerKey ?? this.providerKey,
         publishedIdentity: originalDatabase.facts.serialized,
+        startedAt: Date.now(),
         progress: {
           memoryComplete: false,
+          cachePrunePending: false,
           completedSessionFiles: new Set(),
           changedSessionFiles: new Set(),
           changedSessionTargets: new Map(),
@@ -203,7 +212,15 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
           ftsTokenizer: this.settings.store.fts.tokenizer,
           provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
         };
-        if (this.vector.available && this.vector.dims) {
+        // Canonical chunk vectors also need an identity-bound size when the
+        // optional search projection is disabled or unavailable.
+        const embeddingDimensions =
+          this.syncProviderGeneration?.kind === "semantic"
+            ? this.syncProviderGeneration.embeddingDimensions
+            : undefined;
+        if (embeddingDimensions) {
+          nextMeta.vectorDims = embeddingDimensions;
+        } else if (this.vector.available && this.vector.dims) {
           nextMeta.vectorDims = this.vector.dims;
         }
 
@@ -269,9 +286,14 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
       this.fts.available = shadow.fts.available;
       this.fts.loadError = shadow.fts.loadError;
       this.vector.dims = rebuilt.nextMeta.vectorDims;
-      // Cache-only rebuilds bypass insertion-time eviction; prune the canonical
-      // cache only after successful publication so failed rebuilds retain their work.
-      await this.pruneEmbeddingCacheIfNeeded();
+      // The replacement index rewrote every chunk, so any cached vector it now serves is a
+      // duplicate: first the rows this rebuild wrote, then the rows written before it began.
+      await this.retirePublishedEmbeddingCacheRows({ writtenSince: state.startedAt });
+      await this.retirePublishedEmbeddingCacheRows({ writtenBefore: state.startedAt });
+      // Rebuild writes must not evict unread hits. After publication the ordinary
+      // policy can prefer vectors no longer referenced by the replacement index.
+      await this.pruneEmbeddingCacheIfNeeded(true);
+      state.progress.cachePrunePending = false;
       this.clearFullReindexRetryBackoff();
     } catch (err) {
       this.adoptReindexRetryState(originalRetryState);

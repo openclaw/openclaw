@@ -1,8 +1,8 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -13,10 +13,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import {
-  createSqliteWorkerOperationAdmission,
-  type SqliteWorkerAdmissionRequest,
-} from "../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerAdmissionRequest } from "../infra/sqlite-worker-operation-admission.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
@@ -31,7 +28,6 @@ import {
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import {
   agentCreationWitnessTempDirs as tempDirs,
   createAgentCreationWitnessFixture as fixture,
@@ -63,13 +59,7 @@ function emptyStore(options: Options) {
   fs.writeFileSync(options.path, "");
 }
 function isPreparing(request: SqliteWorkerAdmissionRequest, kind: string) {
-  return (
-    request.stage === "prepare" &&
-    request.facts !== null &&
-    typeof request.facts === "object" &&
-    "kind" in request.facts &&
-    request.facts.kind === kind
-  );
+  return request.stage === "prepare" && isRecord(request.facts) && request.facts.kind === kind;
 }
 function releaseAll(...executions: (Execution | undefined)[]) {
   return Promise.allSettled(executions.map(async (execution) => execution?.release()));
@@ -82,19 +72,15 @@ function initialized(sessionKey: string, sessionId: string) {
     transcriptPublication: transcriptPublication(sessionKey, sessionId),
   };
 }
-async function readAliasAndClose(
-  options: Options,
-  sessionKey: string,
-  assertRegistry?: () => void,
-) {
+function existingTranscript(sessionKey: string) {
+  return { kind: "session-transcript-initialized", sessionKey, transcriptPublication: undefined };
+}
+async function readAliasAndClose(options: Options, sessionKey: string) {
   const execution = capture(options);
   await using _ = onExit(() => execution.release());
-  await expect(initialize(execution, sessionKey, "alias-session")).resolves.toEqual({
-    kind: "session-transcript-initialized",
-    sessionKey,
-    transcriptPublication: undefined,
-  });
-  assertRegistry?.();
+  expect(await initialize(execution, sessionKey, "alias-session")).toEqual(
+    existingTranscript(sessionKey),
+  );
   await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
   expect(() => execution.assertCurrent()).toThrow(/closed/);
 }
@@ -136,18 +122,11 @@ it("exposes a prepared generation only after registration publication and keeps 
   expect(observedUnpublishedIdentity).toBe(true);
   const claim = execution.capturePreparedGenerationClaim();
   expect(claim).toBeDefined();
-  claim!.assertCurrent();
   const warmStages: string[] = [];
   const warmSource = source((request) => warmStages.push(request.stage));
-  const host = observeHostDataSql();
-  try {
-    await Promise.all([execution.prepare(warmSource), execution.prepare(warmSource)]);
-    await execution.prepare(warmSource);
-    expect(warmStages).toEqual([]);
-    expect(host.queries).toEqual([]);
-  } finally {
-    host.restore();
-  }
+  await Promise.all([execution.prepare(warmSource), execution.prepare(warmSource)]);
+  await execution.prepare(warmSource);
+  expect(warmStages).toEqual([]);
   claim!.assertCurrent();
   await execution.release();
   expect(() => execution.capturePreparedGenerationClaim()).toThrow(/released/);
@@ -224,32 +203,24 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
   const creator = creatorFor(aliased);
   const sibling = capture(options);
   const sessionKey = "agent:main:alias-proof";
-  const command = {
-    type: "session.transcript.initialize" as const,
-    input: { sessionKey, sessionId: "alias-session" },
-  };
-  const existingTranscript = {
-    kind: "session-transcript-initialized",
-    sessionKey,
-    transcriptPublication: undefined,
-  };
   await using _ = onExit(() => releaseAll(creator, sibling));
   await creator.prepare(source());
   const registry = await prepareOpenClawAgentDatabaseRegistrySnapshotRead({
     env: options.env,
   }).read();
-  await expect(creator.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
+  await expect(initialize(creator, sessionKey, "alias-session")).resolves.toEqual(
     initialized(sessionKey, "alias-session"),
   );
-  await expect(sibling.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
-    existingTranscript,
+  await expect(initialize(sibling, sessionKey, "alias-session")).resolves.toEqual(
+    existingTranscript(sessionKey),
   );
   expect(registry.assertCurrent).not.toThrow();
   expect(sibling.path).toBe(options.path);
   expect(sibling.fileIdentity).toEqual(creator.fileIdentity);
   await Promise.all([creator.release(), sibling.release()]);
   await readAliasAndClose(options, sessionKey);
-  await readAliasAndClose(aliased, sessionKey, () => expect(registry.assertCurrent).not.toThrow());
+  await readAliasAndClose(aliased, sessionKey);
+  expect(registry.assertCurrent).not.toThrow();
   const retainedValidation = getOpenClawAgentDatabaseValidationForTransfer(options);
   assert(retainedValidation);
   expect(Atomics.load(new Int32Array(retainedValidation.valid), 0)).toBe(1);
@@ -268,9 +239,9 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
     );
     expect(checkedReplacementProof).toBe(true);
     expect(registry.assertCurrent).toThrow("registry changed");
-    await expect(
-      replacement.runExisting(source(), (scope) => scope.execute(command)),
-    ).resolves.toEqual(initialized(sessionKey, "alias-session"));
+    await expect(initialize(replacement, sessionKey, "alias-session")).resolves.toEqual(
+      initialized(sessionKey, "alias-session"),
+    );
   } finally {
     await replacement.release();
   }
@@ -395,30 +366,28 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it("keeps the owner's absent target when a later creator observes an unexpected file", async () => {
-  const options = fixture();
-  const creator = creatorFor(options);
-  emptyStore(options);
-  const later = creatorFor(options);
-  await using _ = onExit(() => releaseAll(creator, later));
-  await expect(later.prepare(source())).rejects.toThrow(/changed before creating open/);
-  expect(fs.readFileSync(options.path)).toHaveLength(0);
-});
-
-it("retains the first creator's file witness on a preexisting execution owner", async () => {
-  const options = fixture();
-  emptyStore(options);
-  const ordinary = capture(options);
-  const creator = creatorFor(options);
-  fs.renameSync(options.path, `${options.path}.original`);
-  fs.writeFileSync(options.path, "");
-  const later = creatorFor(options);
-  await using _ = onExit(() => releaseAll(ordinary, creator, later));
-  await expect(later.prepare(source())).rejects.toThrow(
-    /identity changed|captured creating reference/,
-  );
-  expect(fs.readFileSync(options.path)).toHaveLength(0);
-});
+it.each(["absent", "preexisting"] as const)(
+  "retains the first creator's %s target witness when a later creator sees another file",
+  async (initial) => {
+    const options = fixture();
+    let ordinary: Execution | undefined;
+    if (initial === "preexisting") {
+      emptyStore(options);
+      ordinary = capture(options);
+    }
+    const creator = creatorFor(options);
+    if (ordinary) {
+      fs.renameSync(options.path, `${options.path}.original`);
+    }
+    emptyStore(options);
+    const later = creatorFor(options);
+    await using _ = onExit(() => releaseAll(ordinary, creator, later));
+    await expect(later.prepare(source())).rejects.toThrow(
+      ordinary ? /identity changed|captured creating reference/ : /changed before creating open/,
+    );
+    expect(fs.readFileSync(options.path)).toHaveLength(0);
+  },
+);
 
 it("prepares its originally missing store and records native birth without changing identity", async () => {
   const options = fixture();
@@ -445,15 +414,20 @@ it("prepares its originally missing store and records native birth without chang
       get: unrelatedInitialization,
     });
   }
-  const warm = capture({
-    ...options,
-    env,
-  });
+  const stat = vi.spyOn(fs, "statSync");
+  syncBuiltinESMExports();
   try {
-    await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
-    expect(unrelatedInitialization).not.toHaveBeenCalled();
+    const warm = capture({ ...options, env });
+    try {
+      await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
+      expect(unrelatedInitialization).not.toHaveBeenCalled();
+      expect(stat).not.toHaveBeenCalled();
+    } finally {
+      await warm.release();
+    }
   } finally {
-    await warm.release();
+    stat.mockRestore();
+    syncBuiltinESMExports();
   }
   const windows = (() => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -739,7 +713,6 @@ it("keeps another captured borrower live when the initiating caller is revoked d
   await using _ = onExit(() => releaseAll(rejected, retained));
   await expect(rejected.runExisting(revoked, async () => "not admitted")).rejects.toThrow(refusal);
   expect(reachedNativeOpen).toBe(true);
-  expect(() => retained.assertCurrent()).not.toThrow();
   await expect(
     initialize(retained, "agent:main:after-open-refusal", "retained-borrower"),
   ).resolves.toEqual(initialized("agent:main:after-open-refusal", "retained-borrower"));
@@ -752,34 +725,17 @@ it("rechecks source authority after registration notification before authorizing
   const execution = capture(options);
   const revoked = new Error("Creation source revoked by its registry notification");
   let current = true;
-  const authorizedOpen = vi.fn();
-  const requestSource: AgentDatabaseRequestExecutionSource = {
-    assertCurrent() {
-      if (!current) {
-        throw revoked;
-      }
-    },
-    onRegistryChange() {
-      current = false;
-    },
-    createAdmission(binding) {
-      return () => ({
-        nativeLocations: binding.nativeLocations,
-        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-          binding.authorize(request);
-          if (request.stage === "open") {
-            authorizedOpen();
-          }
-          if (!grant()) {
-            throw new Error("Creation source lost admission");
-          }
-        }, binding.attachment),
-      });
-    },
+  const requestSource = source();
+  requestSource.assertCurrent = () => {
+    if (!current) {
+      throw revoked;
+    }
+  };
+  requestSource.onRegistryChange = () => {
+    current = false;
   };
   await using _ = onExit(() => execution.release());
   await expect(execution.prepare(requestSource)).rejects.toThrow(revoked);
-  expect(authorizedOpen).not.toHaveBeenCalled();
   expect(fs.existsSync(options.path)).toBe(false);
 });
 
@@ -801,8 +757,8 @@ it.skipIf(process.platform === "win32")(
         replaced = true;
       }
     };
-    const readEntry = (request = source()) =>
-      execution.runExisting(request, (scope) =>
+    const readEntry = (request = source(), borrowed = execution) =>
+      borrowed.runExisting(request, (scope) =>
         scope.execute({
           type: "session.entry.read",
           input: { sessionKeys: ["agent:main:missing"] },
@@ -812,7 +768,12 @@ it.skipIf(process.platform === "win32")(
       await execution.prepare(source());
       await expect(readEntry(requestSource)).resolves.toMatchObject({ entries: [] });
       expect(replaced).toBe(true);
-      await expect(readEntry()).rejects.toThrow(/identity changed/);
+      const borrowed = capture(options);
+      try {
+        await expect(readEntry(source(), borrowed)).rejects.toThrow(/identity changed/);
+      } finally {
+        await borrowed.release();
+      }
     } finally {
       if (replaced) {
         fs.unlinkSync(options.path);

@@ -194,11 +194,6 @@
       "class": "plugin-runtime",
       "risk": ["telegram-bot-api", "network"]
     },
-    "highlight.js": {
-      "owner": "core:syntax-highlighting",
-      "class": "core-runtime",
-      "risk": ["syntax-highlighting"]
-    },
     "hosted-git-info": {
       "owner": "core:git-utils",
       "class": "core-runtime",
@@ -289,6 +284,11 @@
       "owner": "core:browser",
       "class": "core-runtime",
       "risk": ["browser-automation", "cdp"]
+    },
+    "proxy-from-env": {
+      "owner": "provider:openai",
+      "class": "default-runtime-initially",
+      "risk": ["network", "proxy"]
     },
     "quickjs-wasi": {
       "owner": "plugin:code-mode-quickjs",

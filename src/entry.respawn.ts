@@ -1,4 +1,5 @@
 import path from "node:path";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { isStandaloneRuntimeExecutable, resolveOpenClawCliRespawn } from "../cli-invocation.mjs";
 import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
@@ -39,31 +40,6 @@ function resolveCliRespawnCommand(params: {
     return "node";
   }
   return params.execPath;
-}
-
-function hasExperimentalWarningSuppressed(
-  params: {
-    env?: NodeJS.ProcessEnv;
-    execArgv?: string[];
-  } = {},
-): boolean {
-  const env = params.env ?? process.env;
-  const execArgv = params.execArgv ?? process.execArgv;
-  const nodeOptions = env.NODE_OPTIONS ?? "";
-  if (nodeOptions.includes(EXPERIMENTAL_WARNING_FLAG) || nodeOptions.includes("--no-warnings")) {
-    return true;
-  }
-  return execArgv.some((arg) => arg === EXPERIMENTAL_WARNING_FLAG || arg === "--no-warnings");
-}
-
-function hasStackSizeConfigured(execArgv: string[]): boolean {
-  return execArgv.some(
-    (arg) =>
-      arg === "--stack-size" ||
-      arg.startsWith("--stack-size=") ||
-      arg === "--stack_size" ||
-      arg.startsWith("--stack_size="),
-  );
 }
 
 export function buildCliRespawnPlan(
@@ -107,7 +83,15 @@ export function buildCliRespawnPlan(
   let needsRespawn = false;
 
   if (platform === "win32") {
-    if (!hasStackSizeConfigured(childExecArgv)) {
+    if (
+      !childExecArgv.some(
+        (arg) =>
+          arg === "--stack-size" ||
+          arg.startsWith("--stack-size=") ||
+          arg === "--stack_size" ||
+          arg.startsWith("--stack_size="),
+      )
+    ) {
       childExecArgv.unshift(WINDOWS_STACK_SIZE_FLAG);
       needsRespawn = true;
     }
@@ -131,19 +115,25 @@ export function buildCliRespawnPlan(
 
     if (
       !shouldSkipRespawnForArgv(argv, platform) &&
-      !isTruthyEnvValue(env[OPENCLAW_NODE_OPTIONS_READY]) &&
-      !hasExperimentalWarningSuppressed({ env, execArgv })
+      !isTruthyEnvValue(env[OPENCLAW_NODE_OPTIONS_READY])
     ) {
-      childEnv[OPENCLAW_NODE_OPTIONS_READY] = "1";
-      if (isStandaloneRuntimeExecutable(execPath)) {
-        // Compiled Bun treats runtime flags as CLI arguments, but honors NODE_OPTIONS.
-        childEnv.NODE_OPTIONS = [childEnv.NODE_OPTIONS, EXPERIMENTAL_WARNING_FLAG]
-          .filter(Boolean)
-          .join(" ");
-      } else {
-        childExecArgv.unshift(EXPERIMENTAL_WARNING_FLAG);
+      const nodeOptions = env.NODE_OPTIONS ?? "";
+      if (
+        !nodeOptions.includes(EXPERIMENTAL_WARNING_FLAG) &&
+        !nodeOptions.includes("--no-warnings") &&
+        !execArgv.some((arg) => arg === EXPERIMENTAL_WARNING_FLAG || arg === "--no-warnings")
+      ) {
+        childEnv[OPENCLAW_NODE_OPTIONS_READY] = "1";
+        if (isStandaloneRuntimeExecutable(execPath)) {
+          // Compiled Bun treats runtime flags as CLI arguments, but honors NODE_OPTIONS.
+          childEnv.NODE_OPTIONS = [childEnv.NODE_OPTIONS, EXPERIMENTAL_WARNING_FLAG]
+            .filter(Boolean)
+            .join(" ");
+        } else {
+          childExecArgv.unshift(EXPERIMENTAL_WARNING_FLAG);
+        }
+        needsRespawn = true;
       }
-      needsRespawn = true;
     }
   }
 
@@ -172,7 +162,7 @@ export async function runCliRespawnPlan(
     onError: (error) =>
       writeError(
         "[openclaw] Failed to respawn CLI:",
-        error instanceof Error ? (error.stack ?? error.message) : error,
+        error instanceof Error ? formatErrorStackWithMessage(error) : error,
       ),
   });
 }

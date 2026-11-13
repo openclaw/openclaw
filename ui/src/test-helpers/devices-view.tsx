@@ -52,5 +52,5 @@ export function getDeviceSettingsRow(container: Element, title: string): Element
   if (!(row instanceof Element)) {
     throw new Error(`Expected ${title} row`);
   }
-  return row;
+  return row.matches(".device-entry__summary") ? (row.closest(".device-entry") ?? row) : row;
 }

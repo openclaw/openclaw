@@ -284,14 +284,7 @@ it.each<TransportCase>([
     ];
     const observations: EmbeddedRunAttemptParams[] = [];
     attempt.mockImplementation(async (params) => {
-      // Run disposal clears continuation payloads; record their dispatch-time facts.
-      observations.push({
-        ...params,
-        continuation: params.continuation && {
-          prompt: params.continuation.prompt,
-          messages: [...params.continuation.messages],
-        },
-      });
+      observations.push({ ...params });
       if (observations.length === 1) {
         if (!serverError) {
           expect(params).toMatchObject({
@@ -362,7 +355,10 @@ it.each<TransportCase>([
           ...(localNoAuth ? { Authorization: null } : {}),
         },
       },
-      continuation: { prompt: "Preserve this admitted request exactly.", messages: history },
+      continuation: undefined,
+      prompt: expect.stringContaining("Continue the current task from the existing transcript"),
+      skipPreparedUserTurnMessage: true,
+      suppressNextUserMessagePersistence: true,
     });
     expect(first.admittedRunContext).toBeDefined();
     expect(retry.admittedRunContext).toBe(first.admittedRunContext);

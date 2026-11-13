@@ -16,6 +16,7 @@ export type RpcSourceTiming = {
   readonly queuedAtMs: number;
   startedAtMs?: number;
   expiresAtMs: number;
+  /** Process-local monotonic reading; unlike the surrounding timestamps, not an epoch. */
   readonly queueDeadlineAtMs?: number;
   readonly timeoutMs: number;
   cancelQueueDeadline: () => void;
@@ -43,6 +44,8 @@ export type RpcSourceAdapter = SessionControllerSourceAdapter & {
   projectSessionTerminalPersisted?: boolean;
   /** The producer observed its terminal outcome; raw cleanup may still be settling. */
   terminalOutcomeObserved?: boolean;
+  /** Native lifecycle delegates the source's chat error response to detached dispatch. */
+  chatErrorDispatchOwned?: true;
   /** A terminal lifecycle event was observed and is awaiting persistence. */
   projectSessionTerminalPending?: boolean;
   /** Store timestamp expected from the observed terminal lifecycle event. */

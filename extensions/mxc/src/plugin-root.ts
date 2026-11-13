@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolvePluginRuntimeProcessAssetUrl } from "openclaw/plugin-sdk/process-runtime";
 
 function isMxcPluginRoot(dir: string): boolean {
   return (
@@ -25,20 +26,7 @@ function resolveMxcPluginRoot(moduleUrl: string = import.meta.url): string {
 }
 
 export function resolveMxcLauncherPath(moduleUrl: string = import.meta.url): string {
-  const root = resolveMxcPluginRoot(moduleUrl);
-  const sourceLauncher = path.join(root, "src", "mxc-spawn-launcher.mjs");
-  const rootDistLauncher = path.join(root, "mxc-spawn-launcher.mjs");
-  const packageDistLauncher = path.join(root, "dist", "mxc-spawn-launcher.mjs");
-  if (fs.existsSync(sourceLauncher)) {
-    return sourceLauncher;
-  }
-  if (fs.existsSync(rootDistLauncher)) {
-    return rootDistLauncher;
-  }
-  if (fs.existsSync(packageDistLauncher)) {
-    return packageDistLauncher;
-  }
-  throw new Error(
-    `[mxc] launcher not found; searched ${sourceLauncher}, ${rootDistLauncher}, and ${packageDistLauncher}`,
+  return fileURLToPath(
+    resolvePluginRuntimeProcessAssetUrl("mxcLauncher", resolveMxcPluginRoot(moduleUrl)),
   );
 }

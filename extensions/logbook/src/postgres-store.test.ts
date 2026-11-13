@@ -1,19 +1,56 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData } from "node:worker_threads";
-import { withEngineStoreAdmission } from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import {
+  openEngineStore,
+  withEngineStoreAdmission,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import { requestSqliteWorkerOperationAdmission } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { Client } from "pg";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { logbookEngineSchema } from "./store-engine-schema.js";
+import { createLogbookDatabase } from "./store-schema-admission.js";
 import { createSqliteWorkerBackend } from "./store.worker.js";
 import type { LogbookCardDraft } from "./types.js";
+
+const transaction = vi.hoisted(() => ({ isActive: (): boolean => false }));
+const fileEffects = vi.hoisted(() => ({
+  beforeRemove: undefined as (() => void) | undefined,
+  beforeRemoveDirectory: undefined as (() => void) | undefined,
+}));
+
+// mock-isolation: Observe real filesystem effects through the worker's named imports.
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    rmSync: (...args: Parameters<typeof actual.rmSync>) => {
+      fileEffects.beforeRemove?.();
+      return actual.rmSync(...args);
+    },
+    rmdirSync: (...args: Parameters<typeof actual.rmdirSync>) => {
+      fileEffects.beforeRemoveDirectory?.();
+      return actual.rmdirSync(...args);
+    },
+  };
+});
 
 // mock-isolation: Exercise the real SQL owner in-process; broker transport is covered separately.
 vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/sqlite-worker-runtime")>();
-  return { ...actual, requestSqliteWorkerOperationAdmission: vi.fn() };
+  return {
+    ...actual,
+    requestSqliteWorkerOperationAdmission: vi.fn(),
+    runSqliteImmediateTransactionSync: (
+      ...args: Parameters<typeof actual.runSqliteImmediateTransactionSync>
+    ) => {
+      transaction.isActive = () => args[0].isTransaction;
+      return actual.runSqliteImmediateTransactionSync(...args);
+    },
+  };
 });
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
@@ -67,10 +104,164 @@ describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
     }
   });
 
+  it("upgrades version 1 index ordering once while retaining standups and nullable indexes", async () => {
+    const pathname = path.join(tempDirs.make("logbook-index-upgrade-"), "logbook.sqlite");
+    const input = { connection: connection!, schemaPrefix: "logbook_upgrade" };
+    const schema = withEngineStoreAdmission(() => {
+      using anchor = new DatabaseSync(pathname);
+      const db = openEngineStore({
+        anchor,
+        input,
+        schema: {
+          ...logbookEngineSchema,
+          ...logbookEngineSchema.postgresMigrations![0]!.fromSchema,
+          version: 1,
+        },
+        prepareAnchor: () => {},
+        inspectSqlite: () => ({ hasEngineAnchor: false, hasExistingData: false }),
+        openSqlite: () => {},
+      });
+      try {
+        db.prepare("INSERT INTO standups VALUES (?, ?, ?)").run(DAY, "Retained standup", 1);
+        return String(anchor.prepare("SELECT schema FROM openclaw_engine_anchor").get()?.schema);
+      } finally {
+        db.close();
+      }
+    });
+    const indexes = async () =>
+      (
+        await observer.query(
+          `SELECT relname AS name, oid::text, pg_get_indexdef(oid) AS definition
+       FROM pg_class WHERE relnamespace = $1::regnamespace
+       AND relname IN ('idx_logbook_frames_captured_at', 'idx_logbook_frames_unbatched')
+       ORDER BY relname`,
+          [schema],
+        )
+      ).rows;
+    try {
+      const before = await indexes();
+      await withEngineStoreAdmission(() => createLogbookDatabase(pathname, input)).close();
+      const after = await indexes();
+      expect(after[0]!.definition).not.toContain("NULLS FIRST");
+      expect(after[0]!.oid).not.toBe(before[0]!.oid);
+      expect(after[1]).toEqual(before[1]);
+      expect((await observer.query(`SELECT text FROM "${schema}".standups`)).rows).toEqual([
+        { text: "Retained standup" },
+      ]);
+      expect(
+        (await observer.query(`SELECT version::integer FROM "${schema}".openclaw_schema_meta`))
+          .rows,
+      ).toEqual([{ version: 3 }]);
+      await withEngineStoreAdmission(() => createLogbookDatabase(pathname, input)).close();
+      expect(await indexes()).toEqual(after);
+    } finally {
+      await observer.query(`DROP SCHEMA "${schema}" CASCADE`);
+    }
+  });
+
+  it("upgrades version 2 by rebuilding only the two non-null partial indexes", async () => {
+    const pathname = path.join(tempDirs.make("logbook-partial-index-upgrade-"), "logbook.sqlite");
+    const input = { connection: connection!, schemaPrefix: "logbook_partial_upgrade" };
+    const migration = logbookEngineSchema.postgresMigrations!.find((step) => step.version === 3)!;
+    const schema = withEngineStoreAdmission(() => {
+      using anchor = new DatabaseSync(pathname);
+      const db = openEngineStore({
+        anchor,
+        input,
+        schema: {
+          ...logbookEngineSchema,
+          ...migration.fromSchema,
+          version: 2,
+          postgresMigrations: [],
+        },
+        prepareAnchor: () => {},
+        inspectSqlite: () => ({ hasEngineAnchor: false, hasExistingData: false }),
+        openSqlite: () => {},
+      });
+      try {
+        db.prepare(
+          "INSERT INTO batches (id, day, start_ms, end_ms, created_ms, updated_ms) VALUES (1, ?, 0, 1000, 1, 1)",
+        ).run(DAY);
+        db.prepare(
+          `INSERT INTO frames (id, captured_at_ms, day, path, content_hash, batch_id)
+           VALUES (1, 100, ?, 'retained.jpg', 'retained-hash', 1),
+             (2, 200, ?, 'unbatched.jpg', 'unbatched-hash', NULL)`,
+        ).run(DAY, DAY);
+        db.prepare(
+          `INSERT INTO cards (id, day, start_ms, end_ms, title, summary, keyframe_id, updated_ms)
+           VALUES (1, ?, 0, 1000, 'Retained', 'Retained summary', 1, 1),
+             (2, ?, 1000, 2000, 'No keyframe', 'Nullable summary', NULL, 1)`,
+        ).run(DAY, DAY);
+        return String(anchor.prepare("SELECT schema FROM openclaw_engine_anchor").get()?.schema);
+      } finally {
+        db.close();
+      }
+    });
+    const indexes = async () =>
+      (
+        await observer.query<{ name: string; oid: string; options: string }>(
+          `SELECT c.relname AS name, c.oid::text AS oid, i.indoption::text AS options
+           FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid
+           WHERE c.relnamespace = $1::regnamespace ORDER BY c.relname`,
+          [schema],
+        )
+      ).rows;
+    const changedNames = ["idx_logbook_cards_keyframe", "idx_logbook_frames_batch"];
+    try {
+      const before = await indexes();
+      // Genuine v2 has native NOT NULL keys but still gives these nullable keys NULLS FIRST.
+      expect(before.find((index) => index.name === "idx_logbook_frames_captured_at")?.options).toBe(
+        "0",
+      );
+      expect(
+        before.filter((index) => changedNames.includes(index.name)).map((index) => index.options),
+      ).toEqual(["2", "2 0"]);
+      await withEngineStoreAdmission(() => createLogbookDatabase(pathname, input)).close();
+      const after = await indexes();
+      expect(after.map((index) => index.name)).toEqual(before.map((index) => index.name));
+      expect(
+        after
+          .filter((index) => index.oid !== before.find((prior) => prior.name === index.name)?.oid)
+          .map((index) => index.name),
+      ).toEqual(changedNames);
+      expect(
+        after.filter((index) => changedNames.includes(index.name)).map((index) => index.options),
+      ).toEqual(["0", "0 0"]);
+      expect(after.filter((index) => !changedNames.includes(index.name))).toEqual(
+        before.filter((index) => !changedNames.includes(index.name)),
+      );
+      expect(
+        (await observer.query(`SELECT path, batch_id::integer FROM "${schema}".frames ORDER BY id`))
+          .rows,
+      ).toEqual([
+        { path: "retained.jpg", batch_id: 1 },
+        { path: "unbatched.jpg", batch_id: null },
+      ]);
+      expect(
+        (
+          await observer.query(
+            `SELECT title, summary, keyframe_id::integer FROM "${schema}".cards ORDER BY id`,
+          )
+        ).rows,
+      ).toEqual([
+        { title: "Retained", summary: "Retained summary", keyframe_id: 1 },
+        { title: "No keyframe", summary: "Nullable summary", keyframe_id: null },
+      ]);
+      expect(
+        (await observer.query(`SELECT version::integer FROM "${schema}".openclaw_schema_meta`))
+          .rows,
+      ).toEqual([{ version: 3 }]);
+      await withEngineStoreAdmission(() => createLogbookDatabase(pathname, input)).close();
+      expect(await indexes()).toEqual(after);
+    } finally {
+      await observer.query(`DROP SCHEMA "${schema}" CASCADE`);
+    }
+  });
+
   function frame(capturedAtMs: number, idle = false, day = DAY): number {
     const file = path.join(dataDir, "frames", day, `${capturedAtMs}-${idle}.jpg`);
-    mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(file, "synthetic-jpeg");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "synthetic-jpeg");
     const result = execute({
       type: "insertFrame",
       input: {
@@ -182,6 +373,201 @@ describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
     });
   });
 
+  describe("prune transaction boundary", () => {
+    let store: ReturnType<typeof createSqliteWorkerBackend>;
+    let directory: string;
+    let schema: string;
+    const admission = vi.mocked(requestSqliteWorkerOperationAdmission);
+    const run: typeof store.execute = (command) =>
+      withEngineStoreAdmission(() => store.execute(command));
+    const prune = (olderThanMs: number) => run({ type: "pruneFrames", input: { olderThanMs } });
+    const frames = () => run({ type: "framesInRange", input: { startMs: 0, endMs: 100_000 } });
+    const cards = () => run({ type: "cardsForDay", input: { day: DAY } });
+
+    beforeEach(() => {
+      admission.mockReset();
+      directory = tempDirs.make("logbook-prune-postgres-");
+      const file = path.join(directory, "logbook.sqlite");
+      store = withEngineStoreAdmission(() =>
+        createSqliteWorkerBackend(
+          {
+            dataDir: directory,
+            postgresInput: { connection: connection!, schemaPrefix: "logbook_prune_test" },
+          },
+          { databasePath: file },
+        ),
+      );
+      using anchor = new DatabaseSync(file, { readOnly: true });
+      schema = String(anchor.prepare("SELECT schema FROM openclaw_engine_anchor").get()?.schema);
+    });
+
+    afterEach(async () => {
+      admission.mockReset();
+      fileEffects.beforeRemove = undefined;
+      fileEffects.beforeRemoveDirectory = undefined;
+      try {
+        await store?.close();
+      } finally {
+        if (schema) {
+          await observer.query(`DROP SCHEMA "${schema}" CASCADE`);
+        }
+      }
+    });
+
+    function seed(expired: number) {
+      const paths = Array.from({ length: expired + 1 }, (_, capturedAtMs) => {
+        const file = path.join(directory, "frames", DAY, `${capturedAtMs}.jpg`);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, "synthetic-jpeg");
+        run({
+          type: "insertFrame",
+          input: {
+            capturedAtMs,
+            day: DAY,
+            path: file,
+            screenIndex: 0,
+            byteSize: 14,
+            contentHash: `synthetic-${capturedAtMs}`,
+            idle: false,
+          },
+        });
+        return file;
+      });
+      run({
+        type: "replaceCardsInWindow",
+        input: {
+          day: DAY,
+          startMs: 0,
+          endMs: expired + 1,
+          drafts: [0, expired].map((startMs) => card({ startMs, endMs: startMs + 1 })),
+        },
+      });
+      admission.mockReset();
+      return paths;
+    }
+
+    it.each([0, 129])(
+      "prunes %i frames without holding a transaction during filesystem work",
+      (expired) => {
+        const paths = seed(expired);
+        const events: string[] = [];
+        fileEffects.beforeRemove = () => {
+          expect(transaction.isActive()).toBe(false);
+          events.push("unlink");
+        };
+        fileEffects.beforeRemoveDirectory = () => {
+          expect(transaction.isActive()).toBe(false);
+          events.push("rmdir");
+        };
+        admission.mockImplementation(({ stage }) => {
+          expect(transaction.isActive()).toBe(stage === "commit");
+          events.push(stage);
+        });
+
+        expect(prune(expired)).toBe(expired);
+        expect(events).toEqual(
+          expired === 0
+            ? []
+            : [
+                "transaction",
+                ...Array<string>(expired).fill("unlink"),
+                "transaction",
+                "commit",
+                "rmdir",
+              ],
+        );
+        expect(frames()).toEqual([{ id: expired + 1, capturedAtMs: expired, idle: false }]);
+        expect(cards()).toEqual([
+          expect.objectContaining({ keyframeId: expired === 0 ? 1 : undefined }),
+          expect.objectContaining({ keyframeId: expired + 1 }),
+        ]);
+        expect(paths.map((file) => fs.existsSync(file))).toEqual([
+          ...Array<boolean>(expired).fill(false),
+          true,
+        ]);
+      },
+    );
+
+    it.each(["initial", "renewed", "commit"])(
+      "retains retryable metadata when %s admission fails",
+      (phase) => {
+        const paths = seed(2);
+        let transactions = 0;
+        const refused = new Error("write authority refused");
+        admission.mockImplementation(({ stage }) => {
+          if (stage === "transaction") {
+            transactions += 1;
+          }
+          if (
+            (phase === "initial" && transactions === 1) ||
+            (phase === "renewed" && transactions === 2) ||
+            (phase === "commit" && stage === "commit")
+          ) {
+            throw refused;
+          }
+        });
+
+        expect(() => prune(2)).toThrow(refused);
+        expect(frames()).toHaveLength(3);
+        expect(cards()).toEqual([
+          expect.objectContaining({ keyframeId: 1 }),
+          expect.objectContaining({ keyframeId: 3 }),
+        ]);
+        expect(paths.map((file) => fs.existsSync(file))).toEqual([
+          phase === "initial",
+          phase === "initial",
+          true,
+        ]);
+
+        admission.mockReset();
+        expect(prune(2)).toBe(2);
+        expect(frames()).toEqual([{ id: 3, capturedAtMs: 2, idle: false }]);
+        expect(cards()).toEqual([
+          expect.objectContaining({ keyframeId: undefined }),
+          expect.objectContaining({ keyframeId: 3 }),
+        ]);
+      },
+    );
+
+    it("retains all metadata after a partial unlink failure and retries absent files", () => {
+      seed(2);
+      let calls = 0;
+      fileEffects.beforeRemove = () => {
+        if (++calls === 2) {
+          throw new Error("unlink refused");
+        }
+      };
+      expect(() => prune(2)).toThrow("unlink refused");
+      expect(frames()).toHaveLength(3);
+      expect(cards()).toEqual([
+        expect.objectContaining({ keyframeId: 1 }),
+        expect.objectContaining({ keyframeId: 3 }),
+      ]);
+      expect(admission.mock.calls.map(([request]) => request.stage)).toEqual(["transaction"]);
+
+      fileEffects.beforeRemove = undefined;
+      expect(prune(2)).toBe(2);
+      expect(frames()).toHaveLength(1);
+    });
+
+    it("counts only metadata still present after competing prune work", () => {
+      seed(2);
+      let transactions = 0;
+      admission.mockImplementation(({ stage }) => {
+        if (stage === "transaction" && ++transactions === 2) {
+          admission.mockReset();
+          expect(prune(2)).toBe(2);
+        }
+      });
+      expect(prune(2)).toBe(0);
+      expect(frames()).toHaveLength(1);
+      expect(cards()).toEqual([
+        expect.objectContaining({ keyframeId: undefined }),
+        expect.objectContaining({ keyframeId: 3 }),
+      ]);
+    });
+  });
+
   it("prunes file artifacts and foreign keys, then reopens the same PostgreSQL store", async () => {
     const day = "2026-07-04";
     const id = frame(-1000, false, day);
@@ -189,14 +575,17 @@ describe.skipIf(!connection)("PostgreSQL logbook operations", () => {
     const span = { day, startMs: -1000, endMs: 0 };
     replace([card(span)], span);
     expect(execute({ type: "pruneFrames", input: { olderThanMs: 0 } })).toBe(1);
-    expect(existsSync(file)).toBe(false);
+    expect(fs.existsSync(file)).toBe(false);
     expect(execute({ type: "frameById", input: { id } })).toBeNull();
     expect(execute({ type: "cardsForDay", input: { day } })).toEqual([
       expect.objectContaining({ keyframeId: undefined, title: "Coding" }),
     ]);
     saveStandup("After pruning", day);
+    expect(() => backend.assertSettled!()).not.toThrow();
     await backend.close();
+    expect(() => backend.assertSettled!()).toThrow("Logbook database is closed");
     backend = open();
+    expect(() => backend.assertSettled!()).not.toThrow();
     expect(execute({ type: "getStandup", input: { day } })).toMatchObject({
       text: "After pruning",
     });

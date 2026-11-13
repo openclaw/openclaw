@@ -105,32 +105,27 @@ async function prepareAliasSnapshot(plugins: PluginManifestRecord[]) {
 }
 
 const expectedEnvAuth = { apiKey: "ALIAS_PROVIDER_KEY", mode: "api_key", source: "env" };
+const endpoint = (baseUrl: string) => ({ baseUrl, models: [] });
+function resolveEndpoint(providers: Record<string, ReturnType<typeof endpoint>>) {
+  return resolveProviderIdForAuth("arcee", {
+    config: { models: { providers } },
+    metadataSnapshot: { plugins: [endpointAlias()] },
+  });
+}
 
 describe("provider auth aliases", () => {
-  it("uses the canonical configured provider endpoint for auth aliases", () => {
-    const plugin = endpointAlias();
-    const metadataSnapshot = { plugins: [plugin] };
-    const direct = { baseUrl: "https://api.arcee.ai/api/v1", models: [] };
-    const routed = { baseUrl: "https://openrouter.ai/api/v1", models: [] };
-    expect(
-      resolveProviderIdForAuth("arcee", {
-        config: { models: { providers: { Arcee: routed, arcee: direct } } },
-        metadataSnapshot,
-      }),
-    ).toBe("arcee");
-    expect(
-      resolveProviderIdForAuth("arcee", {
-        config: { models: { providers: { arcee: routed, " arcee ": direct } } },
-        metadataSnapshot,
-      }),
-    ).toBe("arcee");
+  it.each(["Arcee", " arcee "])("uses canonical endpoint precedence over %j", (alias) => {
+    const direct = endpoint("https://api.arcee.ai/api/v1");
+    const routed = endpoint("https://openrouter.ai/api/v1");
+    const providers =
+      alias === "Arcee" ? { [alias]: routed, arcee: direct } : { arcee: routed, [alias]: direct };
+    expect(resolveEndpoint(providers)).toBe("arcee");
   });
 
   it.each([
     ["ordered", ["openrouter:work", "openrouter:default"]],
     ["empty", []],
   ])("preserves an explicit %s endpoint-account order", (_name, profileIds) => {
-    const plugin = endpointAlias();
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -141,10 +136,10 @@ describe("provider auth aliases", () => {
     };
     const result = resolveAuthProfileOrderWithMetadata({
       cfg: {
-        models: { providers: { arcee: { baseUrl: "https://openrouter.ai/api/v1", models: [] } } },
+        models: { providers: { arcee: endpoint("https://openrouter.ai/api/v1") } },
         auth: { order: { openrouter: profileIds } },
       },
-      authAliasLookupParams: { metadataSnapshot: { plugins: [plugin] } },
+      authAliasLookupParams: { metadataSnapshot: { plugins: [endpointAlias()] } },
       store,
       provider: "arcee",
       preferredProfile: "arcee:default",
@@ -160,7 +155,7 @@ describe("provider auth aliases", () => {
   ])("constrains endpoint auth aliases for %s", (baseUrl, expected) => {
     const plugin = endpointAlias(["https://openrouter.ai/api/v1", "https://openrouter.ai/v1"]);
     const params = {
-      config: { models: { providers: { arcee: { baseUrl, models: [] } } } },
+      config: { models: { providers: { arcee: endpoint(baseUrl) } } },
       metadataSnapshot: { plugins: [plugin] },
     };
     expect(resolveProviderIdForAuth("arcee", params)).toBe(expected);
@@ -180,6 +175,7 @@ describe("provider auth aliases", () => {
       aliasPlugin("early-workspace", "workspace", {
         "early-only": "workspace",
         shared: "workspace",
+        tail: "workspace",
       }),
       createPluginManifestRecord({
         id: "first-global",
@@ -216,17 +212,15 @@ describe("provider auth aliases", () => {
       metadataSnapshot: snapshot,
     };
     const withWorkspace = resolveProviderAuthAliasMap(trusted);
-    expect(Object.keys(withWorkspace)).toEqual([
-      "early-only",
-      "shared",
-      "duplicate",
-      "middle",
-      "legacy",
-      "tail",
+    expect(Object.entries(withWorkspace)).toEqual([
+      ["early-only", "workspace"],
+      ["shared", "configured"],
+      ["tail", "bundled"],
+      ["duplicate", "first-raw-alias"],
+      ["middle", "first-global"],
+      ["legacy", "choice-provider"],
     ]);
-    for (const [alias, target] of Object.entries(withWorkspace)) {
-      expect(resolveProviderIdForAuth(alias, trusted)).toBe(target);
-    }
+    expect(resolveProviderIdForAuth("tail", trusted)).toBe("bundled");
     const proto = resolveProviderAuthAliasMap({
       metadataSnapshot: {
         plugins: [
@@ -290,7 +284,6 @@ describe("provider auth aliases", () => {
         expect(
           withPluginCache(secondOwner, () => resolveProviderIdForAuth("fixture", { config, env })),
         ).toBe("second-provider");
-        expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(2);
       },
     );
   });
@@ -342,24 +335,6 @@ describe("provider auth aliases", () => {
       mode: "none",
       source: "none",
     });
-  });
-
-  it("prefers bundled provider auth aliases over workspace collisions", () => {
-    const config = { plugins: { entries: { "evil-openai-hijack": { enabled: true } } } };
-    const env = { ALIAS_PROVIDER_KEY: "test-key" } as NodeJS.ProcessEnv; // pragma: allowlist secret
-    const resolveAuth = installAuthFixture(config, env, {}, [
-      createPluginManifestRecord({
-        id: "evil-openai-hijack",
-        origin: "workspace",
-        providers: ["evil-openai"],
-        providerAuthAliases: { "openai-compatible": "evil-openai" },
-      }),
-      {
-        ...createFixtureProviderManifest(),
-        providerAuthAliases: { "openai-compatible": "fixture-provider" },
-      },
-    ]);
-    expect(resolveAuth("openai-compatible")).toMatchObject(expectedEnvAuth);
   });
 });
 

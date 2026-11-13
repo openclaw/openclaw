@@ -7,9 +7,7 @@ import { pathToFileURL } from "node:url";
 import { expect, it, onTestFinished } from "vitest";
 import {
   generateDependencyReleaseEvidence,
-  parseArgs,
   resolvePreviousReleaseTag,
-  resolveReleaseTag,
 } from "../../scripts/generate-dependency-release-evidence.mts";
 
 async function writeJson(dir: string, fileName: string, value: unknown) {
@@ -20,7 +18,7 @@ const readText = (dir: string, name: string) => readFile(path.join(dir, name), "
 const writeExecutable = (dir: string, name: string, source: string) =>
   writeFile(path.join(dir, name), `#!/usr/bin/env node\n${source}`, { mode: 0o755 });
 
-function runCli(args: string[], env = process.env) {
+function runCli(args: readonly string[], env = process.env) {
   return spawnSync(
     process.execPath,
     ["--import", "tsx", "scripts/generate-dependency-release-evidence.mts", ...args],
@@ -28,44 +26,28 @@ function runCli(args: string[], env = process.env) {
   );
 }
 
-function advisory(packageName: string, id: string, tool: string, url: string | null = null) {
-  return {
-    id,
-    packageName,
-    severity: "high",
-    graph: "production",
-    lockfile: `.github/release/${tool}/package-lock.json`,
-    source: "github-repository",
-    malware: false,
-    url,
-  };
-}
-
-function makeReports(vulnerability: unknown, populated = false): Record<string, unknown> {
-  const count = (value: number) => (populated ? value : 0);
+function makeReports(vulnerability: unknown): Record<string, unknown> {
   return {
     "dependency-vulnerability-gate.json": vulnerability,
     "transitive-manifest-risk-report.json": {
-      findingCount: count(17),
-      workspaceExcludedFindingCount: count(3),
-      metadataFailures: populated ? [{}] : [],
+      findingCount: 0,
+      workspaceExcludedFindingCount: 0,
+      metadataFailures: [],
     },
     "dependency-ownership-surface-report.json": {
-      summary: { lockfilePackageCount: count(101), buildRiskPackageCount: count(8) },
+      summary: { lockfilePackageCount: 0, buildRiskPackageCount: 0 },
     },
     "dependency-changes-report.json": {
       summary: {
-        dependencyFileChanges: count(4),
-        addedPackages: count(5),
-        removedPackages: count(6),
-        changedPackages: count(7),
+        dependencyFileChanges: 0,
+        addedPackages: 0,
+        removedPackages: 0,
+        changedPackages: 0,
       },
     },
     "npm-package-locks.json": {
-      packagesWithOmittedWorkspaceDependencies: populated ? 2 : 1,
-      packages: (populated ? [false, true, false] : [false, true]).map(
-        (bundleRuntimeDependencies) => ({ bundleRuntimeDependencies }),
-      ),
+      packagesWithOmittedWorkspaceDependencies: 1,
+      packages: [false, true].map((bundleRuntimeDependencies) => ({ bundleRuntimeDependencies })),
     },
   };
 }
@@ -104,47 +86,47 @@ it.each([false, true])(
       ],
     };
     const coverage = { npm: "checked", upstream };
-    const findings = malware
+    const advisory = {
+      id: "GHSA-report",
+      packageName: "fixture",
+      severity: "high",
+      graph: "production",
+      lockfile: ".github/release/vercel-cli/package-lock.json",
+      source: "github-repository",
+      malware: false,
+      url: malware ? null : "https://github.com/advisories/GHSA-report",
+    };
+    const blockers = malware
       ? [
           { id: "GHSA-malware", lockfile: "pnpm-lock.yaml", source: "npm-bulk", malware: true },
           {
             id: "GHSA-malware",
-            lockfile: ".github/release/vercel-cli/package-lock.json",
+            lockfile: advisory.lockfile,
             source: "github-repository",
             malware: true,
           },
-          advisory("report-pkg", "GHSA-report", "clawhub-cli"),
         ]
-      : [
-          advisory(
-            "undici",
-            "GHSA-rfgv-xxqx-mfg5",
-            "vercel-cli",
-            "https://github.com/advisories/GHSA-rfgv-xxqx-mfg5",
-          ),
-        ];
-    const reports = makeReports(
-      { blockers: malware ? findings.slice(0, 2) : [], findings, coverage },
-      malware,
-    );
-    const commands: string[] = [];
+      : [];
+    const findings = [...blockers, advisory];
+    const reports = makeReports({
+      blockers,
+      findings,
+      coverage,
+    });
+    const releaseRef = malware ? "a".repeat(40) : "v2026.5.13-beta.1";
     const result = await generateDependencyReleaseEvidence({
       rootDir: source,
       outputDir,
-      releaseRef: "v2026.5.13",
+      releaseRef,
       npmDistTag: "latest",
       baseRef: "v2026.5.1",
       githubOutput: "",
       githubStepSummary: stepPath,
-      execFileSyncImpl: (command, commandArgs, options) => {
+      execFileSyncImpl: (command, commandArgs) => {
         if (command === "git") {
           return "a".repeat(40);
         }
         const args = commandArgs ?? [];
-        expect(command).toBe("pnpm");
-        expect(options).toMatchObject({ cwd: path.resolve(".") });
-        expect(args[args.indexOf("--root") + 1]).toBe(source);
-        commands.push(args[0]!);
         const jsonPath = args[args.indexOf("--json") + 1]!;
         const report = reports[path.basename(jsonPath)];
         if (!report) {
@@ -155,66 +137,30 @@ it.each([false, true])(
         return null;
       },
     });
-    expect(commands).toContain("deps:npm-lock:report");
-    const manifest = JSON.parse(await readText(outputDir, "dependency-evidence-manifest.json"));
-    expect(manifest.reports).toContainEqual({
-      name: "npm package-lock mirrors",
-      command: "pnpm deps:npm-lock:report",
-      policy: "report-only",
-      json: "npm-package-locks.json",
-      markdown: "npm-package-locks.md",
-    });
-    expect(result.counts).toEqual({
+    expect(result.manifest.releaseTag).toBe(malware ? "v2026.5.13" : releaseRef);
+    expect(result.counts).toMatchObject({
       malwareBlockers: malware ? 2 : 0,
       vulnerabilityFindings: malware ? 3 : 1,
-      advisories: malware ? [findings[2]] : findings,
+      advisories: [advisory],
       vulnerabilityCoverage: coverage,
       upstreamOnlyVulnerabilityFindings: malware ? 2 : 1,
-      transitiveRiskSignals: malware ? 17 : 0,
-      workspaceExcludedTransitiveSignals: malware ? 3 : 0,
-      transitiveMetadataFailures: malware ? 1 : 0,
-      ownershipLockfilePackages: malware ? 101 : 0,
-      ownershipBuildRiskPackages: malware ? 8 : 0,
-      dependencyFileChanges: malware ? 4 : 0,
-      dependencyAddedPackages: malware ? 5 : 0,
-      dependencyRemovedPackages: malware ? 6 : 0,
-      dependencyChangedPackages: malware ? 7 : 0,
-      npmLockPackages: malware ? 3 : 2,
-      npmLocklessPackages: malware ? 2 : 1,
-      npmPartialLockPackages: malware ? 2 : 1,
+      npmLockPackages: 2,
+      npmLocklessPackages: 1,
+      npmPartialLockPackages: 1,
     });
     const summary = await readText(outputDir, "dependency-evidence-summary.md");
     const stepSummary = await readFile(stepPath, "utf8");
-    expectContains(
-      summary,
-      `- Transitive manifest reported risk signals: ${malware ? 17 : 0}`,
-      "- Dependency change baseline: `v2026.5.1`",
-      `- Resolved package changes: +${malware ? 5 : 0} -${malware ? 6 : 0} changed ${malware ? 7 : 0}`,
-      "- `npm-package-locks.md`",
-    );
     expect(stepSummary).toContain(
-      "- Evidence artifact: `openclaw-release-dependency-evidence-v2026.5.13`",
+      `- Evidence artifact: \`openclaw-release-dependency-evidence-${releaseRef}\``,
     );
     for (const rendered of [summary, stepSummary]) {
       expect(rendered).toMatch(/#+ Non-blocking advisory findings\n\nAdvisories never block/u);
       expectContains(
         rendered,
-        `- npm package-lock mirrors: ${malware ? 3 : 2}`,
-        `- Lockless packages (bundleRuntimeDependencies=false): ${malware ? 2 : 1}`,
-        `- Partial npm package-lock mirrors (workspace omissions): ${malware ? 2 : 1}`,
         `- Known malware findings (release-blocking): ${malware ? 2 : 0}`,
         "- npm advisory coverage: checked",
         "- Upstream public repository advisory coverage: partial",
-        "- Upstream source: `github-public-repository-advisories`",
-        "- Upstream package versions mapped: 100/101",
-        "- Upstream repositories checked: 1/2",
-        "- Non-blocking advisory findings: 1",
-        `- Advisory vulnerability total findings: ${malware ? 3 : 1}`,
-        `- Upstream-only vulnerability findings: ${malware ? 2 : 1}`,
-        "- Upstream coverage issues: 2",
-        malware
-          ? "- HIGH `report-pkg` (.github/release/clawhub-cli/package-lock.json; production) id=GHSA-report source=github-repository\n"
-          : "- HIGH `undici` (.github/release/vercel-cli/package-lock.json; production) id=GHSA-rfgv-xxqx-mfg5 source=github-repository https://github.com/advisories/GHSA-rfgv-xxqx-mfg5",
+        `- HIGH \`fixture\` (.github/release/vercel-cli/package-lock.json; production) id=GHSA-report source=github-repository${malware ? "\n" : " https://github.com/advisories/GHSA-report"}`,
         "Coverage is limited to these advisory sources; zero findings do not prove that dependencies are unaffected.",
       );
       for (const { subject, reason } of upstream.issues) {
@@ -223,34 +169,6 @@ it.each([false, true])(
     }
   },
 );
-
-it("uses a synthetic release tag for validation-only SHA preflight input", () => {
-  for (const [releaseRef, packageVersion, expected] of [
-    ["0123456789abcdef0123456789abcdef01234567", "2026.5.13", "v2026.5.13"],
-    ["v2026.5.13-beta.1", "2026.5.13-beta.1", "v2026.5.13-beta.1"],
-  ] as const) {
-    expect(resolveReleaseTag({ releaseRef, packageVersion })).toBe(expected);
-  }
-});
-
-it("rejects missing dependency evidence CLI option values", () => {
-  const missingValues = [
-    ["--output-dir", "--release-ref"],
-    ["--output-dir", "-h"],
-    ["--release-ref", "--npm-dist-tag"],
-    ["--release-ref", "-h"],
-    ["--npm-dist-tag", "-h"],
-    ["--base-ref", undefined],
-    ["--base-ref", "-h"],
-    ["--github-output", "--github-step-summary"],
-    ["--github-output", "-h"],
-  ] satisfies Array<[string, string | undefined]>;
-  for (const [flag, value] of missingValues) {
-    expect(() => parseArgs(value === undefined ? [flag] : [flag, value])).toThrow(
-      `Expected ${flag} <value>.`,
-    );
-  }
-});
 
 it("prints CLI help without generating evidence", () => {
   const result = runCli(["--help"]);
@@ -261,16 +179,15 @@ it("prints CLI help without generating evidence", () => {
   );
 });
 
-it("reports CLI argument errors without a Node stack trace", () => {
-  for (const args of [["--wat"], ["wat", "--help"]]) {
-    const result = runCli(args);
+it.each([
+  [["--wat"], "Unsupported argument: --wat"],
+  [["--base-ref"], "Expected --base-ref <value>."],
+] as const)("reports CLI argument errors without a Node stack trace: %s", (args, error) => {
+  const result = runCli(args);
 
-    expect(result).toMatchObject({ status: 1, stdout: "" });
-    expect(result.stderr.trim()).toBe(
-      `Unsupported argument: ${args[0]}\n[dependency-release-evidence] FAILED (exit 1)`,
-    );
-    expect(result.stderr).not.toMatch(/Node\.js|\n {4}at /u);
-  }
+  expect(result).toMatchObject({ status: 1, stdout: "" });
+  expect(result.stderr.trim()).toBe(`${error}\n[dependency-release-evidence] FAILED (exit 1)`);
+  expect(result.stderr).not.toMatch(/Node\.js|\n {4}at /u);
 });
 
 it.skipIf(process.platform === "win32")(

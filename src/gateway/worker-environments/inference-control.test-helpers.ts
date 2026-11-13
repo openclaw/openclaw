@@ -90,6 +90,7 @@ export function createWorkerInferenceServiceStub(): WorkerEnvironmentServiceCont
   };
   return {
     getDedicatedNodeLeaseSignal: unexpected,
+    ensureRetainedRunning: unexpected,
     captureSessionAttachment: unexpected,
     getSessionAttachment: unexpected,
     findSessionAttachment: unexpected,
@@ -113,7 +114,9 @@ export function createWorkerInferenceServiceStub(): WorkerEnvironmentServiceCont
     listOperatingSystems: unexpected,
     prepare: unexpected,
     create: unexpected,
+    createWithRequest: unexpected,
     destroy: unexpected,
+    reclaim: unexpected,
     destroyUnattached: unexpected,
     observeDesktop: unexpected,
     launchDesktopApp: unexpected,

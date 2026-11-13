@@ -34,6 +34,7 @@ function enter(input: HTMLInputElement, value: string, isComposing = false) {
 
 function show(
   options: { role?: string; persisted?: boolean; streaming?: boolean; writable?: boolean } = {},
+  initialReactions = new Map([["message-1", reactions]]),
 ) {
   host = document.body.appendChild(document.createElement("div"));
   const role = options.role ?? "user";
@@ -44,19 +45,18 @@ function show(
     timestamp: 1,
     ...(options.persisted === false ? {} : { __openclaw: { id: "message-1" } }),
   };
-  createMessageGroupHarness(host).render(
-    createMessageGroup(message, role, { isStreaming: options.streaming ?? false }),
-    {
+  const harness = createMessageGroupHarness(host);
+  const group = createMessageGroup(message, role, { isStreaming: options.streaming ?? false });
+  const render = (messageReactions: Map<string, MessageReactionSummary[]>) => {
+    harness.render(group, {
       showReasoning: false,
       userId: "self",
-      messageReactions: new Map([["message-1", reactions]]),
+      messageReactions,
       onReact: options.writable === false ? undefined : onReact,
-    },
-  );
-  return {
-    onReact,
-    pickers: [...host.querySelectorAll<HTMLElement>("openclaw-message-reaction-picker")],
+    });
+    return [...host.querySelectorAll<HTMLElement>("openclaw-message-reaction-picker")];
   };
+  return { onReact, pickers: render(initialReactions), render };
 }
 
 function pickerButton(picker: HTMLElement, label: string) {
@@ -71,6 +71,7 @@ async function customEntry() {
   const root = pickers[0]!;
   flush();
   root.querySelector<HTMLButtonElement>(".trigger")!.click();
+  await waitForSolid(() => expect(root.querySelector(".palette")).not.toBeNull());
   root.querySelector<HTMLButtonElement>(".more")!.click();
   await waitForSolid(() =>
     expect(root.querySelector<HTMLInputElement>(".emoji-search-panel__search")).not.toBeNull(),
@@ -91,6 +92,17 @@ function hidden(picker: Element) {
 }
 
 describe("transcript message reactions", () => {
+  const tab = (id = "message-1") =>
+    host.querySelector<HTMLButtonElement>(
+      `.chat-message-reactions[data-message-id="${id}"] .chat-reaction-tab`,
+    )!;
+  const openTab = async (id?: string) => {
+    const picker = tab(id).closest<HTMLElement>("openclaw-message-reaction-picker")!;
+    tab(id).click();
+    await waitForSolid(() => expect(picker.querySelector(".palette")).not.toBeNull());
+    return picker;
+  };
+
   it.each([
     [{ role: "user" }, "writable"],
     [{ role: "assistant" }, "writable"],
@@ -99,80 +111,179 @@ describe("transcript message reactions", () => {
     [{ streaming: true }, "ineligible"],
     [{ role: "system" }, "ineligible"],
   ] as const)("renders %j reactions as %s", async (options, access) => {
-    const { onReact, pickers } = show(options);
-    // Reactions exist, so only the chip row carries a picker; the action row drops its own.
-    expect(pickers).toHaveLength(access === "writable" ? 1 : 0);
-    expect(pickers[0]?.closest(".chat-message-reactions") ?? null).toBe(
-      access === "writable" ? host.querySelector(".chat-message-reactions") : null,
-    );
+    const { onReact, pickers, render } = show(options);
     if (access === "ineligible") {
+      expect(pickers).toHaveLength(0);
       expect(host.querySelector(".chat-message-reactions")).toBeNull();
       return;
     }
-    const chips = host.querySelectorAll<HTMLButtonElement>("button.chat-reaction-chip");
+    // One summary tab hangs off the bubble; the toolbar keeps its own add-reaction picker.
+    expect(pickers).toHaveLength(access === "writable" ? 2 : 1);
+    const summary = host.querySelector(".chat-message-reactions")!;
+    expect(summary.parentElement?.classList.contains("chat-bubble")).toBe(true);
+    expect(summary.classList.contains("chat-message-reactions--own")).toBe(true);
+    // Most-used emoji lead; the total replaces per-emoji counts.
+    expect(tab().textContent).toBe("🎉👍7");
+    expect(tab().getAttribute("aria-label")).toBe("🎉 Ana, Ben, Cy and 2 others; 👍 You, Riley");
+    expect(summary.querySelector(".chat-reaction-who")?.textContent).toBe(
+      "🎉Ana, Ben, Cy and 2 others👍You, Riley",
+    );
     if (access === "readonly") {
-      expect(chips[0]!.disabled).toBe(true);
-      chips[0]!.click();
+      const allReactions = [
+        ...reactions,
+        ...["👀", "🚀", "😂", "🙏", "🔥", "✅", "🦞"].map((emoji, index) => ({
+          emoji,
+          count: index + 1,
+          identities: [{ id: "peer" }],
+        })),
+      ];
+      render(new Map([["message-1", allReactions]]));
+      expect(tab().disabled).toBe(false);
+      tab().click();
+      await waitForSolid(() =>
+        expect(summary.querySelectorAll(".chat-reaction-chip")).toHaveLength(9),
+      );
+      for (const reaction of allReactions) {
+        const chip = pickerButton(pickers[0]!, `${reaction.emoji} ${reaction.count}`)!;
+        expect(chip.disabled).toBe(true);
+        chip.click();
+      }
+      expect(summary.querySelector(".palette")).toBeNull();
       expect(onReact).not.toHaveBeenCalled();
       return;
     }
-    expect(chips).toHaveLength(2);
-    const [own, crowd] = [...chips] as [HTMLButtonElement, HTMLButtonElement];
-    expect(own.getAttribute("aria-pressed")).toBe("true");
-    expect(own.getAttribute("aria-label")).toBe("👍 2");
-    expect(own.parentElement).toHaveProperty("content", "You, Riley reacted with 👍");
-    expect(crowd.parentElement).toHaveProperty(
-      "content",
-      "Ana, Ben, Cy and 2 others reacted with 🎉",
-    );
-    own.click();
-    expect(onReact).toHaveBeenCalledWith("message-1", "👍", true);
-    crowd.click();
-    expect(onReact).toHaveBeenCalledWith("message-1", "🎉", false);
-    const picker = pickers[0]!;
-    flush();
-    expect(picker.querySelector(".palette")).toBeNull();
-    picker.querySelector<HTMLButtonElement>(".trigger")!.click();
-    const pressed = pickerButton(picker, "👍")!;
-    expect(pressed.getAttribute("aria-pressed")).toBe("true");
+    const picker = await openTab();
+    const chips = [...picker.querySelectorAll<HTMLButtonElement>(".chat-reaction-chip")];
+    expect(chips.map((chip) => [chip.getAttribute("aria-label"), chip.ariaPressed])).toEqual([
+      ["🎉 5", "false"],
+      ["👍 2", "true"],
+    ]);
     const didHide = hidden(picker);
-    pressed.click();
+    chips[1]!.click();
     expect(onReact).toHaveBeenLastCalledWith("message-1", "👍", true);
     await didHide;
     expect(picker.querySelector(".palette")).toBeNull();
-    picker.querySelector<HTMLButtonElement>(".trigger")!.click();
+    (await openTab()).querySelector<HTMLButtonElement>(".chat-reaction-chip")!.click();
+    expect(onReact).toHaveBeenLastCalledWith("message-1", "🎉", false);
+    expect(pickerButton(await openTab(), "👍")!.getAttribute("aria-pressed")).toBe("true");
     pickerButton(picker, "🚀")!.click();
     expect(onReact).toHaveBeenLastCalledWith("message-1", "🚀", false);
   });
 
-  it("moves the add-reaction picker from the action row to the chip row once reacted", () => {
+  it("shows a lone reaction without a number and names an unlisted reactor", () => {
+    show({}, new Map([["message-1", [{ emoji: "👀", count: 2, identities: [{ id: "peer" }] }]]]));
+    expect(tab().textContent).toBe("👀2");
+    expect(tab().getAttribute("aria-label")).toBe("👀 peer and 1 other");
+    cleanupSolid();
+    host.remove();
+    show(
+      {},
+      new Map([
+        ["message-1", [{ emoji: "👀", count: 1, identities: [{ id: "peer", label: "Riley" }] }]],
+      ]),
+    );
+    expect(tab().textContent).toBe("👀");
+    expect(host.querySelector(".chat-message-reactions--own")).toBeNull();
+  });
+
+  it("keeps the toolbar picker stable and disables open reactions when write access ends", async () => {
+    const access = { role: "assistant", writable: true };
+    const { render, onReact } = show(access, new Map());
+    const locations = (messageReactions: Map<string, MessageReactionSummary[]>) =>
+      render(messageReactions).map((picker) =>
+        picker.closest(".chat-message-reactions") ? "tab" : "actions",
+      );
+    expect(locations(new Map())).toEqual(["actions"]);
+    const toolbar = host.querySelector(".chat-reaction-action");
+    expect(locations(new Map([["message-1", reactions]]))).toEqual(["tab", "actions"]);
+    expect(host.querySelector(".chat-reaction-action")).toBe(toolbar);
+    const picker = await openTab();
+    const chip = picker.querySelector<HTMLButtonElement>(".chat-reaction-chip")!;
+    access.writable = false;
+    render(new Map([["message-1", reactions]]));
+    expect(chip.disabled).toBe(true);
+    expect(picker.querySelector(".palette")).toBeNull();
+    chip.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onReact).not.toHaveBeenCalled();
+    expect(locations(new Map([["message-1", []]]))).toEqual([]);
+  });
+
+  it("keeps reactions actionable on the bubble through an active continuation", async () => {
     host = document.body.appendChild(document.createElement("div"));
     const harness = createMessageGroupHarness(host);
     const group = createMessageGroup(
       {
         role: "assistant",
-        content: [{ type: "text", text: "A shared reply" }],
+        content: [{ type: "text", text: "A saved reply" }],
         timestamp: 1,
         __openclaw: { id: "message-1" },
       },
       "assistant",
     );
-    const render = (messageReactions: Map<string, MessageReactionSummary[]>) => {
+    const onReact = vi.fn();
+    for (const active of [false, true, false]) {
       harness.render(group, {
         showReasoning: false,
         userId: "self",
-        messageReactions,
-        onReact() {},
+        messageReactions: new Map([["message-1", reactions]]),
+        onReact,
+        activeContinuation: active ? { parts: [], options: {} } : undefined,
       });
-      const pickers = [...host.querySelectorAll("openclaw-message-reaction-picker")];
-      return pickers.map((picker) =>
-        picker.closest(".chat-message-reactions") ? "chips" : "actions",
-      );
-    };
-    expect(render(new Map())).toEqual(["actions"]);
-    expect(render(new Map([["message-1", reactions]]))).toEqual(["chips"]);
-    expect(render(new Map([["message-1", []]]))).toEqual(["actions"]);
+      const footer = host.querySelector(".chat-group > .chat-group-footer")!;
+      expect(host.querySelectorAll(".chat-bubble > .chat-message-reactions")).toHaveLength(1);
+      expect(footer.querySelector(".chat-group-footer__meta") !== null).toBe(!active);
+      const picker = await openTab();
+      const didHide = hidden(picker);
+      pickerButton(picker, "🚀")!.click();
+      expect(onReact).toHaveBeenLastCalledWith("message-1", "🚀", false);
+      await didHide;
+    }
   });
+
+  it.each(["user", "assistant"])(
+    "hangs each %s message's reactions off its own bubble",
+    async (role) => {
+      host = document.body.appendChild(document.createElement("div"));
+      const harness = createMessageGroupHarness(host);
+      const message = (id: string) => ({
+        role,
+        content: [{ type: "text", text: `Shared message ${id}` }],
+        timestamp: 1,
+        __openclaw: { id },
+      });
+      const first = message("first");
+      const group = createMessageGroup(first, role, {
+        messages: [
+          { key: "first", message: first },
+          { key: "last", message: message("last") },
+        ],
+      });
+      const onReact = vi.fn();
+      const render = (messageReactions: Map<string, MessageReactionSummary[]>) =>
+        harness.render(group, { showReasoning: false, userId: "self", messageReactions, onReact });
+      render(new Map());
+      const copy = host.querySelector<HTMLButtonElement>(
+        ".chat-message-actions-row .chat-copy-btn",
+      )!;
+      copy.focus();
+      render(
+        new Map([
+          ["first", reactions],
+          ["last", reactions],
+        ]),
+      );
+      // Reactions arriving must not rebuild the toolbar a keyboard user is on.
+      expect(document.activeElement).toBe(copy);
+      for (const id of ["first", "last"]) {
+        expect(tab(id).closest(".chat-bubble")?.getAttribute("data-message-id")).toBe(id);
+        const picker = await openTab(id);
+        const didHide = hidden(picker);
+        picker.querySelector<HTMLButtonElement>(".chat-reaction-chip")!.click();
+        await didHide;
+      }
+      expect(onReact.mock.calls.map(([id]) => id)).toEqual(["first", "last"]);
+    },
+  );
 
   it("searches emoji by name and selects the first match on Enter", async () => {
     const { root, onReact, input } = await customEntry();
@@ -192,7 +303,7 @@ describe("transcript message reactions", () => {
       flush();
       expect(onReact).not.toHaveBeenCalled();
       expect(root.querySelector(".emoji-search-panel__empty")?.textContent).toBe(
-        "No matching emoji",
+        "No emoji match your search.",
       );
     }
     enter(input, " 🦞 ");

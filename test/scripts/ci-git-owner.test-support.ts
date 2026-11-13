@@ -51,6 +51,8 @@ const actionInputs = new Map<string, ActionInput>();
 const ownerSource = read(".github/actions/git-owner/owner.py");
 const basePolicySource = read(".github/actions/ensure-base-commit/policy.py");
 const publisherPolicySource = read(".github/actions/publish-generated-pr/policy.py");
+const fixtureLifetimeFds =
+  '((7,) if os.environ.get("OPENCLAW_PR_LIFETIME_FILE") else ()) + tuple(item["fd"] for item in json.loads(os.environ.get("OPENCLAW_PR_LIFETIME_ANCESTORS", "[]")))';
 
 function readActionSteps(action: string) {
   const input =
@@ -199,8 +201,10 @@ export async function runCiGitStep(options: {
     options.workflow || options.action === "mantis-validate-trusted-ref" || publisher;
   const clock = {
     ...options,
+    // Policy tests can accelerate escalation while lifecycle tests retain real grace.
     realDrain:
-      options.cancelDuringCleanup || options.scenario?.startsWith("cancel-") || options.realDrain,
+      options.realDrain ??
+      (options.cancelDuringCleanup || options.scenario?.startsWith("cancel-") || undefined),
   };
   const step: (Step & { run: string }) | undefined = options.action
     ? readActionSteps(options.action).find((entry) =>
@@ -223,6 +227,8 @@ export async function runCiGitStep(options: {
   if (!step?.run) {
     throw new Error("Missing executable action step");
   }
+  const selectedSourceBootstrap =
+    isWorkflow("linux-app-release") && step.name === "Checkout selected tag";
   let env: Record<string, string>;
   let performanceFixture: ReturnType<typeof preparePerformanceFixture> | undefined;
   let publisherFixture: ReturnType<typeof prepareGeneratedPublisherFixture> | undefined;
@@ -240,6 +246,7 @@ export async function runCiGitStep(options: {
         performanceFixture = preparePerformanceFixture(root, options.performance);
       }
       env = stepEnvironment(step, {
+        ...(step.name === "Prepare Git owner" ? { CHECKOUT_KIND: "prepare" } : {}),
         PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
         CONTENTS_TOKEN: "fixture-contents",
         HEAD_BRANCH: "automation/locale",
@@ -296,9 +303,9 @@ export async function runCiGitStep(options: {
           write(path.join(publish, ".previous-checkout"), "stale\n");
         }
       }
-      if (externalOwner) {
-        // Workflow bodies follow actions/checkout; selected-source bootstrap must
-        // still create its own directory, while later selected steps inherit one.
+      if (externalOwner && !selectedSourceBootstrap) {
+        // Workflow bodies normally follow actions/checkout. Selected-source bootstrap
+        // creates the checkout itself; later selected steps inherit one.
         for (const directory of [
           workspace,
           ...(!publisher && step["working-directory"]
@@ -306,6 +313,12 @@ export async function runCiGitStep(options: {
             : []),
         ]) {
           write(path.join(directory, ".git/preexisting.lock"), "not invocation-owned\n");
+        }
+        if (isWorkflow("plugin-npm-release")) {
+          write(
+            path.join(workspace, ".release-tooling/scripts/plugin-npm-release-admission.py"),
+            read("scripts/plugin-npm-release-admission.py"),
+          );
         }
         if (pluginRelease) {
           write(path.join(workspace, "package.json"), '{"version":"2026.8.33"}\n');
@@ -339,7 +352,7 @@ export async function runCiGitStep(options: {
              os.path.join(os.environ["RUNNER_TEMP"], "generated-pr-push.log"): "push-log"}
     if event == "open" and args[0] in names:
         subprocess.run([${JSON.stringify(process.execPath)}, ${JSON.stringify(ciCheckoutFixture)},
-                        "observe", os.environ["TMPDIR"], "linux:configured", names[args[0]]], check=True)
+                        "observe", os.environ["TMPDIR"], "linux:configured", names[args[0]]], check=True, pass_fds=${fixtureLifetimeFds})
 
 sys.addaudithook(fixture_file_boundary)
 
@@ -352,7 +365,7 @@ def main():`,
             "def backoff(seconds):",
             `def backoff(seconds):
     subprocess.run([${JSON.stringify(process.execPath)}, ${JSON.stringify(ciCheckoutFixture)},
-                    "observe", os.environ["TMPDIR"], "linux:configured", "backoff"], check=True)`,
+                    "observe", os.environ["TMPDIR"], "linux:configured", "backoff"], check=True, pass_fds=${fixtureLifetimeFds})`,
           );
         }
         if (action === "git-owner" && options.cancelDuringBackoff) {
@@ -377,7 +390,7 @@ def main():`,
             with open(fixture_cancel, "x") as receipt:
                 json.dump(os.getpid(), receipt)
             subprocess.run([${JSON.stringify(process.execPath)}, ${JSON.stringify(ciCheckoutFixture)},
-                            "observe", os.environ["TMPDIR"], "linux:configured", "backoff-cancel"], check=True)
+                            "observe", os.environ["TMPDIR"], "linux:configured", "backoff-cancel"], check=True, pass_fds=${fixtureLifetimeFds})
             os.kill(os.getpid(), signal.SIGTERM)`,
           );
         }
@@ -484,7 +497,8 @@ ${run}`;
       }
       if (options.prepare) {
         const prepare = readCiCheckoutStep("security-fast", "Prepare Git owner");
-        const prepareEnv = stepEnvironment(prepare, {});
+        // Policy fixtures need only the supervisor, without a candidate checkout.
+        const prepareEnv = stepEnvironment(prepare, { CHECKOUT_KIND: "prepare" });
         write("prepare.sh", renderGitTestClock(prepare.run, clock));
         // Run the actual prepare body in its own shell: its exec must not replace the caller.
         run = `CHECKOUT_KIND=${prepareEnv.CHECKOUT_KIND} bash --noprofile --norc -eo pipefail "$TMPDIR/prepare.sh"\n${run}`;

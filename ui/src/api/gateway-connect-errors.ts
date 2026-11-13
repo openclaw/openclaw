@@ -5,10 +5,12 @@ import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   readConnectErrorDetailCode,
+  readGatewayOperatorAccessClose,
   shouldPauseGatewayReconnect,
   type ErrorShape,
   type GatewayProtocolCloseContext,
 } from "@openclaw/gateway-client/browser";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isLoopbackHostname } from "../lib/gateway-locality.ts";
 import {
   BROWSER_WEBSOCKET_SECURITY_ERROR_CODE,
@@ -65,12 +67,15 @@ export function resolveBrowserGatewayClose(
       pendingError: nativeAuthError,
     };
   }
-  const error = pairingFailure ?? context.connectFailure?.error;
+  const accessDenial = readGatewayOperatorAccessClose(context.code, context.reason);
+  const error =
+    pairingFailure ??
+    (accessDenial ? new GatewayRequestError(accessDenial) : context.connectFailure?.error);
   const startupDelay = context.connectFailure?.reconnectDelayMs;
   if (startupDelay !== undefined) {
     return { retry: true, notify: true, reconnectDelayMs: startupDelay, pendingError: error };
   }
-  const connectError = error instanceof GatewayRequestError ? toGatewayErrorInfo(error) : undefined;
+  const connectError = error instanceof GatewayRequestError ? error : undefined;
   const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
   // This decision drives both scheduling and the store's reconnect rendering.
   const retry =
@@ -104,17 +109,28 @@ export function notifyBrowserWebSocketError(
 }
 
 function enrichProtocolMismatchDetails(message: string | undefined, details: unknown): unknown {
-  if (readConnectErrorDetailCode(details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
+  if (readConnectErrorDetailCode(details)) {
     return details;
   }
-  if (!message?.toLowerCase().includes("protocol mismatch")) {
+  const range = asOptionalRecord(details);
+  const min = range?.minProtocol ?? range?.expectedProtocol;
+  const max = range?.maxProtocol ?? range?.expectedProtocol;
+  const excludesClient =
+    typeof min === "number" &&
+    Number.isInteger(min) &&
+    min > 0 &&
+    typeof max === "number" &&
+    Number.isInteger(max) &&
+    max >= min &&
+    (min > PROTOCOL_VERSION || max < MIN_CLIENT_PROTOCOL_VERSION);
+  if (!message?.toLowerCase().includes("protocol mismatch") && !excludesClient) {
     return details;
   }
   return {
+    ...range,
     code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
     clientMinProtocol: MIN_CLIENT_PROTOCOL_VERSION,
     clientMaxProtocol: PROTOCOL_VERSION,
-    ...(details && typeof details === "object" && !Array.isArray(details) ? details : {}),
   };
 }
 

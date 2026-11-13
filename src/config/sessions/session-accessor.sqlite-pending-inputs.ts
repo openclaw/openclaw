@@ -26,6 +26,13 @@ import {
 } from "./session-actor-transaction.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import {
+  collectForeignLiveSessionPendingInputEntries,
+  copySessionPendingInputWorkerFacts,
+  hydratePendingInputWorkerOwner,
+  publishConsumedSessionPendingInputSources,
+  publishSessionPendingInputWorkerReceipt,
+} from "./session-pending-input-live-owner.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import {
   isFinalInputCompletion,
@@ -61,36 +68,14 @@ export function captureSessionPendingInputWorkerCustody() {
   if (!owner) {
     return undefined;
   }
-  const copy = (current: SessionPendingInputOwner): SessionPendingInputWorkerFacts => ({
-    agentId: current.agentId,
-    databaseAgentId: current.databaseAgentId,
-    inputId: current.inputId,
-    transcriptInputId: current.transcriptInputId,
-    sessionId: current.sessionId,
-    sessionKey: current.sessionKey,
-    databasePath: current.workerDatabasePath,
-    idempotencyKey: current.idempotencyKey,
-    lifecycleGeneration: current.lifecycleGeneration,
-    messageJson: current.messageJson,
-    preparedAuthority:
-      current.authority || current.sources?.some((source) => source.authority) ? true : undefined,
-    ...(current.sources ? { sources: current.sources.map(copy) } : {}),
-  });
   const relocation = owners.relocation.getStore();
   return {
-    facts: copy(owner),
+    facts: copySessionPendingInputWorkerFacts(owner),
     ...(relocation?.owner === owner ? { relocation: relocation.sourceInputId } : {}),
     assertCurrent: (facts?: SessionPendingInputAuthorityFacts, assertSourceCurrent?: () => void) =>
       assertPendingInputOwnerCurrent(owner, facts, assertSourceCurrent),
-    publish(receipt: SessionPendingInputWorkerReceipt) {
-      owner.transcriptInputId = receipt.transcriptInputId;
-      const consumed = new Set(receipt.consumedInputIds);
-      for (const source of owner.sources ?? [owner]) {
-        if (consumed.has(source.inputId)) {
-          source.consumed = true;
-        }
-      }
-    },
+    publish: (receipt: SessionPendingInputWorkerReceipt) =>
+      publishSessionPendingInputWorkerReceipt(owner, receipt),
   };
 }
 
@@ -101,16 +86,7 @@ export function runWithSessionPendingInputWorkerCustody<T>(
   assertCurrent: () => void,
   run: () => T,
 ): { value: T; receipt: SessionPendingInputWorkerReceipt } {
-  const hydrate = (current: SessionPendingInputWorkerFacts): SessionPendingInputOwner => ({
-    ...current,
-    workerDatabasePath: current.databasePath,
-    sources: current.sources?.map(hydrate),
-    assertCurrent,
-    finish: () => {
-      throw new Error("Worker custody cannot finish its host owner");
-    },
-  });
-  const owner = hydrate(facts);
+  const owner = hydratePendingInputWorkerOwner(facts, assertCurrent);
   const value = workerCustody.run({ owner, assertCurrent, consumed: new Set() }, () =>
     owners.current.run(owner, () =>
       relocation === undefined
@@ -157,22 +133,17 @@ const owners = resolveGlobalSingleton(Symbol.for("openclaw.sessionPendingInputOw
   transactionRelocations: new WeakMap<EngineConnection, Map<SessionPendingInputOwner, string>>(),
 }));
 
-const recoveredDedupeOwners = resolveGlobalSingleton(
-  Symbol.for("openclaw.sessionPendingInputDedupeRecoveries"),
-  () => new WeakSet<SessionPendingInputOwner>(),
-);
-
 registerAgentEventLifecycleRotationHandler("session-pending-inputs", () => {
   const failures: unknown[] = [];
   for (const owner of owners.live.values()) {
     try {
-      owner.finish("interrupted");
+      owner.finish("cancelled");
     } catch (error) {
       failures.push(error);
     }
   }
   if (failures.length) {
-    throw new AggregateError(failures, "Failed to record interrupted pending inputs");
+    throw new AggregateError(failures, "Failed to settle pending inputs");
   }
 });
 
@@ -187,6 +158,13 @@ export function releaseSessionPendingInputOwner(owner: SessionPendingInputOwner)
   if (owners.live.get(owner.inputId) === owner) {
     owners.live.delete(owner.inputId);
   }
+  // Timers can retain this owner through their async frame after settlement.
+  // Keep replay facts, but release the admission and staging closures.
+  owner.assertCurrent = assertPendingInputOwnerActive.bind(undefined, owner);
+  owner.assertMentionInvitationCurrent = undefined;
+  owner.finish = () => {};
+  owner.authority = undefined;
+  owner.promotedOwner = undefined;
 }
 
 export function assertRegisteredSessionPendingInputOwner(owner: SessionPendingInputOwner): void {
@@ -232,6 +210,9 @@ function assertPendingInputOwnerCurrent(
   } else {
     owner.assertCurrent();
   }
+  if (!owner.consumed) {
+    owner.assertMentionInvitationCurrent?.();
+  }
 }
 
 export function assertSessionPendingInputLifetimeCurrent(owner: SessionPendingInputOwner): void {
@@ -243,6 +224,18 @@ export function assertSessionPendingInputLifetimeCurrent(owner: SessionPendingIn
   }
   assertPendingInputOwnerActive(owner);
   (owner.authority?.assertLifetimeCurrent ?? owner.assertCurrent)();
+}
+
+/** Capture the calling owner before physical database discovery yields. */
+export function captureForeignLiveSessionPendingInputReader() {
+  const currentOwner = owners.current.getStore();
+  return (scope: { databasePath: string; sessionId: string; sessionKey: string }) =>
+    collectForeignLiveSessionPendingInputEntries({
+      scope,
+      liveOwners: owners.live.values(),
+      currentOwner,
+      assertLifetimeCurrent: assertSessionPendingInputLifetimeCurrent,
+    });
 }
 
 export function runWithSessionPendingInput<T>(owner: SessionPendingInputOwner, run: () => T): T {
@@ -300,6 +293,39 @@ export function hasRegisteredSessionPendingInputOwner(
   );
 }
 
+/** Durable queued text is visible only while its ordinary input owner is live. */
+export function listLiveSessionPendingInputs(
+  databasePath: string,
+  sessionKey: string,
+  sessionId: string,
+  queuedOnly = false,
+): Pick<SessionPendingInputOwner, "inputId" | "runId" | "recoverySource">[] {
+  return [...owners.live.values()]
+    .filter(
+      (owner) =>
+        owner.workerDatabasePath === databasePath &&
+        owner.sessionKey === sessionKey &&
+        owner.sessionId === sessionId &&
+        (!queuedOnly || (!owner.consumed && !owner.settling)) &&
+        (owner.settling || isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration)),
+    )
+    .map((owner) => ({
+      inputId: owner.inputId,
+      runId: owner.runId,
+      recoverySource: owner.recoverySource,
+    }));
+}
+
+/** Called after the exact IDs commit in the session marker, before shutdown cancellation. */
+export function preserveSessionQueuedInputOwnersForRestart(inputIds: readonly string[]): void {
+  for (const inputId of inputIds) {
+    const owner = owners.live.get(inputId);
+    if (owner && !owner.consumed && !owner.settling) {
+      owner.preserveQueuedForRestart = true;
+    }
+  }
+}
+
 type SessionInputCompletionScope = Pick<ResolvedTranscriptScope, "sessionId" | "sessionKey"> & {
   idempotencyKey: string;
 };
@@ -349,11 +375,10 @@ export function writeSessionInputCompletion(
   if (retained && isFinalInputCompletion(retained.outcome)) {
     return retained.outcome;
   }
-  const succeeded = classifyAgentRunTerminalOutcome(outcome) === "success";
   const completedAt = Date.now();
   const completionState = {
     outcome_json: JSON.stringify(outcome),
-    succeeded: succeeded ? 1 : 0,
+    succeeded: classifyAgentRunTerminalOutcome(outcome) === "success" ? 1 : 0,
     completed_at: completedAt,
   };
   executeSqliteQuerySync(
@@ -423,7 +448,7 @@ export function writeSessionInputCompletion(
   return outcome;
 }
 
-/** Capture the exact host owner before reading; claim it once in the consuming frame. */
+/** Only the freshly staged owner may spend one inbound dedupe retry. */
 export function prepareCurrentSessionPendingInputDedupeRecovery(
   scope: Pick<ResolvedTranscriptScope, "sessionId" | "sessionKey">,
   runId: string,
@@ -432,8 +457,7 @@ export function prepareCurrentSessionPendingInputDedupeRecovery(
   if (
     !owner ||
     owner.sources ||
-    owner.restartRecovered !== true ||
-    recoveredDedupeOwners.has(owner) ||
+    owner.dedupeRetryAvailable !== true ||
     owner.sessionId !== scope.sessionId ||
     owner.sessionKey !== scope.sessionKey ||
     owner.idempotencyKey !== `${runId}:user`
@@ -442,32 +466,16 @@ export function prepareCurrentSessionPendingInputDedupeRecovery(
   }
   // Preparation does not spend replay custody; the claim rechecks current authority.
   assertSessionPendingInputLifetimeCurrent(owner);
-  return (
-    path: string,
-    snapshot: { current: boolean; pending?: SessionPendingInputRow },
-  ): boolean => {
+  return (): boolean => {
     assertPendingInputOwnerCurrent(owner);
-    const row = snapshot.pending;
     if (
       owners.current.getStore() !== owner ||
-      recoveredDedupeOwners.has(owner) ||
-      owner.consumed ||
-      owner.workerDatabasePath !== path ||
-      !snapshot.current ||
-      !row ||
-      row.input_id !== owner.inputId ||
-      row.run_id !== runId ||
-      row.session_key !== owner.sessionKey ||
-      row.session_id !== owner.sessionId ||
-      row.lifecycle_generation !== owner.lifecycleGeneration ||
-      row.message_json !== owner.messageJson ||
-      row.state !== "queued" ||
-      row.consumed_event_id != null ||
-      !hasRegisteredSessionPendingInputOwner(path, row)
+      owner.dedupeRetryAvailable !== true ||
+      owner.consumed
     ) {
       return false;
     }
-    recoveredDedupeOwners.add(owner);
+    owner.dedupeRetryAvailable = undefined;
     return true;
   };
 }
@@ -481,7 +489,10 @@ export function readSessionPendingInputByKey(
   const actor = readSessionActorTransactionState(database, scope);
   if (actor) {
     const row = actor.pendingInputs.get(idempotencyKey);
-    return row && { ...row };
+    if (row) {
+      return { ...row };
+    }
+    // The resident map covers unconsumed custody, not retained source history.
   }
   if (!hasSessionPendingInputsSchema(database.db)) {
     return undefined;
@@ -509,9 +520,9 @@ export function resolveSessionPendingInputAppend(
     return undefined;
   }
   const idempotencyKey = record.idempotencyKey.trim();
-  const row = preparedInputs
-    ? preparedInputs.get(idempotencyKey)
-    : readSessionPendingInputByKey(database, scope, idempotencyKey);
+  const row =
+    preparedInputs?.get(idempotencyKey) ??
+    readSessionPendingInputByKey(database, scope, idempotencyKey);
   const owner = owners.current.getStore();
   // A bound-session mirror shares source correlation, never its pending custody.
   const ownsInput =
@@ -584,7 +595,7 @@ export function resolveSessionPendingInputAppend(
     const inputs =
       preparedInputs ?? readSessionActorTransactionState(database, scope)?.pendingInputs;
     const acceptedByKey = new Map(
-      (inputs
+      (inputs && owner.sources.every((source) => inputs.has(source.idempotencyKey))
         ? owner.sources.flatMap((source) => inputs.get(source.idempotencyKey) ?? [])
         : executeSqliteQuerySync(
             database.db,
@@ -628,6 +639,13 @@ export function resolveSessionPendingInputAppend(
       inputId: transcriptInputId,
       message: parseSessionPendingInputMessage(owner.messageJson),
       alreadyPromoted,
+      ...(!alreadyPromoted
+        ? {
+            mentionInvitations: owner.sources.flatMap((source) =>
+              source.mentionInvitation ? [source.mentionInvitation] : [],
+            ),
+          }
+        : {}),
       sourceInputIds: sources.map((source) => source.input_id),
       ...(alreadyPromoted && stageRelocation ? { stageRelocation } : {}),
     };
@@ -641,6 +659,7 @@ export function resolveSessionPendingInputAppend(
     inputId: transcriptInputId,
     message: parseSessionPendingInputMessage(row?.message_json ?? owner.messageJson),
     alreadyPromoted: !row,
+    ...(row && owner.mentionInvitation ? { mentionInvitations: [owner.mentionInvitation] } : {}),
     ...(!row && stageRelocation ? { stageRelocation } : {}),
   };
 }
@@ -696,11 +715,8 @@ export function consumeSessionPendingInput(
         continue;
       }
       actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
-      if (pending.sourceInputIds) {
-        actor.pendingInputs.set(key, { ...row, consumed_event_id: pending.inputId });
-      } else {
-        actor.pendingInputs.delete(key);
-      }
+      // Retain source receipts in SQLite only; replay uses the indexed reader.
+      actor.pendingInputs.delete(key);
     }
   }
   // Outer commit publishes this fact before observers; rollback leaves finish responsible.
@@ -719,11 +735,7 @@ export function consumeSessionPendingInput(
         worker?.consumed.delete(consumedOwner.inputId);
       }
     },
-    commit: () => {
-      for (const consumedOwner of consumedOwners) {
-        consumedOwner.consumed = true;
-      }
-    },
+    commit: () => publishConsumedSessionPendingInputSources(owner, consumedOwners),
   });
 }
 

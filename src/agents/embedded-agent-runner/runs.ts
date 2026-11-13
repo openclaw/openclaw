@@ -31,7 +31,6 @@ import {
   assertSessionControllerOperation,
   getAttachedBackend,
   getSessionControllerEntryForOperation,
-  getSessionControllerOperation,
   markReplyOperationExecutionStarted,
   readSessionControllerOperationState,
   resolveReplyRunForCurrentSessionId,
@@ -45,6 +44,7 @@ import {
   type SessionTarget,
 } from "../../sessions/session-controller.target.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { settlesWithin } from "../../shared/settle-within.js";
 import { SessionControllerAdmissionRequiredError } from "../harness/errors.js";
 import {
@@ -401,10 +401,9 @@ export function prepareEmbeddedAgentRunCompletionClaim(
   revokeCompletionClaim(sessionId, undefined, target);
   EMBEDDED_RUN_COMPLETION_CLAIMS.add(claim);
   const consume = (allowUnregistered: boolean): boolean => {
-    if (!EMBEDDED_RUN_COMPLETION_CLAIMS.has(claim)) {
+    if (!EMBEDDED_RUN_COMPLETION_CLAIMS.delete(claim)) {
       return false;
     }
-    EMBEDDED_RUN_COMPLETION_CLAIMS.delete(claim);
     if (!claim.promoted) {
       claim.settleRegistration(undefined);
     }
@@ -470,20 +469,6 @@ export function prepareEmbeddedAgentRunCompletionClaim(
 
 export function isEmbeddedAgentRunHandleActive(sessionId: string): boolean {
   return Boolean(getActiveNativeAttempt(sessionId));
-}
-
-/** @internal Exposed for unit tests only. */
-export function resolveActiveEmbeddedRunHandleSessionId(sessionKey: string): string | undefined {
-  const normalizedSessionKey = sessionKey.trim();
-  if (!normalizedSessionKey) {
-    return undefined;
-  }
-  // Logical aliases outlive turns; native lookup follows the exact registration key.
-  const operation = getSessionControllerOperation(normalizedSessionKey);
-  const registration = operation && getControllerEmbeddedAttachment(operation);
-  return registration?.sessionKey?.trim() === normalizedSessionKey
-    ? registration.sessionId
-    : undefined;
 }
 
 export type ActiveEmbeddedRunOwner = {
@@ -737,7 +722,7 @@ async function abortAndDrainCapturedEmbeddedAgentRun(
   registration: ActiveEmbeddedRunAttachment | undefined,
 ): Promise<AbortAndDrainEmbeddedAgentRunResult> {
   const settleMs = params.settleMs ?? 15_000;
-  const settleDeadline = Date.now() + resolveTimerTimeoutMs(settleMs, 100, 100);
+  const settleDeadline = monotonicNow() + resolveTimerTimeoutMs(settleMs, 100, 100);
   const handle = registration?.handle;
   let aborted = false;
   if (params.reason === "stuck_recovery" && operation) {
@@ -778,7 +763,7 @@ async function abortAndDrainCapturedEmbeddedAgentRun(
       diag.warn(`abort failed: sessionId=${params.sessionId} err=${String(err)}`);
     }
   }
-  const remainingMs = Math.max(0, settleDeadline - Date.now());
+  const remainingMs = Math.max(0, settleDeadline - monotonicNow());
   const nativeSettlement = waitForCapturedSessionNativeAttemptEnd(
     params.sessionId,
     remainingMs,
@@ -977,8 +962,9 @@ export function attachActiveEmbeddedRun(
   attachNativeAttempt(attachment);
   handle[embeddedRunCleanupAttachment] = attachment;
   if (watchdogAttempt && handle.ownsLiveness) {
-    const wait = watchdogAttempt.beginWait({
+    attachment.closeWatchdogWait = watchdogAttempt.beginWait({
       kind: "runtime_owned",
+      releaseStartsSemanticWindow: true,
       isCurrent: () => {
         if (
           getEmbeddedRunAttachment(handle) !== attachment ||
@@ -989,8 +975,7 @@ export function attachActiveEmbeddedRun(
         toolAuthority?.assertActive();
         return handle.ownsLiveness?.() === true && !handle.isAborted?.() && !handle.isStopped?.();
       },
-    });
-    attachment.closeWatchdogWait = () => wait.close();
+    }).close;
   }
   if (operation) {
     if (toolAuthority?.sourceTurnId) {

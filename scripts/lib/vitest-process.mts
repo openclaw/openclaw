@@ -64,7 +64,17 @@ export function spawnOwnedVitestProcess(spec: {
     if (containingOwner) {
       parent = { root: containingOwner.root, release: containingOwner.claim() };
     }
-    tempRoot = tempDirs.make("oc-vt-", containingRoot);
+    // Reserve 45 bytes for socket suffixes (Chromium's SingletonSocket), plus
+    // the NUL in macOS's 104-byte sun_path. os.tmpdir() also inherits TMPDIR.
+    const allocationRoot =
+      process.platform !== "win32" &&
+      Buffer.byteLength(path.join(containingRoot, "oc-vt-XXXXXX")) > 58
+        ? fs.realpathSync.native("/tmp")
+        : containingRoot;
+    tempRoot = tempDirs.make("oc-vt-", allocationRoot);
+    // Stop ancestor package scopes without forcing CommonJS: fixtures may use
+    // either extensionless CommonJS or Node's syntax-detected JavaScript modules.
+    fs.writeFileSync(path.join(tempRoot, "package.json"), "{}\n");
     owner = createVitestResourceOwner(tempRoot);
     const childEnv: NodeJS.ProcessEnv = { ...env, TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot };
     if (mode !== "tooling") {

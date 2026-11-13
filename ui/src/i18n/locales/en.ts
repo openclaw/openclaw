@@ -9,6 +9,7 @@ type EnglishCatalog = TranslationMap & {
   execApproval: TranslationMap & { labels: TranslationMap; scope: TranslationMap };
   sessionProgressCard: TranslationMap & {
     refresh: TranslationMap;
+    runtime: TranslationMap;
     activity: TranslationMap;
     outcome: TranslationMap;
     status: TranslationMap;
@@ -35,10 +36,10 @@ type EnglishCatalog = TranslationMap & {
   pluginsPage: TranslationMap & Record<"installed" | "official" | "install", string>;
   mcpApp: TranslationMap;
   linkReader: TranslationMap;
+  openclawId: TranslationMap;
   agentTools: TranslationMap;
   githubPublication: TranslationMap & Record<"newAction" | "capacity", string>;
-  githubConnections: TranslationMap &
-    Record<"title" | "mine" | "system" | "forMe" | "forSystem", string>;
+  githubConnections: TranslationMap & Record<"title" | "mine" | "system", string>;
   board: TranslationMap & { announcement: TranslationMap; widget: TranslationMap };
   browser: TranslationMap & { errors: TranslationMap; annotatePrompt: TranslationMap };
   pluginUi: TranslationMap & { surface: TranslationMap };
@@ -78,7 +79,6 @@ type EnglishCatalog = TranslationMap & {
         Record<
           | "automationAttention"
           | "automationEmpty"
-          | "automationEnabled"
           | "automationError"
           | "automationLoading"
           | "automationMore"
@@ -95,7 +95,6 @@ type EnglishCatalog = TranslationMap & {
       systemNotice: TranslationMap &
         Record<
           | "guardian"
-          | "restartRecovery"
           | "automationRecovery"
           | "gatewayRestarted"
           | "cliHarnessContext"
@@ -225,18 +224,13 @@ type EnglishCatalog = TranslationMap & {
   sessionHovercard: TranslationMap & { states: TranslationMap; checks: TranslationMap } & Record<
       | "ariaLabel"
       | "linkedChannel"
-      | "moreParticipants"
       | "moreParticipantsLabel"
       | "projectLabel"
       | "workspaceLabel"
       | "branchLabel"
       | "runsOn"
-      | "machineLabel"
       | "machineCpu"
-      | "machineMemory"
-      | "more"
-      | "changedFile"
-      | "changedFiles",
+      | "machineMemory",
       string
     >;
   filePreview: TranslationMap;
@@ -282,15 +276,17 @@ type EnglishCatalog = TranslationMap & {
       | "withMoreParticipants"
       | "snoozeWakes"
       | "snoozeTomorrowTime"
+      | "snoozeTomorrow"
       | "user"
       | "assistant"
-      | "opensAsDashboard"
       | "approvalNeeded"
       | "messageNeedsAttention"
       | "messagesNeedAttention"
       | "unsentDraft"
       | "noArchivedSessions"
       | "status"
+      | "all"
+      | "snoozed"
       | "statusLive"
       | "statusIdle"
       | "statusUnknown"
@@ -307,7 +303,6 @@ type EnglishCatalog = TranslationMap & {
       | "approvalsNeedApproval"
       | "attentionMore"
       | "runFailedReason"
-      | "childRunFailedReason"
       | "runErrorTimedOut"
       | "runErrorUnknown"
       | "attentionRequired"
@@ -322,7 +317,6 @@ type EnglishCatalog = TranslationMap & {
       | "showMoreChildren"
       | "archived"
       | "unread"
-      | "automationAttached"
       | "incognito"
       | "incognitoLabel"
       | "incognitoDescription"
@@ -340,8 +334,7 @@ type EnglishCatalog = TranslationMap & {
       | "forkedSession"
       | "archiveSession"
       | "restoreSession"
-      | "deleteSessionStale"
-      | "deleteSessionsStale"
+      | "deleteSessionIdentityMissing"
       | "groupMenu"
       | "groupOptions"
       | "newSessionInGroup"
@@ -356,6 +349,15 @@ type EnglishCatalog = TranslationMap & {
 };
 
 const startupEnglish = {
+  runtimeErrors: {
+    socketInsecure:
+      "Browser refused the Gateway WebSocket for security reasons. Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789.",
+    socketRefused:
+      "Browser refused the Gateway WebSocket for security reasons. Check the Gateway WebSocket URL and browser security policy.",
+    socketCreateFailed:
+      "Couldn’t create the Gateway WebSocket. Check the Gateway WebSocket URL and browser security policy. Details: {message}",
+    socketTimeout: "gateway websocket opening timed out after {milliseconds}ms",
+  },
   pluginUi: {
     retryView: "Retry plugin view",
     inlineLoading: "Loading plugin view…",
@@ -363,34 +365,36 @@ const startupEnglish = {
       "This view is unavailable. Check that its plugin is installed, enabled, and allowed for your account. Reload the conversation after installing or updating the plugin.",
     dashboardTitle: "Session dashboard",
     customPluginsDisabled: "Custom plugin UI is off",
-    customPluginsEnableHint: "Enable Custom plugin UI in Labs.",
-    openLabs: "Open Labs",
+    customPluginsEnableHint:
+      "Disabled by the Gateway configuration. An administrator can enable native plugin UI.",
     surface: {},
   },
   capacityMeter: {},
   agentsHome: {
-    loadFailed: "Could not load agents. Try again.",
+    loadFailed: "Couldn’t load agents. Retry.",
   },
   outputs: {
     dashboard: "Dashboard",
   },
   common: {
+    reportBug: "Report a bug",
+    suggestFeature: "Suggest a feature",
+    showDetails: "Show details",
     uploadsDisabled: "File and image uploads are disabled.",
-    health: "Health",
     ok: "OK",
     yes: "Yes",
     no: "No",
-    default: "Default",
     active: "Active",
     loading: "Loading…",
     gatewayStarting: "Gateway starting…",
     refreshing: "Refreshing…",
-    offline: "Offline",
+    offline: "Disconnected",
     connect: "Connect",
     connected: "Connected",
     refresh: "Refresh",
     retry: "Retry",
-    staleData: "Showing stale data.",
+    helpFor: "Help for {section}",
+    staleData: "Showing last known data.",
     reload: "Reload",
     reset: "Reset",
     restore: "Restore",
@@ -398,7 +402,6 @@ const startupEnglish = {
     undo: "Undo",
     probe: "Check connection",
     call: "Call",
-    confirm: "Confirm",
     dontAskAgain: "Don't ask me again",
     cancel: "Cancel",
     close: "Close",
@@ -408,14 +411,15 @@ const startupEnglish = {
     back: "Back",
     create: "Create",
     copy: "Copy",
-    copied: "Copied!",
-    copyFailed: "Copy failed",
+    copied: "Copied",
+    copyFailed: "Couldn’t copy. Try again.",
     copyCode: "Copy code",
     copyTable: "Copy table",
     expandTable: "Expand table",
     expandedTable: "Expanded table",
     closeTable: "Close expanded table",
     resizeSplitView: "Resize split view",
+    resizeMessageWidth: "Resize message width",
     delete: "Delete",
     remove: "Remove",
     dismiss: "Dismiss",
@@ -426,7 +430,6 @@ const startupEnglish = {
     failed: "Failed",
     none: "none",
     na: "n/a",
-    never: "never",
     justNow: "just now",
     now: "now",
     unknown: "Unknown",
@@ -451,7 +454,6 @@ const startupEnglish = {
     publicKey: "Public Key",
     probeOk: "Connection check passed",
     probeFailed: "Connection check failed",
-    reloadConfig: "Reload Config",
     multiSelect: {
       addCustom: "Add “{value}”",
       noMatches: "No matches",
@@ -460,12 +462,12 @@ const startupEnglish = {
     loadConfig: "Load config",
     loadApprovals: "Load approvals",
     settingsSections: "Settings sections",
-    version: "Version",
     docs: "Docs",
     learnMore: "Learn more",
     colorMode: "Color mode",
     colorModeOption: "Color mode: {mode}",
     search: "Search",
+    clearSearch: "Clear search",
     pickerNoMatches: "No matches",
     save: "Save",
     saving: "Saving…",
@@ -505,22 +507,18 @@ const startupEnglish = {
   sessionHovercard: {
     ariaLabel: "Session information",
     linkedChannel: "Linked to {channel}",
-    moreParticipants: "+{count}",
     moreParticipantsLabel: "{count} more participants",
     projectLabel: "Project",
     workspaceLabel: "Workspace",
     branchLabel: "Branch",
     runsOn: "Runs on {providerId} · {profileId}",
-    machineLabel: "Machine",
     machineCpu: "{cpu} vCPU",
     machineMemory: "{memory} GB",
-    more: "+{count} more",
-    changedFile: "{count} file",
-    changedFiles: "{count} files",
     states: {},
     checks: {},
   },
   sessionProgressCard: {
+    runtime: {},
     composerTitle: "Task progress",
 
     clearFailed: "Could not clear saved progress card.",
@@ -554,9 +552,9 @@ const startupEnglish = {
     slack: {},
     telegram: {},
     whatsapp: {
-      loggedOut: "Logged out.",
+      loggedOut: "Signed out.",
       logoutNotCleared:
-        "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
+        "No saved WhatsApp session was cleared. It may already be gone or need manual cleanup.",
     },
   },
   agentStartup: {
@@ -565,11 +563,12 @@ const startupEnglish = {
     short: "Starting up…",
   },
   lazyView: {
-    errorTitle: "Panel failed to load",
-    genericSubtitle: "Something went wrong while loading this panel.",
+    errorTitle: "Couldn’t load this panel.",
+    genericSubtitle: "Try again.",
     staleTitle: "This view could not load",
     staleSubtitle:
       "Some interface files could not be downloaded. Check your connection, then reload.",
+    bootDraftRecovery: "Copy the draft below before clearing it and reloading.",
     reloading: "Reloading…",
     retry: "Retry",
     stylesFailed: "Styles failed to load, so the page may look broken.",
@@ -601,27 +600,19 @@ const startupEnglish = {
       commitBehind: "{count} commit behind",
       commitsBehind: "{count} commits behind",
     },
-    sidebar: {
-      waitingForIdle: "Waiting for active work",
-    },
+    sidebar: {},
     dialog: {},
     channel: {},
     installKind: {},
     page: {},
-    coalescedRestart:
-      "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
-    error: "Update error: {error}",
-    checkError: "Could not check for updates: {error}",
+    error: "Couldn’t update OpenClaw. {error}",
+    checkError: "Couldn’t check for updates. {error}",
     status: "Update {status}: {reason}. {guidance}",
-    verificationFailedWithIdentity:
-      "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}. Run `openclaw triage` on the Gateway host before retrying.",
-    handoffTimeout:
-      "Update completion was not confirmed. Run `openclaw triage` on the Gateway host and inspect the result before retrying.",
     outcomeUnknown:
-      "The update outcome is unknown. Run `openclaw triage` on the Gateway host and inspect the result before retrying.",
+      "Couldn’t confirm the update outcome. Run `openclaw triage` on the computer running OpenClaw and inspect the result before retrying.",
     triage: {
       hostHint:
-        "If Ask OpenClaw is unavailable, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
+        "If Ask OpenClaw is unavailable, run `openclaw triage` on the computer running OpenClaw to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
     },
     report: {},
     failureReasons: {
@@ -631,15 +622,15 @@ const startupEnglish = {
         "Not a git checkout. Run `openclaw update` from the CLI for a global reinstall.",
       notOpenclawRoot:
         "Run the update from an OpenClaw checkout or use the CLI global reinstall path.",
-      depsInstallFailed: "Dependency install failed. Fix the install error and retry.",
-      buildFailed: "Build failed. Fix the build error and retry.",
+      depsInstallFailed: "Couldn’t install dependencies. Fix the install error and retry.",
+      buildFailed: "Couldn’t build the update. Fix the build error and retry.",
       buildDirty:
         "The selected revision's build changed checkout files. Retry with a revision that includes its generated artifacts.",
-      uiBuildFailed: "The control UI rebuild failed. Fix the UI build error and retry.",
+      uiBuildFailed: "Couldn’t rebuild the Control UI. Fix the UI build error and retry.",
       globalInstallFailed:
         "The global package install did not verify on disk. Retry or reinstall from the CLI.",
       restartDisabled:
-        "The update was not applied because gateway restarts are disabled. Enable restarts in config, then retry.",
+        "The update was not applied because Gateway restarts are disabled. Enable restarts in config, then retry.",
       restartUnavailable:
         "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
       externalSupervisorUpdateRequired:
@@ -662,21 +653,18 @@ const startupEnglish = {
         "The Gateway could not start the update helper. Run `openclaw update` in the terminal instead.",
       managedServiceHandoffParentTimeout:
         "The Gateway stayed up too long for the update helper. Start the update again, or run `openclaw update`.",
-      default: "See the gateway logs for the exact failure and retry once the cause is fixed.",
+      default: "See the Gateway logs for the exact failure and retry once the cause is fixed.",
     },
-    failedAtStep: "The update failed at {step}: {cause}.",
-    succeededVersion: "Gateway updated to v{version}.",
-    succeededCommit: "Gateway updated · now on {sha}.",
-    succeeded: "Gateway updated and restarted.",
+    failedAtStep: "Couldn’t complete {step}: {cause}.",
   },
   devices: {
     readOnly: {},
     // The trigger and load failure stay eager; dialog copy follows its lazy renderer.
     pairing: {
-      button: "Pair device",
-      adminRequired: "Administrator access is required to create setup codes.",
-      title: "Pair a device",
-      loadFailed: "Could not load the pairing dialog. Check your connection and try again.",
+      button: "Connect a device",
+      adminRequired: "You need admin access to create setup codes.",
+      title: "Connect a device",
+      loadFailed: "Couldn’t load the connection dialog. Check your connection and try again.",
     },
     binding: {},
     inventory: {},
@@ -722,15 +710,17 @@ const startupEnglish = {
     withMoreParticipants: "+{count} more",
     snoozeWakes: "Wakes {time}",
     snoozeTomorrowTime: "tomorrow {time}",
+    snoozeTomorrow: "Tomorrow",
     user: "User",
     assistant: "Assistant",
-    opensAsDashboard: "Opens as dashboard",
     approvalNeeded: "Approval needed",
     messageNeedsAttention: "{count} message needs attention",
     messagesNeedAttention: "{count} messages need attention",
     unsentDraft: "Unsent draft",
     noArchivedSessions: "No archived sessions.",
     status: "Status",
+    all: "All",
+    snoozed: "Snoozed",
     statusLive: "Live",
     statusIdle: "Idle",
     statusUnknown: "Unknown",
@@ -747,7 +737,6 @@ const startupEnglish = {
     approvalsNeedApproval: "{count} requests need approval",
     attentionMore: "+{count} more",
     runFailedReason: "Run failed: {reason}",
-    childRunFailedReason: "Child session {label} failed: {reason}",
     runErrorTimedOut: "Timed out",
     runErrorUnknown: "Unknown error",
     attentionRequired: "Session needs attention",
@@ -755,6 +744,7 @@ const startupEnglish = {
     provider: "Provider",
     lastActive: "Last active {time}",
     activeRun: "Active run",
+    backgroundWorkRunning: "Background work running",
     subagentsWorking: "Subagents working",
     showChildSessions: "Show {count} child sessions for {session}",
     hideChildSessions: "Hide {count} child sessions for {session}",
@@ -762,7 +752,6 @@ const startupEnglish = {
     showMoreChildren: "Show {count} more",
     archived: "Archived",
     unread: "Unread",
-    automationAttached: "Automation attached",
     incognito: "Incognito session",
     incognitoLabel: "Incognito",
     incognitoDescription:
@@ -792,9 +781,10 @@ const startupEnglish = {
     forkedSession: "Forked session",
     archiveSession: "Archive session",
     restoreSession: "Restore session",
-    deleteSessionStale: 'Gateway connection replaced before "{session}" was deleted. Try again.',
-    deleteSessionsStale:
-      "Gateway connection replaced before {count} sessions were deleted. Try again.",
+    deleteSessionStale: {},
+    deleteSessionIdentityMissing:
+      'Cannot queue deletion of "{session}" without its session identity. Refresh after reconnecting and try again.',
+    deleteSessionsStale: {},
     groupMenu: "Group options for {group}",
     groupOptions: "Group options",
     newSessionInGroup: "New session in {group}",
@@ -802,7 +792,7 @@ const startupEnglish = {
     moveToTopLevel: "Move to top level",
   },
   agents: {
-    noAgents: "No agents",
+    noAgents: "No agents yet",
     createdBy: {},
     defaults: {},
     copyId: {},
@@ -815,11 +805,8 @@ const startupEnglish = {
     context: {},
     identity: {},
     overview: {
-      title: {},
-      subtitle: {},
       selectedSkills: "{count} selected",
-      allSkills: "all skills",
-      unsavedConfig: {},
+      allSkills: "All skills",
       modelSelection: {},
       primaryModel: {},
       primaryModelDefault: {},
@@ -860,7 +847,7 @@ const startupEnglish = {
   },
   configPage: {},
   configView: {
-    adminRequired: "Configuration changes require operator.admin access.",
+    adminRequired: "You need admin access to change settings.",
     categories: {},
     sections: {},
     themes: {},
@@ -901,10 +888,7 @@ const startupEnglish = {
       externalPost: "Posts externally to {target}",
     },
 
-    agentPendingOne: "{count} pending approval",
-    agentPending: "{count} pending approvals",
-
-    reviewOnly: "Review only. Sign in with approval access to record a decision.",
+    reviewOnly: "You need approval access to approve.",
 
     labels: {},
   },
@@ -916,8 +900,10 @@ const startupEnglish = {
   nav: {
     gateway: {
       sectionLabel: "Gateway",
-      menuLabel: "Gateway: {gateway}",
       primaryTag: "primary",
+      configReadOnly: "Gateway configuration is read-only.",
+      configReadOnlyHint:
+        "To make changes, update the configuration file or deployment settings for this Gateway.",
       setPrimary: "Set as primary…",
       openSettings: "Gateway settings",
       connected: "Connected",
@@ -937,32 +923,28 @@ const startupEnglish = {
     settingsGroupThisDevice: "This device",
     settingsGroupConnections: "Connections",
     settingsGroupAgents: "Agents & Tools",
-    settingsGroupSecurity: "Privacy & Security",
+    settingsGroupSecurity: "Privacy & security",
     settingsGroupSystem: "System",
     settingsSearchLabel: "Search settings",
     settingsSearchPlaceholder: "Search settings…",
-    settingsSearchNoResults: "No matching settings.",
+    settingsSearchNoResults: "No settings match your search.",
     settingsSearchClear: "Clear settings search",
     settingsLoadFailed: "Settings navigation could not load.",
     exitSettings: "Back to app",
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",
     resize: "Resize sidebar",
-    more: "More",
-    home: "Home",
     pages: "Pages",
     pin: "Pin",
     unpin: "Unpin",
     customize: "Edit pinned items",
-    customizeReset: "Reset pinned items",
-    workboardGroup: "WorkBoard",
   },
   terminal: {
     title: "Terminal",
     toggle: "Toggle terminal",
     open: "Open terminal",
-    startCancelled: "Terminal start was cancelled. Try again.",
-    unavailable: "The terminal is not available on this gateway.",
+    startCancelled: "Couldn’t start the terminal. Try again.",
+    unavailable: "The terminal is unavailable.",
   },
   browser: {
     nativeTab: {},
@@ -970,20 +952,14 @@ const startupEnglish = {
     stop: {},
     profile: {},
     title: "Browser",
-    open: "Open",
-    openPanel: "Open browser panel",
     moreActions: "More actions",
     copyUrl: "Copy URL",
-    openNewTab: "Open in new tab",
-    openWithinOpenClaw: "Open in OpenClaw",
     toggle: "Toggle browser panel",
     close: {},
     resize: {},
     newTab: "New tab",
     closeTab: "Close tab",
     untitledTab: {},
-    tweetPost: "Post on X",
-    openPost: "Open post",
     back: {},
     forward: {},
     reload: {},
@@ -1024,7 +1000,6 @@ const startupEnglish = {
   tabs: {
     device: "This Mac",
     devicePermissions: "Permissions",
-    agentsHome: "Agents",
     agents: "Agents",
     activity: "Activity",
     meetings: "Meetings",
@@ -1043,7 +1018,7 @@ const startupEnglish = {
     plugins: "Plugins",
     skillWorkshop: "Skill workshop",
     devices: "Devices",
-    claws: "Claws",
+    templates: "Templates",
     cloudWorkers: "Cloud environments",
     chat: "Chat",
     dashboards: "Dashboards",
@@ -1061,10 +1036,10 @@ const startupEnglish = {
     labs: "Labs",
     updates: "Updates",
     about: "About",
-    aiAgents: "Agent Defaults",
-    modelSetup: "Model Setup",
-    memoryImport: "Import Memory",
-    security: "Privacy & Security",
+    aiAgents: "Agent defaults",
+    modelSetup: "Models",
+    memoryImport: "Import memory",
+    security: "Privacy & security",
     secrets: "Secrets",
     debug: "Debug",
     logs: "Logs",
@@ -1080,14 +1055,14 @@ const startupEnglish = {
   portalsPage: {},
   modelSetup: {
     discovery: {},
-    missingAuth: "No provider credential is configured for this model. Set it up in Model Setup.",
+    missingAuth: "No account is available for this model. Add one in Models.",
     commandHint: "Try /models or /help.",
     heading: {},
     intro: {},
     required: {
-      title: "No AI provider configured",
-      body: "Connect a provider and choose a model to send messages.",
-      action: "Connect an AI provider",
+      title: "No model set up",
+      body: "Choose an account or set up a local model to send messages.",
+      action: "Set up a model",
     },
     loading: {},
     testing: {},
@@ -1128,7 +1103,7 @@ const startupEnglish = {
   memoryImport: {},
   onboarding: {
     memoryImport: {
-      title: "Bring your assistant memory with you",
+      title: "Bring your agent memory with you",
     },
   },
   assistantPanel: {
@@ -1140,8 +1115,6 @@ const startupEnglish = {
     resize: "Resize assistant sidebar",
     dockBottom: "Dock assistant sidebar at bottom",
     dockRight: "Dock assistant sidebar at right",
-
-    contextOff: "Work context off",
   },
   custodian: {
     title: {},
@@ -1179,28 +1152,20 @@ const startupEnglish = {
     install: "Install",
   },
   labsPage: {
-    intro:
-      "Labs contains experimental capabilities that may change, break, or disappear between releases.",
-    sectionTitle: "Experimental features",
     sectionDescription:
-      "Changes save without restarting the Gateway. Code Mode and Tool Search apply to future agent runs.",
-    documentation: "Documentation",
+      "Changes save without restarting the Gateway. Code Mode and Tool Search apply to future replies.",
     restartRequired: "Gateway restart required.",
-    saveErrorTitle: "Could not update feature",
+    saveErrorTitle: "Couldn’t save this setting. Try again.",
     saveFailed: "The feature setting could not be saved.",
     decisionAssistance: {},
+    usageRankedToolIndex: {},
     codeMode: {},
 
-    swarm: {
-      title: "Swarm",
-
-      defaultPhase: "Unphased",
-    },
+    swarm: {},
     toolSearch: {},
 
-    customPluginUi: {},
-
     hostDesktop: {},
+    openclawId: {},
     workerDesktop: {},
   },
   aboutPage: {
@@ -1232,6 +1197,13 @@ const startupEnglish = {
       total: "Total sessions",
       name: "Name",
     },
+    menu: {
+      label: "Actions for {name}",
+      pin: "Pin to sidebar",
+      unpin: "Unpin from sidebar",
+      openNewTab: "Open activity in new tab",
+      copyLink: "Copy activity link",
+    },
     active: "Active",
     onlineActive: "Online · Active",
     onlineIdle: "Online · Idle",
@@ -1240,9 +1212,6 @@ const startupEnglish = {
     sessions: {
       openCount: "{count}\u00a0open",
       runningCount: "{count}\u00a0running",
-      openHint:
-        "Owned, unarchived conversations you can access across agents. Excludes hidden subagents, automation, and system sessions.",
-      runningHint: "Open sessions actively executing an agent turn. Queued work is not running.",
       counts: "{open} open sessions, {running} running",
       unavailable: "Session counts unavailable",
       retry: "Counts may be out of date. Retry",
@@ -1259,9 +1228,7 @@ const startupEnglish = {
       notObserved: "Activity unavailable",
       viewingNow: "Viewing now",
       recentSessions: "Recent sessions",
-      noVisibleSessions: "No visible sessions being viewed.",
       noRecentSessions: "No recent visible sessions.",
-      sessionUpdated: "Session updated",
       ago: "ago",
       viewActivity: "View activity",
       web: "Web app",
@@ -1280,11 +1247,9 @@ const startupEnglish = {
       'Too many publications are awaiting review. Finish an existing publication, then select "{newAction}" to make room. Existing retries remain available.',
   },
   githubConnections: {
-    title: "GitHub connections",
+    title: "GitHub accounts",
     mine: "My GitHub",
-    system: "System GitHub",
-    forMe: "For me",
-    forSystem: "For the system",
+    system: "Shared agent account",
   },
   profilePage: {
     personalInstructions: {
@@ -1292,7 +1257,7 @@ const startupEnglish = {
       description:
         "Tell this agent about you and how you like to work. This edits only your personal USER.md, not the shared workspace file.",
     },
-    offline: "Connect to the gateway to meet your agent.",
+    offline: "Reconnect to view your profile.",
     access: {},
     usageStatistics: "Usage statistics",
     usageStatisticsDescription: "View activity, costs, and usage trends.",
@@ -1305,6 +1270,7 @@ const startupEnglish = {
       chooseAvatar: "Choose image",
       displayName: "Display name",
       linkedEmails: "Linked emails",
+      attribution: "Attribution",
     },
     modelAccounts: {},
   },
@@ -1354,25 +1320,65 @@ const startupEnglish = {
     "reload-required": "Refresh required",
     offline: "Disconnected",
     reconnecting: "Reconnecting…",
-    interruptedRetrying:
-      "Connection to the Gateway was interrupted. Reconnecting automatically. (WebSocket {code})",
-    interrupted:
-      "Connection to the Gateway was interrupted. Check your connection and try again. (WebSocket {code})",
+    interruptedRetrying: "Disconnected. Reconnecting automatically. (WebSocket {code})",
+    interrupted: "Disconnected. Check your connection and reconnect. (WebSocket {code})",
     restarting: "Restarting…",
     suspending: "Suspending…",
     suspended: "Suspended",
     retryNow: "Retry now",
+    workspace: {
+      header: "OpenClaw",
+      tryAgain: "Try again",
+      reloadAction: "Reload",
+      connecting: {
+        title: "Connecting to OpenClaw",
+        description: "Your workspace opens as soon as the Gateway answers.",
+      },
+      starting: {
+        title: "OpenClaw is starting",
+        description: "Hang on while the Gateway gets ready.",
+      },
+      restarting: {
+        title: "OpenClaw is restarting",
+        description: "Back in a moment. Your drafts are safe.",
+      },
+      reconnecting: {
+        title: "Still connecting",
+        description: "No answer from the Gateway yet. We’ll keep trying.",
+      },
+      pausing: {
+        title: "OpenClaw is pausing",
+        description: "Finishing what it was doing first.",
+      },
+      paused: {
+        title: "OpenClaw is paused",
+        description: "Your workspace opens when it resumes.",
+      },
+      restoring: {
+        title: "Welcome back",
+        description: "Loading your conversations.",
+      },
+      offline: {
+        title: "Couldn’t reach the Gateway",
+        description: "Check that it’s running, then try again.",
+      },
+      reload: {
+        title: "OpenClaw was updated",
+        description: "Reload to get the latest version.",
+      },
+    },
     queued: "{count} queued",
     offlineChangesDiscarded: "Offline changes discarded: {count}",
     offlineChangesReloadBlocked:
       "Offline changes are waiting to reconnect. Reloading would discard them.",
-    sessionMoveRefreshFailed: "The session move was saved, but refreshing the list failed: {error}",
+    sessionMoveRefreshFailed:
+      "Couldn’t refresh sessions after the move. The move was saved. Try again. {error}",
     sessionMoveUncertain:
-      "The session move could not be confirmed. Refresh and check its group before retrying. {error}",
+      "Couldn’t confirm the session move. Refresh and check its group before retrying. {error}",
     sessionOperationCompletedPreviousConnection:
       "The session operation completed on the previous connection. Check the current session list before continuing.",
     sessionOperationCompletedPreviousConnectionWithRefreshError:
-      "The session operation completed on the previous connection, but refreshing the current session list failed: {error}",
+      "Couldn’t refresh sessions. The operation completed on the previous connection. Try again. {error}",
     scopeUpgrade: {},
     // Settings → Gateway copy lives in the lazy en-settings catalog; the anchor keeps its merge target.
     access: {},
@@ -1406,50 +1412,22 @@ const startupEnglish = {
     common: {
       emptyValue: "—",
       unknown: "unknown",
-      atLeast: "≥ {value}",
-      approx: "≈ {value}",
     },
     loading: {
-      title: "Usage Overview",
-      badge: "Loading",
+      badge: "Loading usage…",
     },
     metrics: {
       tokens: "Tokens",
       cost: "Cost",
-      session: "session",
-      sessions: "sessions",
     },
     heatmap: {
-      title: "Token Activity",
-      subtitle: "Daily token intensity for the selected range, up to one year.",
+      title: "Token activity",
+      subtitle: "Daily token intensity in this range, up to one year.",
       cellTokens: "{tokens} tokens",
       less: "Less",
       more: "More",
     },
-    providerUsage: {
-      title: "Provider plans & billing",
-      subtitle: "Live plan, quota, balance, and budget data reported by configured providers.",
-      stalled: "Provider usage did not finish loading. Refresh to retry.",
-      unavailable: "Provider usage is unavailable; the last request failed. Refresh to retry.",
-      balance: "Balance",
-      spend: "Usage",
-      budget: "Budget",
-      today: "Today",
-      last7Days: "7 days",
-      lastDays: "{count} days",
-      dailyCost: "Daily provider cost",
-      requests: "{count} requests",
-      inputTokens: "{count} input",
-      cacheTokens: "{count} cache",
-      outputTokens: "{count} output",
-      topModels: "Top models",
-      costCategories: "Cost categories",
-      remaining: "{percent}% left",
-      resets: "Resets {date}",
-      exhausted: "{label} is used up.",
-      checkFailed: "Check failed",
-      exhaustedUntil: "{label} is used up until {date}.",
-    },
+    providerUsage: {},
     presets: {},
     scope: {},
     filters: {},
@@ -1462,14 +1440,14 @@ const startupEnglish = {
     breakdown: {
       output: "Output",
       input: "Input",
-      cacheWrite: "Cache Write",
-      cacheRead: "Cache Read",
+      cacheWrite: "Cache write",
+      cacheRead: "Cache read",
       total: "Total",
-      tokensByType: "Tokens by Type",
-      costByType: "Cost by Type",
+      tokensByType: "Tokens by type",
+      costByType: "Cost by type",
     },
     overview: {
-      title: "Usage Overview",
+      title: "Usage overview",
     },
     sessions: {},
     // Sidebar collapse stays eager; Usage registers the remaining detail copy.
@@ -1535,17 +1513,16 @@ const startupEnglish = {
     sessionDetails: {
       automations: "Automations",
       progressOptions: "Task progress options",
-      automationError: "Couldn't load automations.",
-      automationUnavailable: "Automations unavailable for this session.",
+      automationError: "Couldn’t load automations. Try again.",
+      automationUnavailable: "Automations unavailable.",
       automationLoading: "Loading automations…",
-      automationEmpty: "No automations for this session",
+      automationEmpty: "No automations yet.",
       automationMore: "Load more automations",
       automationAttention: "Needs attention",
       automationPaused: "Paused",
-      automationEnabled: "Enabled",
     },
     agentDatabaseWarming: "This agent is still starting. Retry in a moment.",
-    historyRequestTimedOut: "Chat history request timed out. Retry to load the conversation.",
+    historyRequestTimedOut: "Couldn’t load the conversation in time. Try again.",
     clawhub: {},
     modelAccounts: {
       section: "Account",
@@ -1553,8 +1530,9 @@ const startupEnglish = {
       manage: "Manage saved accounts…",
     },
     mentions: {},
-    cloudWorkerFailed: "Runner failed: {error}",
+    cloudWorkerFailed: "Couldn’t continue this session. Check its device and try again. {error}",
     errorDetails: "Error details",
+    errorSummary: "Couldn’t complete this action. Try again.",
     errorReplySummary: "Couldn't finish this reply. Check the conversation before trying again.",
     errorReplyTitle: "Couldn’t finish this reply",
     historyUnavailableTitle: "Couldn’t load this conversation",
@@ -1563,15 +1541,18 @@ const startupEnglish = {
       retrying: "Retrying…",
       retryingIn: "Retrying in {seconds}s",
       tryingFallback: "Trying fallback model…",
-      failedTitle: "Unable to finish this reply",
-      failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
+      failedTitle: "Couldn’t finish this reply",
+      credentialsRejected: "{provider} didn’t accept the saved credentials",
+      billingProblem: "{provider} reports a billing problem",
+      openModels: "Open Models",
+      failedRepeatCount: "{count} times",
       tryAgain: "Try again",
       continuePrompt:
         "Continue from where you stopped. Check which actions already completed before retrying anything.",
     },
     errorBusySummary: "OpenClaw is busy. Check status before trying again.",
     errorSignInSummary: "Couldn't sign in to the AI service. Sign in again under Models.",
-    errorStartSummary: "Couldn't start this conversation. Open Settings → Logs for details.",
+    errorStartSummary: "Couldn’t start this session. Try again.",
     checkStatus: "Check status",
     details: "Details",
     usageLimit: {},
@@ -1586,8 +1567,24 @@ const startupEnglish = {
     waitingForApproval: "Waiting for approval…",
     waitingOnSubagents: "Waiting on subagents",
     waitingForMessage: "Waiting for a message",
-    turnElapsed: "Total time since your message, including subagent waits",
     waitingOnSubagent: "Waiting on {name}",
+    waitingOnSessions: "Waiting on {count} sessions",
+    sessionsNeedInputOne: "1 needs your input",
+    sessionsNeedInput: "{count} need your input",
+    sessionsPaused: "{count} paused",
+    sessionPausedNote: "{name} is paused",
+    sessionsPausedNote: "{count} sessions are paused",
+    handoffResumed: "Resumed · {duration} later",
+    handoffSessionsOne: "1 session",
+    handoffSessions: "{count} sessions",
+    handoffSessionStatus: {
+      attention: "Needs your input",
+      paused: "Paused",
+      running: "Running",
+      failed: "Failed",
+      stopped: "Stopped",
+      done: "Done",
+    },
     subagentsRunning: "{count} subagents running",
     subagentsRunningOne: "1 subagent running",
     startupStatus: {
@@ -1600,8 +1597,7 @@ const startupEnglish = {
       startingFromSnapshot: "Starting from snapshot…",
       preparingCloudEnvironment: "Preparing cloud environment…",
       savingSnapshot: "Saving snapshot…",
-      preparingContext: "Preparing this turn…",
-      waitingForTurn: "Waiting for turn to start…",
+      preparingContext: "Preparing reply…",
       memoryFlushing: "Saving conversation memory…",
       startingModel: "Waiting for a response",
       waitingForLocalModel: "Waiting for the local model to respond",
@@ -1611,18 +1607,14 @@ const startupEnglish = {
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
     subagentViewOnly: "View-only subagent",
     subagentSessionDisabled: "Continue in {parent}.",
-    processesPanel: { title: "Processes", refresh: "Refresh processes" },
+    processesPanel: { title: "Processes" },
     subagentsPanel: {},
     parentSession: "the parent session",
     openParentSession: "Open parent session",
     parentSessionUnavailable: "Parent session information is unavailable.",
     sessionRoute: {},
     commandResults: {
-      startingNewThread: "Starting new session...",
-      resettingThread: "Resetting session...",
-      stoppingCurrentRun: "Stopping current run...",
-      chatHistoryCleared: "Chat history cleared.",
-      emptyExport: "There are no messages to export yet.",
+      emptyExport: "No messages to export yet.",
       exportPathUnsupported:
         "Control UI exports Markdown through your browser. Run /export without a file path.",
       help: {},
@@ -1654,6 +1646,9 @@ const startupEnglish = {
     },
     sessionHeader: {},
     board: {},
+    codexSupervisionDisabled:
+      "Codex supervision is off. Enable it in plugin settings to continue this session.",
+    openCodexSettings: "Open settings",
     catalog: {},
     taskSuggestions: {},
     pullRequests: {
@@ -1662,23 +1657,23 @@ const startupEnglish = {
       merged: "Merged",
       closed: "Closed",
     },
-    usageRemaining: "Usage Remaining",
+    usageRemaining: "Usage remaining",
     view: {},
 
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
 
-    followUpModeSteer: "Steer into the active run",
+    followUpModeSteer: "Steer this reply",
 
     catalogOutputTruncated: "[Output truncated]",
     onboardingDisabled: "Disabled during setup",
     commandPaletteTitle: "Search or jump to… (⌘K)",
-    openCommandPalette: "Command palette",
+    openCommandPalette: "Search",
 
     actions: {
       copyAsMarkdown: "Copy as markdown",
       dismissError: "Dismiss error",
-      exitFocusMode: "Exit focus mode",
       scrollToLatest: "Scroll to latest",
+      skipToComposer: "Skip to message composer",
     },
     markdown: {
       truncated: "… truncated ({total} chars, showing first {shown}).",
@@ -1687,8 +1682,7 @@ const startupEnglish = {
     codeBlock: {},
     workspaceConflict: {},
     compaction: {
-      label: "Compacted history",
-      savedTokens: "saved {count} tokens",
+      savedTokensWithPercent: "saved {count} tokens ({percent}%)",
     },
     sessionReset: {
       label: "Session reset",
@@ -1726,16 +1720,8 @@ const startupEnglish = {
     incognitoExpiredBody:
       "Incognito sessions last for 24 hours or until the Gateway restarts. Your unsent input stays in this tab.",
     newIncognitoSession: "New Incognito session",
-    restartRecoveryTitle: "This task was interrupted by a restart.",
-    restartRecoveryDisabled: "Your transcript is safe. Resume to continue in this session.",
-    restartRecoveryNewSession:
-      "This provider cannot safely resume tool work here. Your transcript can continue in a new session.",
-    resumeSession: "Resume",
-    resumeInNewSession: "Resume in new session",
-    resumingSession: "Resuming…",
     systemNotice: {
       guardian: {},
-      restartRecovery: {},
       automationRecovery: {},
       gatewayRestarted: {},
       cliHarnessContext: {},
@@ -1745,7 +1731,6 @@ const startupEnglish = {
     skillLearned: {},
     progressLabels: {},
     turnRecap: {
-      doneIn: "Done in {duration}",
       tokens: "{count} output tokens",
       tokensOne: "1 output token",
     },
@@ -1756,9 +1741,8 @@ const startupEnglish = {
       loading: "Loading skills…",
     },
     splitView: {
-      chooseConversation: "Choose a conversation",
-      missingOwner:
-        "Select this pane, then choose Home or a conversation in the sidebar to restore it.",
+      chooseConversation: "Choose a session",
+      missingOwner: "Select this pane, then choose Home or a session in the sidebar to restore it.",
       open: "Open split view",
       splitRight: "Split right",
       splitDown: "Split down",
@@ -1790,11 +1774,8 @@ const startupEnglish = {
       sortCreated: "Created",
       menuFilters: "Filters",
       menuDisplay: "Display",
-      hideEmpty: "Hide empty",
-      activeFilterCount: "Active filters: {count}",
       sortSessions: "Filter & sort",
       sessionSources: "Session sources",
-      showAllSessions: "Show all sessions",
       noActiveSessionsForFilter: "No active sessions match this filter",
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
@@ -1807,8 +1788,6 @@ const startupEnglish = {
     welcome: { suggestions: { whatCanYouDo: "What can you do?" } },
     runControls: {
       newSession: "New session",
-      newSessionWorktree: "New session in worktree",
-      exportChat: "Export chat",
       queue: "Queue",
       queueMessage: "Queue message",
       stop: "Stop",
@@ -1824,7 +1803,7 @@ const startupEnglish = {
       showSecret: "Show secret",
       hideSecret: "Hide secret",
       answer: "Answer",
-      disconnected: "Not connected. Try again after reconnecting.",
+      disconnected: "Reconnect to try again.",
     },
     imageLightbox: {},
     externalImage: { notLoaded: "External image not loaded", open: "Open image" },
@@ -1838,6 +1817,7 @@ const startupEnglish = {
       unattributedSender: "Message",
       toolSender: "Tool",
       errorSender: "Error",
+      agentName: "Agent",
     },
     mediaPlayer: {},
     youtube: {},
@@ -1850,16 +1830,16 @@ const startupEnglish = {
       close: "Close {panel}",
     },
     sidePanel: {
+      context: "Context",
+      contextEmpty: "Send a message to capture context usage.",
       label: "Side panel",
       quickAccess: "Quick access",
       explorePanels: "Explore panels",
       addTab: "Add side panel tab",
       closeNewTab: "Close New tab",
-      closeAll: "Close all",
       closeAllTabs: "Close all tabs",
       closeOtherTabs: "Close other tabs",
       closeFileChanges: "Save changes to {file} before closing?",
-      reviewFileChanges: "Open the file to review its unsaved changes before closing.",
       expand: "Focus",
       expandPanel: "Expand {panel}",
       restore: "Restore split",
@@ -1869,11 +1849,9 @@ const startupEnglish = {
         "Used when anyone opens this dashboard. Personal layout choices still apply.",
       savingDefault: "Saving default…",
       defaultSaved: "Dashboard default saved for future opens.",
-      defaultSaveFailed:
-        "Could not save the dashboard default. Check the connection and try again.",
-      defaultSaveError: "Could not save the dashboard default: {error}",
+      defaultSaveFailed: "Couldn’t save the dashboard default. Check the connection and try again.",
+      defaultSaveError: "Couldn’t save the dashboard default. Try again.",
       swap: "Swap {main} and {side}",
-      layout: "Layout",
       panelPosition: "Panel position",
       dockLeft: "Move side panel left",
       dockRight: "Move side panel right",
@@ -1894,7 +1872,7 @@ const startupEnglish = {
       browser: "Browser",
       browserEmpty: "A shared browser for you and the agent.",
       browserUnavailableReason: {
-        permission: "You need operator.admin to use Browser.",
+        permission: "You need admin access to use Browser.",
         disconnected: "Disconnected.",
         unavailable: "Browser unavailable.",
       },
@@ -1922,8 +1900,8 @@ const startupEnglish = {
       agentUpdate: {},
     },
     pairingQrExpired: {
-      title: "Pairing QR expired",
-      reason: "Run /pair qr again to generate a fresh setup code.",
+      title: "Pairing code expired",
+      reason: "Run /pair qr again to get a new setup code.",
       badge: "Expired",
     },
     composer: {},
@@ -1939,10 +1917,11 @@ const startupEnglish = {
       modelLocked: "Locked",
       modelLockedLabel: "Model selection controlled for this session",
       lockedSessionModel: "Session model",
-      thinkingLevel: "Chat thinking level",
+      thinkingLevel: "Effort",
     },
     permissions: {},
     toolCards: {
+      tool: "Tool",
       activity: {},
       review: {},
       verbs: {},
@@ -1994,6 +1973,8 @@ const startupEnglish = {
     title: "Link reader",
     urlPlaceholder: "Supported link URL",
   },
+
+  openclawId: {},
 } satisfies TranslationMap;
 
 export const en: typeof startupEnglish & EnglishCatalog = startupEnglish;

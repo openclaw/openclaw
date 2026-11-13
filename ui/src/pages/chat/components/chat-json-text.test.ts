@@ -1,12 +1,11 @@
-/* @vitest-environment jsdom */
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readMarkdownCodeBlockCopyText } from "../../../components/markdown-code-blocks.ts";
+/* @vitest-environment jsdom */
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { TOOL_OUTPUT_PREVIEW_CHARS } from "../../../lib/chat/tool-output.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { MessageGroup } from "./chat-message-group-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
@@ -95,7 +94,7 @@ describe.each(["user", "assistant", "toolResult"])("%s JSON message text", (role
     if (!fenced) {
       if (role === "user") {
         expect(copy).toBeNull();
-        expect(container.querySelector(".code-block-wrapper")).toBeNull();
+        expect(container.querySelector(".code-block-wrapper")).not.toBeNull();
       } else {
         expect(copy).not.toBeNull();
         expect(readMarkdownCodeBlockCopyText(copy!)).toBe(text);
@@ -112,7 +111,10 @@ describe.each(["user", "assistant", "toolResult"])("%s JSON message text", (role
       expect(container.querySelector(".code-block-viewport pre code")?.textContent).toBe(displayed);
     } else {
       expect(container.querySelector(".code-block-json-tree, .code-block-json-mode")).toBeNull();
-      if (role !== "assistant") {
+      if (role === "user") {
+        expect(container.querySelectorAll(".code-block-wrap")).toHaveLength(1);
+        expect(container.querySelector(".code-block-expand")).toBeNull();
+      } else if (role === "toolResult") {
         expect(container.querySelector(".code-block-wrap, .code-block-expand")).toBeNull();
       }
     }
@@ -265,9 +267,10 @@ describe("JSON group DOM retention", () => {
     expect(code.textContent).toBe(text);
     expect(
       container.querySelector(
-        ".code-block-json-tree, .code-block-json-mode, .code-block-copy, .code-block-wrap, .code-block-expand",
+        ".code-block-json-tree, .code-block-json-mode, .code-block-copy, .code-block-expand",
       ),
     ).toBeNull();
+    expect(container.querySelectorAll(".code-block-wrap")).toHaveLength(1);
     toggle.click();
     expect(onToggleUserMessageExpanded).toHaveBeenCalledWith("user-message:user-message");
     expanded = true;
@@ -302,7 +305,9 @@ describe("JSON group DOM retention", () => {
       expectElement(nested!, ":scope > summary", HTMLElement).click();
       expect(nested?.open).toBe(false);
     } else {
-      expect(container.querySelector(".chat-text button, .chat-text details")).toBeNull();
+      expect(container.querySelectorAll(".chat-text button")).toHaveLength(1);
+      expect(container.querySelector(".code-block-wrap")).not.toBeNull();
+      expect(container.querySelector(".chat-text details")).toBeNull();
     }
     renderJsonMessageGroup(container, message, role, { showToolCalls: false });
     expect(container.querySelector(".chat-text pre code")).toBe(code);
@@ -314,7 +319,7 @@ describe("JSON group DOM retention", () => {
       expect(nested?.open).toBe(false);
       expect(container.querySelector(".code-block-viewport pre code")).toBe(code);
     } else {
-      expect(container.querySelector(".code-block-wrapper")).toBeNull();
+      expect(container.querySelector(".code-block-wrapper")).not.toBeNull();
     }
   });
 });

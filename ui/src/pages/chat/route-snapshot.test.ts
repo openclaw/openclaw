@@ -1,8 +1,10 @@
-// @vitest-environment node
+// @vitest-environment jsdom
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createApplicationRouter, startApplicationRouter } from "../../app-routes.ts";
+import { selectShellRouteState } from "../../app/app-host-route-state.ts";
+import { prewarmChatSnapshot } from "./chat-snapshot-prewarm.ts";
 import { loadChatRoute } from "./route-loader.ts";
 import {
   createSessionRouteContext,
@@ -13,8 +15,8 @@ import {
 } from "./route-resolution.test-support.ts";
 import * as database from "./session-snapshot-database.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
-import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { readPrewarmedChatSnapshot, SessionSnapshotStore } from "./session-snapshot-store.ts";
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
 const prefix = 'scope:["ws://snapshot.example","account-a"]\u0000';
 const snapshot = {
@@ -32,9 +34,9 @@ afterEach(async () => {
 
 async function setup(key = sessionRouteKey, storedPrefix = prefix) {
   const store = new SessionSnapshotStore();
-  store.write(storedPrefix + key, snapshot);
+  writeSnapshotFixture(store, storedPrefix + key, snapshot);
   await store.flush();
-  prewarmChatSnapshot(storedPrefix + key);
+  void prewarmChatSnapshot(storedPrefix + key);
   const fixture = createSessionRouteContext();
   Object.defineProperty(fixture.context.gateway, "connection", {
     value: { gatewayUrl: "ws://snapshot.example" },
@@ -189,19 +191,35 @@ it.each(["reconnect", "account change"])(
   },
 );
 
-it.each([false, true])(
-  "revalidates cached admission through the router after hello (deleted: %s)",
-  async (deleted) => {
-    const { context, request } = await setup();
+it.each(
+  (["snapshot", "roster"] as const).flatMap((source) =>
+    (["same", "deleted", "moved"] as const).map((outcome) => ({ source, outcome })),
+  ),
+)(
+  "keeps $source admission provisional until $outcome authority settles",
+  async ({ source, outcome }) => {
+    const { context, request, publishGateway } = await setup();
+    if (source === "roster") {
+      context.gateway.snapshot.phase = "connecting";
+      context.sessions.state.result = sessionRouteListResult([createSessionRouteRow()]);
+      context.sessions.state.resultCached = true;
+      Object.defineProperty(context.sessions, "cachedRoutingDefaults", {
+        value: { mainKey: "main", scope: "per-sender" },
+      });
+    }
     const answer = createDeferred<unknown>();
-    request.mockImplementation(() => {
-      return answer.promise;
-    });
+    request.mockImplementation((method) =>
+      method === "sessions.resolve" ? answer.promise : new Promise(() => {}),
+    );
     const router = createApplicationRouter();
     context.router = router;
     onTestFinished(() => router.stop());
     vi.spyOn(router.getRoute("chat")!, "component").mockResolvedValue({ renderSolid: () => null });
-    const location = { pathname: `/chat/roboclaw/${sessionRouteUuid}`, search: "", hash: "" };
+    const location = {
+      pathname: `/chat/roboclaw/${sessionRouteUuid.replaceAll("-", "")}`,
+      search: "",
+      hash: "",
+    };
     const startup = startApplicationRouter(
       router,
       {
@@ -215,16 +233,35 @@ it.each([false, true])(
     );
     await startup;
     await vi.dynamicImportSettled();
-    expect(request).toHaveBeenCalledOnce();
-    expect(router.getState().matches[0]?.data).toMatchObject({
+    const initial = router.getState().matches[0]?.data;
+    expect(initial).toMatchObject({
       kind: "session",
       sessionKey: sessionRouteKey,
+      sessionResolutionFromCache: source,
     });
-    answer.resolve(deleted ? { ok: false } : { ok: true, key: sessionRouteKey });
+    expect(initial).not.toHaveProperty("canonicalLocation");
+    expect(selectShellRouteState(router.getState()).sessionUrlPending).toBe(true);
+    if (source === "roster") {
+      publishGateway({ phase: "connected" });
+      await vi.dynamicImportSettled();
+    }
+    expect(request.mock.calls.filter(([method]) => method === "sessions.resolve")).toHaveLength(1);
+    const resolvedKey =
+      outcome === "moved" ? `agent:other:chat:${sessionRouteUuid}` : sessionRouteKey;
+    answer.resolve(outcome === "deleted" ? { ok: false } : { ok: true, key: resolvedKey });
     await vi.dynamicImportSettled();
     expect(router.getState().matches[0]?.data).toMatchObject(
-      deleted ? { kind: "missing-session" } : { kind: "session", sessionKey: sessionRouteKey },
+      outcome === "deleted"
+        ? { kind: "missing-session" }
+        : {
+            kind: "session",
+            sessionKey: resolvedKey,
+            ...(outcome === "moved"
+              ? { canonicalLocation: { pathname: "/chat/other/1234567890abcdef1234567890abcdef" } }
+              : {}),
+          },
     );
-    expect(request).toHaveBeenCalledOnce();
+    expect(router.getState().matches[0]?.data).not.toHaveProperty("sessionResolutionFromCache");
+    expect(request.mock.calls.filter(([method]) => method === "sessions.resolve")).toHaveLength(1);
   },
 );

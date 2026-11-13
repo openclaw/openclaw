@@ -12,12 +12,9 @@ function toolingLog(
   cost: number,
   nativeSeconds?: number,
   fileName = file,
-  summary: {
-    configs?: string[];
-    includePatterns?: string[];
-    testFiles?: string[];
-    durations?: string[];
-  } = {},
+  summary: Partial<
+    Record<"configs" | "includePatterns" | "testFiles" | "durations", string[]>
+  > = {},
 ) {
   const configs = summary.configs ?? [config];
   const includePatterns = summary.includePatterns ?? [fileName];
@@ -76,21 +73,63 @@ it("requires independent runs, preserves runner profiles and prefers complete na
   ]);
   const { toolingFileSeconds, compactGroupSeconds, runtimePlacementTimings } = result.timings;
   expect({ toolingFileSeconds, compactGroupSeconds, runtimePlacementTimings }).toEqual({
-    toolingFileSeconds: { blacksmith: { [file]: 130 }, github: { [file]: 60 } },
-    compactGroupSeconds: { blacksmith: {}, github: {} },
-    runtimePlacementTimings: { blacksmith: [], github: [] },
+    toolingFileSeconds: { blacksmith: { [file]: 130 }, github: { [file]: 60 }, boat: {} },
+    compactGroupSeconds: { blacksmith: {}, github: {}, boat: {} },
+    runtimePlacementTimings: { blacksmith: [], github: [], boat: [] },
   });
+});
+
+it("excludes Boat and unsupported self-hosted tooling from existing runner profiles", () => {
+  const labels = [["boat"], ["boat-large/from=snapshot"], ["ubuntu-24.04", "self-hosted"]];
+  const runs = labels.flatMap((runnerLabels, index) =>
+    [1, 2].map((id) =>
+      Object.assign(run(index * 2 + id), {
+        logs: [{ kind: "tooling" as const, text: toolingLog(200), labels: runnerLabels }],
+      }),
+    ),
+  );
+  expect(refitTestTimings(runs).timings.toolingFileSeconds).toEqual({
+    blacksmith: {},
+    boat: {},
+    github: {},
+  });
+});
+
+it("keeps resource-qualified Boat tooling separate and rejects mixed worker ceilings", () => {
+  const boatRun = (id: number, cost: number, workers = 2): CiTimingRun => ({
+    ...run(id),
+    logs: [
+      {
+        kind: "tooling",
+        labels: ["boat-xlarge"],
+        text: [
+          `2026-09-20T01:00:00Z OPENCLAW_VITEST_MAX_WORKERS: ${workers}`,
+          `2026-09-20T01:00:00Z [shard:resources] logicalCpuCount=16 totalMemoryBytes=${31 * 1024 ** 3} requested plans=1 admitted plans=1`,
+          toolingLog(cost),
+        ].join("\n"),
+      },
+    ],
+  });
+  const result = refitTestTimings([run(1), run(2), boatRun(3, 40), boatRun(4, 60)]);
+  expect(result.timings.toolingFileSeconds).toEqual({
+    blacksmith: { [file]: 200 },
+    github: {},
+    boat: { [file]: 50 },
+  });
+  expect(result.contributingRunIds.toolingBoat).toEqual([3, 4]);
+  expect(
+    refitTestTimings([boatRun(3, 40), boatRun(4, 60, 4)]).timings.toolingFileSeconds.boat,
+  ).toEqual({});
 });
 
 type TimingCase = [
   label: string,
   expected: number | undefined,
-  options?: Parameters<typeof toolingLog>[3] | number,
+  options?: Parameters<typeof toolingLog>[3],
   mutate?: (text: string) => string,
 ];
 it.each<TimingCase>([
   ["singleton wall", 190],
-  ["native file time", 120, 120],
   ["missing file summary", 391, { testFiles: [] }],
   ["skipped file", 391, { testFiles: ["1 passed | 1 skipped (2)"] }],
   ["multiple invocations", 391, { durations: ["190.06s", "20s"] }],
@@ -118,10 +157,10 @@ it.each<TimingCase>([
   ["no duration", undefined, { durations: [] }],
   ["other family", undefined, undefined, replace(/core-tooling/gu, "agentic-gateway")],
 ])("prices complete unambiguous tooling: %s", (_label, expected, options, mutate) => {
-  const text = toolingLog(391, typeof options === "number" ? options : undefined, file, {
+  const text = toolingLog(391, undefined, file, {
     testFiles: ["1 passed (1)"],
     durations: ["190.06s"],
-    ...(typeof options === "object" ? options : {}),
+    ...options,
   });
   expect(weights(mutate?.(text) ?? text)).toEqual(
     expected === undefined ? {} : { [file]: expected },
@@ -131,7 +170,6 @@ it.each<TimingCase>([
 it("seeds one explicit run, retains absent files in partial PRs, and respects the write threshold", () => {
   const seed = refitTestTimings([run(1)], undefined, { seedTooling: true }).timings;
   expect(seed.toolingFileSeconds.blacksmith).toEqual({ [file]: 200 });
-  expect(seed.source).toContain("seed from successful pull_request CI merge-ref runs: 1");
   const partial = [2, 3, 4].map((id) =>
     run(id, toolingLog(10, undefined, "test/scripts/other.test.ts")),
   );

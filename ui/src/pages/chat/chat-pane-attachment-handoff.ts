@@ -66,6 +66,28 @@ export class ChatPaneComposerHandoff {
     presentations.add(this);
   }
 
+  static retainedAttachmentIds(
+    context: ApplicationContext,
+    attachments: readonly ChatAttachment[],
+  ): ReadonlySet<string> {
+    const retained = new Set(context.chatAttachmentHandoff.retainedAttachmentIds(attachments));
+    for (const presentation of composerPresentations.get(context) ?? []) {
+      const state = presentation.host.state();
+      if (!state) {
+        continue;
+      }
+      const references = [
+        ...state.chatAttachments,
+        ...Object.values(state.chatComposerFallbackByScope).flatMap((draft) => draft.attachments),
+        ...(state.chatQueuedEdit?.attachments ?? []),
+      ];
+      for (const { id } of references) {
+        retained.add(id);
+      }
+    }
+    return retained;
+  }
+
   claim(): void {
     if (!this.host.presented()) {
       return;
@@ -136,7 +158,10 @@ export class ChatPaneComposerHandoff {
     if (
       state &&
       captured?.recoveryScope &&
-      !isChatComposerOwnerCurrent({ ...state, connected: false }, captured)
+      !isChatComposerOwnerCurrent(
+        { settings: state.settings, client: state.client, connected: false },
+        captured,
+      )
     ) {
       return null;
     }
@@ -296,7 +321,10 @@ export function preparePaneStagedAttachments(
   // Never mint a handoff for that new account from the retired pane’s input.
   if (
     presentationOwner &&
-    !isChatComposerOwnerCurrent({ ...state, connected: false }, presentationOwner)
+    !isChatComposerOwnerCurrent(
+      { settings: state.settings, client: state.client, connected: false },
+      presentationOwner,
+    )
   ) {
     return;
   }

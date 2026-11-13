@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  PG16_GATEWAY_SMOKE_RESERVATION_SECONDS,
   assignPostgresConformanceShards,
   createPostgresConformanceEstimator,
 } from "../../scripts/lib/postgres-conformance-shards.mts";
@@ -32,6 +33,18 @@ describe("PostgreSQL conformance cost model", () => {
     expect(shards.some((shard) => shard.includes("runtime-a") && shard.includes("runtime-b"))).toBe(
       true,
     );
+  });
+
+  it("reserves the first shard's PG16 smoke while balancing PG17 work", () => {
+    const targets = Array.from({ length: 12 }, (_, index) => `test-${index}`);
+    const estimateWork = (selected: readonly string[]) => selected.length * 50;
+    const shards = assignPostgresConformanceShards(targets, 3, estimateWork);
+    expect(shards.map(estimateWork)).toEqual([
+      250 - PG16_GATEWAY_SMOKE_RESERVATION_SECONDS,
+      250,
+      250,
+    ]);
+    expect(shards.flat().toSorted()).toEqual(targets.toSorted());
   });
 
   it("prices the cold file-size order instead of optimistically running slow files first", () => {

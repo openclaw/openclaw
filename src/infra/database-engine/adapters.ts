@@ -17,6 +17,7 @@ import {
   verifyPostgresSchema,
   withPostgresSearchExtensions,
 } from "./postgres-schema.js";
+import { admitPostgresSearch } from "./postgres-search-schema.js";
 import type { DatabaseEngineInput } from "./types.js";
 
 export { admitStoreSearch } from "./search-admission.js";
@@ -50,6 +51,7 @@ export const databaseEngineAdapters: {
           store.storeId,
           {
             reuse: store.reusePostgresConnection,
+            readOnly: store.input.readOnly,
             lockTimeoutMs: POSTGRES_LOCK_TIMEOUT_MS,
             statementTimeoutMs: POSTGRES_STATEMENT_TIMEOUT_MS,
           },
@@ -108,10 +110,31 @@ export const databaseEngineAdapters: {
               postgres: migration.fromSchema.postgres,
               postgresFragments: migration.fromSchema.postgresFragments,
               postgresVectorDecoderVersion: migration.fromSchema.postgresVectorDecoderVersion,
+              postgresVectorSearchVersion: migration.fromSchema.postgresVectorSearchVersion,
+              postgresTextSearchVersion: migration.fromSchema.postgresTextSearchVersion,
             },
             snapshot,
           );
-          store.beforeMigrate?.(db, version - 1);
+          if (
+            migration.schema.postgresVectorSearchVersion === 2 &&
+            migration.fromSchema.postgresVectorSearchVersion !== 2
+          ) {
+            for (const definition of [
+              schema.search,
+              ...Object.values(schema.searchExtensions ?? {}),
+            ]) {
+              if (definition) {
+                admitPostgresSearch(db, definition, store.namespace!, 2);
+              }
+            }
+          }
+          store.beforeMigrate?.(
+            db,
+            version - 1,
+            new Set(
+              snapshot.catalog.filter((fact) => fact.kind === "table").map((fact) => fact.table),
+            ),
+          );
           db.exec(migration.sql);
           db.prepare("UPDATE openclaw_schema_meta SET version = ? WHERE store = ?").run(
             version,
@@ -123,6 +146,8 @@ export const databaseEngineAdapters: {
             postgres: migration.schema.postgres,
             postgresFragments: migration.schema.postgresFragments,
             postgresVectorDecoderVersion: migration.schema.postgresVectorDecoderVersion,
+            postgresVectorSearchVersion: migration.schema.postgresVectorSearchVersion,
+            postgresTextSearchVersion: migration.schema.postgresTextSearchVersion,
           });
         }
       },

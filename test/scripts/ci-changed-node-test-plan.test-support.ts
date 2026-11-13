@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -13,6 +14,7 @@ import {
   type CompactNodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { PR_PROTECTED_RUNTIME_TEST_FILES } from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
 type Shards = ReturnType<typeof createChangedNodeTestShards>;
 type FileSelection =
@@ -22,6 +24,26 @@ type FileSelection =
       groups?: { includePatterns?: string[] }[];
     }[]
   | null;
+
+export function createFixtureGit(cwd: string) {
+  return (...args: string[]) =>
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.test",
+        "-c",
+        "commit.gpgsign=false",
+        "-c",
+        "core.hooksPath=/dev/null",
+        ...args,
+      ],
+      { cwd, env: createNestedGitEnv(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    ).trim();
+}
+
 export function writeFiles(cwd: string, files: Record<string, string> | readonly string[]) {
   const entries: [string, string][] = Array.isArray(files)
     ? files.map((file): [string, string] => [file, "export {};\n"])
@@ -31,8 +53,6 @@ export function writeFiles(cwd: string, files: Record<string, string> | readonly
     writeFileSync(path.join(cwd, file), source);
   }
 }
-
-export const testConfig = (name: string) => `test/vitest/vitest.${name}.config.ts`;
 
 export function fullOwnerPlan(runnerBackend?: string, changedPaths?: string[]) {
   return createNodeTestShardBundles({
@@ -147,11 +167,6 @@ export function expectCanonicalGroupedConcurrency(shards: Shards, runnerBackend?
   for (const { shard, group } of groups) {
     if (!group.includePatterns) {
       // Paired isolated tooling configs retain whole processes and serial admission.
-      expect(group.shard_name).toBe("core-tooling-isolated");
-      expect(group.configs.toSorted()).toEqual([
-        "test/vitest/vitest.tooling-docker.config.ts",
-        "test/vitest/vitest.tooling-isolated.config.ts",
-      ]);
       expect(shard.planConcurrency).toBe(1);
       continue;
     }

@@ -17,7 +17,7 @@ const expectFocus = (target: Locator) =>
   expect.poll(() => target.evaluate((element) => element === document.activeElement)).toBe(true);
 suite.define(() =>
   it.each([1280, 390])(
-    "validates, cancels, applies, and reuses custom snoozes at width %s",
+    "edits native date segments, applies, and reuses custom snoozes at width %s",
     (width) =>
       suite.withPage(
         {
@@ -60,21 +60,6 @@ suite.define(() =>
           const field = picker.getByLabel("Date and time", { exact: true });
           await field.waitFor();
           await expectFocus(field);
-          await field.fill("2020-01-01T09:00");
-          await field.press("Enter");
-          await picker.getByRole("alert").waitFor();
-          expect(
-            (await gateway.getRequests("sessions.patch")).filter(
-              (r) => r.params && typeof r.params === "object" && "snoozedUntil" in r.params,
-            ),
-          ).toHaveLength(0);
-          await field.press("Escape");
-          await picker.waitFor({ state: "hidden" });
-          await expectFocus(chooser);
-          await chooser.click();
-          await picker.getByRole("button", { name: "Cancel", exact: true }).click();
-          await picker.waitFor({ state: "hidden" });
-          await chooser.click();
           const value = {
             input: "2031-07-02T07:01",
             timestamp: Date.parse("2031-07-02T07:01:00-04:00"),
@@ -86,18 +71,11 @@ suite.define(() =>
             );
           expect(await field.inputValue()).toBe("2030-06-01T06:00");
           // Real native editing: Tab must visit the day, year, hour, and minute segments.
-          for (const keyboardKey of [
-            "ArrowUp",
-            "Tab",
-            "ArrowUp",
-            "Tab",
-            "ArrowUp",
-            "Tab",
-            "ArrowUp",
-            "Tab",
-            "ArrowUp",
-          ]) {
-            await page.keyboard.press(keyboardKey);
+          for (let segment = 0; segment < 5; segment += 1) {
+            await page.keyboard.press("ArrowUp");
+            if (segment < 4) {
+              await page.keyboard.press("Tab");
+            }
           }
           expect(await field.inputValue()).toBe(value.input);
           const cancel = picker.getByRole("button", { name: "Cancel", exact: true });

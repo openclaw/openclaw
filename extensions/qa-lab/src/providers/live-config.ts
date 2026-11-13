@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
+import JSON5 from "json5";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -40,7 +41,7 @@ export async function readQaLiveProviderConfigOverrides(params: {
   }
   try {
     const raw = await fs.readFile(configPath.path, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
+    const parsed = JSON5.parse(raw) as unknown;
     const models = asOptionalRecord(asOptionalRecord(parsed)?.models);
     const providers = asOptionalRecord(models?.providers) ?? {};
     const selected: Record<string, ModelProviderConfig> = {};

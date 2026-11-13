@@ -5,6 +5,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { SESSION_LIST_SOURCES } from "../../../../packages/gateway-protocol/src/schema/sessions-list.js";
 import { WORKER_PROTOCOL_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_INFERENCE_METHODS } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { WORKER_TURN_ADMISSION_METHOD } from "../../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { hasInternalDiagnosticEventInterest } from "../../../infra/diagnostic-event-listener-presence.js";
 import {
   areDiagnosticsEnabledForProcess,
@@ -29,7 +30,11 @@ type ModelsListAttribution = Extract<RpcEvent, { phase: "received" }>["modelsLis
 type SessionsListAttribution = Extract<RpcEvent, { phase: "received" }>["sessionsList"];
 type CronListAttribution = Extract<RpcEvent, { phase: "received" }>["cronList"];
 type ChatHistoryAttribution = NonNullable<Extract<RpcEvent, { phase: "response" }>["chatHistory"]>;
-const workerMethods = new Set<string>([...WORKER_PROTOCOL_METHODS, ...WORKER_INFERENCE_METHODS]);
+const workerMethods = new Set<string>([
+  ...WORKER_PROTOCOL_METHODS,
+  ...WORKER_INFERENCE_METHODS,
+  WORKER_TURN_ADMISSION_METHOD,
+]);
 const rpcDiagnostics = channel("openclaw.gateway.rpc");
 let activeHandlers = 0;
 let exclusiveHandler: GatewayRpcDiagnostics | undefined;

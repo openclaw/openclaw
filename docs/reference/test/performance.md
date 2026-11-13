@@ -9,6 +9,9 @@ read_when:
 
 ## Test performance tooling
 
+For a busy Gateway's New Session → ACK → first assistant delta → first tool
+start waterfall, use the [session-start measurement harness](/reference/session-start-measurement).
+
 - `pnpm test:perf:imports`: enables Vitest import-duration + import-breakdown reporting, while still using scoped lane routing for explicit file/directory targets. `pnpm test:perf:imports:changed` scopes the same profiling to files changed since `origin/main`.
 - `pnpm test:perf:changed:bench -- --ref <git-ref>` benchmarks the routed changed-mode path against the native root-project run for the same committed git diff; `pnpm test:perf:changed:bench -- --worktree` benchmarks the current worktree change set without committing first.
 - `pnpm test:perf:profile:main` writes a CPU profile for the Vitest main thread; `pnpm test:perf:profile:runner` writes CPU + heap profiles for each unit worker. Both print their output directory (a temporary directory by default). Use `-- --output-dir <dir>` or `OPENCLAW_VITEST_PROFILE_DIR` to retain profiles at a chosen location.
@@ -318,6 +321,21 @@ Gateway startup, restart, and agent concurrency benchmark fixtures use temporary
 
 Defaults to the built CLI entry at `dist/entry.js`; run `pnpm build` first. Pass `--entry scripts/run-node.mjs` to measure the source runner instead, and keep those results separate from built-entry baselines.
 
+Use `--exit-listeners` to capture main-thread process-exit registration stacks,
+removals, warnings, and peak/current counts after post-ready maintenance and
+handler prewarming. `--assert-exit-listeners` also fails above Node's default
+listener limit without changing it. The Linux startup regression includes the
+spawn broker, secret-egress proxy, eight agents, and 10,000 synthetic sessions:
+
+```bash
+node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts --case teamBoot --fixture-root .artifacts/exit-fixture --seed-only --bundled-plugin-fixture scripts/fixtures/gateway-startup-exit-listeners.json
+node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts --case teamBoot --fixture-root .artifacts/exit-fixture --runs 1 --warmup 0 --timeout-ms 120000 --assert-exit-listeners --bundled-plugin-fixture scripts/fixtures/gateway-startup-exit-listeners.json --output .artifacts/exit-listeners.json
+```
+
+Use a restrictive umask when creating fixtures so plugin-directory admission
+accepts them. Add `--team-scale` to both commands for the 35 GiB agent database
+and 62,000-file workspace fixture. Use fresh fixture copies for comparisons.
+
 Startup, restart, and concurrency accept `--gateway-runtime <executable>` to
 select only the Gateway executable, leaving the benchmark controller and mock
 provider on the runtime that launched the script. The default is that same
@@ -378,7 +396,10 @@ their ancestors to each preflight. Each preflight still inspects the target
 filesystem again before mutation or acceptance; it does not reuse local node state.
 Independent workspaces can progress while the main thread serves requests. The
 host owns session authority, workspace mutations, Git subprocesses, and durable
-acceptance; cancellation joins outstanding work before cleanup.
+acceptance; cancellation joins outstanding work before cleanup. Raw snapshot imports
+return their tree ID directly, and empty-entry reconciliation reuses the base tree
+instead of importing and diffing it again. Result staging carries repository
+identity into the shared ref-mutation queue instead of repeating discovery.
 
 Node capture reuses this pool and its compiled manifest program rather than
 starting a process per verification. Each capture has a private workspace, hash

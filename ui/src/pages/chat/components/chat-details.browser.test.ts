@@ -1,11 +1,19 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { createComponent, createSignal, merge } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
+import { observeResize } from "../../../lib/reactive/observers.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { stubResizeObserver } from "../../../test-helpers/resize-observer.ts";
+import { phase } from "../../../test-helpers/solid-menu.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
-import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
+import { captureChatDetailsSnapshot } from "../chat-details-snapshot.ts";
+import {
+  cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
+  type ChatMessageCache,
+} from "../session-message-cache.ts";
+import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatDetails, type ChatDetailsViewProps } from "./chat-details.tsx";
@@ -44,6 +52,7 @@ async function fixture(
   width = 600,
   fullscreen = false,
   nativePresentation?: ChatDetailsViewProps["nativePresentation"],
+  contentPending?: boolean,
 ) {
   const styles = document.createElement("style");
   styles.textContent = [baseStyles, progressStyles, detailsStyles].join("\n");
@@ -61,6 +70,8 @@ async function fixture(
   const pane = document.createElement("openclaw-chat-pane");
   pane.className = "sidebar-region";
   pane.style.cssText = `display:block;position:relative;width:${width}px;height:640px;margin:30px 20px`;
+  pane.style.setProperty("--desktop-side-reserve", "0px");
+  pane.style.setProperty("--desktop-divider-reserve", "0px");
   pane.append(frame);
   frame.hidden = fullscreen;
   const header = document.createElement("div");
@@ -75,6 +86,7 @@ async function fixture(
     presentation: true,
     mobile: false,
     nativePresentation,
+    contentPending,
     conversationVisible: !fullscreen,
     externalTrigger: fullscreen,
     setRef: (handle) => (details = handle),
@@ -102,6 +114,7 @@ async function fixture(
       update({ chat: { ...current().chat!, ...patch } }),
     open: (source: HTMLElement) => details?.open(source),
     frame,
+    elements: current().elements!,
     pane,
     footer,
     get session() {
@@ -127,16 +140,194 @@ afterEach(() => {
 });
 
 describe("chat Details presentation", () => {
-  it("measures a closed desktop frame once during mounting", async () => {
-    const measurement = vi.spyOn(Element.prototype, "getBoundingClientRect");
+  it("retains docking after connection admits geometry measured while offline", async () => {
+    await page.viewport(1700, 900);
+    stubResizeObserver();
     try {
-      const { frame, panel } = await fixture(props(), 600, false, "desktop");
-      expect(panel.hidden).toBe(true);
-      expect(measurement.mock.contexts.filter((target) => target === frame)).toHaveLength(1);
+      const chatMessagesBySession: ChatMessageCache = new Map();
+      const host = {
+        assistantAgentId: "main",
+        chatMessagesBySession,
+        sessionKey: card.sessionKey,
+        currentSessionId: "details-1",
+        connected: false,
+        connectionEpoch: 0,
+        settings: { gatewayUrl: "wss://details.example" },
+        client: { recoveryScope: "account-a", recoveryScopeReady: true },
+      };
+      const target = { sessionKey: card.sessionKey };
+      cacheChatSessionSnapshot(host.chatMessagesBySession, host, target, {
+        messages: [],
+        pagination: { hasMore: false },
+        sessionId: host.currentSessionId,
+      });
+      const view = await fixture(
+        props({ connected: false, onDetailsSnapshot: captureChatDetailsSnapshot(host)!.write }),
+        1320,
+        false,
+        "desktop",
+        true,
+      );
+      const layout = JSON.stringify([1700]);
+      view.update({ dockingLayout: layout });
+      window.dispatchEvent(new Event("resize"));
+      flush();
+      const saved = () => readChatSessionSnapshot(host.chatMessagesBySession, host, target);
+      expect(saved()?.details?.docking).toBeUndefined();
+
+      host.connected = true;
+      view.updateChat({
+        connected: true,
+        onDetailsSnapshot: captureChatDetailsSnapshot(host)!.write,
+      });
+      flush();
+      expect(saved()?.details?.docking).toEqual({ layout, wide: true });
     } finally {
-      measurement.mockRestore();
+      vi.unstubAllGlobals();
     }
   });
+
+  it("keeps unchanged resize targets and observes replaced refs in the same layout object", async () => {
+    await page.viewport(1700, 900);
+    const view = await fixture(props(), 1320, false, "desktop", true);
+    onTestFinished(observeResize([view.frame], () => {}));
+    const settle = () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    await settle();
+    const read = vi.spyOn(view.frame, "getBoundingClientRect");
+    onTestFinished(() => read.mockRestore());
+    view.updateChat({ messages: [] });
+    flush();
+    await Promise.resolve();
+    expect(read).not.toHaveBeenCalled();
+
+    const replacement = document.createElement("div");
+    replacement.style.cssText = view.frame.style.cssText;
+    view.pane.append(replacement);
+    const replacedRead = vi.spyOn(replacement, "getBoundingClientRect");
+    onTestFinished(() => replacedRead.mockRestore());
+    view.elements.frame = replacement;
+    view.updateChat({ messages: [] });
+    flush();
+    await settle();
+    expect(replacedRead).toHaveBeenCalled();
+  });
+
+  it("resolves composer observation after refs attach", () => {
+    const observe = vi.spyOn(ResizeObserver.prototype, "observe");
+    const pane = document.createElement("div");
+    document.body.append(pane);
+    mounted.push(pane);
+    let input: HTMLTextAreaElement | null = null;
+    try {
+      mountSolid(
+        () => {
+          const details = createComponent(ChatDetails, {
+            chat: props(),
+            presentation: true,
+            mobile: false,
+            elements: { pane, getComposerInput: () => input },
+            setRef: () => {},
+          });
+          input = document.createElement("textarea");
+          pane.append(input);
+          return details;
+        },
+        { container: pane },
+      );
+      flush();
+      expect(observe.mock.calls.some(([target]) => target === input)).toBe(true);
+    } finally {
+      observe.mockRestore();
+    }
+  });
+
+  it("keeps native resize subscriptions across equivalent parent snapshots", async () => {
+    const observe = vi.spyOn(ResizeObserver.prototype, "observe");
+    const unobserve = vi.spyOn(ResizeObserver.prototype, "unobserve");
+    try {
+      const { pane, frame, footer, update } = await fixture();
+      const targets = new Set<Element>([pane, frame, footer]);
+      const calls = () => observe.mock.calls.filter(([target]) => targets.has(target)).length;
+      const initial = calls();
+      expect(initial).toBeGreaterThan(0);
+      update({ elements: { pane, frame, footer } });
+      flush();
+      expect(calls()).toBe(initial);
+      expect(unobserve.mock.calls.filter(([target]) => targets.has(target))).toHaveLength(0);
+      const replacement = document.createElement("div");
+      pane.append(replacement);
+      update({ elements: { pane, frame: replacement, footer } });
+      flush();
+      expect(observe.mock.calls.some(([target]) => target === replacement)).toBe(true);
+      expect(unobserve.mock.calls.some(([target]) => target === frame)).toBe(true);
+    } finally {
+      observe.mockRestore();
+      unobserve.mockRestore();
+    }
+  });
+
+  it.each([undefined, "desktop"] as const)(
+    "reserves automatic Details before the first resize delivery (presentation: %s)",
+    async (nativePresentation) => {
+      stubResizeObserver();
+      try {
+        await page.viewport(1700, 900);
+        const { conversation, panel } = await fixture(
+          props(),
+          1320,
+          false,
+          nativePresentation,
+          true,
+        );
+        expect(panel.hidden).toBe(false);
+        expect(getComputedStyle(conversation).right).toBe(
+          nativePresentation === "desktop" ? "313px" : "300px",
+        );
+        if (nativePresentation === "desktop") {
+          expect(panel.querySelector(".chat-details-session")).toBeNull();
+        }
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
+  it.each(["transcript paint", "explicit open"] as const)(
+    "holds automatic content until %s and retains it through later hydration",
+    async (release) => {
+      // A cold lazy import must not accidentally satisfy the initial hold assertion.
+      await import("./chat-details-session.tsx");
+      await page.viewport(1700, 900);
+      const { update, open, conversation, trigger, panel } = await fixture(
+        props(),
+        1320,
+        false,
+        "desktop",
+        true,
+      );
+      await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+      expect(panel.getAttribute("role")).toBe("complementary");
+      expect(conversation.getBoundingClientRect().right).toBeLessThanOrEqual(
+        panel.getBoundingClientRect().left,
+      );
+      expect(panel.querySelector(".chat-details-session")).toBeNull();
+
+      if (release === "transcript paint") {
+        update({ contentPending: false });
+      } else {
+        open(trigger);
+      }
+      await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
+      const session = panel.querySelector(".chat-details-session");
+      update({ contentPending: true });
+      flush();
+      expect(panel.querySelector(".chat-details-session")).toBe(session);
+      expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+    },
+  );
 
   it("automatically docks within the available pane, preserves intent, and releases its column", async () => {
     await page.viewport(1700, 900);
@@ -175,10 +366,12 @@ describe("chat Details presentation", () => {
     const metadata = session.querySelector(".chat-details-session")!;
     // A side panel consumes pane width even when the desktop stays wide.
     frame.style.width = "900px";
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+    await expect
+      .poll(() => trigger.getAttribute("aria-expanded"), { timeout: 5_000 })
+      .toBe("false");
     expect(conversation.getBoundingClientRect().width).toBe(900);
     frame.style.width = "1320px";
-    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+    await expect.poll(() => trigger.getAttribute("aria-expanded"), { timeout: 5_000 }).toBe("true");
     expect(session.querySelector(".chat-details-session")).toBe(metadata);
     expect(metadata.querySelector(":scope > summary")).toBeNull();
     trigger.click();
@@ -195,8 +388,13 @@ describe("chat Details presentation", () => {
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     trigger.click();
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+    // ResizeObserver and the native popover settle on the browser's rendering turn.
+    const shown = new Promise<void>((resolve) => {
+      panel.addEventListener("toggle", () => resolve(), { once: true });
+    });
     frame.style.width = "600px";
-    await expect.poll(() => panel.matches(":popover-open")).toBe(true);
+    await shown;
+    expect(panel.matches(":popover-open")).toBe(true);
     expect(panel.getAttribute("role")).toBe("dialog");
     expect(conversation.getBoundingClientRect().width).toBe(600);
     frame.style.width = "1320px";
@@ -222,7 +420,7 @@ describe("chat Details presentation", () => {
     );
   });
 
-  it("aligns the Environment diff below its branch label without shifting on hover or focus", async () => {
+  it("keeps first-attached Details insets stable and aligns the Environment diff below its branch label", async () => {
     await page.viewport(1000, 800);
     const openChanges = vi.fn();
     const styles = document.createElement("style");
@@ -234,40 +432,63 @@ describe("chat Details presentation", () => {
     panel.style.cssText = "position:relative;inset:auto;width:600px;max-width:none;height:400px";
     document.body.append(panel);
     mounted.push(panel, styles);
-    mountSolid(
-      () =>
-        createComponent(ChatDetailsDesktopBody, {
-          presented: true,
-          get children() {
-            return createComponent(ChatDetailsEnvironment, {
-              details: props({
-                detailsWorkspace: {
-                  root: "/workspace/details",
-                  label: null,
-                  branch: "feature/details",
-                },
-              }),
-              presented: true,
-              onOpenUncommitted: openChanges,
-              uncommitted: {
-                sessionKey: card.sessionKey,
+    const mountContent = () =>
+      mountSolid(
+        () =>
+          createComponent(ChatDetailsDesktopContent, {
+            presented: true,
+            dismissed: false,
+            cachedReady: true,
+            progressMenuRef: () => {},
+            onHideProgress: () => {},
+            chat: props({
+              progressCard: undefined,
+              detailsWorkspace: {
+                root: "/workspace/details",
+                label: null,
                 branch: "feature/details",
-                baseRef: "HEAD",
-                files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
-                additions: 3,
-                deletions: 1,
               },
-            });
-          },
-        }),
-      { container: panel },
-    );
+              environment: {
+                onOpenUncommitted: openChanges,
+                uncommitted: {
+                  sessionKey: card.sessionKey,
+                  branch: "feature/details",
+                  baseRef: "HEAD",
+                  files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
+                  additions: 3,
+                  deletions: 1,
+                },
+              },
+            }),
+          }),
+        { container: panel },
+      );
+    // Load the public boundary, then measure a fresh scroll owner before its first layout turn.
+    const prepared = mountContent();
+    await expect
+      .poll(() => panel.querySelector(".chat-environment__branch-controls button.chat-pr__diff"))
+      .not.toBeNull();
+    prepared.unmount();
+    mountContent();
     flush();
     const heading = panel.querySelector(".chat-details-desktop-section__heading")!;
+    const expectHeadingInsets = () => {
+      const panelBounds = panel.getBoundingClientRect();
+      const headingBounds = heading.getBoundingClientRect();
+      expect(headingBounds.left - panelBounds.left).toBeCloseTo(17);
+      expect(panelBounds.right - headingBounds.right).toBeCloseTo(17);
+    };
+    // Measure both widths before the scroll owner's first scheduled layout read.
+    for (const width of [600, 300]) {
+      panel.style.width = width + "px";
+      expectHeadingInsets();
+    }
     const navigation = panel.querySelector<HTMLButtonElement>(
       ".chat-environment__branch-controls button.chat-pr__diff",
     )!;
     const branchLabel = panel.querySelector(".chat-environment__branch-name")!;
+    await new Promise(requestAnimationFrame);
+    expectHeadingInsets();
     expect(navigation.getAttribute("aria-label")).toBe("Show session changes");
     expect(navigation.textContent).toContain("+3");
     expect(navigation.textContent).toContain("−1");
@@ -320,7 +541,7 @@ describe("chat Details presentation", () => {
   it("opens full-width mobile Details from Panels and restores focus to that control", async () => {
     await page.viewport(420, 720);
     const { update, open, frame, trigger, panel } = await fixture(props(), 380);
-    update({ mobile: true });
+    update({ mobile: true, contentPending: true });
     const source = document.createElement("button");
     source.textContent = "Panels";
     frame.prepend(source);
@@ -331,6 +552,7 @@ describe("chat Details presentation", () => {
     expect(panel.matches(":popover-open")).toBe(true);
     expect(panel.getBoundingClientRect().width).toBe(364);
     expect(panel.querySelector(".chat-details__toolbar")).not.toBeNull();
+    await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
     panel.querySelector<HTMLButtonElement>("button")!.focus();
     document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
@@ -401,8 +623,7 @@ describe("chat Details presentation", () => {
     const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
     const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
     menu.querySelector<HTMLButtonElement>("button")!.click();
-    await expect.poll(() => menuSurface.dataset.phase).toBe("open");
-    expect(menuSurface.matches(":popover-open")).toBe(true);
+    await phase(menuSurface, "open");
     updateChat({ messages: [] });
     flush();
     expect(menuSurface.matches(":popover-open")).toBe(true);
@@ -508,8 +729,7 @@ describe("chat Details presentation", () => {
     const menu = progress.querySelector<HTMLElement>(".chat-details-progress__menu")!;
     const menuSurface = menu.querySelector<HTMLElement>('[role="menu"]')!;
     menu.querySelector<HTMLButtonElement>("button")!.click();
-    await expect.poll(() => menuSurface.dataset.phase).toBe("open");
-    expect(menuSurface.matches(":popover-open")).toBe(true);
+    await phase(menuSurface, "open");
     expect(progress.querySelector<HTMLDetailsElement>(".task-progress-details")!.open).toBe(true);
     const select = async (value: string) => {
       if (trigger.getAttribute("aria-expanded") !== "true") {
@@ -521,7 +741,7 @@ describe("chat Details presentation", () => {
       }
       if (menu.querySelector("button")!.getAttribute("aria-expanded") !== "true") {
         menu.querySelector<HTMLButtonElement>("button")!.click();
-        await expect.poll(() => menuSurface.dataset.phase).toBe("open");
+        await phase(menuSurface, "open");
       }
       menu.querySelector<HTMLButtonElement>(`[data-value="${value}"]`)!.click();
     };

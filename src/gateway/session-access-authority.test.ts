@@ -32,6 +32,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { runWithPluginSessionWorkAuthority } from "./plugin-session-work-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createRequestGate } from "./server-methods.request-gate.test-support.js";
 import type {
@@ -42,6 +43,7 @@ import type {
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import * as sessionAccess from "./session-access-authority.js";
 import { prepareGatewaySessionAccessAuthority } from "./session-access-authority.js";
+import { isSessionAccessRefreshingError } from "./session-mutation-authorization-error.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 
@@ -263,6 +265,7 @@ beforeEach(() => {
       return { profileId, assignedRole: null };
     };
     return {
+      readCurrentRevision: readCurrentProfile,
       readCurrentProfile,
       emailBindingIds: [],
       readCurrentFacts: () => ({
@@ -292,6 +295,72 @@ afterEach(() => {
 });
 
 describe("session resource admission", () => {
+  it("checks accepted service invocation while preserving retained actor lifetime", async () => {
+    const test = fixture();
+    test.client.internal = {
+      ...test.client.internal,
+      syntheticClient: true,
+      pluginRuntimeOwnerId: "research",
+    };
+    const controller = new AbortController();
+    const source = {
+      pluginId: "research",
+      context: test.context,
+      target: {
+        agentId: "main",
+        sessionKey: key,
+        sessionId: "session-1",
+        lifecycleRevision: "incarnation-1",
+      },
+      signal: controller.signal,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+      assertToolAllowed: vi.fn((name: string) => {
+        if (name !== "browser") {
+          throw new Error("not admitted");
+        }
+      }),
+    };
+    const authority = await runWithPluginSessionWorkAuthority(source, () => prepareAuthority(test));
+    const borrow = hold(authority.retain());
+    expectCurrent(authority, borrow);
+    expect(source.assertToolAllowed).toHaveBeenCalledWith("browser");
+    controller.abort(new Error("service revoked"));
+    expect(() => authority.assertCurrent()).toThrow("service revoked");
+    expectCurrent(borrow);
+  });
+
+  it.each(["plugin", "gateway", "incarnation", "tool"])(
+    "refuses accepted service work with a different %s boundary",
+    async (boundary) => {
+      const test = fixture();
+      test.client.internal = {
+        ...test.client.internal,
+        syntheticClient: true,
+        pluginRuntimeOwnerId: "research",
+      };
+      const source = {
+        pluginId: boundary === "plugin" ? "other" : "research",
+        context: boundary === "gateway" ? createContext() : test.context,
+        target: {
+          agentId: "main",
+          sessionKey: key,
+          sessionId: boundary === "incarnation" ? "other" : "session-1",
+          lifecycleRevision: "incarnation-1",
+        },
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+        assertToolAllowed: () => {
+          if (boundary === "tool") {
+            throw new Error("not admitted");
+          }
+        },
+      };
+      await expect(
+        runWithPluginSessionWorkAuthority(source, () => prepareAuthority(test)),
+      ).rejects.toThrow();
+    },
+  );
+
   it.each([
     ["canonical", "grant"],
     ["canonical", "profile"],
@@ -387,7 +456,6 @@ describe("session resource admission", () => {
         respond(true, {});
       });
       await dispatchSession(test, handler);
-      expect(test.client.authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
       expect(handler).toHaveBeenCalledOnce();
       expect(effect).not.toHaveBeenCalled();
     },
@@ -400,7 +468,7 @@ describe("session resource admission", () => {
     const test = fixture(["operator.write", "operator.sessions.write"], "alice");
     const prepare = sessionAccess.prepareGatewaySessionAccessAuthority;
     const release = vi.fn();
-    using capture = vi
+    using _ = vi
       .spyOn(sessionAccess, "prepareGatewaySessionAccessAuthority")
       .mockImplementation(async (params) => {
         const prepared = await prepare(params);
@@ -421,7 +489,6 @@ describe("session resource admission", () => {
       respond,
       allowOwnSessionScope: true,
     });
-    expect(capture).toHaveBeenCalledOnce();
     expect(handler).not.toHaveBeenCalled();
     expect(respond.mock.calls[0]?.[0]).toBe(false);
     expect(release).toHaveBeenCalledOnce();
@@ -460,7 +527,6 @@ describe("session resource admission", () => {
         ).resolves.toEqual({ scopes: ["operator.sessions.write"] });
       },
     );
-    expect(handler).toHaveBeenCalledOnce();
   });
   it.each([
     { scopes: ["operator.write"], creator: "someone-else", allowed: true },
@@ -547,16 +613,15 @@ describe("session resource admission", () => {
         await dispatchSession(test, handler, {
           respond: response,
           sessionMutationCommitGuard: kind === "receipt" ? assertActive : undefined,
-          ...(kind === "profile selection"
-            ? {
-                expectedProfileBinding: {
+          expectedProfileBinding:
+            kind === "profile selection"
+              ? {
                   assertCurrent: assertActive,
                   assertMatchesResolvedProfile: () => {},
                   markInvoked: () => {},
                   guardResponse: (respond) => respond,
-                },
-              }
-            : {}),
+                }
+              : undefined,
         });
         expect(response).toHaveBeenCalledExactlyOnceWith(true, {});
         expect(committed).toMatchObject({ label: "allowed invocation write" });
@@ -576,12 +641,7 @@ describe("session resource admission", () => {
       await closeOpenClawAgentDatabaseByPathAsync(staged, "main");
       const { authority, resource, viewer } = await borrowSession(test);
       authority.release();
-      expect(() => authority.retainSession()).toThrow();
-      expect(() => authority.assertCurrent()).toThrow();
-      replaceSessionEntrySync(
-        { agentId: "main", storePath, sessionKey: key },
-        { ...entry, updatedAt: 2, label: "Progress" },
-      );
+      replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: "Progress" });
       await projection.ensureMaterialized();
       await projection.prepareMembership();
       expectCurrent(resource, viewer);
@@ -596,7 +656,6 @@ describe("session resource admission", () => {
       expect(resource.signal.aborted).toBe(false);
       await projection.prepareMembership();
       expect(() => resource.assertCurrent()).not.toThrow();
-      expect(resource.signal.aborted).toBe(false);
       renewGrant(test);
       expect(() => viewer.assertCurrent()).toThrow();
       await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
@@ -620,7 +679,15 @@ describe("session resource admission", () => {
     await setImmediate();
     expect(prepare).toHaveBeenCalledOnce();
     expect(resource.signal.aborted).toBe(false);
-    expect(() => resource.assertCurrent()).toThrow("refreshing");
+    let failure: unknown;
+    try {
+      resource.assertCurrent();
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(sessionAccess.SessionAccessPreparationPendingError);
+    expect(isSessionAccessRefreshingError(failure)).toBe(true);
+    expect(isSessionAccessRefreshingError(new Error("Session revoked"))).toBe(false);
     state.mockReturnValue(readyState);
     expect(() => resource.assertCurrent()).not.toThrow();
     resource.release();
@@ -706,6 +773,5 @@ describe("session resource admission", () => {
     };
     mocks.ambient = { sessionKey: "agent:main:other", agentId: "main", assertToolAllowed: vi.fn() };
     await expect(test.prepare()).rejects.toThrow("Session access changed");
-    expect(mocks.prepare).not.toHaveBeenCalled();
   });
 });

@@ -59,11 +59,7 @@ export default {
     });
     api.registerGatewayMethod("qa.voiceCall.streamSession", async ({ params, respond }) => {
       const coordinator = globalThis[Symbol.for("openclaw.voice-call.runtimeCoordinator")];
-      const slot = coordinator?.slot;
-      const runtime =
-        slot?.state === "running" && slot.owner === coordinator.current?.generation
-          ? slot.runtime
-          : undefined;
+      const runtime = await coordinator?.current?.ensureRuntime();
       const callId = typeof params?.callId === "string" ? params.callId : "";
       const call = runtime?.manager?.getCall?.(callId);
       const issue = runtime?.manager?.streamSessionIssuer;

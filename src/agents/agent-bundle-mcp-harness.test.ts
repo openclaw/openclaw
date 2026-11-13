@@ -1,48 +1,33 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { executeMcpAppOperation } from "../gateway/mcp-app-operations.js";
-import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
+import { catalogTool } from "./agent-bundle-mcp-fixture.test-support.js";
+import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
-const connectConfig = {
-  servers: {
-    calendar: {
-      url: "https://mcp.example/rpc",
-      auth: "oauth" as const,
-      oauth: { identity: "per-requester" as const },
-    },
-  },
-};
 const startAuthorization = vi.hoisted(() => vi.fn());
 const readCredentialsStatus = vi.hoisted(() => vi.fn());
+type Requester = { sessionId: string; requesterSenderId?: string | null };
 
 const mocks = vi.hoisted(() => {
   const advertised = new Map<string, McpToolCatalog>();
-  let resolveImpl:
-    | ((params: {
-        sessionId: string;
-        requesterSenderId?: string | null;
-      }) => Promise<SessionMcpRuntime | undefined>)
-    | undefined;
+  const resolveRuntime = vi.fn<(params: Requester) => Promise<SessionMcpRuntime | undefined>>();
 
   return {
-    advertised,
-    setResolveImpl(impl?: typeof resolveImpl) {
-      resolveImpl = impl;
-    },
-    acquireRequesterScopedMcpRuntime: vi.fn(
-      async (params: { sessionId: string; requesterSenderId?: string | null }) => {
-        const runtime = await resolveImpl?.(params);
-        return runtime
-          ? {
-              runtime,
-              releaseLease: runtime.acquireLease?.() ?? (() => {}),
-              advertisedCatalogConfigFingerprint: runtime.configFingerprint,
-            }
-          : undefined;
-      },
-    ),
+    resolveRuntime,
+    acquireRequesterScopedMcpRuntime: vi.fn(async (params: Requester) => {
+      const runtime = await resolveRuntime(params);
+      return runtime
+        ? {
+            runtime,
+            releaseLease: runtime.acquireLease?.() ?? (() => {}),
+            advertisedCatalogConfigFingerprint: runtime.configFingerprint,
+          }
+        : undefined;
+    }),
     acquireSessionMcpRuntime: vi.fn(),
     retireSessionMcpRuntime: vi.fn(async () => true),
     rememberAdvertisedScopedMcpCatalog: vi.fn(
@@ -50,10 +35,10 @@ const mocks = vi.hoisted(() => {
         advertised.set(handle.runtime.sessionId, catalog);
       },
     ),
-    getAdvertisedScopedMcpCatalog: vi.fn((sessionId: string) => advertised.get(sessionId) ?? null),
+    getAdvertisedScopedMcpCatalog: (sessionId: string) => advertised.get(sessionId) ?? null,
     reset() {
       advertised.clear();
-      resolveImpl = undefined;
+      resolveRuntime.mockReset();
     },
   };
 });
@@ -112,7 +97,6 @@ beforeEach(() => {
   mocks.acquireSessionMcpRuntime.mockReset();
   mocks.retireSessionMcpRuntime.mockClear();
   mocks.rememberAdvertisedScopedMcpCatalog.mockClear();
-  mocks.getAdvertisedScopedMcpCatalog.mockClear();
   readCredentialsStatus.mockReset().mockResolvedValue([{ state: "unauthenticated" }]);
   startAuthorization.mockReset();
 });
@@ -127,23 +111,8 @@ function makeStaticRuntime(sessionId: string) {
   return runtime;
 }
 
-function catalogTool(
-  serverName: string,
-  toolName: string,
-  overrides: Partial<McpToolCatalog["tools"][number]> = {},
-): McpToolCatalog["tools"][number] {
-  return {
-    serverName,
-    safeServerName: serverName,
-    toolName,
-    inputSchema: { type: "object", properties: {} },
-    fallbackDescription: toolName,
-    ...overrides,
-  };
-}
-
 function resolveRequesterRuntime() {
-  mocks.setResolveImpl(async ({ sessionId, requesterSenderId }) =>
+  mocks.resolveRuntime.mockImplementation(async ({ sessionId, requesterSenderId }) =>
     typeof requesterSenderId === "string" && requesterSenderId
       ? makeRuntime({ sessionId, requesterSenderId })
       : undefined,
@@ -152,6 +121,23 @@ function resolveRequesterRuntime() {
 
 function fullPermissionTools(sessionId: string, requesterSenderId: string) {
   return requesterTools(sessionId, { requesterSenderId, autoApproveCodexAppServerApprovals: true });
+}
+const toolNames = (tools: { name: string }[]) => tools.map((tool) => tool.name);
+function setCatalog(runtime: SessionMcpRuntime, catalog: McpToolCatalog) {
+  runtime.peekCatalog = () => catalog;
+  runtime.getCatalog = async () => catalog;
+}
+function approvalGate(deniedId = "denied") {
+  type Approval = NonNullable<
+    Parameters<
+      typeof materializeStaticMcpToolsForHarnessRunCore
+    >[0]["requestInteractiveCodexApproval"]
+  >;
+  return vi.fn<Approval>(async ({ toolCallId }) => {
+    if (toolCallId === deniedId) {
+      throw new Error("operator denied");
+    }
+  });
 }
 
 const heartbeatPolicy = {
@@ -227,7 +213,7 @@ it("joins captured cleanup and reports its failure to repeated static harness di
 
 it("joins captured cleanup and reports its failure to repeated requester harness disposals", async () => {
   const fixture = repeatedDisposalFixture("repeat-dispose-requester");
-  mocks.setResolveImpl(async () => fixture.runtime);
+  mocks.resolveRuntime.mockResolvedValue(fixture.runtime);
   const tools = (await requesterTools("repeat-dispose-requester", { requesterSenderId: "alice" }))!;
   await expectRepeatedDisposal(fixture, tools, 0);
 });
@@ -281,13 +267,7 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
   it("gates interactive configured MCP before the original executor", async () => {
     const runtime = makeStaticRuntime("interactive");
     const callTool = vi.spyOn(runtime, "callTool");
-    let active: (() => boolean) | undefined;
-    const requestInteractiveCodexApproval = vi.fn(async (request) => {
-      active = request.isActive;
-      if (request.toolCallId === "denied") {
-        throw new Error("operator denied");
-      }
-    });
+    const requestInteractiveCodexApproval = approvalGate();
 
     const result = await staticTools("interactive", {
       toolsAllow: ["user-mail__inbox"],
@@ -309,7 +289,7 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
         mode: "auto",
       }),
     );
-    expect(active?.()).toBe(false);
+    expect(requestInteractiveCodexApproval.mock.lastCall?.[0].isActive()).toBe(false);
     await result.dispose();
   });
 
@@ -375,28 +355,24 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
       .mcpAppPreview?.mcpApp?.viewId;
     const view = getMcpAppViewLease(viewId!, runtime)!;
     expect(view.allowedAppToolNames).toEqual(new Set(["safe-app", "show"]));
-
-    await expect(
+    const callApp = (name: string) =>
       executeMcpAppOperation(
         { runtime, view },
-        { method: "tools/call", params: { name: "unsafe-app", arguments: {} } },
-      ),
-    ).rejects.toThrow('MCP tool "unsafe-app" is not app-callable');
+        { method: "tools/call", params: { name, arguments: {} } },
+      );
+    await expect(callApp("unsafe-app")).rejects.toThrow(
+      'MCP tool "unsafe-app" is not app-callable',
+    );
     expect(callTool).toHaveBeenCalledTimes(1);
-    await expect(
-      executeMcpAppOperation(
-        { runtime, view },
-        { method: "tools/call", params: { name: "safe-app", arguments: {} } },
-      ),
-    ).resolves.toBeDefined();
+    await expect(callApp("safe-app")).resolves.toBeDefined();
     expect(callTool).toHaveBeenCalledTimes(2);
     expect(requestInteractiveCodexApproval).not.toHaveBeenCalled();
     await result.dispose();
   });
 
-  it("returns a bounded operator-visible notice for failed configured MCP discovery", async () => {
+  it("returns a well-formed bounded notice for failed configured MCP discovery", async () => {
     const runtime = makeStaticRuntime("scheduled-diagnostic");
-    const failedCatalog = {
+    setCatalog(runtime, {
       ...runtime.peekCatalog()!,
       servers: {},
       tools: [],
@@ -405,17 +381,15 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
           serverName: "user-mail",
           safeServerName: "user-mail",
           launchSummary: "user-mail",
-          message: "authentication required",
+          message: "authentication required " + "🙂".repeat(120),
         },
       ],
-    };
-    runtime.peekCatalog = () => failedCatalog;
-    runtime.getCatalog = async () => failedCatalog;
+    });
 
     const result = await staticTools("scheduled-diagnostic", { toolsAllow: ["*"] });
 
     expect(result.diagnosticNotice).toContain("user-mail: authentication required");
-    expect(result.diagnosticNotice).toContain("Do not claim MCP-backed work succeeded");
+    expect(result.diagnosticNotice).toContain(`${"🙂".repeat(72)}. Do not claim MCP-backed work`);
     await result.dispose();
   });
 
@@ -436,7 +410,7 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
         },
         warn: (message) => warnings.push(message),
       });
-      expect(result.tools.map((tool) => tool.name)).toEqual(deny ? [] : ["user-mail__inbox"]);
+      expect(toolNames(result.tools)).toEqual(deny ? [] : ["user-mail__inbox"]);
       expect(warnings).toContain(
         "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
       );
@@ -481,40 +455,27 @@ afterEach(() => {
 
 describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
   it("returns undefined before any requester resolves", async () => {
-    mocks.setResolveImpl(async () => undefined);
     const result = await requesterTools("session-empty", { requesterSenderId: "guest" });
     expect(result).toBeUndefined();
     expect(mocks.rememberAdvertisedScopedMcpCatalog).not.toHaveBeenCalled();
   });
 
   it("bootstraps a requester connect tool without starting OAuth during materialization", async () => {
-    mocks.setResolveImpl(async (params) =>
+    mocks.resolveRuntime.mockImplementation(async (params) =>
       makeConnectRuntime({
         sessionId: params.sessionId,
         requesterSenderId: params.requesterSenderId ?? "alice",
         publicOrigin: "https://gateway.example",
       }),
     );
-    startAuthorization.mockResolvedValue({
-      status: "redirect",
-      authorizationUrl: "https://auth.example/authorize?state=opaque",
-    });
     const result = await requesterTools("session-connect", {
       requesterSenderId: "alice",
-      messageChannel: "telegram",
-      agentAccountId: "bot",
-      cfg: { gateway: { publicOrigin: "https://gateway.example" }, mcp: connectConfig },
     });
 
-    expect(result?.tools.map((tool) => tool.name)).toEqual(["calendar__connect"]);
+    expect(result && toolNames(result.tools)).toEqual(["calendar__connect"]);
     expect(startAuthorization).not.toHaveBeenCalled();
-    const connect = await result!.tools[0]!.execute("connect", {});
-    expect(connect.details).toMatchObject({
-      mcpConnect: {
-        serverName: "calendar",
-        authorizationUrl: "https://auth.example/authorize?state=opaque",
-      },
-    });
+    startAuthorization.mockResolvedValue({ status: "authorized" });
+    await result!.tools[0]!.execute("connect", {});
     expect(startAuthorization).toHaveBeenCalledWith(
       expect.objectContaining({ principal: "requester", serverName: "calendar" }),
       expect.objectContaining({ url: "https://mcp.example/rpc" }),
@@ -522,11 +483,42 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     );
     expect(mocks.rememberAdvertisedScopedMcpCatalog).not.toHaveBeenCalled();
     await result!.dispose();
+
+    // A senderless turn lists the same sign-in tool, so the catalog stays stable,
+    // but it refuses without starting sign-in for anyone.
+    startAuthorization.mockClear();
+    mocks.resolveRuntime.mockResolvedValue(undefined);
+    const senderless = await requesterTools("session-connect", {
+      cfg: {
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            calendar: {
+              transport: "streamable-http",
+              url: "https://mcp.example/rpc",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      },
+    });
+    const spec = ({ name, description, parameters }: AnyAgentTool) => ({
+      name,
+      description,
+      parameters,
+    });
+    expect(senderless?.advertisedTools.map(spec)).toEqual(result!.advertisedTools.map(spec));
+    const refusal = await senderless!.tools[0]!.execute("connect", {});
+    expect(refusal.content[0]).toMatchObject({
+      text: expect.stringContaining("this turn has no verified user"),
+    });
+    expect(startAuthorization).not.toHaveBeenCalled();
   });
 
   it("releases the live runtime when pre-return catalog publication fails", async () => {
     const runtime = makeRuntime({ sessionId: "session-cleanup", requesterSenderId: "authed" });
-    mocks.setResolveImpl(async () => runtime);
+    mocks.resolveRuntime.mockImplementation(async () => runtime);
     mocks.rememberAdvertisedScopedMcpCatalog.mockImplementationOnce(() => {
       throw new Error("catalog publication failed");
     });
@@ -537,31 +529,34 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     expect(runtime.activeLeases).toBe(0);
   });
 
-  it("keeps advertised specs stable and returns not-connected for unauthed senders", async () => {
+  it("keeps specs stable across requester isolation, disconnection, and recovery", async () => {
     const specs = (
       tools: NonNullable<Awaited<ReturnType<typeof requesterTools>>>["advertisedTools"],
     ) => tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
-    mocks.setResolveImpl(async (params) => {
+    mocks.resolveRuntime.mockImplementation(async (params) => {
       const senderId = params.requesterSenderId;
-      if (senderId !== "authed") {
+      if (senderId !== "authed" && senderId !== "bob") {
         return undefined;
       }
-      return makeRuntime({ sessionId: params.sessionId, requesterSenderId: "authed" });
+      return makeRuntime({ sessionId: params.sessionId, requesterSenderId: senderId });
     });
 
     const authed = await fullPermissionTools("session-stable", "authed");
-    const advertisedNames = authed!.advertisedTools.map((tool) => tool.name);
+    const advertisedNames = toolNames(authed!.advertisedTools);
     const advertisedSpecs = specs(authed!.advertisedTools);
     expect(advertisedNames).toEqual(["user-mail__inbox"]);
 
+    const bob = await fullPermissionTools("session-stable", "bob");
+    expect(specs(bob!.advertisedTools)).toEqual(advertisedSpecs);
     const live = await authed!.tools[0]!.execute("c1", {});
     expect(live.content[0]).toMatchObject({ type: "text", text: "live:inbox:authed" });
+    const bobResult = await bob!.tools[0]!.execute("b", {});
+    expect(bobResult.content[0]).toMatchObject({ text: "live:inbox:bob" });
+    await bob!.dispose();
     await authed!.dispose();
 
     const unavailable = makeRuntime({ sessionId: "session-stable", requesterSenderId: "busy" });
-    const emptyCatalog = { version: 1, generatedAt: 0, servers: {}, tools: [] };
-    unavailable.getCatalog = async () => emptyCatalog;
-    unavailable.peekCatalog = () => emptyCatalog;
+    setCatalog(unavailable, { version: 1, generatedAt: 0, servers: {}, tools: [] });
     const unavailableCall = vi.spyOn(unavailable, "callTool");
     mocks.acquireRequesterScopedMcpRuntime.mockResolvedValueOnce({
       runtime: unavailable,
@@ -569,7 +564,6 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
       advertisedCatalogConfigFingerprint: "",
     });
     const busy = await fullPermissionTools("session-stable", "busy");
-    expect(busy).toBeDefined();
     expect(specs(busy!.advertisedTools)).toEqual(advertisedSpecs);
     const unavailableResult = await busy!.tools[0]!.execute("busy-call", {});
     expect(unavailableResult.details).toMatchObject({ status: "error" });
@@ -578,8 +572,8 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     expect(unavailable.activeLeases).toBe(0);
 
     const guest = await fullPermissionTools("session-stable", "guest");
-    expect(guest!.advertisedTools.map((tool) => tool.name)).toEqual(advertisedNames);
-    expect(guest!.tools.map((tool) => tool.name)).toEqual(advertisedNames);
+    expect(toolNames(guest!.advertisedTools)).toEqual(advertisedNames);
+    expect(toolNames(guest!.tools)).toEqual(advertisedNames);
 
     const notConnected = await guest!.tools[0]!.execute("c2", {});
     expect(notConnected.details).toMatchObject({ status: "error" });
@@ -606,24 +600,6 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     await result!.dispose();
   });
 
-  it("routes authed calls to that sender's runtime only", async () => {
-    resolveRequesterRuntime();
-
-    const alice = await fullPermissionTools("session-route", "alice");
-    const bob = await fullPermissionTools("session-route", "bob");
-    expect(alice!.advertisedTools.map((t) => t.name)).toEqual(
-      bob!.advertisedTools.map((t) => t.name),
-    );
-
-    const aliceResult = await alice!.tools[0]!.execute("a", {});
-    const bobResult = await bob!.tools[0]!.execute("b", {});
-    expect(aliceResult.content[0]).toMatchObject({ text: "live:inbox:alice" });
-    expect(bobResult.content[0]).toMatchObject({ text: "live:inbox:bob" });
-
-    await alice!.dispose();
-    await bob!.dispose();
-  });
-
   it("exempts only trusted OAuth bootstrap tools, not real server tools named connect", async () => {
     const runtime = makeRuntime({
       sessionId: "session-connect-provenance",
@@ -645,27 +621,22 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     }
     catalog.servers["user-mail"]!.codexApprovalMode = "prompt";
     const callTool = vi.spyOn(runtime, "callTool");
-    mocks.setResolveImpl(async () => runtime);
+    mocks.resolveRuntime.mockImplementation(async () => runtime);
 
     const failClosed = await requesterTools("session-connect-provenance", {
       requesterSenderId: "authed",
     });
     const names = ["auth-hub__connect", "drive__connect", "user-mail__inbox"];
-    expect(failClosed!.tools.map((tool) => tool.name)).toEqual(names);
-    expect(failClosed!.advertisedTools.map((tool) => tool.name)).toEqual(names);
+    expect(toolNames(failClosed!.tools)).toEqual(names);
+    expect(toolNames(failClosed!.advertisedTools)).toEqual(names);
     await failClosed!.dispose();
 
-    const requestInteractiveCodexApproval = vi.fn(async (request) => {
-      if (request.toolCallId === "denied-connect") {
-        throw new Error("operator denied");
-      }
-    });
+    const requestInteractiveCodexApproval = approvalGate("denied-connect");
     const gated = await requesterTools("session-connect-provenance", {
       requesterSenderId: "authed",
       requestInteractiveCodexApproval,
     });
     const realConnect = gated!.tools.find((tool) => tool.name === "drive__connect");
-    expect(realConnect).toBeDefined();
     await expect(realConnect!.execute("denied-connect", {})).rejects.toThrow("operator denied");
     expect(callTool).not.toHaveBeenCalled();
     await expect(realConnect!.execute("allowed-connect", {})).resolves.toMatchObject({

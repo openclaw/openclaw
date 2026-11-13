@@ -1,4 +1,6 @@
+import path from "node:path";
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
+import type { QaEvidenceOccurrence } from "./evidence-summary.js";
 import type { QaSeedScenarioWithSource as Scenario } from "./scenario-catalog.js";
 import type { QaSuiteRunParams, QaSuiteScenarioResult } from "./suite-types.js";
 
@@ -26,6 +28,19 @@ export function makeQaSuiteTestLaunch(): Parameters<
     protocol: null,
     accountRef: null,
     proofClass: null,
+  };
+}
+
+export function makeQaSuiteTestOccurrence(id: string): QaEvidenceOccurrence {
+  return {
+    id,
+    parentCell: null,
+    scenario: null,
+    retryOf: null,
+    terminalStatus: "pass",
+    assertions: null,
+    launch: makeQaSuiteTestLaunch(),
+    receipts: [],
   };
 }
 
@@ -93,5 +108,22 @@ export function recordQaSuiteTestResults(
   return {
     scenarios,
     evidence: invocation.snapshot({ generatedAt: "2026-09-15T00:00:00.000Z" }),
+  };
+}
+
+export function makeQaSuiteTestResult(
+  recorded: ReturnType<typeof recordQaSuiteTestResults>,
+  outputDir: string,
+  startedScenarioIds: string[],
+) {
+  return {
+    ...recorded,
+    outputDir,
+    evidencePath: path.join(outputDir, "qa-evidence.json"),
+    reportPath: path.join(outputDir, "qa-suite-report.md"),
+    summaryPath: path.join(outputDir, "qa-suite-summary.json"),
+    report: "# QA Suite Report\n",
+    startedScenarioIds,
+    watchUrl: "http://127.0.0.1:43124",
   };
 }

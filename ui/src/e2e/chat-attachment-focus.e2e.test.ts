@@ -10,7 +10,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Attachment opening focus" });
 
 suite.define(() => {
-  it.each(["file", "photo"] as const)(
+  it.each(["file", "media"] as const)(
     "keeps native %s selection across the real opening animation",
     async (kind) => {
       const fixture = attachmentBrowser("Android Chrome");
@@ -66,11 +66,20 @@ suite.define(() => {
           expect(chooser.isMultiple()).toBe(true);
           await chooser.setFiles([]);
           expect(await page.locator(".chat-attachment-thumb").count()).toBe(0);
-          await menu.evaluate((el) => el.style.removeProperty("--oc-overlay-show-duration"));
-          // Reopen immediately after cancellation and select before show settles.
+          // Keep the second opening in flight while selecting from retained rows.
           await trigger.press("Enter");
+          await menu.evaluate((element) => {
+            for (const animation of element.getAnimations()) {
+              animation.pause();
+            }
+          });
+          expect(await menu.getAttribute("data-phase")).toBe("opening");
+          await attachmentOption(page, kind).focus();
+          expect(
+            await page.evaluate(() => document.activeElement?.getAttribute("data-value")),
+          ).toBe(kind);
           const reopened = page.waitForEvent("filechooser");
-          await attachmentOption(page, kind).press("Enter");
+          await page.keyboard.press("Enter");
           const next = await reopened;
           expect(await next.element().getAttribute("class")).toBe(`agent-chat__${kind}-input`);
           await next.setFiles([]);

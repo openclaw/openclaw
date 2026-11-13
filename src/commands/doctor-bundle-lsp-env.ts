@@ -1,11 +1,5 @@
 /** Doctor note for Gateway env vars that bundle LSP servers no longer inherit. */
 import { note } from "../../packages/terminal-core/src/note.js";
-import {
-  collectWithheldLspEnvNames,
-  formatWithheldLspEnvHints,
-  LSP_ENV_PASSTHROUGH_DOCS_URL,
-  resolveLspServerEnv,
-} from "../agents/agent-bundle-lsp-env.js";
 import { resolveStdioMcpServerLaunchConfig } from "../agents/mcp-stdio.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -46,6 +40,12 @@ export async function noteBundleLspEnvPassthrough(params: {
   if (servers.size === 0) {
     return;
   }
+  const {
+    collectWithheldLspEnvNames,
+    formatWithheldLspEnvHints,
+    LSP_ENV_PASSTHROUGH_DOCS_URL,
+    resolveLspServerEnv,
+  } = await import("../agents/agent-bundle-lsp-env.js");
   const env = params.env ?? process.env;
   const service = params.service ?? resolveGatewayService();
   const sources = [env];

@@ -136,9 +136,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
   };
   const abortEntry = (entry: ActiveInference, reason: WorkerInferenceErrorReason): void => {
     entry.abortReason ??= reason;
-    if (!entry.controller.signal.aborted) {
-      entry.controller.abort();
-    }
+    entry.controller.abort();
   };
   const durableFence = (entry: ActiveInference): WorkerInferenceErrorReason | null => {
     const processError = processFence(entry);

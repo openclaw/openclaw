@@ -27,6 +27,7 @@ import { Icon } from "./solid/icon.tsx";
 registerEnglishCatalog(registerSidebarAttentionEnglish);
 
 export type SidebarAttentionProps = {
+  cachedCount?: number;
   activeRouteId?: NavigationRouteId;
   onNavigate?: ApplicationContext["navigate"];
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
@@ -70,7 +71,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   let panelFocus: SidebarAttentionFocus | null = null;
   let panelGeneration = 0;
   let disposed = false;
-  const count = createMemo(() => sidebarInboxTabCounts(attention.read()).all);
+  const count = createMemo(() => props.cachedCount ?? sidebarInboxTabCounts(attention.read()).all);
   const label = createMemo(() =>
     t(count() === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count()),
@@ -121,7 +122,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     } catch {
       if (isCurrentPanel(generation, scope)) {
         showToast({
-          message: `${t("lazyView.errorTitle")}. ${t("lazyView.staleSubtitle")}`,
+          message: `${t("lazyView.errorTitle")} ${t("lazyView.staleSubtitle")}`,
           severity: "error",
         });
       }
@@ -180,6 +181,20 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     }
     const generation = panelGeneration;
     const scope = routeScope();
+    if (item.action.kind === "openClawIdRecovery") {
+      const client = context.gateway.snapshot.client;
+      try {
+        const { openSidebarKeyRecovery } = await import("./openclaw-id/key-attention.ts");
+        if (isCurrentPanel(generation, scope) && client === context.gateway.snapshot.client) {
+          await openSidebarKeyRecovery(context);
+        }
+      } catch (error) {
+        showToast({ message: formatUiError(error), severity: "error" });
+      } finally {
+        context.sidebarAttention.refreshOpenClawId();
+      }
+      return;
+    }
     try {
       const { custodianAlertStore } = await import("../pages/custodian/custodian-alert-store.ts");
       if (!isCurrentPanel(generation, scope)) {
@@ -293,13 +308,14 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   });
 
   return (
-    <Show when={gateway.read().snapshot.phase === "connected" || attention.read().length > 0}>
+    <>
       <span class="sr-only" role="status" aria-live="polite">
         {label()}
       </span>
       <button
         type="button"
         class="sidebar-issues-button"
+        disabled={gateway.read().snapshot.phase !== "connected" && attention.read().length === 0}
         aria-expanded={panelOpen() ? "true" : "false"}
         aria-haspopup="dialog"
         aria-controls="sidebar-issues-panel"
@@ -354,7 +370,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
           />
         </Loading>
       </Show>
-    </Show>
+    </>
   );
 }
 
@@ -364,6 +380,7 @@ export const SidebarAttention = defineSolidBridge<SidebarAttentionProps, Sidebar
     useOptionalApplication() ? renderSidebarAttentionContent(props, host) : props.children,
   {
     properties: {
+      cachedCount: { default: undefined, attribute: false },
       activeRouteId: { default: undefined, attribute: false },
       onNavigate: { default: undefined, attribute: false },
       watchUpdateProgress: { default: undefined, attribute: false },

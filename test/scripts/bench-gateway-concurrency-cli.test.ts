@@ -29,16 +29,16 @@ const failureMessages = {
   teardown: "Gateway did not exit cleanly",
   diagnostic: "Activity-summary diagnostic benchmark failed",
 };
-const memorySample = { heapUsedMb: 4, rssMb: 16 };
 const processInspection = { errorPolicy: "indeterminate" } as const;
 type Scenario = keyof typeof failureMessages;
 
-async function withBenchmark(scenario: Scenario) {
+async function withBenchmark(scenario: Scenario, profile?: string) {
   const root = tempDirs.make("openclaw-concurrency-cli-");
   const tempRoot = path.join(root, "tmp");
   const entry = path.join(root, `${scenario}.mjs`);
   const output = path.join(root, "report.json");
   const receipts = path.join(root, "children.jsonl");
+  const shutdowns = path.join(root, "shutdown.jsonl");
   const preload = path.join(root, "capture-spawn.mjs");
   mkdirSync(tempRoot);
   const fixture = new URL("./fixtures/gateway-concurrency-entry.mjs", import.meta.url);
@@ -59,6 +59,9 @@ childProcess.spawn = (command, args, options) => {
   const child = spawn(command, args, options);
   const role = args[0] === "scripts/e2e/mock-openai-server.mjs" ? "mock" : args.includes(${JSON.stringify(entry)}) ? "gateway" : null;
   if (role && child.pid) appendFileSync(${JSON.stringify(receipts)}, JSON.stringify({ role, pid: child.pid, startTime: getFileLockProcessStartTime(child.pid), root: options.env.HOME ?? "" }) + "\\n");
+  if (role === "gateway") child.on("message", (message) => {
+    if (message.type === "openclaw-startup-benchmark:stopping") appendFileSync(${JSON.stringify(shutdowns)}, JSON.stringify({ pid: child.pid, type: "ack", accepted: message.accepted }) + "\\n");
+  });
   return child;
 };
 syncBuiltinESMExports();\n`,
@@ -81,6 +84,7 @@ syncBuiltinESMExports();\n`,
         output,
         ...(scenario === "history" ? ["--history-clients", "1", "--history-burst", "1"] : []),
         ...(scenario === "diagnostic" ? ["--activity-summary-diagnostics"] : []),
+        ...(profile ? [profile, root] : []),
       ],
       {
         cwd: process.cwd(),
@@ -116,14 +120,28 @@ syncBuiltinESMExports();\n`,
     expect(children.map((child) => child.role)).toEqual(
       scenario === "workload" ? ["mock", "gateway", "mock", "gateway"] : ["mock", "gateway"],
     );
+    const stopped = readFileSync(shutdowns, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { pid: number; type: string });
     for (const child of children) {
       expect(child.startTime).not.toBeNull();
       expect(inspectManagedProcessGroup(child, processInspection)).toBe("dead");
       if (child.role === "gateway") {
         expect(existsSync(child.root)).toBe(false);
+        const events = stopped.filter((event) => event.pid === child.pid);
+        expect(events.filter((event) => event.type === "ack")).toEqual([
+          { pid: child.pid, type: "ack", accepted: true },
+        ]);
+        expect(events.filter((event) => event.type === "handled")).toEqual([
+          { pid: child.pid, type: "handled", signal: "SIGINT" },
+        ]);
       }
     }
-    expect(readdirSync(tempRoot)).toEqual([]);
+    // Profiling can leave tsx's compiler cache beside fixtures; only benchmark roots are ours.
+    expect(
+      readdirSync(tempRoot).filter((name) => name.startsWith("openclaw-gateway-concurrency-")),
+    ).toEqual([]);
     expect(report.failedAttempt.mockProviderExit).toBeDefined();
     expect(report.failedAttempt.mockProviderProcess?.exitEvent).toBeDefined();
     expect(report.failedAttempt.partialRun.gatewayProcess?.closeEvent).toBeDefined();
@@ -194,27 +212,15 @@ function checkReport(report: Report, scenario: Scenario) {
   if (scenario === "workload") {
     expect(report.runs).toHaveLength(1);
     const completed = report.runs[0]!;
-    const scans = completed.pluginMetadataScans;
     expect(completed).not.toHaveProperty("failures");
     expect(completed).not.toHaveProperty("cleanup");
-    expect(completed).toMatchObject({
-      freshConnection: { ok: true },
-      memory: { before: memorySample, after: memorySample },
-    });
-    expect(scans).toEqual({ count: 0, durationMs: null, totalDurationMs: 0 });
-    expect(report.summary).toMatchObject({ turnCount: 1, pluginMetadataScanCount: 0 });
+    expect(report.summary.turnCount).toBe(1);
     expect(partialRun.sessionsList?.some((sample) => sample.ok)).toBe(true);
-    expect(partialRun.memory.before).toMatchObject(memorySample);
     return;
   }
   expect(report).toMatchObject({ runs: [], summary: { turnCount: 0 } });
-  expect(partialRun.memory.after).toMatchObject(memorySample);
   if (scenario === "teardown") {
-    expect(partialRun).toMatchObject({
-      turnCount: 1,
-      freshConnection: { ok: true },
-      gatewayProcess: { exitEvent: { exitCode: 23, signal: null } },
-    });
+    expect(partialRun.gatewayProcess?.exitEvent).toMatchObject({ exitCode: 23, signal: null });
     expect(partialRun).not.toHaveProperty("pluginMetadataScans");
     return;
   }
@@ -224,10 +230,6 @@ function checkReport(report: Report, scenario: Scenario) {
       (sample) => !sample.ok && sample.error?.includes("fixture history failure"),
     ),
   ).toBe(true);
-  expect(partialRun.cpuUsage).toMatchObject({
-    process: { totalMs: expect.any(Number) },
-    mainThread: { totalMs: expect.any(Number) },
-  });
   expect(partialRun.pluginMetadataScans).toMatchObject({ count: 1, totalDurationMs: 7 });
 }
 
@@ -235,5 +237,14 @@ it
   .skipIf(process.platform === "win32")
   .each(["diagnostic", "workload", "teardown", "history"] as const)(
   "retains partial evidence and cleans up after %s failure",
-  withBenchmark,
+  (scenario) => withBenchmark(scenario),
+);
+
+it
+  .skipIf(process.platform === "win32")
+  .each(["--heap-prof-dir", "--load-cpu-prof-dir", "--cpu-prof-dir"])(
+  "acknowledges fixed-turn shutdown before cleanup with %s",
+  async (profile) => {
+    await withBenchmark("workload", profile);
+  },
 );

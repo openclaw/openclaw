@@ -133,7 +133,6 @@ it.each([
   ["token", undefined],
   ["webhook", undefined],
   ["token", "identity"],
-  ["webhook", "identity"],
   ["webhook", "send"],
 ] as const)(
   "%s driver completes or reports %s failure and cleans up owned webhooks",

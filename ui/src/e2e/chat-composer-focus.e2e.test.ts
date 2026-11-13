@@ -9,6 +9,38 @@ const expectFocus = (locator: Locator, focused = true) =>
   expect
     .poll(() => locator.evaluate((element) => document.activeElement === element))
     .toBe(focused);
+const expectActiveOption = (option: Locator) =>
+  expect
+    .poll(() =>
+      option.evaluate(
+        (element) => document.activeElement?.getAttribute("aria-activedescendant") === element.id,
+      ),
+    )
+    .toBe(true);
+
+const measureComposer = (composer: Locator) =>
+  composer.evaluate(async (element) => {
+    await Promise.all(element.getAnimations().map((animation) => animation.finished));
+    const { borderColor, boxShadow } = getComputedStyle(element);
+    const { width, height } = element.getBoundingClientRect();
+    const channels = borderColor
+      .match(/[\d.]+/g)
+      ?.slice(0, 3)
+      .map(Number);
+    if (!channels || channels.length !== 3) {
+      throw new Error(`expected an RGB color, received ${borderColor}`);
+    }
+    const rgb = borderColor.startsWith("color(srgb")
+      ? channels.map((value) => value * 255)
+      : channels;
+    return {
+      borderColor,
+      boxShadow,
+      width,
+      height,
+      neutralChannelSpread: Math.max(...rgb) - Math.min(...rgb),
+    };
+  });
 
 async function openAgentPicker(page: Page) {
   await installMockGateway(page, {
@@ -28,12 +60,77 @@ async function openAgentPicker(page: Page) {
     picker,
     trigger: picker.locator(".agent-select__trigger"),
     menu: picker.locator(".agent-select__menu"),
-    option: picker.getByRole("menuitemradio", { name: "research", exact: true }),
+    option: picker.getByRole("option", { name: "research", exact: true }),
     composer: page.locator(".new-session-page__message"),
   };
 }
 
 suite.define(() => {
+  it("keeps blocked composer clicks and typing from focusing the footer", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, { operatorScopes: ["operator.read"] });
+      await page.goto(suite.server.baseUrl + "chat");
+      const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+      await expect.poll(() => textarea.isDisabled()).toBe(true);
+      const footer = page.locator(".chat-footer");
+      const input = page.locator(".agent-chat__input");
+      for (const [target, inset] of [
+        [textarea, 8],
+        [input, 3],
+        [footer, 3],
+      ] as const) {
+        const bounds = await target.boundingBox();
+        expect(bounds).not.toBeNull();
+        await page.mouse.click(bounds!.x + inset, bounds!.y + inset);
+        await page.keyboard.type("Do not change this draft");
+        await expectFocus(footer, false);
+        expect(await textarea.inputValue()).toBe("");
+      }
+      await page.keyboard.press("Tab");
+      await expectFocus(footer, false);
+      await page.keyboard.press("Shift+Tab");
+      await expectFocus(footer, false);
+      await gateway.setOperatorScopes(["operator.admin", "operator.read", "operator.write"]);
+      await gateway.closeLatest();
+      await expect.poll(() => textarea.isDisabled()).toBe(false);
+      await textarea.fill("Keep my unsent draft");
+      await gateway.setOperatorScopes(["operator.read"]);
+      await gateway.closeLatest();
+      await expect.poll(() => textarea.isDisabled()).toBe(true);
+      await textarea.click({ force: true });
+      await page.keyboard.type("Blocked edit");
+      await expectFocus(footer, false);
+      expect(await textarea.inputValue()).toBe("Keep my unsent draft");
+      await gateway.setOperatorScopes(["operator.admin", "operator.read", "operator.write"]);
+      await gateway.closeLatest();
+      await expect.poll(() => textarea.isDisabled()).toBe(false);
+      expect(await textarea.inputValue()).toBe("Keep my unsent draft");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    });
+  });
+
+  it("keeps the archived composer keyboard handoff before Unarchive", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      await installMockGateway(page, {
+        sessions: [{ key: "agent:main:main", kind: "direct", archived: true, updatedAt: 1 }],
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      const unarchive = page.getByRole("button", { name: "Unarchive", exact: true });
+      await unarchive.waitFor();
+      const skip = page.locator(".chat-composer-skip-link");
+      await skip.focus();
+      await page.keyboard.press("Enter");
+      const footer = page.locator(".chat-footer");
+      await expectFocus(footer);
+      await page.keyboard.press("Tab");
+      await expectFocus(unarchive);
+      const bounds = await footer.boundingBox();
+      expect(bounds).not.toBeNull();
+      await page.mouse.click(bounds!.x + 3, bounds!.y + 3);
+      await expectFocus(footer, false);
+    });
+  });
+
   it.each(["chat", "new"])(
     "centers %s composer keyboard focus on its action glyphs",
     async (route) => {
@@ -79,11 +176,11 @@ suite.define(() => {
       await trigger.waitFor({ state: "visible" });
       await trigger.focus();
       await page.keyboard.press("Enter");
-      // Opening initializes the selected row after its animation completes.
-      const selected = picker.getByRole("menuitemradio", { name: "main", exact: true });
-      await expectFocus(selected);
+      // The list retains focus while its active descendant follows navigation.
+      const selected = picker.getByRole("option", { name: "main", exact: true });
+      await expectActiveOption(selected);
       await page.keyboard.press("ArrowDown");
-      await expectFocus(option);
+      await expectActiveOption(option);
 
       await page.keyboard.press("Space");
 
@@ -96,17 +193,18 @@ suite.define(() => {
 
       await trigger.focus();
       await page.keyboard.press("Enter");
-      await expectFocus(option);
+      await expectActiveOption(option);
 
       await page.keyboard.type("r");
 
-      await expect.poll(() => composer.inputValue()).toBe("r");
+      await expectActiveOption(option);
+      await expect.poll(() => composer.inputValue()).toBe("");
     });
   });
 
   it("keeps agent-menu activation keys out of the composer while its trigger retains focus", async () => {
     await suite.withPage({}, async ({ page }) => {
-      const { trigger, menu, option, composer } = await openAgentPicker(page);
+      const { trigger, menu, composer } = await openAgentPicker(page);
       await composer.waitFor({ state: "visible" });
 
       await trigger.click();
@@ -117,34 +215,9 @@ suite.define(() => {
 
       await expect
         .poll(() => menu.evaluate((element) => element.matches(":popover-open")))
-        .toBe(true);
-      await expectFocus(option);
+        .toBe(false);
+      await expectFocus(trigger);
       await expect.poll(() => composer.inputValue()).toBe("");
-    });
-  });
-
-  it("routes printable input from the real Chat context menu to the composer", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      const messageText = "Context menu typing route";
-      await installMockGateway(page, {
-        historyMessages: [
-          { role: "assistant", content: [{ type: "text", text: messageText }], timestamp: 1_000 },
-        ],
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const bubble = page.locator(".chat-bubble").filter({ hasText: messageText });
-      await bubble.waitFor();
-      await bubble.click({ button: "right" });
-      const menuItem = page
-        .locator(".chat-reply-context-menu")
-        .getByRole("menuitem", { name: "Reply to message", exact: true });
-      await menuItem.focus();
-
-      await page.keyboard.type("x");
-
-      const composer = page.locator(".agent-chat__composer-combobox > textarea");
-      await expect.poll(() => composer.inputValue()).toBe("x");
-      await expectFocus(composer);
     });
   });
 
@@ -165,7 +238,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
 
       const composer = page.locator(".agent-chat__composer-combobox > textarea");
       await composer.waitFor({ state: "visible" });
@@ -235,7 +308,7 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
 
       const composer = page.locator(".agent-chat__input");
       const textarea = composer.locator("textarea");
@@ -247,40 +320,9 @@ suite.define(() => {
           .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
           .toBe(theme);
         await textarea.evaluate((element) => element.blur());
-        const unfocused = await composer.evaluate(async (element) => {
-          await Promise.all(element.getAnimations().map((animation) => animation.finished));
-          const style = getComputedStyle(element);
-          const { width, height } = element.getBoundingClientRect();
-          return { borderColor: style.borderColor, boxShadow: style.boxShadow, width, height };
-        });
-
+        const unfocused = await measureComposer(composer);
         await textarea.focus();
-        const focused = await composer.evaluate(async (element) => {
-          await Promise.all(element.getAnimations().map((animation) => animation.finished));
-          const style = getComputedStyle(element);
-          const { width, height } = element.getBoundingClientRect();
-          const parseRgb = (color: string): [number, number, number] => {
-            const values = color
-              .match(/[\d.]+/g)
-              ?.slice(0, 3)
-              .map(Number);
-            if (!values || values.length !== 3) {
-              throw new Error(`expected an RGB color, received ${color}`);
-            }
-            return (
-              color.startsWith("color(srgb") ? values.map((value) => value * 255) : values
-            ) as [number, number, number];
-          };
-          const borderChannels = parseRgb(style.borderColor);
-
-          return {
-            borderColor: style.borderColor,
-            boxShadow: style.boxShadow,
-            width,
-            height,
-            neutralChannelSpread: Math.max(...borderChannels) - Math.min(...borderChannels),
-          };
-        });
+        const focused = await measureComposer(composer);
 
         expect([focused.borderColor, focused.boxShadow]).not.toEqual([
           unfocused.borderColor,

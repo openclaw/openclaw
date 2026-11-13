@@ -54,6 +54,7 @@ import type { loadMemorySourceFileState } from "./manager-source-state.js";
 
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
 type CachePruneInput = MemoryPublicationOperations["cache.prune"]["input"];
+type CacheRetireInput = MemoryPublicationOperations["cache.retire"]["input"];
 const log = createSubsystemLogger("memory");
 type PublicationWorker = {
   store: Pick<
@@ -479,7 +480,7 @@ export class MemoryIndexDatabase {
         const worker = await this.getPublicationWorker();
         return await operation(worker.store);
       } catch (error) {
-        const [cleanup] = await Promise.allSettled([this.closePublicationWorker()]);
+        const [cleanup] = await Promise.allSettled([this.retirePublicationWorker()]);
         if (cleanup.status === "rejected") {
           throw new AggregateError(
             [error, cleanup.reason],
@@ -490,9 +491,8 @@ export class MemoryIndexDatabase {
         throw error;
       }
     };
-    return this.isShadow
-      ? this.withPrivateAccess(run, { nativeWriter: true, reentrant: true })
-      : run();
+    // Published readers also borrow this worker; retirement must not revoke an accepted read.
+    return this.withPrivateAccess(run, { nativeWriter: true, reentrant: true });
   }
 
   private runPublication<T>(
@@ -582,6 +582,14 @@ export class MemoryIndexDatabase {
       this.executePublication({ type: "cache.prune", input }, assertCurrent),
     );
     return pruned ?? false;
+  }
+
+  async retireEmbeddingCache(input: CacheRetireInput, assertCurrent: () => void) {
+    assertCurrent();
+    const next = await this.settlePublication(() =>
+      this.executePublication({ type: "cache.retire", input }, assertCurrent),
+    );
+    return next ?? null;
   }
 
   async mutateEmbeddingCache(
@@ -697,10 +705,19 @@ export class MemoryIndexDatabase {
     );
   }
 
-  async closePublicationWorker(): Promise<void> {
+  private async retirePublicationWorker(): Promise<void> {
     const worker = await this.publicationWorker;
     await worker?.store.close();
     this.publicationWorker = undefined;
+  }
+
+  closePublicationWorker(): Promise<void> {
+    return runQueuedStoreWrite({
+      queues: this.privateQueues,
+      storePath: this.shadow?.path ?? "memory-index",
+      label: "memory publication worker retirement",
+      fn: () => this.retirePublicationWorker(),
+    });
   }
 
   async withPublicationGeneration(run: () => Promise<void>): Promise<void> {

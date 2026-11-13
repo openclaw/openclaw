@@ -9,9 +9,9 @@ import {
   runtimeMediaRequestSecretOwnerId,
 } from "../secrets/runtime-media-secret-owner.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { runProviderEntry } from "./runner.entries.js";
 import { withAudioFixture } from "./runner.test-utils.js";
-import type { MediaUnderstandingProvider } from "./types.js";
 
 afterEach(() => setActiveDegradedSecretOwners([]));
 

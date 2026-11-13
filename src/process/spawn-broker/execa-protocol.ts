@@ -158,3 +158,24 @@ export function restoreExecaResult(result: BrokerExecaResult) {
   }
   return { ...properties, cause: undefined };
 }
+
+/** Failed admission has no command or native process metadata. */
+export function createBrokerExecaAdmissionFailure(
+  error: Error & { code: string },
+): BrokerExecaResult {
+  return {
+    failed: true,
+    code: error.code,
+    timedOut: false,
+    isCanceled: false,
+    isGracefullyCanceled: false,
+    isMaxBuffer: false,
+    isTerminated: false,
+    isForcefullyTerminated: false,
+    command: "",
+    escapedCommand: "",
+    cwd: process.cwd(),
+    durationMs: 0,
+    error: serializeExecaError(error),
+  };
+}

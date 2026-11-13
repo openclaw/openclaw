@@ -49,7 +49,7 @@ const environmentSource = { kind: "environment", environmentId: "worker-desktop-
 const hostEnvironment = { id: "gateway", type: "local", status: "available", desktop: true };
 const noSourcePicker = async (panel: Locator) => {
   expect(await text(panel, "Desktop sources").count()).toBe(0);
-  expect(await text(panel, "This machine").count()).toBe(0);
+  expect(await text(panel, "This computer").count()).toBe(0);
 };
 const expectObservation = (params: unknown, control = false) =>
   expect(params).toEqual({ source: environmentSource, control });
@@ -644,10 +644,10 @@ suite.define(() => {
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(2);
     }));
 
-  it("opens the standalone desktop picker in a focused window", () =>
+  it("opens the focused desktop picker and keeps a right dock above bottom panels", () =>
     withDesktopPage(async (page) => {
       await desktopGateway(page);
-      await openDesktopPanel(page, suite.server.baseUrl);
+      const panel = await openDesktopPanel(page, suite.server.baseUrl);
       const [popup] = await Promise.all([
         page.waitForEvent("popup"),
         button(page, "Open desktop in new window").click(),
@@ -655,12 +655,6 @@ suite.define(() => {
       await popup.waitForLoadState("domcontentloaded");
       expect(new URL(popup.url()).pathname).toBe("/focus/desktop");
       await popup.close();
-    }));
-
-  it("keeps a right-docked desktop above bottom-docked panels", () =>
-    withDesktopPage(async (page) => {
-      await desktopGateway(page);
-      const panel = await openDesktopPanel(page, suite.server.baseUrl);
       await button(panel, "Dock to right").click();
       const bottom = await panel.evaluate((element) => {
         document.documentElement.style.setProperty("--oc-terminal-reserve-bottom", "40px");
@@ -721,7 +715,7 @@ suite.define(() => {
         });
         const panel = await openDesktopPanel(page, suite.server.baseUrl);
         await gateway.waitForRequest("environments.list");
-        await text(panel, isHost ? "This machine" : "node:paired-node").waitFor();
+        await text(panel, isHost ? "This computer" : "node:paired-node").waitFor();
         expect(await text(panel, isHost ? "legacy-nested-worker" : "node:plain-node").count()).toBe(
           0,
         );
@@ -732,7 +726,7 @@ suite.define(() => {
             source,
             control: false,
           });
-          await text(panel, "Enter the VNC password for this machine.").waitFor();
+          await text(panel, "Enter the VNC password for this device.").waitFor();
           expect(await panel.getAttribute("data-connect-count")).toBeNull();
         }
         await panel.getByLabel("VNC password", { exact: true }).fill(password);
@@ -931,49 +925,49 @@ suite.define(() => {
       await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
     }));
 
-  it.each(
-    [
-      { name: "view-only text", control: false, format: 1 as const },
-      { name: "controlling unsupported format", control: true, format: 2 as const },
-      { name: "controlling text", control: true, format: 1 as const },
-    ].flatMap(({ name, control, format }) =>
-      (["coalesced", "fragmented"] as const).map((delivery) => ({
-        name,
-        control,
-        format,
-        delivery,
-      })),
-    ),
-  )(
-    "renders the next RFB frame after $name Provide ($delivery)",
-    async ({ control, format, delivery }) => {
+  it.each([
+    { name: "view-only text", control: false, format: 1 as const },
+    { name: "controlling unsupported format", control: true, format: 2 as const },
+    { name: "controlling text", control: true, format: 1 as const },
+  ])(
+    "renders the next RFB frame after coalesced and fragmented $name Provide",
+    async ({ control, format }) => {
       await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
         const { gateway, rfb, panel } = await openScriptedDesktop(page);
         if (control) {
           await button(panel, "Take control").click();
           await expect.poll(rfb.events).toEqual(["authenticated:1", "authenticated:2", "closed:1"]);
         }
-        const provide = createRfbClipboardProvide(format);
-        const frame = createRfbRawFrame();
-        await rfb.send(
-          delivery === "coalesced"
-            ? [[...provide, ...frame]]
-            : [...provide.map((byte) => [byte]), frame],
-        );
-        // Observe both terminal outcomes so the broken stream fails without waiting for a missing frame.
-        const outcome = () =>
-          panel.evaluate((element) => {
-            if (element.textContent?.includes("Desktop disconnected:")) {
-              return "disconnected";
-            }
-            const canvas = element.querySelector<HTMLCanvasElement>(".desktop-surface canvas");
-            const pixel = canvas?.getContext("2d")?.getImageData(0, 0, 1, 1).data;
-            return pixel && [...pixel].join(",") === "24,180,160,255" ? "frame" : null;
-          });
-        await expect.poll(outcome).not.toBeNull();
-        expect(await outcome()).toBe("frame");
-        expect(await gateway.getRequests("desktop.observe")).toHaveLength(control ? 2 : 1);
-        expect(await button(panel, "Reconnect").count()).toBe(0);
+        for (const [delivery, red] of [
+          ["coalesced", 24],
+          ["fragmented", 25],
+        ] as const) {
+          const provide = createRfbClipboardProvide(format);
+          const frame = createRfbRawFrame();
+          // The previous delivery's frame must not satisfy this delivery's wait.
+          frame[16] = red;
+          await rfb.send(
+            delivery === "coalesced"
+              ? [[...provide, ...frame]]
+              : [...provide.map((byte) => [byte]), frame],
+          );
+          // Observe both terminal outcomes so the broken stream fails without waiting for a missing frame.
+          const outcome = () =>
+            panel.evaluate((element, expectedRed) => {
+              if (element.textContent?.includes("Desktop disconnected:")) {
+                return "disconnected";
+              }
+              const canvas = element.querySelector<HTMLCanvasElement>(".desktop-surface canvas");
+              const pixel = canvas?.getContext("2d")?.getImageData(0, 0, 1, 1).data;
+              return pixel && [...pixel].join(",") === `${expectedRed},180,160,255`
+                ? "frame"
+                : null;
+            }, red);
+          await expect.poll(outcome).not.toBeNull();
+          expect(await outcome(), delivery).toBe("frame");
+          expect(await gateway.getRequests("desktop.observe")).toHaveLength(control ? 2 : 1);
+          expect(await button(panel, "Reconnect").count()).toBe(0);
+        }
       });
     },
   );

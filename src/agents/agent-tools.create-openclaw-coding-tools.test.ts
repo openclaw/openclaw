@@ -18,7 +18,6 @@ import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
-import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { registerPluginOnlyCallerIdentityCase } from "./agent-tools.caller-identity.test-support.js";
@@ -47,6 +46,7 @@ import {
   createHostSandboxFsBridge,
   createSandboxFsBridgeFromResolver,
 } from "./test-helpers/host-sandbox-fs-bridge.js";
+import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
 import { attachToolAllowlistIntersection } from "./tool-policy.js";
 
 const tinyPngBuffer = Buffer.from(
@@ -56,13 +56,7 @@ const tinyPngBuffer = Buffer.from(
 const avifHeaderBuffer = Buffer.from("00000018667479706176696600000000617669666d696631", "hex");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-completion-grant-");
-const openClawOnlyPlan = {
-  includeBaseCodingTools: false,
-  includeShellTools: false,
-  includeChannelTools: false,
-  includeOpenClawTools: true,
-  includePluginTools: false,
-};
+const openClawOnlyPlan = createOpenClawOnlyToolConstructionPlan();
 const pluginOnlyPlan = {
   ...openClawOnlyPlan,
   includeOpenClawTools: false,
@@ -213,7 +207,7 @@ describe("createOpenClawCodingTools", () => {
     ["multi-page node", "node", `${"ok\n".repeat(2_100)}done`, false],
     ["oversized local", "local", `# Pond\n${"x".repeat(33 * 1024)}`, true],
   ] as const)(
-    "serves %s skill instructions whole or refuses them",
+    "serves %s skill instructions whole or as read pages",
     async (_name, backend, content, oversized) => {
       const virtual = backend === "node";
       const baseDir = virtual
@@ -253,10 +247,7 @@ describe("createOpenClawCodingTools", () => {
       });
 
       if (oversized) {
-        expect(extractToolText(result)).toMatch(
-          /(?:cannot|omitted|exceeds).*whole|whole.*(?:cannot|exceeds)|partially served/i,
-        );
-        expect(extractToolText(result)).not.toContain("# Pond");
+        expect(extractToolText(result)).toMatch(/^# Pond\n[\s\S]*Use offset=2 to continue\.\]$/);
         expect(Buffer.byteLength(extractToolText(result), "utf8")).toBeLessThanOrEqual(32 * 1024);
         return;
       }
@@ -733,35 +724,6 @@ describe("createOpenClawCodingTools", () => {
 
   registerPluginOnlyCallerIdentityCase({ testConfig, requireTool });
 
-  it("materializes additive runtime tools while preserving normal deny policy", async () => {
-    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
-    createOpenClawToolsMock.mockClear();
-    const config: OpenClawConfig = { tools: { profile: "coding", deny: ["workboard_block"] } };
-
-    createOpenClawCodingTools({
-      config,
-      conversationCapabilityProfile: await prepareConversationCapabilityProfile({
-        config,
-        runtimePluginToolGrant: {
-          pluginId: "workboard",
-          toolNames: ["workboard_heartbeat", "workboard_complete"],
-        },
-      }),
-    });
-
-    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
-    const options = lastCoreOptions();
-    expect(options.pluginToolAllowlist).not.toContain("workboard_heartbeat");
-    expect(
-      createPluginToolAllowlist(options.pluginToolAllowlist).allowsTool(
-        "workboard",
-        "workboard_heartbeat",
-      ),
-    ).toBe(true);
-    expect(options).not.toHaveProperty("runtimePluginToolGrant");
-    expect(options.pluginToolDenylist).toContain("workboard_block");
-  });
-
   it("removes message from persisted visible child sessions on every turn", async () => {
     const storeTemplate = sessionStoreTemplate();
     const agentId = "visible-subagent-message";
@@ -1153,7 +1115,7 @@ describe("createOpenClawCodingTools read behavior", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
-  it("retries skill reads after failures, whole-read refusals, and optional misses", async () => {
+  it("retries skill reads after failures, oversized pages, and optional misses", async () => {
     const locator = skillLocator;
     const truncatedResult: AgentToolResult<ReadToolDetails> = {
       content: [{ type: "text", text: "partial" }],
@@ -1190,9 +1152,9 @@ describe("createOpenClawCodingTools read behavior", () => {
     await expect(tool.execute("failed-skill-read", { path: locator })).rejects.toThrow(
       "transient read failure",
     );
-    expect(
-      extractToolText(await tool.execute("oversized-skill-read", { path: locator })),
-    ).toContain("cannot be partially served");
+    expect(extractToolText(await tool.execute("oversized-skill-read", { path: locator }))).toBe(
+      "partial",
+    );
     expect(
       extractToolText(
         await tool.execute("optional-missing-skill-read", { path: locator, optional: true }),

@@ -1,15 +1,14 @@
 import type { CronJob } from "../api/types.ts";
-import {
-  createControlUiChatHistoryMessage as chatHistoryMessage,
-  createControlUiMockSessionRow as sessionRow,
-} from "./control-ui-session-fixtures.ts";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
+import { createControlUiChatHistoryMessage as chatHistoryMessage } from "./control-ui-chat-history-fixtures.ts";
+import { createControlUiMockSessionRow as sessionRow } from "./control-ui-session-fixtures.ts";
 import { buildWorkboardProgressResponses } from "./control-ui-workboard-progress-fixtures.ts";
 import {
   buildWorkboardStateCells,
   buildWorkboardStateSessions,
   MATRIX_STATES,
 } from "./control-ui-workboard-states.ts";
-import { cronListResponseFixture } from "./cron.ts";
+import { cronJobsListResponse, cronListResponseFixture } from "./cron.ts";
 
 export function buildWorkboardMocks(
   baseTime: number,
@@ -564,36 +563,26 @@ export function buildWorkboardMocks(
           },
         ],
       },
-      "cron.list": cronListResponseFixture({
-        jobs: [automationJob],
-        snapshotRevision: "workboard-mock-cron",
-        total: 1,
-        offset: 0,
-        limit: 50,
-        hasMore: false,
-        nextOffset: null,
-      }),
+      "cron.list": cronListResponseFixture(
+        cronJobsListResponse([automationJob], {
+          snapshotRevision: "workboard-mock-cron",
+        }),
+      ),
 
       "board.get": {
         sessionKey,
         revision: 1,
         tabs: [{ tabId: "main", title: "Workboard", position: 0, chatDock: "hidden" }],
         widgets: [
-          {
+          createBoardWidget({
             name: "session-progress",
-            tabId: "main",
             title: "Session progress",
             contentKind: "plugin",
             pluginKind: "session:progress",
-            sizeW: 6,
             sizeH: 5,
-            position: 0,
-            grantState: "none",
-            revision: 1,
-          },
-          {
+          }),
+          createBoardWidget({
             name: "workboard-product-operations",
-            tabId: "main",
             title: "Product Operations",
             contentKind: "plugin",
             pluginKind: "workboard:board",
@@ -602,9 +591,7 @@ export function buildWorkboardMocks(
             sizeW: 12,
             sizeH: 16,
             position: 1,
-            grantState: "none",
-            revision: 1,
-          },
+          }),
         ],
       },
       "workboard.boards.list": { boards },

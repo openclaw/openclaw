@@ -8,10 +8,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../../../src/state/openclaw-state-db.js";
-import type {
-  TranscriptSessionDescriptor,
-  TranscriptUtterance,
-} from "../../../../src/transcripts/provider-types.js";
+import type { TranscriptSessionDescriptor } from "../../../../src/transcripts/provider-types.js";
 import { TranscriptsStore } from "../../../../src/transcripts/store.js";
 import {
   createOpenClawTestInstance,
@@ -21,7 +18,6 @@ import {
 const SESSION_KEY = "agent:main:qa:missing-transcript";
 const SESSION_ID = "qa-missing-transcript";
 const TRANSCRIPT_ID = "qa-cli-transcript";
-const TRANSCRIPT_STARTED_AT = "2026-08-03T12:00:00.000Z";
 const TRANSCRIPT_TEXT = "Action item: preserve the CLI transcript artifact.";
 
 type SessionsJson = {
@@ -62,34 +58,30 @@ async function cliJson<T>(...args: string[]): Promise<T> {
   return JSON.parse(result.stdout) as T;
 }
 
-async function seedTranscript(stateDir: string, env: NodeJS.ProcessEnv) {
-  const session: TranscriptSessionDescriptor = {
-    sessionId: TRANSCRIPT_ID,
-    title: "CLI transcript proof",
-    source: { providerId: "manual-transcript", kind: "posthoc-transcript" },
-    startedAt: TRANSCRIPT_STARTED_AT,
-    stoppedAt: "2026-08-03T12:05:00.000Z",
-  };
-  const utterance: TranscriptUtterance = {
-    final: true,
-    speaker: { label: "Operator" },
-    text: TRANSCRIPT_TEXT,
-  };
-  const store = new TranscriptsStore(path.join(stateDir, "transcripts"), { env });
-  await store.writeSession(session);
-  await store.appendUtteranceForSession(session, utterance);
-}
-
 it("manages canonical sessions and transcript artifacts through the CLI", async () => {
   instance = await createOpenClawTestInstance({ name: "qa-session-transcript-cli" });
   instance.state.applyEnv();
   await captureRuntimeConfigAsyncReader()();
-
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey: SESSION_KEY },
     { sessionId: SESSION_ID, updatedAt: Date.now() - 60_000 },
   );
-  await seedTranscript(instance.stateDir, instance.env);
+  const session: TranscriptSessionDescriptor = {
+    sessionId: TRANSCRIPT_ID,
+    title: "CLI transcript proof",
+    source: { providerId: "manual-transcript", kind: "posthoc-transcript" },
+    startedAt: "2026-08-03T12:00:00.000Z",
+    stoppedAt: "2026-08-03T12:05:00.000Z",
+  };
+  const store = new TranscriptsStore(path.join(instance.stateDir, "transcripts"), {
+    env: instance.env,
+  });
+  await store.writeSession(session);
+  await store.appendUtteranceForSession(session, {
+    final: true,
+    speaker: { label: "Operator" },
+    text: TRANSCRIPT_TEXT,
+  });
   await closeDatabases();
 
   const sessionsBefore = await cliJson<SessionsJson>("sessions");

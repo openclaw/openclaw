@@ -169,10 +169,9 @@ suite.define(() => {
         const sharing = ui.button(activePane, "Session sharing");
         expect((await sharing.count()) > 0 && !(await sharing.isDisabled())).toBe(false);
         await openOwnMenu();
-        for (const control of [rename, archive]) {
+        for (const control of [rename, archive, fork]) {
           expect((await control.getAttribute("disabled")) === null).toBe(canOrganize);
         }
-        expect(await fork.getAttribute("disabled")).not.toBeNull();
         const unread = menu.locator('[data-value="toggle-unread"]');
         expect(await unread.isDisabled()).toBe(!canOrganize);
         if (canOrganize) {
@@ -202,8 +201,9 @@ suite.define(() => {
           await ui.button(ownRow, "Unpin session").waitFor();
           await ownRow.click({ button: "right" });
           await support.activateSelfRemovingControl(archive);
-          await ui.sessionPatch(gateway, own.key, { archived: true });
           await ui.button(page, "Undo").waitFor();
+          await ui.closeArchiveUndoToast(page);
+          await ui.sessionPatch(gateway, own.key, { archived: true });
 
           await showSessions("?status=archived");
           const archivedRow = listRow("Organized workspace");
@@ -220,7 +220,7 @@ suite.define(() => {
           await archivedRow.waitFor({ state: "detached" });
           await navigate(own.key);
           await ui.expectText(ownRow, "Organized workspace");
-          // Ordinary Unarchive leaves personal pins cleared; only Undo restores them.
+          // The committed archive cleared the personal pin; Unarchive does not restore it.
           await ui.expectCount(
             page.locator(`[data-session-section="pinned"] [data-session-key="${own.key}"]`),
             0,

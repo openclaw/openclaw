@@ -8,6 +8,7 @@ import {
   registerParityHostLifecycle,
 } from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
 import { createOpenAIResponsesTransportStreamFn } from "../../../../packages/ai/src/transports/openai-responses-client.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -43,6 +44,7 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { convertToLlm } from "../../sessions/messages.js";
+import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
@@ -412,8 +414,14 @@ describe("prompt-cache boundary regressions", () => {
           validateAnthropicTurns: api === "anthropic-messages",
           allowSyntheticToolResults: true,
         };
+        const restored = await manager[sessionManagerReadInitialContext]();
+        expect(restored.messages.every(Object.isFrozen)).toBe(true);
+        const restoredAssistant = restored.messages.find((message) => message.role === "assistant");
+        expect(
+          Object.isFrozen(expectDefined(restoredAssistant, "restored assistant").content),
+        ).toBe(true);
         const sanitized = await sanitizeSessionHistory({
-          messages: manager.buildSessionContext().messages,
+          messages: restored.messages,
           modelApi: api,
           policy,
           sessionManager: manager,
@@ -497,14 +505,8 @@ describe("prompt-cache boundary regressions", () => {
       storePath: path.join(dir, "sessions.json"),
     };
     const input = { text: "describe this", timestamp: TS, idempotencyKey: "cache-99495:user" };
-    let resolveMedia!: (input: UserTurnInput) => void;
-    let markStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
-    const media = new Promise<UserTurnInput>((resolve) => {
-      resolveMedia = resolve;
-    });
+    const { promise: started, resolve: markStarted } = createDeferred();
+    const { promise: media, resolve: resolveMedia } = createDeferred<UserTurnInput>();
     const recorder = createUserTurnTranscriptRecorder({
       input,
       target,

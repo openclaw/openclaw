@@ -28,6 +28,14 @@ export type FeatureContract = {
   events: Readonly<Record<string, TSchema>>;
 };
 
+/** Browser runtime metadata; schemas stay in the canonical contract's type. */
+export type FeatureClientContract<C extends FeatureContract> = {
+  pluginId: C["pluginId"];
+  operations: {
+    [K in keyof C["operations"]]: Pick<C["operations"][K], "kind">;
+  };
+};
+
 export type FeatureOperationName<C extends FeatureContract> = keyof C["operations"] & string;
 export type FeatureEventName<C extends FeatureContract> = keyof C["events"] & string;
 export type FeatureInput<C extends FeatureContract, K extends FeatureOperationName<C>> = Static<
@@ -45,12 +53,8 @@ export type FeatureQueryName<C extends FeatureContract> = {
 export type FeatureRequestOptions = { sessionKey?: string; agentId?: string };
 
 export function defineFeatureContract<const C extends FeatureContract>(contract: C): C {
-  if (
-    !contract.pluginId.trim() ||
-    Object.keys(contract.operations).length > 64 ||
-    Object.keys(contract.events).length > 64
-  ) {
-    throw new Error("Feature contracts require a plugin id and at most 64 operations and events");
+  if (!contract.pluginId.trim() || Object.keys(contract.events).length > 64) {
+    throw new Error("Feature contracts require a plugin id and at most 64 events");
   }
   for (const id of Object.keys(contract.operations)) {
     if (!/^[a-z][a-z0-9._-]{0,127}$/u.test(id)) {
@@ -89,6 +93,14 @@ export type FeatureClient<C extends FeatureContract> = {
 /** Uses only the current browser connection; it does not mint scopes or a backend client. */
 export function createFeatureClient<C extends FeatureContract>(
   contract: C,
+  host: FeatureTransport,
+): FeatureClient<C>;
+export function createFeatureClient<C extends FeatureContract>(
+  contract: FeatureClientContract<C>,
+  host: FeatureTransport,
+): FeatureClient<C>;
+export function createFeatureClient<C extends FeatureContract>(
+  contract: FeatureClientContract<C>,
   host: FeatureTransport,
 ): FeatureClient<C> {
   if (host.pluginId !== contract.pluginId) {

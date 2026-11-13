@@ -67,12 +67,7 @@ it("resolves saved sources from the transcript registry instead of unrelated mat
     end: 16,
     text: "Selected passage",
   };
-  const unrelated = document.createElement("div");
-  unrelated.className = "chat-bubble";
-  unrelated.dataset.messageId = source.messageId;
-  if (source.entryId) {
-    unrelated.dataset.entryId = source.entryId;
-  }
+  const unrelated = bubble.cloneNode(false);
   unrelated.textContent = "Different source";
   container.querySelector(".chat-thread")!.prepend(unrelated);
 
@@ -100,12 +95,10 @@ it("exposes only connected pins fully inside the transcript and viewport, then r
   const handle = state.commentPins!;
   const thread = container.querySelector<HTMLElement>(".chat-thread")!;
   const pin = container.querySelector<HTMLButtonElement>(".chat-comment-pin")!;
-  const threadBounds = vi
-    .spyOn(thread, "getBoundingClientRect")
-    .mockReturnValue(new DOMRect(0, 0, 200, 200));
-  const pinBounds = vi
-    .spyOn(pin, "getBoundingClientRect")
-    .mockReturnValue(new DOMRect(10, 10, 24, 24));
+  const bounds = (element: Element, ...rect: ConstructorParameters<typeof DOMRect>) =>
+    vi.spyOn(element, "getBoundingClientRect").mockReturnValue(new DOMRect(...rect));
+  const threadBounds = bounds(thread, 0, 0, 200, 200);
+  const pinBounds = bounds(pin, 10, 10, 24, 24);
   pin.hidden = false;
 
   expect(handle.visiblePin("visible")).toBe(pin);

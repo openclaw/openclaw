@@ -15,6 +15,7 @@ export type ExecApprovalRequestPayload = {
   scope?: ApprovalScope | null;
   cwd?: string | null;
   host?: string | null;
+  nodeId?: string | null;
   security?: string | null;
   ask?: string | null;
   agentId?: string | null;
@@ -58,16 +59,6 @@ export type ExecApprovalPromptState = {
 
 const APPROVAL_ALREADY_RESOLVED = "APPROVAL_ALREADY_RESOLVED";
 const APPROVAL_NOT_FOUND = "APPROVAL_NOT_FOUND";
-
-const APPROVAL_EVENT_KINDS = [
-  ["exec", "exec"],
-  ["plugin", "plugin"],
-  ["openclaw", "system-agent"],
-] as const;
-
-function approvalKindForEvent(event: string, phase: "requested" | "resolved") {
-  return APPROVAL_EVENT_KINDS.find(([prefix]) => event === `${prefix}.approval.${phase}`)?.[1];
-}
 
 function parseCommandSpans(
   value: unknown,
@@ -191,6 +182,7 @@ function parseApprovalRequested(
             streamProposal: parseStreamProposal(request.streamProposal),
             cwd: readStringValue(request.cwd) ?? null,
             host: readStringValue(request.host) ?? null,
+            nodeId: readStringValue(request.nodeId) ?? null,
             security: readStringValue(request.security) ?? null,
             ask: readStringValue(request.ask) ?? null,
             resolvedPath: readStringValue(request.resolvedPath) ?? null,
@@ -238,7 +230,12 @@ function parseApprovalRequested(
 }
 
 export function parseApprovalResolvedEvent(event: string, payload: unknown): { id: string } | null {
-  if (!approvalKindForEvent(event, "resolved") || !isRecord(payload)) {
+  if (
+    (event !== "exec.approval.resolved" &&
+      event !== "plugin.approval.resolved" &&
+      event !== "openclaw.approval.resolved") ||
+    !isRecord(payload)
+  ) {
     return null;
   }
   const id = normalizeOptionalString(payload.id);
@@ -249,7 +246,14 @@ export function parseApprovalRequestedEvent(
   event: string,
   payload: unknown,
 ): ExecApprovalRequest | null {
-  const kind = approvalKindForEvent(event, "requested");
+  const kind =
+    event === "exec.approval.requested"
+      ? "exec"
+      : event === "plugin.approval.requested"
+        ? "plugin"
+        : event === "openclaw.approval.requested"
+          ? "system-agent"
+          : undefined;
   return kind ? parseApprovalRequested(kind, payload) : null;
 }
 

@@ -1,12 +1,15 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   hasNonTextEmbeddingParts,
   type EmbeddingInput,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
+import type { MemoryEmbeddingCacheRetireFence } from "./manager-embedding-cache-retire.js";
 import {
   collectMemoryCachedEmbeddings,
   isValidMemoryEmbedding,
@@ -20,6 +23,10 @@ import type { MemoryIndexWorkItem, MemorySemanticProviderGeneration } from "./ma
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
+const log = createSubsystemLogger("memory");
+
+const CACHE_READ_PAGE_BYTES = 8 * 1024 * 1024;
+const CACHE_READ_DEFAULT_DIMENSIONS = 4096;
 
 export type MemoryEmbeddingCacheCandidate = {
   chunk: IndexedMemoryChunk;
@@ -40,7 +47,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     cacheCandidates?: MemoryEmbeddingCacheCandidate[],
   ): Promise<number[][]>;
 
-  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {
+  protected async pruneEmbeddingCacheIfNeeded(recount = false): Promise<void> {
     const max = this.cache.maxEntries;
     if (!this.cache.enabled || !max || max <= 0) {
       return;
@@ -54,10 +61,49 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     const unreferencedFirst = {
       identities: this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities(),
     };
+    // Deletion may fence new writes before close. Stop optional maintenance between
+    // batches so retiring a suspended rebuild only drains and releases its resources.
     while (
-      await database.pruneEmbeddingCache({ maxEntries: max, unreferencedFirst }, assertCurrent)
+      !this.closing &&
+      (await database.pruneEmbeddingCache(
+        { maxEntries: max, unreferencedFirst, ...(recount ? { recount: true } : {}) },
+        assertCurrent,
+      ))
     ) {
       await yieldToEventLoop();
+    }
+  }
+
+  /**
+   * After a successful publication, drop fenced cache rows whose exact vector the
+   * published memory index now serves. Optional cleanup: a failure is logged and never
+   * reaches publication or retry state.
+   */
+  protected async retirePublishedEmbeddingCacheRows(
+    fence: MemoryEmbeddingCacheRetireFence,
+  ): Promise<void> {
+    const identity = (this.syncProviderGeneration?.identities ??
+      this.resolveProviderIndexIdentities())[0];
+    if (!this.cache.enabled || !identity) {
+      return;
+    }
+    const database = this.database;
+    const assertCurrent = () => {
+      if (this.closed || !database.isOpen || this.database !== database) {
+        throw new Error("Memory database owner closed or changed before write admission");
+      }
+    };
+    try {
+      let after: Awaited<ReturnType<typeof database.retireEmbeddingCache>> = null;
+      do {
+        after = await database.retireEmbeddingCache(
+          { ...fence, identity, ...(after ? { after } : {}) },
+          assertCurrent,
+        );
+        await yieldToEventLoop();
+      } while (after && !this.closing);
+    } catch (err) {
+      log.warn(`memory embedding cache duplicate cleanup skipped: ${formatErrorMessage(err)}`);
     }
   }
 
@@ -66,28 +112,67 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     generation: MemorySemanticProviderGeneration,
   ) {
     const hashes = candidates.map((candidate) => candidate.chunk.hash);
-    const cached = this.cache.enabled
-      ? await generation.database.read(
-          {
-            type: "cache.read",
-            input: {
-              providerIdentities: generation.identities,
-              hashes,
+    const meta = generation.database.facts.meta;
+    // Only the published index can bind an alias to this vector space.
+    const providerIdentities = generation.identities.filter(
+      (identity, index) =>
+        index === 0 ||
+        (identity.provider === meta?.provider &&
+          identity.model === meta.model &&
+          identity.providerKey === meta.providerKey),
+    );
+    const published = new Map<
+      string,
+      Array<{ source: MemorySource; path: string; hash: string }>
+    >();
+    for (const { source, entry, chunk } of candidates) {
+      const chunks = published.get(chunk.hash);
+      const ref = { source, path: entry.path, hash: chunk.hash };
+      if (chunks) {
+        chunks.push(ref);
+      } else {
+        published.set(chunk.hash, [ref]);
+      }
+    }
+    // The read worker decodes each vector into 8 bytes per dimension under a bounded heap,
+    // so a rebuild reads whole hashes in pages instead of every published vector at once.
+    const pageHashes = Math.max(
+      1,
+      Math.floor(
+        CACHE_READ_PAGE_BYTES /
+          (8 *
+            (generation.embeddingDimensions ?? meta?.vectorDims ?? CACHE_READ_DEFAULT_DIMENSIONS)),
+      ),
+    );
+    const uniqueHashes = [...published.keys()];
+    const cached = new Map<string, number[]>();
+    for (let start = 0; start < uniqueHashes.length; start += pageHashes) {
+      const page = uniqueHashes.slice(start, start + pageHashes);
+      const read = await generation.database.read(
+        {
+          type: "cache.read",
+          input: {
+            providerIdentities,
+            hashes: page,
+            cacheEnabled: this.cache.enabled,
+            published: {
+              chunks: page.flatMap((hash) => published.get(hash) ?? []),
+              dimensions: generation.embeddingDimensions,
             },
           },
-          () => {
-            if (!generation.database.isOpen) {
-              throw new Error("Memory database owner is closed");
-            }
-          },
-        )
-      : new Map<string, number[]>();
-    // Cache hits and new batches must inhabit the same vector space during a sync.
-    for (const [hash, embedding] of cached) {
-      if (!isValidMemoryEmbedding(embedding, generation.embeddingDimensions)) {
-        cached.delete(hash);
-      } else {
-        generation.embeddingDimensions ??= embedding.length;
+        },
+        () => {
+          if (!generation.database.isOpen) {
+            throw new Error("Memory database owner is closed");
+          }
+        },
+      );
+      // Cache hits and new batches must inhabit the same vector space during a sync.
+      for (const [hash, embedding] of read) {
+        if (isValidMemoryEmbedding(embedding, generation.embeddingDimensions)) {
+          generation.embeddingDimensions ??= embedding.length;
+          cached.set(hash, embedding);
+        }
       }
     }
     const result = collectMemoryCachedEmbeddings({ hashes, cached });
@@ -254,13 +339,22 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       if (accepted.length === 0) {
         return;
       }
+      const reindex = this.reindexProgress;
+      if (reindex) {
+        reindex.cachePrunePending = true;
+      }
       await this.withGeneratedEmbeddingCacheWrite(generation, {
         kind: "upsert",
         header: {
           agentId: this.agentId,
           provider: { id: generation.provider.id, model: generation.provider.model },
           providerKey: generation.providerKey,
-          maxEntries: this.cache.maxEntries,
+          // Rebuilds reserve at most 2× maxEntries. Live completion/abort trims to
+          // the cap; retirement leaves this bounded cache for later admitted writes.
+          maxEntries:
+            this.cache.maxEntries === undefined
+              ? undefined
+              : this.cache.maxEntries * (this.reindexProgress ? 2 : 1),
           unreferencedFirst: { identities: generation.identities },
         },
         entries: accepted,

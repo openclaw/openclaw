@@ -3,18 +3,19 @@ import type { Mock } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { createTestConfigSnapshot } from "./test-runtime-config-helpers.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type ResolveConfigPathMock = Mock<() => string>;
+type ReadConfigSnapshot =
+  typeof import("../config/config.js").readConfigFileSnapshotWithPluginMetadata;
 
 type StatusScanSharedMocks = {
   resolveConfigPath: ResolveConfigPathMock;
   resolveGatewayPort: Mock<(cfg?: OpenClawConfig) => number>;
   hasConfiguredChannels: UnknownMock;
-  hasConfiguredChannelsForReadOnlyScope: UnknownMock;
-  readBestEffortConfig: UnknownMock;
-  readBestEffortConfigSnapshot: UnknownMock;
+  hasConfiguredChannelsForReadOnlyScopeAsync: UnknownMock;
+  readConfigFileSnapshotWithPluginMetadata: Mock<ReadConfigSnapshot>;
   resolveCommandSecretRefsViaGateway: UnknownMock;
   getUpdateCheckResult: UnknownMock;
   getAgentLocalStatuses: Mock<
@@ -35,9 +36,8 @@ export function createStatusScanSharedMocks(configPathLabel: string): StatusScan
     resolveConfigPath: vi.fn(() => `/tmp/openclaw-${configPathLabel}-missing-${process.pid}.json`),
     resolveGatewayPort: vi.fn((cfg?: OpenClawConfig) => cfg?.gateway?.port ?? 18789),
     hasConfiguredChannels: vi.fn(),
-    hasConfiguredChannelsForReadOnlyScope: vi.fn(),
-    readBestEffortConfig: vi.fn(),
-    readBestEffortConfigSnapshot: vi.fn(),
+    hasConfiguredChannelsForReadOnlyScopeAsync: vi.fn(),
+    readConfigFileSnapshotWithPluginMetadata: vi.fn<ReadConfigSnapshot>(),
     resolveCommandSecretRefsViaGateway: vi.fn(),
     getUpdateCheckResult: vi.fn(),
     getAgentLocalStatuses: vi.fn(),
@@ -209,12 +209,13 @@ export async function loadStatusScanModuleForTest(
     mocks.resolveMemorySearchConfig ??
     vi.fn(() => ({ store: { databasePath: "/tmp/main.sqlite" } }));
 
+  // mock-isolation: Status scans drive channel presence from the test mocks, not saved plugin state.
   vi.doMock("../plugins/channel-plugin-ids.js", () => ({
-    hasConfiguredChannelsForReadOnlyScope: (params: {
+    hasConfiguredChannelsForReadOnlyScopeAsync: async (params: {
       config: OpenClawConfig;
       env?: NodeJS.ProcessEnv;
       includePersistedAuthState?: boolean;
-    }) => mocks.hasConfiguredChannelsForReadOnlyScope(params),
+    }) => mocks.hasConfiguredChannelsForReadOnlyScopeAsync(params),
     listConfiguredChannelIdsForReadOnlyScope: (params: {
       config: OpenClawConfig;
       env?: NodeJS.ProcessEnv;
@@ -231,36 +232,9 @@ export async function loadStatusScanModuleForTest(
         : [],
   }));
 
-  vi.doMock("../config/io.js", () => ({
-    readBestEffortConfig: mocks.readBestEffortConfig,
-    readBestEffortConfigSnapshot: mocks.readBestEffortConfigSnapshot,
-  }));
-  vi.doMock("../config/config.js", () => ({
-    readBestEffortConfig: mocks.readBestEffortConfig,
-    readBestEffortConfigSnapshot: mocks.readBestEffortConfigSnapshot,
-    readConfigFileSnapshotWithPluginMetadata: async (readOptions: unknown) => {
-      const result = (await mocks.readBestEffortConfigSnapshot(readOptions)) as {
-        config: OpenClawConfig;
-        sourceConfig: OpenClawConfig;
-        configDiagnostics: { path: string; issues: unknown[] } | null;
-      };
-      return {
-        snapshot: {
-          path: result.configDiagnostics?.path ?? mocks.resolveConfigPath(),
-          exists: false,
-          raw: null,
-          parsed: result.sourceConfig,
-          sourceConfig: result.sourceConfig,
-          resolved: result.sourceConfig,
-          valid: result.configDiagnostics === null,
-          runtimeConfig: result.config,
-          config: result.config,
-          issues: result.configDiagnostics?.issues ?? [],
-          warnings: [],
-          legacyIssues: [],
-        },
-      };
-    },
+  vi.doMock("../config/config.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../config/config.js")>()),
+    readConfigFileSnapshotWithPluginMetadata: mocks.readConfigFileSnapshotWithPluginMetadata,
     resolveGatewayPort: mocks.resolveGatewayPort,
   }));
   vi.doMock("../cli/command-secret-targets.js", () => ({
@@ -343,12 +317,10 @@ export function createStatusScanConfig<T extends object = OpenClawConfig>(
 
 export function createStatusSummary(
   options: {
-    linkChannel?: { linked: boolean };
     byAgent?: unknown[];
   } = {},
 ) {
   return {
-    linkChannel: options.linkChannel,
     sessions: {
       count: 0,
       paths: [],
@@ -424,8 +396,6 @@ export function applyStatusScanDefaults(
     sourceConfig?: OpenClawConfig;
     resolvedConfig?: OpenClawConfig;
     summary?: ReturnType<typeof createStatusSummary>;
-    update?: ReturnType<typeof createStatusUpdateResult> | false;
-    gatewayProbe?: ReturnType<typeof createStatusGatewayProbeFailure> | false;
     memoryManager?: ReturnType<typeof createStatusMemorySearchManager>;
   } = {},
 ) {
@@ -433,7 +403,7 @@ export function applyStatusScanDefaults(
   const resolvedConfig = options.resolvedConfig ?? sourceConfig;
 
   mocks.hasConfiguredChannels.mockReturnValue(options.hasConfiguredChannels ?? false);
-  mocks.hasConfiguredChannelsForReadOnlyScope.mockImplementation((rawParams: unknown) => {
+  mocks.hasConfiguredChannelsForReadOnlyScopeAsync.mockImplementation((rawParams: unknown) => {
     const params = rawParams as {
       config: OpenClawConfig;
       env?: NodeJS.ProcessEnv;
@@ -449,11 +419,13 @@ export function applyStatusScanDefaults(
       ),
     );
   });
-  mocks.readBestEffortConfig.mockResolvedValue(sourceConfig);
-  mocks.readBestEffortConfigSnapshot.mockResolvedValue({
-    config: sourceConfig,
-    sourceConfig,
-    configDiagnostics: null,
+  mocks.readConfigFileSnapshotWithPluginMetadata.mockResolvedValue({
+    snapshot: {
+      ...createTestConfigSnapshot(sourceConfig, sourceConfig, mocks.resolveConfigPath()),
+      exists: false,
+      raw: null,
+      parsed: sourceConfig,
+    },
   });
   mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
     resolvedConfig,
@@ -469,22 +441,10 @@ export function applyStatusScanDefaults(
   mocks.ensurePluginRegistryLoaded.mockImplementation(() => {});
   mocks.buildPluginCompatibilityNotices.mockReturnValue([]);
 
-  if (options.update !== false) {
-    mocks.getUpdateCheckResult.mockResolvedValue(options.update ?? createStatusUpdateResult());
-  }
-
-  if (options.gatewayProbe !== false) {
-    mocks.probeGateway.mockResolvedValue(options.gatewayProbe ?? createStatusGatewayProbeFailure());
-  }
+  mocks.getUpdateCheckResult.mockResolvedValue(createStatusUpdateResult());
+  mocks.probeGateway.mockResolvedValue(createStatusGatewayProbeFailure());
 
   if (options.memoryManager) {
     mocks.getMemorySearchManager.mockResolvedValue(options.memoryManager);
   }
-}
-
-export async function withTemporaryEnv(
-  overrides: Record<string, string | undefined>,
-  run: () => Promise<void>,
-) {
-  await withEnvAsync(overrides, run);
 }

@@ -33,14 +33,17 @@ import {
   listSessionStateEventsSince,
 } from "../sessions/session-state-events.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
+import { getGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import {
   isCompactOperationEvent,
   loadSessionEntry,
   seedTranscriptRows,
 } from "./server.sessions.compaction-fixtures.test-support.js";
 import { embeddedRunMock, onceMessage, agentDiscoveryMock, rpcReq } from "./test-helpers.js";
-import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
+import {
+  createClaudeCliRegistrationFixture,
+  getTestPluginRegistry,
+} from "./test-helpers.plugin-registry.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 import { testConfigRoot } from "./test-helpers.runtime-state.js";
 import { holdCompaction } from "./test/server-sessions-compaction.test-helpers.js";
@@ -87,7 +90,7 @@ async function createCompactionSession(
 }
 
 function getSuiteGatewayContextResolver() {
-  const runtime = getGatewayRecoveryRuntime();
+  const runtime = getGatewayLifecycleRuntime();
   const resolveGatewayContext = runtime && getGatewayContextResolver(runtime);
   if (!resolveGatewayContext) {
     throw new Error("Suite Gateway runtime is unavailable");
@@ -100,6 +103,7 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
     totalLines: 1,
     entry: {
       spawnedCwd: "/tmp/task-repo",
+      contextTokens: 32_000,
       thinkingLevel: "medium",
       reasoningLevel: "stream",
       cliSessionIds: { "claude-cli": "claude-session", "codex-cli": "codex-session" },
@@ -214,6 +218,7 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
     },
     workspaceDir: "/tmp/task-repo",
     cwd: "/tmp/task-repo",
+    contextTokenBudget: 32_000,
     config: {
       agents: {
         defaults: {
@@ -419,16 +424,7 @@ test("sessions.compact records terminal Codex native compaction with a stale neg
 
 test("sessions.compact targets the persisted native CLI session", async () => {
   const pluginRegistry = getTestPluginRegistry();
-  pluginRegistry.cliBackends.push({
-    pluginId: "anthropic",
-    source: "test",
-    backend: {
-      id: "claude-cli",
-      modelProvider: "anthropic",
-      config: { command: "claude" },
-      bundleMcp: false,
-    },
-  });
+  pluginRegistry.cliBackends.push(createClaudeCliRegistrationFixture());
   setActivePluginRegistry(pluginRegistry);
   await createCompactionSession("sess-claude", {
     totalLines: 2,
@@ -768,7 +764,7 @@ test("sessions.compact preserves summary-elided queued follow-up work", async ()
   }
   const queue = getExistingFollowupQueue(sessionKey)!;
   expect(queue.summaryElisions).toHaveLength(1);
-  const elidedSource = queue.summaryElisions[0]!.sources[0]!;
+  const elidedSource = queue.summaryElisions[0]!.entries[0]!.source;
   expect(elidedSource.controllerInput).toBeDefined();
 
   const { ws } = await openClient();
@@ -776,9 +772,9 @@ test("sessions.compact preserves summary-elided queued follow-up work", async ()
     const compacted = await rpcReq(ws, "sessions.compact", { key: "main" });
 
     expect(compacted.ok).toBe(true);
-    expect(getExistingFollowupQueue(sessionKey)?.summaryElisions[0]?.sources).toContain(
-      elidedSource,
-    );
+    expect(
+      getExistingFollowupQueue(sessionKey)?.summaryElisions[0]?.entries.map(({ source }) => source),
+    ).toContain(elidedSource);
     expect(elidedSource.controllerInput?.retirementRequested).not.toBe(true);
     expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledOnce();
     expectNoSessionQueueCleanup();

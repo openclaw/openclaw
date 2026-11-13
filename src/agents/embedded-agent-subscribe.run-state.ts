@@ -26,6 +26,7 @@ import { collectAgentInternalEventMedia } from "./internal-events.js";
 import type { McpConnectAction } from "./mcp-connect-action.js";
 import type { McpAppChannelView } from "./mcp-ui-resource.js";
 import type { ReplyDeliveryState } from "./reply-completion.js";
+import { ToolActivityPresentation } from "./tool-activity-presentation.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 
 /** Per-tool metadata tracked between tool start/update/end events. */
@@ -66,7 +67,7 @@ export type StreamingReplyResolver = (params: {
 
 /** Incremental tag and Markdown parsing state, owned by one stream lane. */
 export type StreamBlockState = {
-  thinking: boolean;
+  reasoningDepth: number;
   final: boolean;
   inlineCode?: InlineCodeState;
   fence?: FenceScanState;
@@ -106,6 +107,7 @@ export class EmbeddedAgentSubscribeState {
   acceptedSessionSpawns: AcceptedSessionSpawn[] = [];
   toolMetaById = new Map<string, ToolCallSummary>();
   toolSummaryById = new Set<string>();
+  toolActivityPresentation = new ToolActivityPresentation();
   declare execLiveUpdateStateById?: Map<
     string,
     { lastEmittedAtMs: number; itemMetadata: ExecLiveItemMetadata }
@@ -136,6 +138,8 @@ export class EmbeddedAgentSubscribeState {
   /** Native source boundary from which the prepared block chunker's frame begins. */
   blockReplyScopeStart: { contentIndex: number; itemId?: string; after?: boolean } | undefined =
     undefined;
+  /** Preserve the projection's hold across updates without a new text snapshot. */
+  blockReplyTextUnsettled = false;
   /** Scanner state shares deltaBuffer's lifecycle so each provider byte is parsed once. */
   thinkingTagStream = createThinkingTagStreamState();
   /**
@@ -147,6 +151,7 @@ export class EmbeddedAgentSubscribeState {
    */
   deltaBufferIsCommentary = false;
   declare nextCommentaryAt?: number;
+  declare commentaryTextProjection?: ReturnType<typeof createAssistantVisibleStreamText>;
   /** Whether timeout settlement committed visible text for this message. */
   hasFlushedPartialText = false;
   partialBlockState: StreamBlockState & { inlineCode: InlineCodeState } =
@@ -160,6 +165,9 @@ export class EmbeddedAgentSubscribeState {
       kind: "raw" | "delivery" | "final";
       projector: ReturnType<typeof createAssistantVisibleStreamText>;
       resolveReply: StreamingReplyResolver;
+      blockProjector?: ReturnType<typeof createAssistantVisibleStreamText>;
+      /** Source length last aligned with the canonical block projection. */
+      blockSourceLength?: number;
     };
   } = undefined;
   lastStreamedReasoning?: string = undefined;
@@ -230,6 +238,39 @@ export class EmbeddedAgentSubscribeState {
   deterministicApprovalPromptPending = false;
   deterministicApprovalPromptSent = false;
   declare lastAssistant?: AssistantMessage;
+
+  // Terminal results outlive the subscription; retain only its recorded facts.
+  setTerminalLifecycleMeta(meta: {
+    replayInvalid?: boolean;
+    livenessState?: EmbeddedRunLivenessState;
+    stopReason?: string;
+    yielded?: boolean;
+    timeoutPhase?: AgentRunTimeoutPhase;
+    providerStarted?: boolean;
+    aborted?: boolean;
+  }): void {
+    if (meta.replayInvalid !== undefined) {
+      this.replayState = { ...this.replayState, replayInvalid: meta.replayInvalid };
+    }
+    if (meta.livenessState) {
+      this.livenessState = meta.livenessState;
+    }
+    if (meta.stopReason !== undefined) {
+      this.terminalStopReason = meta.stopReason;
+    }
+    if (meta.yielded !== undefined) {
+      this.yielded = meta.yielded;
+    }
+    if (meta.timeoutPhase) {
+      this.timeoutPhase = meta.timeoutPhase;
+    }
+    if (meta.providerStarted !== undefined) {
+      this.providerStarted = meta.providerStarted;
+    }
+    if (meta.aborted !== undefined) {
+      this.terminalAborted = meta.aborted;
+    }
+  }
 
   constructor(
     params: Pick<

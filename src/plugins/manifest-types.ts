@@ -2,6 +2,7 @@ import type { ModelPricingProvider } from "@openclaw/model-catalog-core/model-ca
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ManifestModelIdNormalizationProvider } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import type { PluginUiCapability } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
+import type { MediaUnderstandingProviderMetadata } from "../../packages/media-understanding-common/src/types.js";
 import type { PluginCategorySlug } from "../../packages/plugin-package-contract/src/index.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
@@ -58,6 +59,7 @@ export type PluginDiagnosticCode =
   | "dashboard-declaration-invalid"
   | "explicit-config-plugin-selection"
   | "plugin-state-migration"
+  | "plugin-source-snapshot-invalid"
   | "plugin-verification"
   | "sdk-incompatible"
   | "workspace-scope-omitted";
@@ -323,6 +325,8 @@ export type PluginManifestControlUi = {
   entry: string;
   /** Stylesheets in the same asset directory, loaded before activation. */
   styles?: string[];
+  /** SVG used for this plugin's side-panel picker entries and tabs, relative to its root. */
+  panelIcon?: string;
   /** Omission retains ordinary runtime activation. */
   activation?: "settings-only";
   settingsViews?: import("../../packages/gateway-protocol/src/plugin-control-ui-settings.js").ControlUiSettingsPlacement[];
@@ -400,6 +404,8 @@ export type PluginManifestBackupResource = {
   disposition: "include" | "regenerable";
   scope: "state" | "agent";
   relativePath: string;
+  /** Limit a regenerable exclusion to local restart checkpoints. */
+  profile?: "local-companion";
   /** Shared-state databases retained under this state-scoped resource. */
   databaseFamily?: "state";
 };
@@ -425,6 +431,16 @@ export type PluginManifestDecisionModel = {
   capabilities?: DecisionProviderCapabilities;
 };
 
+/** Reload behavior a plugin opts in to; absent fields keep the default reload. */
+type PluginManifestReload = {
+  /**
+   * A reload hands running turns to the new generation at their next model step
+   * instead of waiting for them to finish. Opting in promises the plugin keeps no
+   * in-memory state that a later call in the same turn depends on.
+   */
+  turnHandover?: boolean;
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
@@ -436,6 +452,8 @@ export type PluginManifest = {
   requiresPlugins?: string[];
   enabledByDefault?: boolean;
   enabledByDefaultOnPlatforms?: PluginManifestDefaultPlatform[];
+  /** Author opt-in: independent generations may coexist through admitted work and cleanup. */
+  generationOverlap?: boolean;
   /** Legacy plugin ids that should normalize to this plugin id. */
   legacyPluginIds?: string[];
   /** Provider ids that should auto-enable this plugin when referenced in auth/config/models. */
@@ -443,6 +461,8 @@ export type PluginManifest = {
   kind?: PluginKind | PluginKind[];
   /** Context engine registration IDs owned by this plugin before runtime loading. */
   contextEngineIds?: string[];
+  /** How a reload of this plugin treats agent turns that are running when it starts. */
+  reload?: PluginManifestReload;
   channels?: string[];
   /** Account-key selection rules available before channel runtime loads. */
   channelAccountKeyPolicies?: Record<string, ChannelAccountKeyPolicy>;
@@ -525,8 +545,16 @@ export type PluginManifest = {
   /** Static MCP servers contributed while this plugin is enabled. */
   mcpServers?: Record<string, PluginManifestMcpServer>;
   skills?: string[];
+  /**
+   * One folder of learned skills per agent, named by this single path segment under the
+   * agent's state folder. Skill loading reads it at the learned tier, between bundled and
+   * managed skills, without loading plugin runtime.
+   */
+  agentSkillsDir?: string;
   name?: string;
   description?: string;
+  /** Up to three author-written starter prompts; display and insertion preserve this text. */
+  recommendedPrompts?: string[];
   /** Optional presentation hints for plugin catalog surfaces. */
   catalog?: PluginManifestCatalog;
   version?: string;
@@ -542,10 +570,7 @@ export type PluginManifest = {
   /** Setup descriptors keyed by ids owned in contracts.transcriptSourceProviders. */
   transcriptSources?: Record<string, PluginManifestTranscriptSource>;
   /** Cheap media-understanding provider defaults without importing plugin runtime. */
-  mediaUnderstandingProviderMetadata?: Record<
-    string,
-    PluginManifestMediaUnderstandingProviderMetadata
-  >;
+  mediaUnderstandingProviderMetadata?: Record<string, MediaUnderstandingProviderMetadata>;
   /** Cheap image-generation provider auth metadata without importing plugin runtime. */
   imageGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   /** Cheap video-generation provider auth metadata without importing plugin runtime. */
@@ -562,24 +587,6 @@ export type PluginManifest = {
 export type PluginManifestContracts = Partial<
   Record<(typeof PLUGIN_MANIFEST_CONTRACT_KEYS)[number], string[]>
 >;
-
-export type PluginManifestMediaUnderstandingCapability = "image" | "audio" | "video";
-
-export type PluginManifestMediaUnderstandingProviderMetadata = {
-  capabilities?: PluginManifestMediaUnderstandingCapability[];
-  defaultModels?: Partial<Record<PluginManifestMediaUnderstandingCapability, string>>;
-  autoPriority?: Partial<Record<PluginManifestMediaUnderstandingCapability, number>>;
-  nativeDocumentInputs?: Array<"pdf">;
-  documentModels?: Partial<
-    Record<
-      "pdf",
-      {
-        textExtraction?: string;
-        image?: string | false;
-      }
-    >
-  >;
-};
 
 export type PluginManifestProviderBaseUrlGuard = {
   provider: string;
