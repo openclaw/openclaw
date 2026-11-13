@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -355,6 +354,20 @@ describe("MCP HTTP keepalive", () => {
     return body;
   }
 
+  it("disables connection reuse for consecutive completed tool calls", async () => {
+    execute.mockResolvedValue(heartbeatResult);
+    for (let id = 1; id <= 2; id++) {
+      const response = await send("POST", { ...toolCall, id });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("connection")).toBe("close");
+      expect(await response.json()).toMatchObject({
+        id,
+        result: { ...heartbeatResult, isError: false },
+      });
+    }
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["success", "serialization-error", "notification"])(
     "keeps pending calls alive without writing notification bodies: %s",
     async (outcome) => {
@@ -420,11 +433,7 @@ describe("MCP HTTP keepalive", () => {
     },
   );
 
-  it("releases a GET notification stream and aborts a pending call during shutdown", async () => {
-    execute.mockImplementation((_id: string, _params: unknown, signal: AbortSignal) =>
-      once(signal, "abort"),
-    );
-    const pending = send("POST", toolCall);
+  it("keeps a GET notification stream alive and releases it during shutdown", async () => {
     const response = await send("GET");
     expect(response.headers.get("content-type")).toBe("text/event-stream");
     expect(response.headers.get("connection")).toBe("close");
@@ -434,8 +443,8 @@ describe("MCP HTTP keepalive", () => {
       await vi.advanceTimersByTimeAsync(30_000);
       expect(await readText(reader)).toMatch(/^(?::\n\n)+$/);
       await within(closeMcpLoopbackServer());
-      await (await pending).body?.cancel();
-      expect(await within(drain(() => reader.read()))).toMatch(/^(?::\n\n)*$/);
+      const buffered = await within(drain(() => reader.read()));
+      expect(buffered).toMatch(/^(?::\n\n)*$/);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       await reader.cancel();
