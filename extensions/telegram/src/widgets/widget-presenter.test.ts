@@ -154,29 +154,7 @@ describe("Telegram widget presenter", () => {
     expect(match({ ...dm, deliveryContext: { threadId: "77" } })).toBe(true);
     expect(match({ ...dm, currentMessagingTarget: "telegram:111:direct-topic:77" })).toBe(false);
     expect(match({ ...dm, deliveryContext: { threadId: "invalid" } })).toBe(false);
-    expect(
-      match({
-        ...dm,
-        currentMessagingTarget: "telegram:111",
-        deliveryContext: { to: "telegram:222", threadId: "77" },
-      }),
-    ).toBe(false);
-    expect(
-      match({
-        ...dm,
-        currentMessagingTarget: "telegram:111:topic:77",
-        deliveryContext: { to: "telegram:111:topic:88", threadId: "77" },
-      }),
-    ).toBe(false);
-    expect(
-      match({
-        ...dm,
-        currentMessagingTarget: "telegram:111",
-        deliveryContext: { to: "telegram:111", threadId: "77" },
-      }),
-    ).toBe(true);
     expect(match({ ...dm, deliveryContext: { threadId: "9007199254740992" } })).toBe(false);
-    expect(match({ ...dm, accountId: "one", deliveryContext: { accountId: "two" } })).toBe(false);
     expect(
       match({
         ...dm,
@@ -204,35 +182,6 @@ describe("Telegram widget presenter", () => {
     expect(sendTelegramWidget).toHaveBeenCalledWith(
       expect.objectContaining({ to: "111:topic:77" }),
     );
-  });
-
-  it("refuses a tap update from another topic in the same private chat", async () => {
-    lookupTelegramWidgetTap.mockResolvedValue({ chatId: "111", messageId: 42 });
-    lookupTelegramSentWidget.mockResolvedValue({
-      name: "vote",
-      title: "Vote",
-      sourceHash: hashTelegramWidgetSource(SOURCE),
-      source: SOURCE,
-      messageThreadId: 88,
-    });
-    const result = await registerPresenter().present({
-      document: { kind: "html", html: "", source: SOURCE },
-      title: "Vote",
-      name: "vote",
-      state: "{}",
-      context: { ...dm, currentMessageId: "query-1", deliveryContext: { threadId: "77" } },
-    });
-    expect(result).toMatchObject({ ok: false, error: { code: "presentation_error" } });
-    expect(sendTelegramWidget).not.toHaveBeenCalled();
-    expect(editTelegramWidgetState).not.toHaveBeenCalled();
-    const changed = await registerPresenter().present({
-      document: { kind: "html", html: "", source: "<p>Changed</p>" },
-      title: "Vote",
-      name: "vote",
-      context: { ...dm, currentMessageId: "query-1", deliveryContext: { threadId: "77" } },
-    });
-    expect(changed).toMatchObject({ ok: false });
-    expect(sendTelegramWidget).not.toHaveBeenCalled();
   });
 
   it("sends raw widget code as a new message outside a tap turn", async () => {

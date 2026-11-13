@@ -22,6 +22,7 @@ vi.mock("../bot-processing-outcome.js", async (importOriginal) => ({
 const { readTelegramWidgetQuery } = await import("./widget-bot-api.js");
 const { createTelegramWidgetQueryRouter, createTelegramWidgetRequestGate } =
   await import("./widget-query-router.js");
+const { prepareTelegramWidgetQueryContextAsync } = await import("./widget-query-context.js");
 
 describe("Telegram widget request gate", () => {
   it("admits a request text once per window per widget", () => {
@@ -139,6 +140,19 @@ describe("widget query router", () => {
       }
     }
   });
+  const tapUpdate = (messageId: number) => ({
+    update_id: messageId,
+    widget_query: { ...query, id: `q${messageId}`, message_id: messageId },
+  });
+  // Ingress and the bot middleware prepare the origin before sequentialization.
+  const routePrepared = async (
+    router: ReturnType<typeof createRouter>,
+    update: ReturnType<typeof tapUpdate>,
+  ) => {
+    await prepareTelegramWidgetQueryContextAsync({ update, accountId: "default" });
+    await router.route({ update, me: { id: 1 }, getFile: vi.fn() } as never, vi.fn());
+  };
+
   it("routes widgets from two private topics back to their own threads", async () => {
     const process = vi.fn();
     const router = createRouter(process);
@@ -146,27 +160,13 @@ describe("widget query router", () => {
       [10, 42],
       [11, 84],
     ] as const) {
-      lookupTelegramSentWidget.mockResolvedValueOnce({
+      lookupTelegramSentWidget.mockResolvedValue({
         name: "vote",
         title: "Vote",
         sourceHash: "h",
         messageThreadId: threadId,
       });
-      await router.route(
-        {
-          update: {
-            update_id: messageId,
-            widget_query: {
-              ...query,
-              id: `q${messageId}`,
-              message_id: messageId,
-            },
-          },
-          me: { id: 1 },
-          getFile: vi.fn(),
-        } as never,
-        vi.fn(),
-      );
+      await routePrepared(router, tapUpdate(messageId));
     }
     for (const [index, threadId] of [
       [1, 42],
@@ -186,12 +186,15 @@ describe("widget query router", () => {
   });
 
   it.each([undefined, { name: "vote", title: "Vote", sourceHash: "h", messageThreadId: 0 }])(
-    "does not route a widget with a missing or invalid origin",
+    "routes a tap without a known topic to the private chat itself",
     async (widget) => {
-      lookupTelegramSentWidget.mockResolvedValueOnce(widget);
+      lookupTelegramSentWidget.mockResolvedValue(widget);
       const process = vi.fn();
-      await createRouter(process).route(ctx, vi.fn());
-      expect(process).not.toHaveBeenCalled();
+      await routePrepared(createRouter(process), tapUpdate(20));
+      expect(process).toHaveBeenCalledOnce();
+      const call = process.mock.calls[0]![0];
+      expect(call.msg.message_thread_id).toBeUndefined();
+      expect(call.options.threadSpec).toEqual({ scope: "dm" });
     },
   );
 

@@ -6,7 +6,8 @@ const { sendWidget, records } = vi.hoisted(() => ({
 }));
 
 // Keep real outbound preparation and the sent-widget store; replace only network and runtime edges.
-vi.mock("../runtime.js", () => ({
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
   getTelegramRuntime: () => ({
     state: {
       openKeyedStoreV2: () => ({

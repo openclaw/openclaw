@@ -42,7 +42,6 @@ type TelegramWidgetRoute = {
   accountId: string;
   to: string;
   chatId: string;
-  messageThreadId?: number;
 };
 
 const unavailable = (message: string) => ({
@@ -70,27 +69,19 @@ function resolveTelegramWidgetRoute(
     return undefined;
   }
   const target = parseTelegramTarget(to);
+  // Private-chat topics are supported: taps return to the topic recorded with the sent widget.
   const deliveryThread = context.deliveryContext?.threadId;
   const deliveryThreadId =
-    deliveryThread == null ? undefined : parseStrictPositiveInteger(deliveryThread);
-  const deliveryTo = context.deliveryContext?.to?.trim();
-  const deliveryTarget = deliveryTo ? parseTelegramTarget(deliveryTo) : undefined;
+    deliveryThread == null || String(deliveryThread) === ""
+      ? undefined
+      : parseStrictPositiveInteger(deliveryThread);
   if (
     target.chatType !== "direct" ||
     target.directMessagesTopicId !== undefined ||
-    (deliveryThread != null && deliveryThreadId === undefined) ||
-    (deliveryTarget !== undefined &&
-      (deliveryTarget.chatType !== "direct" ||
-        deliveryTarget.chatId !== target.chatId ||
-        deliveryTarget.directMessagesTopicId !== undefined ||
-        (deliveryTarget.messageThreadId !== undefined &&
-          deliveryTarget.messageThreadId !== (target.messageThreadId ?? deliveryThreadId)))) ||
+    (deliveryThread != null && String(deliveryThread) !== "" && deliveryThreadId === undefined) ||
     (target.messageThreadId !== undefined &&
       deliveryThreadId !== undefined &&
-      target.messageThreadId !== deliveryThreadId) ||
-    (context.accountId &&
-      context.deliveryContext?.accountId &&
-      context.accountId !== context.deliveryContext.accountId)
+      target.messageThreadId !== deliveryThreadId)
   ) {
     return undefined;
   }
@@ -108,7 +99,6 @@ function resolveTelegramWidgetRoute(
     accountId: account.accountId,
     chatId: target.chatId,
     to: messageThreadId === undefined ? to : `${target.chatId}:topic:${messageThreadId}`,
-    ...(messageThreadId !== undefined ? { messageThreadId } : {}),
   };
 }
 
@@ -141,10 +131,6 @@ async function presentTelegramWidget(
           messageId: tap.messageId,
         })
       : undefined;
-  // A tap belongs to the sent message's recorded chat and topic, even when sending new code.
-  if (tap && (!tapped || tapped.messageThreadId !== route.messageThreadId)) {
-    return presentationError("The tapped widget's original chat or topic is unavailable.");
-  }
   // A tap turn updates the tapped widget while its code is unchanged; anything else is a new message.
   // The tap names its widget; models often re-derive a different name, so only the code must match.
   const updatesTapped =

@@ -1,2 +1,2 @@
-195
-# Private topic delivery, durable origin, cross-topic rejection, and callback routing need separate boundary regressions.
+250
+# Private-topic widgets need boundary regressions for topic delivery, the recorded origin, the tap lane at ingress and sequentialization, and tap routing with and without a recorded topic.

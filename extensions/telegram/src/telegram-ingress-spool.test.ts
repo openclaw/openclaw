@@ -18,6 +18,7 @@ import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 import { createTelegramIngressMonitor } from "./telegram-ingress-drain.js";
 import { openTelegramIngressQueue, resolveTelegramUpdateId } from "./telegram-ingress-spool.js";
+import { recordTelegramSentWidget } from "./widgets/widget-store.js";
 
 async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tg-spool-"));
@@ -176,6 +177,77 @@ describe("telegram ingress spool ordering", () => {
       } finally {
         // Release pending delivery before waiting for the monitor to stop.
         registration.complete(null);
+        await monitor.stop();
+      }
+    });
+  });
+  it("keeps a widget tap ahead of a later message in the widget's private topic", async () => {
+    await withTempState(async (stateDir) => {
+      const dm = { id: 7, type: "private" as const, first_name: "Ada" };
+      await recordTelegramSentWidget({
+        accountId: "acct",
+        chatId: "7",
+        messageId: 50,
+        widget: { name: "vote", title: "Vote", sourceHash: "h", messageThreadId: 42 },
+      });
+      const { promise: tapReleased, resolve: releaseTap } = createDeferred<void>();
+      const dispatchOrder: number[] = [];
+      const queue = openTelegramIngressQueue({ accountId: "acct", stateDir });
+      const monitor = createTelegramIngressMonitor({
+        queue,
+        getConfig: () => ({}) as OpenClawConfig,
+        accountId: "acct",
+        botInfo: { id: 1, is_bot: true, first_name: "Bot", has_topics_enabled: true } as never,
+        dispatch: async (update) => {
+          const updateId = resolveTelegramUpdateId(update);
+          dispatchOrder.push(updateId ?? -1);
+          if (updateId === 20) {
+            await tapReleased;
+          }
+          return { kind: "completed" };
+        },
+      });
+      monitor.start();
+      try {
+        await monitor.waitForIdle();
+        await monitor.admit({
+          update_id: 20,
+          widget_query: {
+            id: "q20",
+            from: sender,
+            chat: dm,
+            message_id: 50,
+            chat_instance: "1",
+            data: "vote:v",
+          },
+        });
+        await monitor.admit({
+          update_id: 21,
+          message: {
+            chat: dm,
+            from: sender,
+            message_id: 60,
+            message_thread_id: 42,
+            is_topic_message: true,
+            date: 0,
+            text: "/new",
+          },
+        });
+        await vi.waitFor(() => expect(dispatchOrder).toEqual([20]));
+        expect(await queue.listClaims()).toEqual([
+          expect.objectContaining({
+            laneKey: "telegram:7:topic:42",
+            payload: expect.objectContaining({ preparedWidgetQuery: { messageThreadId: 42 } }),
+          }),
+        ]);
+        expect(await queue.listPending({ limit: "all" })).toMatchObject([
+          { id: "0000000000000021", laneKey: "telegram:7:topic:42" },
+        ]);
+        releaseTap();
+        await monitor.waitForIdle();
+        expect(dispatchOrder).toEqual([20, 21]);
+      } finally {
+        releaseTap();
         await monitor.stop();
       }
     });
