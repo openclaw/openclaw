@@ -25,6 +25,7 @@ type ScheduledRequest<TData> = {
   query?: RequestQuery;
   routeKey: string;
   retryCount: number;
+  retryAt: number;
   state: ScheduledRequestState;
   signal?: AbortSignal;
   detachAbort?: () => void;
@@ -102,6 +103,7 @@ export class RestScheduler<TData> {
         ...params,
         routeKey,
         retryCount: 0,
+        retryAt: 0,
         state: "queued",
         resolve: (value) => {
           this.settleRequest(request);
@@ -246,6 +248,11 @@ export class RestScheduler<TData> {
   }
 
   private drainQueues(): void {
+    // New work or a response can introduce an earlier route deadline.
+    if (this.drainTimer) {
+      clearTimeout(this.drainTimer);
+      this.drainTimer = undefined;
+    }
     while (this.activeWorkers < MAX_CONCURRENT_WORKERS) {
       const next = this.takeNextQueuedRequest();
       if (!next.queued) {
@@ -268,9 +275,7 @@ export class RestScheduler<TData> {
     | { bucket: BucketState<TData>; queued: ScheduledRequest<TData>; waitMs?: never }
     | { bucket?: never; queued?: never; waitMs?: number } {
     const now = Date.now();
-    if (this.globalRateLimitUntil > now) {
-      return { waitMs: this.globalRateLimitUntil - now };
-    }
+    const globalWaitMs = Math.max(0, this.globalRateLimitUntil - now);
     for (const [key, bucket] of this.buckets) {
       if (bucket.active !== 0 || countPending(bucket) > 0) {
         continue;
@@ -297,18 +302,22 @@ export class RestScheduler<TData> {
       }
       for (const bucket of buckets) {
         const queue = bucket.pending[lane];
-        if (queue.length === 0 || bucket.active > 0) {
+        const queued = queue[0];
+        if (!queued || bucket.active > 0) {
           continue;
         }
-        const waitMs = this.getBucketWaitMs(bucket, now);
+        // Initial interaction callbacks are outside the bot-global limit,
+        // but still honor their own 429 deadline and route bucket.
+        const waitMs = Math.max(
+          queued.retryAt - now,
+          this.getBucketWaitMs(bucket, now),
+          isInteractionCallbackPath(queued.path) ? 0 : globalWaitMs,
+        );
         if (waitMs > 0) {
           nextDelayMs = Math.min(nextDelayMs ?? waitMs, waitMs);
           continue;
         }
-        const queued = queue.shift();
-        if (!queued) {
-          continue;
-        }
+        queue.shift();
         queued.state = "dispatched";
         this.queuedByLane[lane] = Math.max(0, this.queuedByLane[lane] - 1);
         this.laneCursor = (this.laneCursor + laneOffset + 1) % laneSchedule.length;
@@ -325,7 +334,7 @@ export class RestScheduler<TData> {
     try {
       queued.resolve(await this.executor(queued));
     } catch (error) {
-      if (error instanceof RateLimitError && this.requeueRateLimitedRequest(queued)) {
+      if (error instanceof RateLimitError && this.requeueRateLimitedRequest(queued, error)) {
         return;
       }
       // A caller that cancelled during the issued attempt still learns the real
@@ -338,7 +347,10 @@ export class RestScheduler<TData> {
     }
   }
 
-  private requeueRateLimitedRequest(queued: ScheduledRequest<TData>): boolean {
+  private requeueRateLimitedRequest(
+    queued: ScheduledRequest<TData>,
+    error: RateLimitError,
+  ): boolean {
     // A caller that aborted while the attempt was in flight must not have its
     // never-issued retry queued again.
     if (queued.signal?.aborted || queued.retryCount >= MAX_RATE_LIMIT_RETRIES) {
@@ -346,6 +358,7 @@ export class RestScheduler<TData> {
     }
     const bucketKey = this.routeBuckets.get(queued.routeKey) ?? queued.routeKey;
     queued.retryCount += 1;
+    queued.retryAt = resolveRateLimitResetAt(error.retryAfter * 1000) ?? 0;
     queued.state = "queued";
     this.getBucket(bucketKey).pending[queued.priority].push(queued);
     this.queuedByLane[queued.priority] += 1;
@@ -365,4 +378,11 @@ function isGlobalRateLimit(parsed: unknown): boolean {
   return parsed && typeof parsed === "object" && "global" in parsed
     ? Boolean(parsed.global)
     : false;
+}
+
+const INTERACTION_CALLBACK_PATH_RE = /^\/interactions\/\d+\/[^/]+\/callback$/;
+
+function isInteractionCallbackPath(path: string): boolean {
+  const pathname = path.split("?")[0] ?? path;
+  return INTERACTION_CALLBACK_PATH_RE.test(pathname.toLowerCase());
 }

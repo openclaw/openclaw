@@ -1,0 +1,2 @@
+# Regression: callbacks bypass global pauses but honor their own route and request retry deadlines.
+79
