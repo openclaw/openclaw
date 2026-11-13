@@ -1,4 +1,4 @@
-name: Placement owner formatting recovery
+name: Placement owner static proof
 
 # Scratch diagnostic only: install alongside the pinned patch, never on a candidate ref.
 on:
@@ -34,7 +34,7 @@ jobs:
       TYPE_CONFIG: ${{ matrix.config }}
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       SOURCE_SHA: db48e205e03f5a0458af2cb78bcf5434fc9a70a0
-      OVERLAY_SHA256: 91749b303ce7d34e5e7a4d00a1f6be60ad6ae681a022dc3a9d8edddc9d92100a
+      OVERLAY_SHA256: 2d6254c9df0e7b818288e9609c30452f010983e7a998a384ca54346343496f09
     steps:
       - name: Initialize failure-safe run binding
         shell: bash
@@ -102,39 +102,6 @@ jobs:
           set -euo pipefail
           node --version | tee "$PROOF_DIR/node.txt"
           pnpm --version | tee "$PROOF_DIR/pnpm.txt"
-      - name: Canonically format only the two reported files
-        id: canonical_format
-        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp "$PROOF_DIR/applied.patch" "$PROOF_DIR/original-failing.patch"
-          files=(src/gateway/server-methods/sessions-create.visible-spawn.live.test.ts src/infra/heartbeat-runner.live.test.ts)
-          mkdir -p "$PROOF_DIR/before" "$PROOF_DIR/formatted"
-          for file in "${files[@]}"; do
-            mkdir -p "$PROOF_DIR/before/$(dirname "$file")" "$PROOF_DIR/formatted/$(dirname "$file")"
-            cp "$file" "$PROOF_DIR/before/$file"
-          done
-          if pnpm format:check -- "${files[@]}" > "$PROOF_DIR/original-format-failure.log" 2>&1; then
-            echo 'Expected original two-file formatting failure was absent' >&2
-            exit 1
-          else
-            status=$?
-            test "$status" -eq 1
-          fi
-          cat "$PROOF_DIR/original-format-failure.log"
-          pnpm format -- "${files[@]}" 2>&1 | tee "$PROOF_DIR/canonical-format.log"
-          for file in "${files[@]}"; do cp "$file" "$PROOF_DIR/formatted/$file"; done
-          python3 - "$PROOF_DIR" <<'PYTHON'
-          import pathlib, re, sys
-          root = pathlib.Path(sys.argv[1])
-          for before in (root / 'before').rglob('*.ts'):
-              after = root / 'formatted' / before.relative_to(root / 'before')
-              assert re.sub(rb'\s+', b'', before.read_bytes()) == re.sub(rb'\s+', b'', after.read_bytes()), f'Non-whitespace change: {after}'
-          PYTHON
-          git diff --check
-          git -c diff.algorithm=myers -c diff.indentHeuristic=false diff --full-index --binary --no-ext-diff --no-textconv --no-color --no-renames --unified=3 --src-prefix=a/ --dst-prefix=b/ > "$PROOF_DIR/formatted.patch"
-          sha256sum "$PROOF_DIR/formatted.patch" > "$PROOF_DIR/formatted-patch.sha256"
       - name: Check exact seven-file formatting
         id: format
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && matrix.lane == 'static' }}
@@ -177,11 +144,7 @@ jobs:
           fi
           if test -f "$PROOF_DIR/applied.patch"; then
             test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-            if test -f "$PROOF_DIR/formatted.patch"; then
-              cmp "$PROOF_DIR/formatted.patch" "$PROOF_DIR/final.patch"
-            else
-              printf '%s  %s\n' "$OVERLAY_SHA256" "$PROOF_DIR/final.patch" | sha256sum --check
-            fi
+            printf '%s  %s\n' "$OVERLAY_SHA256" "$PROOF_DIR/final.patch" | sha256sum --check
           fi
       - name: Upload exact proof including failures
         if: ${{ always() }}

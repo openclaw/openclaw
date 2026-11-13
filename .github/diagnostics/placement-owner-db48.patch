@@ -1,8 +1,8 @@
 diff --git a/src/gateway/server-methods/sessions-create.visible-spawn.live.test.ts b/src/gateway/server-methods/sessions-create.visible-spawn.live.test.ts
-index 368671c73006db784ac1123dfb02ce8d4aedb3c6..d2dafddec865016e9064c6043110a8bcac53def5 100644
+index 368671c73006db784ac1123dfb02ce8d4aedb3c6..683793acd832ea10163a4bde271c7aba91cc75b2 100644
 --- a/src/gateway/server-methods/sessions-create.visible-spawn.live.test.ts
 +++ b/src/gateway/server-methods/sessions-create.visible-spawn.live.test.ts
-@@ -31,13 +31,17 @@ async function readHistory(client: GatewayClient, sessionKey: string) {
+@@ -31,13 +31,19 @@ async function readHistory(client: GatewayClient, sessionKey: string) {
    return history.messages.filter(isRecord);
  }
  
@@ -15,15 +15,17 @@ index 368671c73006db784ac1123dfb02ce8d4aedb3c6..d2dafddec865016e9064c6043110a8bc
      { timeoutMs: RUN_TIMEOUT_MS + 5_000 },
    );
 -  expect(result.status).toBe("ok");
-+  const diagnostic = JSON.stringify({ phase, runId, status: result.status, error: result.error }).slice(
-+    0,
-+    8_000,
-+  );
++  const diagnostic = JSON.stringify({
++    phase,
++    runId,
++    status: result.status,
++    error: result.error,
++  }).slice(0, 8_000);
 +  expect(result.status, diagnostic).toBe("ok");
  }
  
  describeLive("Gateway visible worktree spawn (live)", () => {
-@@ -170,7 +174,7 @@ describeLive("Gateway visible worktree spawn (live)", () => {
+@@ -170,7 +176,7 @@ describeLive("Gateway visible worktree spawn (live)", () => {
            message,
            idempotencyKey: randomUUID(),
          });
@@ -32,7 +34,7 @@ index 368671c73006db784ac1123dfb02ce8d4aedb3c6..d2dafddec865016e9064c6043110a8bc
          const parentHistory = await readHistory(client, parent.key);
          const calls = parentHistory.flatMap((entry) =>
            Array.isArray(entry.content)
-@@ -205,7 +209,7 @@ describeLive("Gateway visible worktree spawn (live)", () => {
+@@ -205,7 +211,7 @@ describeLive("Gateway visible worktree spawn (live)", () => {
              .map((entry) => extractAssistantPhaseText(entry))
              .join("\n"),
          ).toContain("PARENT_CONTINUED");
@@ -185,7 +187,7 @@ index 49a3377e8d84f5da332e27d3b2f8f76a80d9a71f..6d953eebab6b651b0cc086d1157cbd54
            nextOwner = createDeferredCore<PlacementOperation | undefined>();
            const completed = await racePromiseWithAbortSignal(owner.operation, signal);
 diff --git a/src/infra/heartbeat-runner.live.test.ts b/src/infra/heartbeat-runner.live.test.ts
-index cde55c524d1e5bf92aa24587c5a5f77984f6f273..1782029cbd9312bdfed93e65858feca52a77a2dd 100644
+index cde55c524d1e5bf92aa24587c5a5f77984f6f273..68af82404fa0ad583846e538a96e2405a3a4ca1e 100644
 --- a/src/infra/heartbeat-runner.live.test.ts
 +++ b/src/infra/heartbeat-runner.live.test.ts
 @@ -50,11 +50,12 @@ async function sendChatTurn(client: GatewayClient, sessionKey: string, message:
@@ -202,22 +204,23 @@ index cde55c524d1e5bf92aa24587c5a5f77984f6f273..1782029cbd9312bdfed93e65858feca5
  }
  
  async function writeGateFixture(workspace: string, name: string, output: string, exitCode: number) {
-@@ -208,7 +209,13 @@ describeLive("session event wake through a live Gateway", () => {
+@@ -208,7 +209,14 @@ describeLive("session event wake through a live Gateway", () => {
                : "When its later completion arrives, copy the entire output marker verbatim as your only reply, preserving every character and case. Do not call any tools for that completion.",
            ].join("\n"),
          );
 -        expect(response.status).toBe("ok");
 +        expect(
 +          response.status,
-+          JSON.stringify({ runId: response.runId, status: response.status, error: response.error }).slice(
-+            0,
-+            8_000,
-+          ),
++          JSON.stringify({
++            runId: response.runId,
++            status: response.status,
++            error: response.error,
++          }).slice(0, 8_000),
 +        ).toBe("ok");
          expect(
            (
              await loadGatewaySessionEntryReadOnlyInWorker({
-@@ -268,15 +275,27 @@ describeLive("session event wake through a live Gateway", () => {
+@@ -268,15 +276,27 @@ describeLive("session event wake through a live Gateway", () => {
              expect(instance.logs()).not.toContain("Async work scope is closed");
              // Internal sessions require a result; a persisted reply alone can
              // precede finalization or recovery and is not a settled snapshot.
