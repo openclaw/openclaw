@@ -17,6 +17,7 @@ import {
 import type { FixedRequestTokenPressure } from "../../sessions/context-token-pressure.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
+import { log } from "../logger.js";
 import {
   declarePromptHistoryRewrite,
   recordAggregateTruncation,
@@ -24,6 +25,7 @@ import {
 import type { MeasuredRequestContext } from "../prompt-cache-request-observer.js";
 import type { ActiveEmbeddedRunAttachment } from "../run-state.js";
 import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
+import { admitSessionPrefix, requestSessionPrefixRebuild } from "../session-prefix-owner.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { truncateOversizedToolResultsInMessages } from "../tool-result-truncation.js";
 import { snapshotRecentMessages } from "./attempt-context-summary.js";
@@ -64,6 +66,32 @@ type PromptActiveSession = (
 ) => Promise<void>;
 
 type TrajectoryRecorder = Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
+
+const reportedPrefixDrift = new Set<string>();
+
+/** Absorbed drift names an upstream transform that rewrote sent bytes; report it once per session. */
+function reportSessionPrefix(
+  sessionId: string,
+  report: ReturnType<typeof admitSessionPrefix>["report"],
+): void {
+  if (report.kind === "absorbed") {
+    const key = `${sessionId}:${report.role}`;
+    if (!reportedPrefixDrift.has(key)) {
+      reportedPrefixDrift.add(key);
+      if (reportedPrefixDrift.size > 512) {
+        reportedPrefixDrift.clear();
+      }
+      log.warn(
+        `[prompt-cache] re-derived history changed ${report.count} sent message(s) from index ${report.index} (${report.role}); ` +
+          `sent the original bytes sessionId=${sessionId}`,
+      );
+    }
+  } else if (report.kind === "rebuild") {
+    log.debug(
+      `[prompt-cache] session prefix rebuilt (${report.reason}${report.index === undefined ? "" : ` at ${report.index}`}) sessionId=${sessionId}`,
+    );
+  }
+}
 
 export async function submitEmbeddedAttemptPrompt(input: {
   attempt: Pick<
@@ -184,8 +212,16 @@ export async function submitEmbeddedAttemptPrompt(input: {
           assertRequestCurrent();
           await input.persistToolResultProjections();
           assertRequestCurrent();
-          let requestContext = context;
           const foregroundRequest = captureCurrentPromptForModel && !activeSession.isCompacting;
+          let requestContext = context;
+          let commitSessionPrefix: (() => void) | undefined;
+          if (foregroundRequest) {
+            // The session prefix owner sends what it already sent and appends the rest.
+            const admitted = admitSessionPrefix(attempt.sessionId, model, context);
+            requestContext = admitted.context;
+            commitSessionPrefix = admitted.commit;
+            reportSessionPrefix(attempt.sessionId, admitted.report);
+          }
           // Observe before V2 decides: only this observation can anchor the request's
           // measured prefix. A checkpoint request is observed again as its own request.
           const fixedTokenPressure = foregroundRequest
@@ -241,6 +277,17 @@ export async function submitEmbeddedAttemptPrompt(input: {
             projectionRecorder?.markSentToProvider?.();
           }
           const stream = await baseStreamFn(model, requestContext, options);
+          if (commitSessionPrefix) {
+            const commit = commitSessionPrefix;
+            void stream.result().then(
+              (message) => {
+                if (message.stopReason !== "error" && message.stopReason !== "aborted") {
+                  commit();
+                }
+              },
+              () => undefined,
+            );
+          }
           return stream;
         },
         { checkAfter: false },
@@ -261,6 +308,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
         }
         if (providerPromptHistoryTruncation.aggregateTruncatedCount > 0) {
           recordAggregateTruncation(attempt);
+          // Overflow recovery shrinks earlier results on purpose: a compaction-like rebuild.
+          requestSessionPrefixRebuild(attempt.sessionId);
         }
         // Bind measured pressure to the final ID-normalized provider context.
         return input.normalizeToolCallIds?.(providerMessages, model) ?? providerMessages;

@@ -29,6 +29,7 @@ type WorkerCleanupHelpers = {
   resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config-state.test-support.js").resetModelsJsonReadyCacheForTest;
   resetPreparedModelRuntimeSnapshotsForTest: typeof import("../src/agents/prepared-model-runtime.test-support.js").resetPreparedModelRuntimeSnapshotsForTest;
   resetStickyRateLimitFallbacksForTest: typeof import("../src/agents/model-fallback-sticky.test-support.js").resetStickyRateLimitFallbacksForTest;
+  clearSessionPrefixSeries: typeof import("../src/agents/embedded-agent-runner/session-prefix-owner.js").clearSessionPrefixSeries;
 };
 
 type ReplyToModeResolver = NonNullable<
@@ -62,6 +63,7 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       agentWriteAdmission,
       fileLock,
       stickyFallbacks,
+      sessionPrefixOwner,
     ] = await Promise.all([
       vi.importActual<typeof import("../src/agents/context.test-support.js")>(
         "../src/agents/context.test-support.js",
@@ -87,6 +89,9 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       vi.importActual<typeof import("../src/agents/model-fallback-sticky.test-support.js")>(
         "../src/agents/model-fallback-sticky.test-support.js",
       ),
+      vi.importActual<typeof import("../src/agents/embedded-agent-runner/session-prefix-owner.js")>(
+        "../src/agents/embedded-agent-runner/session-prefix-owner.js",
+      ),
     ]);
     return {
       drainOpenClawAgentWriteQueuesForTest:
@@ -101,6 +106,8 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       resetPreparedModelRuntimeSnapshotsForTest:
         preparedModelRuntime.resetPreparedModelRuntimeSnapshotsForTest,
       resetStickyRateLimitFallbacksForTest: stickyFallbacks.resetStickyRateLimitFallbacksForTest,
+      // Tests reuse session ids across unrelated transcripts; each test starts with no sent prefix.
+      clearSessionPrefixSeries: sessionPrefixOwner.clearSessionPrefixSeries,
     };
   })();
   return globalState[WORKER_CLEANUP_HELPERS];
@@ -390,7 +397,9 @@ afterEach(async () => {
     resetModelsJsonReadyCacheForTest,
     resetPreparedModelRuntimeSnapshotsForTest,
     resetStickyRateLimitFallbacksForTest,
+    clearSessionPrefixSeries,
   } = await loadWorkerCleanupHelpers();
+  clearSessionPrefixSeries();
   await drainOpenClawAgentWriteQueuesForTest();
   await drainSessionStoreWriterQueuesForTest();
   clearSessionStoreCacheForTest();

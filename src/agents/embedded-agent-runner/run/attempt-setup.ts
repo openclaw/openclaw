@@ -55,6 +55,7 @@ import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
 import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
+import { requestSessionPrefixRebuild } from "../session-prefix-owner.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   installContextEngineLoopHook,
@@ -323,6 +324,8 @@ export function installEmbeddedAttemptContextGuards(input: {
         pruneNewRounds: !input.getServerToolClearingEnabled(),
         onPruned: () => {
           declarePromptHistoryRewrite({ ...attempt, reason: "pruning" });
+          // Pruning runs after the provider cache expired; the next request starts a new series.
+          requestSessionPrefixRebuild(attempt.sessionId);
           cacheTouch.recordCacheTouch(Date.now());
         },
       });

@@ -25,6 +25,7 @@ import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
+import { requestSessionPrefixRebuild } from "../session-prefix-owner.js";
 import {
   repairRejectedCompactionReplayInSessionManager,
   repairRejectedThinkingReplayInSessionManager,
@@ -183,6 +184,8 @@ export function installEmbeddedAttemptStreamGuards(
           repair = await repairRejectedThinkingReplayInSessionManager(repairParams);
         }
         if (repair.repaired) {
+          // The provider rejected bytes it was already sent; the repaired history starts a new series.
+          requestSessionPrefixRebuild(attempt.sessionId);
           callbacks.onRejectedProviderReplayRepaired();
           return;
         }
