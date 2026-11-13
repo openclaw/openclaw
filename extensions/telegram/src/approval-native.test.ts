@@ -239,4 +239,45 @@ describe("telegram native approval adapter", () => {
 
     expect(target).toEqual({ to: chatId, threadId: 928 });
   });
+
+  // Gateway sessions store forum topics as `telegram:<chat>:topic:<id>`, like the live turn.
+  it.each([
+    ["928", { to: chatId, threadId: 928 }],
+    ["111", null],
+  ] as const)("matches a stored forum topic route against live topic %s", async (thread, want) => {
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const sessionKey = `agent:main:telegram:group:${chatId}:topic:928`;
+    const route = `telegram:${chatId}:topic:928`;
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess",
+        updatedAt: Date.now(),
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: route, accountId: "default", threadId: 928 },
+        }),
+      },
+    });
+
+    const target = await telegramApprovalCapability.nativeAsync?.resolveOriginTarget?.({
+      cfg: { ...cfg, session: { store: storePath } },
+      accountId: "default",
+      approvalKind: "exec",
+      request: {
+        ...requestTimes,
+        id: "req-3",
+        request: {
+          command: "echo hi",
+          turnSourceChannel: "telegram",
+          turnSourceTo: `telegram:${chatId}:topic:${thread}`,
+          turnSourceThreadId: thread,
+          turnSourceAccountId: "default",
+          sessionKey,
+        },
+      },
+    });
+
+    expect(target ?? null).toEqual(want);
+  });
 });
