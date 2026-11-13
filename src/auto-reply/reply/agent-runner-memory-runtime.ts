@@ -206,6 +206,7 @@ export async function defersTokenCompactionToChatGPTBoundary(
     route !== undefined &&
     isChatGPTV2CompactionEligible({
       config: run.config,
+      agentId: run.agentId,
       model: route,
       extraParams: resolvePreparedExtraParams({
         cfg: run.config,

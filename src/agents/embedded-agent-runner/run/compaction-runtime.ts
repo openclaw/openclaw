@@ -186,6 +186,7 @@ async function executeRecoveryCompaction(
     ...buildEmbeddedCompactionRuntimeContext(
       {
         ...runParams,
+        agentId: input.sessionAgentId,
         modelCallUrgency: resolveModelCallUrgency(runParams),
         authProfileId: input.modelSelection.authProfileId,
         authProfileIdSource: input.modelSelection.authProfileIdSource,

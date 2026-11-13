@@ -127,6 +127,7 @@ export async function runEmbeddedAttemptPromptPhase(
   let providerBoundaryPrecheck: MidTurnPrecheckRequest | undefined;
   const providerCompactionAtRequestBoundary = isChatGPTV2CompactionEligible({
     config: attempt.config,
+    agentId: sessionAgentId,
     model: attempt.model,
     extraParams: effectiveExtraParams,
     compactionEnabled,
