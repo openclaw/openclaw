@@ -1,2 +1,2 @@
-5
-# Observe the real history-handler refusal after source retirement without requiring a forbidden provider continuation.
+3
+# Assert removed-job replies contain no hydrated history while preserving ordinary notice lifetime.
