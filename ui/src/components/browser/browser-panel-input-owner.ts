@@ -415,15 +415,27 @@ export class BrowserPanelInputOwner {
         this.host.operations.isLive(epoch, client) &&
         this.host.activeTargetId === targetId &&
         this.host.mode === "interact";
-      let outcome = { navigated: false, unsent: 0 };
+      let outcome = { navigated: false, blockedByDialog: false, unsent: 0 };
       const delivered = await this.host.runAction(async (actionClient) => {
         outcome = await this.sendInputs(actionClient, targetId, inputs, current);
       });
       if (this.inputGeneration !== generation || !this.host.operations.isLive(epoch, client)) {
         return;
       }
-      const clicked = inputs.some((input) => input.kind === "clickCoords");
-      if (outcome.navigated) {
+      const isClick = (input: BrowserOperatorInput) => input.kind === "clickCoords";
+      const sentCount = inputs.length - outcome.unsent;
+      const clicked = inputs.slice(0, sentCount).some(isClick);
+      if (outcome.blockedByDialog) {
+        // A page dialog stopped the burst. Input it withheld or that queued behind it
+        // was typed for a page the dialog now blocks; a withheld click never moved focus.
+        this.queuedInputs = [];
+        if (inputs.slice(sentCount).some(isClick)) {
+          this.focusUncertain = true;
+        } else if (clicked) {
+          this.focusUncertain = false;
+        }
+        this.host.setState("noticeText", t("browser.inputBlockedByDialog"));
+      } else if (outcome.navigated) {
         // Input withheld from this burst or queued meanwhile was aimed at the document
         // the user saw before it changed.
         if (outcome.unsent > 0 || this.queuedInputs.length > 0) {
@@ -454,11 +466,15 @@ export class BrowserPanelInputOwner {
     targetId: string,
     inputs: BrowserOperatorInput[],
     current: () => boolean,
-  ): Promise<{ navigated: boolean; unsent: number }> {
+  ): Promise<{ navigated: boolean; blockedByDialog: boolean; unsent: number }> {
     if (this.operatorInputUnsupportedClient !== client) {
       try {
         const result = await sendBrowserOperatorInput(client, { targetId, inputs });
-        return { navigated: result.navigated, unsent: inputs.length - result.sent };
+        return {
+          navigated: result.navigated,
+          blockedByDialog: result.blockedByDialog,
+          unsent: inputs.length - result.sent,
+        };
       } catch (error) {
         if (!isBrowserOperatorInputUnsupportedError(error)) {
           throw error;
@@ -480,7 +496,7 @@ export class BrowserPanelInputOwner {
         await insertBrowserText(client, { targetId, text: input.text });
       }
     }
-    return { navigated: false, unsent: 0 };
+    return { navigated: false, blockedByDialog: false, unsent: 0 };
   }
 
   handleOverlayPointerDown(event: PointerEvent): void {

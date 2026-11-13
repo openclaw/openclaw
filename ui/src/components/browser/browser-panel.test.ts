@@ -690,6 +690,25 @@ describe("Browser panel", () => {
       );
     });
 
+    it("keeps typing out of the old field when a dialog stops the click", async () => {
+      const { panel, request, input, actions } = await mountForm({ clickable: true });
+      request.mockImplementationOnce(async () => ({
+        ok: true,
+        sent: 0,
+        blockedByDialog: true,
+        browserState: { dialogs: { pending: [{ type: "alert" }] } },
+      }));
+      input.click();
+      await vi.advanceTimersByTimeAsync(0);
+      key(input, { key: "x", cancelable: true });
+      await vi.advanceTimersByTimeAsync(0);
+      await panel.updateComplete;
+      expect(actions()).toMatchObject([{ kind: "clickCoords" }]);
+      expect(panel.querySelector('[role="status"]')?.textContent).toContain(
+        "The page opened a dialog",
+      );
+    });
+
     it("types again after a queued click recovers from a failed click", async () => {
       const { request, input, actions } = await mountForm({ clickable: true });
       const failedClick = createDeferred<unknown>();

@@ -411,7 +411,7 @@ function redactOperatorInputError(error: unknown, inputs: BrowserOperatorInput[]
 export async function sendBrowserOperatorInput(
   client: BrowserRequestClient,
   params: { targetId: string; inputs: BrowserOperatorInput[] },
-): Promise<{ sent: number; navigated: boolean }> {
+): Promise<{ sent: number; navigated: boolean; blockedByDialog: boolean }> {
   const result = asRecord(
     await browserRequest(client, {
       method: "POST",
@@ -431,6 +431,7 @@ export async function sendBrowserOperatorInput(
   return {
     sent: typeof result?.sent === "number" ? result.sent : 0,
     navigated: result?.navigated === true,
+    blockedByDialog: result?.blockedByDialog === true,
   };
 }
 
