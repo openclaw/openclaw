@@ -92,8 +92,15 @@ function forkChange(fork: WireRequest, parent: WireRequest): string | undefined 
   const shared = fork.messages.findIndex((message) => FORK_ONLY.test(message));
   const end = shared < 0 ? fork.messages.length : shared;
   for (let index = 0; index < end; index++) {
-    if (fork.messages[index] !== parent.messages[index]) {
-      return `fork message ${index}: ${fork.messages[index]!.slice(0, 200)} -> parent ${(parent.messages[index] ?? "(missing)").slice(0, 200)}`;
+    const own = fork.messages[index]!;
+    const theirs = parent.messages[index] ?? "(missing)";
+    if (own !== theirs) {
+      let at = 0;
+      while (own[at] === theirs[at]) {
+        at++;
+      }
+      const around = (text: string) => text.slice(Math.max(0, at - 120), at + 160);
+      return `fork message ${index} @${at}: ${around(own)} -> parent ${around(theirs)}`;
     }
   }
   return undefined;
