@@ -59,6 +59,8 @@ import {
   collectSupplementalStateDatabasePaths,
   readSharedDatabaseVersion,
   readUpdateStoreSchemaVersion,
+  rehydrateUpdateStateSchemaOwnership,
+  writeUpdateStateSchemaOwnership,
   type StateInput,
 } from "./update-candidate-state.shared.js";
 import {
@@ -286,25 +288,25 @@ export async function discoverUpdateStateSchemaInspectionInProcess(
     input,
     await collectStateDatabasePaths(input),
   );
+  let plan: UpdateStateSchemaInspectionPlan;
   if (!(await updateStateDatabaseExists(shared))) {
-    return { files: [...files], sharedVersion: { path: shared, userVersion: null } };
-  }
-  if (resolveDatabaseFamilyEngines(input.config).state === "postgres") {
+    plan = { files: [...files], sharedVersion: { path: shared, userVersion: null } };
+  } else if (resolveDatabaseFamilyEngines(input.config).state === "postgres") {
     const { readUpdatePostgresState } = await import("./update-candidate-state.postgres.js");
     const result = await readUpdatePostgresState(input, files);
-    return { files: result.files, sharedVersion: { path: shared, ...result.version } };
+    plan = { files: result.files, sharedVersion: { path: shared, ...result.version } };
+  } else {
+    const version = await withStateDatabaseSnapshot(
+      shared,
+      (location) => readSharedDatabaseVersion(location, shared, files, input),
+      input.stagingRoot,
+      input.onProgress,
+      input.preserveSourceArtifacts,
+    );
+    plan = { files: [...files], sharedVersion: { path: shared, ...version } };
   }
-  const sharedVersion = await withStateDatabaseSnapshot(
-    shared,
-    async (location) => ({
-      path: shared,
-      ...(await readSharedDatabaseVersion(location, shared, files, input)),
-    }),
-    input.stagingRoot,
-    input.onProgress,
-    input.preserveSourceArtifacts,
-  );
-  return { files: [...files], sharedVersion };
+  await writeUpdateStateSchemaOwnership(input.stagingRoot, plan.files);
+  return plan;
 }
 
 /** Missing databases stay explicit so creation is schema-checked and loss blocks rollback. */
@@ -321,6 +323,9 @@ export async function readUpdateStateSchemaVersionsInProcess(
     ? new Map(input.inspectionPlan.files)
     : await collectSupplementalStateDatabasePaths(input, await collectStateDatabasePaths(input));
   const sharedIdentity = resolveUpdateCandidateStateIdentity(input.stateDir, shared);
+  if (input.inspectionPlan) {
+    await rehydrateUpdateStateSchemaOwnership(files, sharedIdentity, input.stagingRoot);
+  }
   // Inspect each identity once, then publish every spelling for released rollback baselines.
   const inspected = new Map<string, Omit<UpdateStateSchemaVersion, "path">>();
   for (const [identity, discovery] of files) {

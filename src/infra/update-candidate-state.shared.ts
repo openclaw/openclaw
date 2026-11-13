@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import path from "node:path";
+import { z } from "zod";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
@@ -13,11 +15,62 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import {
+  StateDatabaseDiscoverySchema,
   queueStateDatabaseSpelling,
   resolveUpdateCandidateStateIdentity,
   type StateDatabaseDiscovery,
 } from "./update-candidate-paths.js";
 import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
+
+const SCHEMA_DISCOVERY_OWNERSHIP_FILENAME = "schema-discovery-ownership.json";
+const StateSchemaDiscoveryOwnershipSchema = z.record(
+  z.string(),
+  StateDatabaseDiscoverySchema.pick({ owners: true, registeredPaths: true }),
+);
+
+/** Released 2026.9.x drivers strip ownership from the plan but reuse this private directory. */
+export async function writeUpdateStateSchemaOwnership(
+  stagingRoot: string | undefined,
+  files: Iterable<readonly [string, StateDatabaseDiscovery]>,
+): Promise<void> {
+  if (!stagingRoot) {
+    return;
+  }
+  const ownership = Object.fromEntries(
+    [...files]
+      .filter(([, discovery]) => discovery.owners?.length || discovery.registeredPaths?.length)
+      .map(([identity, { owners, registeredPaths }]) => [identity, { owners, registeredPaths }]),
+  );
+  await fs.writeFile(
+    path.join(stagingRoot, SCHEMA_DISCOVERY_OWNERSHIP_FILENAME),
+    JSON.stringify(ownership),
+    { mode: 0o600 },
+  );
+}
+
+export async function rehydrateUpdateStateSchemaOwnership(
+  files: Map<string, StateDatabaseDiscovery>,
+  sharedIdentity: string,
+  stagingRoot: string | undefined,
+): Promise<void> {
+  const record = stagingRoot
+    ? await fs
+        .readFile(path.join(stagingRoot, SCHEMA_DISCOVERY_OWNERSHIP_FILENAME), "utf8")
+        .catch(ignoreMissingPath)
+    : undefined;
+  const ownership = record ? StateSchemaDiscoveryOwnershipSchema.parse(JSON.parse(record)) : {};
+  for (const [identity, discovery] of files) {
+    if (discovery.owners?.length || discovery.registeredPaths?.length) {
+      continue;
+    }
+    if (ownership[identity]) {
+      files.set(identity, { ...discovery, ...ownership[identity] });
+    } else if (identity === sharedIdentity) {
+      files.set(identity, { ...discovery, owners: [{ role: "global" }] });
+    }
+  }
+}
+
 export type StateInput = {
   stateDir: string;
   additionalPaths?: readonly string[];
