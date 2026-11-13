@@ -84,7 +84,26 @@ function prefixChange(previous: WireRequest, current: WireRequest): string | und
     return "system";
   }
   if (previous.tools !== current.tools) {
-    return "tools";
+    const byName = (tools: string) =>
+      new Map(
+        (JSON.parse(tools) as Array<Record<string, unknown>>).map((tool) => [
+          String(
+            tool.name ??
+              (tool.function as { name?: unknown } | undefined)?.name ??
+              (tool.toolSpec as { name?: unknown } | undefined)?.name,
+          ),
+          JSON.stringify(tool),
+        ]),
+      );
+    const before = byName(previous.tools);
+    const after = byName(current.tools);
+    const added = [...after.keys()].filter((name) => !before.has(name));
+    const removed = [...before.keys()].filter((name) => !after.has(name));
+    const changed = [...after.keys()].filter(
+      (name) => before.has(name) && before.get(name) !== after.get(name),
+    );
+    const order = added.length + removed.length + changed.length === 0 ? " (order)" : "";
+    return `tools added=${added.join(",")} removed=${removed.join(",")} changed=${changed.join(",")}${order}`;
   }
   const message = previous.messages.findIndex(
     (entry, position) => current.messages[position] !== entry,
