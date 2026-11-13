@@ -3,7 +3,6 @@ import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import "../../components/tooltip.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
-import { SwitchIndicator } from "../../components/solid/switch.tsx";
 import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -293,36 +292,31 @@ export function PaletteSessionSettingsView(properties: {
           ) : (
             <SettingsPlaces />
           )}
-
-          {!view().placementLocked && place().checkoutVisible && !place().remoteRepository ? (
-            <button
-              class="palette-session-settings__row palette-session-settings__worktree"
-              type="button"
-              role="switch"
-              aria-checked={place().worktree ? "true" : "false"}
-              aria-label={t("newSession.checkoutWorktree")}
-              title={
-                place().remotePlacement
-                  ? t("newSession.checkoutRemoteLocked")
-                  : !place().worktreeAvailable()
-                    ? (repositoryIssueText(place().repository) ??
-                      t("newSession.gitCheckUnavailable"))
-                    : undefined
-              }
-              disabled={view().locked || place().remotePlacement}
-              ref={[controlRef(), worktree]}
-            >
-              <span class="palette-session-settings__icon">
-                <Icon name="gitBranch" />
-              </span>
-              <span class="palette-session-settings__label">
-                {t("newSession.checkoutWorktree")}
-              </span>
-              <SwitchIndicator checked={place().worktree} size="sm" />
-            </button>
-          ) : undefined}
         </div>
       </Popover>
+      {!view().placementLocked && place().checkoutVisible && !place().remoteRepository ? (
+        <button
+          class="palette-session-settings__chip palette-session-settings__worktree"
+          type="button"
+          role="switch"
+          aria-checked={place().worktree ? "true" : "false"}
+          aria-label={t("newSession.checkoutWorktree")}
+          title={
+            place().remotePlacement
+              ? t("newSession.checkoutRemoteLocked")
+              : !place().worktreeAvailable()
+                ? (repositoryIssueText(place().repository) ?? t("newSession.gitCheckUnavailable"))
+                : undefined
+          }
+          disabled={view().locked || place().remotePlacement}
+          ref={worktree}
+        >
+          <Icon name="gitBranch" />
+          <span class="palette-session-settings__chip-label">
+            {t("newSession.checkoutWorktree")}
+          </span>
+        </button>
+      ) : undefined}
     </>
   );
 }

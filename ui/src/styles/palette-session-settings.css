@@ -73,11 +73,23 @@
   opacity: 0.5;
 }
 
-/* Keep the project readable; only the agent name and narrow chevrons are omitted. */
+/* Keep the project readable; the worktree switch keeps its glyph and chevrons are omitted. */
 @media (max-width: 560px) {
+  .palette-session-settings__worktree .palette-session-settings__chip-label,
   .palette-session-settings__chip-chevron,
   .cmd-palette .palette-session-settings__agent .agent-select__chevron {
     display: none;
+  }
+
+  /* Glyph only: a round target, so the on state is a circle and not a sliver. */
+  .palette-session-settings__worktree {
+    justify-content: center;
+    aspect-ratio: 1;
+  }
+
+  /* The tooltip host has no box; inset the select so the avatar meets the prompt's text edge. */
+  .palette-session-settings__agent .agent-select {
+    margin-inline-start: 10px;
   }
 }
 
@@ -185,9 +197,14 @@
   min-width: 0;
 }
 
+/* The avatar carries the weight of Send at the other end of the row. */
 .palette-session-settings__agent .agent-select__avatar {
-  width: var(--chat-composer-chip-icon);
-  height: var(--chat-composer-chip-icon);
+  width: 24px;
+  height: 24px;
+}
+
+.cmd-palette .palette-session-settings__agent .agent-select__avatar--icon {
+  font-size: 12px;
 }
 
 /* The search icon and text sit on the rows' icon and label columns. */
@@ -217,10 +234,4 @@
 
 .cmd-palette .palette-session-settings__chip-label {
   max-width: min(180px, 25vw);
-}
-
-.palette-session-settings__worktree {
-  margin-top: 5px;
-  border-top: 1px solid var(--border);
-  border-radius: 0 0 var(--menu-item-radius) var(--menu-item-radius);
 }

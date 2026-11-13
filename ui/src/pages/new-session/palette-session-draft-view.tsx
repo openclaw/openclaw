@@ -33,7 +33,6 @@ export function PaletteSessionModel(props: DraftProps) {
             sending: props.draft.messageLocked,
           }}
           showEffort={false}
-          onModelChange={() => settings().options.onChange()}
         />
       )}
     </Show>

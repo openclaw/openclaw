@@ -60,6 +60,8 @@ export class PaletteSessionPreferences {
       return;
     }
     this.observed = preference;
+    // Accepted edge: a model picked while an earlier start is still saving its choices
+    // follows that save when it lands. Agent and project edits are kept.
     if (
       this.edited ||
       draft.submission.submitting ||

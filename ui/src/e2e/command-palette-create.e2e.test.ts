@@ -293,14 +293,10 @@ suite.define(() => {
           expect(page.url()).toBe(url);
 
           if (destination === "local") {
-            await changePicker(settings, "overlay-after-show", () =>
-              palette.locator(".palette-session-settings__trigger").click(),
-            );
             const worktree = palette.getByRole("switch", { name: "New worktree", exact: true });
             if ((await worktree.getAttribute("aria-checked")) !== "true") {
               await worktree.click();
             }
-            await changePicker(settings, "overlay-after-hide", () => page.keyboard.press("Escape"));
           }
           if (destination === "device") {
             await gateway.waitForRequest("environments.list");

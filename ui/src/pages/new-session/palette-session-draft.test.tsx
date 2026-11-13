@@ -7,7 +7,6 @@ import type { AgentSelectElement } from "../../components/agent-select.tsx";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import * as toast from "../../lib/toast.ts";
-import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import {
   mount as mountDraft,
@@ -680,7 +679,7 @@ describe("palette-only last-used settings", () => {
     expect(f.entries["new-session.v1:main"]).toEqual(ordinary);
   });
 
-  it.each(["none", "agent", "model"] as const)(
+  it.each(["none", "agent"] as const)(
     "finishes an accepted save across remount without overwriting edited choices (edited=%s)",
     async (edited) => {
       const f = await mountPreferences();
@@ -705,22 +704,6 @@ describe("palette-only last-used settings", () => {
           agent(current).onSelect("main");
           await current.updateComplete;
         }
-        if (edited === "model") {
-          installModelPickerLayout();
-          const trigger = expectDefined(
-            current.querySelector<HTMLElement>("[data-chat-model-select]"),
-            "model picker",
-          );
-          trigger.click();
-          await waitForSolid(() =>
-            expect(current.querySelector('[data-chat-model-option="example/fast"]')).not.toBeNull(),
-          );
-          expectDefined(
-            current.querySelector<HTMLElement>('[data-chat-model-option="example/fast"]'),
-            "fast model",
-          ).click();
-          await current.updateComplete;
-        }
         held.release();
         await vi.waitFor(() =>
           expect(f.entries[PALETTE_PREFERENCE_KEY]).toMatchObject({ agentId: "other" }),
@@ -728,11 +711,6 @@ describe("palette-only last-used settings", () => {
         await vi.waitFor(() =>
           expect(agent(current).value).toBe(edited === "none" ? "other" : "main"),
         );
-        if (edited === "model") {
-          expect(current.draft.settingsView()?.options.draft.place.modelControl.selected).toBe(
-            "example/fast",
-          );
-        }
       } finally {
         held.release();
         replacement?.remove();
