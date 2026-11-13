@@ -835,30 +835,25 @@
   justify-content: center;
 }
 
-/* Mid-run context is part of the agent's turn: a compact card flush with its column. */
+/* Mid-run context is part of the agent's turn: a quiet disclosure flush with its
+ * column, read like the activity rollups. Opened, the body hangs off a hairline
+ * under the icon instead of sitting in a card, and reads at prose size. */
 .chat-notice-inline {
-  width: fit-content;
-  max-width: min(var(--chat-message-max-width, min(900px, 68%)), calc(100% - 66px));
-  margin-block: 0 calc(var(--chat-turn-gap, 16px) + 8px);
+  margin-block: 0 12px;
   margin-inline: calc(4px + var(--chat-avatar-gutter, 46px)) 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--secondary);
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.chat-notice-inline[open] {
-  width: auto;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  line-height: 1.5;
 }
 
 .chat-notice-inline > summary {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
+  width: fit-content;
+  max-width: 100%;
+  border-radius: var(--radius-sm);
   list-style: none;
-  border-radius: inherit;
   cursor: var(--cursor-action);
 }
 
@@ -868,6 +863,11 @@
 
 .chat-notice-inline > summary:is(:hover, :focus-visible) {
   color: var(--text);
+}
+
+/* Keep the global ring inside the control so virtual-row paint containment cannot clip it. */
+.chat-notice-inline > summary:focus-visible {
+  outline-offset: -2px;
 }
 
 .chat-notice-inline__icon,
@@ -880,38 +880,48 @@
 .chat-notice-inline__chevron svg {
   width: 14px;
   height: 14px;
+  stroke-width: calc(12px / 7);
 }
 
 .chat-notice-inline__label {
   min-width: 0;
   overflow: hidden;
-  color: var(--muted-strong);
-  font-weight: 600;
+  color: var(--text);
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .chat-notice-inline__time {
   flex: none;
+  color: var(--text-tertiary);
 }
 
+/* Like the activity rollups, the chevron appears on hover or focus and stays while open. */
 .chat-notice-inline__chevron {
-  margin-inline-start: auto;
-  transition: transform 150ms ease;
+  opacity: 0;
+  transition:
+    opacity 150ms,
+    transform 150ms;
+}
+
+summary:is(:hover, :focus-visible) > .chat-notice-inline__chevron,
+.chat-notice-inline[open] .chat-notice-inline__chevron {
+  opacity: 1;
 }
 
 .chat-notice-inline[open] .chat-notice-inline__chevron {
   transform: rotate(90deg);
 }
 
+/* The hairline sits under the icon's center and the text starts at the label. */
 .chat-notice-inline .chat-notice__body {
   width: auto;
-  margin: 0;
-  padding: 8px 10px 10px;
-  border-top: 1px solid var(--border);
-  color: var(--text);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.5;
+  margin-block: 6px 0;
+  margin-inline: 6px 0;
+  padding-block: 2px;
+  padding-inline: 12px 0;
+  border-inline-start: 2px solid var(--border-strong);
 }
 
 /* Avatar-less layouts (direct threads, narrow screens) start groups at the column edge. */

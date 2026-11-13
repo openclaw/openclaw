@@ -8,6 +8,8 @@ export type DatabaseEngineInput =
       readOnly?: true;
       /** Opt-in: rollback captures keep their rows on the server instead of a SQLite image. */
       serverRecoveryCaptures?: true;
+      /** database.postgres.ownership installation: Gateway state ownership is held in PostgreSQL. */
+      ownership?: "installation";
     }>
   | undefined;
 export type DatabaseEngineId = "sqlite" | "postgres";

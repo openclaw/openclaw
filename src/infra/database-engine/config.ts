@@ -66,5 +66,8 @@ async function resolveDatabasePostgresInput(
     ...(config.database?.postgres?.recoveryCaptures === "server"
       ? { serverRecoveryCaptures: true as const }
       : {}),
+    ...(config.database?.postgres?.ownership === "installation"
+      ? { ownership: "installation" as const }
+      : {}),
   });
 }
