@@ -102,7 +102,7 @@ type GithubEvent = {
   pull_request?: {
     number: number;
     draft: boolean;
-    head: { sha: string };
+    head: { sha: string; repo: { full_name: string } };
     user?: { login?: string; type?: string };
     author_association?: string;
   };
@@ -131,7 +131,14 @@ function pr(
   return {
     ...refEvent(workflow, "workflow_dispatch", runId, "e", `refs/pull/${number}/merge`),
     event_name: "pull_request",
-    event: { action, pull_request: { number, draft, head: { sha: head.repeat(40) } } },
+    event: {
+      action,
+      pull_request: {
+        number,
+        draft,
+        head: { sha: head.repeat(40), repo: { full_name: "openclaw/openclaw" } },
+      },
+    },
   };
 }
 
