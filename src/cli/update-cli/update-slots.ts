@@ -118,6 +118,7 @@ function readServiceCommand(args: string[] | undefined) {
  */
 async function moveServiceToLauncher(params: {
   args: string[] | undefined;
+  port: number | undefined;
   dir: string;
   staged: string;
   node: string;
@@ -128,8 +129,10 @@ async function moveServiceToLauncher(params: {
     return false;
   }
   const entry = path.join(params.staged, "openclaw.mjs");
+  // Keep the port the service listens on, not the configured default.
+  const port = params.port ? ["--port", String(params.port)] : [];
   const result = await runCommandWithTimeout(
-    [params.node, entry, "gateway", "install", "--force", "--json"],
+    [params.node, entry, "gateway", "install", "--force", ...port, "--json"],
     {
       cwd: params.staged,
       env: runtimeSlotEnv(params.node, params.env),
@@ -334,7 +337,7 @@ export async function runRuntimeSlotUpdate(
     if (opts.restart === false) {
       return done("ok", "next-start", "Update applies on the next Gateway start.");
     }
-    if (await moveServiceToLauncher({ args: serviceArgs, dir, staged, node, env })) {
+    if (await moveServiceToLauncher({ args: serviceArgs, port, dir, staged, node, env })) {
       log("Pointed the Gateway service at the runtime launcher and restarted it.");
     } else if (opts.restartSelf) {
       opts.restartSelf();
