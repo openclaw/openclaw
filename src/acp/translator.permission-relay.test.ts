@@ -212,6 +212,42 @@ describe("ACP translator permission relay", () => {
     await harness.cleanup();
   });
 
+  it("routes an MCP approval to its ACP turn by run ID despite different tool IDs", async () => {
+    const harness = await createHarness({ sessions: ["session-1", "session-2"] });
+    try {
+      const secondRun = expectDefined(harness.runIds[1], "second Gateway run id");
+      await harness.agent.handleGatewayEvent(tool(harness.runId, "toolu_first"));
+      await harness.agent.handleGatewayEvent(tool(secondRun, "toolu_second"));
+      const send = (id: string, runId?: string, sessionKey = SESSION_KEY) =>
+        harness.agent.handleGatewayEvent({
+          type: "event",
+          event: "exec.approval.requested",
+          payload: {
+            id,
+            request: { sessionKey, runId, toolCallId: "mcp-exec", command: "echo actual" },
+          },
+        });
+      await send("no-run");
+      await send("stale-run", "finished");
+      await send("wrong-session", secondRun, "agent:main:elsewhere");
+      expect(harness.requestPermission).not.toHaveBeenCalled();
+      await send("approval-mcp", secondRun);
+      await vi.waitFor(() => {
+        expect(resolveCalls(harness.request)).toEqual([
+          ["exec.approval.resolve", { id: "approval-mcp", decision: "allow-once" }],
+        ]);
+      });
+      expect(harness.requestPermission).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          sessionId: "session-2",
+          toolCall: expect.objectContaining({ toolCallId: "mcp-exec" }),
+        }),
+      );
+    } finally {
+      await harness.cleanup();
+    }
+  });
+
   it("correlates concurrent approvals by a unique execute tool call and fails closed otherwise", async () => {
     const harness = await createHarness({
       sessions: ["session-1", "session-2"],
