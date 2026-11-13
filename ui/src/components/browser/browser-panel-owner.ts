@@ -439,6 +439,16 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         panel.resetBrowserState();
       } else if (targetId === panel.activeTargetId && !route) {
         return;
+      } else if (
+        options?.focusBrowserTab === false &&
+        stream.ownsView(panel.activeTargetId) &&
+        panel.tabs.some(
+          (tab) =>
+            tab.id === panel.activeTargetId && (tab.id === targetId || tab.targetId === targetId),
+        )
+      ) {
+        // A newer session result for the tab already streaming here keeps the live view.
+        return;
       }
       const client = operations.captureClient();
       const previous = { targetId: panel.activeTargetId, view: panel.view };

@@ -20,6 +20,7 @@ import {
   streamFixture,
 } from "./browser-panel-stream.test-support.ts";
 import { screencastFrame, TestScreencastSocket } from "./browser-screencast-test-support.ts";
+import type { BrowserRoute, BrowserTabTarget } from "./browser-target.ts";
 
 const NEXT_URL = "https://example.test/next";
 const otherRoute = { target: "host", profile: "other" } as const;
@@ -513,6 +514,72 @@ describe("Browser panel streaming", () => {
     expect(revokedUrls).toEqual(["blob:frame-0", "blob:frame-1"]);
     sockets[1]!.receive(screencastFrame(NEXT_URL));
     expect(images).toHaveLength(3);
+  });
+
+  describe("following session results", () => {
+    const route = { target: "host", profile: "managed" } as const;
+    function follow(controller: BrowserPanel, targetId: string, tabRoute: BrowserRoute = route) {
+      const tab: BrowserTabTarget = { ...tabRoute, targetId };
+      return controller.selectTab(targetId, tab, { focusBrowserTab: false });
+    }
+
+    async function following() {
+      const state = setup(async (envelope) =>
+        envelope.path === "/tabs"
+          ? {
+              running: true,
+              canAutoResizeViewport: true,
+              tabs: [
+                createBrowserPanelTestTab("tab-a", PAGE_URL, "Page"),
+                createBrowserPanelTestTab("tab-b", NEXT_URL, "Next"),
+              ],
+            }
+          : undefined,
+      );
+      const pending = follow(state.controller, "raw-tab-a");
+      await flush();
+      const socket = sockets.at(-1)!;
+      socket.receive(ready);
+      socket.receive(screencastFrame());
+      await pending;
+      await flush();
+      return { ...state, socket };
+    }
+
+    it("keeps the live view when a newer result names the streaming tab", async () => {
+      const { controller, socket, calls } = await following();
+      const view = controller.view;
+      expect(view).not.toBeNull();
+      const listed = calls("/tabs").length;
+      const pending = follow(controller, "raw-tab-a");
+      await flush();
+      expect(socket.close).not.toHaveBeenCalled();
+      expect(controller.view).toBe(view);
+      expect(calls("/screencast")).toHaveLength(1);
+      expect(calls("/tabs")).toHaveLength(listed);
+      await pending;
+    });
+
+    it.each([
+      ["another tab", "raw-tab-b", route, "tab-b", "managed"],
+      ["another route", "raw-tab-a", otherRoute, "tab-a", "other"],
+    ] as const)(
+      "restarts the stream for %s",
+      async (_case, targetId, tabRoute, activeTargetId, profile) => {
+        const { controller, socket, calls } = await following();
+        const pending = follow(controller, targetId, tabRoute);
+        await flush();
+        expect(socket.close).toHaveBeenCalled();
+        expect(controller.activeTargetId).toBe(activeTargetId);
+        expect(calls("/screencast")).toHaveLength(2);
+        expect(calls("/screencast").at(-1)![1]).toMatchObject({
+          query: { profile },
+          body: { targetId: activeTargetId },
+        });
+        sockets.at(-1)!.receive(screencastFrame());
+        await pending;
+      },
+    );
   });
 });
 
