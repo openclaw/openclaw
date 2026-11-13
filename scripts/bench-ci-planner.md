@@ -39,15 +39,26 @@ explicit alternative workload; record that change when comparing reports.
 `--case all|main|cron|discord` and `--repetitions 1..5` support focused verification;
 all three cases and five repetitions are required for a fifteen-flow baseline.
 
-The workflow dispatch exposes the same selections as `workload_sha`, `case`, and
-`repetitions`. Defaults remain the frozen workload above, `all`, and `5`. The SHA
-must contain exactly 40 lowercase hexadecimal characters; refs, short SHAs and
-other repositories are not accepted. All inputs are validated before either
-checkout. Both checkouts must declare the same complete integrity-pinned pnpm
-12.15.0 version before either frozen install runs.
+The hosted workflow exposes `workload_sha`, `case`, and `repetitions`, but limits
+workloads to these reviewed canonical repository commits:
 
-For the first single-flow qualification, select a reviewed workload SHA, `main`,
-and `1` to exercise the main-planning admission. A successful single flow proves
+- Historical default: `79f5aeb133830a1db60b55cff3cf7a617086aa07`.
+- Reviewed landed workload: `ba284782cf1705d7e5f1f085b9cdefbb55932af6`.
+
+Defaults remain the historical workload, `all`, and `5`. Runtime validation rejects
+all other SHAs, including well-formed ones, before either checkout. Two mutually
+exclusive checkout steps use literal commit refs; the selected checkout identity
+is verified before installation. Adding a hosted workload requires a reviewed
+workflow change. The local CLI remains general and accepts `--workload-sha`.
+Both checkouts must declare the same complete integrity-pinned pnpm 12.15.0 version
+before either frozen install runs.
+
+The action-level cache switches remain off, but they do not revoke the runner's
+cache tokens. The fixed reviewed source choices restrict execution authority;
+input syntax checks alone do not establish that trust.
+
+For the first single-flow qualification, select the reviewed landed workload,
+`main`, and `1` to exercise the main-planning admission. A successful single flow proves
 that selected planning path works; it is not a fifteen-flow baseline or a repeatability result. The
 historical default main case can fail the frozen planner's job-cap admission;
 selecting a different workload or case does not change that planner policy.

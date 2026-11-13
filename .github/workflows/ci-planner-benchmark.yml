@@ -4,10 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       workload_sha:
-        description: Exact canonical repository workload commit (40 lowercase hex characters)
-        type: string
+        description: Reviewed canonical repository workload commit
+        type: choice
         required: true
         default: "79f5aeb133830a1db60b55cff3cf7a617086aa07"
+        options:
+          - "79f5aeb133830a1db60b55cff3cf7a617086aa07"
+          - "ba284782cf1705d7e5f1f085b9cdefbb55932af6"
       case:
         description: Planner case to measure
         type: choice
@@ -124,12 +127,23 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$WORKLOAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid workload SHA' >&2; exit 1; }
+          case "$WORKLOAD_SHA" in
+            79f5aeb133830a1db60b55cff3cf7a617086aa07)
+              WORKLOAD_SHA=79f5aeb133830a1db60b55cff3cf7a617086aa07
+              WORKLOAD=historical
+              ;;
+            ba284782cf1705d7e5f1f085b9cdefbb55932af6)
+              WORKLOAD_SHA=ba284782cf1705d7e5f1f085b9cdefbb55932af6
+              WORKLOAD=reviewed
+              ;;
+            *) echo 'Unreviewed workload SHA' >&2; exit 1 ;;
+          esac
           case "$BENCHMARK_CASE" in
             all|main|cron|discord) ;;
             *) echo 'Invalid planner case' >&2; exit 1 ;;
           esac
           [[ "$REPETITIONS" =~ ^[1-5]$ ]] || { echo 'Invalid repetition count' >&2; exit 1; }
-          printf 'workload_sha=%s\ncase=%s\nrepetitions=%s\n' "$WORKLOAD_SHA" "$BENCHMARK_CASE" "$REPETITIONS" >> "$GITHUB_OUTPUT"
+          printf 'workload=%s\nworkload_sha=%s\ncase=%s\nrepetitions=%s\n' "$WORKLOAD" "$WORKLOAD_SHA" "$BENCHMARK_CASE" "$REPETITIONS" >> "$GITHUB_OUTPUT"
 
       - name: Checkout measurement harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -140,11 +154,23 @@ jobs:
           persist-credentials: false
           submodules: false
 
-      - name: Checkout frozen planner workload
+      - name: Checkout historical planner workload
+        if: ${{ steps.selection.outputs.workload == 'historical' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: openclaw/openclaw
-          ref: ${{ steps.selection.outputs.workload_sha }}
+          ref: 79f5aeb133830a1db60b55cff3cf7a617086aa07
+          path: workload
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Checkout reviewed planner workload
+        if: ${{ steps.selection.outputs.workload == 'reviewed' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: ba284782cf1705d7e5f1f085b9cdefbb55932af6
           path: workload
           fetch-depth: 1
           persist-credentials: false
