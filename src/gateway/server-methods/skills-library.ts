@@ -24,7 +24,6 @@ import {
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { importSkillLibrary, uploadSkillLibrary } from "../../skills/library/import.js";
 import {
   assertPreparedSkillLibrarySelection,
   changeSkillLibrarySelection,
@@ -520,11 +519,19 @@ export const skillsLibraryHandlers: GatewayRequestHandlers = {
   "skills.library.import": libraryHandler(
     "skills.library.import",
     validateSkillsLibraryImportParams,
-    (authority, params) => importSkillLibrary(authority, params),
+    async (authority, params) => {
+      const { importSkillLibrary } = await import("../../skills/library/import.js");
+      authority.assertCurrent();
+      return importSkillLibrary(authority, params);
+    },
   ),
   "skills.library.upload": libraryHandler(
     "skills.library.upload",
     validateSkillsLibraryUploadParams,
-    (authority, params) => uploadSkillLibrary(authority, params),
+    async (authority, params) => {
+      const { uploadSkillLibrary } = await import("../../skills/library/import.js");
+      authority.assertCurrent();
+      return uploadSkillLibrary(authority, params);
+    },
   ),
 };

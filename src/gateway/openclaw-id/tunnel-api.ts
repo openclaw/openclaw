@@ -1,9 +1,9 @@
 // Membership API for owner devices that reach the claw over the tunnel (the
 // browser loader's Service Worker, which is not a Gateway WebSocket client).
-// Only requests relayed by the tunnel child reach it, so the caller is an
-// admitted device whose key W the QUIC handshake authenticated. Every write is
-// a signed statement the authority verifies itself (spec sections 6 and 7);
-// this layer only decodes JSON and maps refusals to HTTP.
+// Only requests relayed by the tunnel child reach it. The QUIC handshake
+// authenticates the device key W; this layer checks admission before dispatch,
+// decodes JSON and maps refusals to HTTP. Membership writes carry signed
+// statements the authority verifies itself (spec sections 6 and 7).
 //
 //   GET  /_openclaw-id/v1/membership  owner devices: seq, binding, active owner certs, members, invites
 //   POST /_openclaw-id/v1/statements  { statement }            MembershipChange, Revocation
@@ -21,6 +21,8 @@ const MAX_BODY_BYTES = 64 * 1024;
 
 /** What the tunnel API needs from the Gateway's OpenClaw ID owner. */
 export type TunnelApiOwner = {
+  /** Resolves current membership and applies the Gateway's role admission policy. */
+  isAdmitted: (peerKey: string) => Promise<boolean>;
   /** The membership view for an owner device's peer key; undefined for anyone else. */
   membership: (peerKey: string) => Promise<unknown>;
   /** Loads owner authority once; the returned check is synchronous and live. */
@@ -132,7 +134,7 @@ export function isTunnelApiRequest(req: IncomingMessage): boolean {
 }
 
 /**
- * Serves one tunnel API request from the admitted device `peerKey`. The caller
+ * Serves one tunnel API request from the authenticated device `peerKey`. The caller
  * has already checked the request came through the tunnel child.
  */
 export async function handleTunnelApiRequest(
@@ -141,6 +143,10 @@ export async function handleTunnelApiRequest(
   peerKey: string,
   owner: TunnelApiOwner,
 ): Promise<void> {
+  if (!(await owner.isAdmitted(peerKey))) {
+    sendError(res, 403, "not_admitted", "this device is not admitted");
+    return;
+  }
   const route = routeOf(req.url);
   if (!route) {
     sendError(res, 404, "not_found", "no such OpenClaw ID endpoint");
