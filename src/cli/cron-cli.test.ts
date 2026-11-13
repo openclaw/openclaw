@@ -220,11 +220,7 @@ it("waits for stored failed completion", async () => {
   mockQueuedRun({ status: "ok", completionStatus: "failed" });
   expect(await parseExit([...RUN_WAIT, "--wait-timeout", "1s", "--poll-interval", "1ms"])).toBe(1);
   expect(defaultRuntime.error).not.toHaveBeenCalled();
-  expect(rpcParams("cron.runs")).toEqual({
-    id: "job-1",
-    runId: "manual:job-1:123:0",
-    limit: 1,
-  });
+  expect(rpcParams("cron.runs")).toEqual({ id: "job-1", runId: "manual:job-1:123:0", limit: 1 });
   expect(JSON.parse(stdoutText())).toMatchObject({
     completed: true,
     status: "ok",
