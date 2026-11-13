@@ -1,8 +1,6 @@
-import {
-  isGatewayProtocolResponseError,
-  readClawHubRiskAcknowledgementRequiredError,
-} from "@openclaw/gateway-client/browser";
+import { isGatewayProtocolResponseError } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readClawHubRiskAcknowledgementRequiredError } from "../../../../packages/gateway-protocol/src/clawhub-trust-error-details.js";
 import {
   selectNextTemplateAgentId,
   templateAgentCopyNumber,

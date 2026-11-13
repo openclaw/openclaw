@@ -458,6 +458,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "src/cron/run-link.ts":
       // These modules already load on first visit; detail/editor views stay lazy.
       return "cron-page";
+    case "packages/gateway-protocol/src/clawhub-trust-error-details.ts":
     case "packages/gateway-protocol/src/capability-consent-error-details.ts":
     case "packages/gateway-protocol/src/install-policy-warning-error-details.ts":
     case "packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts":
