@@ -22,7 +22,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
 import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";
 import {
@@ -72,6 +72,10 @@ const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
   "iMessage persistent approval reaction state failed",
 );
 
+// The plugin child logger only writes to the log file; operators watching the
+// container console would never see a degraded tapback approval path.
+const approvalReactionLog = createSubsystemLogger("imessage/approval-reactions");
+
 function reportApprovalBindingCorrelationMismatch(binding: {
   approvalId: string;
   approvalKind: string;
@@ -80,12 +84,13 @@ function reportApprovalBindingCorrelationMismatch(binding: {
   // lines (or chunked delivery) would otherwise disable tapback approvals
   // with no operator signal.
   try {
-    getOptionalIMessageRuntime()
-      ?.logging.getChildLogger({ plugin: "imessage", feature: "approval-reaction-state" })
-      .warn("iMessage approval prompt text failed binding correlation; tapbacks disabled", {
+    approvalReactionLog.warn(
+      "iMessage approval prompt text failed binding correlation; tapbacks disabled",
+      {
         approvalId: binding.approvalId,
         approvalKind: binding.approvalKind,
-      });
+      },
+    );
   } catch {
     // Best effort only.
   }
@@ -499,13 +504,11 @@ export async function handleIMessageApprovalReaction(params: {
     },
     onError: (error) => {
       try {
-        getOptionalIMessageRuntime()
-          ?.logging.getChildLogger({ plugin: "imessage", feature: "approval-reactions" })
-          .warn("approval reaction failed", {
-            approvalId: target.approvalId,
-            senderId: event.actorHandle,
-            error: String(error),
-          });
+        approvalReactionLog.warn("approval reaction failed", {
+          approvalId: target.approvalId,
+          senderId: event.actorHandle,
+          error: String(error),
+        });
       } catch {
         // Optional logging must not mask a replayable resolver failure.
       }

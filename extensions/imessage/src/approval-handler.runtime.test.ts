@@ -4,6 +4,7 @@ import {
   buildTypedExecApprovalPendingReplyPayload,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApprovalPollOptions, mapSentPollOptionsToDecisions } from "./approval-polls.js";
 import type { IMessagePayload } from "./monitor/types.js";
@@ -922,6 +923,25 @@ describe("iMessage approval reactions", () => {
         delivery("42", prepared.text.replace("exec-shared-2", "exec-other"), "p:0/real-guid"),
       ]),
     ).toBe(false);
+  });
+
+  it("prints a binding correlation mismatch on the console", async () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "compact" });
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(prepare({ ...execPayload(), text: "no approval markers here" })).toBeNull();
+      expect(
+        await bindDeliveredPayload(requirePrepared(buildForwardedApproval("exec", "exec-c", "c")), [
+          delivery("p:0/guid", "no approval markers here"),
+        ]),
+      ).toBe(false);
+      expect(consoleWarn.mock.calls.flat().join("\n")).toMatch(
+        /failed binding correlation.*approvalId=/su,
+      );
+    } finally {
+      consoleWarn.mockRestore();
+      setLoggerOverride(null);
+    }
   });
 
   it("derives reaction conversation keys from every supported target form", () => {

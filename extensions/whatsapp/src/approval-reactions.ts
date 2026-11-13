@@ -20,6 +20,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
@@ -31,6 +32,10 @@ const PERSISTENT_NAMESPACE = "whatsapp.approval-reactions";
 const PERSISTENT_MAX_ENTRIES = 1000;
 const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
 const DELIVERY_BINDING_CHANNEL_DATA_KEY = "whatsappApprovalReactionBindingV1";
+
+// The plugin child logger only writes to the log file; operators watching the
+// container console would never see a degraded reaction approval path.
+const approvalReactionLog = createSubsystemLogger("whatsapp/approval-reactions");
 
 type WhatsAppApprovalReactionResolution = {
   approvalId: string;
@@ -70,12 +75,13 @@ function reportApprovalBindingCorrelationMismatch(binding: {
   // Fail closed but never silently: a pending command whose text collides with
   // the marker lines would otherwise disable reactions with no operator signal.
   try {
-    getOptionalWhatsAppRuntime()
-      ?.logging.getChildLogger({ plugin: "whatsapp", feature: "approval-reaction-state" })
-      .warn("WhatsApp approval prompt text failed binding correlation; reactions disabled", {
+    approvalReactionLog.warn(
+      "WhatsApp approval prompt text failed binding correlation; reactions disabled",
+      {
         approvalId: binding.approvalId,
         approvalKind: binding.approvalKind,
-      });
+      },
+    );
   } catch {
     // Best effort only.
   }
