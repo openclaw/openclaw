@@ -72,8 +72,9 @@ vi.mock("../../infra/update-candidate-canary.js", () => ({
 }));
 
 // Like the canary above, the activated-release boot is a process boundary.
-vi.mock("../../infra/update-activated-gateway-check.js", () => ({
-  checkActivatedGatewayStartup: async ({ result }: { result: unknown }) => result,
+vi.mock(import("../../infra/update-activated-gateway-check.js"), async (original) => ({
+  ...(await original()),
+  checkActivatedGatewayStartup: async ({ result }) => result,
 }));
 vi.mock("./update-command-plugin-preflight.js", () => ({
   preflightConfiguredNpmPluginTargets: mocks.pluginPreflight,

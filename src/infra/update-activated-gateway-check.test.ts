@@ -9,15 +9,20 @@ const mocks = vi.hoisted(() => ({
   stop: vi.fn(),
   ready: vi.fn(),
 }));
+// mock-isolation: the check must never read a real Gateway lock, bind a port or spawn a Gateway.
 vi.mock("./gateway-lock.js", () => ({ readActiveGatewayLockIdentity: mocks.owner }));
+// mock-isolation: entrypoint resolution reads the real install tree.
 vi.mock("../daemon/gateway-entrypoint.js", () => ({
   resolveGatewayInstallEntrypoint: mocks.entry,
 }));
+// mock-isolation: port probing binds real sockets.
 vi.mock("./ports-probe.js", () => ({ tryListenOnPort: mocks.port }));
+// mock-isolation: launching spawns a real Gateway process.
 vi.mock("./update-candidate-canary-process.js", () => ({
   launchCanary: mocks.launch,
   stopCanary: mocks.stop,
 }));
+// mock-isolation: readiness polls a real HTTP endpoint.
 vi.mock("./update-candidate-canary-readiness.js", () => ({
   observeUpdateCandidateStartup: () => ({ onLine: () => {}, milestones: new Map() }),
   waitForUpdateCandidateReadiness: mocks.ready,
@@ -58,7 +63,7 @@ it("keeps an activated release whose Gateway becomes ready", async () => {
   const result = await check();
   expect(result.status).toBe("ok");
   expect(result.steps.at(-1)).toMatchObject({ name: "activated-gateway-startup", exitCode: 0 });
-  expect(mocks.launch.mock.calls[0][0].env).toMatchObject({
+  expect(mocks.launch.mock.calls[0]?.[0].env).toMatchObject({
     OPENCLAW_SKIP_CHANNELS: "1",
     OPENCLAW_SKIP_CRON: "1",
   });
