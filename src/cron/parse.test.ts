@@ -7,6 +7,18 @@ describe("parseAbsoluteTimeMs", () => {
     it("rejects digit-only timestamps outside the Date range", () => {
       expect(parseAbsoluteTimeMs(String(Number.MAX_SAFE_INTEGER))).toBeNull();
     });
+
+    it("rejects digit-only timestamps past the schedulable epoch-ms range", () => {
+      // Compact calendar datetimes (yyyyMMddHHmmss) are also pure digits; in
+      // ms they land far beyond any schedulable date, so reject the value
+      // instead of reading it as a year-2286+ timestamp.
+      expect(parseAbsoluteTimeMs("20250101120000")).toBeNull();
+    });
+
+    it("accepts zero-padded epochs for valid dates", () => {
+      // The bound is on the parsed value, not the digit count.
+      expect(parseAbsoluteTimeMs("01798761600000")).toBe(1798761600000);
+    });
   });
 
   describe("whitespace handling", () => {

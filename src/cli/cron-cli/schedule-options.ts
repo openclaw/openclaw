@@ -275,7 +275,9 @@ function resolveDirectSchedule(
   if (options.at) {
     const atIso = parseAt(options.at, options.tz);
     if (!atIso) {
-      throw new CronCliError("Invalid --at. Use an ISO timestamp or a duration like 20m.");
+      throw new CronCliError(
+        `Invalid --at "${options.at}". Use an ISO timestamp or a duration like 20m.`,
+      );
     }
     return { kind: "at", at: atIso };
   }
