@@ -1006,12 +1006,7 @@ async function effectiveNpmPreparationAttempt(request, runId, runAttempt) {
 
 function assertNpmPreparationExecutionPreserved(request, runId, runAttempt, producer) {
   const sourceAttempt = Number(producer.runAttempt);
-  let sourceJobs;
-  try {
-    sourceJobs = artifactAttemptJobs(request, runId, sourceAttempt);
-  } catch {
-    throw new Error("Raw npm bundle requires its unique exact completed producer job.");
-  }
+  const sourceJobs = artifactAttemptJobs(request, runId, sourceAttempt);
   const sourceMatches = sourceJobs.filter(
     (job) => String(job.id) === producer.jobId && job.name === producer.jobName,
   );
