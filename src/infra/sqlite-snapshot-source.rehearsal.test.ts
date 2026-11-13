@@ -19,14 +19,27 @@ import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each(["drained", "journal", "unowned"])(
-  "prepares an in-place inspection only with drained maintenance custody (%s)",
+it.each(["drained", "wal", "wal-symlink", "journal", "journal-symlink", "unowned"])(
+  "prepares an in-place inspection only with maintenance custody (%s)",
   async (kind) => {
     const root = fs.realpathSync(dirs.make("sqlite-custodied-read-"));
     const file = path.join(root, "agent.sqlite");
     exec(file, "CREATE TABLE probe(value INTEGER); INSERT INTO probe VALUES (42)");
-    if (kind === "journal") {
+    if (kind.startsWith("wal")) {
+      const source = path.join(root, "wal-source.sqlite");
+      using db = openNodeSqliteDatabase(source);
+      db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;");
+      db.exec("CREATE TABLE probe(value INTEGER); INSERT INTO probe VALUES (42)");
+      for (const suffix of ["", "-wal", "-shm"]) {
+        fs.copyFileSync(source + suffix, file + suffix);
+      }
+    }
+    if (kind.startsWith("journal")) {
       fs.writeFileSync(`${file}-journal`, Buffer.alloc(512));
+    }
+    const requested = kind.endsWith("-symlink") ? path.join(root, "linked.sqlite") : file;
+    if (requested !== file) {
+      fs.symlinkSync(file, requested);
     }
     const before = fs.readFileSync(file);
     const entries = fs
@@ -36,10 +49,10 @@ it.each(["drained", "journal", "unowned"])(
     const inspect = () =>
       reads.withArtifactPreservingStateReads(
         async () => {
-          await prepareArtifactPreservingSqliteRead(file);
-          using db = openSqliteReadOnlyDatabase(file);
+          await prepareArtifactPreservingSqliteRead(requested);
+          using db = openSqliteReadOnlyDatabase(requested);
           expect(db.prepare("SELECT value FROM probe").get()).toEqual({ value: 42 });
-          expect(db.location() === file).toBe(kind === "drained");
+          expect(db.location() === file).toBe(kind === "drained" || kind.startsWith("wal"));
           expect(() => db.exec("UPDATE probe SET value = 99")).toThrow(/readonly/);
         },
         { agentDatabases: true },

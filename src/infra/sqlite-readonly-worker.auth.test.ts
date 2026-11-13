@@ -14,6 +14,7 @@ import {
   authProfileFileChanges,
 } from "../agents/auth-profiles/file-state.js";
 import { watchAuthProfileNativeCommits } from "../agents/auth-profiles/store-update-commit.js";
+import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
@@ -23,9 +24,11 @@ import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { SpawnBrokerError } from "../process/spawn-broker/protocol.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { revokeAgentDatabaseResources } from "../state/openclaw-agent-db-resources.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db-schema.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import * as directoryWatch from "./directory-watch-host.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
@@ -273,6 +276,58 @@ function read(
     signal,
   });
 }
+
+it.each([false, true])(
+  "reads custodied auth rows without bypassing journal recovery (%s)",
+  async (journal) => {
+    const { source, rows } = createAuthDatabase();
+    if (journal) {
+      fs.writeFileSync(`${source}-journal`, Buffer.alloc(512));
+    }
+    const requests: unknown[] = [];
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    vi.mocked(spawn).mockImplementation((...args) => {
+      const child = actual.spawn(...args);
+      const send = child.send.bind(child);
+      vi.spyOn(child, "send").mockImplementation((...message) => {
+        requests.push(message[0]);
+        return send(...message);
+      });
+      return child;
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.dirname(source) };
+    await withDoctorSqliteMaintenanceLock({
+      env,
+      operation: "synthetic stopped auth read",
+      run: async (authority) => {
+        const scope = createOpenClawDatabaseMaintenanceScope({
+          schemaMaintenance: true,
+          assertOwnerCurrent: () => authority.assertCurrent(),
+          assertDatabaseAccess: () => authority.assertCurrent(),
+        });
+        try {
+          expect(
+            await scope.run(() =>
+              withArtifactPreservingStateReads(() => read(source, "canonical", undefined, env), {
+                agentDatabases: true,
+              }),
+            ),
+          ).toEqual({ ...rows, cacheable: !journal });
+        } finally {
+          await scope.close();
+        }
+      },
+    });
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          artifactPreserving: journal ? true : undefined,
+          retainReader: false,
+        }),
+      }),
+    );
+  },
+);
 
 it("rejects stale auth identity before transferring credentials from a replaced database", async () => {
   const { source } = createAuthDatabase("original");

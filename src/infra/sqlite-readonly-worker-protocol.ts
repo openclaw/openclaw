@@ -71,7 +71,7 @@ export const SQLITE_SNAPSHOT_CAPACITY_PREFIX = "SQLite snapshot capacity unavail
 export type SqliteAuthProfileRows = { store: unknown; state: unknown; cacheable: boolean };
 export type SqliteAuthProfileReadOptions = {
   mode: "auth-profile-rows";
-  source: "canonical" | "snapshot";
+  source: "canonical" | "snapshot" | "custodied";
   expectedIdentity: string;
   artifactPreserving?: true;
   env: NodeJS.ProcessEnv;

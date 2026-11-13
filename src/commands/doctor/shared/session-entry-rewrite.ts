@@ -35,7 +35,6 @@ import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../../../infra/k
 import { isPostgresSqlConnection } from "../../../infra/sql-connection.js";
 import {
   prepareArtifactPreservingSqliteRead,
-  readCustodiedDrainedSqliteSource,
   startSqliteReadOnlyLocationAsync,
 } from "../../../infra/sqlite-snapshot-source.js";
 import {
@@ -53,7 +52,10 @@ import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
 } from "../../../state/openclaw-agent-db.js";
-import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-maintenance-context.js";
+import {
+  getOpenClawDatabaseMaintenanceScope,
+  readCustodiedSqliteSource,
+} from "../../../state/openclaw-state-maintenance-context.js";
 import { chunkItems } from "../../../utils/chunk-items.js";
 import {
   deliveryContextFromSession,
@@ -160,8 +162,8 @@ export async function scanDoctorSessionEntryRecords(
       return scan(databaseOptions, expectedIdentity);
     }
     assertSourceCurrent();
-    if (readCustodiedDrainedSqliteSource(scope.storePath)) {
-      // The artifact-preserving owner reads a drained, custodied source in place.
+    if (readCustodiedSqliteSource(scope.storePath)) {
+      // Maintenance custody permits a direct read, including committed WAL frames.
       const inPlace = withArtifactPreservingStateReads(
         () => scan(databaseOptions, expectedIdentity),
         { agentDatabases: true },

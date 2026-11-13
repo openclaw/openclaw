@@ -1,0 +1,124 @@
+// Synthetic update benchmark preload. No product hooks or operator-state access.
+const fs = require("node:fs");
+const path = require("node:path");
+const { Session } = require("node:inspector");
+const { syncBuiltinESMExports } = require("node:module");
+const { DatabaseSync } = require("node:sqlite");
+const { deserialize } = require("node:v8");
+const { threadId } = require("node:worker_threads");
+const directory = process.env.SCHEMA_CROSSING_CHILD_OBSERVATIONS;
+if (directory) {
+  const file = path.join(directory, `${process.pid}-${threadId}.jsonl`);
+  const log = (event) =>
+    fs.appendFileSync(
+      file,
+      JSON.stringify({ at: Date.now(), pid: process.pid, threadId, ...event }) + "\n",
+    );
+  let readBytes = 0;
+  const read = fs.readSync;
+  fs.readSync = function (...args) {
+    const bytes = Reflect.apply(read, this, args);
+    readBytes += bytes;
+    return bytes;
+  };
+  const sql = new Map();
+  if (process.env.SCHEMA_CROSSING_SQL_TIMINGS === "1") {
+    const prepare = DatabaseSync.prototype.prepare;
+    DatabaseSync.prototype.prepare = function (query) {
+      const statement = prepare.call(this, query);
+      const measure = (original) =>
+        new Proxy(original, {
+          apply(target, receiver, args) {
+            const start = performance.now();
+            try {
+              return Reflect.apply(target, receiver, args);
+            } finally {
+              const row = sql.get(query) ?? { calls: 0, ms: 0 };
+              row.calls++;
+              row.ms += performance.now() - start;
+              sql.set(query, row);
+            }
+          },
+        });
+      statement.get = measure(statement.get.bind(statement));
+      statement.all = measure(statement.all.bind(statement));
+      statement.run = measure(statement.run.bind(statement));
+      const iterate = statement.iterate.bind(statement);
+      statement.iterate = (...args) => {
+        const iterator = iterate(...args);
+        iterator.next = measure(iterator.next.bind(iterator));
+        return iterator;
+      };
+      return statement;
+    };
+  }
+  let active;
+  process.on("message", (message) => {
+    if (!message || !Array.isArray(message.args)) return;
+    active = {
+      id: message.id,
+      mode: message.args[0],
+      pathname: message.args[1],
+      cpu: process.cpuUsage(),
+      start: performance.now(),
+      read: readBytes,
+    };
+    const command = message.operation?.command;
+    log({
+      kind: "request",
+      ...active,
+      operation:
+        typeof command === "string" ? deserialize(Buffer.from(command, "base64")).type : undefined,
+      artifactPreserving: message.auth?.artifactPreserving ?? message.operation?.artifactPreserving,
+    });
+  });
+  if (process.send) {
+    const send = process.send;
+    process.send = function (message, ...args) {
+      if (active && message?.id === active.id) {
+        log({
+          kind: "reply",
+          id: active.id,
+          mode: active.mode,
+          ms: performance.now() - active.start,
+          cpu: process.cpuUsage(active.cpu),
+          readBytes: readBytes - active.read,
+          resultType: message.result?.type,
+          ok: message.result?.ok,
+        });
+        if (message.result?.type === "complete" || message.result?.ok !== undefined)
+          active = undefined;
+      }
+      return Reflect.apply(send, this, [message, ...args]);
+    };
+  }
+  const root =
+    threadId === 0 && process.argv.some((arg) => arg.endsWith("schema-crossing-measure.ts"));
+  let inspector;
+  if (!root && process.env.SCHEMA_CROSSING_CHILD_ALLOCATIONS === "1") {
+    inspector = new Session();
+    inspector.connect();
+    inspector.post("HeapProfiler.startSampling", {
+      samplingInterval: 131072,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
+    });
+  }
+  syncBuiltinESMExports();
+  log({ kind: "start", argv: process.argv });
+  process.on("exit", () => {
+    let allocatedBytes;
+    inspector?.post("HeapProfiler.stopSampling", (error, result) => {
+      if (error) throw error;
+      allocatedBytes = result.profile.samples.reduce((sum, sample) => sum + sample.size, 0);
+    });
+    inspector?.disconnect();
+    log({
+      kind: "exit",
+      cpu: process.cpuUsage(),
+      readBytes,
+      allocatedBytes,
+      sql: [...sql].sort((a, b) => b[1].ms - a[1].ms).slice(0, 30),
+    });
+  });
+}

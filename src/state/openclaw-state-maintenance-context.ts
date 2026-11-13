@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import fs from "node:fs";
+import fs, { type BigIntStats } from "node:fs";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -74,6 +74,17 @@ export function maintenanceOwnerHasSourceCustody(
   }
   scope.assertReadAdmission();
   return !allowsMaintenanceLiveAuthorityReads(scope, pathname);
+}
+
+/** Read-only WAL views are safe under custody; rollback journals still need private recovery. */
+export function readCustodiedSqliteSource(pathname: string): BigIntStats | undefined {
+  if (
+    !maintenanceOwnerHasSourceCustody(getOpenClawDatabaseMaintenanceScope(), pathname) ||
+    fs.existsSync(`${resolveIdentityPathViaExistingAncestorSync(pathname)}-journal`)
+  ) {
+    return undefined;
+  }
+  return fs.statSync(pathname, { bigint: true });
 }
 
 const MAINTENANCE_IN_PROCESS_COPY_MAX_BYTES = 64 * 1024 * 1024;

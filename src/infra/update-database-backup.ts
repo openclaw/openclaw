@@ -46,7 +46,10 @@ import {
   readUpdateStateDatabaseSizes,
   readUpdateStateDatabaseSizesInProcess,
 } from "./update-candidate-state.sizes.js";
-import { inspectRestorableDatabaseFiles } from "./update-database-backup-source.js";
+import {
+  inspectRestorableDatabaseFiles,
+  prepareRestorableDatabaseFiles,
+} from "./update-database-backup-source.js";
 import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
 import type { SqliteDatabaseGenerationReceipt } from "./update-database-generations.js";
 import {
@@ -208,7 +211,7 @@ async function canonicalDatabaseInventory(
   };
 }
 
-/** Read-only capture; the caller separately decides whether automatic restoration is safe. */
+/** No logical writes; the caller separately decides whether automatic restoration is safe. */
 export async function createUpdateDatabaseBackupInProcess(
   input: BackupInput & {
     stagingRoot: string;
@@ -236,7 +239,10 @@ export async function createUpdateDatabaseBackupInProcess(
       input.excludedDatabasePaths,
     );
   const inventory = await inventoryFor(inspectionPlan);
-  const identities = await inspectRestorableDatabaseFiles(inventory.present);
+  const { identities, checkpointed } = await prepareRestorableDatabaseFiles(
+    inventory.present,
+    input.stopped,
+  );
   const { warnings } = await checkUpdateDatabaseBackupSpace(
     directory,
     await measureUpdateStateFiles(inventory.present),
@@ -371,6 +377,9 @@ export async function createUpdateDatabaseBackupInProcess(
                 sourcePath,
                 targetPath: snapshotPath,
                 sourceIdentity: identities.get(sourcePath)!,
+                integrity: checkpointed.has(sourcePath)
+                  ? { check: input.integrityCheck ?? "full", ftsSchemas: AGENT_FTS_SCHEMAS }
+                  : undefined,
               })
             : await createVerifiedSqliteSnapshot({
                 sourcePath,

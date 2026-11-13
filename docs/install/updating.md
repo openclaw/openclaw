@@ -54,9 +54,9 @@ backup.
 ## Update implementation contract
 
 Offline Doctor prepares no extra inspection image when its existing maintenance
-owner proves custody and the SQLite family is drained. It uses the same immutable
-read-only source reader; nonempty WALs, journals, and unowned sources retain private
-snapshots. Stopped-update backup inventory verification reads registrations from
+owner proves custody and no rollback journal needs recovery. Drained SQLite
+families use immutable reads; committed WAL frames use a direct read-only SQLite
+view. Journals and unowned sources retain private snapshots. Stopped-update backup inventory verification reads registrations from
 the completed backup image while retaining filesystem inventory and source-change
 checks. The candidate must contain these changes; backup publication, integrity
 checks, migrations, and rollback rules are unchanged.
@@ -473,10 +473,13 @@ stopped backup and identify the changed file. This repair must
 be present in the runtime performing the snapshot, including the candidate worker
 when the installed updater delegates capture to it.
 
+Under the native updater's stopped-writer handoff, backup checkpoints committed WAL
+frames once before recording source identities and taking the recovery image. The
+same integrity and foreign-key checks run on that image without another copy.
 For checkpointed databases under stopped-update custody, backup identifies the
 database engine from the retained backup image instead of acquiring a second
-whole-store image for classification. WAL and rollback-journal captures retain
-their pre-capture engine inspection. Backup digests, PostgreSQL exports, and
+whole-store image for classification. Rollback-journal captures retain
+their private recovery and pre-capture engine inspection. Backup digests, PostgreSQL exports, and
 source-change refusal still apply. The candidate backup worker must contain this change.
 
 Candidate Doctor also accepts an empty WAL index appearing or disappearing
