@@ -8,8 +8,9 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import { isReservedSystemAgentId, SYSTEM_AGENT_ID } from "../system-agent/agent-id.js";
 import {
   getPreparedSharedAuthStoreOwnership,
   prepareSharedAuthStoreOwnership,
@@ -299,6 +300,46 @@ export function ownerKey(input: PreparedModelRuntimeInput): string {
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     runtimePluginSelections: input.runtimePluginSelections,
     config: input.readOnly ? modelRuntimeConfigFingerprint(input.config) : undefined,
+  });
+}
+
+/**
+ * Catalog-source identity of a request against its configured owner. Setup's isolated read-only
+ * view differs from the owner only by the reserved execution agent and the absent binding grant;
+ * it may read the owner's passive catalog, never borrow its execution identity or authority.
+ */
+export function resolveCatalogSourceKey(
+  request: PreparedModelRuntimeInput,
+  configured: PreparedModelRuntimeInput,
+): string {
+  let projected = request;
+  if (
+    request.readOnly === true &&
+    request.agentId !== undefined &&
+    normalizeAgentId(request.agentId) === SYSTEM_AGENT_ID &&
+    request.allowGatewaySubagentBinding !== true
+  ) {
+    const { entries: { [SYSTEM_AGENT_ID]: _setup, ...entries } = {}, ...agents } =
+      request.config.agents ?? {};
+    const config = {
+      ...request.config,
+      agents: { ...agents, ...(Object.keys(entries).length ? { entries } : {}) },
+    };
+    if (preparedModelRuntimeConfigsMatch(config, configured.config)) {
+      projected = {
+        ...request,
+        agentId: configured.agentId,
+        readOnly: configured.readOnly,
+        allowGatewaySubagentBinding: configured.allowGatewaySubagentBinding,
+        config: configured.config,
+      };
+    }
+  }
+  return ownerKey({
+    ...projected,
+    loadRuntimePlugins: false,
+    runtimePluginPurpose: undefined,
+    runtimePluginSelections: undefined,
   });
 }
 

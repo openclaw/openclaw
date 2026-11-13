@@ -12,12 +12,16 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
+import { publishConfiguredModelRuntimeSnapshots } from "../gateway/server-startup-model-runtime.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import { SYSTEM_AGENT_ID } from "../system-agent/agent-id.js";
+import { resolveSystemAgentConfiguredRouteFromConfig } from "../system-agent/inference-route.js";
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
 import {
   scopePreparedModelRuntimeLease,
   withPreparedModelRuntimePluginGenerationScope,
 } from "./prepared-model-runtime-generation-scope.js";
+import { readAdmittedPublishedModelCatalog } from "./prepared-model-runtime.capture.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
@@ -32,6 +36,7 @@ import {
   registerPreparedModelRuntimePublicationListener,
 } from "./prepared-model-runtime.js";
 import { withPreparedModelRuntimeReadBatch } from "./prepared-model-runtime.owner.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
   const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
@@ -754,5 +759,85 @@ describe("prepared model runtime snapshots", () => {
       agentDir,
       expect.objectContaining({ workspaceDir: "/tmp/explicit-workspace" }),
     );
+  });
+
+  describe("setup read-only catalog capture", () => {
+    const published = { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" };
+    type SetupRoute = NonNullable<
+      Awaited<ReturnType<typeof resolveSystemAgentConfiguredRouteFromConfig>>
+    >;
+
+    async function startGateway(binding = true) {
+      const config = gatewayConfig();
+      // Only the Gateway publication discovers the row; isolated builds find nothing of their own.
+      let gatewayPublishing = true;
+      mocks.resolveStaticCatalogModel.mockImplementation(({ provider, modelId }) =>
+        gatewayPublishing && provider === published.provider && modelId === published.id
+          ? makeProviderModelFixture({
+              ...published,
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+            })
+          : undefined,
+      );
+      mocks.configuredAgentIds = ["default"];
+      mocks.resolveNativeModelPrimary.mockReturnValue("openai/gpt-5.5");
+      if (binding) {
+        await publishConfiguredModelRuntimeSnapshots({ cfg: config });
+      } else {
+        await refreshPreparedModelRuntimeSnapshots(config, {
+          gatewayLifecycle: true,
+          catalogMode: "static",
+        });
+      }
+      gatewayPublishing = false;
+      const route = (await resolveSystemAgentConfiguredRouteFromConfig(config, "default"))!;
+      return { config, route };
+    }
+
+    const setupInput = (
+      route: SetupRoute,
+      overrides: Partial<RuntimeInput> = {},
+    ): RuntimeInput => ({
+      config: route.runConfig,
+      agentId: SYSTEM_AGENT_ID,
+      agentDir: route.agentDir,
+      workspaceDir: "/tmp/setup-probe-workspace",
+      ...overrides,
+    });
+    const catalogIds = async (input: RuntimeInput) => {
+      await using lease = await acquireReadOnlyPreparedModelRuntime(input, {
+        catalogMode: "static",
+      });
+      return readAdmittedPublishedModelCatalog(lease.snapshot)?.entries.map(({ id }) => id);
+    };
+
+    it("captures the configured agent's published catalog for the exact setup projection", async () => {
+      const { route } = await startGateway();
+      expect(await catalogIds(setupInput(route))).toEqual([published.id]);
+    });
+
+    it("keeps the published catalog out of altered projections and other identities", async () => {
+      const { route } = await startGateway();
+      const altered = structuredClone(route.runConfig);
+      altered.agents!.defaults!.model = "anthropic/claude-opus-4-6";
+      const otherDir = fixture.state.agentDir("other-setup-agent");
+      for (const input of [
+        setupInput(route, { config: altered }),
+        setupInput(route, { agentId: "other" }),
+        setupInput(route, { agentDir: otherDir, inheritedAuthDir: otherDir }),
+        setupInput(route, { skipCredentials: true }),
+      ]) {
+        expect(await catalogIds(input)).toEqual([]);
+      }
+    });
+
+    it("does not let a read-only request borrow a catalog it could not publish itself", async () => {
+      const { route } = await startGateway(false);
+      expect(await catalogIds(setupInput(route))).toEqual([published.id]);
+      expect(await catalogIds(setupInput(route, { allowGatewaySubagentBinding: true }))).toEqual(
+        [],
+      );
+    });
   });
 });

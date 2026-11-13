@@ -24,6 +24,7 @@ import {
   preparedModelRuntimeConfigsMatch,
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
+  resolveCatalogSourceKey,
   resolveConfiguredOwner,
   resolveInventoryInput,
   type PreparedModelRuntimeInput,
@@ -422,18 +423,8 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
     // Execution purpose isolates plugins, not the configured agent's published inventory.
     const catalogOwner =
       configuredOwner &&
-      ownerKey({
-        ...configuredOwner.input,
-        loadRuntimePlugins: false,
-        runtimePluginPurpose: undefined,
-        runtimePluginSelections: undefined,
-      }) ===
-        ownerKey({
-          ...inventoryInput,
-          loadRuntimePlugins: false,
-          runtimePluginPurpose: undefined,
-          runtimePluginSelections: undefined,
-        })
+      resolveCatalogSourceKey(inventoryInput, configuredOwner.input) ===
+        resolveCatalogSourceKey(configuredOwner.input, configuredOwner.input)
         ? configuredOwner
         : owner;
     snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);
