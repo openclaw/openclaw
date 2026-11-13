@@ -39,26 +39,21 @@ function withoutCacheMarkers(value: unknown): unknown {
 }
 
 function readWireRequest(api: Api, body: Record<string, unknown>): WireRequest {
-  const all = (body.messages as unknown[]) ?? [];
-  const leading = api === "openai-completions" ? all.findIndex((m) => !isSystemMessage(m)) : 0;
-  const systemMessages = api === "openai-completions" ? all.slice(0, Math.max(0, leading)) : [];
-  const messages = (api === "openai-completions" ? all.slice(Math.max(0, leading)) : all).map(
-    (message) => JSON.stringify(withoutCacheMarkers(message)),
-  );
-  const system = JSON.stringify(
-    withoutCacheMarkers(api === "openai-completions" ? systemMessages : body.system),
-  );
+  const all = (body.messages as Array<{ role?: unknown }> | undefined) ?? [];
+  // Chat Completions sends the system prompt as leading system messages.
+  const lead =
+    api === "openai-completions"
+      ? all.findIndex(({ role }) => role !== "system" && role !== "developer")
+      : 0;
+  const json = (value: unknown) => JSON.stringify(withoutCacheMarkers(value));
+  const system = json(api === "openai-completions" ? all.slice(0, lead) : body.system);
+  const messages = all.slice(lead).map(json);
   return {
     system,
-    tools: JSON.stringify(withoutCacheMarkers(body.tools ?? [])),
+    tools: json(body.tools ?? []),
     messages,
     text: `${system}\n${messages.join("\n")}`,
   };
-}
-
-function isSystemMessage(message: unknown): boolean {
-  const role = (message as { role?: unknown }).role;
-  return role === "system" || role === "developer";
 }
 
 /** Messages after the newest assistant reply: the current input, carriers and tool results. */
@@ -241,24 +236,10 @@ export function usePrefixStabilityJourney() {
         body += chunk;
       });
       request.on("end", () => {
-        let reply: Reply;
-        let wire: WireRequest;
-        try {
-          wire = readWireRequest(api, JSON.parse(body) as Record<string, unknown>);
-          reply = script(wire);
-        } catch (error) {
-          seen.push(`script error: ${String(error)}`);
-          response.writeHead(500).end();
-          return;
-        }
-        const session = /session=(\S+)/.exec(wire.system)?.[1] ?? "?";
-        void fs.appendFile(
-          `/tmp/prefix-stability-${api}.log`,
-          `${seen.length} ${session} last=${lastMessage(wire).slice(-400)} -> ${JSON.stringify(reply)}\n`,
-        );
-        seen.push(
-          `${session} tools=${wire.tools.length} last=${lastMessage(wire).slice(-300)} -> ${JSON.stringify(reply)}`,
-        );
+        const wire = readWireRequest(api, JSON.parse(body) as Record<string, unknown>);
+        const reply = script(wire);
+        const session = /session=(\S+)/.exec(wire.text)?.[1] ?? "?";
+        seen.push(`${session} last=${lastMessage(wire).slice(-300)} -> ${JSON.stringify(reply)}`);
         writeReply(api, response, reply, ++ordinal);
       });
     });

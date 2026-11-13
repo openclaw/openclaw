@@ -9,6 +9,7 @@ import * as promptCacheFacts from "./prompt-cache-facts.js";
 import {
   collectPromptCacheTools,
   completePromptCacheObservation,
+  declarePromptSystemPromptRebuild,
   recordAggregateTruncation,
 } from "./prompt-cache-observability.js";
 import {
@@ -452,6 +453,19 @@ describe("prompt cache observability", () => {
       previousCacheRead: null,
       changes: null,
     });
+  });
+
+  it("enforces only the immediate prefix change after an unmeasured rebuild", () => {
+    vi.stubEnv("OPENCLAW_PROMPT_CACHE_ASSERT", "1");
+    const identity = { sessionId: scopedKey("rebuild-unmeasured") };
+    const begin = (systemPrompt: string) =>
+      beginAnthropicObservation({ ...identity, systemPrompt });
+    begin("prompt A");
+    declarePromptSystemPromptRebuild(identity);
+    begin("prompt B");
+    completePromptCacheObservation(identity);
+    expect(() => begin("prompt B")).not.toThrow();
+    expect(() => begin("prompt C")).toThrow("systemPrompt(");
   });
 
   it.each([

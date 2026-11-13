@@ -638,8 +638,8 @@ OpenClaw also checks that each converted request history extends the previous re
 
 ## Session prefix stability
 
-Every session pins its system prompt and tool definitions when it starts, on
-every provider route and runtime. Each later request in the session extends the
+Every embedded Gateway session pins its system prompt and tool definitions when
+it starts, on every provider route. Each later request in the session extends the
 previous one byte for byte: system prompt, tools, and every earlier message stay
 unchanged, and earlier runtime-context carriers stay in history.
 
@@ -654,13 +654,23 @@ The session prompt rebuilds only at these points:
 
 - A new session: the first request, `/new`, or `/reset`.
 - An explicit compaction (`/compact` or automatic compaction).
-- A model or provider switch, including a change of API, base URL, or the
+- A model or provider switch, including a change of API, base URL, agent
+  harness, tool surface (direct tools, tool search, or Code Mode), or the
   session's selected personal profile.
 
 These are also the operator refresh points: use `/compact` or `/new` to make the
 model see a fully re-rendered prompt.
 
-Outside these points, a changed prefix is a bug. Tests fail on it
+Known exceptions:
+
+- Remote worker turns still render the system prompt on each turn.
+- A tool that the session has not sent before extends the tool pin once.
+- Routes that merge consecutive user turns (strict Chat Completions
+  compatibility, Google, Bedrock) can rewrite the last message once. This
+  happens when a turn with a prompt update ends without a stored assistant
+  reply, so the next input merges into that update.
+
+Outside these points and exceptions, a changed prefix is a bug. Tests fail on it
 (`OPENCLAW_PROMPT_CACHE_ASSERT=1` is the test default), and the Gateway logs one
 `[prompt-cache] prefix changed within session outside a rebuild point` warning per
 session and changed component (`systemPrompt`, `systemPromptSuffix`, `tools`, or

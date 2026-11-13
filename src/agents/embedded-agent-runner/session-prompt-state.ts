@@ -478,7 +478,8 @@ function promptDelta(previous: string, current: string): string[] {
  * - `new`: the session's first request, or `/new` and `/reset` (a new session);
  * - `history`: an explicit compaction or a transcript reset;
  * - `model-change` and `route:*`: a model or provider switch, including its API, base
- *   URL and system-message capability, or a change of the session's selected person.
+ *   URL, system-message capability, harness or tool surface, or a change of the
+ *   session's selected person.
  * The operator refresh is one of these: `/compact`, `/new` or a model switch.
  */
 export function prepareSessionSystemPrompt(params: {

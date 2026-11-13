@@ -396,19 +396,22 @@ export function beginPromptCacheObservation(
       }
     }
   }
+  // Enforcement compares only this request with the previous one; carried changes stay
+  // attribution evidence for a later measured cache drop.
+  const immediate = (previous && diffSnapshots(previous.snapshot, snapshot)) || [];
   const changes = previous
     ? [
         ...(previous.unmeasuredChanges ?? []),
         ...(previous.pendingChanges?.filter(
           (change) => change.code === "aggregateToolResultTruncation",
         ) ?? []),
-        ...(diffSnapshots(previous.snapshot, snapshot) ?? []),
+        ...immediate,
       ]
     : [];
   for (const code of previous?.declaredRewrites ?? []) {
     changes.push({ code, detail: `${code} changed provider history` });
   }
-  const restarted = changes.some(
+  const restarted = immediate.some(
     ({ code }) => code === "model" || code === "transport" || code === "cacheRetention",
   );
   const divergence = previous
@@ -449,7 +452,7 @@ export function beginPromptCacheObservation(
   }
   const prefixChanges = restarted
     ? []
-    : changes.filter(({ code }) =>
+    : immediate.filter(({ code }) =>
         code === "tools"
           ? !previous?.toolPinChanged
           : (code === "systemPrompt" || code === "systemPromptSuffix") &&
