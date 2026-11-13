@@ -88,13 +88,15 @@ export function startGatewayPageActivation(
         }
         if (
           reachable &&
-          (failedProbes > 0 || gateway.snapshot.reconnectAt === undefined) &&
+          (failedProbes > 0 ||
+            (client.needsWakeReconnect && gateway.snapshot.reconnectAt === undefined)) &&
           !controller.signal.aborted &&
           shouldProbe() &&
           gateway.snapshot.client === client &&
           client.needsReachabilityReconnect
         ) {
-          // A stale opening can recover; only restored reachability may cut short backoff.
+          // Healthy HTTP does not rule out an opening awaiting browser proxy authentication.
+          // Only restored reachability may replace that opening or cut short backoff.
           failedProbes = 0;
           gateway.connect();
         }
