@@ -4,7 +4,8 @@ import { it } from "vitest";
 import { usePrefixRandomizedJourney } from "./prompt-cache-prefix-randomized.test-support.js";
 
 const runJourney = usePrefixRandomizedJourney();
-const SEEDS = (process.env.OPENCLAW_PREFIX_RANDOM_SEEDS ?? "1,2").split(",").map(Number);
+// One journey per process: the in-process Gateway keeps module state between journeys.
+const SEEDS = (process.env.OPENCLAW_PREFIX_RANDOM_SEEDS ?? "1").split(",").map(Number);
 
 for (const seed of SEEDS) {
   it(`keeps the session prefix append-only for journey seed ${seed}`, { timeout: 600_000 }, () =>
