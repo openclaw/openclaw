@@ -227,6 +227,9 @@ public final class OpenClawChatViewModel {
     /// Guard the cache pre-paint: once a live response applied (even an empty
     /// one), a slow cache read must never paint stale rows over it.
     var hasAppliedLiveHistory = false
+    /// Canonical identity reported by accepted history, not the displayed alias. Display reuse only.
+    @ObservationIgnored
+    var transcriptPresentationTarget: OpenClawChatSessionTarget?
     var hasAppliedLiveSessions = false
     @ObservationIgnored
     var unreadPatchGuard = ChatSessionUnreadPatchGuard()
@@ -731,6 +734,9 @@ public final class OpenClawChatViewModel {
                 activeAgentId: self.explicitSessionAgentID ??
                     OpenClawChatSessionKey.agentID(from: self.sessionKey) ?? nextAgentId)
         }
+        let preservesTranscript = self.canRetainTranscriptPresentation(
+            sessionKey: self.sessionKey, agentID: self.explicitSessionAgentID ?? nextAgentId,
+            routingContract: nextContract)
         self.activeAgentId = nextAgentId
         self.sessionRoutingContract = nextContract
         self.syncComposerDraftKey()
@@ -746,7 +752,7 @@ public final class OpenClawChatViewModel {
         // Restart when this key depends on a changed routing value so cleared
         // state cannot remain stuck or cross session owners.
         advanceSessionGeneration()
-        clearSessionOwnedState()
+        clearSessionOwnedState(preservingTranscriptPresentation: preservesTranscript)
         startBootstrap()
     }
 
@@ -1222,9 +1228,12 @@ extension OpenClawChatViewModel {
             return
         }
         self.deferredExternalSessionKey = nil
+        let preservesTranscript = self.canRetainTranscriptPresentation(
+            sessionKey: next, agentID: nextAgentID ?? encodedAgentID ?? self.activeAgentId,
+            routingContract: self.sessionRoutingContract)
         self.prepareComposerForSessionSwitch(to: next, agentID: nextAgentID)
         self.advanceSessionGeneration()
-        self.clearSessionOwnedState()
+        self.clearSessionOwnedState(preservingTranscriptPresentation: preservesTranscript)
         if self.currentSessionSnapshot().deliveryAgentID != (nextAgentID ?? encodedAgentID ?? self.activeAgentId) {
             if self.sidebarData == nil { self.sessions = [] }
             self.hasAppliedLiveSessions = false
@@ -1275,7 +1284,9 @@ extension OpenClawChatViewModel {
     }
 
     /// Clears state owned by the current session/agent before a new identity can consume events.
-    func clearSessionOwnedState() {
+    func clearSessionOwnedState(preservingTranscriptPresentation: Bool = false) {
+        let retained = preservingTranscriptPresentation ? self.retainedTranscriptPresentation : []
+        if !preservingTranscriptPresentation { self.transcriptPresentationTarget = nil }
         self.historyDeltaMessageIDs = []
         self.historyRouteLocalUserEchoIDs = []
         self.historyRequiresCanonicalReplacement = false
@@ -1286,9 +1297,9 @@ extension OpenClawChatViewModel {
         self.invalidateModelChoices()
         self.modelSelectionPolicy = nil
         self.modelCatalogMessage = nil
-        replaceMessages([])
         self.narration = ChatNarration()
-        self.isShowingCachedTranscript = false
+        replaceMessages(retained)
+        self.isShowingCachedTranscript = !retained.isEmpty
         self.hasAppliedLiveHistory = false
         self.retainedActiveSession = nil
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()

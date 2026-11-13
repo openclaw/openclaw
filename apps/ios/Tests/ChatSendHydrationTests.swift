@@ -23,9 +23,37 @@ private actor ChatSendHydrationGateway {
     private var runCompleted = false
     private var heldRunWaits: [(GatewayTestWebSocketTask, String)] = []
     private var runWaitEntered: CheckedContinuation<Void, Never>?
+    private let initialHistory: String?
+    private let reportsHistoryIdentity: Bool
+    private var holdNextHistory = false
+    private var heldHistory: (GatewayTestWebSocketTask, String, [String: Any])?
+    private var historyEntered: CheckedContinuation<Void, Never>?
 
-    init(acknowledgesStartedRun: Bool = false) {
+    init(
+        acknowledgesStartedRun: Bool = false,
+        initialHistory: String? = nil,
+        reportsHistoryIdentity: Bool = true)
+    {
         self.acknowledgesStartedRun = acknowledgesStartedRun
+        self.initialHistory = initialHistory
+        self.reportsHistoryIdentity = reportsHistoryIdentity
+    }
+
+    func armHistory() {
+        self.holdNextHistory = true
+    }
+
+    func waitForHeldHistory() async {
+        if self.heldHistory != nil { return }
+        await withCheckedContinuation { self.historyEntered = $0 }
+    }
+
+    func releaseHistory() throws {
+        guard let (socket, id, held) = self.heldHistory else { return }
+        self.heldHistory = nil
+        var payload = held
+        payload["messages"] = []
+        try self.respond(socket: socket, id: id, payload: payload)
     }
 
     func armHealth() {
@@ -90,11 +118,26 @@ private actor ChatSendHydrationGateway {
                 "sessionId": "readiness-session",
                 "messages": self.historyMessages(sessionKey: Self.sessionKey(params)),
             ]
+            if self.reportsHistoryIdentity {
+                payload["sessionInfo"] = [
+                    "key": Self.sessionKey(params),
+                    "agentId": OpenClawChatSessionKey.agentID(from: Self.sessionKey(params)) ?? "main",
+                ]
+            }
             if self.acknowledgesStartedRun, let message = self.messages.last {
-                payload["sessionInfo"] = ["hasActiveRun": !self.runCompleted]
+                var info = payload["sessionInfo"] as? [String: Any] ?? [:]
+                info["hasActiveRun"] = !self.runCompleted
+                payload["sessionInfo"] = info
                 if !self.runCompleted {
                     payload["inFlightRun"] = ["runId": message.runID, "text": ""]
                 }
+            }
+            if self.holdNextHistory {
+                self.holdNextHistory = false
+                self.heldHistory = (socket, id, payload)
+                self.historyEntered?.resume()
+                self.historyEntered = nil
+                return
             }
         case "chat.send":
             let text = try XCTUnwrap(params["message"] as? String)
@@ -115,6 +158,10 @@ private actor ChatSendHydrationGateway {
             payload = ["sessions": []]
         case "models.list":
             payload = ["models": []]
+        case "config.get":
+            payload = ["config": ["session": ["scope": "per-sender", "mainKey": "main"]]]
+        case "agents.list":
+            payload = ["scope": "per-sender", "mainKey": "main", "defaultId": "main", "agents": []]
         case "question.list":
             payload = ["questions": []]
         default:
@@ -136,6 +183,9 @@ private actor ChatSendHydrationGateway {
 
     private func historyMessages(sessionKey: String) -> [[String: Any]] {
         guard !self.acknowledgesStartedRun || self.runCompleted else { return [] }
+        if let initialHistory, sessionKey == "agent:main:main" {
+            return [["role": "assistant", "content": [["type": "text", "text": initialHistory]]]]
+        }
         return self.messages.filter { $0.sessionKey == sessionKey }.flatMap { message in
             let user: [String: Any] = [
                 "id": message.id,
@@ -157,6 +207,133 @@ private actor ChatSendHydrationGateway {
 
 @MainActor
 final class ChatSendHydrationTests: XCTestCase {
+    private enum TranscriptTransition: CaseIterable {
+        case hydration, differentAgent, differentAccount, differentGateway
+        case unknownHistory, unresolvedRouting, rapidSwitch, pendingAttachment
+    }
+
+    func testHydrationRetainsOnlyProvenConversationWhileReplacementHistoryWaits() async throws {
+        for transition in TranscriptTransition.allCases {
+            try await self.checkTranscriptHandoff(transition)
+        }
+    }
+
+    private func checkTranscriptHandoff(_ transition: TranscriptTransition) async throws {
+        let appModel = NodeAppModel()
+        let gateway = ChatSendHydrationGateway(
+            initialHistory: "Previously accepted answer", reportsHistoryIdentity: transition != .unknownHistory)
+        let socket = GatewayTestWebSocketTask(sendHook: { socket, message, _ in
+            try await gateway.receive(socket: socket, message: message)
+        })
+        let session = GatewayTestWebSocketSession(taskFactory: { socket })
+        let stableID = "transcript-hydration-\(UUID().uuidString)"
+        let url = try XCTUnwrap(URL(string: "ws://transcript-hydration.invalid"))
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.allowStoredDeviceAuth = false
+        options.deviceAuthGatewayID = stableID
+        func config(stableID: String, token: String = "synthetic-account") -> GatewayConnectConfig {
+            GatewayConnectConfig(
+                url: url, stableID: stableID, tls: nil, token: token,
+                bootstrapToken: nil, password: nil, nodeOptions: options)
+        }
+        appModel.activeGatewayConnectConfig = config(stableID: stableID)
+        let owner = appModel.chatPresentation
+        let (cacheGate, releaseCache) = AsyncStream<Void>.makeStream()
+        defer {
+            releaseCache.finish()
+            owner.viewModel?.detachTransport()
+            appModel.voiceWake.stop()
+        }
+        do {
+            try await appModel.operatorSession.connect(
+                url: url, credentials: .init(), connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: session),
+                onConnected: {}, onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            owner.sync(appModel: appModel)
+            let original = try XCTUnwrap(owner.viewModel)
+            // Hold write-through, not history: this handoff cannot be rescued by disk prepaint.
+            original.pendingCacheWriteTask = Task { for await _ in cacheGate { break } }
+            await original.bootstrapTask?.value
+            let store = try XCTUnwrap(original.transcriptCache as? OpenClawChatSQLiteTranscriptCache)
+            let cached = await store.loadTranscript(sessionKey: "main")
+            XCTAssertTrue(cached.isEmpty)
+            XCTAssertEqual(original.messages.flatMap { $0.content.compactMap(\.text) }, ["Previously accepted answer"])
+            let rows = original.messages.map(\.id)
+            let presentationID = owner.presentationID
+            let editor = owner.composerModelResolver()
+            original.input = "Still typing"
+            if transition == .pendingAttachment {
+                original.attachments.append(.init(
+                    url: nil, data: Data([1]), fileName: "synthetic.png", mimeType: "image/png", preview: nil))
+            }
+            if transition == .unresolvedRouting {
+                appModel.gatewayDefaultAgentId = "main"
+            } else {
+                appModel.apply(
+                    .connected(.init(serverName: "Fixture", remoteAddress: "fixture")), to: .operator, route: nil)
+                await appModel.refreshGatewayOverviewIfConnected()
+                XCTAssertEqual(appModel.chatSessionRoutingContract, "per-sender|main|main")
+            }
+            switch transition {
+            case .differentAgent: appModel.selectedAgentId = "research"
+            case .differentAccount: appModel.activeGatewayConnectConfig = config(stableID: stableID, token: "other")
+            case .differentGateway: appModel.activeGatewayConnectConfig = config(stableID: stableID + "-other")
+            default: break
+            }
+            await gateway.armHistory()
+            owner.sync(appModel: appModel)
+            if transition == .pendingAttachment {
+                XCTAssertTrue(owner.viewModel === original)
+                XCTAssertEqual(original.attachments.map(\.fileName), ["synthetic.png"])
+                original.removeAttachment(try XCTUnwrap(original.attachments.first?.id))
+                owner.sync(appModel: appModel)
+            }
+            let replacement = try XCTUnwrap(owner.viewModel)
+            let replacementBootstrap = replacement.bootstrapTask
+            await gateway.waitForHeldHistory()
+            XCTAssertTrue(original.isTransportDetached)
+            XCTAssertFalse(replacement === original)
+            let preserves = transition == .hydration || transition == .rapidSwitch || transition == .pendingAttachment
+            XCTAssertEqual(replacement.messages.map(\.id), preserves ? rows : [], "\(transition)")
+            XCTAssertFalse(replacement.hasAppliedLiveHistory)
+            XCTAssertNil(replacement.historyDeltaCursor)
+            XCTAssertEqual(replacement.pendingRunCount, 0)
+            if preserves {
+                XCTAssertEqual(owner.presentationID, presentationID)
+                XCTAssertEqual(replacement.input, "Still typing")
+                editor()?.input += " through handoff"
+                XCTAssertEqual(replacement.input, "Still typing through handoff")
+                XCTAssertEqual(original.input, "Still typing")
+            }
+            if transition == .rapidSwitch {
+                appModel.focusChatSession("agent:main:other")
+                owner.sync(appModel: appModel)
+                XCTAssertTrue(replacement.messages.isEmpty)
+                await replacement.bootstrapTask?.value
+            }
+            try await gateway.releaseHistory()
+            await replacementBootstrap?.value
+            XCTAssertTrue(
+                replacement.messages.isEmpty,
+                "Fresh empty history or a newer destination replaces retained display")
+            if transition == .rapidSwitch { XCTAssertEqual(replacement.sessionKey, "agent:main:other") }
+            releaseCache.finish()
+            await original.pendingCacheWriteTask?.value
+            owner.viewModel?.detachTransport()
+            await replacement.persistComposerDraft()
+            await appModel.operatorSession.disconnect()
+            _ = await appModel.purgeChatTranscriptCache(gatewayID: stableID)
+            if transition == .differentGateway {
+                _ = await appModel.purgeChatTranscriptCache(gatewayID: stableID + "-other")
+            }
+        } catch {
+            try? await gateway.releaseHistory()
+            await appModel.operatorSession.disconnect()
+            throw error
+        }
+    }
+
     private enum Transition: String {
         case unchanged
         case beforeTask

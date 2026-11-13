@@ -5,6 +5,37 @@ import Foundation
 // of truth and replace cached rows wholesale.
 
 extension OpenClawChatViewModel {
+    /// The presenter must prove the same Gateway/account before calling. The old transport must
+    /// already be detached. Only display rows cross the handoff; fresh history owns all live state.
+    public func inheritTranscriptPresentation(from previous: OpenClawChatViewModel) {
+        guard previous.isTransportDetached, !self.isTransportDetached,
+              self.messages.isEmpty, !self.hasAppliedLiveHistory,
+              previous.canRetainTranscriptPresentation(
+                  sessionKey: self.sessionKey, agentID: self.activeAgentId,
+                  routingContract: self.sessionRoutingContract)
+        else { return }
+        self.replaceMessages(previous.retainedTranscriptPresentation)
+        self.transcriptPresentationTarget = previous.transcriptPresentationTarget
+        self.isShowingCachedTranscript = !self.messages.isEmpty
+    }
+
+    var retainedTranscriptPresentation: [OpenClawChatMessage] {
+        // Queued rows need their durable outbox status, which the new owner restores itself.
+        self.transcriptMessages.filter { self.outboxCommandIDsByMessageID[$0.id] == nil }
+    }
+
+    func canRetainTranscriptPresentation(
+        sessionKey: String, agentID: String?, routingContract: String?) -> Bool
+    {
+        guard let previous = self.transcriptPresentationTarget,
+              let routing = OpenClawChatSessionRoutingContract.parse(routingContract)
+        else { return false }
+        let target = OpenClawChatSendOwnership.Scope(
+            sessionKey: sessionKey, agentID: agentID, scope: routing.scope,
+            mainKey: routing.mainKey, defaultAgentID: routing.defaultAgentID)
+        return previous.sessionKey == target.sessionKey && previous.agentID == target.agentID
+    }
+
     struct SessionSnapshot: Equatable {
         var key: String
         var generation: UInt64
