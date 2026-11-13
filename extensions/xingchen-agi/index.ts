@@ -34,7 +34,7 @@ export default defineSingleProviderPluginEntry({
             // Official pricing, USD per 1M tokens (RMB rate card: off-peak 0.75 /
             // 0.015 / 3, peak 1.5 / 0.03 / 6).
             // Off-peak (standard): input $0.11 / cache read $0.0022 / output $0.45
-            // Peak (= 2x off-peak): $0.22 / $0.0044 / $0.90
+            // Peak (input/output 2x off-peak; official cache read $0.0045):
             // Peak window: Beijing time (UTC+8) Mon-Fri 00:00-11:00; off-peak
             // otherwise plus all weekend. Beijing time has no daylight saving.
             // Single-value cost fields hold the off-peak (standard) tier.
