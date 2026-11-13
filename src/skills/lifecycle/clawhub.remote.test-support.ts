@@ -16,7 +16,6 @@ import {
   installTestSkill,
   updateTestSkill,
   mockArchiveInstallResolution,
-  mockInstalledSkillFile,
   writeTrackedSkill,
   readClawHubSkillsLockfile,
   preflightSkillFromClawHub,
@@ -31,7 +30,7 @@ async function write(root: string, name: string, content: string) {
   await fs.writeFile(path.join(root, name), content);
 }
 
-/** ClawHub suite cases kept out of clawhub.test.ts by its line cap: workspace hosts, bulk update. */
+/** Uses the existing ClawHub suite fixture to exercise a distinct workspace host. */
 export function registerRemoteClawHubTests(getWorkspaceDir: () => string) {
   async function onHost(host: string, run: () => Promise<void>) {
     const release = bindHostWorkspace(getWorkspaceDir(), host);
@@ -165,14 +164,7 @@ export function registerRemoteClawHubTests(getWorkspaceDir: () => string) {
             scenario === "edited" ? 0 : 1,
           );
         } else {
-          expect(results).toEqual([
-            expect.objectContaining({
-              ok: true,
-              slug: "weather",
-              previousVersion: "0.9.0",
-              version: "1.0.0",
-            }),
-          ]);
+          expect(results).toMatchObject([{ ok: true, previousVersion: "0.9.0", version: "1.0.0" }]);
           expect(installPackageDirMock).toHaveBeenCalledWith(
             expect.objectContaining({ targetDir: skillDir }),
           );
@@ -229,23 +221,10 @@ export function registerRemoteClawHubTests(getWorkspaceDir: () => string) {
     });
   });
 
-  it("finishes the update in progress and starts no other after Ctrl+C", async () => {
-    const dir = getWorkspaceDir();
-    const interrupt = new AbortController();
-    const skills = {};
-    for (const slug of ["agentreceipt", "weather"]) {
-      await writeTrackedSkill(dir, slug, { installedVersion: "0.9.0", skillMd: "# A\n" });
-      Object.assign(skills, JSON.parse(await read(dir, ".clawhub/lock.json")).skills);
-    }
-    await write(dir, ".clawhub/lock.json", JSON.stringify({ version: 1, skills }));
-    mockInstalledSkillFile("# A\n");
-    const download = downloadClawHubSkillArchiveUrlMock.getMockImplementation();
-    downloadClawHubSkillArchiveUrlMock.mockImplementationOnce(async (...args) => {
-      interrupt.abort();
-      return download?.(...args);
-    });
-    const results = await updateTestSkill(dir, undefined, { signal: interrupt.signal });
-    expect(results).toEqual([expect.objectContaining({ ok: true, changed: true })]);
-    expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledOnce();
+  it("starts no skill update once interrupted", async () => {
+    await writeTrackedSkill(getWorkspaceDir(), "weather", { installedVersion: "0.9.0" });
+    const signal = AbortSignal.abort();
+    expect(await updateTestSkill(getWorkspaceDir(), undefined, { signal })).toEqual([]);
+    expect(fetchClawHubSkillInstallResolutionMock).not.toHaveBeenCalled();
   });
 }

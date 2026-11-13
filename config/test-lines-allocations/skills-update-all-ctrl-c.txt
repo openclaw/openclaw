@@ -1,3 +1,0 @@
-# Skills update --all regression: Ctrl+C during the first tracked skill's update lets it finish
-# and starts no other (in the clawhub.test.ts overflow suite), plus the CLI signal check.
-24

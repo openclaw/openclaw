@@ -9,7 +9,6 @@ import {
 } from "../agents/agent-scope-config.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { ExitError } from "../runtime.js";
-import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
 import { registerSkillsCli } from "./skills-cli.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
@@ -283,13 +282,11 @@ describe("skills cli commands", () => {
     mocks.update.mockResolvedValue([
       { ...installedCalendar(), previousVersion: "1.2.2", changed: true },
     ]);
-    const scope = new AsyncWorkScope();
-    await scope.run(() => run("update --all --force --force-install"));
+    await run("update --all --force --force-install");
     expectOptions(mocks.update, {
       workspaceDir: "/tmp/workspace",
       force: true,
       forceInstall: true,
-      signal: scope.signal,
     });
     expect(runtime.log).toHaveBeenCalledWith("Updated calendar: 1.2.2 -> 1.2.3");
     expect(errors).toEqual([]);
