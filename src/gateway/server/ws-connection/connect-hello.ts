@@ -382,17 +382,20 @@ export async function sendGatewayHello(
     if (role === "operator") {
       const identity = resolveControlUiIdentity(context.configSnapshot, resolvedAuth);
       if (identity) {
-        snapshot.controlUiIdentityUrl = identity.url;
+        if (identity.url) {
+          snapshot.controlUiIdentityUrl = identity.url;
+        }
         if (identity.signal && !context.handler.isClosed()) {
           const signal = identity.signal;
-          const withdraw = () => {
-            setCloseCause("browser-identity-route-withdrawn");
+          const renew = () => {
+            setCloseCause("browser-identity-route-changed");
             close(1012, "browser identity route changed");
           };
           // Hello is frozen for this connection. Bind its route lifetime before
-          // delivery can await, so a vanished claim cannot remain advertised.
-          signal.addEventListener("abort", withdraw, { once: true });
-          context.handler.socket.once("close", () => signal.removeEventListener("abort", withdraw));
+          // delivery can await, so a vanished claim cannot remain advertised
+          // and a returning one cannot stay unadvertised.
+          signal.addEventListener("abort", renew, { once: true });
+          context.handler.socket.once("close", () => signal.removeEventListener("abort", renew));
         }
       }
     }
