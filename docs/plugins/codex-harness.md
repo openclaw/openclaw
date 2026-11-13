@@ -575,6 +575,11 @@ to the Gateway host and follows OpenClaw exec policy. `gateway_process` uses the
 existing per-session OpenClaw process scope for background follow-up. Prefer
 Codex native shell for ordinary local work.
 
+For an automation's finite `payload.toolsAllow`, author these capabilities as
+`exec` and `process`: the host-created `gateway_exec` and `gateway_process`
+aliases are captured under those canonical names. The saved Gateway target and
+approval restrictions remain in force. See [Automation tool policy](/automation/cron-jobs/payloads#agent-turn-options).
+
 A native shell command can yield a session handle before it exits. When a
 successful turn ends with that exact command still owned by the native thread,
 its tool row records **Outcome unknown** and explains that the process is still
