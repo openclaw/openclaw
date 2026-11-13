@@ -384,7 +384,6 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
           expectedBuildId: "new-build",
           env,
           supervisorKeepsAlive: true,
-          requirePluginHealth: false,
           requireChannelHealth: false,
         });
       } else {

@@ -28,6 +28,8 @@ const PUBLIC_CODES = new Set<string>([
   PLUGIN_CAPABILITY_CONSENT_REQUIRED,
   ...updateRecoverySchema.options[1].shape.reason.options,
   ...GATEWAY_RESTART_WAIT_OUTCOMES,
+  // Recorded by updaters before plugin load errors became notices.
+  "plugin-errors",
   ...CANARY_CHECKS.map((phase) => `candidate-${phase}-failed`),
   "candidate-readiness-probe-failed",
   "Error",

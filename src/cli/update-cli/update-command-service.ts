@@ -482,7 +482,6 @@ export async function maybeRestartService(
             onProgress,
             expectedVersion: expectedGatewayVersion,
             ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
-            requirePluginHealth: false,
             serviceEnv: activation.serviceEnv,
             requireRunningService: true,
             assertCurrent,

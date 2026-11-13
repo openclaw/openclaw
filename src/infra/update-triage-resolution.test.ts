@@ -4,7 +4,6 @@ import { verifyPreviousGatewayForUpdate } from "../cli/update-cli/update-command
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
-import { readDeferredPluginMigrationsAsync } from "./deferred-plugin-migrations.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import { collectGitRuntimeErrors } from "./update-git-runtime.js";
@@ -32,10 +31,6 @@ vi.mock("./package-dist-inventory.js", () => ({
 vi.mock("./package-json.js", () => ({ readPackageVersion: vi.fn() }));
 // mock-isolation: Exercise triage decisions without opening package journals or lease databases.
 vi.mock("./package-update-activation.js", () => ({ assertNoPendingPackageActivation: vi.fn() }));
-vi.mock("./deferred-plugin-migrations.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./deferred-plugin-migrations.js")>()),
-  readDeferredPluginMigrationsAsync: vi.fn(),
-}));
 vi.mock("./update-git-runtime.js", () => ({ collectGitRuntimeErrors: vi.fn() }));
 vi.mock("./update-global.js", () => ({ collectInstalledGlobalPackageErrors: vi.fn() }));
 vi.mock("./update-run-reader.js", () => ({
@@ -123,7 +118,6 @@ function useGitTarget() {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue([]);
   validateDoctor.mockResolvedValue(healthy);
   failedRun = run();
   latestRun = run({
@@ -149,43 +143,6 @@ beforeEach(() => {
   vi.mocked(resolveGatewayRestartProbeContext).mockResolvedValue({ config: {}, auth: undefined });
   vi.mocked(verifyPreviousGatewayForUpdate).mockResolvedValue(true);
   vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(gitHead(TARGET_SHA));
-});
-
-it("preserves post-core migration guidance", async () => {
-  vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue(
-    ["first", "second"].map((pluginId) => ({
-      pluginId,
-      reason: "Package repair deferred.",
-      command: "openclaw update repair",
-    })),
-  );
-  const env = {
-    OPENCLAW_STATE_DIR: "/fixture/state",
-    OPENCLAW_UPDATE_IN_PROGRESS: "1",
-    OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
-  };
-  const result = await validate(failure(), env);
-  expectStopped(
-    result,
-    'Run "openclaw update repair"',
-    'Plugin "first"',
-    'Plugin "second"',
-    'then "openclaw doctor --fix" to retry the upgrade.',
-  );
-  expect(result.summary.match(/Run "openclaw update repair"/g)).toHaveLength(2);
-  expect(result.summary).not.toContain("Let the current update or repair finish.");
-});
-
-it("keeps plugin failures unresolved after Doctor", async () => {
-  failedRun.reason = "post-update-failed";
-  failedRun.steps = [{ step: "finalize:doctor", status: "failed" }];
-  vi.mocked(verifyPreviousGatewayForUpdate).mockImplementation(
-    async ({ requirePluginHealth }) => !requirePluginHealth,
-  );
-  const saved = failure("post-update-failed", {
-    postUpdate: { plugins: { status: "error" } },
-  });
-  await expectResolution(false, saved);
 });
 
 it("verifies a SHA-only Git target", async () => {

@@ -46,7 +46,6 @@ export async function verifyPreviousGatewayForUpdate(params: {
   observedStartupMs?: number;
   assertCurrent?: () => void;
   signal?: AbortSignal;
-  requirePluginHealth?: boolean;
   expectedVersion?: string;
   gatewayPort?: number;
   waitForStartup?: boolean;
@@ -118,7 +117,6 @@ export async function verifyPreviousGatewayForUpdate(params: {
         requireRunningService: true,
         waitForStartup: params.waitForStartup,
         signal: deadline.signal,
-        requirePluginHealth: params.requirePluginHealth,
         assertCurrent,
         onProgress: progress,
       });
@@ -194,7 +192,6 @@ export type UpdateGatewayReadinessParams = {
   expectedVersion?: string;
   expectedBuildId?: string;
   requireRunningService?: boolean;
-  requirePluginHealth?: boolean;
   health?: GatewayRestartSnapshot;
   /** Installation observes native startup; final verification owns HTTP and identity proof. */
   healthOnly?: boolean;
@@ -224,7 +221,6 @@ export function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean
     ["waiting for Gateway listener", "startup migration"].includes(health.startupPhase ?? "") &&
     !health.versionMismatch &&
     !health.buildIdMismatch &&
-    !health.activatedPluginErrors?.length &&
     health.staleGatewayPids.length === 0
   );
 }
@@ -260,7 +256,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     port: params.gatewayPort,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
-    requirePluginHealth: params.requirePluginHealth ?? false,
     requireChannelHealth: false,
     env: params.serviceEnv,
     signal: deadline.signal,
@@ -344,7 +339,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
           (health.waitOutcome !== undefined && health.waitOutcome !== "healthy") ||
           health.versionMismatch ||
           health.buildIdMismatch ||
-          health.activatedPluginErrors?.length ||
           health.staleGatewayPids.length > 0)
       ) {
         return { health, readyz: false, http: undefined, launchAgentRecovery };

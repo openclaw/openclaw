@@ -47,6 +47,7 @@ export type StatusScanOverviewResult = {
         StatusSummary,
         | "degradedSecretOwners"
         | "degradedPlugins"
+        | "failedPlugins"
         | "startupMigrationWarning"
         | "modelReasoningWarning"
         | "installationReplacementWarning"
@@ -247,6 +248,7 @@ export async function collectStatusScanOverview(params: {
       ? {
           degradedSecretOwners: status.degradedSecretOwners ?? [],
           degradedPlugins: status.degradedPlugins ?? [],
+          failedPlugins: status.failedPlugins ?? [],
           startupMigrationWarning: status.startupMigrationWarning,
           modelReasoningWarning: status.modelReasoningWarning,
           installationReplacementWarning: status.installationReplacementWarning,

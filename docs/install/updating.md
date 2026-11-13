@@ -1433,11 +1433,17 @@ After an upgrade, check the [FreeBSD model-runtime limitation](/install/installe
 
 An already-installed registry package version or Git target SHA still runs plugin maintenance, repairs eligible old OpenClaw release pins, and restarts a running managed Gateway when plugins change or its service points at another installation, unless `--no-restart` is set. Unchanged runs finish as `skipped` / `already-current`.
 
-Plugin maintenance does not fail an otherwise successful core update. If a plugin
-cannot be updated, OpenClaw continues with the remaining plugins, keeps the previous
-installation where possible, and prints a short next action. A running updated
-Gateway can also report a plugin that did not load without turning the core update
-into a failure. Individual plugin outcomes remain available in `--json` output.
+Plugin failures never fail an update. If a plugin cannot be updated, OpenClaw
+continues with the remaining plugins, keeps the previous installation where possible,
+and prints a short next action. A plugin that cannot load (for example, one built
+against an older plugin SDK) stays off for that Gateway boot while the Gateway
+serves; its config and data are kept, and the next start or update retries it.
+`openclaw status` shows it in a **Plugins not loaded** row and `openclaw doctor`
+names the load error. Gateway restart and readiness checks, including the
+`gateway restart` an updater runs, never count plugin load errors as unhealthy, and
+plugin-owned Doctor checks do not gate the post-plugin readiness pass. Pending plugin
+data migrations stay warnings. Individual plugin outcomes remain available in
+`--json` output.
 When ClawHub has not published a version-matched official runtime plugin, the
 updater tries its declared trusted npm source for that same version, honoring
 catalog pins. Security and integrity refusals do not permit a source fallback.

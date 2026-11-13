@@ -120,10 +120,7 @@ export async function resolveGatewayProbeSnapshot(params: {
             }),
         )
       : undefined;
-  const canDiagnose =
-    readiness?.healthy ||
-    readiness?.waitOutcome === "plugin-errors" ||
-    readiness?.waitOutcome === "channel-errors";
+  const canDiagnose = readiness?.healthy || readiness?.waitOutcome === "channel-errors";
   const unavailableProbe = (): GatewayProbeResult => ({
     ok: false,
     url: gatewayConnection.url,
@@ -248,7 +245,6 @@ export async function resolveGatewayProbeSnapshot(params: {
     gatewayReachable,
     localGatewayHealthy:
       readiness?.healthy === true &&
-      !readiness.activatedPluginErrors?.length &&
       !readiness.channelProbeErrors?.length &&
       gatewayProbe?.ok === true,
     gatewaySelf,
