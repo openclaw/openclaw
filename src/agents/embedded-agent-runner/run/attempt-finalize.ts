@@ -4,7 +4,7 @@ import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-co
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { projectNestedToolActivityForHooks } from "../../../sessions/nested-tool-activity.js";
 import { buildTrajectoryArtifacts } from "../../../trajectory/metadata.js";
-import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import { hasOwedSessionSpawn } from "../../accepted-session-spawn.js";
 import {
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
@@ -99,7 +99,7 @@ export function finalizeEmbeddedAttempt(
       params.emptyAssistantReplyIsSilent ||
       result.didSendDeterministicApprovalPrompt === true ||
       hasCommittedMessagingToolDeliveryEvidence(result) ||
-      hasAcceptedSessionSpawn(result.acceptedSessionSpawns) ||
+      hasOwedSessionSpawn(result.acceptedSessionSpawns) ||
       (result.clientToolCalls?.length ?? 0) > 0 ||
       result.yieldDetected === true ||
       hasAsyncActivity(result.toolMetas) ||

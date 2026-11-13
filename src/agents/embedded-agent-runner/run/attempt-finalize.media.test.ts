@@ -73,11 +73,13 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
   });
 
   it.each`
-    name                       | input                                                                                                                                                                                    | delivered
-    ${"tool metadata only"}    | ${{ currentAttemptAssistant: assistant("toolUse"), toolMetas: [{ toolName: "read" }] }}                                                                                                  | ${false}
-    ${"accepted spawn"}        | ${{ currentAttemptAssistant: assistant("toolUse"), toolMetas: [{ toolName: "read" }], acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:claude:subagent:child" }] }} | ${true}
-    ${"unconsumed tool error"} | ${{ currentAttemptAssistant: undefined, lastToolError: { toolName: "bash", error: "Execution denied.", executionStarted: false } }}                                                      | ${false}
-    ${"answered tool error"}   | ${{ lastToolError: { toolName: "bash", error: "Execution denied.", executionStarted: false } }}                                                                                          | ${true}
+    name                       | input                                                                                                                                                                                                                                      | delivered
+    ${"tool metadata only"}    | ${{ currentAttemptAssistant: assistant("toolUse"), toolMetas: [{ toolName: "read" }] }}                                                                                                                                                    | ${false}
+    ${"accepted spawn"}        | ${{ currentAttemptAssistant: assistant("toolUse"), toolMetas: [{ toolName: "read" }], acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:claude:subagent:child", expectsCompletionMessage: true }] }}                   | ${true}
+    ${"fire-and-forget spawn"} | ${{ currentAttemptAssistant: assistant("toolUse"), toolMetas: [{ toolName: "read" }], acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:claude:subagent:child", expectsCompletionMessage: false }] }}                  | ${false}
+    ${"collector spawn"}       | ${{ currentAttemptAssistant: assistant("toolUse"), toolMetas: [{ toolName: "read" }], acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:claude:subagent:child", expectsCompletionMessage: false, collector: true }] }} | ${true}
+    ${"unconsumed tool error"} | ${{ currentAttemptAssistant: undefined, lastToolError: { toolName: "bash", error: "Execution denied.", executionStarted: false } }}                                                                                                        | ${false}
+    ${"answered tool error"}   | ${{ lastToolError: { toolName: "bash", error: "Execution denied.", executionStarted: false } }}                                                                                                                                            | ${true}
   `(
     "requires durable progress: $name",
     ({ input, delivered }: { input: Partial<EmbeddedRunAttemptResult>; delivered: boolean }) => {
