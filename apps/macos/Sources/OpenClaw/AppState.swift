@@ -527,7 +527,8 @@ final class AppState {
         let configRemoteTransport = configRemoteResolution.transport
         let configRemoteUrl = configRemoteResolution.directURL?.absoluteString
             ?? GatewayRemoteConfig.resolveUrlString(root: configRoot)
-        let resolvedConnectionMode = ConnectionModeResolver.resolve(root: configRoot).mode
+        let resolvedConnection = ConnectionModeResolver.resolve(root: configRoot)
+        let resolvedConnectionMode = resolvedConnection.mode
         self.remoteTransport = configRemoteTransport
         self.connectionMode = resolvedConnectionMode
         if let deferred = AppDefaults.standard.data(forKey: primaryGatewayDeferredFingerprintKey) {
@@ -579,6 +580,13 @@ final class AppState {
         self.activeComputerPresenceEnabled = Self.resolveActiveComputerPresenceEnabled()
         self.peekabooBridgeEnabled = AppLaunchRuntimePlan.current.resolvePeekabooBridgeEnabled(
             AppDefaults.standard.object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true)
+        // A remote URL without gateway.mode leaves the companion routing remote in
+        // memory while disk consumers (Chrome extension pairing) read the missing
+        // mode as local and pair to an absent local Gateway. Own the inference by
+        // publishing it; only the mode is dirty so remote token objects survive.
+        if resolvedConnection == EffectiveConnectionMode(mode: .remote, source: .configRemoteURL) {
+            self.dirtyGatewayConfigFields.insert(.mode)
+        }
         if !self.isPreview, !AppProfile.current.isActive, let manager = self.launchAtLoginManager {
             manager.loadStatus { [weak self] current in
                 self?.hydrateLaunchAtLogin(current)
@@ -599,6 +607,9 @@ final class AppState {
             self.reconcilePreferredGatewayRouteBinding()
         }
         self.isInitializing = false
+        if self.dirtyGatewayConfigFields.contains(.mode) {
+            self.syncGatewayConfigIfNeeded()
+        }
         if !self.isPreview {
             self.startConfigWatcher()
         }
@@ -928,6 +939,11 @@ extension AppState {
         let nextMode = desiredMode ?? (hasRemoteUrl ? .remote : forcing ? .unconfigured : nil)
         if let nextMode, nextMode != self.connectionMode {
             self.connectionMode = nextMode
+        }
+        // A config reload that kept a remote URL while losing gateway.mode re-derives
+        // remote in memory only; mark the mode dirty so the next sync republishes it.
+        if desiredMode == nil, hasRemoteUrl, self.connectionMode == .remote {
+            self.dirtyGatewayConfigFields.insert(.mode)
         }
     }
 
@@ -1423,6 +1439,26 @@ extension AppState {
     @discardableResult
     func syncGatewayConfigNow() -> Bool {
         guard self.gatewayConfigSyncIsEnabled, !self.isInitializing else { return true }
+        return self.performGatewayConfigSyncNow()
+    }
+
+    /// Chrome extension setup hands the on-disk config path to a node worker, so an
+    /// inferred-but-unpublished gateway mode must reach the file first or the pairing
+    /// reads the missing mode as local and targets an absent local Gateway.
+    /// Fail closed with a visible recovery message instead of enqueueing setup
+    /// against a half-published draft.
+    func prepareGatewayConfigForChromeExtensionSetup() throws {
+        self.gatewayConfigSyncTask?.cancel()
+        guard self.performGatewayConfigSyncNow() else {
+            let message = self.gatewayConfigConflict?.message ??
+                self.gatewayConfigSyncFailure ??
+                String(localized: "Could not save Gateway settings. Check your connection settings and try again.")
+            throw ChromeExtensionSetup.SetupError.gatewayConfigSyncFailed(message)
+        }
+    }
+
+    private func performGatewayConfigSyncNow() -> Bool {
+        guard !self.isInitializing else { return true }
         self.setGatewayConfigSyncState(.pending)
 
         let currentRoot = OpenClawConfigFile.loadDict()
@@ -1596,6 +1632,9 @@ extension AppState {
 extension AppState {
     func _testEnableGatewayConfigSync() {
         self.gatewayConfigSyncEnabledForTesting = true
+        if !self.dirtyGatewayConfigFields.isEmpty {
+            self.syncGatewayConfigIfNeeded()
+        }
     }
 
     func _testAwaitGatewayConfigSync() async {
