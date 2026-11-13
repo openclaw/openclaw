@@ -15,7 +15,11 @@ import {
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
-import { ERROR_DETAILS_HINT, ERROR_PREFIX_RE } from "./assistant-request-failure-copy.js";
+import {
+  API_KEY_EXPIRED_ERROR_CODE,
+  ERROR_DETAILS_HINT,
+  ERROR_PREFIX_RE,
+} from "./assistant-request-failure-copy.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
 import {
   AUTH_PROFILE_COOLDOWN_ERROR_CODE,
@@ -60,7 +64,7 @@ const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 const MODEL_CAPACITY_ERROR_RE = /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i;
 const RATE_LIMIT_SPECIFIC_HINT_RE =
-  /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\bresets?\b|\bplan\b|\bquota\b|重置|分钟|小时|秒后|额度|配额/i;
+  /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again (?:in|at)\b|\bresets?\b|\bplan\b|\bquota\b|重置|分钟|小时|秒后|额度|配额/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context (?:length|window) exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
 const PROVIDER_PROMPT_SIZE_LIMIT_RE =
@@ -356,11 +360,13 @@ function resolveProviderRequestFailureCode(params: {
   classification: FailoverClassification | null;
   facet: ProviderRequestFacet | null;
   status?: number;
+  code?: string;
 }): ProviderRequestErrorCode | undefined {
   const reason =
     params.classification?.kind === "reason" ? params.classification.reason : undefined;
   if (reason === "auth" && params.status === 401) {
-    return "provider_authentication_error";
+    // An expired key cannot be fixed by signing in; its copy is rendered from the provider code.
+    return params.code === API_KEY_EXPIRED_ERROR_CODE ? undefined : "provider_authentication_error";
   }
   if (reason === "model_not_found") {
     return "provider_model_unavailable";
@@ -382,6 +388,7 @@ export function resolveProviderRequestFailureCopy(params: {
   classification: FailoverClassification | null;
   facet: ProviderRequestFacet | null;
   status?: number;
+  code?: string;
 }) {
   const code = resolveProviderRequestFailureCode(params);
   if (!code) {
@@ -630,6 +637,8 @@ const AUTH_PROFILE_COOLDOWN_COPY = {
     `${provider} rejected the request — looks like a billing issue on the account.`,
   server_error: (provider: string) =>
     `${provider} is having issues right now. Please wait a moment before trying again.`,
+  route_unavailable: (provider: string) =>
+    `${provider} cannot serve this model right now. Choose another model.`,
   timeout: (provider: string) =>
     `${provider} hasn't been responding. Please wait a moment before trying again.`,
   tls_certificate: authProfileUnavailableCopy,

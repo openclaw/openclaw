@@ -20,6 +20,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contra
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { VERSION } from "../version.js";
 import * as assert from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import { candidateStartupStep as startupStep } from "./update-cli-lifecycle.test-support.js";
@@ -506,7 +507,8 @@ describe("update-cli", () => {
         { cause },
       );
       vi.mocked(update.updateGitCheckout).mockImplementationOnce(async ({ opts }) => {
-        await assert.requireValue(opts.beforeGitMutation, "Git mutation admission")({});
+        const target = { version: VERSION, databaseEngines: ["sqlite", "postgres"] };
+        await assert.requireValue(opts.beforeGitMutation, "Git mutation admission")(target);
         mocks.restartHealthTestControl.snapshot = {
           runtime: { status: "stopped", pid: null, state: "stopped" },
           portUsage: { port: 18789, status: "free", listeners: [], hints: [] },

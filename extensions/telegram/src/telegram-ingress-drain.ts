@@ -47,6 +47,11 @@ import {
   type TelegramSpooledUpdatePayload,
 } from "./telegram-ingress-spool.payload.js";
 import { createShouldSupersedeTelegramSpooledPending } from "./telegram-ingress-supersede.js";
+import {
+  getPreparedTelegramWidgetQuery,
+  prepareTelegramWidgetQueryContextAsync,
+  recordPreparedTelegramWidgetQuery,
+} from "./widgets/widget-query-context.js";
 
 const TELEGRAM_SPOOLED_HANDLER_TIMEOUT_ENV = "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS";
 const TELEGRAM_SPOOLED_DRAIN_START_LIMIT = 100;
@@ -333,6 +338,9 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
       if (context.phase === "admission" && isEligibleTelegramPollAnswerUpdate(update)) {
         await prepareTelegramPollAnswerContextAsync({ update, accountId: params.accountId });
       }
+      if (context.phase === "admission" && typeof update === "object" && update !== null) {
+        await prepareTelegramWidgetQueryContextAsync({ update, accountId: params.accountId });
+      }
       return inspect(update, context);
     },
     reuseAdmissionFactsForFreshClaims: true,
@@ -344,12 +352,17 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
           typeof update === "object" && update !== null
             ? getPreparedTelegramPollAnswer(update)
             : undefined;
+        const preparedWidgetQuery =
+          typeof update === "object" && update !== null
+            ? getPreparedTelegramWidgetQuery(update)
+            : undefined;
         return {
           version: TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION,
           updateId,
           receivedAt,
           update,
           ...(preparedPollAnswer ? { preparedPollAnswer } : {}),
+          ...(preparedWidgetQuery ? { preparedWidgetQuery } : {}),
         };
       },
       deserialize: (payload) => {
@@ -358,6 +371,9 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
           recordTelegramUpdateReceivedAt(update, payload.receivedAt);
           if (payload.preparedPollAnswer) {
             recordPreparedTelegramPollAnswer(update, payload.preparedPollAnswer);
+          }
+          if (payload.preparedWidgetQuery) {
+            recordPreparedTelegramWidgetQuery(update, payload.preparedWidgetQuery);
           }
         }
         return update;
@@ -430,6 +446,14 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
                   await telegramLifecycle.onFailed(terminal.error);
                   return;
                 }
+                if (terminal.kind === "dropped") {
+                  if (telegramLifecycle.onDropped) {
+                    await telegramLifecycle.onDropped(terminal.reason);
+                  } else {
+                    await telegramLifecycle.onAbandoned();
+                  }
+                  return;
+                }
                 await lifecycle.onAdopted();
               },
               async (error: unknown) => {
@@ -454,6 +478,13 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         const outcome = result.value;
         if (outcome?.kind === "failed-retryable") {
           return { kind: "failed-retryable", error: wrapFailure(outcome.error) };
+        }
+        if (outcome?.kind === "dropped") {
+          if (!lifecycle.onDropped) {
+            return { kind: "failed-retryable", error: new Error("terminal drop is unsupported") };
+          }
+          await lifecycle.onDropped(outcome.reason);
+          return { kind: "transferred" };
         }
         // A dispatched update that records no outcome and defers no participant
         // was consumed silently; completing here tombstones the spool row with

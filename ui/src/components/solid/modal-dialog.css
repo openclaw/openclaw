@@ -42,7 +42,8 @@ openclaw-modal-dialog {
 .oc-modal-dialog[open] {
   display: flex;
   opacity: 1;
-  scale: 1;
+  /* Identity scale still contains fixed-position transient anchors. */
+  scale: none;
   transition-duration: var(--openclaw-modal-show-duration);
 }
 
@@ -190,36 +191,11 @@ openclaw-modal-dialog {
   gap: 2px;
 }
 
+/* Close and header icon actions are IconButtons sized by the dialog's close box,
+   which grows with the menu row height on touch layouts. */
 .oc-dialog__close,
 .oc-dialog__icon-button {
-  display: grid;
-  width: var(--overlay-modal-close-size);
-  height: var(--overlay-modal-close-size);
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: var(--menu-item-radius);
-  background: transparent;
-  color: var(--muted);
-  cursor: var(--cursor-action);
-}
-
-.oc-dialog__close svg,
-.oc-dialog__icon-button svg {
-  width: 14px;
-  height: 14px;
-}
-
-.oc-dialog__close:hover,
-.oc-dialog__icon-button:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.oc-dialog__close:focus-visible,
-.oc-dialog__icon-button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
+  --oc-icon-button-size: var(--overlay-modal-close-size);
 }
 
 .oc-dialog__body {
@@ -306,7 +282,7 @@ openclaw-modal-dialog.drawer > .oc-modal-dialog {
   max-height: 100dvh;
   margin: 0 0 0 auto;
   border-radius: 0;
-  scale: 1;
+  scale: none;
 }
 
 openclaw-modal-dialog.drawer > .oc-modal-dialog[open] {

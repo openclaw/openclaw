@@ -1,5 +1,6 @@
 import { For, Show, type Element } from "solid-js";
 import type { CronJob } from "../../../api/types.ts";
+import { Checkbox } from "../../../components/solid/checkbox.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuControls } from "../../../components/solid/menu.tsx";
 import { SettingsToggle } from "../../../components/solid/settings-ui.tsx";
@@ -88,10 +89,8 @@ export function ChatCiAutomationView(props: ChatCiAutomationProps) {
                     when={props.menuPresentation}
                     fallback={
                       <label class="chat-ci__automation-option">
-                        <input
+                        <Checkbox
                           ref={(element) => binding.ref?.(element)}
-                          class="chat-ci__automation-checkbox"
-                          type="checkbox"
                           name={entry[0]}
                           checked={props.options[entry[0]]}
                           disabled={props.pending[entry[0]] !== undefined}

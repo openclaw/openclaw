@@ -6,7 +6,7 @@ import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
-import { omittedMediaReason } from "./chat-message-media.ts";
+import { omittedMediaReason } from "./chat-message-media-projection.ts";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 

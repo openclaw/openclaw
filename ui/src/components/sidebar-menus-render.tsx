@@ -1,5 +1,5 @@
 import { getObserver } from "@solidjs/signals";
-import type { JSX } from "@solidjs/web";
+import { dynamic, type JSX } from "@solidjs/web";
 import { createMemo, lazy, Loading, Show } from "solid-js";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
@@ -10,7 +10,11 @@ import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import type { IdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
-import { projectGateway, projectOverlays } from "../lib/reactive/application.ts";
+import {
+  projectApplicationConfig,
+  projectGateway,
+  projectOverlays,
+} from "../lib/reactive/application.ts";
 import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
@@ -46,7 +50,12 @@ import { canRetryGatewayStatus } from "./gateway-status.ts";
 import "../styles/sidebar-menus.css";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import { SessionMenu, type SessionMenuAction } from "./session-menu-solid.tsx";
-import { runSessionAction, runBatchSessionAction } from "./session-organizer-menu.runtime.ts";
+import {
+  createNestedSession,
+  isCreatingNestedSession,
+  runSessionAction,
+  runBatchSessionAction,
+} from "./session-organizer-menu.runtime.ts";
 import { moveSessionFromMenu, sessionPlacementAction } from "./session-placement-action.ts";
 import { isUpdateAttentionForced } from "./sidebar-attention-dismissals.ts";
 import { isReleaseUpdateAvailable } from "./sidebar-attention-update.ts";
@@ -57,6 +66,10 @@ import type { MenuEntry } from "./solid/menu.tsx";
 
 export { SidebarCatalogMenu as CatalogSessionMenu } from "./app-sidebar-catalog-menu.runtime.tsx";
 export { createSessionMenuWork } from "./session-menu-work.ts";
+
+const OpenClawIdIdentityMenu = lazy(() => import("./openclaw-id/identity-menu.tsx"), {
+  export: "OpenClawIdIdentityMenu",
+});
 
 const AgentCreateDialog = lazy(() => import("./agent-create-dialog.tsx"), {
   export: "AgentCreateDialog",
@@ -275,6 +288,11 @@ function renderSidebarMenus(
           const user = selfUser();
           return user ? { ...user, watchedSessions: [] } : undefined;
         });
+        const config =
+          view.sessionDataContext && projectApplicationConfig(view.sessionDataContext.config);
+        const IdentityMenu = dynamic(() =>
+          config?.read().openclawIdEnabled ? OpenClawIdIdentityMenu : SidebarIdentityMenu,
+        );
         const updateAvailable = createMemo(
           () =>
             isReleaseUpdateAvailable(
@@ -287,7 +305,7 @@ function renderSidebarMenus(
             !isUpdateAttentionForced(overlaySnapshot()?.updateStatusBanner?.tone),
         );
         return (
-          <SidebarIdentityMenu
+          <IdentityMenu
             {...{
               nativeGatewaySnapshot: view.nativeGatewaySnapshot,
               position: menu,
@@ -441,12 +459,29 @@ function renderSidebarMenus(
             navigationAllowed={Boolean(context())}
             copyMarkdownAllowed={canCopySessionMarkdown(context()?.gateway.snapshot)}
             splitAllowed={canSplitSessionView()}
+            nestedSession={{
+              creating: isCreatingNestedSession(
+                view.sessionOrganizer,
+                context()?.gateway.snapshot.client,
+                session().key,
+              ),
+              // Forks and empty children share parent-scoped sessions.create admission.
+              disabledReason: actionDisabledReasons().fork,
+              onCreate: () => {
+                void createNestedSession(view.sessionOrganizer, session()).finally(() => {
+                  if (projected.sessionMenu === menu) {
+                    menus.closeSessionMenu();
+                  }
+                });
+              },
+            }}
             forkDisabled={view.sessionData.sessionsLoading || session().modelSelectionLocked}
             forkFromLastCompleted={session().gatewayHasActiveRun ?? session().hasActiveRun}
             snoozeAllowed={true}
             archiveAllowed={archiveAllowed()}
             deleteAllowed={deleteAllowed()}
             cloudWorkerStopAllowed={cloudWorkerStopAllowed()}
+            cloudWorkerStopLabel={t(cloudWorkerStopAction()?.copyKey ?? "sessionsView.stopWorker")}
             groups={view.knownSessionGroups()}
             currentOwner={session().owner?.actor ?? null}
             work={batchRows() ? null : projected.sessionMenuWork}
@@ -526,7 +561,7 @@ function renderSidebarMenus(
                       if (!actionSignal.aborted) {
                         showToast({
                           severity: "error",
-                          message: error instanceof Error ? error.message : String(error),
+                          message: formatUiError(error),
                         });
                       }
                     });

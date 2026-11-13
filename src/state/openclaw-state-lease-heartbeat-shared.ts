@@ -22,6 +22,22 @@ export const leaseHeartbeatState = {
   lost: 3n,
 } as const;
 
+export function createLeaseHeartbeatState(): BigInt64Array<SharedArrayBuffer> {
+  return new BigInt64Array(
+    new SharedArrayBuffer((leaseHeartbeatState.ownerFence + 1) * BigInt64Array.BYTES_PER_ELEMENT),
+  );
+}
+
+// A heartbeat may not have started yet; retain the last confirmed acquisition expiry.
+export function readLeaseHeartbeatExpiry(
+  observation: BigInt64Array<SharedArrayBuffer> | undefined,
+  confirmedExpiresAt: number | undefined,
+): number | undefined {
+  return observation && confirmedExpiresAt !== undefined
+    ? Math.max(confirmedExpiresAt, Number(Atomics.load(observation, leaseHeartbeatState.expiresAt)))
+    : confirmedExpiresAt;
+}
+
 // Startup observations never grant readiness or lease authority.
 export const leaseHeartbeatStartupPhase = {
   "entry-not-observed": 0n,

@@ -24,12 +24,19 @@ import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import { resolveAfterToolHttpFailure } from "./mock-openai-after-tool-failures.js";
 import {
   buildAssistantText,
+  buildImageGenerationCompletionReply,
   buildImageInspectionReply,
   readForkedContextCompletion,
   isCanonicalCompactionRetryWriteResult,
   QA_COMPACTION_RETRY_FINAL_MARKER,
 } from "./mock-openai-assistant-text.js";
 import { planAutomationScenarioTurn } from "./mock-openai-automation-turns.js";
+import {
+  QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE,
+  QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE,
+  hasCompactionOutputRecoveryMarker,
+  resolveCompactionRecoverySummary,
+} from "./mock-openai-compaction-summaries.js";
 import {
   type ResponsesInputItem,
   type StreamEvent,
@@ -231,12 +238,6 @@ const QA_COMPACTION_OUTPUT_RECOVERY_OVERFLOW_THRESHOLD_BYTES = 96 * 1024;
 const QA_COMPACTION_RETRY_DURABLE_MARKER = "QA-COMPACTION-DURABLE-MARKER";
 const QA_COMPACTION_RETRY_BULKY_MARKER = "QA-COMPACTION-BULKY-HISTORICAL-MARKER";
 const QA_COMPACTION_RETRY_HISTORICAL_PHRASE = "post-marker historical user block";
-const QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE =
-  /\bQA-COMPACTION-EMPTY-OUTPUT-ONCE-[A-Za-z0-9_-]+\b/u;
-const QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE =
-  /\bQA-COMPACTION-REASONING-ONLY-OUTPUT-ONCE-[A-Za-z0-9_-]+\b/u;
-const QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-EMPTY-RECOVERED-SUMMARY";
-const QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER = "QA-COMPACTION-REASONING-RECOVERED-SUMMARY";
 const QA_COMPACTION_RETRY_SUMMARY = `## Decisions
 - Continue the compaction retry from durable context without replaying a completed mutation.
 
@@ -269,55 +270,6 @@ const QA_COMPACTION_RETRY_HISTORICAL_SUMMARY = `## Decisions
 
 ## Exact identifiers
 - None captured.`;
-const QA_GENERIC_COMPACTION_SUMMARY = `## Decisions
-- Continue from the summary without restarting completed work.
-
-## Open TODOs
-- Continue the active task.
-
-## Constraints/Rules
-- Keep current requirements and identifiers.
-
-## Pending user asks
-- Continue the active task from the retained context.
-
-## Exact identifiers
-- None captured.`;
-const QA_COMPACTION_OUTPUT_RECOVERY_SUMMARY = `## Decisions
-- Retry the typed compaction-summary fault at the compaction owner.
-
-## Open TODOs
-- Continue the active task after compaction.
-
-## Constraints/Rules
-- Preserve the historical recovery user block and current continuation.
-
-## Pending user asks
-- Retain the historical recovery user block context.
-
-## Exact identifiers`;
-
-function resolveCompactionRecoverySummary(allInputText: string) {
-  const faultMarker =
-    QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE.exec(allInputText)?.[0] ??
-    QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.exec(allInputText)?.[0];
-  const recoveryMarker = faultMarker?.startsWith("QA-COMPACTION-EMPTY-")
-    ? QA_COMPACTION_EMPTY_RECOVERY_SUMMARY_MARKER
-    : faultMarker
-      ? QA_COMPACTION_REASONING_RECOVERY_SUMMARY_MARKER
-      : undefined;
-  return recoveryMarker && faultMarker
-    ? `${QA_COMPACTION_OUTPUT_RECOVERY_SUMMARY}\n- ${recoveryMarker}\n- ${faultMarker}`
-    : QA_GENERIC_COMPACTION_SUMMARY;
-}
-
-function hasCompactionOutputRecoveryMarker(allInputText: string) {
-  return (
-    QA_COMPACTION_EMPTY_OUTPUT_ONCE_MARKER_RE.test(allInputText) ||
-    QA_COMPACTION_REASONING_ONLY_OUTPUT_ONCE_MARKER_RE.test(allInputText)
-  );
-}
-
 const QA_RESTART_CHECKPOINT_COUNT = 3;
 const QA_RESTART_FINAL_TEXT = "RESTART-CODE-MODE-WAIT-OK";
 const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
@@ -1724,6 +1676,10 @@ async function buildResponsesPayload(
       );
     }
     return buildAssistantEvents("NONE");
+  }
+  const imageCompletionReply = buildImageGenerationCompletionReply(input);
+  if (imageCompletionReply) {
+    return buildAssistantEvents(imageCompletionReply);
   }
   if (
     QA_IMAGE_GENERATION_PROMPT_RE.test(allInputText) &&

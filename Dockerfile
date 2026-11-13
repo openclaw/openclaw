@@ -105,6 +105,7 @@ COPY --from=workspace-deps /out/openclaw-required-platform-packages /tmp/opencla
 
 # ── Production dependencies ────────────────────────────────────
 FROM dependency-inputs AS production-deps
+ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
     set -eu; set -- --filter . --filter ./ui --filter './packages/*'; \
     while IFS= read -r ext; do \

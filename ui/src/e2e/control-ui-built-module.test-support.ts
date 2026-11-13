@@ -17,6 +17,20 @@ export async function failControlUiModuleForDocuments(
       documentSequence += 1;
     }
   });
+  // These cases model retired chunks after an update, rather than same-build downtime.
+  await page.route("**/index.html", async (route) => {
+    if (
+      route.request().headers()["x-openclaw-reachability-probe"] !== "1" ||
+      requestedDocuments.size === 0
+    ) {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      contentType: "text/html",
+      body: '<script>globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO={"buildId":"replacement-test-build"};</script>',
+    });
+  });
   await page.route(module, async (route) => {
     requestedDocuments.add(documentSequence);
     if (requestedDocuments.size <= failedDocumentCount) {

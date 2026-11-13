@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { modelSessionList } from "./chat-runtime-fixtures.test-support.ts";
@@ -8,6 +9,69 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI model and effort controls" });
 
 suite.define(() => {
+  it("hides the routed-model suffix and standard-only speed controls without changing the route", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const id = "anthropic/claude-opus-5-5";
+      const name = "Claude Opus 5.5 via ClawRouter";
+      await installMockGateway(page, {
+        agentModel: `clawrouter/${id}`,
+        models: [
+          {
+            id,
+            name,
+            alias: name,
+            provider: "clawrouter",
+            reasoning: true,
+            thinkingLevels: ["low", "medium", "high", "xhigh", "max"].map((level) => ({
+              id: level,
+              label: level,
+            })),
+            supportsFastMode: false,
+            serviceTiers: ["default"],
+          },
+        ],
+        methodResponses: {
+          "sessions.list": modelSessionList(
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              model: id,
+              modelProvider: "clawrouter",
+              thinkingLevel: "medium",
+              updatedAt: 1,
+            },
+            { model: id, modelProvider: "clawrouter" },
+          ),
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__input").first();
+      const trigger = composer.locator("[data-chat-model-select]");
+      await trigger.waitFor({ state: "visible" });
+      await expect.poll(() => trigger.textContent()).toBe("Claude Opus 5.5");
+      await composer.screenshot({ path: `${suite.artifactDir}/clawrouter-model-label.png` });
+      await trigger.click();
+      const option = page.locator(`[data-chat-model-option="clawrouter/${id}"]`);
+      await option.waitFor({ state: "visible" });
+      expect(await option.textContent()).toContain("Claude Opus 5.5");
+      expect(await option.textContent()).not.toContain("via ClawRouter");
+      expect(await option.getAttribute("aria-selected")).toBe("true");
+      await page.keyboard.press("Escape");
+      // A fresh canonical descriptor must preserve the same model and effort facts.
+      await evaluateControlUiContext(page, async (app) => {
+        const reconcile = app.sessions.captureReconcile();
+        const { session } = await app.sessions.describe(
+          { key: "agent:main:main", agentId: "main" },
+          { refresh: true },
+        );
+        reconcile(session ?? undefined);
+      });
+      await composer.locator('[data-chat-thinking-select="true"]').click();
+      await composer.locator("[data-chat-thinking-slider]").waitFor({ state: "visible" });
+      expect(await composer.locator(".chat-controls__speed-panel").count()).toBe(0);
+    });
+  });
+
   it("keeps a large pending model catalog usable in /chat", async () => {
     const contextOptions = { viewport: { width: 1280, height: 900 }, hasTouch: true };
     await suite.withPage(contextOptions, async ({ page }) => {

@@ -3,10 +3,20 @@ import OpenClawDiscovery
 import SwiftUI
 
 extension OnboardingView {
+    @discardableResult
+    func beginNodeInvitation() -> Task<Void, Never>? {
+        let task = self.openClawID.begin(.joinNode)
+        if task != nil { self.finishState.connectionCompletion = nil }
+        self.showOpenClawID = true
+        return task
+    }
+
     func selectLocalGateway() {
         if state.connectionMode != .local {
             resetGatewayBoundAIState()
         }
+        remoteSetupSelected = false
+        savedBrowserGatewayName = nil
         defaultsToLocalGateway = false
         state.connectionMode = .local
         showRemoteChoices = false
@@ -16,6 +26,8 @@ extension OnboardingView {
 
     func selectUnconfiguredGateway() {
         resetGatewayBoundAIState()
+        remoteSetupSelected = false
+        savedBrowserGatewayName = nil
         defaultsToLocalGateway = false
         state.connectionMode = .unconfigured
         showRemoteChoices = false
@@ -23,8 +35,8 @@ extension OnboardingView {
     }
 
     func handleRemoteSelection() {
-        showRemoteChoices = true
-        showConnectionEditor = true
+        remoteSetupSelected = true
+        savedBrowserGatewayName = nil
     }
 
     func selectRemoteGateway(_: GatewayDiscoveryModel.DiscoveredGateway) {
@@ -33,6 +45,7 @@ extension OnboardingView {
     }
 
     func didSaveRemoteConnection() {
+        self.savedBrowserGatewayName = nil
         self.defaultsToLocalGateway = false
         self.retireGatewayStateForRemoteEndpointEdit()
         self.probeConfiguredGatewayForDashboard()
@@ -46,14 +59,8 @@ extension OnboardingView {
 
     func handleNext() {
         guard canAdvance else { return }
-        let remoteDecision = Self.remoteGatewayAdvanceDecision(
-            connectionMode: state.connectionMode,
-            activePageIndex: activePageIndex,
-            connectionPageIndex: connectionPageIndex,
-            authIssue: remoteAuthIssue,
-            probeState: remoteProbeState,
-            input: remoteGatewayProbeInput)
-        guard remoteDecision.canAdvance else {
+        let remoteDecision = self.findPageAdvanceDecision
+        guard self.activePageIndex != self.findPageIndex || remoteDecision.canAdvance else {
             if remoteDecision.shouldProbe {
                 Task { await self.probeRemoteConnection(advanceOnSuccess: true) }
             }
@@ -69,10 +76,19 @@ extension OnboardingView {
 
     func commitRecommendedConnectionIfNeeded(for pageIndex: Int) {
         if pageIndex == connectionPageIndex,
-           defaultsToLocalGateway,
+           defaultsToLocalGateway, !remoteSetupSelected,
            state.connectionMode == .unconfigured
         {
             self.selectLocalGateway()
+        }
+    }
+
+    func advanceAfterInference() {
+        guard self.activePageIndex != self.reachabilityPageIndex,
+              self.activePageIndex != self.readyPageIndex else { return }
+        let destination = self.state.connectionMode == .local ? self.reachabilityPageIndex : self.readyPageIndex
+        if let cursor = self.pageOrder.firstIndex(of: destination) {
+            withAnimation { self.currentPage = cursor }
         }
     }
 
@@ -83,7 +99,8 @@ extension OnboardingView {
         aiSetup.clearCompletedHandoffIfOwned()
         OnboardingController.markComplete()
         OnboardingController.shared.close()
-        guard openPrimaryDashboard, state.connectionMode != .unconfigured else { return true }
+        guard openPrimaryDashboard, finishState.connectionCompletion == nil,
+              state.connectionMode != .unconfigured else { return true }
         // Fresh activation hands off to the dashboard's custodian onboarding, which
         // owns the remaining first-run steps (memory import, channels, permissions,
         // hatch). A live-verified pre-existing setup reopens the normal dashboard.

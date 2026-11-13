@@ -10,6 +10,11 @@ import {
   createApiKeyCredential as keyCredential,
   createAuthProfileStoreFixture as authStore,
 } from "./auth-profiles/credential-fixtures.test-support.js";
+import {
+  createFailedOAuthRefreshFence,
+  createOAuthRefreshFence,
+} from "./auth-profiles/oauth-refresh-marker.js";
+import type { OAuthCredential } from "./auth-profiles/types.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "./model-auth-markers.js";
 import {
   attachModelProviderRequestTransport,
@@ -678,6 +683,21 @@ describe("resolveApiKeyForProviderCore", () => {
         store: authStore({}),
       }),
     ).rejects.toThrow('No API key found for provider "openai"');
+  });
+
+  it("asks for a new sign-in, not an API key, when the saved sign-in has ended", async () => {
+    // A rejected refresh leaves the profile as a failed fence; the run then plans no fallback.
+    const id = "acme:me@example.test";
+    const credential = { type: "oauth", provider: "acme", access: "a", refresh: "r", expires: 0 };
+    const ended = createFailedOAuthRefreshFence(
+      createOAuthRefreshFence({ profileId: id, credential: credential as OAuthCredential }),
+    );
+    const store = authStore({ [id]: ended });
+    await expect(
+      storedAuth("acme", undefined, { allowAuthProfileFallback: false, store }),
+    ).rejects.toThrow(
+      `Sign in again with openclaw models auth login --provider acme --profile-id '${id}'.`,
+    );
   });
 
   it("prefers explicit api-key provider SecretRef config over ambient auth profiles", async () => {

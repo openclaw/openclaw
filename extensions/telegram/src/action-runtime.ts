@@ -28,6 +28,7 @@ import { TELEGRAM_MESSAGE_ACTION_MAP } from "./action-names.js";
 import {
   readTelegramChatId,
   readTelegramForumTopicIconColor,
+  readTelegramMessageEffectId,
   readTelegramPositiveIntegerParam,
   readTelegramReplyToMessageId,
   readTelegramSendMediaUrls,
@@ -430,6 +431,7 @@ export async function handleTelegramAction(
     const replyToMessageId = readTelegramReplyToMessageId(params);
     const messageThreadId = readTelegramThreadId(params);
     const quoteText = readStringParam(params, "quoteText", { trim: false });
+    const messageEffectId = readTelegramMessageEffectId(params, to);
     requireToken();
     const asVoice = readBooleanParam(params, "asVoice");
     const silent = readBooleanParam(params, "silent");
@@ -437,8 +439,12 @@ export async function handleTelegramAction(
       readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false;
     const pin = normalizeTelegramDeliveryPin(params);
     const telegramData =
-      buttons || quoteText
-        ? { ...(buttons ? { buttons } : {}), ...(quoteText ? { quoteText } : {}) }
+      buttons || quoteText || messageEffectId
+        ? {
+            ...(buttons ? { buttons } : {}),
+            ...(quoteText ? { quoteText } : {}),
+            ...(messageEffectId ? { messageEffectId } : {}),
+          }
         : undefined;
     const payload: ReplyPayload = {
       text: content,

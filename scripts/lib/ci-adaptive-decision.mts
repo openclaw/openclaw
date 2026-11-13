@@ -6,6 +6,7 @@ import { captureAdaptiveModelRanking } from "./ci-adaptive-model.mts";
 import { planAdaptiveSelection } from "./ci-adaptive-selection.mjs";
 import {
   collectTestObservations,
+  decodeTestObservations,
   isObservationPath,
   observationContext,
 } from "./ci-test-observations.mjs";
@@ -19,7 +20,14 @@ type Prior = {
   archiveSha256: string;
   memberPath: string;
   memberSha256: string;
-  observations: { observations: Observations };
+  observations: { observations: unknown };
+  comparison: {
+    baseRevision: string;
+    baseTree: string;
+    headRevision: string;
+    headTree: string;
+    changedFiles: string[];
+  };
 };
 const sha = /^[a-f0-9]{64}$/;
 const date = (value: unknown): value is string =>
@@ -51,7 +59,7 @@ export function captureAdaptiveGraphDecision(options: {
     recordedAt,
     selector: "dependency-graph-v1",
     bundleSha256: null as string | null,
-    prior: null as Omit<Prior, "observations"> | null,
+    prior: null as Omit<Prior, "observations" | "comparison"> | null,
     comparison: null as { revision: string; tree: string; changedFiles: string[] } | null,
     graph: null as ReturnType<typeof planAdaptiveSelection> | null,
     ranking: null as ReturnType<typeof captureAdaptiveModelRanking> | null,
@@ -82,6 +90,7 @@ export function captureAdaptiveGraphDecision(options: {
       bundle.consumer?.runId !== env.GITHUB_RUN_ID ||
       bundle.consumer?.runAttempt !== env.GITHUB_RUN_ATTEMPT ||
       bundle.consumer?.revision !== current.context.revision ||
+      bundle.consumer?.tree !== current.context.tree ||
       !date(bundle.restoredAt) ||
       !date(bundle.cutoffAt) ||
       Date.parse(bundle.cutoffAt) > Date.parse(bundle.restoredAt) ||
@@ -117,7 +126,7 @@ export function captureAdaptiveGraphDecision(options: {
         ) {
           throw new Error("Invalid prior identity");
         }
-        const baseline = prior.observations.observations;
+        const baseline = decodeTestObservations(prior.observations.observations);
         const context = observationContext(baseline.context);
         if (
           baseline.version !== 1 ||
@@ -133,24 +142,22 @@ export function captureAdaptiveGraphDecision(options: {
           fallbackReasons.push("incompatible-prior");
           continue;
         }
-        // Never silently fetch history or reuse the preflight diff for a different prior.
-        git("merge-base", "--is-ancestor", context.revision, current.context.revision);
-        if (git("rev-parse", `${context.revision}^{tree}`).trim() !== context.tree) {
-          throw new Error("Prior source mismatch");
-        }
-        const output = git(
-          "diff",
-          "--no-renames",
-          "--name-only",
-          "-z",
-          context.revision,
-          current.context.revision,
-          "--",
-        );
-        const changedFiles = output ? output.split("\0").slice(0, -1) : [];
-        if (changedFiles.some((file) => !isObservationPath(file))) {
+        // Preflight binds the comparison to both exact trees. No history or
+        // network access is needed in this shallow test checkout.
+        const comparison = prior.comparison;
+        if (
+          comparison?.baseRevision !== context.revision ||
+          comparison.baseTree !== context.tree ||
+          comparison.headRevision !== current.context.revision ||
+          comparison.headTree !== current.context.tree ||
+          !Array.isArray(comparison.changedFiles) ||
+          comparison.changedFiles.length >= 600 ||
+          comparison.changedFiles.some((file) => !isObservationPath(file)) ||
+          new Set(comparison.changedFiles).size !== comparison.changedFiles.length
+        ) {
           throw new Error("Invalid prior comparison");
         }
+        const changedFiles = comparison.changedFiles;
         const graph = planAdaptiveSelection(baseline, {
           version: 1,
           context: current.context,

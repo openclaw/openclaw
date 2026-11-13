@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GATEWAY_TLS_HANDSHAKE_TIMEOUT_REASON
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayNodeApprovalActionState
 import ai.openclaw.app.GatewayNodeCapabilityApproval
@@ -908,6 +909,7 @@ fun OnboardingFlow(
           gatewayConnectionProblem = gatewayConnectionProblem,
           onBack = ::goBack,
           onRetry = viewModel::refreshGatewayConnection,
+          onEnterFingerprint = viewModel::enterGatewayFingerprintManually,
           onContinue = ::continueFromGatewayPairing,
         )
       }
@@ -1809,6 +1811,7 @@ private fun GatewayRecoveryScreen(
   gatewayConnectionProblem: GatewayConnectionProblem?,
   onBack: () -> Unit,
   onRetry: () -> Unit,
+  onEnterFingerprint: () -> Unit,
   onContinue: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -1943,6 +1946,11 @@ private fun GatewayRecoveryScreen(
     gatewayNetworkRecoveryHelpUrl(gatewayConnectionProblem)?.let { url ->
       TextButton(onClick = { uriHandler.openUri(url) }) {
         Text(nativeString("Set up Tailscale"), style = ClawTheme.type.body, color = ClawTheme.colors.text)
+      }
+    }
+    if (recoveryState == GatewayRecoveryUiState.Failed && gatewayConnectionProblem?.reason == GATEWAY_TLS_HANDSHAKE_TIMEOUT_REASON) {
+      TextButton(onClick = onEnterFingerprint) {
+        Text(nativeString("Enter fingerprint manually"), style = ClawTheme.type.body, color = ClawTheme.colors.text)
       }
     }
   }

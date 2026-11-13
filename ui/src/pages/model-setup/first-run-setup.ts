@@ -353,7 +353,7 @@ export class FirstRunSetup {
       this.host.setVerifyState({
         phase: "failed",
         status: "unknown",
-        error: `${t("modelSetup.access.gatewayTooOld")}. ${t("updates.confirm.action")}. ${t("desktop.reconnect")}.`,
+        error: t("modelSetup.access.gatewayTooOld"),
       });
       return;
     }

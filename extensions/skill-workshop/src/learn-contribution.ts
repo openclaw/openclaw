@@ -42,6 +42,8 @@ function buildDraftReviewPrompt(drafts: readonly WorkshopDraft[], focus: string)
 export const workshopLearnContribution: LearnContribution = {
   medium: "skills",
   toolNames: ["skill_workshop"],
+  unavailableText:
+    "Skill workshop is not available on this agent. Use a non-sandboxed agent where the skill_workshop tool is available, or use the openclaw skills workshop CLI.",
   buildGuidance: ({ media }) => ({
     lines: [
       `Write ${media.has("memory") ? "skills " : ""}with skill_workshop: list and view related skills first, and make the fewest changes that cover what you found. Put reusable scripts under scripts/ and reference them from the step that runs them. Pass a short reason.`,

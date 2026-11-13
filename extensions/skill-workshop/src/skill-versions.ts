@@ -20,7 +20,7 @@ const WORKSHOP_CHANGE_ACTIONS = [
   "restore",
 ] as const satisfies readonly WorkshopChangeAction[];
 
-export function isWorkshopChangeAction(value: string): value is WorkshopChangeAction {
+function isWorkshopChangeAction(value: string): value is WorkshopChangeAction {
   return WORKSHOP_CHANGE_ACTIONS.some((action) => action === value);
 }
 

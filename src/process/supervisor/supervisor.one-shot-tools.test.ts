@@ -132,7 +132,7 @@ describe("one-shot tool-generation process cleanup", () => {
     expect(child.killMock).toHaveBeenCalledExactlyOnceWith("SIGTERM");
     extinction.reject(new Error("owned host cleanup failed"));
     await expect(closing).rejects.toThrow("owned host cleanup failed");
-    await expect(supervisor.shutdown()).rejects.toThrow("owned host cleanup failed");
+    await expect(supervisor.shutdown()).resolves.toBeUndefined();
   });
 
   it("runs a one-shot host PTY request once through the owned child fallback", async () => {

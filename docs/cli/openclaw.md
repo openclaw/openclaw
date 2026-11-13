@@ -119,9 +119,18 @@ In direct OpenClaw chat, persistent operations require conversational approval (
 
 Changes delegated by a regular agent, including requests from messaging channels,
 follow the requesting run's effective [session permission policy](/gateway/permission-modes).
-Full Access applies the exact proposed operation automatically, including when
-Full Access comes from the configured default rather than an explicit session
-mode. Restricted runs from messaging channels ask for approval in the chat that
+Inferred and explicit Full Access apply permitted proposals automatically by
+default. Inference accounts for effective tool access and policy; settings for a
+disabled `exec` tool cannot grant authority. Configure
+[`tools.openclaw.autoApproveChanges`](/gateway/config-tools/built-in-tools#tools.openclaw)
+globally or per agent: `false` requires human approval even in Full Access;
+`true` grants standing delegated administration. That grant, or an explicit Full
+Access selection, can authorize changes that enable host code execution even when
+direct execution or editing tools are denied. Broadening the grant requires
+direct operator administration or exact human approval.
+
+Restricted defaults without independent authority require human approval. Runs
+from messaging channels ask for approval in the chat that
 made the request: channels with native approval cards show **Allow once** and
 **Deny** buttons, and other messaging chats receive the change summary with a
 `/approve <id> allow-once|deny` reply. Webchat and terminal runs decide in the
@@ -130,8 +139,8 @@ Replying "yes" in the delegated chat cannot authorize a change; the button or
 `/approve` command does.
 Channels with their own approver settings decide who may approve; elsewhere only
 a current owner (`commands.ownerAllowFrom`) can approve an OpenClaw change.
-Independent filesystem and sandbox boundaries,
-tool policy, and the operation restrictions below still apply. The host also checks
+Independent filesystem and sandbox boundaries, inherited authority,
+access to the `openclaw` tool, and the operation restrictions below still apply. The host also checks
 that the requesting run and verified inference route remain valid. Interactive
 setup and agent handoffs still require a direct operator session; delegated chat
 cannot start a wizard, even when a model proposes it.

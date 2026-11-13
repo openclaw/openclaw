@@ -250,8 +250,18 @@ it("keeps a newly created operator-named CLI session visible", () => {
   expect(isSystemCreatedSessionRow(row)).toBe(false);
 });
 
-it("breaks updatedAt ties by key, matching the gateway list order", () => {
-  const rows = ["zeta", "alpha", "mid"].map((name) => session(name, { updatedAt: null }));
+it("preserves metadata pin priority and key ties, matching the gateway list order", () => {
+  const rows = [
+    ...["zeta", "alpha", "mid"].map((name) => session(name, { updatedAt: null })),
+    session("older-pin", { updatedAt: 900, pinned: true, pinnedAt: 10 }),
+    session("newer-pin", { updatedAt: 1, pinned: true, pinnedAt: 20 }),
+  ];
   const sorted = rows.toSorted(compareSessionRowsByUpdatedAt).map((row) => row.key);
-  expect(sorted).toEqual(["agent:main:alpha", "agent:main:mid", "agent:main:zeta"]);
+  expect(sorted).toEqual([
+    "agent:main:newer-pin",
+    "agent:main:older-pin",
+    "agent:main:alpha",
+    "agent:main:mid",
+    "agent:main:zeta",
+  ]);
 });

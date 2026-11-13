@@ -66,7 +66,11 @@ it.each([
     const request = profileRpc(() => profile, {
       "users.prefs.get": (params) => {
         expect(params).toEqual({
-          keys: [GIT_COAUTHOR_PREFERENCE_KEY, "github.prAttribution.enabled"],
+          keys: [
+            GIT_COAUTHOR_PREFERENCE_KEY,
+            "github.prAttribution.enabled",
+            "git.coauthor.organization",
+          ],
         });
         return {
           status: "ok",
@@ -280,7 +284,7 @@ it("does not offer personal PR attribution without a durable profile", async () 
     "unresolved-profile",
   );
   await waitForFast(() =>
-    expect(page.textContent).toContain("Your identity profile could not be loaded."),
+    expect(page.textContent).toContain("Couldn’t load your profile. Try again."),
   );
   expect(attributionToggle(page)).toBeUndefined();
   expect(request.mock.calls.some(([method]) => method.startsWith("users.prefs."))).toBe(false);
@@ -316,7 +320,17 @@ it("retires a pending attribution save when the requester changes", async () => 
 it("shows pending coauthor consent and restores the accepted value after failure", async () => {
   const saved = createDeferred();
   const request = profileRpc(() => modelAccountProfile, {
-    "users.prefs.get": () => ({ status: "ok", entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: true } }),
+    "users.prefs.get": () => ({
+      status: "ok",
+      entries: {
+        [GIT_COAUTHOR_PREFERENCE_KEY]: true,
+        "git.coauthor.organization": {
+          name: "Ada",
+          email: "ada@example.test",
+          policy: "test-policy",
+        },
+      },
+    }),
     "users.prefs.set": () => saved.promise,
   });
   const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
@@ -354,7 +368,17 @@ it.each(["identity", "navigation"])(
     const saved = createDeferred();
     let profile = modelAccountProfile;
     const request = profileRpc(() => profile, {
-      "users.prefs.get": () => ({ status: "ok", entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: true } }),
+      "users.prefs.get": () => ({
+        status: "ok",
+        entries: {
+          [GIT_COAUTHOR_PREFERENCE_KEY]: true,
+          "git.coauthor.organization": {
+            name: "Ada",
+            email: "ada@example.test",
+            policy: "test-policy",
+          },
+        },
+      }),
       "users.prefs.set": () => saved.promise,
     });
     const harness = createConnectedContext(request as GatewayBrowserClient["request"], {

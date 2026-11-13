@@ -36,8 +36,10 @@ import { routeLogsToStderr } from "../logging/console.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { installDatabaseProcessRole } from "./database-engine/admission-scope.js";
@@ -45,11 +47,13 @@ import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { closePostgresPool, preparePostgresPoolForUpdate } from "./postgres-sync/pool.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
+import { withSqliteSnapshotReuse } from "./sqlite-snapshot-reuse.js";
 import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { createDoctorServiceInspectionBudget } from "./update-doctor-deadline.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+  createUpdateDoctorDatabaseWriteCapture,
   recordUpdateDoctorConfigWriteRefusal,
   writeUpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
@@ -152,10 +156,12 @@ async function finalizeMigratedUpdate(): Promise<void> {
     return;
   }
   if (process.argv[2] === "--post-core") {
-    return await runDelegatedPostCore(readUpdatePostCoreInput(JSON.parse(text)));
+    const postCoreInput = readUpdatePostCoreInput(JSON.parse(text));
+    return await withSqliteSnapshotReuse(() => runDelegatedPostCore(postCoreInput));
   }
   if (process.argv[2] === "--doctor") {
-    return await runDelegatedDoctor(readUpdateDoctorInput(JSON.parse(text)));
+    const doctorInput = readUpdateDoctorInput(JSON.parse(text));
+    return await withSqliteSnapshotReuse(() => runDelegatedDoctor(doctorInput));
   }
   // SAFETY: Only the typed parent continuation serializes this private input.
   const input = JSON.parse(text) as MigratedUpdateFinalizationInput;
@@ -385,7 +391,19 @@ async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void
       const { runDoctorHealthFlow } = await import("../flows/doctor-health.js");
       assertCurrent();
       remaining();
+      const databaseWriteCapture = isStatePostgres()
+        ? undefined
+        : createUpdateDoctorDatabaseWriteCapture(input.databaseGenerations, {
+            env: process.env,
+            root: input.root,
+            signal: getAsyncWorkSignal() ?? new AbortController().signal,
+            pluginOwners: input.databasePluginOwners,
+            assertCurrent,
+            warn: (message) => process.stderr.write(message + "\n"),
+          });
+      await databaseWriteCapture?.admit();
       await stopSupervisedPredecessorGateway(input, {
+        databaseWriteCapture,
         root: input.root,
         assertCurrent,
         serviceInspectionBudget: remaining,
@@ -427,6 +445,7 @@ async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void
                 installRoot: captureUpdateCommandExecutorAuthority(fence, input.runId).installKey,
                 ref: input.originalRecoveryCapture,
               },
+              databaseWriteCapture,
               ...(input.databaseGenerations
                 ? { databaseGenerations: input.databaseGenerations }
                 : {}),

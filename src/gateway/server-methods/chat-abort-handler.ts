@@ -5,7 +5,6 @@ import {
   validateChatAbortParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { captureExecRequestCancellation } from "../../agents/bash-process-control.js";
-import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import { discardSessionPendingInput } from "../../config/sessions/session-pending-input-withdrawal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -32,6 +31,7 @@ import {
   waitForChatAbortTerminalPersistence,
 } from "../chat-abort-lifecycle-internal.js";
 import { captureWorkerInferenceForSession, createChatAbortOps } from "../chat-abort-ops.js";
+import { createChatAbortSignalReason } from "../chat-abort.js";
 import { formatStopRequest } from "../control-plane-audit.js";
 import {
   resolveRequestedSessionAgentId,
@@ -189,6 +189,7 @@ export async function handleChatAbortRequestWithLifecycle(
         defaultAgentId: compatibilityDefaultAgentId,
         abortOrigin: "rpc",
         stopReason: "rpc",
+        userInitiated: params.userInitiated,
         stopSource: "client-session",
         hookContext: stopHookContext,
         requester,
@@ -255,7 +256,7 @@ export async function handleChatAbortRequestWithLifecycle(
     // descendants, workers, or command hooks selected by the caller's placeholder key.
     const stopped = cancelCapturedSessionControllerSource(
       captureSessionControllerStop({ inputs: [reservedCandidate] }),
-      { assertCurrent, reason: createAgentRunDirectAbortError() },
+      { assertCurrent, reason: createChatAbortSignalReason("rpc", params.userInitiated) },
     );
     const failure = stopped.failures[0];
     if (failure) {
@@ -478,7 +479,7 @@ export async function handleChatAbortRequestWithLifecycle(
         source: "client-run",
         capture: captureSessionControllerStop({ inputs: [reserved] }),
         assertCurrent: assertReserved,
-        reason: createAgentRunDirectAbortError(),
+        reason: createChatAbortSignalReason("rpc", params.userInitiated),
         hookContext: {
           ...stopHookContext,
           sessionKey: activeIdentity.sessionKey,
@@ -602,6 +603,7 @@ export async function handleChatAbortRequestWithLifecycle(
     cfg: abortCfg,
     runId,
     active,
+    userInitiated: params.userInitiated,
     lifecycleRevision:
       selectedSession.ok && selectedSession.value.entry?.sessionId === sessionId
         ? selectedSession.value.entry.lifecycleRevision

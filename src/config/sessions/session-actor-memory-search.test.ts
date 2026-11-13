@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildSessionEntry,
   statSessionEntrySync,
+  streamSessionEntry,
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import { readSessionResetRecallCutoff } from "../../../packages/memory-host-sdk/src/host/session-reset-recall-read.js";
 import type { SessionLeafControl } from "../../agents/sessions/session-manager-types.js";
@@ -268,7 +269,14 @@ describe("Memory export from the session actor", () => {
     message: { role: "user", content: text },
   });
 
-  async function fixture(target = scope) {
+  async function fixture(
+    target = scope,
+    events: unknown[] = [
+      message("old", "Previous discussion"),
+      { type: "reset", id: "reset", parentId: "old", firstKeptEntryId: "old" },
+      message("new", "Current discussion"),
+    ],
+  ) {
     const { sessionId: _sessionId, ...acquisition } = target;
     owners.push({ agentId: target.agentId, path: target.storePath });
     const initial = await acquireSessionActorStorage(acquisition, {
@@ -284,9 +292,7 @@ describe("Memory export from the session actor", () => {
       entry: { sessionId: target.sessionId, updatedAt: 1 },
       transcriptEvents: [
         { type: "session", id: target.sessionId, version: 3, cwd: "/synthetic" },
-        message("old", "Previous discussion"),
-        { type: "reset", id: "reset", parentId: "old", firstKeptEntryId: "old" },
-        message("new", "Current discussion"),
+        ...events,
       ],
     });
     return { actor };
@@ -408,5 +414,36 @@ describe("Memory export from the session actor", () => {
       ),
     ).rejects.toThrow("Memory disclosure was revoked");
     expect(disclosed).toEqual([{ role: "user", content: "Previous discussion" }]);
+  });
+
+  it("blocks the next export page when a page consumer revokes permission", async () => {
+    // Each message fills one 512 KiB export page.
+    const { actor } = await fixture(scope, [
+      message("first", `first ${"x".repeat(600_000)}`),
+      message("second", `second ${"y".repeat(600_000)}`),
+    ]);
+    let allowed = true;
+    const selectedAuthority: SessionActorAuthority = {
+      assertCurrent() {},
+      authorize() {
+        if (!allowed) {
+          throw new Error("Memory disclosure was revoked");
+        }
+      },
+    };
+    const pages: string[] = [];
+    await expect(
+      runWithSessionActorStorage(
+        { actor, authority: selectedAuthority, agentId: scope.agentId, path: scope.storePath },
+        () =>
+          streamSessionEntry(scope.sessionKey, scope, {
+            onPage(page) {
+              pages.push(page.lines[0]!.slice(0, 11));
+              allowed = false;
+            },
+          }),
+      ),
+    ).rejects.toThrow("Memory disclosure was revoked");
+    expect(pages).toEqual(["User: first"]);
   });
 });

@@ -265,34 +265,26 @@ describe("telegram bot message processor", () => {
     );
   });
 
-  it("runs the dispatch-start lifecycle after context creation and before dispatch", async () => {
-    const onDispatchStart = vi.fn(async () => undefined);
-    buildTelegramMessageContext.mockResolvedValue(createMessageContext());
-
-    const processMessage = createTelegramMessageProcessor(baseDeps);
-    await expect(processSampleMessage(processMessage, { onDispatchStart })).resolves.toEqual({
-      kind: "completed",
-    });
-
-    expect(onDispatchStart).toHaveBeenCalledTimes(1);
-    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
-    expect(requireInvocationOrder(onDispatchStart.mock, "dispatch-start invocation")).toBeLessThan(
-      requireInvocationOrder(dispatchTelegramMessage.mock, "message dispatch invocation"),
-    );
-  });
-
-  it("does not run the dispatch-start lifecycle when no context is produced", async () => {
-    const onDispatchStart = vi.fn(async () => undefined);
-    buildTelegramMessageContext.mockResolvedValue(null);
-
-    const processMessage = createTelegramMessageProcessor(baseDeps);
-    await expect(processSampleMessage(processMessage, { onDispatchStart })).resolves.toEqual({
-      kind: "skipped",
-    });
-
-    expect(onDispatchStart).not.toHaveBeenCalled();
-    expect(dispatchTelegramMessage).not.toHaveBeenCalled();
-  });
+  it.each([true, false])(
+    "runs dispatch-start only with context (context=%s)",
+    async (hasContext) => {
+      const onDispatchStart = vi.fn(async () => undefined);
+      buildTelegramMessageContext.mockResolvedValue(hasContext ? createMessageContext() : null);
+      const processMessage = createTelegramMessageProcessor(baseDeps);
+      await expect(processSampleMessage(processMessage, { onDispatchStart })).resolves.toEqual({
+        kind: hasContext ? "completed" : "skipped",
+      });
+      expect(onDispatchStart).toHaveBeenCalledTimes(Number(hasContext));
+      expect(dispatchTelegramMessage).toHaveBeenCalledTimes(Number(hasContext));
+      if (hasContext) {
+        expect(
+          requireInvocationOrder(onDispatchStart.mock, "dispatch-start invocation"),
+        ).toBeLessThan(
+          requireInvocationOrder(dispatchTelegramMessage.mock, "message dispatch invocation"),
+        );
+      }
+    },
+  );
 
   it("dispatches media context without logging message content", async () => {
     const body = "private Telegram image caption";
@@ -330,69 +322,127 @@ describe("telegram bot message processor", () => {
     expect(JSON.stringify(verboseLog.mock.calls)).not.toContain(body);
   });
 
-  it("sends user-visible fallback when dispatch throws", async () => {
-    const sendMessage = vi.fn().mockResolvedValue(undefined);
-    const { processMessage, runtimeError, dispatchError } = createDispatchFailureHarness(
-      {
-        threadSpec: { id: 456, scope: "forum" },
-      },
-      sendMessage,
-    );
-    const result = await processSampleMessage(processMessage);
-
-    expect(result).toEqual({ kind: "failed-retryable", error: dispatchError });
-
-    expect(sendMessage).toHaveBeenCalledWith(
-      123,
-      "Something went wrong while processing your request. Please try again.",
-      { message_thread_id: 456 },
-    );
-    expect(runtimeError).toHaveBeenCalledWith(
-      "telegram message processing failed: Error: dispatch exploded",
-    );
-  });
-
-  it("finalizes spooled adoption before settling the ingress participant", async () => {
-    buildTelegramMessageContext.mockResolvedValue(createMessageContext());
-    const events: string[] = [];
-    const finalizeSpooledReplayResult = vi.fn(
-      async (
-        result: TelegramMessageProcessingResult,
-        phase: "adopted" | "terminal",
-      ): Promise<TelegramMessageProcessingResult> => {
-        events.push(`finalizer:${phase}`);
-        return result;
-      },
-    );
-    dispatchTelegramMessage.mockImplementationOnce(async ({ turnAdoptionLifecycle }) => {
-      await turnAdoptionLifecycle?.onAdopted();
-      return { kind: "completed" };
-    });
-    const processMessage = createTelegramMessageProcessor(baseDeps);
-    const update = { update_id: 123458 };
-
-    const replay = await runWithTelegramSpooledReplayUpdate(update, async () => {
-      const participant = createTelegramSpooledReplayDeferredParticipant("test:finalizer-order");
-      if (!participant) {
-        throw new Error("expected spooled replay participant");
+  it.each([
+    [456, { message_thread_id: 456 }, false],
+    [1, undefined, false],
+    [undefined, undefined, true],
+  ] as const)(
+    "handles dispatch failure fallback (topic=%s, params=%j, sendFailure=%s)",
+    async (threadId, threadParams, sendFailure) => {
+      const sendMessage = vi.fn();
+      if (sendFailure) {
+        sendMessage.mockRejectedValue(new Error("blocked by user"));
+      } else {
+        sendMessage.mockResolvedValue(undefined);
       }
-      const settle = participant.settle;
-      participant.settle = (result) => {
-        events.push(`participant:${result.kind}`);
-        settle(result);
-      };
-      return await processSampleMessage(
-        processMessage,
-        { finalizeSpooledReplayResult },
-        { update },
+      const { processMessage, runtimeError, dispatchError } = createDispatchFailureHarness(
+        threadId === undefined ? {} : { threadSpec: { id: threadId, scope: "forum" } },
+        sendMessage,
       );
-    });
+      await expect(processSampleMessage(processMessage)).resolves.toEqual({
+        kind: "failed-retryable",
+        error: dispatchError,
+      });
+      expect(sendMessage).toHaveBeenCalledWith(
+        123,
+        "Something went wrong while processing your request. Please try again.",
+        threadParams,
+      );
+      expect(runtimeError).toHaveBeenCalledWith(
+        "telegram message processing failed: Error: dispatch exploded",
+      );
+    },
+  );
 
-    expect(replay.value).toEqual({ kind: "completed" });
-    await expect(replay.deferredWork?.task).resolves.toEqual({ kind: "completed" });
-    expect(events).toEqual(["finalizer:adopted", "participant:completed"]);
-    expect(finalizeSpooledReplayResult).toHaveBeenCalledTimes(1);
-  });
+  it.each([undefined, "queue-cap-old", "queue-cap-new"] as const)(
+    "settles a spooled source after its durable receipt: %s",
+    async (reason) => {
+      buildTelegramMessageContext.mockResolvedValue(createMessageContext());
+      const events: string[] = [];
+      const receipt = createDeferred<void>();
+      const receiptStarted = createDeferred<void>();
+      const callbackStarted = createDeferred<void>();
+      const receiptError = reason === "queue-cap-new" ? new Error("receipt failed") : undefined;
+      const result: TelegramMessageProcessingResult = reason
+        ? { kind: "dropped", reason }
+        : { kind: "completed" };
+      const finalizeSpooledReplayResult = vi.fn(async () => {
+        events.push("finalizer");
+        return result;
+      });
+      const settleReceipt = () => {
+        events.push("drain");
+        receiptStarted.resolve();
+        return receipt.promise;
+      };
+      let sourceResult: Promise<unknown> | undefined;
+      dispatchTelegramMessage.mockImplementationOnce(async ({ turnAdoptionLifecycle }) => {
+        const settlement = reason
+          ? turnAdoptionLifecycle.onDropped(reason)
+          : turnAdoptionLifecycle.onAdopted();
+        sourceResult = Promise.resolve(settlement).then(
+          () => events.push("source"),
+          (error: unknown) => error,
+        );
+        callbackStarted.resolve();
+        await settlement;
+        return { kind: "completed" };
+      });
+      const update = { update_id: 123458 };
+      const processing = runWithTelegramSpooledReplayUpdate(
+        update,
+        async () => {
+          const participant = expectDefined(
+            createTelegramSpooledReplayDeferredParticipant("test:receipt"),
+            "spooled participant",
+          );
+          const settle = participant.settle;
+          participant.settle = (outcome) => {
+            events.push(`participant:${outcome.kind}`);
+            settle(outcome);
+          };
+          return await processSampleMessage(
+            createTelegramMessageProcessor(baseDeps),
+            { finalizeSpooledReplayResult },
+            { update },
+          );
+        },
+        {
+          abortSignal: new AbortController().signal,
+          onAdopted: settleReceipt,
+          onDropped: settleReceipt,
+          onDeferred: () => {},
+          onAbandoned: () => {},
+        },
+      );
+      try {
+        await callbackStarted.promise;
+        const source = expectDefined(sourceResult, "source settlement");
+        expect(
+          await Promise.race([
+            receiptStarted.promise.then(() => "receipt"),
+            source.then(() => "source"),
+          ]),
+        ).toBe("receipt");
+        expect(events).toEqual(["finalizer", `participant:${result.kind}`, "drain"]);
+        if (receiptError) {
+          receipt.reject(receiptError);
+          expect(await sourceResult).toBe(receiptError);
+        } else {
+          receipt.resolve();
+          await sourceResult;
+          expect(events.at(-1)).toBe("source");
+        }
+        const replay = await processing;
+        expect(replay.value).toEqual(result);
+        await expect(replay.deferredWork?.task).resolves.toEqual(result);
+        expect(finalizeSpooledReplayResult).toHaveBeenCalledOnce();
+      } finally {
+        receipt.resolve();
+        await processing;
+      }
+    },
+  );
 
   it("owns spooled dispatch through draft cleanup and fallback delivery after adoption", async () => {
     const cleanup = createDeferred<void>();
@@ -619,27 +669,21 @@ describe("telegram bot message processor", () => {
       .mockRejectedValueOnce(finalizerError);
     let participantSettles = 0;
     let settledAfterFirstAdmission = false;
-    let firstAdmissionError: unknown;
-    let secondAdmissionError: unknown;
-    let thirdAdmissionError: unknown;
+    const admissionErrors: unknown[] = [];
+    const admissionsDone = createDeferred<void>();
     dispatchTelegramMessage.mockImplementationOnce(async ({ turnAdoptionLifecycle }) => {
       turnAdoptionLifecycle?.onDeferred?.();
-      try {
-        await turnAdoptionLifecycle?.onAdopted();
-      } catch (error) {
-        firstAdmissionError = error;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        admissionErrors.push(
+          await Promise.resolve()
+            .then(() => turnAdoptionLifecycle.onAdopted())
+            .catch((error: unknown) => error),
+        );
+        if (attempt === 0) {
+          settledAfterFirstAdmission = participantSettles > 0;
+        }
       }
-      settledAfterFirstAdmission = participantSettles > 0;
-      try {
-        await turnAdoptionLifecycle?.onAdopted();
-      } catch (error) {
-        secondAdmissionError = error;
-      }
-      try {
-        await turnAdoptionLifecycle?.onAdopted();
-      } catch (error) {
-        thirdAdmissionError = error;
-      }
+      admissionsDone.resolve();
       return { kind: "completed" };
     });
     const processMessage = createTelegramMessageProcessor(baseDeps);
@@ -664,10 +708,9 @@ describe("telegram bot message processor", () => {
       );
     });
 
-    expect(firstAdmissionError).toBe(finalizerError);
+    await admissionsDone.promise;
+    expect(admissionErrors).toEqual([finalizerError, undefined, undefined]);
     expect(settledAfterFirstAdmission).toBe(false);
-    expect(secondAdmissionError).toBeUndefined();
-    expect(thirdAdmissionError).toBeUndefined();
     expect(finalizeSpooledReplayResult).toHaveBeenCalledTimes(2);
     expect(participantSettles).toBe(1);
     expect(replay.value).toEqual({ kind: "completed" });
@@ -757,44 +800,5 @@ describe("telegram bot message processor", () => {
 
     expect(frame.value).toEqual({ kind: "failed-retryable", error: dispatchError });
     expect(frame.result).toBeUndefined();
-  });
-
-  it("omits message_thread_id for General-topic fallback replies", async () => {
-    const sendMessage = vi.fn().mockResolvedValue(undefined);
-    const { processMessage, dispatchError } = createDispatchFailureHarness(
-      {
-        threadSpec: { id: 1, scope: "forum" },
-      },
-      sendMessage,
-    );
-    const result = await processSampleMessage(processMessage);
-
-    expect(result).toEqual({ kind: "failed-retryable", error: dispatchError });
-
-    expect(sendMessage).toHaveBeenCalledWith(
-      123,
-      "Something went wrong while processing your request. Please try again.",
-      undefined,
-    );
-  });
-
-  it("swallows fallback delivery failures after dispatch throws", async () => {
-    const sendMessage = vi.fn().mockRejectedValue(new Error("blocked by user"));
-    const { processMessage, runtimeError, dispatchError } = createDispatchFailureHarness(
-      {},
-      sendMessage,
-    );
-    const result = await processSampleMessage(processMessage);
-
-    expect(result).toEqual({ kind: "failed-retryable", error: dispatchError });
-
-    expect(sendMessage).toHaveBeenCalledWith(
-      123,
-      "Something went wrong while processing your request. Please try again.",
-      undefined,
-    );
-    expect(runtimeError).toHaveBeenCalledWith(
-      "telegram message processing failed: Error: dispatch exploded",
-    );
   });
 });

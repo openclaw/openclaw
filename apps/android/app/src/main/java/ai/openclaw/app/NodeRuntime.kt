@@ -46,7 +46,6 @@ import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.gateway.NativeControlUiCredential
 import ai.openclaw.app.gateway.NetworkMonitor
 import ai.openclaw.app.gateway.NodeEventSendOutcome
-import ai.openclaw.app.gateway.TalkSessionCloseDisposition
 import ai.openclaw.app.gateway.buildNativeControlUiConnectAuth
 import ai.openclaw.app.gateway.decideGatewayTlsTrust
 import ai.openclaw.app.gateway.formatGatewayAuthority
@@ -556,6 +555,9 @@ internal class NotificationNodeEventOutbox(
     pending.clear()
   }
 }
+
+/** Distinguishes a stalled TLS probe from a WebSocket connect timeout; only the former can offer manual pin entry. */
+internal const val GATEWAY_TLS_HANDSHAKE_TIMEOUT_REASON = "tls-handshake-timeout"
 
 data class GatewayConnectionProblem(
   val code: String?,
@@ -1191,6 +1193,7 @@ class NodeRuntime internal constructor(
   private var providerModelCatalogNeedsStatusRefresh = true
   private val _modelAuthProviders = MutableStateFlow<List<GatewayModelProviderSummary>>(emptyList())
   val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = _modelAuthProviders.asStateFlow()
+  private val talkSetupRefreshGuard = LatestGatewayRefreshGuard()
   private val _talkSetupReadiness = MutableStateFlow(GatewayTalkSetupReadiness.unverified())
   val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> = _talkSetupReadiness.asStateFlow()
   private val _gatewayDefaultAgentId = MutableStateFlow<String?>(null)
@@ -1389,6 +1392,9 @@ class NodeRuntime internal constructor(
     var handedOff = false
     var waitingForAdmission = true
     var deadlineExpired = false
+
+    // Set by the timeout recovery action: open manual pin entry instead of re-probing a handshake that stalls.
+    var manualTlsTrust = false
 
     override fun invoke(): Boolean = isCurrent()
   }
@@ -1756,6 +1762,7 @@ class NodeRuntime internal constructor(
     _providerModelCatalogRefreshing.value = false
     _providerModelCatalogErrorText.value = null
     _modelAuthProviders.value = emptyList()
+    talkSetupRefreshGuard.invalidate()
     _talkSetupReadiness.value = GatewayTalkSetupReadiness.unverified()
     voiceWakeWordsSaveSeq.incrementAndGet()
     _voiceWakeWordsSaving.value = false
@@ -2192,6 +2199,9 @@ class NodeRuntime internal constructor(
 
   val talkModeEnabled: StateFlow<Boolean>
     get() = talkMode.isEnabled
+
+  val talkMicrophoneMuted: StateFlow<Boolean>
+    get() = talkMode.isMicrophoneMuted
 
   val talkModeListening: StateFlow<Boolean>
     get() = talkMode.isListening
@@ -3573,11 +3583,9 @@ class NodeRuntime internal constructor(
 
   internal fun acknowledgeTalkModeFailure(notice: TalkFailureNotice): Unit = talkMode.acknowledgeFailure(notice)
 
-  fun setTalkModeEnabled(value: Boolean): Unit =
-    setVoiceCaptureMode(
-      if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off,
-      disposition = if (value) TalkSessionCloseDisposition.Detach else TalkSessionCloseDisposition.Abort,
-    )
+  fun setTalkModeEnabled(value: Boolean): Unit = setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
+
+  fun setTalkMicrophoneMuted(value: Boolean): Unit = talkMode.setMicrophoneMuted(value)
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
     runTalkPttCommand {
@@ -4033,7 +4041,6 @@ class NodeRuntime internal constructor(
   private fun setVoiceCaptureMode(
     mode: VoiceCaptureMode,
     persistManualMic: Boolean = true,
-    disposition: TalkSessionCloseDisposition = TalkSessionCloseDisposition.Detach,
   ) {
     var startAfterSuppression: VoiceCaptureMode? = null
     var ownershipEpoch = 0L
@@ -4053,7 +4060,7 @@ class NodeRuntime internal constructor(
         when (captureMode) {
           VoiceCaptureMode.Off -> {
             talkMode.ttsOnAllResponses = false
-            talkMode.stopAllCapture(disposition = disposition)
+            talkMode.stopAllCapture()
             stopVoicePlayback()
             micCapture.setMicEnabled(false)
             if (persistManualMic) {
@@ -4276,16 +4283,20 @@ class NodeRuntime internal constructor(
     target: okhttp3.HttpUrl,
     currentAttempt: () -> Boolean,
   ) {
-    refreshGatewayConnection {
+    refreshGatewayConnection(isCurrent = {
       val endpoint = connectingEndpoint ?: connectedEndpoint
       currentAttempt() && endpoint != null && connectionManager.resolveTlsParams(endpoint) != null &&
         endpoint.host.equals(target.host, ignoreCase = true) && endpoint.port == target.port &&
         endpoint.contextPath.trimEnd('/') == target.encodedPath.trimEnd('/')
-    }
+    })
   }
 
-  fun refreshGatewayConnection(isCurrent: () -> Boolean = { true }) {
+  fun refreshGatewayConnection(
+    isCurrent: () -> Boolean = { true },
+    manualTlsTrust: Boolean = false,
+  ) {
     val intent = beginGatewayReplacementOperation(isCurrent) ?: return
+    intent.manualTlsTrust = manualTlsTrust
     intent.handedOff = true
     launchGatewayLifecycle(intent) {
       val endpoint = connectedEndpoint
@@ -4632,6 +4643,23 @@ class NodeRuntime internal constructor(
     if (tls != null) {
       val storedFingerprint = tls.expectedFingerprint
       intent.handedOff = true
+      if (intent.manualTlsTrust && storedFingerprint == null) {
+        launchGatewayLifecycle({ isCurrentConnectAttempt(connectAttemptId) }) {
+          finishGatewayConnectionOperation(intent)
+          setStandaloneGatewayStatus(gatewayTlsProbeFailureMessage(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT), operation = intent)
+          publishGatewayTrustPromptIfCurrent(
+            connectAttemptId = connectAttemptId,
+            prompt =
+              GatewayTrustPrompt(
+                endpoint = endpoint,
+                fingerprintSha256 = null,
+                auth = auth,
+                probeFailure = GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT,
+              ),
+          )
+        }
+        return
+      }
       tlsProbeJob =
         scope.launch {
           val tlsProbe =
@@ -4702,10 +4730,10 @@ class NodeRuntime internal constructor(
               is GatewayTlsTrustDecision.Failed -> {
                 clearAcceptedConnectAttempt()
                 val problem =
-                  if (decision.reason == GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE) {
-                    gatewayConnectionProblem(gatewayNetworkConnectError(), false, endpoint)
-                  } else {
-                    null
+                  when (decision.reason) {
+                    GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE -> gatewayConnectionProblem(gatewayNetworkConnectError(), false, endpoint)
+                    GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT -> gatewayConnectionProblem(gatewayNetworkConnectError(timedOut = true).copy(message = gatewayTlsTimeoutText.source), false, endpoint).copy(reason = GATEWAY_TLS_HANDSHAKE_TIMEOUT_REASON)
+                    GatewayTlsProbeFailure.TLS_UNAVAILABLE -> null
                   }
                 setStandaloneGatewayStatus(problem?.message ?: gatewayTlsProbeFailureMessage(decision.reason), problem, operation = intent)
               }
@@ -5524,6 +5552,12 @@ class NodeRuntime internal constructor(
       // the gateway to connections bound to our own profile.
       scope.launch { refreshBrandingFromGateway() }
     }
+    if (event == "config.changed") {
+      // Drop the cached Talk route before any in-flight catalog read can republish it.
+      talkSetupRefreshGuard.invalidate()
+      _talkSetupReadiness.value = GatewayTalkSetupReadiness.unverified()
+      if (operatorConnected) refreshTalkSetupReadiness()
+    }
     if (event == "sessions.catalog.host") {
       val owner = sessionCatalogProgressOwner.get()
       val progress =
@@ -6110,7 +6144,6 @@ class NodeRuntime internal constructor(
       val sessionKey = parseSessionCatalogContinueResult(response, json)
       return withCurrentGatewayData(gatewayScope) {
         if (sessionCatalogContinueSeq.get() != requestSeq) return@withCurrentGatewayData false
-        _sessionCatalogState.value = _sessionCatalogState.value.copy(continuingEntryId = null)
         if (!chatSelectionSeq.compareAndSet(selectionSeq, selectionSeq + 1)) return@withCurrentGatewayData false
         stopMessageSpeech()
         chat.switchSession(sessionKey, entry.agentId)
@@ -6123,12 +6156,18 @@ class NodeRuntime internal constructor(
         if (sessionCatalogContinueSeq.get() == requestSeq) {
           _sessionCatalogState.value =
             _sessionCatalogState.value.copy(
-              continuingEntryId = null,
               errorText = nativeString("Could not open this session."),
             )
         }
       }
       return false
+    } finally {
+      // The Activity's ViewModel can be cleared while this process runtime stays connected.
+      publishGatewayData(gatewayScope) {
+        if (sessionCatalogContinueSeq.get() == requestSeq) {
+          _sessionCatalogState.value = _sessionCatalogState.value.copy(continuingEntryId = null)
+        }
+      }
     }
   }
 
@@ -6760,18 +6799,34 @@ class NodeRuntime internal constructor(
   }
 
   private suspend fun refreshTalkSetupReadinessFromGateway() {
+    val refreshGeneration = talkSetupRefreshGuard.begin()
     val gatewayScope = captureGatewayDataScope() ?: return
     if (!operatorConnected) {
-      _talkSetupReadiness.value = GatewayTalkSetupReadiness.unverified()
+      talkSetupRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
+        _talkSetupReadiness.value = GatewayTalkSetupReadiness.unverified()
+      }
       return
     }
     val readiness =
       try {
-        parseGatewayTalkSetupReadiness(requestGatewayObject(gatewayScope, "talk.catalog", "{}"))
+        val catalog = requestGatewayObject(gatewayScope, "talk.catalog", "{}")
+        // talk.config selects native stt-tts versus realtime. A failed read must not
+        // fall back to the realtime catalog gate; Talk Mode loads the same config itself.
+        val talkConfig =
+          try {
+            requestGatewayObject(gatewayScope, "talk.config", "{}")?.get("config").asObjectOrNull()
+          } catch (error: CancellationException) {
+            throw error
+          } catch (_: Throwable) {
+            null
+          }
+        talkSetupReadinessFromGateway(catalog, talkConfig)
       } catch (_: Throwable) {
         GatewayTalkSetupReadiness.unverified(GatewayTalkSetupIssue.CatalogLoadFailed)
       }
-    publishGatewayData(gatewayScope) { _talkSetupReadiness.value = readiness }
+    talkSetupRefreshGuard.publishGatewayRefresh(gatewayScope, refreshGeneration) {
+      _talkSetupReadiness.value = readiness
+    }
   }
 
   private suspend fun refreshCronFromGateway() {

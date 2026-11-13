@@ -9,6 +9,7 @@ import {
   type ThemeColorMode,
   type ThemeDescriptor,
 } from "../../../packages/gateway-protocol/src/theme.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { ThemeValidationError, type ImportedCustomTheme } from "./custom-theme.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { normalizeThemePalette } from "./theme-palette.ts";
@@ -16,6 +17,7 @@ import type { ThemeName } from "./theme.ts";
 
 export type ThemeCatalogSnapshot = {
   themes: readonly ThemeDescriptor[];
+  palettes?: ReadonlyMap<string, CatalogTheme["palette"]>;
   error: Error | string | null;
   unavailableId?: string;
   read?: {
@@ -59,8 +61,16 @@ export function createThemeCatalog(
     reads.clear();
   };
   const readSnapshot = (theme: ThemeName): ThemeCatalogSnapshot => {
-    const error = snapshot.error ?? definitionErrors.get(theme) ?? null;
-    return error === snapshot.error ? snapshot : { ...snapshot, error };
+    const error =
+      snapshot.error ??
+      definitionErrors.get(theme) ??
+      definitionErrors.values().next().value ??
+      null;
+    return {
+      ...snapshot,
+      error,
+      palettes: new Map(Array.from(definitions, ([id, value]) => [id, value.palette])),
+    };
   };
 
   const remainsCurrent = (client: ApplicationGateway["snapshot"]["client"], profile?: string) =>
@@ -85,6 +95,7 @@ export function createThemeCatalog(
         },
       });
       requested.add(result.theme.id);
+      reads.clear();
     }
   };
 
@@ -124,12 +135,7 @@ export function createThemeCatalog(
         if (remainsCurrent(client, profile)) {
           snapshot = {
             ...snapshot,
-            error:
-              error instanceof ThemeValidationError
-                ? error
-                : error instanceof Error
-                  ? error.message
-                  : String(error),
+            error: error instanceof ThemeValidationError ? error : formatUiError(error),
           };
           onChange();
         }
@@ -167,12 +173,9 @@ export function createThemeCatalog(
         if (remainsCurrent(client, profile)) {
           definitionErrors.set(
             id,
-            error instanceof ThemeValidationError
-              ? error
-              : error instanceof Error
-                ? error.message
-                : String(error),
+            error instanceof ThemeValidationError ? error : formatUiError(error),
           );
+          reads.clear();
           onChange();
         }
       },
@@ -244,6 +247,11 @@ export function createThemeCatalog(
 
   return {
     snapshot(theme: ThemeName): ThemeCatalogSnapshot {
+      // Appearance needs every card's palette, not just the selected theme.
+      // Reuse the selection cache and its connection/profile invalidation.
+      for (const entry of snapshot.themes) {
+        ensureDefinition(entry.id);
+      }
       const value = readSnapshot(theme);
       if (!catalogRead && !definitionReads.has(theme)) {
         return value;

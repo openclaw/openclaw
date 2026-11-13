@@ -23,12 +23,30 @@ import {
   isPrivateIpAddress,
   resolvePinnedHostnameWithPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalObjectRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const SEARXNG_BASE_URL_ENV_VAR = "SEARXNG_BASE_URL";
 const SEARXNG_BASE_URL_PATH = "plugins.entries.searxng.config.webSearch.baseUrl";
 const DEFAULT_TIMEOUT_SECONDS = 20;
 const MAX_RESPONSE_BYTES = 1_000_000;
+// SearXNG serializes each unresponsive engine as [engine, errorType, ...].
+function readUnresponsiveEngines(parsed: unknown): string[] {
+  const raw = asOptionalObjectRecord(parsed)?.unresponsive_engines;
+  const engines: string[] = [];
+  for (const entry of Array.isArray(raw) ? raw : []) {
+    const [engine, reason] = Array.isArray(entry) ? entry : [entry];
+    if (typeof engine !== "string" || engine.length === 0) {
+      continue;
+    }
+    engines.push(
+      typeof reason === "string" && reason.length > 0 ? `${engine} (${reason})` : engine,
+    );
+  }
+  return engines;
+}
 
 function normalizeBaseUrl(value: unknown): string | undefined {
   return normalizeSecretInput(value)?.replace(/\/+$/u, "") || undefined;
@@ -200,21 +218,32 @@ export async function runSearxngSearch(params: {
           throw new Error("SearXNG returned invalid JSON.");
         }
 
-        return nativeWebSearchCodecs["searxng.search"].results(parsed, count);
+        return {
+          results: nativeWebSearchCodecs["searxng.search"].results(parsed, count),
+          unresponsiveEngines: readUnresponsiveEngines(parsed),
+        };
       },
     );
   };
-  let results = await fetchSearxngResults(categories);
+  let page = await fetchSearxngResults(categories);
   params.signal?.throwIfAborted();
-  if (results.length === 0 && categories) {
+  if (page.results.length === 0 && categories) {
     const normalized = categories
       .split(",")
       .map((category) => category.trim().toLowerCase())
       .filter((category) => category.length > 0);
     if (normalized.length > 0 && !normalized.includes("general")) {
-      results = await fetchSearxngResults("general");
+      page = await fetchSearxngResults("general");
       params.signal?.throwIfAborted();
     }
+  }
+  const { results, unresponsiveEngines } = page;
+  // No results while engines were suspended, rate-limited or timing out is a failed
+  // search, not an empty one: fail so the caller does not treat (and cache) it as "nothing found".
+  if (results.length === 0 && unresponsiveEngines.length > 0) {
+    throw new Error(
+      `SearXNG returned no results and reported unresponsive engines: ${unresponsiveEngines.join(", ")}.`,
+    );
   }
 
   const payload = {

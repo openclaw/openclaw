@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { startChatSendDiagnostics } from "../../gateway/server-methods/chat-send-diagnostics.js";
 import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
+import { withWorktreePreparationTiming } from "../worktrees/preparation-timing.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   prepareSandboxDependencyTemplate,
@@ -126,37 +127,60 @@ async function prepare(config = cfg, signal?: AbortSignal, rollbackGuard = vi.fn
   }
 }
 
-it("installs the pinned guest image without session credentials or writable Git metadata", async () => {
-  expect(await prepare()).toEqual({ installed: true });
-  const admitted = mocks.ensure.mock.calls[0]![0];
-  expect(admitted.cfg.docker).toMatchObject({
-    image,
-    workdir: "/workspace",
-    network: "bridge",
-    env: {
-      CI: "1",
-      HOME: "/tmp/openclaw-deps",
-      XDG_CONFIG_HOME: "/tmp/openclaw-deps/config",
-      XDG_DATA_HOME: "/tmp/openclaw-deps/data",
-      XDG_STATE_HOME: "/tmp/openclaw-deps/state",
-      XDG_CACHE_HOME: "/tmp/openclaw-deps/cache",
-    },
-    binds: undefined,
-    setupCommand: undefined,
-  });
-  expect(admitted.cfg.docker.env).not.toHaveProperty("REGISTRY_PASSWORD");
-  expect(admitted.agentWorkspaceDir).toBe(directory);
-  expect(admitted.readOnlyResourceMounts).toEqual([
-    { hostPath: "/owned/template/.git", containerPath: "/workspace/.git" },
-  ]);
-  expect(mocks.retire).toHaveBeenCalledWith(
-    expect.anything(),
-    containerId,
-    expect.any(AbortSignal),
-  );
-  expect(mocks.exec.mock.calls.map(([, args]) => args[0])).not.toContain("rm");
-  expect(cfg.docker.env).toHaveProperty("REGISTRY_PASSWORD", "private-fixture");
-});
+it.each([undefined, "PNPM_CONFIG_STORE_DIR", "npm_config_store_dir"])(
+  "installs the pinned guest image without session credentials or writable Git metadata (store=%s)",
+  async (key) => {
+    const storeDir = key ? "/operator/pnpm-store" : "/tmp/openclaw-deps/data/pnpm/store";
+    const config =
+      key === undefined
+        ? cfg
+        : {
+            ...cfg,
+            docker: { ...cfg.docker, env: { ...cfg.docker.env, [key]: storeDir } },
+          };
+    const spans = new Map<string, number>();
+    const prepared = await withDiagnosticsTimelineObserver(
+      (name, _attributes, duration) => {
+        if (duration !== undefined) {
+          spans.set(name, duration);
+        }
+      },
+      () => withWorktreePreparationTiming("managed", () => prepare(config)),
+    );
+    expect(prepared).toEqual({ installed: true });
+    expect(spans.get("worktree.managed.templateRetire")).toEqual(expect.any(Number));
+    const admitted = mocks.ensure.mock.calls[0]![0];
+    expect(admitted.cfg.docker).toMatchObject({
+      image,
+      workdir: "/workspace",
+      network: "bridge",
+      env: {
+        CI: "1",
+        HOME: "/tmp/openclaw-deps",
+        XDG_CONFIG_HOME: "/tmp/openclaw-deps/config",
+        XDG_DATA_HOME: "/tmp/openclaw-deps/data",
+        XDG_STATE_HOME: "/tmp/openclaw-deps/state",
+        XDG_CACHE_HOME: "/tmp/openclaw-deps/cache",
+        PNPM_CONFIG_STORE_DIR: storeDir,
+        npm_config_store_dir: storeDir,
+      },
+      binds: undefined,
+      setupCommand: undefined,
+    });
+    expect(admitted.cfg.docker.env).not.toHaveProperty("REGISTRY_PASSWORD");
+    expect(admitted.agentWorkspaceDir).toBe(directory);
+    expect(admitted.readOnlyResourceMounts).toEqual([
+      { hostPath: "/owned/template/.git", containerPath: "/workspace/.git" },
+    ]);
+    expect(mocks.retire).toHaveBeenCalledWith(
+      expect.anything(),
+      containerId,
+      expect.any(AbortSignal),
+    );
+    expect(mocks.exec.mock.calls.map(([, args]) => args[0])).not.toContain("rm");
+    expect(cfg.docker.env).toHaveProperty("REGISTRY_PASSWORD", "private-fixture");
+  },
+);
 
 // Build test/fixtures/sandbox-home/Dockerfile and opt in with its image tag.
 it.runIf(process.env.OPENCLAW_TEST_SANDBOX_HOME_IMAGE)(
@@ -259,11 +283,26 @@ it.each(["stdout", "stderr"] as const)(
   },
 );
 
-it("uses offline installation when the sandbox has no network", async () => {
+it.each(["ENOSPC", "No space left on device", "No space left\n      on device (os error 28)"])(
+  "fails preparation on %s instead of publishing a partial install or source-only success",
+  async (failure) => {
+    mocks.exec.mockImplementation(async (_engine, args: string[]) => ({
+      code: args[0] === "exec" ? 1 : 0,
+      stdout: args[0] === "image" ? image : containerId,
+      stderr: args[0] === "exec" ? `${failure}\n${"progress\n".repeat(400)}` : "",
+    }));
+    await expect(prepare()).rejects.toThrow(
+      /Sandbox dependency installation ran out of space.*PNPM_CONFIG_STORE_DIR/u,
+    );
+    expect(mocks.retire).toHaveBeenCalledOnce();
+  },
+);
+
+it("uses offline installation without skipping source lifecycle scripts", async () => {
   const offlineCfg = { ...cfg, docker: { ...cfg.docker, network: "none" } };
   await prepare(offlineCfg);
   expect(mocks.exec.mock.calls.find(([, args]) => args[0] === "exec")?.[1]).toContain(
-    'exec pnpm install --offline --frozen-lockfile --store-dir "$XDG_DATA_HOME/pnpm/store"',
+    'exec pnpm install --offline --frozen-lockfile --config.optimistic-repeat-install=false --store-dir "$PNPM_CONFIG_STORE_DIR"',
   );
 });
 
