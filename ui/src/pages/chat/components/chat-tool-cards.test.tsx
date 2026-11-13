@@ -18,10 +18,10 @@ import {
 import { mountSolid as mountComponent } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
+import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { DiffBlock } from "./chat-diff-render.solid.tsx";
-import * as inlineCommandPresentation from "./chat-inline-command-presentation.tsx";
 import { createActivityGroupHarness } from "./chat-message-native.test-support.tsx";
 import { createMessageEntry, createToolGroup } from "./chat-message.test-support.ts";
 import { mountCard, mountPreview } from "./chat-tool-cards.test-support.tsx";
@@ -895,7 +895,7 @@ it("previews live command output without inferring completion and retains detail
     outputTruncated: true,
   };
   const options = {
-    inlineCommands: inlineCommandPresentation,
+    inlineCommands: await inlineCommandPresentation(),
     expanded: false,
     runActive: true,
     onToggleExpanded,
