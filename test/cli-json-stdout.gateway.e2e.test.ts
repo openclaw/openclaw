@@ -54,7 +54,6 @@ it.each([
 ])("renders Gateway query failures through the Gateway owner for $name", async (testCase) => {
   await withCliHome(async (tempHome) => {
     const configPath = path.join(tempHome, "missing-openclaw.json");
-    const stateDir = path.join(tempHome, "isolated-state");
     const gatewayError = "AUTOQA_INJECTED_GATEWAY_FAILURE";
     const concurrentSparkplug = "AUTOQA_CONCURRENT_SPARKPLUG";
     const result = runIsolatedCli(tempHome, testCase.args, {
@@ -107,21 +106,22 @@ it.each([
       });
       expect(result.stderr).toBe("");
     } else {
-      expectCliError(
-        result.stdout,
+      const message =
         "configReadFailure" in testCase
           ? `Config could not be read at ${configPath}:\n- <root>: read failed at ${configPath}: Error: ${testCase.message}`
-          : testCase.message,
-      );
+          : testCase.message;
+      expectCliError(result.stdout, message);
       if ("configReadFailure" in testCase && !("commander" in testCase)) {
         expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+        expect(result.stderr).toContain(`[openclaw] Reason: ${message}`);
+      } else {
+        expect(result.stderr).not.toContain(testCase.message);
       }
-      expect(result.stderr).not.toContain(testCase.message);
     }
     if ("tty" in testCase) {
       expect(result.stderr).toContain("\u001B[?25h");
     }
-    await expectMissing(stateDir, configPath);
+    await expectMissing(path.join(tempHome, "isolated-state"), configPath);
   });
 });
 

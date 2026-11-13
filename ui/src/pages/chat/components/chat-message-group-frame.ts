@@ -2,13 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { t } from "../../../i18n/index.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
-import {
-  normalizeRoleForGrouping,
-  resolveMessageRole,
-} from "../../../lib/chat/message-normalizer.ts";
-import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
-import { hasVisiblePreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { gatewayClientKind } from "../../../lib/gateway-client-kind.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";
@@ -74,29 +68,6 @@ export function prepareGroupMessage(
     }
   }
   return { item, source, actions: details, ownsActions };
-}
-
-export function isActivityMessageGroup(group: MessageGroupData, bubbleMode = false): boolean {
-  if (normalizeRoleForGrouping(group.role) !== "tool") {
-    return false;
-  }
-  if (
-    bubbleMode &&
-    group.messages.some(
-      (item) => item.hasVisibleContent && resolveMessageRole(item.message) === "assistant",
-    )
-  ) {
-    return false;
-  }
-  const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
-  return (
-    bubbleMode ||
-    group.messages.length > 1 ||
-    cards.length > 1 ||
-    (cards.length === 0 &&
-      group.messages.some(({ message }) => hasVisiblePreparedActivity(message))) ||
-    cards.some((card) => readToolApprovalReviews(card.details).length > 0)
-  );
 }
 
 export function resolveFileLinkOwnerOptions(
@@ -276,6 +247,12 @@ export function prepareMessageGroupFrame(
     lastMessageIndex,
     footerActionDetails,
     footerActionMessageKey,
+    rowReactions:
+      normalizedRole === "assistant" &&
+      !forwardedSource &&
+      !opts.bubbleMode &&
+      !isTurnBlock &&
+      opts.frameFooter !== false,
     hasUserFooterActions,
     // An undelivered steer's footer slot holds only its steer row; identity, time and
     // actions follow delivery.

@@ -1,6 +1,6 @@
 import type { ProgressCardStep } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, Show, createMemo, lazy } from "solid-js";
+import { For, Show, createMemo, lazy, useContext } from "solid-js";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -8,25 +8,33 @@ import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-too
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
 import { resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
-import { resolveToolCardDisplay, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
+import {
+  readLiveToolStreamOutput,
+  resolveToolCardDisplay,
+  resolveToolCardOutcome,
+  type ToolCardOutput,
+} from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
+import { projectSource } from "../../../lib/reactive/projection.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
-import "./browser-tab-card.css";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import { ChatImportBoundary } from "./chat-import-boundary.tsx";
-import { ChatPermissionCard } from "./chat-permission-card.tsx";
+import { ChatPermissionCard } from "./chat-message-deferred.tsx";
 import { ToolIcon } from "./chat-tool-card-chrome.tsx";
 import type { ToolCardProps } from "./chat-tool-card-types.ts";
-import { ExpandedToolCardContent } from "./chat-tool-content.solid.tsx";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
 import { resolveToolRowVerb } from "./chat-tool-row-presentation.ts";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
-const ToolCardRow = lazy(() => import("./chat-tool-card-row.solid.tsx"), { export: "ToolCardRow" });
+export const ToolCardBody = lazy(() => import("./chat-tool-card-row.solid.tsx"), {
+  export: "ToolCardBody",
+});
 
 function progressReceiptSteps(value: unknown): ProgressCardStep[] {
   if (!Array.isArray(value)) {
@@ -184,7 +192,7 @@ function ToolCardRowPlaceholder(props: ToolCardProps) {
   );
 }
 
-function ToolCardView(props: ToolCardProps) {
+function ToolCardView(props: ToolCardProps & { output?: ToolCardOutput }) {
   let host: HTMLDivElement | undefined;
   const card = createMemo(() => resolveToolCardDisplay(props.card), { equals: false });
   const permission = () =>
@@ -215,32 +223,16 @@ function ToolCardView(props: ToolCardProps) {
                   />
                 )}
               >
-                <ToolCardRow
-                  card={card()}
+                <ToolCardBody
+                  card={props.card}
+                  displayCard={card()}
+                  output={props.output}
                   options={props.options}
                   hasChildren={props.hasChildren}
-                />
-              </ChatImportBoundary>
-              <Show when={props.options.expanded}>
-                <Show
-                  when={props.hasChildren}
-                  fallback={
-                    <div class="chat-tool-msg-body">
-                      <ExpandedToolCardContent card={props.card} options={props.options} />
-                    </div>
-                  }
                 >
-                  <div class="chat-tool-children">
-                    {props.children}
-                    <details class="chat-tool-wrapper-details">
-                      <summary>{t("chat.toolCards.toolInput")}</summary>
-                      <div class="chat-tool-msg-body">
-                        <ExpandedToolCardContent card={props.card} options={props.options} />
-                      </div>
-                    </details>
-                  </div>
-                </Show>
-              </Show>
+                  {props.children}
+                </ToolCardBody>
+              </ChatImportBoundary>
               <Show when={props.options.showApprovalReviews !== false}>
                 <ToolApprovalReviews card={card()} />
               </Show>
@@ -268,16 +260,42 @@ function ToolCardView(props: ToolCardProps) {
 }
 
 export function ChatToolCard(props: ToolCardProps) {
+  const presented = useContext(ContentPresentation);
+  const outputProjection = createMemo(() => {
+    const source = props.options.toolMessageSource;
+    const { runId, callId, live, completed } = props.card;
+    if (!source || !runId || !callId || !live || completed) {
+      return undefined;
+    }
+    const invocation = projectSource(
+      { source, runId, callId },
+      {
+        read: (scope) => scope.source.readToolMessage(scope.runId, scope.callId),
+        subscribe: (scope, notify) =>
+          scope.source.subscribeToolMessage(scope.runId, scope.callId, notify),
+        equality: Object.is,
+      },
+    );
+    return createParkedProjection(
+      () => {
+        const message = invocation.read();
+        return message ? readLiveToolStreamOutput(message) : undefined;
+      },
+      () => presented() && (props.options.presented ?? true),
+    );
+  });
+  const output = () => outputProjection()?.();
   return (
     <PluginSurface
       surface="tool-result"
-      props={toolResultSurfaceProps(props.card, props.options)}
+      props={toolResultSurfaceProps(props.card, props.options, output())}
       presented={props.options.presented ?? true}
       enabled={props.options.mediaReadAllowed !== false}
       renderDefault={() => (
         <openclaw-chat-tool-card style={{ display: "contents" }}>
           <ToolCardView
             card={props.card}
+            output={output()}
             options={props.options}
             hasChildren={props.hasChildren ?? Boolean(props.children)}
           >

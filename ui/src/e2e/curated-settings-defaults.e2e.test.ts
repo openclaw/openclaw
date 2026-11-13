@@ -8,10 +8,9 @@ import {
   settingsRow,
 } from "./config-composer-fixtures.test-support.ts";
 const suite = createConfigSuite("Control UI curated settings defaults mocked Gateway E2E");
-const thinkingDefaultExplanation =
-  "Uses the selected model's thinking policy instead of saving a global thinking override.";
+const thinkingDefaultExplanation = "Default: use the model’s own effort setting.";
 const fastModeDefaultExplanation =
-  "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.";
+  "Default: use the model’s speed policy. Unlike Auto, this does not turn fast mode on.";
 function configResponse(config: Record<string, unknown>, hash: string) {
   return { ...configSnapshot(config, hash), appliedConfigHash: hash };
 }

@@ -1,4 +1,0 @@
-# Exact net regression growth for named-query admission, live-authority delivery,
-# distinct authenticated readers, durable grants, approval renewal, widget consumers,
-# reconnecting Android cleanup, and deterministic caller-revocation proof.
-948

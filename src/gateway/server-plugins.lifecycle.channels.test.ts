@@ -9,6 +9,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
+  type RuntimeConfigWriteApplicationStatus,
 } from "../config/runtime-write-application.js";
 import * as configFileSource from "../config/source-file.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -259,9 +260,18 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     });
     expect(committed.afterWrite.mode).toBe("auto");
     expect(application.claimed).toBe(true);
-    // Persistence schedules application; await its owner before probing the replacement.
-    await expect(application.result).resolves.toBe("applied");
-    expect((await settledProbe("cold-chat")).captured?.label).toBe("installed setup");
+    // The receipt can defer while retained work retires; observe actual application below.
+    const applicationResult = await application.result;
+    if (applicationResult !== "applied") {
+      expect(applicationResult).toEqual({
+        status: "deferred",
+        reason: expect.any(String),
+        appliesWhen: expect.any(String),
+      } satisfies RuntimeConfigWriteApplicationStatus);
+    }
+    await expect
+      .poll(async () => (await settledProbe("cold-chat")).captured?.label, { timeout: 10_000 })
+      .toBe("installed setup");
     expect(await settledProbe("cold-chat")).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
     expect(await settledProbe("sibling-chat")).toEqual(sibling);
     assert.ok(configWatcher);

@@ -38,6 +38,7 @@ const handshakeRecoverySnapshotSchema = z.strictObject({
         requestHost: boundedString.optional(),
         origin: boundedString.optional(),
         isLocalClient: z.boolean().optional(),
+        openclawIdTunnel: z.boolean().optional(),
       })
       .optional(),
   }),

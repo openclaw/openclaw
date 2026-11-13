@@ -51,7 +51,10 @@ import {
   openOpenClawAgentDatabaseInWorker,
   runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
-import { createAgentDatabaseExecutionCloser } from "./openclaw-agent-execution-close.js";
+import {
+  createAgentDatabaseExecutionCloser,
+  prepareCreatedAgentDatabaseBackend,
+} from "./openclaw-agent-execution-close.js";
 import type {
   AgentDatabaseFileExecutionIdentity,
   AgentDatabaseExecutionOpen,
@@ -89,23 +92,7 @@ export function createSqliteWorkerBackend(
   input: AgentDatabaseExecutionOpen,
   opening: { databasePath: string },
 ): SqliteWorkerPreparedBackend<AgentDatabaseOperations> {
-  const backend = openAgentDatabaseBackend(input, opening, true);
-  try {
-    backend.execute({ type: "database.prepareWrite", input: undefined });
-    backend.assertSettled?.();
-    return backend;
-  } catch (error) {
-    try {
-      backend.closeAfterFailedOpen();
-    } catch (cleanupError) {
-      throw createSqliteLifecycleAggregateError(
-        [error, cleanupError],
-        "Agent creation and cleanup failed",
-        error,
-      );
-    }
-    throw error;
-  }
+  return prepareCreatedAgentDatabaseBackend(openAgentDatabaseBackend(input, opening, true));
 }
 
 /** The broker supplies a private admission channel before invoking this native factory. */
@@ -139,7 +126,8 @@ function openAgentDatabaseBackend(
     input.creatingIdentity?.key ??
     opening.existingIdentity ??
     readDatabasePathIdentitySync(input.databasePath).key;
-  let admittedFileBirthtime = input.creatingIdentity?.birthtime;
+  let admittedFileBirthtime =
+    input.creatingIdentity?.birthtime ?? input.expectedIdentity?.birthtime;
   const assertFileIdentity = () => {
     try {
       if (!database && input.expectedIdentity) {
@@ -418,6 +406,17 @@ function openAgentDatabaseBackend(
     transferList?: Transferable[],
     requestAdmission?: AgentDatabaseAdmissionRestriction,
   ) => {
+    // Admitted reads finish on their retained file; mutations must still own the pathname.
+    if (stage !== "prepare") {
+      const operation = currentSqliteWorkerOperationAdmission.getStore();
+      if (operation) {
+        operation.owner.databaseIdentity ??= {
+          databasePath: input.databasePath,
+          key: admittedFileIdentity,
+          birthtime: admittedFileBirthtime,
+        };
+      }
+    }
     const request: SqliteWorkerAdmissionRequest = {
       stage,
       facts: {

@@ -1,2 +1,0 @@
-# Deferred Discord status must keep the mobile row and action geometry for unavailable and linked replies.
-57

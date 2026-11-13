@@ -51,7 +51,7 @@ export function readSessionTranscriptMaintenance(
             ? CODE_MODE_STORE_CUSTOM_TYPE
             : request.customType;
         const checkpoint = request.operation === "code-mode-store" ? request.checkpoint : undefined;
-        let events: Record<string, unknown>[] | undefined;
+        let events: Iterable<Record<string, unknown>> | undefined;
         if (
           checkpoint &&
           checkpoint.generation === version.generation &&
@@ -102,7 +102,7 @@ export function readSessionTranscriptMaintenance(
                   ? { writes: collectCodeModeStoreWrites(events, incremental), incremental }
                   : undefined,
               }
-            : { events }),
+            : { events: events && [...events] }),
         };
       }),
     );

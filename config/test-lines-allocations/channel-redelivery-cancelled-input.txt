@@ -1,2 +1,0 @@
-# Prove channel redelivery reopens its own cancelled input, keeps Stop/dismissal fences, and loses concurrent reopens.
-167

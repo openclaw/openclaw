@@ -5,7 +5,6 @@ import {
   setAgentRunAttemptTerminalFailure,
   type AgentRunAttemptFailureSource,
 } from "../../agent-run-terminal-outcome.js";
-import { SAFETY_MARGIN } from "../../compaction-planning.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import {
   buildAgentRunBlockedUserMessage,
@@ -20,14 +19,16 @@ import {
   createCompactionRequestBudget,
   type CompactionRequestBudget,
 } from "../../sessions/compaction/request-budget.js";
-import { createFixedRequestTokenEstimator } from "../../sessions/context-token-pressure.js";
+import {
+  SAFETY_MARGIN,
+  createFixedRequestTokenEstimator,
+} from "../../sessions/context-token-pressure.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
 import {
   persistToolResultProjections,
   persistSessionSystemPrompt,
-  persistSessionToolSurface,
 } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { createAbortableError, isOpenClawAbortableWrapper } from "./abortable.js";
@@ -537,8 +538,10 @@ export async function runEmbeddedAttemptPromptPhase(
         persistToolResultProjections: async () => {
           if (
             !isRawModelRun &&
-            (inHistorySystemUpdates ||
+            (sessionRuntime.prepareSystemPromptUpdate ||
               sessionPromptState.pendingToolSurface ||
+              sessionPromptState.usageRanking?.snapshot !==
+                sessionPromptState.persistedUsageRanking ||
               toolResultPromptProjectionState.frozen.size > 0)
           ) {
             await withTranscriptWrite(async () => {
@@ -547,11 +550,9 @@ export async function runEmbeddedAttemptPromptPhase(
                 toolResultPromptProjectionState,
                 (customType, data) => sessionManager.appendCustomEntryAsync(customType, data),
               );
-              const appendEntry = (customType: string, data: unknown) =>
-                sessionManager.appendCustomEntryAsync(customType, data);
-              await (sessionRuntime.prepareSystemPromptUpdate
-                ? persistSessionSystemPrompt(sessionPromptState, appendEntry)
-                : persistSessionToolSurface(sessionPromptState, appendEntry));
+              await persistSessionSystemPrompt(sessionPromptState, (customType, data) =>
+                sessionManager.appendCustomEntryAsync(customType, data),
+              );
             });
           }
         },

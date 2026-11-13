@@ -27,7 +27,6 @@ import {
 } from "../../infra/gateway-processes.js";
 import { captureStalledGatewayStartup } from "../../infra/gateway-startup-owner.js";
 import {
-  assertGatewayServiceMutationAllowed,
   formatExternalSupervisorActionRequired,
   isGatewayExternallySupervised,
   resolveGatewayServiceMutationError,
@@ -462,7 +461,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
   let preserveDefinition = Boolean(opts.preserveDefinition);
   if (preserveDefinition) {
-    assertGatewayServiceMutationAllowed("restart the gateway");
+    assertGatewayServiceActionAllowed("restart", "restart the gateway");
   }
   assertNativeRestartFlags(opts);
   if (isGatewayExternallySupervised()) {
@@ -511,7 +510,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     },
     readDriftContext: () => ({ config: configPorts.config ?? {}, command: restartContext.command }),
     expectedPort: configuredPort,
-    beforeServiceMutation: () => assertGatewayServiceMutationAllowed("restart the gateway"),
+    beforeServiceMutation: () =>
+      assertGatewayServiceActionAllowed("restart", "restart the gateway"),
     restartOwnedProcess: preserveDefinition
       ? undefined
       : async () => {

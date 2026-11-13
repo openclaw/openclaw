@@ -748,9 +748,6 @@ describe("attachment removal names", () => {
     const buttons = [...container.querySelectorAll<HTMLButtonElement>(".chat-attachment-remove")];
     const labels = names.map((name) => (name?.trim() ? "Remove " + name : "Remove attachment"));
     expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual(labels);
-    expect(
-      buttons.map((button) => (button.parentElement as HTMLElement & { content: string }).content),
-    ).toEqual(labels);
     buttons[2]?.click();
     expect(h.attachments.map(({ id }) => id)).toEqual(
       originals.filter((_, index) => index !== 2).map(({ id }) => id),

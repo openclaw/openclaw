@@ -33,6 +33,7 @@ import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
   onOpenClawIdTunnelPrincipalsChanged,
+  openclawIdSubjectRolePolicy,
   openclawIdTunnelRolePolicy,
   prepareOpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
@@ -93,13 +94,14 @@ export async function prepareCronStreamSandboxAuthority(params: {
   const originalRole = operator
     ? structuredClone(
         sourceRolePolicy(
-          membershipPolicy ??
+          openclawIdSubjectRolePolicy(principal, () =>
             resolveOperatorRolePolicyForAssignment(
               operator.profileId,
               operator.assignedRole,
               config,
               operator.githubLogin,
             ),
+          ),
         ),
       )
     : undefined;
@@ -248,19 +250,23 @@ export async function prepareCronStreamSandboxAuthority(params: {
     }
     const identity = profile?.readCurrentFacts(emailBindingIds);
     const role = operator
-      ? (membershipPolicy ??
-        resolveOperatorRolePolicyForAssignment(
-          operator.profileId,
-          operator.assignedRole,
-          currentConfig,
-          identity ? (identity.profile.githubLogin ?? null) : operator.githubLogin,
-        ))
+      ? openclawIdSubjectRolePolicy(principal, () =>
+          resolveOperatorRolePolicyForAssignment(
+            operator.profileId,
+            operator.assignedRole,
+            currentConfig,
+            identity ? (identity.profile.githubLogin ?? null) : operator.githubLogin,
+          ),
+        )
       : undefined;
     if (operator) {
+      // A current owner certificate, not the linked person's stored role, bounds owner work.
+      const ownerCertificate =
+        principal?.kind === "owner" && isOpenClawIdTunnelPrincipalCurrent(principal);
       if (
         (profile &&
           (identity?.profile.profileId !== operator.profileId ||
-            identity.profile.assignedRole !== operator.assignedRole ||
+            (!ownerCertificate && identity.profile.assignedRole !== operator.assignedRole) ||
             (identity.profile.githubLogin ?? null) !== operator.githubLogin)) ||
         !isDeepStrictEqual(sourceRolePolicy(role), originalRole) ||
         (role &&
@@ -354,6 +360,8 @@ export async function prepareCronStreamSandboxAuthority(params: {
           current.identity.profile,
           current.currentConfig,
           operator.gatewayAccessGrant,
+          undefined,
+          principal,
         );
       }
       // Plugin callbacks may synchronously publish role, profile, session, or config changes.
@@ -376,7 +384,15 @@ export async function prepareCronStreamSandboxAuthority(params: {
   subscriptions.push(
     onUserProfilesChanged(recheck),
     onOperatorRolePolicyChanged((change) => {
-      if (change.kind === "assignment" && change.profileId === operator?.profileId) {
+      if (
+        change.kind === "assignment" &&
+        change.profileId === operator?.profileId &&
+        change.roleOnly &&
+        principal?.kind === "owner"
+      ) {
+        // A linked owner device's authority is its certificate; its person's role is not.
+        recheck();
+      } else if (change.kind === "assignment" && change.profileId === operator?.profileId) {
         revoke(unavailable());
       } else if (change.kind === "config") {
         recheck();
@@ -434,6 +450,8 @@ export async function prepareCronStreamSandboxAuthority(params: {
         prepared.identity.profile,
         prepared.currentConfig,
         operator.gatewayAccessGrant,
+        undefined,
+        principal,
       );
       const originalAccess = access;
       const accessAborted = () => revoke(originalAccess?.signal.reason ?? unavailable());

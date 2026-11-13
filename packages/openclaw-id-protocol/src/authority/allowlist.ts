@@ -5,7 +5,7 @@
 // was listed, so a revocation can tell whether it covers that listing.
 import type { IrohEndpointKey, KeyFingerprint } from "../keys.js";
 import type { UnixSeconds } from "../statements/types.js";
-import { nodeRemovalEvents, withoutNodes } from "./nodes.js";
+import { nodeRemovalEvents, ownerDeviceNodes, withoutNodes } from "./nodes.js";
 import type { AuthorityEvent, AuthorityState, MemberRecord, OwnerDeviceRecord } from "./state.js";
 
 /** Default: owner devices not admitted for 90 days are dropped. */
@@ -96,12 +96,13 @@ export function approvalDescendants(state: AuthorityState, fp: KeyFingerprint): 
 
 /**
  * Removes owner devices from the allowlist, with the invites they registered that are still
- * open; returns the new state and the devices' peer keys.
+ * open and the nodes bound to them; returns the new state, the devices' peer keys and the
+ * removed node keys.
  */
 export function withoutOwnerDevices(
   state: AuthorityState,
   fps: readonly KeyFingerprint[],
-): { state: AuthorityState; peers: IrohEndpointKey[] } {
+): { state: AuthorityState; peers: IrohEndpointKey[]; nodes: IrohEndpointKey[] } {
   const remove = new Set(fps);
   const peers = fps.flatMap((fp) => state.owner_devices[fp]?.cert.body.peer_keys ?? []);
   const owner_devices = Object.fromEntries(
@@ -123,7 +124,12 @@ export function withoutOwnerDevices(
         invite.status !== "open" || invite.created_by === "root" || !remove.has(invite.created_by),
     ),
   );
-  return { state: { ...state, owner_devices, invites, node_invites }, peers: [...new Set(peers)] };
+  const nodes = ownerDeviceNodes(state, remove);
+  return {
+    state: withoutNodes({ ...state, owner_devices, invites, node_invites }, nodes),
+    peers: [...new Set(peers)],
+    nodes,
+  };
 }
 
 /** Removes peer keys from every member (members themselves stay listed). */
@@ -235,10 +241,12 @@ export function dropInactive(
     return null;
   }
   const owners = withoutOwnerDevices(state, idleOwners);
+  // A dropped owner device takes its bound node with it.
+  const nodes = [...new Set([...idleNodes, ...owners.nodes])];
   return {
-    state: withoutNodes(withoutMemberPeerKeys(owners.state, idleKeys), idleNodes),
-    peers: [...new Set([...owners.peers, ...idleKeys, ...idleNodes])],
-    events: idleNodes.length ? nodeRemovalEvents(idleNodes) : [],
+    state: withoutNodes(withoutMemberPeerKeys(owners.state, idleKeys), nodes),
+    peers: [...new Set([...owners.peers, ...idleKeys, ...nodes])],
+    events: nodes.length ? nodeRemovalEvents(nodes) : [],
   };
 }
 

@@ -54,6 +54,7 @@ import {
   isPreparedCliInternalSourceReply,
 } from "./execute-messaging.js";
 import { createSettledMessagingEvidence } from "./execute-settled-evidence.js";
+import { createCliTurnInterruptRequest } from "./execute-turn-interrupt.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const CLI_LOOPBACK_CORRELATION_MAX_CALLS = 64;
@@ -65,20 +66,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   let gatewayCaptureKey: string | undefined;
   let yielded = false;
   let yieldAcknowledgment: string | undefined;
-  let turnInterrupt: CliBackendTurnInterrupt | undefined;
-  let supportsTurnInterrupt = false;
-  let yieldToolResultObserved = false;
-  let yieldInterrupt: Promise<void> | undefined;
-  const requestYieldInterrupt = () => {
-    if (!yielded || !yieldToolResultObserved || !turnInterrupt || yieldInterrupt) {
-      return;
-    }
-    const interrupt = turnInterrupt;
-    yieldInterrupt = Promise.resolve().then(() => interrupt.interrupt("yield"));
-    // The execution owner joins this promise and cancels the transport on failure.
-    void yieldInterrupt.catch(() => {});
-  };
-  const shouldSuppressAssistantOutput = () => yielded && supportsTurnInterrupt;
+  const turnInterrupt = createCliTurnInterruptRequest();
+  const shouldSuppressAssistantOutput = () =>
+    (yielded || turnInterrupt.reason() === "source_reply") && turnInterrupt.isSupported();
   let didSendViaMessagingTool = false;
   let didDeliverSourceReplyViaMessageTool = false;
   let sourceReplyDelivered: true | undefined;
@@ -566,8 +556,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       stripOpenClawMcpToolPrefix(activeTool?.toolName ?? event.name) === "sessions_yield"
     ) {
       // Native's tool-result record confirms the yield response was consumed before interruption.
-      yieldToolResultObserved = true;
-      requestYieldInterrupt();
+      turnInterrupt.request("yield");
     }
     if (activeTool?.loopbackCall) {
       askUserDeadlines.clear(activeTool.loopbackCall);
@@ -582,6 +571,10 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         isError: event.isError,
         isLatestToolResult,
       });
+    }
+    // A final current-source reply ends the turn, as on the embedded runner; running siblings do not.
+    if (terminalSourceReplyDelivered && isLatestToolResult && activeCliTools.size === 0) {
+      turnInterrupt.request("source_reply");
     }
     return activeTool?.loopbackAmbiguous ? undefined : activeTool?.loopbackCall?.current.args;
   };
@@ -695,12 +688,10 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   return {
     beginGatewayCapture,
     registerTurnInterrupt(this: void, interrupt: CliBackendTurnInterrupt | undefined) {
-      turnInterrupt = interrupt;
-      supportsTurnInterrupt ||= interrupt !== undefined;
-      requestYieldInterrupt();
+      turnInterrupt.register(interrupt);
     },
     async waitForTurnInterrupt(this: void) {
-      await yieldInterrupt;
+      await turnInterrupt.wait();
     },
     shouldSuppressAssistantOutput,
     getActiveLoopbackAskUserDeadline: askUserDeadlines.get,

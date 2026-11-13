@@ -53,7 +53,10 @@ import type {
 import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
 import { resolveCompactionRuntimeSelection } from "./compaction-runtime-preparation.js";
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
-import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
+import {
+  hydratePersistedCompactionSkillsSnapshot,
+  type PreparedCompactEmbeddedAgentSessionParams,
+} from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
 import { log } from "./logger.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
@@ -152,6 +155,10 @@ export async function compactNativeCliSession(params: {
   let compactedMeta: EmbeddedAgentMeta | undefined;
   try {
     const runControlOperation = async () => {
+      const skillsSnapshot = await hydratePersistedCompactionSkillsSnapshot(
+        params.compactParams,
+        sessionAgentId,
+      );
       const result = await runCliAgent({
         replyOperation: params.replyOperation,
         preparedRunAdmission,
@@ -177,6 +184,20 @@ export async function compactNativeCliSession(params: {
           ? { sessionEntry: params.compactParams.sessionEntry }
           : {}),
         contextWindow: params.compactParams.sessionEntry?.contextWindow,
+        // Forward the turn's prompt inputs so the compact control op rebuilds
+        // the same request prefix (system prompt, MCP, skills) and the provider
+        // cache hits instead of rewriting history at cache-write price.
+        chatType: params.compactParams.chatType,
+        agentAccountId: params.compactParams.agentAccountId,
+        conversationToolPolicy: params.compactParams.conversationToolPolicy,
+        messageChannel: params.compactParams.messageChannel,
+        messageProvider: params.compactParams.messageProvider,
+        skillsSnapshot,
+        toolOverrides: params.compactParams.toolOverrides,
+        ownerNumbers: params.compactParams.ownerNumbers,
+        sourceReplyDeliveryMode: params.compactParams.sourceReplyDeliveryMode,
+        extraSystemPrompt: params.compactParams.extraSystemPrompt,
+        bootstrapWorkspaceDir: params.compactParams.bootstrapWorkspaceDir,
         trigger: "manual",
         controlOperation: "compact",
         disableCliLiveSession: true,

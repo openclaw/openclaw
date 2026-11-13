@@ -1,2 +1,0 @@
-# Regression proof for installed Claude CLI replacement, cache hits, and failed replacement recovery.
-98
