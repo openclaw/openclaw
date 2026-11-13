@@ -1,3 +1,0 @@
-# Synchronize 398 already-landed planner validation lines to this older PR head.
-# ci-planner-measurement.txt credits the original 157; this credits the remaining 241.
-241

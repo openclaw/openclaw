@@ -177,6 +177,12 @@ import type {
   SessionGoalOperationReceiptWorkerInput,
   SessionPendingInputReceiptsWorkerInput,
 } from "./session-transcript-worker-receipts.types.js";
+import type {
+  AgentToolUsageReadInput,
+  AgentToolUsageImportReadInput,
+  AgentToolUsageStatus,
+  AgentToolUsageImportScan,
+} from "./tool-usage.types.js";
 
 export type {
   PreparedSessionTranscriptHydration,
@@ -277,6 +283,8 @@ type TrajectoryEventsWorkerInput = {
 };
 
 export type SessionHistoryWorkerInput =
+  | AgentToolUsageReadInput
+  | AgentToolUsageImportReadInput
   | SessionRetirementReadWorkerInput
   | TrajectoryRetentionWorkerInput
   | TrajectoryEventsWorkerInput
@@ -498,6 +506,8 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
       kind: "session-identity-evidence";
       evidence: SessionIdentityEvidenceResult[];
     };
+    "agent-tool-usage": { kind: "agent-tool-usage"; status: AgentToolUsageStatus };
+    "agent-tool-usage-import": { kind: "agent-tool-usage-import"; scan: AgentToolUsageImportScan };
     "voice-sessions": { kind: "voice-sessions"; matches: VoiceSessionMatch[] };
     "model-context": ReturnType<typeof readSessionTranscriptModelContext>;
     "context-messages": import("./session-history-read.types.js").SessionTranscriptContextSnapshot;
@@ -545,6 +555,8 @@ type CancellableSessionHistoryReader<
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
   SessionTranscriptHydrationReaders & {
+    readAgentToolUsage: SessionHistoryReader<"agent-tool-usage", "status">;
+    readAgentToolUsageImport: SessionHistoryReader<"agent-tool-usage-import", "scan">;
     readRetirement: CancellableSessionHistoryReader<"session-retirement-read", "result">;
     readTrajectoryEvents: CancellableSessionHistoryReader<"trajectory-events", "events">;
     readTrajectoryRetention: (

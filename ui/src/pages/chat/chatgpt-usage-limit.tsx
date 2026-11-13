@@ -49,6 +49,7 @@ export function ChatGPTUsageLimit(props: { presented: boolean; kind: "business" 
             class="chatgpt-usage-limit__close"
             icon="x"
             label={t("common.close")}
+            tooltip={false}
             onClick={() => setOpen(false)}
           />
           <ProviderBrandIcon provider="openai" class="chatgpt-usage-limit__logo" />

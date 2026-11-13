@@ -129,6 +129,7 @@ const enNewSessionSetup = {
     browseAccessDenied: "You don’t have permission to browse this folder. Ask an admin for access.",
     browseRequiresAdmin:
       "You need admin access to browse outside agent workspaces. Ask an admin for access.",
+    browseRequiresAdminTooltip: "Only admins can browse outside agent workspaces.",
     connectMachine: "Connect a device",
     browserUp: "Parent folder",
     browserUse: "Use this folder",
@@ -157,6 +158,8 @@ const enNewSessionSetup = {
     startInTerminal: "Start in terminal",
     nativeTerminalHint:
       "Starts the native CLI on the selected device using its own account and configuration. This doesn’t create an OpenClaw session.",
+    nativeTerminalHintTooltip:
+      "Opens the native CLI on the selected device with its own account and settings—not an OpenClaw session.",
     chooseNativeHost: "Choose a device for the native CLI",
     nativeHostsUnavailable:
       "No native CLI is available. Install it on this computer or connect a device with CLI access, then reconnect to the Gateway.",

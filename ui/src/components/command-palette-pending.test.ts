@@ -80,10 +80,7 @@ describe("CommandPalette pending searches", () => {
         method === "sessions.search" ? transcript.promise : catalog.promise,
       );
       const list = vi.fn(() => metadata.promise);
-      const { palette, query, queryAll } = await mountSearch(
-        { methods: ["sessions.search"], request },
-        list,
-      );
+      const { palette, query } = await mountSearch({ methods: ["sessions.search"], request }, list);
       await enterQuery(palette, "zzfixtureunique");
       await settlePalette(palette, dispatched ? 200 : 199);
       expect(list).toHaveBeenCalledTimes(dispatched ? 1 : 0);
@@ -108,12 +105,16 @@ describe("CommandPalette pending searches", () => {
       expectPalettePromptMode(palette);
       expect(input.value).toBe(prompt);
 
+      // An automatic Compose holds until the draft is emptied.
+      setInputValue(input, "zzfixtureunique");
+      await palette.updateComplete;
+      expectPalettePromptMode(palette);
+      setInputValue(input, "");
       setInputValue(input, "zzfixtureunique");
       await palette.updateComplete;
       expect(query('[inert][aria-hidden="true"]')).toBeNull();
-      if (dispatched) {
-        expect(queryAll('[role="option"]')).toHaveLength(0);
-      }
+      // Emptying the draft settled the navigation list; no stale row may return.
+      expect(palette.querySelector('[role="listbox"]')?.textContent).not.toContain("stale");
       expect(query(".cmd-palette__source-error")).toBeNull();
       expect(list).toHaveBeenCalledTimes(dispatched ? 1 : 0);
       expect(request).toHaveBeenCalledTimes(dispatched ? 2 : 0);
@@ -140,7 +141,7 @@ describe("CommandPalette pending searches", () => {
     expect(palette.textContent).not.toContain("Searching sessions");
     const empty = query(".cmd-palette__no-results")!;
     expect(empty.querySelector("h2")?.textContent).toBe("No results match your search.");
-    expect(empty.textContent).toContain("to start a new session.");
+    expect(empty.textContent).toContain("to compose a new session.");
     expect(empty.querySelector("button")).toBeNull();
   });
 

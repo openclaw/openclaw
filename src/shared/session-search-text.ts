@@ -14,6 +14,24 @@ export function normalizeSessionSearchText(value: unknown): string {
     .trim();
 }
 
+function rankFields(fields: readonly string[], search: string): number {
+  if (!search) {
+    return 0;
+  }
+  let rank = 0;
+  for (const field of fields) {
+    if (field === search) {
+      return 3;
+    }
+    if (field.startsWith(search)) {
+      rank = 2;
+    } else if (rank === 0 && field.includes(search)) {
+      rank = 1;
+    }
+  }
+  return rank;
+}
+
 /** Rank already-normalized metadata identically before selection and in the palette. */
 export function rankSessionSearchFields(
   literal: readonly string[],
@@ -21,23 +39,5 @@ export function rankSessionSearchFields(
   search: string,
   titleSearch: string,
 ): number {
-  if (!search) {
-    return 0;
-  }
-  if (
-    literal.some((field) => field === search) ||
-    (titleSearch && titles.some((field) => field === titleSearch))
-  ) {
-    return 3;
-  }
-  if (
-    literal.some((field) => field.startsWith(search)) ||
-    (titleSearch && titles.some((field) => field.startsWith(titleSearch)))
-  ) {
-    return 2;
-  }
-  return literal.some((field) => field.includes(search)) ||
-    (titleSearch && titles.some((field) => field.includes(titleSearch)))
-    ? 1
-    : 0;
+  return Math.max(rankFields(literal, search), rankFields(titles, titleSearch));
 }

@@ -132,10 +132,15 @@ function statusRow(
   };
 }
 
-// Make reachable is offered only after loopback sign-in.
+// Make reachable is offered after sign-in to the loopback operator or an admin with a
+// verified personal identity; another person on a personal sign-in is told it needs an admin.
 function makeReachableBlocker(status: OpenClawIdStatusResult): string | undefined {
-  if (status.channel !== "local_operator") {
-    return t("openclawId.makeReachableLocalOnly");
+  if (!status.remoteAccessSetup) {
+    return t(
+      status.accountSignIn === "device"
+        ? "openclawId.makeReachableAdminOnly"
+        : "openclawId.makeReachableLocalOnly",
+    );
   }
   return status.services.loaderDomain ? undefined : t("openclawId.needsLoaderDomain");
 }
@@ -182,8 +187,9 @@ function keyAttentionEntries(
 }
 
 /**
- * One claw card, followed by its account actions. `publication`
- * is the owner-only publication state (`openclawId.people`), read on this computer.
+ * One claw card, followed by its account actions. `publication` is the owner-only
+ * publication state (`openclawId.people`), read on this computer; a personal admin's comes
+ * with its status.
  */
 export function openClawIdMenuEntries(
   status: OpenClawIdStatusResult | null,
@@ -343,6 +349,13 @@ export function openClawIdMenuEntries(
   if (status.channel === "local_operator" && status.link.linked && openClawIdAccount()) {
     entries.push(...keyAttentionEntries(status, publication));
     entries.push(renderSidebarMenuAction(MOVE_KEYS, t("openclawId.moveToNewKeys"), "key"));
+  } else if (
+    status.remoteAccessSetup === "personal_admin" &&
+    status.link.linked &&
+    openClawIdAccount()
+  ) {
+    // Moving to new keys stays on the computer that runs this claw; publishing them does not.
+    entries.push(...keyAttentionEntries(status, publication ?? status.publication));
   }
   if (status.owner && status.link.linked && (status.channel === "tunnel" || openClawIdAccount())) {
     entries.push(renderSidebarMenuAction(DEVICES, t("openclawId.yourDevices"), "monitor"));
@@ -389,13 +402,19 @@ function openDialog(open: () => Promise<unknown>, context: OpenClawIdErrorContex
   );
 }
 
-// Opens Make reachable, with the link code taken from the account when signed in.
-function startMakeReachable(client: GatewayBrowserClient, loaderDomain: string) {
+// Opens Make reachable, with the link code taken from the account when signed in. A personal
+// admin's setup also links that account to their profile.
+function startMakeReachable(
+  client: GatewayBrowserClient,
+  loaderDomain: string,
+  status: OpenClawIdStatusResult,
+) {
   openDialog(async () =>
     (await import("./make-reachable-dialog.tsx")).showMakeReachableDialog({
       client,
       loaderDomain,
       signedIn: openClawIdAccount(),
+      linkProfile: status.remoteAccessSetup === "personal_admin",
     }),
   );
 }
@@ -415,7 +434,7 @@ function offerMakeReachable(
     severity: "info",
     message: t("openclawId.reachOffer", { account }),
     actionLabel: t("openclawId.makeReachable"),
-    onAction: () => startMakeReachable(client, loaderDomain),
+    onAction: () => startMakeReachable(client, loaderDomain, status),
     durationMs: 30_000,
   });
 }
@@ -423,6 +442,11 @@ function offerMakeReachable(
 // The browser's sign-in, for actions only the operator on this computer may run.
 function localSignedIn(status: OpenClawIdStatusResult): OpenClawIdSignedIn | null {
   return status.channel === "local_operator" ? openClawIdAccount() : null;
+}
+
+// The browser's sign-in, for actions anyone who may turn on remote access may run.
+function setupSignedIn(status: OpenClawIdStatusResult): OpenClawIdSignedIn | null {
+  return status.remoteAccessSetup ? openClawIdAccount() : null;
 }
 
 /**
@@ -494,7 +518,7 @@ export function selectOpenClawIdMenuValue(
         }),
     );
   } else if (value === MAKE_REACHABLE && client && status?.services.loaderDomain) {
-    startMakeReachable(client, status.services.loaderDomain);
+    startMakeReachable(client, status.services.loaderDomain, status);
   } else if (value === MOVE_KEYS && client && status.link.hostname) {
     const signedIn = localSignedIn(status);
     const hostname = status.link.hostname;
@@ -510,7 +534,7 @@ export function selectOpenClawIdMenuValue(
       });
     }
   } else if (value === PUBLISH_KEYS && client) {
-    const signedIn = localSignedIn(status);
+    const signedIn = setupSignedIn(status);
     if (signedIn) {
       openDialog(async () => {
         const { publishWithLinkCode } = await import("../../lib/openclaw-id/rebind.ts");

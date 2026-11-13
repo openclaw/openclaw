@@ -53,9 +53,7 @@ export function buildCommandPaletteSessionItems(params: {
         row.owner?.actor.id,
         row.createdActor?.label,
         row.createdActor?.id,
-      ]
-        .map(normalizeSessionSearchLiteral)
-        .filter(Boolean);
+      ].map(normalizeSessionSearchLiteral);
       const titleFields = titleSearch ? titles.map(normalizeSessionSearchText) : [];
       const rawMetadataRank = rankSessionSearchFields(
         fields,
@@ -67,7 +65,7 @@ export function buildCommandPaletteSessionItems(params: {
         row,
         label,
         rawMetadataRank,
-        metadataRank: Math.max(visibleKeys.has(row.key) ? 1 : 0, rawMetadataRank),
+        metadataRank: rawMetadataRank || Number(visibleKeys.has(row.key)),
         transcriptHit: transcriptHitByKey.get(row.key),
       };
     })

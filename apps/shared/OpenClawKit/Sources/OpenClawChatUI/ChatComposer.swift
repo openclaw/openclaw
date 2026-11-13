@@ -621,7 +621,6 @@ struct OpenClawChatComposer: View {
         } label: {
             Image(systemName: "paperclip")
         }
-        .help("Add attachment")
         .accessibilityLabel("Attachments")
         .buttonStyle(.bordered)
         .controlSize(.small)
@@ -1321,11 +1320,20 @@ extension OpenClawChatComposer {
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
-        .help("Refresh")
     }
 
     private var composerPadding: CGFloat {
-        self.style == .onboarding ? 5 : (self.composerChrome == .clean ? 4 : 6)
+        Self.padding(style: self.style, chrome: self.composerChrome)
+    }
+
+    private static func padding(style: OpenClawChatView.Style, chrome: OpenClawChatView.ComposerChrome) -> CGFloat {
+        style == .onboarding ? 5 : (chrome == .clean ? 4 : 6)
+    }
+
+    /// How far the visible composer sits inside its frame, so a card stacked on it can share its edges.
+    /// The clean surface is drawn inside the padding; the full background is drawn around it.
+    static func surfaceInset(style: OpenClawChatView.Style, chrome: OpenClawChatView.ComposerChrome) -> CGFloat {
+        chrome == .clean ? self.padding(style: style, chrome: chrome) : 0
     }
 
     #if os(iOS)
@@ -1638,6 +1646,7 @@ extension OpenClawChatComposer {
 
     private func sendDraftIfEnabled(queueMode: OpenClawChatQueueMode? = nil) {
         guard self.canSendMessage else { return }
+        ChatBehaviorProbe.mark("send")
         self.inputModel?.send(queueMode: queueMode)
     }
 }

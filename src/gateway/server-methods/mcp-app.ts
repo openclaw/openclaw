@@ -14,6 +14,7 @@ import { buildMcpAppSandboxPath } from "../../agents/mcp-app-sandbox.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logWarn } from "../../logger.js";
+import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { createLazyRuntimeMethod } from "../../shared/lazy-runtime.js";
 import {
   executeMcpAppOperation,
@@ -291,7 +292,20 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
           logWarn(`mcp-app: standalone ticket unavailable: ${formatErrorMessage(error)}`);
         }
         assertRequestCurrent();
+        const catalog = active.runtime.peekCatalog();
+        const server = catalog?.servers[view.serverName];
+        const plugin = server?.pluginId
+          ? getGatewayPluginMetadataSnapshot()?.byPluginId.get(server.pluginId)
+          : undefined;
+        const tool = catalog?.tools.find(
+          (entry) => entry.serverName === view.serverName && entry.toolName === view.toolName,
+        );
         return {
+          appIdentity: {
+            label: plugin?.name ?? server?.title ?? view.serverName,
+            icons: [...(tool?.appExtensions?.icons ?? []), ...(server?.icons ?? [])],
+            ...(plugin?.iconPath ? { pluginId: plugin.id } : {}),
+          },
           sandboxUrl: ingress
             ? new URL(buildMcpAppSandboxPath(view.csp), ingress.sandboxOrigin).href
             : buildMcpAppSandboxPath(view.csp),

@@ -5,6 +5,13 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 /** Shared input/output pixel cap for Rastermill-backed image operations. */
 export const MAX_IMAGE_INPUT_PIXELS = 25_000_000;
 
+/**
+ * Source admission for owners whose output is a bounded downscale under MAX_IMAGE_INPUT_PIXELS.
+ * Covers tall full-page screenshots and 48 MP phone photos; a 64 MP decode peaks near 0.8 GB in
+ * the image worker, against roughly 0.5 GB at the shared cap.
+ */
+export const MAX_IMAGE_DOWNSCALE_SOURCE_PIXELS = 64_000_000;
+
 export type ImageProcessorPixelLimits = { inputPixels: number; outputPixels: number };
 
 export function createLocalImageProcessor(

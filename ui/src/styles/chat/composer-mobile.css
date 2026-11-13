@@ -156,7 +156,7 @@
 
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
   .agent-chat__composer-combobox
-  > :is(textarea, .agent-chat__composer-placeholder, .agent-chat__composer-prediction) {
+  > :is(textarea, .agent-chat__composer-placeholder, .agent-chat__composer-prediction, .cm-editor) {
   height: 24px;
   min-height: 24px;
   max-height: 24px;
@@ -167,7 +167,7 @@
 
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
   .agent-chat__composer-combobox
-  > :is(textarea, .agent-chat__plugin-draft-overlay) {
+  > :is(textarea, .agent-chat__plugin-draft-overlay, .cm-editor) {
   overflow: hidden;
   scrollbar-gutter: auto;
   white-space: nowrap;
@@ -211,7 +211,7 @@
    the measured pane limit still lowers it when space runs out. */
 .agent-chat__composer-shell[data-mobile-composer="true"]
   .agent-chat__composer-combobox
-  > :is(textarea, .agent-chat__composer-placeholder) {
+  > :is(textarea, .agent-chat__composer-placeholder, .cm-editor) {
   --chat-composer-editor-max-lines: 3;
 
   font-family: var(--font-body);

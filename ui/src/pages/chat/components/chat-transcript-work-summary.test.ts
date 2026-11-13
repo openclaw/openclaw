@@ -2,9 +2,9 @@
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { wrapWebContent } from "../../../../../src/security/external-content.js";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
-import * as inlineCommandPresentation from "./chat-inline-command-presentation.tsx";
 import { createChatThreadHarness } from "./chat-message-native.test-support.tsx";
 import * as textPreparation from "./chat-message-text-preparation.ts";
 import {
@@ -49,6 +49,7 @@ it("keeps settled message preparation out of minute-boundary scroll updates", as
 });
 
 it("shows the inline command trail during a turn and folds it behind completed work", async () => {
+  const inlineCommands = await inlineCommandPresentation();
   const runId = "inline-trail-run";
   const messages: unknown[] = [
     { role: "user", content: "Check the workspace", timestamp: 1_000 },
@@ -94,7 +95,7 @@ it("shows the inline command trail during a turn and folds it behind completed w
     runActive: true,
     runWorking: true,
     showToolCalls: true,
-    inlineCommands: inlineCommandPresentation,
+    inlineCommands,
     autoExpandToolCalls: true,
   });
   const transcript = createTestTranscript(props.paneId);
@@ -122,7 +123,7 @@ it("shows the inline command trail during a turn and folds it behind completed w
   await waitForSolid(() =>
     expect(container.querySelector(".chat-command-trail__preview")).toBeNull(),
   );
-  props.inlineCommands = inlineCommandPresentation;
+  props.inlineCommands = inlineCommands;
   props.runActive = false;
   props.runWorking = false;
   props.messages = [

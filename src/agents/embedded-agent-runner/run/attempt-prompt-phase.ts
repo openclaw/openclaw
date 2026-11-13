@@ -29,7 +29,6 @@ import { log } from "../logger.js";
 import {
   persistToolResultProjections,
   persistSessionSystemPrompt,
-  persistSessionToolSurface,
 } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { createAbortableError, isOpenClawAbortableWrapper } from "./abortable.js";
@@ -539,8 +538,10 @@ export async function runEmbeddedAttemptPromptPhase(
         persistToolResultProjections: async () => {
           if (
             !isRawModelRun &&
-            (inHistorySystemUpdates ||
+            (sessionRuntime.prepareSystemPromptUpdate ||
               sessionPromptState.pendingToolSurface ||
+              sessionPromptState.usageRanking?.snapshot !==
+                sessionPromptState.persistedUsageRanking ||
               toolResultPromptProjectionState.frozen.size > 0)
           ) {
             await withTranscriptWrite(async () => {
@@ -549,11 +550,9 @@ export async function runEmbeddedAttemptPromptPhase(
                 toolResultPromptProjectionState,
                 (customType, data) => sessionManager.appendCustomEntryAsync(customType, data),
               );
-              const appendEntry = (customType: string, data: unknown) =>
-                sessionManager.appendCustomEntryAsync(customType, data);
-              await (sessionRuntime.prepareSystemPromptUpdate
-                ? persistSessionSystemPrompt(sessionPromptState, appendEntry)
-                : persistSessionToolSurface(sessionPromptState, appendEntry));
+              await persistSessionSystemPrompt(sessionPromptState, (customType, data) =>
+                sessionManager.appendCustomEntryAsync(customType, data),
+              );
             });
           }
         },

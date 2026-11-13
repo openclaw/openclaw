@@ -78,6 +78,7 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
   const params: SessionsListParams = {
     rowMode: options.rowMode ?? "compact",
     source: options.source ?? "chat-pane",
+    sortBy: options.sortBy,
     includeGlobal: true,
     includeUnknown: true,
     configuredAgentsOnly: true,
@@ -131,9 +132,6 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
     if (value) {
       params[key] = value;
     }
-  }
-  if (options.sortBy) {
-    params.sortBy = options.sortBy;
   }
   if (options.boardFace) {
     params.boardFace = options.boardFace;

@@ -37,7 +37,6 @@ import {
 } from "../run-state.js";
 import {
   detachActiveEmbeddedRun,
-  type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
   attachActiveEmbeddedRun,
 } from "../runs.js";
@@ -56,7 +55,10 @@ import {
   withEmbeddedAttemptSteeringAdmission,
   type EmbeddedAttemptSteeringAdmission,
 } from "./attempt-steering-admission.js";
-import type { PrepareEmbeddedAttemptStreamInput } from "./attempt-stream-prepare.types.js";
+import type {
+  PrepareEmbeddedAttemptStreamInput,
+  AttemptStreamQueueHandle,
+} from "./attempt-stream-prepare.types.js";
 import { createSubscribedToolSearchExecutor } from "./attempt-tool-search-executor.js";
 import {
   createEmbeddedAttemptDeferredLifecycleOwner,
@@ -68,11 +70,6 @@ import {
   resolveReportedModelRef,
 } from "./helpers.js";
 import { resolveProviderRefusal } from "./provider-refusal.js";
-
-type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
-  kind: "embedded";
-  cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
-};
 
 export function prepareEmbeddedAttemptStream(input: PrepareEmbeddedAttemptStreamInput) {
   return withEmbeddedAttemptSteeringAdmission(
@@ -349,8 +346,11 @@ function prepareStream(
     codeModeExecToolNames: agentSession.codeModeExecToolNames,
     sourceReplyCapableToolNames: agentSession.sourceReplyCapableToolNames,
     sideEffectToolOwners: agentSession.sideEffectToolOwners,
+    toolUsageRecorder: attempt.toolUsageRecorder,
+    toolUsageIdsByName: agentSession.toolUsageIdsByName,
     trustedLocalMediaToolNames: agentSession.trustedLocalMediaToolNames,
     session: activeSession,
+    getUserTranscriptContexts: input.getUserTranscriptContexts,
     onModelUsage: input.onModelUsage,
     messageChannel: input.runtimeChannel,
     hookRunner: getGlobalHookRunner() ?? undefined,
@@ -583,7 +583,7 @@ function prepareStream(
       claimPendingUserInputAnswer(text, options, preparation.assertCurrent, kind, preparation),
     cancelPendingUserInputAsync: (resolvedBy, preparation, kind) =>
       cancelPendingUserInput(resolvedBy, preparation.assertCurrent, kind, preparation),
-  } satisfies NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]>;
+  } satisfies NonNullable<AttemptStreamQueueHandle["messageInjectionV2"]>;
   const canApplyPermissionMode = () =>
     admission.accepting && !input.runAbortController.signal.aborted && isCurrentRegistration();
   const applyPermissionMode = input.applyPermissionMode;

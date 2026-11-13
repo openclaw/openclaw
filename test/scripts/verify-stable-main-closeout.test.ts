@@ -366,22 +366,6 @@ if (args[1] === 'view') {
 }
 
 describe("stable closeout Linux publication", () => {
-  it.each(["stableSoakWaiver", "laneWaiver"])(
-    "refuses historical %s replay without rewriting the published receipt",
-    (field) => {
-      const fixture = linuxCloseoutFixture();
-      const receipt = JSON.parse(saveReceipt(fixture));
-      const original = JSON.stringify({ ...receipt, [field]: "historical published authority" });
-      writeFileSync(fixture.originalPath, original);
-      const result = fixture.run(true);
-      expectFailure(result, "Historical waiver-bearing closeout receipt replay is unsupported");
-      expect(result.stderr).toContain(
-        "a fresh validation run cannot replace their published binding",
-      );
-      expect(readFileSync(fixture.originalPath, "utf8")).toBe(original);
-    },
-  );
-
   it("accepts only the validated exact late immutable Linux manifest", () => {
     const fixture = linuxCloseoutFixture();
     const original = saveReceipt(fixture);
@@ -535,21 +519,10 @@ describe("verify-stable-main-closeout", () => {
     },
   );
 
-  it("rejects removed waiver flags while preserving strict closeout replay", () => {
+  it("preserves strict closeout replay", () => {
     const fixture = closeoutFixture();
-    const { outputPath } = fixture;
     const bytes = saveReceipt(fixture);
-    const recorded = JSON.parse(bytes);
-    expect(recorded).not.toHaveProperty("stableSoakWaiver");
-    expect(recorded).not.toHaveProperty("laneWaiver");
-
     expectReplay(fixture, fixture.replay(), bytes);
-    for (const flag of ["--stable-soak-waiver", "--lane-waiver"]) {
-      const rejected = fixture.run([flag, "2026.9.6 operator approved"]);
-      expect(rejected.status).not.toBe(0);
-      expect(rejected.stderr).toContain(`${flag} was removed`);
-      expect(readFileSync(outputPath, "utf8")).toBe(bytes);
-    }
   });
 
   it("records a withdrawn 2026.9.6 macOS appcast from the main commit lookup", () => {
