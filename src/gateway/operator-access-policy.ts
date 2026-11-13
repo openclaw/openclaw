@@ -300,9 +300,14 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
             throw invalidate("policy-set-changed");
           }
         }
-        for (const { authority, pluginId, decision, assertCurrent } of authorities) {
+        for (const {
+          authority,
+          pluginId,
+          decision,
+          assertCurrent: assertAuthorityCurrent,
+        } of authorities) {
           try {
-            assertBoundGatewayAccessDecision(authority, decision, assertCurrent);
+            assertBoundGatewayAccessDecision(authority, decision, assertAuthorityCurrent);
           } catch (error) {
             if (error instanceof GatewayOperatorAccessDeniedError) {
               throw invalidate(error.accessCause);

@@ -33,6 +33,7 @@ const { values } = parseArgs({
     sessions: { type: "string", default: "2000" },
     runs: { type: "string", default: "20000" },
     roles: { type: "string", default: "2000" },
+    pairs: { type: "string", default: "5" },
   },
 });
 assert(values.capsule && values.output, "--capsule and --output are required");
@@ -44,6 +45,16 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const capsule = path.resolve(values.capsule);
 assert(capsule !== root);
 const manifest = JSON.parse(fs.readFileSync(path.join(capsule, "checkpoint-source.json"), "utf8"));
+const pairs = Number(values.pairs);
+assert(Number.isInteger(pairs) && pairs > 0, "--pairs must be a positive integer");
+const readSource = (relative: string) =>
+  values.lineage
+    ? execFileSync("git", ["show", `${manifest.revision}:${relative}`], {
+        cwd: root,
+        encoding: "utf8",
+        maxBuffer: 8 * 1024 ** 2,
+      })
+    : fs.readFileSync(path.join(root, relative), "utf8");
 const output = path.resolve(values.output);
 fs.mkdirSync(output);
 const key = 'globalThis[Symbol.for("openclaw.benchmark.githubActionScope")]';
@@ -113,7 +124,7 @@ for (const [relative, name, end] of variants) {
 }
 // Candidate's optional prepared-index parameter preserves the baseline's full-index path.
 const query = "src/agents/subagents/registry/subagent-registry-queries.ts";
-fs.copyFileSync(path.join(root, query), path.join(capsule, query));
+fs.writeFileSync(path.join(capsule, query), readSource(query));
 const counters: [string, string, string][] = [
   [
     "src/plugins/plugin-instance.ts",
@@ -175,7 +186,7 @@ const counters: [string, string, string][] = [
 const rewritten = new Set(variants.map(([relative]) => relative).concat(query));
 for (const [relative] of counters) {
   if (!rewritten.has(relative)) {
-    fs.copyFileSync(path.join(root, relative), path.join(capsule, relative));
+    fs.writeFileSync(path.join(capsule, relative), readSource(relative));
     rewritten.add(relative);
   }
 }
@@ -197,10 +208,7 @@ if (values["large-fixture"]) {
   const db = path.join(fixture, "state/agents/main/agent/openclaw-agent.sqlite");
   assert(fs.statSync(db).size >= 35 * 1024 ** 3, "Expected completed synthetic fixture");
   const support = path.join(capsule, "src/gateway/github-publication.test-support.ts");
-  const original = fs.readFileSync(
-    path.join(root, "src/gateway/github-publication.test-support.ts"),
-    "utf8",
-  );
+  const original = readSource("src/gateway/github-publication.test-support.ts");
   const anchor = '    root = tempDirs.make("openclaw-publication-");';
   assert(original.includes(anchor));
   fs.writeFileSync(
@@ -234,7 +242,7 @@ import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-h
 import { listSubagentRunsForRequester } from "../agents/subagents/registry/subagent-registry-read.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
-import { prepareSystemAgentRunAdmission, resolveAdmittedRunActiveAssertion } from "../agents/admitted-run-context.js";
+import { prepareSystemAgentRunAdmission, resolveAdmittedRunActiveAssertion, bindOperatorModelExecution } from "../agents/admitted-run-context.js";
 import { SESSION_KEY } from "./github-publication.test-support.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 installGitHubPublicationTestHarness({creatorEmail: "publication-guest@example.test", sandbox: "required", realWorktree: true});
@@ -259,7 +267,7 @@ it("measures actions at the registered boundary with a large authority inventory
  if(cpuProfile)await heap.post("Profiler.enable");
  const state = {arm:"baseline",count:undefined};
  globalThis[Symbol.for("openclaw.benchmark.githubActionScope")]=state;
- const pairs=[{kind:"warmup",arms:lineage?["baseline","baseline"]:["baseline","candidate"]},...Array.from({length:5},()=>({kind:"AA",arms:["baseline","baseline"]})),...(lineage ? [] : Array.from({length:5},(_,i)=>({kind:"AB",arms:i%2?["candidate","baseline"]:["baseline","candidate"]})))];
+ const pairs=[{kind:"warmup",arms:lineage?["baseline","baseline"]:["baseline","candidate"]},...Array.from({length:${pairs}},()=>({kind:"AA",arms:["baseline","baseline"]})),...(lineage ? [] : Array.from({length:${pairs}},(_,i)=>({kind:"AB",arms:i%2?["candidate","baseline"]:["baseline","candidate"]})))];
  let i=0;
  for(const depth of lineage ? [1,4,16,64] : [0]) {
  const releases=[];
@@ -278,10 +286,12 @@ it("measures actions at the registered boundary with a large authority inventory
   expect(active).toBeTypeOf("function");
   parent=active;
  }
+ const model=lineage ? bindOperatorModelExecution(principal.authority,{provider:"fixture",model:"model"}):undefined;
+ if(model)releases.push(model.release);
  const invocation=lineage ? {client:{...f.guestSource.client,internal:{...f.guestSource.client.internal,operatorRunAuthority:principal.authority}}}:undefined;
  try {
  if(cpuProfile)await heap.post("Profiler.start");
- for(const [pair,control] of pairs.entries()) for(const [slot,arm] of control.arms.entries()) for(const action of publication ? ["publish"] : lineage ? ["assert", "edit_read", "edit"] : ["edit_read","edit","requester_runs"]) {
+ for(const [pair,control] of pairs.entries()) for(const [slot,arm] of control.arms.entries()) for(const action of publication ? ["publish"] : lineage ? ["assert", "model", "edit_read", "edit"] : ["edit_read","edit","requester_runs"]) {
   // Expire the synthetic request window outside measurement; normal RPC admission still runs.
   pruneStaleControlPlaneBuckets(Date.now()+360000);
   i++;state.arm=arm;
@@ -289,23 +299,24 @@ it("measures actions at the registered boundary with a large authority inventory
   const counts={};
   if(process.env.LANE2450_COUNTS==="1")state.count=(key)=>counts[key]=(counts[key]??0)+1;
   let maxSegment=0,last=performance.now();
-  const timer=action==="assert" ? undefined : setInterval(()=>{const now=performance.now();maxSegment=Math.max(maxSegment,now-last);last=now;},1);
+  const synchronous=action==="assert" || action==="model";
+  const timer=synchronous ? undefined : setInterval(()=>{const now=performance.now();maxSegment=Math.max(maxSegment,now-last);last=now;},1);
   const allocating=process.env.LANE2450_ALLOC==="1";
   if(allocating)await heap!.post("HeapProfiler.startSampling",{samplingInterval:32768,includeObjectsCollectedByMajorGC:true,includeObjectsCollectedByMinorGC:true});
   const cpu=process.threadCpuUsage(); const started=performance.now();
-  const iterations=action==="assert" ? Math.ceil(1024/depth) : 1;
+  const iterations=synchronous ? Math.ceil(1024/depth) : 1;
   let result;
   for(let iteration=0;iteration<iterations;iteration++){
   const callStarted=performance.now();
-  result=action==="assert" ? active() : publication ? await (async()=>{const admitted=await capturePublicationGuest(f);try{return await f.coordinator.requestForSessionV2(f.request(\`benchmark-\${i}\`,admitted.requester));}finally{admitted.release();}})() : action==="requester_runs" ? listSubagentRunsForRequester("agent:main:fixture:0",{requesterSessionId:"fixture-0"}) : await f.invoke("guest",{action:"edit",...f.expected,...(action==="edit"?{title:\`Fixture \${i}\`,expectedTitle:f.state.title}:{})},SESSION_KEY,invocation);
-  if(action==="assert")maxSegment=Math.max(maxSegment,performance.now()-callStarted);
+  result=action==="assert" ? active() : action==="model" ? model.assertCurrent() : publication ? await (async()=>{const admitted=await capturePublicationGuest(f);try{return await f.coordinator.requestForSessionV2(f.request(\`benchmark-\${i}\`,admitted.requester));}finally{admitted.release();}})() : action==="requester_runs" ? listSubagentRunsForRequester("agent:main:fixture:0",{requesterSessionId:"fixture-0"}) : await f.invoke("guest",{action:"edit",...f.expected,...(action==="edit"?{title:\`Fixture \${i}\`,expectedTitle:f.state.title}:{})},SESSION_KEY,invocation);
+  if(synchronous)maxSegment=Math.max(maxSegment,performance.now()-callStarted);
   }
   const wallMs=performance.now()-started;const usage=process.threadCpuUsage(cpu);
   if(timer){maxSegment=Math.max(maxSegment,performance.now()-last);clearInterval(timer);}
   let allocatedBytes;
   if(allocating){const {profile}=await heap!.post("HeapProfiler.stopSampling");const sum=n=>n.selfSize+n.children.reduce((s,c)=>s+sum(c),0);allocatedBytes=sum(profile.head);}
   state.count=undefined;
-  if(action==="assert")expect(result).toBeUndefined();
+  if(synchronous)expect(result).toBeUndefined();
   else if(publication)expect(result.status).toBe("published");
   else if(action==="requester_runs")expect(result).toHaveLength(Math.ceil(runs/sessions));
   else expect(result.details).toHaveProperty("headCommit",f.publication.headCommit);
@@ -327,6 +338,7 @@ fs.writeFileSync(
   JSON.stringify(
     {
       revision: manifest.revision,
+      pairs,
       hashes,
       testSha256: hash(fixtureTest),
       counts: Boolean(values.counts),
@@ -336,7 +348,7 @@ fs.writeFileSync(
       lineage: Boolean(values.lineage),
       largeFixture: values["large-fixture"],
       acceptance: values.lineage
-        ? "Baseline A/A census: real principal/session/admitted owners at depth 1/4/16/64; five paired samples after warmup, CPU and allocation sampled separately. A candidate must reduce plugin entries to a constant per principal/source, improve depth-16/64 owner CPU and allocation at least 20%, and not regress depth-1/action latency or max segment by 20%."
+        ? "Real principal/session/admitted owners at depth 1/4/16/64; A/A pairs after warmup, CPU and allocation sampled separately. Run pinned baseline/candidate capsules interleaved for at least five A/B pairs. A candidate must reduce plugin entries to a constant per principal/source, improve depth-16/64 owner CPU and allocation at least 20%, and not regress depth-1/action latency or max segment by 20%."
         : "Warm edit CPU and allocation must improve at least 20%; no user-facing metric may regress 20%. Census confirms fewer redundant scopes/assertions; A/A controls bound noise. Requester lookup must stop full-index builds.",
     },
     null,
