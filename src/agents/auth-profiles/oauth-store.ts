@@ -26,6 +26,7 @@ import {
 } from "./oauth-shared.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import type { PersonalAuthProfileStore } from "./personal-store.js";
+import { getScopedAuthProfileEnv } from "./runtime-scope.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
   loadAuthProfileStoreWithoutExternalProfilesAsync,
@@ -410,7 +411,9 @@ export async function resolveOAuthAccessBesideStateOwner(
   },
 ): Promise<ResolvedOAuthAccess | undefined> {
   const { readActiveGatewayLockIdentity } = await import("../../infra/gateway-lock.js");
-  const owner = await readActiveGatewayLockIdentity({ includeEmbedded: true });
+  // An exec run can redirect its own state while it retains the original credential scope.
+  const env = getScopedAuthProfileEnv() ?? process.env;
+  const owner = await readActiveGatewayLockIdentity({ env, includeEmbedded: true });
   if (!owner || owner.pid === process.pid) {
     return undefined;
   }

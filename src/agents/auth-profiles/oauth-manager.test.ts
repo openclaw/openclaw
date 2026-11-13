@@ -39,18 +39,24 @@ import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "./store-runtime.js";
+import { withAuthProfileStoreAgentDir } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 const { testing: externalAuthTesting } = await import("./external-auth.test-support.js");
 
-const gatewayOwner = vi.hoisted(() => ({ pid: undefined as number | undefined }));
+const gatewayOwner = vi.hoisted(() => ({
+  pid: undefined as number | undefined,
+  stateDir: undefined as string | undefined,
+}));
 // mock-isolation: The owning Gateway is another process; this test process cannot hold its lock.
 vi.mock("../../infra/gateway-lock.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/gateway-lock.js")>();
   return {
     ...actual,
-    readActiveGatewayLockIdentity: async () =>
-      gatewayOwner.pid ? { pid: gatewayOwner.pid, port: 18789, createdAt: "" } : undefined,
+    readActiveGatewayLockIdentity: async ({ env }: { env: NodeJS.ProcessEnv }) =>
+      gatewayOwner.pid && env.OPENCLAW_STATE_DIR === gatewayOwner.stateDir
+        ? { pid: gatewayOwner.pid, port: 18789, createdAt: "" }
+        : undefined,
   };
 });
 
@@ -687,9 +693,10 @@ describe("credentials owned by a running Gateway", () => {
   });
 
   it.each([
-    ["uses a still-valid sign-in without refreshing it", 60_000],
-    ["refuses to refresh an expired sign-in before any write", -60_000],
-  ])("%s", async (_name, expiresInMs) => {
+    ["uses a still-valid sign-in without refreshing it", 60_000, false],
+    ["refuses to refresh an expired sign-in before any write", -60_000, false],
+    ["refuses for the retained credential scope of a redirected run", -60_000, true],
+  ])("%s", async (_name, expiresInMs, redirected) => {
     await withOAuthAgentDirs("oauth-manager-gateway-owned-", async ({ mainAgentDir }) => {
       const profileId = "openai:oauth";
       const credential = oauth("current-access", "current-refresh", {
@@ -698,13 +705,17 @@ describe("credentials owned by a running Gateway", () => {
       saveCredential(profileId, credential, mainAgentDir);
       const refreshCredential = vi.fn(async () => rotated());
       gatewayOwner.pid = process.pid + 1;
+      gatewayOwner.stateDir = process.env.OPENCLAW_STATE_DIR;
+      const manager = createTestManager({ refreshCredential });
 
-      const result = resolve(
-        createTestManager({ refreshCredential }),
-        profileId,
-        credential,
-        mainAgentDir,
-      );
+      // Like agent exec: this run's own state moves, its credentials stay with the Gateway.
+      const result = redirected
+        ? withEnvAsync({ OPENCLAW_STATE_DIR: path.join(mainAgentDir, "exec-state") }, () =>
+            withAuthProfileStoreAgentDir(mainAgentDir, gatewayOwner.stateDir!, () =>
+              resolve(manager, profileId, credential, mainAgentDir),
+            ),
+          )
+        : resolve(manager, profileId, credential, mainAgentDir);
 
       await (expiresInMs > 0
         ? expect(result).resolves.toMatchObject({ apiKey: "current-access" })
