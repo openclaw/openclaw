@@ -1,14 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { Check } from "typebox/value";
 import { parseDocument, stringify } from "yaml";
 import type { VaultAccess } from "./access.js";
 import { annotationEvidence } from "./annotations.js";
-import { AttachInput, ATTACHMENT_CHUNK_BYTES } from "./attachment-contract.js";
-import { attachChunk } from "./attachments.js";
-import { EvidenceInspector, inspectEvidence } from "./evidence-files.js";
+import { ATTACHMENT_CHUNK_BYTES } from "./attachment-contract.js";
+import { EvidenceInspector, inspectEvidence, settledStamp } from "./evidence-files.js";
 import { parseYaml } from "./files.js";
+import { hashMatches } from "./hash-fence.js";
 import { lifecycleRecord, lifecycleImpact, assertLifecycleTarget } from "./lifecycle.js";
 import { RECORD_MAX_BYTES } from "./limits.js";
 import { mergeRedirects } from "./merge.js";
@@ -44,28 +45,6 @@ import type { SampleVault } from "./vault.js";
 import { digest } from "./vault.js";
 /** Validation and journaled acceptance of planned publications, plus single-record writes. */
 export class StoragePublication extends StorageJournal {
-  async attach(input: AttachInput, access: VaultAccess) {
-    access.assertCurrent();
-    if (!this.config.writesEnabled) {
-      throw new Error("Knowledge writes are disabled.");
-    }
-    if (input.expectedVaultId && input.expectedVaultId !== this.config.vaultId) {
-      throw new Error("Connected vault changed; do not upload this file here.");
-    }
-    await this.initialize(access);
-    this.assertReadable();
-    return this.transaction("knowledge.attach", (db) => {
-      this.identity(db, new PublicationFiles(this.config.root));
-      return attachChunk(
-        db,
-        this.config.root,
-        scopeKey(access.scope),
-        input,
-        () => access.assertCurrent(),
-        this.hook,
-      );
-    });
-  }
   save(input: SavePage, access: VaultAccess, actor: string) {
     return this.publish(input, "page", access, actor);
   }
@@ -231,7 +210,7 @@ export class StoragePublication extends StorageJournal {
         previous.lifecycle !== "active" ||
         !previous.valid ||
         previous.kind !== "page" ||
-        previous.hash !== input.expectedHash ||
+        !hashMatches(previous.hash, input.expectedHash!) ||
         previous.revision !== input.expectedRevision)
     ) {
       throw new Error(
@@ -435,9 +414,6 @@ export class StoragePublication extends StorageJournal {
         );
       }
     }
-    if (!batch && new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-      throw new Error("Edit conflict: vault changed during validation.");
-    }
     const additional =
       corrected && correction
         ? [
@@ -494,10 +470,13 @@ export class StoragePublication extends StorageJournal {
         at: new Date().toISOString(),
         message: rejection.message,
         indexed: false,
+        ...(prepared.data.ontology
+          ? { ontologyFingerprint: prepared.data.ontology.fingerprint }
+          : {}),
         budget: rejection.budget,
       });
     }
-    this.transaction("knowledge.accept", (db) => {
+    this.store.withDatabase((db) => {
       const rival = this.row(db, scope, requestId);
       if (rival) {
         this.checkReplay(rival, intent);
@@ -517,9 +496,14 @@ export class StoragePublication extends StorageJournal {
           throw new Error("Source descriptor changed during validation.");
         }
       }
-      // Fence the exact snapshot used for schema and reference validation.
+      // Fence the exact snapshot used for schema and reference validation. The
+      // equal snapshot already fences every settled record by its change stamp;
+      // only a record rewritten too recently to trust its stamp is compared by content.
+      // SAFETY: the snapshot is the JSON [path, stamp] list PublicationFiles serialized.
+      const stamps = new Map(JSON.parse(prepared.snapshot) as [string, string][]);
       for (const r of prepared.data.records) {
-        if (files.hash(`${scope}/${r.path}`) !== r.hash) {
+        const stamp = stamps.get(`${scope}/${r.path}`);
+        if ((!stamp || !settledStamp(stamp)) && files.hash(`${scope}/${r.path}`) !== r.hash) {
           throw new Error("Edit conflict: vault changed during validation.");
         }
       }
@@ -542,12 +526,6 @@ export class StoragePublication extends StorageJournal {
       for (const record of prepared.batch ? (prepared.additional ?? []).map((c) => c.after) : []) {
         for (const evidence of record.metadata.evidence ?? []) {
           cited.inspect(evidence);
-        }
-      }
-      if (prepared.batch?.source) {
-        const prior = this.sourceRow(db, scope, prepared.batch.source);
-        if (prior?.request !== prepared.batch.expectedPreviousRequestId) {
-          throw new Error("Source changed during validation; no batch accepted.");
         }
       }
       for (const evidence of prepared.annotationEvidence ?? []) {
@@ -580,13 +558,8 @@ export class StoragePublication extends StorageJournal {
       ) {
         throw new Error("Reference unavailable or inactive in this scope.");
       }
-      // Bind every descriptor used for validation and every resulting record.
-      // New sidecars are journaled; reused sidecars remain explicit replay dependencies.
-      for (const record of prepared.data.records) {
-        recordSourceDependencies(record, (p) =>
-          readSourceDescriptor(path.join(this.config.root, scope), p),
-        );
-      }
+      // Bind every descriptor of every resulting record. New sidecars are
+      // journaled; reused sidecars remain explicit replay dependencies.
       const descriptors: Record<string, string> = {};
       for (const record of [prepared.record, ...(prepared.additional ?? []).map((c) => c.after)]) {
         Object.assign(
@@ -642,6 +615,9 @@ export class StoragePublication extends StorageJournal {
         at: new Date().toISOString(),
         message: "Accepted for publication; not yet saved.",
         indexed: false,
+        ...(prepared.data.ontology
+          ? { ontologyFingerprint: prepared.data.ontology.fingerprint }
+          : {}),
       };
       if (prepared.batch) {
         receipt.items = prepared.batch.items;
@@ -701,14 +677,38 @@ export class StoragePublication extends StorageJournal {
           ? { restored: changed.map((r) => r.id) }
           : {}),
       };
+      const serializedPlan = JSON.stringify(plan),
+        serializedReceipt = JSON.stringify(receipt);
+      this.hook("before-accept-commit");
       access.assertCurrent();
-      db.prepare("INSERT INTO mutations VALUES (?,?,?,?,?,?)").run(
-        scope,
-        requestId,
-        intent,
-        "accepted",
-        JSON.stringify(plan),
-        JSON.stringify(receipt),
+      runSqliteImmediateTransactionSync(
+        db,
+        () => {
+          const current = this.row(db, scope, requestId);
+          if (current) {
+            this.checkReplay(current, intent);
+            return;
+          }
+          if (db.prepare("SELECT 1 FROM mutations WHERE state!='published' LIMIT 1").get()) {
+            throw blocked();
+          }
+          this.assertCheckpoint(db, before);
+          if (prepared.batch?.source) {
+            const prior = this.sourceRow(db, scope, prepared.batch.source);
+            if (prior?.request !== prepared.batch.expectedPreviousRequestId) {
+              throw new Error("Source changed during validation; no batch accepted.");
+            }
+          }
+          db.prepare("INSERT INTO mutations VALUES (?,?,?,?,?,?)").run(
+            scope,
+            requestId,
+            intent,
+            "accepted",
+            serializedPlan,
+            serializedReceipt,
+          );
+        },
+        { operationLabel: "knowledge.accept" },
       );
     });
     this.hook("after-accept");

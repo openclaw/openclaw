@@ -13,12 +13,13 @@ import {
 const predecessor = 30;
 const target = OPENCLAW_AGENT_SCHEMA_VERSION;
 const scope = [
+  "agent_tool_usage",
   "memory_index_chunks",
   "memory_index_sources",
   "schema_meta",
+  "session_creation_operations",
+  "session_transcript_active_event_facts",
   "session_transcript_cold_archive_chunks",
-  "sqlite_stat1",
-  "sqlite_stat4",
   "transcript_events",
 ];
 

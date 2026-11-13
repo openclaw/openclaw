@@ -82,7 +82,9 @@ suite.define(() => {
         expect(await toast.textContent()).toContain("Session archived");
         expect(await page.getByText(conversation).count()).toBe(1);
         await undo.click();
-        await ui.sessionPatch(gateway, archived.key, { archived: false });
+        // Undo cancels the held archive locally; the row returns without a write.
+        await archiveRow.waitFor({ state: "visible" });
+        expect(await ui.requestCount(gateway, "sessions.patch")).toBe(0);
         expect(page.url()).toBe(currentUrl);
       },
       { viewport: { height: 900, width: 1440 } },

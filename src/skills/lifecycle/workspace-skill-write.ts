@@ -206,15 +206,15 @@ export function assertInsideSkillsRoot(
   const resolvedRoot = path.resolve(skillsRoot);
   const resolvedTarget = path.resolve(targetPath);
   if (resolvedTarget !== resolvedRoot && !isPathInside(resolvedRoot, resolvedTarget)) {
-    throw new Error(`${label} must stay inside the Skill Workshop directory.`);
+    throw new Error(`${label} must stay inside the skills root.`);
   }
   try {
     resolveRootPathSync({
       rootPath: resolvedRoot,
       absolutePath: resolvedTarget,
-      boundaryLabel: "Skill Workshop directory",
+      boundaryLabel: "skills root",
     });
   } catch (cause) {
-    throw new Error(`${label} must stay inside the Skill Workshop directory.`, { cause });
+    throw new Error(`${label} must stay inside the skills root.`, { cause });
   }
 }

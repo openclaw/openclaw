@@ -50,6 +50,8 @@ const MEMORY_HOST_SDK_EXPORTS = (
   .split(" ")
   .map((name) => `./${name}`);
 const MEMORY_CORE_BRIDGES = [
+  "embeddings-remote-client",
+  "embeddings-remote-provider",
   "embeddings.types",
   "error-utils",
   ..."agent auth config io kysely memory network paths session sqlite workspace"
@@ -185,7 +187,11 @@ describe("opt-in extension package boundaries", () => {
       const tsconfig = readExtensionTsconfig(extensionName);
       expect(tsconfig.extends, extensionName).toBe("../tsconfig.package-boundary.base.json");
       expect(tsconfig.compilerOptions?.rootDir).toBeUndefined();
-      expect(tsconfig.include).toBeUndefined();
+      expect(tsconfig.include, extensionName).toEqual(
+        extensionName === "deep-research"
+          ? ["*.ts", "src/**/*.ts", "browser/**/*.ts", "browser/**/*.tsx"]
+          : undefined,
+      );
       expect(tsconfig.exclude).toBeUndefined();
       if (extensionName !== "xai") {
         expect(tsconfig.compilerOptions?.paths, extensionName).toBeUndefined();

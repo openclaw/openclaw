@@ -9,6 +9,8 @@
  * Run counterbalanced baseline/candidate processes on the approved benchmark host.
  * Acceptance: identical full-selection oracle and digests, page-bounded retained
  * candidate reads, and lower CPU/allocation without a reproducible adverse sibling.
+ * --case sidebar,archived,agent,search selects filter shapes; --cold refilters all
+ * partitions on each call. Run each shape with --sessions 1000, 5000, and 25000.
  * Cold construction precedes measurement; --churn replaces N rows before each call.
  * Allocation sampling includes collected objects but excludes TypedArray backing stores.
  */
@@ -45,6 +47,8 @@ const { values } = parseArgs({
     sessions: { type: "string", default: "10800" },
     mode: { type: "string", default: "timing" },
     churn: { type: "string", default: "0" },
+    case: { type: "string" },
+    cold: { type: "boolean", default: false },
   },
 });
 assert(global.gc, "run with --expose-gc");
@@ -72,11 +76,14 @@ for (const id of ["ada", "bob"]) {
     profileId: id,
     label: id,
     avatarUrl: "/synthetic/avatar",
-    hasUploadedAvatar: false,
   });
 }
 const cases: Array<[string, SessionsListParams]> = [
-  ["sidebar", {}],
+  ["sidebar", { archived: false }],
+  ["archived", { archived: true }],
+  ["agent", { agentId: "ops" }],
+  ["agent-involving", { agentId: "ops", involvingMe: true }],
+  ["search", { search: "fixture-7" }],
   ["offset", { offset: 50 }],
   ["activity", { sortBy: "activity" }],
   ["interaction", { sortBy: "lastInteractionAt" }],
@@ -89,7 +96,14 @@ const sampledBytes = (node: HeapProfiler.SamplingHeapProfileNode): number =>
   node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const results = [];
-for (const [name, query] of cases) {
+const selectedCases = values.case?.split(",");
+assert(
+  selectedCases?.every((selected) => cases.some(([name]) => name === selected)) ?? true,
+  "unknown --case",
+);
+for (const [name, query] of cases.filter(
+  ([caseName]) => !selectedCases || selectedCases.includes(caseName),
+)) {
   const owner = createSessionRowSelection(
     cfg,
     {
@@ -137,8 +151,8 @@ for (const [name, query] of cases) {
     includeUnknown: true,
     ...query,
   };
-  const retained = new WeakMap<object, SessionListFilteredEntries>();
-  const read = (cache: WeakMap<object, SessionListFilteredEntries> | null = retained) => {
+  const retained = new Map<object, SessionListFilteredEntries>();
+  const read = (cache: Map<object, SessionListFilteredEntries> | null = retained) => {
     const selected = owner.read(opts.sortBy ?? "updatedAt");
     return selectSessionEntries({
       cfg,
@@ -146,9 +160,10 @@ for (const [name, query] of cases) {
       now,
       ...selected,
       entriesSorted: true,
-      partitions: cache ? selected.partitions : undefined,
-      retained: cache ?? undefined,
+      partitions: cache && !opts.search ? selected.partitions : undefined,
+      retained: opts.search ? undefined : (cache ?? undefined),
       getTarget: selected.get,
+      modelSearchMayMatch: () => false,
       getRowContext: () => context,
       userProfileIdentityById: context.userProfileIdentityById,
       involvingActorId: opts.involvingMe ? "ada" : undefined,
@@ -187,7 +202,17 @@ for (const [name, query] of cases) {
       const previous = rows[index]!;
       const row = { ...previous, entry: { ...previous.entry, updatedAt: now + revision } };
       rows[index] = row;
-      owner.change({ kind: "row", id: identity(row), key: row.key, agentId: row.agentId, row });
+      owner.change({
+        kind: "row",
+        id: identity(row),
+        key: row.key,
+        agentId: row.agentId,
+        storePath: row.storeTarget.storePath,
+        row,
+      });
+    }
+    if (values.cold) {
+      retained.clear();
     }
     return read();
   };
@@ -211,16 +236,28 @@ for (const [name, query] of cases) {
   }
   const hostLoad = loadavg();
   const times = new Float64Array(iterations);
-  const cpu = process.cpuUsage();
+  const taskCpuTimes = values.mode === "timing" ? new Float64Array(iterations) : undefined;
+  let maxTaskMs = 0;
+  let maxTaskCpuMs: number | undefined;
+  const cpu = process.threadCpuUsage();
   const started = performance.now();
   let last = read();
   for (let index = 0; index < iterations; index++) {
+    const taskCpu = taskCpuTimes && process.threadCpuUsage();
     const before = performance.now();
     last = run();
     times[index] = performance.now() - before;
+    if (taskCpu && taskCpuTimes) {
+      const used = process.threadCpuUsage(taskCpu);
+      taskCpuTimes[index] = (used.user + used.system) / 1000;
+      if (times[index]! > maxTaskMs) {
+        maxTaskMs = times[index]!;
+        maxTaskCpuMs = taskCpuTimes[index];
+      }
+    }
   }
   const elapsedMs = performance.now() - started;
-  const used = process.cpuUsage(cpu);
+  const used = process.threadCpuUsage(cpu);
   const memory = process.memoryUsage();
   let bytes: number | undefined;
   if (values.mode === "allocation") {
@@ -238,6 +275,7 @@ for (const [name, query] of cases) {
     `${name}: retained selection differs from full ordered filtering`,
   );
   times.sort();
+  taskCpuTimes?.sort();
   const gcByKind: Record<number, { count: number; ms: number; maxMs: number }> = {};
   for (const entry of collections) {
     const { kind } = (entry as PerformanceNodeEntry).detail as { kind: number };
@@ -252,11 +290,17 @@ for (const [name, query] of cases) {
     iterations,
     candidateReads,
     hostLoad,
+    hostLoadEnd: loadavg(),
     elapsedMs,
     cpuMs: (used.user + used.system) / 1000,
     cpuUsPerCall: (used.user + used.system) / iterations,
     p50Ms: times[Math.floor(iterations * 0.5)],
+    p95Ms: times[Math.min(iterations - 1, Math.floor(iterations * 0.95))],
     p99Ms: times[Math.min(iterations - 1, Math.floor(iterations * 0.99))],
+    maxMs: times[iterations - 1],
+    maxTaskCpuMs,
+    p99TaskCpuMs: taskCpuTimes?.[Math.min(iterations - 1, Math.floor(iterations * 0.99))],
+    maxCpuMs: taskCpuTimes?.[iterations - 1],
     sampledBytesPerCall: bytes === undefined ? undefined : bytes / iterations,
     gcMs,
     gcMsPerMinute: (gcMs * 60_000) / elapsedMs,
@@ -275,6 +319,7 @@ console.log(
     sourceSha256: createHash("sha256").update(readFileSync(source)).digest("hex"),
     sessions,
     churn,
+    cold: values.cold,
     mode: values.mode,
     results,
   }),

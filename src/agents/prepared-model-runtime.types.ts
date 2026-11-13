@@ -214,6 +214,8 @@ export type PreparedModelRuntimeRefreshOptions = {
   joinSupersedingPublication?: boolean;
   /** Restricts replacement to configured owners whose normalized agent id is present. */
   agentIds?: ReadonlySet<string>;
+  /** Auth-only config publications rebuild credentials without replacing plugin capabilities. */
+  preservePluginGenerations?: boolean;
 };
 
 export type PreparedModelRuntimeBuildStats = Readonly<{
@@ -254,6 +256,8 @@ export type PreparedModelCatalogProviderFacts = {
 
 export type PreparedModelCatalogInventory = {
   catalog: ModelCatalogSnapshot;
+  /** An unscoped provider acquisition completed; retained across provider-local refreshes. */
+  fullProviderDiscovery?: true;
   runtimeModels: ReadonlyMap<string, readonly Model[]>;
   key: string;
   pluginFingerprint: string;

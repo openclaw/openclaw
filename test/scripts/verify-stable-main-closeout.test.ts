@@ -280,7 +280,7 @@ process.stdout.write('${"a".repeat(40)}\\n');
     bin,
     "gh",
     `
-const fs = require('node:fs');
+import fs from 'node:fs';
 const args = process.argv.slice(2);
 const releases = JSON.parse(fs.readFileSync(process.env.LINUX_CLOSEOUT_REMOTE, 'utf8'));
 function reply(value) { process.stdout.write(typeof value === 'string' ? value : JSON.stringify(value)); }
@@ -622,9 +622,11 @@ type RoutingPatch = {
   recovery?: { reason?: string; npmPublishRunId?: string };
   code?: number;
   checksum?: string;
+  path?: string;
 };
 const routingCases: Array<[string, RoutingPatch]> = [
   ["ordinary successful parent", { manual: false, conclusion: "success", code: 0 }],
+  ["spoofed parent title", { path: ".github/workflows/plugin-npm-release.yml" }],
   ["failed parent without manual recovery", { manual: false }],
   ["unrelated operator metadata", { recovery: { reason: "App assets are pending" }, code: 0 }],
   ["incomplete split selectors", { recovery: { npmPublishRunId: "13" } }],
@@ -637,6 +639,7 @@ it.each(routingCases)("stable closeout publication routing preserves %s", (name,
     npm: "success",
     docker: "success",
     code: 1,
+    path: ".github/workflows/openclaw-release-publish.yml",
     ...patch,
   };
   const workflow = readFileSync(".github/workflows/openclaw-stable-main-closeout.yml", "utf8");
@@ -656,7 +659,8 @@ it.each(routingCases)("stable closeout publication routing preserves %s", (name,
   const evidence = path.join(dir, "evidence.json");
   const manifest = path.join(dir, "manifest.json");
   writeJson(run, {
-    workflowName: "OpenClaw Release Publish",
+    workflowName: "OpenClaw Release Publish [v2026.6.8]",
+    path: scenario.path,
     event: "workflow_dispatch",
     status: "completed",
     conclusion: scenario.conclusion,

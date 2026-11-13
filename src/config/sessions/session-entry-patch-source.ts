@@ -84,7 +84,14 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
   const databaseOptions = toDatabaseOptions(resolved);
   assertAgentSessionWriteAdmission(databaseOptions, resolved.agentId);
   const databasePath = resolveOpenClawAgentSqlitePath(databaseOptions);
-  const targetIdentity = readDatabasePathIdentitySync(databasePath);
+  const targetIdentity =
+    typeof captured?.databaseIdentity === "string"
+      ? {
+          key: `file:${captured.databaseIdentity}`,
+          canonicalPath: databasePath,
+          birthtime: captured.databaseBirthtime,
+        }
+      : readDatabasePathIdentitySync(databasePath);
   resolved.path = databasePath;
   databaseOptions.path = databasePath;
   const useWorker = isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions);
@@ -109,13 +116,6 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
     if (!captured) {
       return;
     }
-    if (!database && typeof captured.databaseIdentity === "string") {
-      assertExistingDatabaseIdentity(
-        captured.path,
-        `file:${captured.databaseIdentity}`,
-        captured.databaseBirthtime,
-      );
-    }
     assertCapturedSessionEntryReadSource(
       captured,
       database ?? getOpenClawAgentDatabaseIfOpen(databaseOptions),
@@ -135,10 +135,12 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
         throw new Error("Retained session writer differs from its acknowledged source");
       }
     }
-    if (targetIdentity.key.startsWith("file:")) {
-      assertExistingDatabaseIdentity(databasePath, targetIdentity.key, targetIdentity.birthtime);
+    if (!useWorker) {
+      if (targetIdentity.key.startsWith("file:")) {
+        assertExistingDatabaseIdentity(databasePath, targetIdentity.key, targetIdentity.birthtime);
+      }
+      assertCapturedSource();
     }
-    assertCapturedSource();
   };
   if (retainedExecution) {
     assertCurrent();

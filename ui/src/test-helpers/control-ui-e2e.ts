@@ -15,7 +15,6 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/sessions.ts";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
-import { controlUiPluginAssetRoot } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { createControlUiAttachmentFacts } from "./control-ui-attachment-fixtures.ts";
@@ -34,7 +33,6 @@ import type {
   MockGatewayWindow,
 } from "./control-ui-e2e-contract.ts";
 import { createMockGatewayControls, installMockGatewayScript } from "./control-ui-e2e-controls.ts";
-import { defaultControlUiFeatureMethods } from "./control-ui-e2e-defaults.ts";
 import {
   installControlUiE2ePageDiagnosticRing,
   installControlUiE2eUnhandledRejectionRing,
@@ -53,6 +51,10 @@ import {
 } from "./control-ui-mock-preferences.ts";
 import { createControlUiMockPresence } from "./control-ui-mock-presence.ts";
 import { createControlUiMockReactions } from "./control-ui-mock-reactions.ts";
+import {
+  createControlUiMockMethodDelays,
+  shouldWaitForControlUiMockRoster,
+} from "./control-ui-mock-request-gates.ts";
 import { createControlUiMockResponses } from "./control-ui-mock-responses.ts";
 import {
   normalizeScenario,
@@ -174,10 +176,9 @@ export async function waitForControlUiSettingsTakeover(
   pathname = "/settings/appearance",
 ): Promise<{ search: Locator; sidebar: Locator }> {
   await waitForControlUiRoute(page, { pathname, routeId: "appearance" });
-  const appSidebar = page.locator("openclaw-app-sidebar");
   const sidebar = page.locator(".settings-sidebar");
   const search = sidebar.getByRole("searchbox", { name: "Search settings" });
-  await appSidebar.waitFor({ state: "detached" });
+  await page.locator(".sidebar-shell").waitFor({ state: "hidden" });
   await search.waitFor({ state: "visible" });
   return { search, sidebar };
 }
@@ -215,6 +216,8 @@ const DEFAULT_CONTROL_UI_E2E_BUILD_INFO: ControlUiBuildInfo = {
   buildId: "e2e",
 };
 
+// Transport transitions are awaited in real time; callers that pause the virtual
+// clock resume it first so backoff and opening deadlines track these waits.
 export async function reconnectMockGateway(
   page: Page,
   gateway: MockGatewayControls,
@@ -646,7 +649,7 @@ function serializeControlUiMockGatewayInitScript(
     protocolVersion: PROTOCOL_VERSION,
     scenario,
   };
-  return `${createControlUiPaneRuntimeTestAdapterScript()}\n${json5BrowserSource}\n;(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}, globalThis.JSON5.parse, ${createControlUiSessionFixtures.toString()}, ${createControlUiAttachmentFacts.toString()}, ${createControlUiMockResponses.toString()}, ${createControlUiMockDeferredRequests.toString()}, ${createControlUiMockSessionSubscriptions.toString()}, ${createControlUiMockPresence.toString()}, ${createControlUiMockReactions.toString()}, ${createControlUiMockPreferences.toString()}, ${parseControlUiMockRequestFrame.toString()}); })();`;
+  return `${createControlUiPaneRuntimeTestAdapterScript()}\n${json5BrowserSource}\n;(() => { const __name = (target) => target; (${installControlUiMockGateway.toString()})(${JSON.stringify(input)}, globalThis.JSON5.parse, ${createControlUiSessionFixtures.toString()}, ${createControlUiAttachmentFacts.toString()}, ${createControlUiMockResponses.toString()}, ${createControlUiMockDeferredRequests.toString()}, ${createControlUiMockSessionSubscriptions.toString()}, ${createControlUiMockPresence.toString()}, ${createControlUiMockReactions.toString()}, ${createControlUiMockPreferences.toString()}, ${parseControlUiMockRequestFrame.toString()}, ${createControlUiMockMethodDelays.toString()}); })();`;
 }
 
 function installControlUiMockGateway(
@@ -664,14 +667,13 @@ function installControlUiMockGateway(
   createReactions: typeof createControlUiMockReactions,
   createPreferences: typeof createControlUiMockPreferences,
   parseFrame: typeof parseControlUiMockRequestFrame,
+  createMethodDelays: typeof createControlUiMockMethodDelays,
 ) {
   const NativeWebSocket = window.WebSocket;
   type DeferredResponse = {
-    preferenceScope: ControlUiMockPreferenceScope | null;
-    id: string;
     method: string;
     params?: unknown;
-    socket: MockWebSocket;
+    respond: (response: unknown, defaultResponse?: boolean) => void;
   };
   type MockTerminalSession = {
     sessionId: string;
@@ -714,6 +716,7 @@ function installControlUiMockGateway(
   }
   const requests: MockGatewayRequest[] = [];
   const requestHandlers = new Map<string, ControlUiMockRequestHandler>();
+  const methodDelays = createMethodDelays(scenario.methodDelays);
   const pendingApprovals = new Map<string, Map<string, Record<string, unknown>>>();
   let canonicalSessionRows = scenario.sessions;
   let hasCanonicalSessionsOverride = false;
@@ -1215,9 +1218,7 @@ function installControlUiMockGateway(
     if (method === "sessions.patchMany") {
       return recordSessionsPatchMany(params, response);
     }
-    if (method === "sessions.create" || method === "sessions.catalog.continue") {
-      sessions.materializeResponse(params, response);
-    }
+    sessions.materializeResponse(method, params, response);
     return response;
   }
 
@@ -1441,10 +1442,7 @@ function installControlUiMockGateway(
                   recoveryScope: "e2e-recovery-scope",
                   role: "operator",
                   scopes: scenario.operatorScopes,
-                  roleAllowsAdmin: scenario.roleAllowsAdmin,
-                  ...(scenario.operatorSessionCap
-                    ? { sessionCap: scenario.operatorSessionCap }
-                    : {}),
+                  ...scenario.operatorRolePolicy,
                 },
               }),
           features: {
@@ -1452,16 +1450,14 @@ function installControlUiMockGateway(
             events: scenario.featureEvents,
             ...(scenario.omitFeatureMethods ? {} : { methods: scenario.featureMethods }),
           },
-          controlUiTabs: scenario.controlUiTabs,
-          controlUiLinkReaders: scenario.controlUiLinkReaders ?? [],
-          controlUiWidgetKinds: scenario.controlUiWidgetKinds,
+          ...scenario.controlUiPluginHello,
           protocol: protocolVersion,
           server: {
             buildId: serverBuildId,
             bootId: gatewayBootId,
             controlUiBuildSource: scenario.controlUiBuildSource,
             connId: "control-ui-e2e",
-            version: scenario.serverVersion,
+            ...scenario.serverRelease,
           },
           policy: {
             maxPayload: scenario.maxPayload,
@@ -1880,13 +1876,11 @@ function installControlUiMockGateway(
       case "sessions.subscribe":
         return { subscribed: true };
       case "sessions.messages.subscribe":
-        return subscriptionRouting.subscribeResponse(params, (historyParams) =>
-          commitFixtureResponse(
-            "chat.startup",
-            historyParams,
-            buildResponse("chat.startup", historyParams),
+        return {
+          key: subscriptionRouting.canonicalKey(
+            isRecord(params) && typeof params.key === "string" ? params.key : "",
           ),
-        );
+        };
       case "sessions.messages.unsubscribe":
         return { ok: true };
       case "terminal.open": {
@@ -1984,6 +1978,53 @@ function installControlUiMockGateway(
     });
   }
 
+  function prepareResponse(
+    method: string,
+    params: unknown,
+    socket: MockWebSocket,
+    respond: (response: unknown, deferred?: boolean) => void,
+  ): (() => void) | undefined {
+    const complete = (response: unknown, deferred = false, defaultResponse = false) => {
+      if (
+        defaultResponse &&
+        method === "sessions.messages.subscribe" &&
+        !hasOwn(scenario.methodResponses, method) &&
+        subscriptionRouting.completeInitialHistory(
+          params,
+          response,
+          (historyParams, reply) =>
+            prepareResponse("chat.startup", historyParams, socket, (history, historyDeferred) =>
+              reply(commitFixtureResponse("chat.startup", historyParams, history), historyDeferred),
+            )?.(),
+          (payload, historyDeferred) => respond(payload, deferred || historyDeferred),
+        )
+      ) {
+        return;
+      }
+      respond(response, deferred);
+    };
+    if (deferredRequests.shouldDefer(method, params)) {
+      deferredRequests.responses.push({
+        method,
+        params,
+        respond: (response, defaultResponse) => complete(response, true, defaultResponse),
+      });
+      return undefined;
+    }
+    return () => {
+      const handler = requestHandlers.get(method);
+      if (handler) {
+        handler({
+          params,
+          respond: complete,
+          emit: (event, payload) => emitGatewayEvent(socket, event, payload),
+        });
+      } else {
+        complete(buildResponse(method, params), false, true);
+      }
+    };
+  }
+
   class MockWebSocket extends EventTarget {
     static readonly CLOSED = 3;
     static readonly CLOSING = 2;
@@ -2031,7 +2072,8 @@ function installControlUiMockGateway(
         event: "connect.challenge",
         payload: {
           nonce: "control-ui-e2e-nonce",
-          ts: Date.now(),
+          // Playwright can expose fractional Date.now() inside virtual timer callbacks.
+          ts: Math.trunc(Date.now()),
           capabilities: scenario.connectCapabilities,
         },
         type: "event",
@@ -2080,17 +2122,7 @@ function installControlUiMockGateway(
       }
       requests.push({ id, method, params: frame.params });
       const preferenceScope = this.preferenceScope;
-      if (deferredRequests.shouldDefer(method, frame.params)) {
-        deferredRequests.responses.push({
-          id,
-          method,
-          params: frame.params,
-          socket: this,
-          preferenceScope,
-        });
-        return;
-      }
-      const respond = (response: unknown) => {
+      const respond = (response: unknown, deferred = false) => {
         const payload = commitFixtureResponse(
           method,
           frame.params,
@@ -2098,19 +2130,19 @@ function installControlUiMockGateway(
           this,
           preferenceScope,
         );
-        const mockError =
-          isRecord(payload) && isRecord(payload["__mockError"]) ? payload["__mockError"] : null;
-        if (!mockError) {
-          this.sessionMessageSubscriptions.recordRequest(method, frame.params, payload);
-        }
-        this.deliver(
-          mockError
-            ? { id, ok: false, error: mockError, type: "res" }
-            : { id, ok: true, payload, type: "res" },
+        const mockError = responseFixtures.deliver(
+          { id, method, params: frame.params },
+          payload,
+          this,
+          MockWebSocket.OPEN,
         );
         if (!mockError) {
           emitTerminalOutput(this, method, frame.params, payload);
           preferenceFixtures.publish(this, method, frame.params, payload);
+        }
+        // A held reply acknowledges the RPC; its test owns later lifecycle events.
+        if (deferred) {
+          return;
         }
         if (!mockError && method === "connect" && this.readyState === MockWebSocket.OPEN) {
           this.tickTimer = window.setInterval(() => {
@@ -2140,20 +2172,14 @@ function installControlUiMockGateway(
           });
         }
       };
-      window.setTimeout(() => {
-        const handler = requestHandlers.get(method);
-        if (handler) {
-          // Delayed fixtures retain this request and socket, even when another
-          // request for the same method finishes first.
-          handler({
-            params: frame.params,
-            respond,
-            emit: (event, payload) => emitGatewayEvent(this, event, payload),
-          });
-        } else {
-          respond(buildResponse(method, frame.params));
-        }
-      }, 0);
+      const dispatch = prepareResponse(method, frame.params, this, respond);
+      if (dispatch) {
+        methodDelays.schedule(method, () => {
+          if (this.readyState === MockWebSocket.OPEN) {
+            dispatch();
+          }
+        });
+      }
     }
 
     suspend(): void {
@@ -2173,6 +2199,9 @@ function installControlUiMockGateway(
   }
 
   const exposed: ControlUiMockGateway = {
+    get sessionListResponseFacts() {
+      return responseFixtures.sessionListResponseFacts;
+    },
     get online() {
       return online;
     },
@@ -2198,55 +2227,24 @@ function installControlUiMockGateway(
       ),
     rejectDeferred(method, error, options) {
       for (const response of deferredRequests.take(method, options)) {
-        response.socket.deliver({
-          error: {
+        response.respond({
+          __mockError: {
             code: error?.code ?? "INVALID_REQUEST",
             message: error?.message ?? "mock Gateway rejected request",
             ...(error?.details ? { details: error.details } : {}),
             ...(error?.retryable ? { retryable: true } : {}),
           },
-          id: response.id,
-          ok: false,
-          type: "res",
         });
       }
     },
     requests,
     resolveDeferred(method, payload, options) {
       for (const response of deferredRequests.take(method, options)) {
-        const resolvedPayload = commitFixtureResponse(
-          response.method,
-          response.params,
-          responseFixtures.applyAgentModel(
-            response.method,
-            payload ?? buildResponse(response.method, response.params),
-          ),
-          response.socket,
-          response.preferenceScope,
+        const responsePayload = payload ?? buildResponse(response.method, response.params);
+        response.respond(
+          responseFixtures.applyAgentModel(response.method, responsePayload),
+          payload == null && !requestHandlers.has(method),
         );
-        const mockError = isRecord(resolvedPayload) ? resolvedPayload["__mockError"] : undefined;
-        if (!mockError) {
-          response.socket.sessionMessageSubscriptions.recordRequest(
-            response.method,
-            response.params,
-            resolvedPayload,
-          );
-        }
-        response.socket.deliver({
-          id: response.id,
-          ok: !mockError,
-          ...(mockError ? { error: mockError } : { payload: resolvedPayload }),
-          type: "res",
-        });
-        if (!mockError) {
-          emitTerminalOutput(response.socket, response.method, response.params, resolvedPayload);
-          preferenceFixtures.publish(
-            response.socket,
-            response.method,
-            response.params,
-            resolvedPayload,
-          );
-        }
       }
     },
     suspendLatest() {
@@ -2290,16 +2288,12 @@ function installControlUiMockGateway(
     setOperatorScopes(scopes) {
       scenario.operatorScopes = [...scopes];
     },
-    getSessionRow(key) {
-      const row = sessions.sessionInfo(key);
-      if (!row) {
-        throw new Error(`Mock Gateway did not return session ${key}`);
-      }
-      return row;
-    },
+    getSessionRow: sessions.requireSessionInfo,
+    setSessionRow: sessions.replaceCanonicalRow,
     setRequestHandler(method, handler) {
       requestHandlers.set(method, handler);
     },
+    setMethodDelay: methodDelays.set,
     setMethodResponse(method, payload) {
       scenario.methodResponses[method] = payload;
       responseFixtures.resetSequence(method);
@@ -2341,9 +2335,13 @@ function installControlUiMockGateway(
     setHistoryMessages(messages) {
       historyMessagesOverridden = true;
       scenario.historyMessages = Array.isArray(messages) ? messages : [];
-      const configuredHistory = scenario.methodResponses["chat.history"];
-      if (isRecord(configuredHistory) && !responseFixtures.cases(configuredHistory)) {
-        configuredHistory.messages = scenario.historyMessages;
+      // Static startup and history responses describe the same overridden transcript.
+      // Case tables remain intentional query-specific fixtures.
+      for (const method of ["chat.startup", "chat.history"]) {
+        const configuredHistory = scenario.methodResponses[method];
+        if (isRecord(configuredHistory) && !responseFixtures.cases(configuredHistory)) {
+          configuredHistory.messages = scenario.historyMessages;
+        }
       }
     },
     socketCount() {
@@ -2401,47 +2399,12 @@ function installControlUiMockGateway(
   });
 }
 
-export async function prepareControlUiMockGatewayScenario(
-  scenario: ControlUiMockGatewayScenario = {},
-) {
-  if (!scenario.nativePlugins?.length) {
-    return { scenario, assets: new Map<string, { body: Buffer; contentType: string }>() };
-  }
-  const { prepareNativeControlUiPluginFixtures } = await import("./control-ui-plugin-fixture.ts");
-  const { catalog, assets } = await prepareNativeControlUiPluginFixtures(scenario.nativePlugins);
-  const preparedScenario = catalog.plugins.length
-    ? {
-        ...scenario,
-        featureMethods: [
-          ...new Set([
-            ...(scenario.featureMethods ?? defaultControlUiFeatureMethods),
-            "plugins.controlUi.list",
-            "plugins.controlUi.report",
-          ]),
-        ],
-        methodResponses: {
-          ...scenario.methodResponses,
-          "plugins.controlUi.list": catalog,
-          "plugins.controlUi.report": { ok: true },
-        },
-      }
-    : scenario;
-  return { scenario: preparedScenario, assets };
-}
-
 export async function installMockGateway(
   page: Page,
   scenario: ControlUiMockGatewayScenario = {},
   options: ControlUiMockGatewayInstallOptions = {},
 ): Promise<MockGatewayControls> {
-  const prepared = await prepareControlUiMockGatewayScenario(scenario);
-  if (prepared.assets.size) {
-    await page.route(`**${controlUiPluginAssetRoot()}**`, async (route) => {
-      const asset = prepared.assets.get(new URL(route.request().url()).pathname);
-      await route.fulfill(asset ? { status: 200, ...asset } : { status: 404 });
-    });
-  }
-  const normalizedScenario = normalizeScenario(prepared.scenario);
+  const normalizedScenario = normalizeScenario(scenario);
   const diagnosticEvents = installControlUiE2ePageDiagnosticRing(page);
   await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
     route.fulfill({
@@ -2456,31 +2419,7 @@ export async function installMockGateway(
     serializeControlUiMockGatewayInitScript(normalizedScenario),
     options,
   );
-  const rosterGates = new Set([
-    "connect",
-    "agents.list",
-    "sessions.resolve",
-    "chat.startup",
-    "chat.history",
-    "sessions.list",
-    "sessions.messages.subscribe",
-  ]);
-  const connectResponse = normalizedScenario.methodResponses.connect;
-  const connectFails =
-    connectResponse !== null &&
-    typeof connectResponse === "object" &&
-    "__mockError" in connectResponse;
-  if (
-    scenario.awaitInitialRoster ??
-    (!connectFails &&
-      normalizedScenario.startupPendingResponses === 0 &&
-      ![
-        ...normalizedScenario.heldMethods,
-        ...normalizedScenario.deferredMethods,
-        ...normalizedScenario.heldRequests.map((request) => request.method),
-        ...normalizedScenario.deferredRequests.map((request) => request.method),
-      ].some((method) => rosterGates.has(method)))
-  ) {
+  if (shouldWaitForControlUiMockRoster(normalizedScenario, scenario.awaitInitialRoster)) {
     installControlUiRosterNavigationWait(page);
   }
   return createMockGatewayControls(

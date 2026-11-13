@@ -156,7 +156,7 @@ describe("update-cli child-owned deferred completion", () => {
     expect(f.getLogOutput()).not.toContain("1 skipped");
   });
 
-  it.each(["channel-less", "pre-attempt", "expired"] as const)(
+  it.each(["channel-less", "pre-attempt", "expired", "torn"] as const)(
     "does not restore backup channels from a %s snapshot",
     async (kind) => {
       const expired = kind === "expired";
@@ -178,6 +178,9 @@ describe("update-cli child-owned deferred completion", () => {
           snapshotPath,
           suffix === ".bak" ? f.stableWhatsAppConfig() : snapshot,
         );
+        if (kind === "torn" && suffix === ".pre-update") {
+          await fs.writeFile(snapshotPath, '{"channels":{"whatsapp":');
+        }
         if (ageMs) {
           const staleTime = new Date(now - ageMs);
           await fs.utimes(snapshotPath, staleTime, staleTime);

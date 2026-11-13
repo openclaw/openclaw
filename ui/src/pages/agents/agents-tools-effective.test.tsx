@@ -155,6 +155,19 @@ describe("Agents effective-tools read", () => {
     },
   );
 
+  it("keeps a space before the enabled summary and the session key", async () => {
+    const view = await mountEffective(async () => effective("Read"));
+    view.context.settingsAgentSelection.set("main");
+    await view.settleEffective();
+    const descriptions = [...view.container.querySelectorAll(".settings-section__desc")].map(
+      (element) => element.textContent,
+    );
+    expect(
+      descriptions.some((text) => /permissions\. \d+\/\d+ enabled(?:$|\s)/.test(text ?? "")),
+    ).toBe(true);
+    expect(descriptions.some((text) => /Session: \S/.test(text ?? ""))).toBe(true);
+  });
+
   it("loads only on demand, joins pending receipts, and retains the accepted result across panel visits", async () => {
     const pending = deferred<ToolsEffectiveResult>();
     const view = await mountEffective(() => pending.promise, "files");
@@ -167,7 +180,7 @@ describe("Agents effective-tools read", () => {
       agentId: "main",
       sessionKey: "main",
     });
-    expect(view.container.textContent).toContain("Loading…");
+    expect(view.container.textContent).toContain("Loading preview…");
     await waitForSolid(() =>
       expect(view.container.querySelector(".agent-tools-group")).not.toBeNull(),
     );
@@ -208,7 +221,7 @@ describe("Agents effective-tools read", () => {
       reason: "patch",
     });
     await waitForSolid(() => expect(view.calls()).toHaveLength(2));
-    expect(view.container.textContent).toContain("Loading…");
+    expect(view.container.textContent).toContain("Loading preview…");
     expect(view.container.querySelector("#agent-tool-read")).toBe(card);
     expect(card.open).toBe(true);
     expect(group.open).toBe(true);
@@ -238,6 +251,77 @@ describe("Agents effective-tools read", () => {
     expect(view.container.textContent).not.toContain("Unavailable");
     expect(view.container.querySelector("#agent-tool-read")).toBe(card);
     expect(document.activeElement).toBe(toggle);
+  });
+
+  it.each([false, true])(
+    "retains the %s populated preview as unverified during refresh, then withdraws denial",
+    async (populated) => {
+      const next = deferred<ToolsEffectiveResult>();
+      const initial = {
+        ...effective("Accepted preview"),
+        ...(!populated ? { groups: [] } : {}),
+        notices: [{ id: "accepted", severity: "info" as const, message: "Accepted policy notice" }],
+      };
+      const view = await mountEffective(
+        vi
+          .fn<() => Promise<ToolsEffectiveResult>>()
+          .mockResolvedValueOnce(initial)
+          .mockReturnValue(next.promise),
+      );
+      await view.settleEffective();
+      openToolGroups(view.container);
+      const card = view.container.querySelector("#agent-tool-read")!;
+      const chip = view.container.querySelector<HTMLAnchorElement>(".agent-tools-runtime-chip");
+      chip?.focus();
+      if (populated) {
+        expect(card.textContent).toContain("Listed in preview via");
+      }
+      view.emit("sessions.changed", {
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        reason: "patch",
+        session: { key: "agent:main:main", toolOverrides: { webSearch: false } },
+      });
+      await waitForSolid(() => expect(view.calls()).toHaveLength(2));
+      expect(view.container.querySelector(".agent-tools-runtime-chip")).toBe(chip);
+      if (chip) {
+        expect(chip.isConnected).toBe(true);
+        expect(document.activeElement).toBe(chip);
+      } else {
+        expect(view.container.textContent).toContain("No tools in this preview.");
+      }
+      expect(view.container.querySelector(".settings-loading-skeleton")).toBeNull();
+      expect(view.container.textContent).toContain("Loading preview…");
+      expect(view.container.textContent).not.toContain("Accepted policy notice");
+      expect(card.textContent).not.toContain("Listed in preview via");
+      next.reject(new Error("permission denied"));
+      await waitForSolid(() => expect(view.container.textContent).toContain("Unavailable"));
+      expect(preview(view.container)).toBeUndefined();
+      expect(view.container.textContent).not.toContain("No tools in this preview.");
+      expect(view.page.read().tools.effectivePreview).toBeNull();
+    },
+  );
+
+  it("withdraws a retained preview immediately on read-grant loss", async () => {
+    const next = deferred<ToolsEffectiveResult>();
+    const view = await mountEffective(
+      vi
+        .fn<() => Promise<ToolsEffectiveResult>>()
+        .mockResolvedValueOnce(effective("Accepted preview"))
+        .mockReturnValue(next.promise),
+    );
+    await view.settleEffective();
+    view.emit("sessions.changed", { sessionKey: "agent:main:main", reason: "patch" });
+    await waitForSolid(() => expect(view.calls()).toHaveLength(2));
+    emitGatewaySnapshot(view.currentGateway, {
+      ...snapshot(view.client),
+      hello: gatewayHelloForMethods([], []),
+    });
+    await waitForSolid(() => expect(preview(view.container)).toBeUndefined());
+    expect(view.page.read().tools.effectivePreview).toBeNull();
+    next.resolve(effective("Revoked preview"));
+    await view.settleEffective();
+    expect(preview(view.container)).toBeUndefined();
   });
 
   it.each([
@@ -278,23 +362,17 @@ describe("Agents effective-tools read", () => {
     },
   );
 
-  it("refreshes after saving tool settings and sends the current session after navigation", async () => {
-    const read = vi
-      .fn<() => Promise<ToolsEffectiveResult>>()
-      .mockResolvedValueOnce(effective("Before save"))
-      .mockResolvedValue(effective("After save"));
+  it("sends the current session after navigation", async () => {
+    const read = vi.fn<() => Promise<ToolsEffectiveResult>>().mockResolvedValue(effective("Tools"));
     const view = await mountEffective(read);
-    await waitForSolid(() => expect(preview(view.container)).toContain("Before save"));
-    await view.page.read().onConfigSave();
-    await waitForSolid(() => expect(preview(view.container)).toContain("After save"));
-    expect(view.save).toHaveBeenCalledOnce();
-    expect(view.calls()).toHaveLength(2);
+    await waitForSolid(() => expect(preview(view.container)).toContain("Tools"));
+    expect(view.calls()).toHaveLength(1);
     emitGatewaySnapshot(view.currentGateway, {
       ...snapshot(view.client),
       sessionKey: "agent:main:next",
     });
     view.setPanel("tools");
-    await waitForSolid(() => expect(view.calls()).toHaveLength(3));
+    await waitForSolid(() => expect(view.calls()).toHaveLength(2));
     expect(view.request).toHaveBeenLastCalledWith("tools.effective", {
       agentId: "main",
       sessionKey: "agent:main:next",
@@ -326,7 +404,7 @@ describe("Agents effective-tools read", () => {
     );
     expect(preview(view.container)).toBeUndefined();
     expect(view.container.querySelector("#agent-tool-read")?.textContent).not.toContain(
-      "Included in preview",
+      "Listed in preview via",
     );
     next.resolve(effective("New session preview"));
     await waitForSolid(() => expect(preview(view.container)).toContain("New session preview"));
@@ -350,7 +428,7 @@ describe("Agents effective-tools read", () => {
     await waitForSolid(() => expect(view.calls()).toHaveLength(2));
     await waitForSolid(() => expect(preview(view.container)).toBeUndefined());
     expect(view.container.querySelector("#agent-tool-read")?.textContent).not.toContain(
-      "Included in preview",
+      "Listed in preview via",
     );
     next.resolve(effective("Current model preview"));
     await waitForSolid(() => expect(preview(view.container)).toContain("Current model preview"));
@@ -421,6 +499,13 @@ describe("Agents effective-tools read", () => {
     await view.settleEffective();
     expect(view.calls()).toHaveLength(1);
     view.emit("config.changed", {});
+    await view.settleEffective();
+    expect(view.calls()).toHaveLength(1);
+    view.emit("chat.metadata.changed", {
+      agentId: "main",
+      modelCatalogChanged: true,
+      authChanged: true,
+    });
     expect(await view.settleEffective()).toMatchObject({
       groups: [{ tools: [{ label: "Inventory 2" }] }],
     });

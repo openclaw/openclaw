@@ -60,7 +60,9 @@ it("holds attachments across history settlement", async () => {
     expect(requestCalls(host.request, "chat.history")).toHaveLength(1);
     history.resolve(result);
     await loading;
-    await Promise.all([host, { ...host, chatQueue: [] }].map((owner) => drain(owner)));
+    await Promise.all(
+      [host, makeChatHost({ ...host, chatQueue: [] })].map((owner) => drain(owner)),
+    );
     expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
   } finally {
     history.resolve(result);

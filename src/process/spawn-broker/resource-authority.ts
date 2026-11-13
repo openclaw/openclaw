@@ -2,15 +2,11 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-const UNIX_SOCKET_PATH_BYTES = 103;
+import { fitsBrokerSocketPath } from "./socket-directory.js";
 
 function createNativeResourceDirectory(): string {
   const directory = mkdtempSync(join(tmpdir(), "oc-br-"));
-  if (
-    process.platform === "win32" ||
-    Buffer.byteLength(join(directory, "resource.sock")) <= UNIX_SOCKET_PATH_BYTES
-  ) {
+  if (fitsBrokerSocketPath(directory, "resource.sock")) {
     return directory;
   }
   // A configured temp root can exceed Darwin's sockaddr_un even for a short private socket.

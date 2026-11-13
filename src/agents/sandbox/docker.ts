@@ -26,7 +26,11 @@ import {
   dockerPersistentTargetFromEngineTarget,
   dockerPersistentTargetToEngineTarget,
 } from "./docker-persistent-target.js";
-import { compareSandboxMountPlan, prepareSandboxMountPlan } from "./mount-plan.js";
+import {
+  compareSandboxMountPlan,
+  prepareSandboxMountPlan,
+  type SandboxMountPlan,
+} from "./mount-plan.js";
 import type { DockerPersistentExecTarget } from "./persistent-exec.types.js";
 import {
   assertPodmanSandboxTarget,
@@ -102,7 +106,26 @@ type EnsureSandboxContainerParams = {
   requireCurrentConfig?: boolean;
 };
 
-export async function ensureSandboxContainer(params: EnsureSandboxContainerParams) {
+type SandboxContainerAllocation = {
+  containerName: string;
+  containerId: string;
+  podmanTarget?: SandboxContainerEngineTarget;
+  configHash: string | null;
+  mountPlan: SandboxMountPlan;
+  currentConfig: boolean;
+};
+
+export function ensureSandboxContainer(
+  params: EnsureSandboxContainerParams,
+): Promise<SandboxContainerAllocation>;
+export function ensureSandboxContainer<T>(
+  params: EnsureSandboxContainerParams,
+  prepare: (allocation: SandboxContainerAllocation) => Promise<T>,
+): Promise<T>;
+export async function ensureSandboxContainer<T>(
+  params: EnsureSandboxContainerParams,
+  prepare?: (allocation: SandboxContainerAllocation) => Promise<T>,
+) {
   using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.backend.lifecycle_wait");
   const engine = params.engine;
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
@@ -123,15 +146,21 @@ export async function ensureSandboxContainer(params: EnsureSandboxContainerParam
     params.cfg.scope === "shared" ? undefined : params.operatorAuthority,
     (source) => {
       phases[Symbol.dispose]();
-      return ensureSandboxContainerLifecycle({ ...params, assertCurrent }, containerName, source);
+      return ensureSandboxContainerLifecycle(
+        { ...params, assertCurrent },
+        containerName,
+        source,
+        prepare,
+      );
     },
   );
 }
 
-async function ensureSandboxContainerLifecycle(
+async function ensureSandboxContainerLifecycle<T>(
   params: EnsureSandboxContainerParams,
   containerName: string,
   source: ContainerSourceLease | undefined,
+  prepare?: (allocation: SandboxContainerAllocation) => Promise<T>,
 ) {
   using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.backend.runtime_info");
   const configuredEngine = params.engine;
@@ -323,6 +352,18 @@ async function ensureSandboxContainerLifecycle(
     configLabelKind: "Image" as const,
     configHash: expectedHash,
   };
+  const complete = async (configHash: string | null, currentConfig: boolean) => {
+    const allocation = {
+      containerName,
+      containerId,
+      ...(podmanRuntimeInfo ? { podmanTarget: podmanRuntimeInfo.target } : {}),
+      configHash,
+      mountPlan,
+      currentConfig,
+    };
+    // Backend inspection must finish before releasing the allocation's cleanup boundary.
+    return prepare ? await prepare(allocation) : allocation;
+  };
   if (!hasContainer) {
     // Preserve managed mount custody and unfinished one-time setup before any
     // provider allocation, including a crash or revocation before publication.
@@ -374,14 +415,7 @@ async function ensureSandboxContainerLifecycle(
         await updateRegistry(readyEntry);
       }
       params.assertCurrent?.();
-      return {
-        containerName,
-        containerId,
-        ...(podmanRuntimeInfo ? { podmanTarget: podmanRuntimeInfo.target } : {}),
-        configHash: expectedHash,
-        mountPlan,
-        currentConfig: true,
-      };
+      return await complete(expectedHash, true);
     } catch (creationError) {
       if (!allocated) {
         throw creationError;
@@ -431,12 +465,5 @@ async function ensureSandboxContainerLifecycle(
     configHash: hashMismatch ? (currentHash ?? undefined) : expectedHash,
   });
   params.assertCurrent?.();
-  return {
-    containerName,
-    containerId,
-    ...(podmanRuntimeInfo ? { podmanTarget: podmanRuntimeInfo.target } : {}),
-    configHash: hashMismatch ? currentHash : expectedHash,
-    mountPlan,
-    currentConfig: !hashMismatch,
-  };
+  return await complete(hashMismatch ? currentHash : expectedHash, !hashMismatch);
 }

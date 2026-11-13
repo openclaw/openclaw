@@ -45,7 +45,7 @@ import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-rec
 import { rehydratePromotionCandidate } from "./short-term-promotion-rehydrate.js";
 import { readStore, writeStore } from "./short-term-promotion-store.js";
 import type {
-  ApplyShortTermPromotionsOptions,
+  PromotionThresholdOptions,
   ApplyShortTermPromotionsResult,
   PromotionCandidate,
   PromotionRejectionCategory,
@@ -57,6 +57,45 @@ import {
   resolvePromotionThresholds,
 } from "./short-term-promotion-utils.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
+import type { WorkspaceFileMode } from "./workspace-file-mode.js";
+
+type ApplyShortTermPromotionsOptions = PromotionThresholdOptions & {
+  agentId?: string;
+  workspaceAgentIds?: readonly string[];
+  workspaceDir: string;
+  workspaceFileMode?: WorkspaceFileMode;
+  candidates: PromotionCandidate[];
+  limit?: number;
+  nowMs?: number;
+  timezone?: string;
+  /**
+   * Maximum size of MEMORY.md on disk after a promotion write, in
+   * characters. When the post-write size would exceed this budget, the
+   * oldest auto-promotion sections may be compacted out, within
+   * `maxPriorEntryLossFraction`, so the file stays bounded and bootstrap
+   * injection keeps reaching new sessions. Pass `0` to disable compaction. Defaults to
+   * `DEFAULT_MEMORY_FILE_MAX_CHARS`. See #73691.
+   */
+  memoryFileMaxChars?: number;
+  /**
+   * Maximum visible size of each promoted short-term snippet in MEMORY.md, in
+   * estimated tokens. This keeps daily journal ranges from being copied
+   * wholesale into long-term memory while preserving the candidate's provenance
+   * metadata.
+   */
+  maxPromotedSnippetTokens?: number;
+  /** Maximum fraction of prior entries a promotion write may remove. */
+  maxPriorEntryLossFraction?: number;
+  consolidation?: {
+    subagent?: import("./dreaming-narrative.js").DreamingCompletion;
+    model?: string;
+    timeoutMs?: number;
+    logger: {
+      info: (message: string) => void;
+      warn: (message: string) => void;
+    };
+  };
+};
 
 const MEMORY_WRITE_LOCK_OPTIONS = {
   retries: { retries: 100, factor: 1.2, minTimeout: 25, maxTimeout: 250 },

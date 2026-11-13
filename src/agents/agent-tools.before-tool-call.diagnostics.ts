@@ -47,23 +47,17 @@ import {
 } from "../skills/workspace-skill-read-path.js";
 import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import { buildAdjustedParamsKey } from "./agent-tools.before-tool-call.state.js";
-import type {
-  HookBlockedReason,
-  HookContext,
-  ToolOutcomeObservation,
-  ToolOutcomeObserver,
-} from "./agent-tools.before-tool-call.types.js";
+import type { HookBlockedReason, HookContext } from "./agent-tools.before-tool-call.types.js";
 import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { getBeforeToolCallSourceTool } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
 import { getSkillInstructionFingerprint } from "./skill-instruction-result.js";
+import { resolveToolExecutionErrorKind } from "./tool-execution-error.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
+import type { ToolOutcomeObservation, ToolOutcomeObserver } from "./tool-outcome-observation.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
-import {
-  resolveToolExecutionErrorKind,
-  resolveToolResultFailureKind,
-} from "./tool-result-error.js";
+import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import { getToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { canonicalizePath } from "./utils/paths.js";

@@ -13,6 +13,7 @@ const en = {
       searchButton: "Search",
       idle: "Search for a person, project, decision, or anything else this agent remembers.",
       searching: "Searching memories…",
+      resultOne: "{count} result",
       results: "{count} results",
       empty: "No memories matched “{query}”.",
       error: "Memory search failed: {message}",
@@ -50,29 +51,22 @@ const en = {
       },
       schedule: {
         title: "Sleep schedule",
-        lightDescription:
-          "Sorts fresh short-term notes and stages promising candidates without changing long-term memory.",
-        remDescription:
-          "Reflects on themes and recurring ideas across recent activity to strengthen ranking without changing long-term memory.",
-        deepDescription:
-          "Scores staged candidates, promotes the keepers into long-term memory (MEMORY.md), and writes the dream diary.",
+        sweep: "Sweep",
+        guide: "Guide",
         nextRun: "next {time}",
         lastRun: "last {time}",
         notScheduled: "Not scheduled",
         learnMore: "How dreaming works",
-        openDocs: "Open dreaming guide",
       },
       activity: {
         title: "Activity",
-        promotedToday: "Promoted today",
-        promotedTotal: "Promoted total",
-        shortTermCount: "Pending short-term entries",
+        promoted: "Promoted",
+        promotedValue: "{today} today · {total} total",
+        shortTermCount: "Waiting for promotion",
         phaseHitCount: "Phase signals",
-        lightPhaseHitCount: "Light-phase hits",
-        remPhaseHitCount: "REM-phase hits",
+        phaseHitValue: "{light} light · {rem} REM",
       },
       health: {
-        title: "Engine health",
         provider: "Provider",
         embeddings: "Embeddings",
         runtime: "Embedding runtime",
@@ -83,12 +77,6 @@ const en = {
         checking: "Checking…",
         test: "Test",
         testing: "Testing…",
-      },
-      shortcuts: {
-        title: "Explore memory",
-        memories: "Search memories",
-        diary: "Read the dream diary",
-        settings: "Configure memory",
       },
     },
     dreaming: {

@@ -179,7 +179,10 @@ describe("X OAuth client ownership", () => {
       if (input.endsWith("/activity/subscriptions")) {
         bearerHeaders.push(new Headers(init?.headers).get("authorization"));
         return Response.json({
-          data: [{ event_type: "post.mention.create", filter: { user_id: "9" } }],
+          data: ["post.mention.create", "post.reply.create"].map((event_type) => ({
+            event_type,
+            filter: { user_id: "9" },
+          })),
         });
       }
       return Response.json({ data: [] });

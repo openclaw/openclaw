@@ -260,7 +260,7 @@ it.each(["sessionId", "model", "provider"] as const)(
 );
 
 it("recovers once for two consumers and preserves server backoff while demand is paused", async () => {
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
   const { store, request } = setup();
   request
     .mockRejectedValueOnce(
@@ -323,6 +323,7 @@ it("recovers once for two consumers and preserves server backoff while demand is
   store.watch(panel, latest);
   await vi.advanceTimersByTimeAsync(200_000);
   expect(request).toHaveBeenCalledTimes(4);
+  vi.setSystemTime(Date.now() + 3_600_000);
   visibility.mockReturnValue("visible");
   document.dispatchEvent(new Event("visibilitychange"));
   await vi.advanceTimersByTimeAsync(99_999);

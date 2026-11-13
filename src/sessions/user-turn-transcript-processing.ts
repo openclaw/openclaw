@@ -35,13 +35,13 @@ export function createUserTurnProcessingCompletion(
       const pendingInput = readPendingInput();
       return pendingInput ? pendingInput.run(run) : run();
     },
-    finishPendingInput: (disposition: "cancelled" | "interrupted") => {
+    finishPendingInput: (disposition: "cancelled" | "interrupted", userInitiated?: true) => {
       const pendingInput = readPendingInput();
       if (pendingInput) {
-        pendingInput.finish(disposition);
+        pendingInput.finish(disposition, userInitiated);
       } else {
         for (const source of sources ?? []) {
-          source.finishPendingInput?.(disposition);
+          source.finishPendingInput?.(disposition, userInitiated);
         }
       }
     },

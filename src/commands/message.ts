@@ -28,6 +28,9 @@ import {
 } from "../infra/outbound/message-action-contracts.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { prepareTemplateInstallSchemaVersions } from "../templates/provenance-runtime-read.js";
+import { collectTemplateToolPolicyCandidates } from "../templates/tool-policy-candidates.js";
+import { prepareCapturedTemplateToolPolicyConsent } from "../templates/tool-policy-runtime.js";
 
 export async function messageCommand(
   opts: Record<string, unknown>,
@@ -90,6 +93,12 @@ export async function messageCommand(
         ", ",
       )}. Example: ${formatCliCommand("openclaw message send --channel <channel> --target <id> --text <message>")}.`,
     );
+  }
+  // The CLI pins config synchronously; media policy resolution also needs the
+  // consent facts that Gateway startup normally prepares for this config.
+  if (collectTemplateToolPolicyCandidates(cfg).length > 0) {
+    (await prepareTemplateInstallSchemaVersions({ artifactPreservingReadOnly: false })).publish();
+    prepareCapturedTemplateToolPolicyConsent(cfg, {});
   }
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
 

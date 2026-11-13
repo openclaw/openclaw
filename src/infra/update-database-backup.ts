@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { DoctorRehearsalDatabaseCoverage } from "../commands/doctor-rehearsal-databases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openClawStateDatabaseCache,
@@ -17,6 +18,7 @@ import {
 } from "../state/openclaw-state-maintenance-context.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
+import type { BackupEngine } from "./database-engine/types.js";
 import {
   ensureDurableDirectory,
   requireDirectorySync,
@@ -25,7 +27,6 @@ import {
 import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessageWithCode } from "./errors.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
-import { hasNodeErrorCode } from "./path-guards.js";
 import { isSqliteSnapshotFile } from "./sqlite-file-header.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
@@ -48,14 +49,11 @@ import {
   readUpdateStateDatabaseSizesInProcess,
 } from "./update-candidate-state.sizes.js";
 import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
+import type { SqliteDatabaseGenerationReceipt } from "./update-database-generations.js";
 import {
-  readUnchangedUpdateDatabaseGeneration,
-  type SqliteDatabaseGenerationReceipt,
-} from "./update-database-generations.js";
-import {
-  readUpdatePhysicalDatabaseGenerations,
   readUpdatePhysicalDatabaseObservation,
   readUpdatePostgresDatabaseGenerations,
+  rereadUpdatePhysicalDatabaseGeneration,
 } from "./update-physical-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
@@ -118,16 +116,20 @@ type BackupInput = {
   /** Native migration owns the stopped Gateway until Doctor takes custody. */
   stopped?: boolean;
   postgresOffline?: boolean;
+  /** Migration exporters may require a physical engine before any server export. */
+  sourceEngine?: "sqlite";
+  /** Manual recovery evidence: live commits after its coherent image change nothing it promises. */
+  originalState?: boolean;
   pluginOwners?: UpdateDatabaseBackup["pluginOwners"];
 };
 type InspectionPlan = z.infer<typeof UpdateStateSchemaInspectionPlanSchema>;
 
 async function loadUpdateDatabaseBackupRuntime() {
-  const [{ discoverBackupDatabasePaths }, { readBackupEngine }] = await Promise.all([
+  const [{ discoverBackupDatabasePaths }, { readBackupEngines }] = await Promise.all([
     import("./backup-sqlite-snapshot.js"),
     import("./database-engine/physical-store.js"),
   ]);
-  return { discoverBackupDatabasePaths, readBackupEngine };
+  return { discoverBackupDatabasePaths, readBackupEngines };
 }
 
 let backupRuntime: ReturnType<typeof loadUpdateDatabaseBackupRuntime> | undefined;
@@ -147,14 +149,12 @@ async function inspectRestorableDatabaseFiles(
     // Readers mutate/recreate the transient WAL index; only durable files fence capture.
     for (const suffix of ["", "-wal", "-journal"]) {
       const file = `${database}${suffix}`;
-      let info;
-      try {
-        info = await fs.lstat(file, { bigint: true });
-      } catch (error) {
-        if (suffix && hasNodeErrorCode(error, "ENOENT")) {
-          continue;
-        }
-        throw error;
+      // Only sidecars may be absent; without a handler a missing main file still rejects.
+      const info = await fs
+        .lstat(file, { bigint: true })
+        .catch(suffix ? ignoreMissingPath : undefined);
+      if (!info) {
+        continue;
       }
       if (!info.isFile() || info.nlink !== 1n) {
         throw new Error(
@@ -264,6 +264,8 @@ export async function createUpdateDatabaseBackupInProcess(
     excludedDatabasePaths?: readonly string[];
     /** Source custody prepared by the parent only for manual original-state capture. */
     originalCaptureSourcePaths?: readonly string[];
+    /** Engines the custody-holding parent already classified; each probe copies the source. */
+    sourceEngines?: Readonly<Record<string, BackupEngine>>;
     onProgress?: (progress: UpdateStateInspectionProgress) => void;
   },
 ): Promise<UpdateDatabaseBackup> {
@@ -299,32 +301,30 @@ export async function createUpdateDatabaseBackupInProcess(
     file: string,
     observation?: ReturnType<typeof readUpdatePhysicalDatabaseObservation>,
     receipt?: SqliteDatabaseGenerationReceipt,
-  ) => {
+  ): Promise<{ generation?: string; emptyReaderAlternate?: string }> => {
     try {
       if (observation) {
         if (!observation.generation.ok) {
           throw observation.generation.error;
         }
-        return observation.engine?.engine === "postgres"
-          ? (await readUpdatePostgresDatabaseGenerations([file], input.pluginOwners))[file]
-          : (observation.generation.value ?? undefined);
+        const generation =
+          observation.engine?.engine === "postgres"
+            ? (await readUpdatePostgresDatabaseGenerations([file], input.pluginOwners))[file]
+            : (observation.generation.value ?? undefined);
+        return { generation, emptyReaderAlternate: observation.emptyReaderAlternate };
       }
-      const unchanged = receipt && readUnchangedUpdateDatabaseGeneration(file, receipt);
-      return (
-        unchanged ??
-        (await readUpdatePhysicalDatabaseGenerations([file], input.pluginOwners))[file] ??
-        undefined
-      );
+      return await rereadUpdatePhysicalDatabaseGeneration(file, receipt, input.pluginOwners);
     } catch (error) {
       warnings.push(
         `Database write generation unavailable for ${file}: ${formatErrorMessageWithCode(error)}`,
       );
-      return undefined;
+      return {};
     }
   };
   const { readBackupEngine, readBackupEngineImage } =
     await import("./database-engine/physical-store.js");
   const requestedOriginalSources = new Set(input.originalCaptureSourcePaths);
+  const preserveSourceArtifacts = input.stopped || input.preserveSourceArtifacts;
   const stoppedSources = new Set(
     inventory.present.filter(
       (file) =>
@@ -345,7 +345,7 @@ export async function createUpdateDatabaseBackupInProcess(
           ReturnType<typeof readUpdatePhysicalDatabaseObservation>
         >();
         // Reuse classification from the generation image; only a failed acquisition needs
-        // an engine-only image. PostgreSQL access still waits for the inventory custody gate.
+        // an engine probe. PostgreSQL access still waits for the inventory custody gate.
         const engines = new Map(
           inventory.present
             .filter((file) => !stoppedSources.has(file))
@@ -360,9 +360,23 @@ export async function createUpdateDatabaseBackupInProcess(
                   heldImages.add(observation.preparedSource);
                 }
               }
-              return [file, observation?.engine ?? readBackupEngine(file)];
+              const engine =
+                observation?.engine ??
+                input.sourceEngines?.[file] ??
+                (preserveSourceArtifacts || requestedOriginalSources.has(file)
+                  ? withArtifactPreservingStateReads(() => readBackupEngine(file))
+                  : readBackupEngine(file));
+              return [file, engine];
             }),
         );
+        if (
+          input.sourceEngine === "sqlite" &&
+          [...engines.values()].some((engine) => engine.engine !== "sqlite")
+        ) {
+          throw new Error(
+            "This capture requires physical SQLite sources; no PostgreSQL data was exported.",
+          );
+        }
         const originalCaptureSources = new Set(
           input.originalCaptureSourcePaths?.filter(
             (file) => engines.get(file)?.engine === "sqlite",
@@ -389,7 +403,8 @@ export async function createUpdateDatabaseBackupInProcess(
             });
           }
           const snapshotPath = path.join(directory, archivePath);
-          const retainGeneration = !input.stopped && !originalCaptureSources.has(sourcePath);
+          const retainGeneration =
+            !input.stopped && !input.originalState && !originalCaptureSources.has(sourcePath);
           const before = retainGeneration
             ? await readGeneration(sourcePath, observations.get(sourcePath))
             : undefined;
@@ -410,7 +425,7 @@ export async function createUpdateDatabaseBackupInProcess(
                 sourceAcquisition: {
                   mode: "isolated-process",
                   stagingRoot: input.stagingRoot,
-                  preserveSourceArtifacts: input.stopped || input.preserveSourceArtifacts,
+                  preserveSourceArtifacts,
                   preparedSource,
                 },
                 preserveRowIds: true,
@@ -424,6 +439,12 @@ export async function createUpdateDatabaseBackupInProcess(
           // Checkpointed stopped stores already have a private image; classify that image
           // instead of copying and comparing the complete source again just for its anchor.
           const engine = engines.get(sourcePath) ?? readBackupEngineImage(snapshotPath, sourcePath);
+          // Stopped, checkpointed stores are classified from the private image, not above.
+          if (input.sourceEngine === "sqlite" && engine.engine !== "sqlite") {
+            throw new Error(
+              "This capture requires physical SQLite sources; no PostgreSQL data was exported.",
+            );
+          }
           if (requestedOriginalSources.has(sourcePath) && engine.engine === "sqlite") {
             originalCaptureSources.add(sourcePath);
           }
@@ -449,8 +470,14 @@ export async function createUpdateDatabaseBackupInProcess(
               undefined,
               observations.get(sourcePath)?.sqliteReceipt,
             );
-            if (after !== undefined && before === after) {
-              sourceGenerations[sourcePath] = after;
+            // Like Doctor admission, a non-writing open or close between the reads is no write.
+            const expected = before?.generation;
+            if (
+              expected !== undefined &&
+              after.generation !== undefined &&
+              (expected === after.generation || expected === after.emptyReaderAlternate)
+            ) {
+              sourceGenerations[sourcePath] = after.generation;
             } else {
               warnings.push(
                 `Database changed during capture; its snapshot requires manual recovery: ${sourcePath}`,
@@ -467,10 +494,7 @@ export async function createUpdateDatabaseBackupInProcess(
           });
         }
         const current = await inventoryFor(
-          await discoverUpdateStateSchemaInspectionInProcess({
-            ...input,
-            preserveSourceArtifacts: input.stopped || input.preserveSourceArtifacts,
-          }),
+          await discoverUpdateStateSchemaInspectionInProcess({ ...input, preserveSourceArtifacts }),
         );
         if (JSON.stringify(current) !== JSON.stringify(inventory)) {
           throw new Error(
@@ -530,7 +554,7 @@ export async function createUpdateDatabaseBackup({
   ...input
 }: BackupInput & {
   acquisition?: UpdateRecoveryCaptureAcquisition;
-  /** Original-state evidence does not need generations while its owner retains every source. */
+  /** Original-state evidence is only ever restored manually, so it never records generations. */
   purpose?: "original-state";
   nodeRunner?: string;
   timeoutMs?: number;
@@ -584,7 +608,7 @@ export async function createUpdateDatabaseBackup({
     }
   }
   const controller = new AbortController();
-  const { discoverBackupDatabasePaths, readBackupEngine } =
+  const { discoverBackupDatabasePaths, readBackupEngines } =
     await prepareUpdateDatabaseBackupRuntime();
   const prepared = Object.values(resolveDatabaseFamilyEngines(input.config)).includes("postgres")
     ? await (await import("./backup-database-discovery.js")).preparePostgresBackupDiscovery(input)
@@ -625,11 +649,12 @@ export async function createUpdateDatabaseBackup({
         acquisition?.mode === "maintenance-owner" &&
         maintenanceOwnerHasSourceCustody(scope, shared) &&
         !openClawStateDatabaseCache.isOpenClawStateDatabaseOpen(shared);
-      // Only maintenance admission consumes this classification. Other callers
-      // let the backup worker inspect engines without another full source image.
-      const postgresPaths = custody
-        ? prepared.paths.filter((file) => readBackupEngine(file).engine === "postgres")
-        : [];
+      // Only maintenance admission classifies here, and its backup worker reuses the
+      // result. Other callers let that worker inspect engines without another source image.
+      const engines = custody
+        ? withArtifactPreservingStateReads(() => readBackupEngines(prepared.paths))
+        : undefined;
+      const postgres = Object.values(engines ?? {}).some(({ engine }) => engine === "postgres");
       const inspectionPlan =
         custody && maintenanceOwnerMayCopySourcesInProcess(scope, shared)
           ? await discoverUpdateStateSchemaInspectionInProcess({
@@ -654,6 +679,7 @@ export async function createUpdateDatabaseBackup({
       );
       const capturedInput = {
         ...workerInput,
+        ...(purpose === "original-state" ? { originalState: true } : {}),
         excludedDatabasePaths,
         postgresOffline: input.postgresOffline || custody,
       };
@@ -678,7 +704,7 @@ export async function createUpdateDatabaseBackup({
       const databases = custody
         ? await readUpdateStateDatabaseSizesInProcess(files, signal)
         : await readUpdateStateDatabaseSizes(files, worker);
-      if (custody && postgresPaths.length > 0) {
+      if (postgres) {
         scope!.assertAdmission();
       }
       const backup = parseUpdateStateInspectionWorker(
@@ -690,13 +716,14 @@ export async function createUpdateDatabaseBackup({
             mode: "database-backup",
             inspectionPlan,
             originalCaptureSourcePaths,
+            sourceEngines: engines,
           },
           ...(custody ? { ioBudget: "deadline" as const } : {}),
           databases,
         }),
         UpdateDatabaseBackupSchema,
       );
-      if (custody && postgresPaths.length > 0) {
+      if (postgres) {
         scope!.assertAdmission();
       }
       rehearsal?.assertCurrent();

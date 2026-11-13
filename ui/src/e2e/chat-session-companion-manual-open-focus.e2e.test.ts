@@ -163,7 +163,7 @@ suite.define(() => {
           await page.getByRole("button", { name: "Send message", exact: true }).click();
           const active = requireRecord((await gateway.waitForRequest("chat.send")).params);
           const runId = requireString(active.idempotencyKey, "active run idempotency key");
-          await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor();
+          await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
           const acceptedSession = {
             key: "agent:main:main",
             sessionId: "session:agent:main:main",

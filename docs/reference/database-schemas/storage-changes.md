@@ -3094,9 +3094,9 @@ Quarter grain is exact for zones whose offsets and transitions fall on quarter
 hours (including +05:30, +05:45 and DST changes). A per-day p95 is the largest
 quarter p95. Ranges or zones that split a quarter with activity report
 `aggregate-boundary` for the overview; `usage.cost` replays those transcripts
-within its bounded allowance. Overview freshness compares the checkpoint with the
-session window's last mutation time and rewrite generation instead of transcript
-statistics. Session detail reads keep using the month partitions.
+within its bounded allowance. Overview and summary freshness compare the checkpoint
+with the session window's last mutation time and rewrite generation instead of
+transcript statistics. Session detail reads keep using the month partitions.
 
 Upgraded installs have partitions without quarter rows. The usage refresh owner
 finds partitions without a paired quarter row with one anti-join, derives the
@@ -3104,15 +3104,22 @@ rows from the stored partitions (no transcript scan) in its bounded batches, and
 inserts each row only while the partition header it decoded is still current.
 The work is idempotent and resumes after a restart.
 
-Both reports first let pending transcript publications land. When a pass finds
-instances without quarter rows, with invalid rows or older than their
-transcript, it asks the refresh owner for exactly those sessions (which also
-runs the upgrade backfill for them), waits up to 10 seconds inside the
-15-second usage request budget, and runs once more, so the answer includes
-them. Only a refresh that outlasts that wait leaves the second answer `partial`
-with reason `summarizing` and the summarized/total counts. Archived JSONL
-transcripts resolve through the same read cache as session detail reads and
-count in both reports.
+Overview reports return recorded aggregates immediately and request background
+refresh for missing or stale instances. Cost summaries first let pending transcript
+publications land, then request missing or stale instances, wait up to 10 seconds
+inside the 15-second RPC budget, and read once more. Incomplete coverage remains
+explicit in cache status. Cost RPC-owned refresh work is cancelled when the response
+is sent; publication-owned updates retain their own lifetime. Archived JSONL
+transcripts resolve through the same read cache as session detail reads and count
+in both reports.
+
+Refresh discovery limits its selected files before reading their statistics.
+SQLite statistics use fixed-tail keyset pages and release native custody between
+pages, so cancellation can stop the next read. Cold archives use their recorded
+statistics. Unchanged checkpoints skip those pages entirely; appended transcripts
+count only the suffix. Pacing uses kernel-accounted reads when available, with
+bounded scalar-page estimates otherwise. Rewrites during a paged recount discard
+the incomplete result; a later publication retries it.
 
 Transcripts remain authoritative; the projection changes neither retention nor
 billing data. Exact partial-quarter ranges and arithmetic that cannot be
@@ -3146,6 +3153,31 @@ execute commands, or require a database restore. The maintainer-authorized
 restart-continuity repair accepts this narrowly scoped durability change; owner
 and separate-Gateway-process tests cover lifecycle cleanup and restart handoff.
 
+## Plugin session notice delivery owner
+
+A channel notice that a loaded plugin posts with `runtime.system.postSessionNotice`
+stores one more `deliveryCompletion` variant in the existing
+`delivery_queue_entries.entry_json`: `{ kind: "plugin-notice", pluginId }`. It names
+the posting plugin and nothing else. Core callers that are not loaded plugins
+store no completion, as before.
+
+Before any channel I/O, restart recovery's existing owner step checks that this
+plugin is loaded, enabled, and not revoked in the active plugin registry. If it is,
+the intent replays as usual. Otherwise the owner logs the reason, and recovery
+settles the intent without sending through its existing owner-rejection path,
+which records a failed delivery audit with no result. The notice uses the existing completion retention under the
+`plugin-notice:` intent prefix (24 hours, 2,000 receipts). A retry with the same
+key therefore finds the kept receipt and does not send again.
+
+There is no table, column, index, or schema-version change, and existing rows are
+not rewritten. The installed updater runs first and is unaffected. Older readers
+(checked against `v2026.10.9`) route an unknown completion kind to the
+conversation owner. That owner has no agent or operation ID for this row, so the
+transition throws, recovery records "delivery owner state unavailable", and the
+row fails without sending until its retry budget moves it to failed. A downgrade
+therefore never sends a pending plugin notice; an upgrade does not resume one
+that an older reader already failed.
+
 ## Memory index batch revisions
 
 Agent schema 31 removes the six row revision triggers on `memory_index_sources`
@@ -3167,6 +3199,54 @@ The declared SQLite backup covers the source and chunk tables and schema metadat
 Other retained tables and planner statistics stay unchanged. Older binaries
 require the verified pre-upgrade backup and matching schema; manually lowering
 version markers cannot restore their revision-update contract.
+
+## Active transcript event facts
+
+Agent schema 41 adds `session_transcript_active_event_facts`, keyed by session
+and transcript sequence. The table starts empty. It stores the transcript
+writer's exact serialized byte count, including the separator, and its guarded
+dependency navigation projection. A missing row means unknown; `{}` means a
+known non-candidate. Readers use the existing payload expression only for
+missing facts and never populate the table.
+
+The transcript projection writer owns the facts in the same transaction as
+active-row insertion or replacement. Payload and eligibility changes replace
+or clear the facts. The foreign key to the active row cascades deletion through
+branch retirement, reset, compaction, and session deletion. SQLite uses
+`STRICT, WITHOUT ROWID`; PostgreSQL carries the same key and foreign key.
+Transcripts remain authoritative, with unchanged retention and admission limits.
+Engine porting omits these derived facts because payload encoding and stored
+predicate materialization can change. The destination starts with missing facts
+and uses its normal fallback; porting does not force a facts backfill.
+
+The version migration creates only this empty table and updates schema metadata.
+It does not alter, scan, backfill, index, or copy existing transcript or active
+rows. Its declared SQLite scoped backup retains `schema_meta`, the prior SQLite user
+version, and the new table's absence. The 40-to-41 crossing uses the established
+schema-only admission policy, then checks the new empty table and its foreign
+key at migration finalization. Existing foreign keys are unchanged and are not
+rescanned for this step. Crossings from schema 38 or 39 retain schema-only
+preflight and global foreign-key validation at finalization. Explicit full
+integrity checks retain their existing coverage.
+Whole-upgrade timing must
+distinguish this version phase from any separate maintenance or update backup.
+PostgreSQL keeps its existing exact-predecessor backup owner; this declaration
+does not narrow that engine's backup scope.
+
+Old rows retain their fallback cost until an ordinary write or rebuild covers
+them. A recent 512-event window can become covered after 512 ordinary, well-formed
+appends. Malformed rows retain their fallback, and old dependency candidates can
+remain uncovered indefinitely. A background backfill is a separate storage and
+lifecycle decision.
+
+Older binaries refuse agent41 stores: their writers cannot keep these facts
+current, so an additive-table reader exception is unsafe. With writers stopped,
+the candidate CLI restores the verified scoped migration backup using
+`openclaw database restore-migration-backup`, removing the companion table and
+restoring both version markers before the matching older build opens the store.
+This version phase does not rewrite transcripts; the scoped restore leaves
+those canonical rows and other undeclared tables intact. It is not a general
+rollback for other migrations or external effects.
 
 ## Review checkpoint for material changes
 
@@ -3192,6 +3272,15 @@ mechanics are engineering decisions within an authorized repair when they
 preserve those contracts. Prove FIFO ordering, current authority after awaited
 work, integrity checks, publication fencing, and settlement of write-capable
 work. Assess performance and storage costs as part of that verification.
+
+Every migration PR states its upgrade cost on the largest known deployment.
+List each statement that touches an existing table (rebuild, `INSERT … SELECT`,
+backfill, index build, integrity-check scope) with that table's size, plus the
+backup scope. Migrations finish before the Gateway serves requests, so a large
+table rewritten in one transaction keeps the Gateway offline until it finishes.
+Prefer changes that leave existing rows untouched, and declare a table-scoped
+backup instead of a full-file copy. A rewrite of a large table needs a measured
+duration at that size and explicit acceptance.
 
 A Doctor or recovery repair that removes only invalid or unreachable rows (for
 example rows whose referenced parent row is missing) is also an engineering
@@ -3282,3 +3371,44 @@ unchanged content hash. Earlier
 editors cannot write to a different same-name file, even with identical bytes.
 Older runtimes do not implement message-qualified prior-file access or this new
 adoption behavior; original files remain in their source without migration.
+
+## Scheduled run parent receipts
+
+A scheduled run whose job is linked to a parent conversation and runs as a
+child (`isolated` or `current` session target) executes in its own hidden
+`:run:` row. The run resolves its memory audience through its admitted parent,
+but sessions it spawns walk their spawn lineage to the run row, which is not the
+parent. Cron run preparation therefore records one private
+`scheduledMemoryParent` relation in that row's existing `entry_json`: the
+parent's session key, session ID, lifecycle revision (when the link recorded
+one), and the occurrence's admitted owner bit.
+
+- **Writer:** only the cron run-continuation write that prepares the `:run:`
+  row, once per attempt, before the agent runs. A retried attempt whose
+  occurrence has no parent clears it. In-session runs execute on their parent's
+  own row and detached runs have no parent, so neither records one.
+- **Not settable elsewhere:** `sessions.create` and `sessions.patch` are closed
+  schemas without this field, spawn parameters never reach it, and the plugin
+  session-store API strips it from reads and writes. The slot key is reserved.
+- **Reader:** memory-audience resolution follows the receipt only from a
+  spawned session's lineage, and only when both the spawn and the occurrence
+  were owner-attributed. The parent hop must still match the recorded session
+  ID and lifecycle revision, so a parent reset or replacement denies the
+  spawned session. Every other combination resolves from the run row exactly
+  as before.
+- **Lifetime:** the relation lives as long as the run row: cron removes the
+  row once the run and its spawned sessions settle, and otherwise session
+  maintenance prunes it after `cron.sessionRetention` (24 hours by default).
+  Reset, rollover, and carry-over never copy it; rotating the row through the
+  public session writer clears it.
+- **Upgrade:** existing run rows and sessions spawned before the upgrade carry
+  no receipt and an earlier non-owner spawn bit, so they keep resolving from
+  the run row. The next occurrence of an existing linked job records the
+  receipt.
+- **Downgrade:** older Gateways keep the unknown optional field but ignore it.
+  A session spawned after this change already recorded the occurrence's owner
+  bit, so until its run row expires it resolves from the run row's copied chat
+  type: owner-private for a direct-chat parent, without the parent-reset
+  check. Sessions spawned by the older Gateway behave as before this change.
+
+There is no SQL migration, table, column, index, or schema-version change.

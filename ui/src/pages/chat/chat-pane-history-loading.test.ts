@@ -41,10 +41,9 @@ describe("chat pane history loading", () => {
       refresh();
       flush();
       const button = container.querySelector<HTMLButtonElement>("button")!;
-      const label = loading ? "Loading earlier…" : "Show earlier";
       expect(button.disabled).toBe(false);
-      expect(button.querySelector('[role="status"]')?.textContent?.trim()).toBe(label);
-      expect(button.getAttribute("aria-label")).toBe(label);
+      expect(button.querySelector('[role="status"]')?.textContent?.trim()).toBe("Show earlier");
+      expect(button.getAttribute("aria-label")).toBe("Show earlier");
       expect(button.getAttribute("aria-busy")).toBe(String(loading));
       expect(Boolean(button.closest(".chat-history-boundary--loading"))).toBe(loading);
       return button;

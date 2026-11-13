@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import {
@@ -17,6 +18,7 @@ import {
   publishTelegramTestConfig,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+import { TelegramPollingSession } from "./polling-session.js";
 import {
   resetTelegramMessageCacheForTest,
   resetTelegramSentMessageCacheForTest,
@@ -50,7 +52,7 @@ afterEach(async () => {
   }
 });
 
-async function createBot(scope: "channel" | "account" | "enabled", botToken = token) {
+async function prepareConfig(scope: "channel" | "account" | "enabled", idleHours = 24) {
   const state = harness.state;
   const cfg: OpenClawConfig = {
     agents: {
@@ -69,7 +71,7 @@ async function createBot(scope: "channel" | "account" | "enabled", botToken = to
         dmPolicy: "open",
         allowFrom: ["*"],
         streaming: { mode: "off" },
-        threadBindings: { enabled: scope !== "channel" },
+        threadBindings: { enabled: scope !== "channel", idleHours },
         accounts: {
           [accountId]: scope === "account" ? { threadBindings: { enabled: false } } : {},
         },
@@ -78,6 +80,11 @@ async function createBot(scope: "channel" | "account" | "enabled", botToken = to
   };
   publishTelegramTestConfig(cfg);
   await state.writeConfig(cfg);
+  return cfg;
+}
+
+async function createBot(scope: "channel" | "account" | "enabled", botToken = token) {
+  const cfg = await prepareConfig(scope);
   if (botToken) {
     return createNativeBot(false, true, cfg, false, accountId);
   }
@@ -177,3 +184,63 @@ it("does not retain an owner when the real bot constructor fails with enabled bi
   expect(harness.replySpy).not.toHaveBeenCalled();
   expect(apiCalls).not.toHaveBeenCalled();
 });
+
+it.each(["getMe", "deleteWebhook"])(
+  "retires polling bindings when startup is canceled at %s",
+  async (method) => {
+    const cfg = await prepareConfig("enabled", 1);
+    const abort = new AbortController();
+    const requested = createDeferred<void>();
+    const transportFetch: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith(`/${method}`)) {
+        const signal = init?.signal;
+        if (!signal) {
+          throw new Error("Expected account-owned Telegram transport cancellation");
+        }
+        return new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("canceled", "AbortError")),
+            { once: true },
+          );
+          requested.resolve();
+        });
+      }
+      return Response.json({ ok: true, result: true });
+    };
+    const session = new TelegramPollingSession({
+      token,
+      config: cfg,
+      accountId,
+      runtime: undefined,
+      proxyFetch: undefined,
+      abortSignal: abort.signal,
+      telegramTransport: {
+        fetch: transportFetch,
+        sourceFetch: transportFetch,
+        close: async () => {},
+      },
+      getCommittedUpdateId: () => null,
+      persistUpdateId: async () => {},
+      log: () => {},
+      ingress: {
+        createWorker: () => {
+          throw new Error("Startup must not admit ingress");
+        },
+      },
+    });
+    const run = session.runUntilAbort();
+    try {
+      await requested.promise;
+      expect(getTelegramThreadBindingManager(accountId)?.getIdleTimeoutMs()).toBe(3_600_000);
+    } finally {
+      abort.abort();
+      await run;
+    }
+    expect(getTelegramThreadBindingManager(accountId)).toBeNull();
+    await expectUnavailableOwner();
+    await createBot("enabled");
+    expect(getTelegramThreadBindingManager(accountId)?.getIdleTimeoutMs()).toBe(86_400_000);
+  },
+);

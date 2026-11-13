@@ -1,11 +1,13 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { t } from "../../i18n/index.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 import { chatItemStartsDisplayTurn, chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
+import { projectSystemNoticeSummary } from "./system-notice-kinds.ts";
 
 const clients = [{ id: "cli", mode: "cli", displayName: "Release helper" }];
 const baseMessage = {
@@ -50,15 +52,10 @@ afterEach(() => resetChatThreadState());
 
 describe("system notices through pending-to-history promotion", () => {
   it.each([
-    [
-      "cron_failure_repair",
-      "System · automation recovery",
-      "An automation failed — asked the agent to investigate and continue if needed.",
-      false,
-    ],
+    ["cron_failure_repair", "System · automation recovery: Automation failed.", "", false],
     [
       "restart-sentinel",
-      "System · gateway restarted",
+      "System · Gateway restarted",
       "Gateway restarted during update 2026.8.2 -> 2026.8.3.",
       false,
     ],
@@ -186,6 +183,49 @@ describe("system notices through pending-to-history promotion", () => {
   });
 });
 
+describe("visible system status contract", () => {
+  it("keeps authored status copy within the single-line total budget", () => {
+    const copy = `${t("chat.systemNotice.automationRecovery.label")}: ${t("chat.systemNotice.automationRecovery.summary")}`;
+    expect(copy).not.toMatch(/[\r\n\u2028\u2029]/u);
+    expect(copy.length).toBeLessThanOrEqual(64);
+  });
+  it.each([56, 57])(
+    "bounds the complete %i-character status body and retains details",
+    (length) => {
+      const text = "x".repeat(length);
+      const result = projectSystemNoticeSummary({
+        label: "System",
+        text,
+        detailed: false,
+        statusOnly: true,
+      });
+      if (length === 56) {
+        expect(result).toEqual({ label: "System: " + text, text: "", collapsedBody: false });
+      } else {
+        expect(result).toEqual({ label: "System", text, collapsedBody: true });
+      }
+      expect(result.label.length).toBeLessThanOrEqual(64);
+      expect(result.label).not.toMatch(/[\r\n]/u);
+    },
+  );
+  it("keeps arbitrary instructions out of owned status copy and preserves ordinary user text", () => {
+    const text = "Workflow instructions.\n".repeat(10);
+    const result = projectSystemNoticeSummary({
+      label: "System",
+      text,
+      detailed: false,
+      statusOnly: true,
+    });
+    expect(result).toEqual({ label: "System", text, collapsedBody: true });
+    const ordinary = {
+      kind: "message" as const,
+      key: "user",
+      message: { ...baseMessage, content: text },
+    };
+    expect(projectChatSystemNotice(ordinary)).toEqual([ordinary]);
+  });
+});
+
 describe("plugin steering notices", () => {
   it.each([
     [{ pluginId: "release-helper", pluginName: "Release Helper" }, "Release Helper"],
@@ -272,10 +312,14 @@ describe("skill review notices", () => {
     model: "delivery-mirror",
     timestamp: 2000,
     openclawDeliveryMirror: {
-      kind: "skill-workshop-change",
-      agentId: "main",
-      runId: "skill-workshop-review:r1",
-      skills,
+      kind: "plugin-notice",
+      pluginId: "skill-workshop",
+      type: "skills-changed",
+      data: {
+        agentId: "main",
+        runId: "skill-workshop-review:r1",
+        skills,
+      },
     },
     __openclaw: { id: "notice-1", seq: 3 },
   });
@@ -295,6 +339,19 @@ describe("skill review notices", () => {
     [{ idempotencyKey: "skill-workshop-notice:review", provider: "model-provider" }, false],
     [{ idempotencyKey: "skill-workshop-notice:review", model: "model-output" }, false],
     [{ idempotencyKey: "skill-workshop-notice:review", role: "user" }, false],
+    // A row written by 2026.10.10 betas, before the plugin-notice marker, stays a text notice.
+    [
+      {
+        idempotencyKey: "skill-workshop-notice:review",
+        openclawDeliveryMirror: {
+          kind: "skill-workshop-change",
+          agentId: "main",
+          runId: "review",
+          skills: [{ name: "deploy-staging", action: "updated" }],
+        },
+      },
+      true,
+    ],
   ])("uses legacy notice provenance, not Learned text: %j", (fields, projected) => {
     const item = {
       kind: "message" as const,
@@ -325,7 +382,6 @@ describe("skill review notices", () => {
         text: "",
         timestamp: 2000,
         skillChanges: {
-          kind: "skill-workshop-change",
           agentId: "main",
           runId: "skill-workshop-review:r1",
           skills,

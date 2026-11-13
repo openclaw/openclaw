@@ -25,6 +25,7 @@ import {
   withOwnedSessionTranscriptWriterFence,
   withSessionTranscriptWriteAssertion,
 } from "../../config/sessions/transcript-write-context.js";
+import { readUserTurnMentionInvitation } from "../../sessions/user-turn-transcript-admission.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -82,6 +83,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
     entry: SessionEntry | SessionLeafControl,
     appendIntent: "active-branch" | undefined,
     writeAdmission: SessionManagerAppendAdmission,
+    view: "reload" | "none",
     message?: Omit<
       NonNullable<SessionMetadataWorkerOperations["session.metadata.append"]["input"]["message"]>,
       "messageJson"
@@ -195,6 +197,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           cwd: message.cwd,
           validateTurn: message.validateTurn,
           idempotencyLookup: message.idempotencyLookup,
+          mentionInvitation: message.mentionInvitation,
         }
       : undefined;
     const projectAppend = (
@@ -261,6 +264,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
       const append = (mutationAt: number | null | undefined) =>
         appendSessionManagerActor({
           actor,
+          toolUsageRecorder: writeAdmission.toolUsageRecorder,
           assertCurrent,
           beforeFreshMessageCommit,
           toolResult: entry.type === "message" && entry.message.role === "toolResult",
@@ -280,12 +284,16 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
                   ? { expectedMutationAt: mutationAt }
                   : {}),
               },
-              view: {
-                loadedVersion,
-                limits: this.boundedContextLimits,
-                admission,
-                questionAnswers: questionAnswers?.answers,
-              },
+              ...(view === "reload"
+                ? {
+                    view: {
+                      loadedVersion,
+                      limits: this.boundedContextLimits,
+                      admission,
+                      questionAnswers: questionAnswers?.answers,
+                    },
+                  }
+                : {}),
             },
             ...(this.persistenceHeaderPending || (initialWriter && !initialWriter.committedFence)
               ? {
@@ -373,7 +381,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
           value.reload,
           outcome.failure,
           loadedVersion,
-          true,
+          view === "reload",
           value.initialModelParentId,
         );
         if (value.projectionNeedsReconcile && !outcome.failure) {
@@ -474,7 +482,7 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
                   ...(intent ? { appendIntent: intent } : {}),
                   ...(mutationAt !== undefined ? { expectedMutationAt: mutationAt } : {}),
                 },
-                ...(event.type !== "session"
+                ...(view === "reload" && event.type !== "session"
                   ? {
                       view: {
                         loadedVersion: this.transcriptVersion,
@@ -600,12 +608,14 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
                 cwd: this.cwd,
                 validateTurn: false,
                 idempotencyLookup: options?.idempotencyLookup,
+                mentionInvitation: readUserTurnMentionInvitation(options?.beforeFreshMessageCommit),
               }
             : undefined;
         const committed = await this.persistWorkerRecord(
           canonical,
           options?.appendIntent,
           admission,
+          "none",
           message,
           options?.beforeFreshMessageCommit,
           options?.expectedMutationAt,

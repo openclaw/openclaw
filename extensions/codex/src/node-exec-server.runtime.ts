@@ -1,5 +1,4 @@
 /** Owns approved, connection-bound Codex exec-server processes on paired nodes. */
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -20,6 +19,7 @@ import {
   resolveManagedCodexAppServerStartOptions,
   resolveManagedCodexNativeCommand,
 } from "./app-server/managed-binary.js";
+import type { CodexStdioChild } from "./app-server/stdio-worker.js";
 import { createStdioTransport } from "./app-server/transport-stdio.js";
 import { closeCodexAppServerTransportAndWait } from "./app-server/transport.js";
 
@@ -67,7 +67,7 @@ function nodeExecServerAbortError(signal: AbortSignal): Error {
 }
 
 function writeNodeExecServerMessage(
-  child: ChildProcessWithoutNullStreams,
+  child: CodexStdioChild,
   message: Buffer,
   signal: AbortSignal,
 ): Promise<void> | void {
@@ -81,7 +81,7 @@ function writeNodeExecServerMessage(
 }
 
 async function relayNodeExecServerOutput(
-  child: ChildProcessWithoutNullStreams,
+  child: CodexStdioChild,
   send: (message: Uint8Array) => Promise<void>,
 ): Promise<void> {
   const overflow = "Codex exec-server stdout message exceeds its 64 MiB limit.";
@@ -103,7 +103,7 @@ async function relayNodeExecServerOutput(
 }
 
 function createNodeExecServerProcessOwner(
-  child: ChildProcessWithoutNullStreams,
+  child: CodexStdioChild,
   closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }>,
   releaseResources: () => Promise<void>,
   activeProcesses: Set<() => Promise<void>>,

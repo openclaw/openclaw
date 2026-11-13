@@ -2,7 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { McpCatalogTool } from "./agent-bundle-mcp-types.js";
+import type { McpCatalogTool } from "./agent-bundle-mcp-catalog.types.js";
 
 // Name sanitizers for tools exposed by bundle MCP servers. Provider/tool names
 // must fit model-facing schema limits while remaining stable and collision-free.

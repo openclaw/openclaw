@@ -69,6 +69,8 @@ export type TranscriptAttachmentEntry = {
   key: string;
   label: string;
   mimeType?: string;
+  /** Timestamp of the message that carried the media, when the transcript recorded one. */
+  timestamp?: number;
   options: ImageRenderOptions;
   onOpenSidebar: (content: SidebarContent) => void;
 } & ({ kind: "image"; image: ImageBlock } | { kind: "attachment"; item: AssistantAttachmentItem });
@@ -94,7 +96,7 @@ export type SessionDiffScope =
 
 type SessionDiffLoader = (
   params: SessionDiffScope,
-  options?: { refresh?: boolean },
+  options?: { refresh?: boolean; summaryOnly?: boolean },
 ) => Promise<SessionsDiffResult>;
 
 type SessionDiffFileTextLoader = (path: string) => Promise<string | null>;
@@ -342,6 +344,13 @@ type McpAppSidebarContent = {
 };
 
 export type SidebarContent =
+  | {
+      kind: "mcp-app-preview";
+      title: string;
+      view: import("../../../components/mcp-app-view-types.ts").McpAppViewElement;
+      appIdentity?: import("../../../../../src/shared/mcp-app-extensions.js").McpAppIdentity;
+      rawText?: null;
+    }
   | McpAppSidebarContent
   | ToolOutputSidebarContent
   | MarkdownSidebarContent
@@ -358,7 +367,7 @@ export type SidebarSelection = (
   | { kind: "loading" }
   // Keep failed opens attached to their selected surface instead of falling back
   // to unrelated content.
-  | { kind: "unavailable"; message: string }
+  | { kind: "unavailable"; message: string; permission?: true }
 ) & {
   fileTab?: { id: string; label: string; disposition?: "pinned" | "preview"; intent?: "navigate" };
 };

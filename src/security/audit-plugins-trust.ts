@@ -10,7 +10,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import type { InstallRecordBase } from "../config/zod-schema.installs.js";
 import { readHookInstalls } from "../hooks/installs.js";
-import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
+import {
+  isPinnedRegistrySpec,
+  readInstalledPackageVersion,
+} from "../infra/package-update-utils.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
 import {
@@ -126,19 +129,6 @@ function resolveEnabledExtensionPluginIds(params: {
     enabled.push(normalizedId);
   }
   return enabled;
-}
-
-function isPinnedRegistrySpec(spec: string): boolean {
-  const value = spec.trim();
-  if (!value) {
-    return false;
-  }
-  const at = value.lastIndexOf("@");
-  if (at <= 0 || at >= value.length - 1) {
-    return false;
-  }
-  const version = value.slice(at + 1).trim();
-  return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
 }
 
 async function collectNpmInstallFindings(

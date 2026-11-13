@@ -19,7 +19,6 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import { removeTempDirectory } from "./sqlite-readonly-location-cleanup.js";
-import { isSqliteSnapshotStagingName } from "./sqlite-snapshot-retirement.js";
 import { SQLITE_STAGING_TOKEN_FILES } from "./sqlite-staging-token.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import { measureUpdateStateFiles } from "./update-candidate-io.js";
@@ -272,7 +271,7 @@ it.skipIf(process.platform === "win32").for(["complete", "cancel"] as const)(
           throw error;
         });
       for (const entry of remaining) {
-        if (!entry.isDirectory() || !isSqliteSnapshotStagingName(entry.name)) {
+        if (!entry.isDirectory() || !entry.name.startsWith("openclaw-sqlite-readonly-")) {
           throw unexpectedEntry("staging", entry);
         }
         retireSnapshot(path.join(stagingRoot, entry.name));
@@ -395,7 +394,9 @@ require("node:module").syncBuiltinESMExports();
       expect(await fs.readdir(directory)).toEqual(["operator.txt"]);
 
       const retained = (await fs.readdir(stagingRoot, { withFileTypes: true }))
-        .filter((entry) => entry.isDirectory() && isSqliteSnapshotStagingName(entry.name))
+        .filter(
+          (entry) => entry.isDirectory() && entry.name.startsWith("openclaw-sqlite-readonly-"),
+        )
         .map((entry) => path.join(stagingRoot, entry.name));
       expect(retained).toHaveLength(2);
       const identities = new Set<string>();

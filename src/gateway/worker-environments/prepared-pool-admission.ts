@@ -72,13 +72,17 @@ export function poolPolicy(options: PoolOptions, profileId: string, providerId?:
   const profile = config?.profiles?.[profileId];
   const configuredProvider = profile ? normalizeCapabilityProviderId(profile.provider) : undefined;
   const configured = providerId === undefined || configuredProvider === providerId;
-  const target = profile && configured ? (profile.readyWorkers ?? 1) : 0;
+  const target =
+    profile && configured && profile.workspaceDurability?.mode !== "retained-disk"
+      ? (profile.readyWorkers ?? 1)
+      : 0;
   return { configured, target, maxTotal: config?.preparedPool?.maxTotal ?? DEFAULT_MAX_TOTAL };
 }
 export function retirePoolRecord(
   options: PoolOptions,
   record: Environment,
   reason: "expired" | "invalidated",
+  authorize?: () => void,
 ) {
   if (!record.preparation) {
     return undefined;
@@ -88,7 +92,12 @@ export function retirePoolRecord(
     ownerEpoch: record.ownerEpoch,
     preparationKey: record.preparation.key,
     reason,
-    assertCurrent: () => options.signal.throwIfAborted(),
+    assertCurrent: () => {
+      options.signal.throwIfAborted();
+      if (options.store.get(record.environmentId)?.destroyRequestedAtMs == null) {
+        authorize?.();
+      }
+    },
   });
 }
 export type Generations = Map<string, Generation>;

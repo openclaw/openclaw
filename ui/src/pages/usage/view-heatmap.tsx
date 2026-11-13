@@ -1,6 +1,7 @@
 import { createMemo, createProjection, For, Show } from "solid-js";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
-import { t } from "../../lib/reactive/i18n.ts";
+import { createMsFormatter, formatNumber } from "../../lib/reactive/format.ts";
+import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import { formatFullDate } from "./metrics.ts";
 import type { CostDailyEntry } from "./types.ts";
 
@@ -75,7 +76,7 @@ function buildUsageHeatmap(
 
   const startWeekday = new Date(startMs).getUTCDay();
   const gridStartMs = startMs - startWeekday * DAY_MS;
-  const monthFormat = new Intl.DateTimeFormat(undefined, { month: "short", timeZone: "UTC" });
+  const monthFormat = createMsFormatter({ month: "short", timeZone: "UTC" });
   const cells: UsageHeatmapCell[] = [];
   const monthLabels: string[] = [];
   let previousMonth = -1;
@@ -100,7 +101,7 @@ function buildUsageHeatmap(
     }
     const labelMs = firstVisibleMs ?? dateToUtcNoon(rangeEndDate);
     const month = new Date(labelMs).getUTCMonth();
-    monthLabels.push(month === previousMonth ? "" : monthFormat.format(new Date(labelMs)));
+    monthLabels.push(month === previousMonth ? "" : monthFormat(labelMs));
     previousMonth = month;
   }
   return { cells, monthLabels };
@@ -126,8 +127,7 @@ function HeatmapSvg(props: UsageHeatmapProps) {
   const cells = createProjection(() => heatmap().cells, [], { key: "date" });
   const width = () => HEATMAP_LEFT + heatmap().monthLabels.length * HEATMAP_PITCH;
   const height = HEATMAP_TOP + 7 * HEATMAP_PITCH;
-  const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
-  const weekdayFormat = new Intl.DateTimeFormat(undefined, {
+  const weekdayFormat = createMsFormatter({
     weekday: "short",
     timeZone: "UTC",
   });
@@ -155,16 +155,20 @@ function HeatmapSvg(props: UsageHeatmapProps) {
             x={HEATMAP_LEFT - 6}
             y={HEATMAP_TOP + row * HEATMAP_PITCH + HEATMAP_CELL - 2}
           >
-            {weekdayFormat.format(new Date(utcDay))}
+            {weekdayFormat(utcDay)}
           </text>
         )}
       </For>
       <For each={cells}>
         {(day) => {
+          const dateLabel = createMemo(() => {
+            getLocale();
+            return formatFullDate(day.date);
+          });
           const tooltip = createMemo(
             () =>
-              `${formatFullDate(day.date)} · ${t("usage.heatmap.cellTokens", {
-                tokens: numberFormat.format(day.tokens),
+              `${dateLabel()} · ${t("usage.heatmap.cellTokens", {
+                tokens: formatNumber(day.tokens, { maximumFractionDigits: 0 }),
               })}`,
           );
           return (

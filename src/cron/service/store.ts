@@ -1,5 +1,7 @@
-/** Loads, normalizes, quarantines, and persists cron service store state. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+/** Loads, normalizes, quarantines, and persists cron service store state. */
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
@@ -29,7 +31,7 @@ import { CronRunReceiptRevisionError } from "../store/run-receipt-store.js";
 import type { CronRuntimeMutationInputs } from "../store/runtime-worker.types.js";
 import { CronJobsStoreChangedError } from "../store/save-error.js";
 import { CronStreamExecApprovalRequiredError } from "../stream-exec-authority.js";
-import type { CronJob, CronStoreFile } from "../types.js";
+import type { CronStoredJob, CronJob, CronStoreFile } from "../types.js";
 import { prepareCronStreamMutationAdmission } from "./config-mutation.js";
 import { assertTimeScheduleSatisfiable } from "./jobs-validation.js";
 import { dispatchCronNotification } from "./notification-dispatch.js";
@@ -44,6 +46,101 @@ import {
   type CronServiceState,
   type DeferredCronNotifications,
 } from "./state.js";
+
+const jobLoadDiagnosticsStarted = new WeakSet<CronServiceState>();
+const JOB_LOAD_DIAGNOSTICS_BUDGET_MS = 5_000;
+
+function warnJobLoadOnce(state: CronServiceState, job: CronStoredJob, warning: string | undefined) {
+  const key = `host:${job.id}`;
+  if (warning && !state.warnedInvalidPersistedJobKeys.has(key)) {
+    state.warnedInvalidPersistedJobKeys.add(key);
+    state.deps.log.warn({ jobId: job.id, name: job.name }, warning);
+  }
+}
+
+/** The initial inventory gets one bounded inspection, never part of cron's operation queue. */
+function scheduleJobLoadDiagnostics(state: CronServiceState, inventory: CronStoredJob[]) {
+  const describe = state.deps.describeJobLoadWarning;
+  if (!describe || inventory.length === 0 || jobLoadDiagnosticsStarted.has(state)) {
+    return;
+  }
+  jobLoadDiagnosticsStarted.add(state);
+  const jobs = inventory.filter(
+    (job) => !state.warnedInvalidPersistedJobKeys.has(`host:${job.id}`),
+  );
+  const scope = state.schedulerScope;
+  scope.schedule({
+    id: `cron:load-diagnostics:${state.deps.storeKey}`,
+    delayMs: 0,
+    run: async () => {
+      let checked = 0;
+      let closed = false;
+      const ended = createDeferredCore();
+      const controller = new AbortController();
+      const finish = () => {
+        closed = true;
+        controller.abort();
+        ended.resolve();
+      };
+      const expire = () => {
+        if (closed) {
+          return;
+        }
+        finish();
+        const uncheckedJobs = jobs.length - checked;
+        if (uncheckedJobs > 0) {
+          state.deps.log.warn(
+            { uncheckedJobs },
+            `cron: startup inference diagnostics reached their time budget; ${uncheckedJobs} jobs were not checked. Run openclaw doctor --lint for a complete check.`,
+          );
+        }
+      };
+      const deadlineAt = scope.now() + JOB_LOAD_DIAGNOSTICS_BUDGET_MS;
+      const budget = scope.schedule({
+        id: `cron:load-diagnostics-budget:${state.deps.storeKey}`,
+        delayMs: JOB_LOAD_DIAGNOSTICS_BUDGET_MS,
+        run: expire,
+      });
+      scope.signal.addEventListener("abort", finish, { once: true });
+      try {
+        // A read already in flight may finish later; it cannot retain readiness/shutdown,
+        // emit a late warning, or start another read after the aggregate budget expires.
+        const scan = runOutsideAsyncWorkScope(async () => {
+          for (const job of jobs) {
+            if (closed) {
+              return;
+            }
+            if (scope.now() >= deadlineAt) {
+              expire();
+              return;
+            }
+            let warning: string | undefined;
+            try {
+              warning = await describe(job, controller.signal);
+            } catch {
+              warning =
+                "cron: inference account readiness could not be checked; run openclaw doctor --lint.";
+            }
+            if (closed) {
+              return;
+            }
+            if (scope.now() >= deadlineAt) {
+              expire();
+              return;
+            }
+            checked += 1;
+            warnJobLoadOnce(state, job, warning);
+          }
+        });
+        await Promise.race([scan, ended.promise]);
+      } finally {
+        finish();
+        budget.cancel();
+        scope.signal.removeEventListener("abort", finish);
+      }
+    },
+  });
+}
 
 const loadedCronStoreRevisions = new WeakMap<CronServiceState, { revision: number }>();
 
@@ -191,14 +288,11 @@ export async function ensureLoaded(
       continue;
     }
     const hydrated = hydratedRaw;
-    const loadWarning =
-      describeCronHostExecutionRestriction(hydrated, state.deps.hostExecutionDisabled) ??
-      state.deps.describeJobLoadWarning?.(hydrated);
-    const loadWarningKey = `host:${hydrated.id}`;
-    if (loadWarning && !state.warnedInvalidPersistedJobKeys.has(loadWarningKey)) {
-      state.warnedInvalidPersistedJobKeys.add(loadWarningKey);
-      state.deps.log.warn({ jobId: hydrated.id, name: hydrated.name }, loadWarning);
-    }
+    warnJobLoadOnce(
+      state,
+      hydrated,
+      describeCronHostExecutionRestriction(hydrated, state.deps.hostExecutionDisabled),
+    );
     jobs.push(hydrated);
     durableNextRunAtMsByJobId.set(hydrated.id, hydrated.state.nextRunAtMs);
   }
@@ -240,6 +334,7 @@ export async function ensureLoaded(
       );
     }
   }
+  scheduleJobLoadDiagnostics(state, jobs);
 }
 
 /** Loads authoritative passive state without discarding enabled-scheduler transients. */

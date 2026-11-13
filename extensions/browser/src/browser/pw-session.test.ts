@@ -452,30 +452,23 @@ describe("pw-session ensurePageState", () => {
     expect(isDownloadStartingNavigationError(new Error("Navigation failed"))).toBe(false);
   });
 
-  it("bounds page-controlled text while tracking network requests", () => {
+  it("bounds page-controlled console and error text", () => {
     const { emit, state } = observedPage();
     const oversized = `${"x".repeat(2047)}😀tail`;
+    const argument = { dispose: vi.fn(async () => {}) };
     const consoleMessage = {
       type: () => oversized,
       text: () => oversized,
       location: () => ({ url: oversized, lineNumber: 1, columnNumber: 2 }),
+      args: () => [argument],
     };
     const pageError = Object.assign(new Error(oversized), { name: oversized, stack: oversized });
-    const req = {
-      method: () => "GET",
-      url: () => oversized,
-      resourceType: () => "xhr",
-      failure: () => ({ errorText: oversized }),
-    };
-    emit("request", req);
-    emit("response", { request: () => req, status: () => 500, ok: () => false });
-    emit("requestfailed", req);
     emit("console", consoleMessage);
+    expect(argument.dispose).toHaveBeenCalledOnce();
     emit("pageerror", pageError);
 
     const consoleEntry = state.console.at(-1);
     const errorEntry = state.errors.at(-1);
-    const request = [...state.requests.values()].at(-1);
     for (const value of [
       consoleEntry?.type,
       consoleEntry?.text,
@@ -483,14 +476,11 @@ describe("pw-session ensurePageState", () => {
       errorEntry?.message,
       errorEntry?.name,
       errorEntry?.stack,
-      request?.url,
-      request?.failureText,
     ]) {
       expect(value?.length).toBeLessThanOrEqual(2048);
       expect(value).not.toContain("tail");
       expect(value?.charCodeAt((value?.length ?? 0) - 1)).not.toBe(0xd83d);
     }
-    expect(request).toMatchObject({ method: "GET", resourceType: "xhr", status: 500, ok: false });
   });
 
   it("clears frame-scoped role refs on frame detachment", () => {
@@ -570,38 +560,30 @@ describe("observed browser dialogs", () => {
     second.cleanup();
   });
 
-  it("uses the default arm-next-dialog timeout for non-finite timeoutMs", async () => {
+  it.each([Number.NaN, 1000])("expires arms by elapsed time (%s)", async (timeoutMs) => {
+    const durationMs = Number.isNaN(timeoutMs) ? 120_000 : timeoutMs;
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(0);
     const { arm, observe, emitAll: emit, dialogs } = observedPage();
-    const dialog = createDialog({ type: "alert", message: "Still armed" });
     const observed = observe();
-
-    arm({ accept: false, timeoutMs: Number.NaN });
-    await vi.advanceTimersByTimeAsync(119_999);
-    emit("dialog", dialog);
-    await Promise.resolve();
-
-    expect(observed.signal.aborted).toBe(false);
-    expect(dialog.dismiss).toHaveBeenCalledOnce();
-    expect(dialogs()).toMatchObject({
-      pending: [],
-      recent: [{ id: "d1", type: "alert", closedBy: "armed" }],
-    });
-    observed.cleanup();
-  });
-
-  it("does not arm next-dialog responses when the expiry would overflow Date bounds", () => {
-    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const first = createDialog({ type: "prompt" });
+    arm({ accept: true, promptText: "synthetic answer", timeoutMs });
+    await vi.advanceTimersByTimeAsync(durationMs - 1);
     vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
-    const { arm, emitAll: emit, dialogs } = observedPage();
-    const dialog = createDialog({ type: "alert", message: "Still pending" });
-    arm({ accept: false, timeoutMs: 1000 });
-    emit("dialog", dialog);
-    expect(dialog.dismiss).not.toHaveBeenCalled();
-    expect(dialogs().pending).toMatchObject([
-      { id: "d1", type: "alert", message: "Still pending" },
-    ]);
+    emit("dialog", first);
+    await Promise.resolve();
+    expect(first.accept).toHaveBeenCalledWith("synthetic answer");
+    expect(observed.signal.aborted).toBe(false);
+    expect(dialogs()).toMatchObject({ pending: [], recent: [{ id: "d1", closedBy: "armed" }] });
+
+    const expired = createDialog({ message: "Still pending" });
+    arm({ accept: false, timeoutMs });
+    await vi.advanceTimersByTimeAsync(durationMs);
+    emit("dialog", expired);
+    expect(expired.dismiss).not.toHaveBeenCalled();
+    expect(observed.signal.aborted).toBe(true);
+    expect(dialogs().pending).toMatchObject([{ id: "d2", message: "Still pending" }]);
+    observed.cleanup();
   });
 
   it("keeps a newer dialog pending after the interrupted dialog was handled remotely", async () => {

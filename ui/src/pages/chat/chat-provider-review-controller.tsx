@@ -13,6 +13,7 @@ import {
   Show,
 } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionRefreshOutcome } from "../../lib/sessions/session-capability.ts";
@@ -484,9 +485,9 @@ export function ChatProviderReviewDialog(props: ProviderReviewViewProps) {
                       fallback={
                         <Errored
                           fallback={(error) => (
-                            <p class="callout danger" role="alert">
+                            <InlineAlert tone="danger" role="alert">
                               {formatUiError(error())}
-                            </p>
+                            </InlineAlert>
                           )}
                         >
                           {latest(props.owner.completed)}
@@ -495,9 +496,9 @@ export function ChatProviderReviewDialog(props: ProviderReviewViewProps) {
                       }
                     >
                       {(error) => (
-                        <p class="callout danger" role="alert">
+                        <InlineAlert tone="danger" role="alert">
                           {error()}
-                        </p>
+                        </InlineAlert>
                       )}
                     </Show>
                   </Show>

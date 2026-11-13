@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createOwnedTestInstance } from "../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 
 const mocks = vi.hoisted(() => ({
   cfg: {} as OpenClawConfig,
@@ -56,6 +59,43 @@ beforeEach(() => {
 });
 
 describe("persistStickyModelSelection", () => {
+  it("finishes a requested default write after the selecting plugin scope closes", async () => {
+    mocks.cfg = config();
+    const instance = createOwnedTestInstance("sticky-model-validation");
+    const invocation = new PluginInvocationScope(instance.owner!.registry!, [instance]);
+    const validatePluginConfig = instance.wrap(() => true);
+    const entered = createDeferredCore();
+    const proceed = createDeferredCore();
+    let write: Promise<unknown> | undefined;
+    mocks.mutateConfigFileWithRetry.mockImplementation(({ mutate }) => {
+      write = (async () => {
+        entered.resolve();
+        await proceed.promise;
+        validatePluginConfig();
+        const draft = structuredClone(mocks.cfg);
+        const result = await mutate(draft, {});
+        mocks.cfg = draft;
+        return { nextConfig: draft, result };
+      })();
+      return write;
+    });
+    try {
+      expect(invocation.run(() => select("work", "openai/gpt-5.6-sol", "agent"))).toBe("requested");
+      await entered.promise;
+      invocation.release();
+      proceed.resolve();
+      await Promise.allSettled([write]);
+      expect(mocks.warn).not.toHaveBeenCalled();
+      expect(mocks.cfg).toEqual(
+        config(defaultModel, { ...agentModel, primary: "openai/gpt-5.6-sol" }),
+      );
+    } finally {
+      invocation.release();
+      proceed.resolve();
+      await Promise.allSettled([write]);
+    }
+  });
+
   it.each(["defaults", "agent"] as const)(
     "persists a normalized selection at %s scope",
     async (target) => {

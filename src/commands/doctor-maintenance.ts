@@ -255,7 +255,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         (health.outcome !== "ready" && health.runtime.status === "running")
       ) {
         warn(
-          `Warning: Doctor repair complete; Gateway started but readiness was not verified. ${renderRestartDiagnostics(health).join(" ")} Run \`${formatCliCommand("openclaw gateway status --deep", state.env)}\` or \`${formatCliCommand("openclaw gateway diagnostics export", state.env)}\`.`,
+          `Warning: Gateway started after Doctor maintenance, but readiness was not verified. ${renderRestartDiagnostics(health).join(" ")} Run \`${formatCliCommand("openclaw gateway status --deep", state.env)}\` or \`${formatCliCommand("openclaw gateway diagnostics export", state.env)}\`.`,
         );
         return;
       }
@@ -264,7 +264,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
           env,
           phase: "gateway-restoration",
           code: "doctor-gateway-rpc-verification-failed",
-          detail: `Doctor repaired state, but the managed Gateway did not become ready: ${renderRestartDiagnostics(health).join(" ")}.`,
+          detail: `The managed Gateway did not become ready after Doctor maintenance: ${renderRestartDiagnostics(health).join(" ")}.`,
         });
       }
     } catch (error) {
@@ -296,7 +296,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         cause: error,
       });
     }
-    params.runtime.log("Gateway restarted and verified after Doctor repair.");
+    params.runtime.log("Gateway restarted and verified after Doctor maintenance.");
     if (staleReplacement) {
       const warning = `Warning: Replaced stale Gateway PID ${staleReplacement.pid ?? "unknown"} through its service manager; verified ${staleReplacement.version} build ${staleReplacement.buildId} after Doctor maintenance.`;
       warn(warning);
@@ -308,28 +308,17 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     writeConfig?: DoctorConfigWriter,
     assertRestoreAdmission?: () => void,
   ) => {
-    let cfg = initialConfig;
-    // Config recovery must not encounter Doctor's own offline-maintenance lease.
-    const settledFailure = await releaseAndRestoreAutoStart(assertCustody);
-    if (!cfg && !stopped?.stopped) {
-      throwSettledFailure(settledFailure);
-      return;
-    }
-    if (!cfg) {
-      try {
-        // Restore our own stop without re-entering the readiness gate that failed.
-        const { readConfigFileSnapshot } = await import("../config/config.js");
-        cfg = (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false })).config;
-      } catch (error) {
-        throw new DoctorMaintenanceRefusalError(
-          `Doctor could not restore the Gateway because persisted repair state is not ready: ${formatErrorMessage(error)}`,
-          { kind: "data-at-risk", reason: "incomplete-migration" },
-          { cause: error },
-        );
-      }
-    }
-    await restoreGateway(cfg, assertCustody, writeConfig, assertRestoreAdmission);
-    throwSettledFailure(settledFailure);
+    const { finishDoctorGatewayMaintenance } = await import("./doctor-maintenance-restoration.js");
+    await finishDoctorGatewayMaintenance({
+      state,
+      stopped: stopped?.stopped === true,
+      config: initialConfig,
+      assertCustody,
+      release: releaseAndRestoreAutoStart,
+      restore: (cfg, assertCurrent) =>
+        restoreGateway(cfg, assertCurrent, writeConfig, assertRestoreAdmission),
+      isCleanupUncertain: () => cleanupFailure !== undefined,
+    });
   };
   const admitRepair = async () => {
     inspectingActivation = false;
@@ -435,7 +424,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     await settle(async () => {
       const externallyManaged = isServiceRepairExternallyManaged(undefined, env);
       if (externallyManaged) {
-        await preflightExternalDoctorAgentLease(env, waitForMaintenance);
+        await preflightExternalDoctorAgentLease(env, waitForMaintenance, exit.signal);
       }
       if (
         params.root &&

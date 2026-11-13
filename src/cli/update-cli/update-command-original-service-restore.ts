@@ -3,7 +3,7 @@ import { readDaemonRuntimePinForInstall } from "../../daemon/runtime-pin-state.j
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { fingerprintGatewayServiceDefinition } from "../../daemon/service-rebind.js";
 import {
-  hasGatewayServiceDefinitionOverrides,
+  canPreserveGatewayServiceDefinitionOverrides,
   resolveManagedGatewayServiceCommand,
 } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -58,7 +58,7 @@ export async function restoreOriginalManagedServiceDefinition(params: {
           throw new Error("Service replacement is not this update's own rebind.");
         }
         const command = original.definition.command;
-        if (hasGatewayServiceDefinitionOverrides(command) || command.reloadPending) {
+        if (!canPreserveGatewayServiceDefinitionOverrides(command) || command.reloadPending) {
           throw new Error(
             "Retained service has operator-owned definition overrides; restoration refused.",
           );

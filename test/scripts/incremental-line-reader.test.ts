@@ -3,16 +3,12 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createIncrementalLineReader } from "../../scripts/e2e/lib/incremental-line-reader.mjs";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  cleanupTempDirs(tempDirs);
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function withTempLog(run: (logPath: string) => void): void {
-  const root = makeTempDir(tempDirs, "openclaw-line-reader-");
+  const root = tempDirs.make("openclaw-line-reader-");
   run(path.join(root, "output.log"));
 }
 

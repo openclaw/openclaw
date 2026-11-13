@@ -112,6 +112,7 @@ function expectStartGatewayClientCall(preauthHandshakeTimeoutMs?: number) {
   expect(typeof (client as { start?: unknown } | undefined)?.start).toBe("function");
   expect(options).toEqual({
     clientOptions: { preauthHandshakeTimeoutMs },
+    signal: expect.any(AbortSignal),
   });
 }
 
@@ -526,6 +527,70 @@ describe("createExecApprovalChannelRuntime", () => {
       "gateway client not connected",
     );
   });
+
+  it.each(["readiness", "hello"] as const)(
+    "cancels startup during %s and permits a later restart",
+    async (phase) => {
+      vi.useFakeTimers();
+      const readiness = await vi.importActual<
+        typeof import("../../packages/gateway-client/src/readiness.js")
+      >("../../packages/gateway-client/src/readiness.js");
+      const readinessEntered = createDeferred();
+      mockStartGatewayClientWhenEventLoopReady.mockImplementation((client, options) => {
+        const waiting = readiness.startGatewayClientWhenEventLoopReady(client, options);
+        readinessEntered.resolve();
+        return waiting;
+      });
+      let releaseHello = () => {};
+      mockCreateOperatorApprovalsGatewayClient.mockImplementationOnce(async (params) => {
+        let connecting = false;
+        releaseHello = () => params.onHelloOk?.({ type: "hello-ok" });
+        return {
+          start: () => {
+            connecting = true;
+            mockGatewayClientStarts();
+          },
+          stop: () => {
+            mockGatewayClientStops();
+            if (connecting) {
+              params.onConnectError?.(new Error("gateway client stopped"));
+            }
+          },
+          request: mockGatewayClientRequests,
+        };
+      });
+      const runtime = createRuntime();
+      const starting = runtime.start();
+      await readinessEntered.promise;
+      if (phase === "hello") {
+        await vi.advanceTimersByTimeAsync(2);
+        expect(mockGatewayClientStarts).toHaveBeenCalledOnce();
+      }
+      let stopped = false;
+      const stopping = runtime.stop().then(() => {
+        stopped = true;
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(2);
+        if (phase === "readiness") {
+          expect(mockGatewayClientStarts).not.toHaveBeenCalled();
+        }
+        expect(stopped).toBe(true);
+        await starting;
+        expect(mockGatewayClientRequests).not.toHaveBeenCalled();
+      } finally {
+        releaseHello();
+        await vi.runAllTimersAsync();
+        await Promise.allSettled([starting, stopping]);
+      }
+      const restarting = runtime.start();
+      await vi.runAllTimersAsync();
+      await restarting;
+      expect(mockGatewayClientStarts).toHaveBeenCalledTimes(phase === "readiness" ? 1 : 2);
+      expect(mockGatewayClientRequests).toHaveBeenCalledWith("exec.approval.list", {});
+      await runtime.stop();
+    },
+  );
 
   it("logs async request handling failures from gateway events", async () => {
     const runtime = createRuntime<PluginApprovalRequest, PluginApprovalResolved>({

@@ -6,11 +6,13 @@ export function preserveResetSessionPresentation(entry: SessionEntry | undefined
     label: entry?.label,
     autoLabel: entry?.autoLabel,
     icon: entry?.icon,
+    color: entry?.color,
     category: entry?.category,
     boardFace: entry?.boardFace,
     boardPresentation: entry?.boardPresentation,
     visibility: entry?.visibility,
     displayName: entry?.displayName,
+    topicName: entry?.topicName,
     pinnedAt: entry?.pinnedAt,
     sidebarRoot: entry?.sidebarRoot,
   };

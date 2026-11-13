@@ -104,6 +104,7 @@ export function createGatewayReloadHandlers(
         mrReload.refreshModelRuntimeAfterHotReload({
           config,
           agentIds: modelRuntime.agentIds,
+          preservePluginGenerations: modelRuntime.scope.preservePluginGenerations,
           pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
           ...(isPublicationCurrent ? { isPublicationCurrent } : {}),
         }),
@@ -382,7 +383,11 @@ export function createGatewayReloadHandlers(
         preparedModelRuntimeReplacementGateId,
         err ?? new Error(`prepared model runtime replacement stopped during ${surface}`),
       );
-      if (plan.pluginLifecycle && !reloadPlanNeedsRecovery(remainingPlan)) {
+      if (
+        plan.pluginLifecycle &&
+        !reloadPlanNeedsRecovery(remainingPlan) &&
+        !(err instanceof PluginRuntimeApplicationError && err.details.runtimeRestorationFailed)
+      ) {
         throw new PluginRuntimeApplicationError(
           `Plugin runtime application failed during ${surface}: ${formatErrorMessage(err)}`,
           {
@@ -523,6 +528,15 @@ export function createGatewayReloadHandlers(
         return "applied-restart-required";
       }
       try {
+        if (
+          !runtimeCommitted &&
+          error instanceof PluginRuntimeApplicationError &&
+          error.details.runtimeRestorationFailed &&
+          isReloadOwnerActive()
+        ) {
+          // Preserve the failed operation while the existing restart owner restores reply dispatch.
+          scheduleRecoveryRestart("model/reply runtime restoration", error);
+        }
         if (
           runtimeCommitted &&
           error instanceof PluginRuntimeApplicationError &&

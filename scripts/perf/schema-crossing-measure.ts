@@ -1,11 +1,20 @@
 /**
  * Offline native-update crossing on synthetic state; never point this at operator state.
  * node --import ./scripts/tsx.mjs scripts/perf/schema-crossing-measure.ts seed .local/crossing-fixture [agents=16] [archiveMiBPerAgent=128] [sessionsPerAgent=625]
+ * Append `team` to seed arguments for seven-agent scale (35 GiB largest agent,
+ * 11.5 GiB shared state, 256 MiB other agents, 62,000 workspace files):
+ * ... seed .local/crossing-team 7 1 1429 team
+ * Team mode recreates the additive 39→40 crossing on synthetic current schemas.
+ * Set SCHEMA_CROSSING_TEMP_ROOT to a task-owned secure staging volume when the
+ * fixture volume has shared ancestors; recovery backups stay beside the fixture.
+ * Build each pinned checkout before measurement so bundled Doctor owners exist.
  * Copy that fixture before each run, then:
  * node --import ./scripts/tsx.mjs scripts/perf/schema-crossing-measure.ts run .local/crossing-base [allocation|timing|memory]
  * For post-cleanup memory diagnostics, add --expose-gc to Node and select memory mode.
  * Memory mode disables allocation sampling; forced GC runs outside the measured crossing.
  * Compare summary.json and stderr startup-trace phase timings on base/candidate.
+ * Summaries include caller CPU/allocations, host fsync/PRAGMA observations and
+ * integrity-worker request scope. Host observations exclude subprocess I/O/SQL.
  * Summaries include native migrate/cleanup time and nested phase spans; do not add
  * parent and child durations when accounting for the whole crossing.
  * Seed uses the frozen schema-35 fixture and current agent schemas. Each archive is
@@ -21,7 +30,7 @@ import { PerformanceObserver } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { getHeapSpaceStatistics } from "node:v8";
 
-const [mode, directory, agentArg = "16", archiveArg = "128", sessionsArg = "625"] =
+const [mode, directory, agentArg = "16", archiveArg = "128", sessionsArg = "625", shape] =
   process.argv.slice(2);
 assert.ok(directory && (mode === "seed" || mode === "run"));
 const root = path.resolve(directory);
@@ -47,7 +56,8 @@ Object.assign(process.env, {
   OPENCLAW_HOME: path.join(root, "home"),
   OPENCLAW_STATE_DIR: stateDir,
   OPENCLAW_CONFIG_PATH: configPath,
-  TMPDIR: path.join(root, "tmp"),
+  TMPDIR: process.env.SCHEMA_CROSSING_TEMP_ROOT ?? path.join(root, "tmp"),
+  XDG_CACHE_HOME: process.env.SCHEMA_CROSSING_TEMP_ROOT ?? path.join(root, "cache"),
   OPENCLAW_SUPERVISOR_MODE: "external",
   OPENCLAW_SERVICE_REPAIR_POLICY: "external",
   OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
@@ -84,9 +94,12 @@ if (mode === "seed") {
   );
   const { openOpenClawAgentDatabase, closeOpenClawAgentDatabasesAsync } =
     await import("../../src/state/openclaw-agent-db.js");
-  const { closeOpenClawStateDatabaseAsync } = await import("../../src/state/openclaw-state-db.js");
+  const { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } =
+    await import("../../src/state/openclaw-state-db.js");
   const { resolveSqliteTranscriptArchiveDirectory } =
     await import("../../src/config/sessions/session-accessor.sqlite-scope.js");
+  const { normalizeLegacySessionEntryDelivery } =
+    await import("../../src/infra/state-migrations.legacy-session-store.js");
   const line =
     JSON.stringify({
       type: "message",
@@ -117,7 +130,11 @@ if (mode === "seed") {
       node.run(
         sessionKey,
         sessionId,
-        JSON.stringify({ sessionId, updatedAt: now, status: "done" }),
+        JSON.stringify(
+          shape === "team"
+            ? normalizeLegacySessionEntryDelivery({ sessionId, updatedAt: now, status: "done" })
+            : { sessionId, updatedAt: now, status: "done" },
+        ),
         now,
       );
       window.run(sessionId, sessionKey, now, now);
@@ -145,6 +162,52 @@ if (mode === "seed") {
     databaseBytes += fs.statSync(agent.path).size;
   }
   await closeOpenClawStateDatabaseAsync();
+  if (shape === "team") {
+    const shared = openOpenClawStateDatabase({ env: process.env });
+    const sharedPath = shared.path;
+    await closeOpenClawStateDatabaseAsync();
+    const paths = [
+      sharedPath,
+      ...ids.map((id) => path.join(stateDir, "agents", id, "agent", "openclaw-agent.sqlite")),
+    ];
+    for (const [index, pathname] of paths.entries()) {
+      using db = new DatabaseSync(pathname);
+      db.exec(
+        "PRAGMA auto_vacuum=INCREMENTAL; VACUUM; CREATE TABLE synthetic_payload (payload BLOB NOT NULL)",
+      );
+      const insert = db.prepare("INSERT INTO synthetic_payload VALUES(zeroblob(1048576))");
+      const targetMiB = index === 0 ? 11776 : index === 1 ? 35840 : 256;
+      db.exec("BEGIN IMMEDIATE");
+      for (let row = 0; row < targetMiB; row++) {
+        insert.run();
+      }
+      if (index > 0) {
+        db.exec(
+          "DROP TABLE session_creation_operations; PRAGMA user_version=39; UPDATE schema_meta SET schema_version=39 WHERE meta_key='primary'",
+        );
+      }
+      db.exec("COMMIT; PRAGMA wal_checkpoint(TRUNCATE)");
+    }
+    const workspace = path.join(stateDir, "workspace");
+    fs.mkdirSync(workspace);
+    const content = Buffer.alloc(19050, "synthetic workspace\n");
+    for (let index = 0; index < 62000; index++) {
+      fs.writeFileSync(path.join(workspace, `file-${index}.txt`), content);
+    }
+    const fixture = {
+      agents,
+      sessions: agents * sessions,
+      archiveMiBPerAgent: archiveMiB,
+      databaseBytes: paths.map((pathname) => fs.statSync(pathname).size),
+      sourceAgentSchema: 39,
+      canonicalSessionDelivery: true,
+      workspaceFiles: 62000,
+      workspaceBytes: 62000 * content.length,
+    };
+    fs.writeFileSync(path.join(root, "fixture.json"), JSON.stringify(fixture, null, 2));
+    console.log(JSON.stringify(fixture));
+    process.exit(0);
+  }
   // Construct the exact released state shape; agent database contents remain untouched.
   const sharedPath = path.join(stateDir, "state", "openclaw.sqlite");
   fs.mkdirSync(path.dirname(sharedPath), { recursive: true });
@@ -174,6 +237,8 @@ if (mode === "seed") {
   fs.writeFileSync(path.join(root, "fixture.json"), JSON.stringify(fixture, null, 2));
   console.log(JSON.stringify(fixture));
 } else {
+  const { observeSchemaCrossing } = await import("./schema-crossing-observer.ts");
+  const attribution = observeSchemaCrossing();
   const forceGc = agentArg === "memory" ? globalThis.gc : undefined;
   assert.ok(agentArg !== "memory" || forceGc, "Memory mode requires node --expose-gc");
   // A copied fixture needs its own pristine binding; it contains no operator credentials.
@@ -277,7 +342,10 @@ if (mode === "seed") {
     contentBefore,
     "Migration changed retained transcript content",
   );
+  attribution.close();
   const summary = {
+    hostIo: attribution.events,
+    integrityRequests: attribution.integrityRequests,
     mode: forceGc ? "memory" : sampling ? "allocation" : "timing",
     elapsedMs,
     migrationMs,

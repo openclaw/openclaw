@@ -165,6 +165,18 @@ export async function completePostUpdateMaintenance(
     >;
   },
 ): Promise<{ result: UpdateRunResult; detail: string } | undefined> {
+  const startedAt = performance.now();
+  using _ = {
+    [Symbol.dispose]() {
+      result.steps.push({
+        name: "post-update-maintenance-timing",
+        command: "openclaw update",
+        cwd: context.root,
+        durationMs: Math.round(performance.now() - startedAt),
+        exitCode: 0,
+      });
+    },
+  };
   await tryInstallShellCompletion({
     root: context.root,
     jsonMode: Boolean(params.opts.json),
@@ -198,13 +210,23 @@ export async function completePostUpdateMaintenance(
   };
 }
 
-export function recordPostUpdateWindowsAutoStartFailure(
+export async function settlePostUpdateWindowsAutoStartFailure(
   params: Pick<FinishUpdateParams, "root">,
   finalResult: UpdateRunResult,
   result: Pick<UpdateRunResult, "status" | "reason">,
   cause: unknown,
-): void {
-  defaultRuntime.error(`Failed to restore Windows Scheduled Task autostart: ${String(cause)}`);
+  readStopped: () => PreManagedServiceStop | undefined,
+): Promise<{ cause: unknown }> {
+  let failure = cause;
+  try {
+    await readStopped()?.windowsTaskAutoStartRecovery?.complete(false);
+  } catch (cleanupError) {
+    failure = new AggregateError(
+      [cause, cleanupError],
+      `Windows task restoration and compensation failed: ${formatErrorMessage(cause)}; ${formatErrorMessage(cleanupError)}`,
+    );
+  }
+  defaultRuntime.error(`Failed to restore Windows Scheduled Task autostart: ${String(failure)}`);
   finalResult.status = "error";
   finalResult.reason =
     result.status === "error" ? result.reason : "windows-task-autostart-restore-failed";
@@ -215,8 +237,9 @@ export function recordPostUpdateWindowsAutoStartFailure(
     cwd: finalResult.root ?? params.root,
     durationMs: 0,
     exitCode: 1,
-    stderrTail: formatErrorMessage(cause),
+    stderrTail: formatErrorMessage(failure),
   });
+  return { cause: failure };
 }
 
 export async function resumePostUpdateWindowsAutoStart(
@@ -224,14 +247,10 @@ export async function resumePostUpdateWindowsAutoStart(
   result: UpdateRunResult,
   readStopped: () => PreManagedServiceStop | undefined,
   callbacks?: {
-    beforeAttempt: () => void;
     onFailure: (cause: unknown) => Promise<unknown>;
   },
 ): Promise<void> {
   try {
-    if (callbacks && readStopped()?.windowsTaskAutoStartRecovery) {
-      callbacks.beforeAttempt();
-    }
     const stopped = readStopped();
     await stopped?.windowsTaskAutoStartRecovery?.restore(
       true,

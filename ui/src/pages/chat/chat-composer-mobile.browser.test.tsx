@@ -6,6 +6,7 @@ import {
   resetComposerTestFixtures,
 } from "../new-session/composer.test-support.ts";
 import {
+  createComposerControlsFixture,
   findPrimaryButton,
   renderComposerFixture,
   renderComposerInto,
@@ -107,11 +108,64 @@ it.each(["menu", "padding"] as const)("keeps the mobile draft through %s focus",
     .toHaveAttribute("data-composer-editing", "false");
 });
 
+it("focuses the atomic editor during a mobile tap and consumes a retargeted toolbar click", async () => {
+  await page.viewport(390, 844);
+  const { props, container } = renderComposerFixture({
+    mobileComposer: true,
+    draft: "@Alex ",
+    mentions: [{ profileId: "alex-one", start: 0, end: 5 }],
+  });
+  document.body.append(container);
+  await expect
+    .poll(() => container.querySelector<HTMLElement>('[data-composer-editor="true"]'))
+    .not.toBeNull();
+  const editor = container.querySelector<HTMLElement>('[data-composer-editor="true"]')!;
+  if (document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur();
+  }
+  let focusedDuringPointerDown = false;
+  editor.addEventListener(
+    "pointerdown",
+    () => {
+      focusedDuringPointerDown = editor.contains(document.activeElement);
+    },
+    { once: true },
+  );
+  editor.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+  expect(focusedDuringPointerDown).toBe(true);
+  const send = findPrimaryButton(container);
+  const click = new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 });
+  send.dispatchEvent(click);
+  expect(click.defaultPrevented).toBe(true);
+  expect(props.onSend).not.toHaveBeenCalled();
+});
+
+it("rests a retained empty editor in the same one-line capsule as the textarea", async () => {
+  await page.viewport(390, 844);
+  const { props, container } = renderComposerFixture({
+    mobileComposer: true,
+    draft: "@Alex ",
+    mentions: [{ profileId: "alex-one", start: 0, end: 5 }],
+  });
+  document.body.append(container);
+  container.style.cssText = "position:fixed;bottom:0;left:16px;width:358px";
+  await expect.poll(() => container.querySelector(".cm-editor")).not.toBeNull();
+  // Sending clears the draft; the editor stays mounted for the next one.
+  renderComposerInto(container, { ...props, draft: "", mentions: [] });
+  await expect
+    .poll(() => container.querySelector("[data-composer-resting]")?.textContent)
+    .not.toContain("@Alex");
+  const editor = container.querySelector<HTMLElement>(".cm-editor")!;
+  await expect.poll(() => editor.getBoundingClientRect().height).toBe(24);
+  expect(getComputedStyle(editor).paddingTop).toBe("0px");
+});
+
 it("keeps attachment chips at the editing inset in the one-line mobile composer", async () => {
   await page.viewport(390, 844);
   const { container } = renderComposerFixture({
     mobileComposer: true,
-    draft: "Messages take longer than usual to send",
+    // A typed draft keeps the open surface; only attachments still rest on one line.
+    draft: "",
     attachments: [
       { id: "diagnostics", fileName: "openclaw-diagnostics.txt", mimeType: "text/plain" },
     ],
@@ -145,7 +199,7 @@ it("keeps attachment chips at the editing inset in the one-line mobile composer"
 
 it("keeps the mobile composer 10px above the bottom edge while resting and editing", async () => {
   await page.viewport(390, 844);
-  const { container } = renderComposerFixture({ mobileComposer: true, draft: "Bottom gap" });
+  const { container } = renderComposerFixture({ mobileComposer: true, draft: "" });
   document.body.append(container);
   container.style.cssText = "position:fixed;bottom:0;left:16px;width:358px";
   const shell = container.querySelector<HTMLElement>(".agent-chat__composer-shell")!;
@@ -157,6 +211,28 @@ it("keeps the mobile composer 10px above the bottom edge while resting and editi
   container.querySelector("textarea")!.focus();
   await expect.element(page.elementLocator(shell)).toHaveAttribute("data-composer-editing", "true");
   expect(gap()).toBeCloseTo(10, 1);
+});
+
+it("shows the mobile model and permission controls inside the composer while editing", async () => {
+  await page.viewport(390, 844);
+  const { container } = renderComposerFixture({
+    mobileComposer: true,
+    permissionPicker: { canSelectFull: true, onSelect: vi.fn() },
+    composerControls: createComposerControlsFixture(),
+  });
+  document.body.append(container);
+  container.style.cssText = "position:fixed;bottom:0;left:16px;width:358px";
+  const shell = container.querySelector<HTMLElement>(".agent-chat__composer-shell")!;
+  container.querySelector("textarea")!.focus();
+  await expect.element(page.elementLocator(shell)).toHaveAttribute("data-composer-editing", "true");
+  const input = container.querySelector<HTMLElement>(".agent-chat__input")!.getBoundingClientRect();
+  for (const selector of [".chat-controls__permission-trigger", ".chat-composer-model-control"]) {
+    const control = container.querySelector<HTMLElement>(selector)!;
+    await expect.element(page.elementLocator(control)).toBeVisible();
+    const box = control.getBoundingClientRect();
+    expect(box.top, selector).toBeGreaterThanOrEqual(input.top);
+    expect(box.bottom, selector).toBeLessThanOrEqual(input.bottom);
+  }
 });
 
 it.each([

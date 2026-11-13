@@ -51,6 +51,11 @@ export type ZaloInboundMessage = {
   quotedGlobalMsgId?: string;
   quotedBody?: string;
   eventMessage?: ZaloEventMessage;
+  attachment?: {
+    kind: "image" | "video" | "document";
+    url: string;
+    fileName?: string;
+  };
 };
 
 export type ZcaUserInfo = ZcaFriend;

@@ -37,3 +37,63 @@ export function createPreparedCliContext(
     ...overrides,
   };
 }
+
+export type PreparedContextOverrides = Partial<{
+  sessionKey: string;
+  cliSessionId: string;
+  runId: string;
+  lane: string;
+  openClawHistoryPrompt: string;
+  provider: string;
+  model: string;
+  executionMode: PreparedCliRunContext["params"]["executionMode"];
+  allowEmptyAssistantReplyAsSilent: boolean;
+}>;
+
+export function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCliRunContext {
+  const provider = params?.provider ?? "codex-cli";
+  const model = params?.model ?? "gpt-5.4";
+  const backend = {
+    command: "codex",
+    args: ["exec", "--json"],
+    output: "text" as const,
+    input: "arg" as const,
+    modelArg: "--model",
+    sessionMode: "existing" as const,
+    serialize: true,
+  };
+  const runId = params?.runId ?? "run-2";
+  return createPreparedCliContext(
+    {
+      provider,
+      model,
+      runId,
+      sessionId: "s1",
+      sessionKey: params?.sessionKey,
+      thinkLevel: "low",
+      lane: params?.lane,
+      executionMode: params?.executionMode,
+      allowEmptyAssistantReplyAsSilent: params?.allowEmptyAssistantReplyAsSilent,
+    },
+    {
+      id: provider,
+      config: backend,
+      bundleMcp: false,
+      pluginId: provider === "claude-cli" ? "anthropic" : "openai",
+    },
+    {
+      reusableCliSession: params?.cliSessionId
+        ? { mode: "reuse", sessionId: params.cliSessionId }
+        : { mode: "none" },
+      contextWindowInfo: {
+        tokens: 150_000,
+        referenceTokens: 200_000,
+        source: "modelsConfig",
+      },
+      systemPrompt: "You are a helpful assistant.",
+      ...(params?.openClawHistoryPrompt
+        ? { openClawHistoryPrompt: params.openClawHistoryPrompt }
+        : {}),
+    },
+  );
+}

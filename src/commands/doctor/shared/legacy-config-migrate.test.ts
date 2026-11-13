@@ -2,11 +2,13 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { setConfigValueAtPath } from "../../../config/config-paths.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import { legacyCodexProviderIdentityKey } from "./codex-route-model-ref.js";
 import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
-import { migrateLegacyConfigForTest as migrate } from "./legacy-config-migrate.apply.test-support.js";
+import {
+  configAt,
+  migrateLegacyConfigForTest as migrate,
+} from "./legacy-config-migrate.apply.test-support.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
 
 function repairBindingsForTest<T extends object>(config: T) {
@@ -24,14 +26,6 @@ function issuePaths(raw: unknown) {
 
 function migratePaths(paths: Record<string, unknown>) {
   return migrate(configAt(paths));
-}
-
-function configAt(paths: Record<string, unknown>) {
-  const raw: Record<string, unknown> = {};
-  for (const [path, value] of Object.entries(paths)) {
-    setConfigValueAtPath(raw, path.split("."), value);
-  }
-  return raw;
 }
 
 it("preserves session typing precedence over an existing agent default", () => {
@@ -71,9 +65,9 @@ it("collapses split spawn flags per scope and resolves conflicts conservatively"
 });
 
 it("strips explicit bundled discovery mode after machine-state capture", () => {
-  expect(
-    migrate({ plugins: { allow: ["telegram"], bundledDiscovery: "allowlist" } }).config,
-  ).toEqual({ plugins: { allow: ["telegram"] } });
+  const plugins = { allow: ["telegram"], bundledDiscovery: "allowlist" };
+  const meta = { migrations: { skillWorkshopPlugin: true } };
+  expect(migrate({ meta, plugins }).config).toEqual({ meta, plugins: { allow: ["telegram"] } });
 });
 
 it("removes a zero port and its empty gateway section", () => {
@@ -147,12 +141,6 @@ function browserSandbox(browser: Record<string, unknown>) {
 function modelMapConfig(models: Record<string, unknown>) {
   return configAt({ "agents.defaults.models": models });
 }
-
-const supervision = {
-  endpoints: [{ id: "local", transport: "stdio-proxy", command: "codex" }],
-  allowRawTranscripts: true,
-  allowWriteControls: true,
-};
 
 function qwenModel(id: string, thinkingFormat: string, extra: Record<string, unknown> = {}) {
   return { id, reasoning: true, compat: { thinkingFormat }, ...extra };
@@ -669,97 +657,10 @@ it.each([
   expect(res.config?.plugins?.entries?.xai).toEqual({ enabled: true, config: { webSearch } });
 });
 
-it.each([
-  {
-    name: "active supervision rewrites the allowlist",
-    plugins: configAt({
-      allow: ["telegram", "codex-supervisor", "codex"],
-      "entries.codex-supervisor.enabled": true,
-      "entries.codex-supervisor.config": supervision,
-      "entries.codex-supervisor.hooks.enabled": true,
-    }),
-    expected: configAt({
-      allow: ["telegram", "codex"],
-      "entries.codex.enabled": true,
-      "entries.codex.config.supervision": { enabled: true, ...supervision },
-    }),
-  },
-  {
-    name: "disabled supervision preserves the implicit harness",
-    agents: { defaults: { model: "openai/gpt-5.5" } },
-    plugins: configAt({
-      "entries.codex.config.appServer": { transport: "stdio" },
-      "entries.codex-supervisor.enabled": false,
-    }),
-    expected: configAt({
-      "entries.codex.config": {
-        appServer: { transport: "stdio" },
-        supervision: { enabled: false },
-      },
-    }),
-  },
-  {
-    name: "canonical values win while missing supervision fields are filled",
-    plugins: configAt({
-      deny: [" CODEX-SUPERVISOR ", "telegram"],
-      "entries. CODEX .enabled": false,
-      "entries. CODEX .config.appServer.transport": "stdio",
-      "entries. CODEX .config.supervision.enabled": true,
-      "entries. CODEX .config.supervision.endpoints": [
-        { id: "canonical", transport: "stdio-proxy" },
-      ],
-      "entries. CODEX .config.supervision.allowWriteControls": false,
-      "entries. CODEX-SUPERVISOR .enabled": true,
-      "entries. CODEX-SUPERVISOR .config.endpoints": [{ id: "legacy", transport: "stdio-proxy" }],
-      "entries. CODEX-SUPERVISOR .config.allowRawTranscripts": true,
-      "entries. CODEX-SUPERVISOR .config.allowWriteControls": true,
-    }),
-    expected: configAt({
-      deny: ["telegram"],
-      "entries. CODEX .enabled": false,
-      "entries. CODEX .config.appServer.transport": "stdio",
-      "entries. CODEX .config.supervision.enabled": true,
-      "entries. CODEX .config.supervision.endpoints": [
-        { id: "canonical", transport: "stdio-proxy" },
-      ],
-      "entries. CODEX .config.supervision.allowRawTranscripts": true,
-      "entries. CODEX .config.supervision.allowWriteControls": false,
-    }),
-  },
-  {
-    name: "denied legacy plugin leaves supervision dormant",
-    plugins: {
-      deny: ["codex-supervisor"],
-      entries: { "codex-supervisor": { enabled: true, config: { allowWriteControls: true } } },
-    },
-    expected: {
-      deny: [],
-      entries: {
-        codex: { config: { supervision: { enabled: false, allowWriteControls: true } } },
-      },
-    },
-  },
-  {
-    name: "malformed legacy entry does not create Codex config",
-    plugins: {
-      entries: { "codex-supervisor": "invalid" },
-    },
-    expected: { entries: {} },
-  },
-])("migrates supervision: $name", ({ plugins, agents, expected }) => {
-  const raw = { plugins, ...(agents ? { agents } : {}) };
-  expect(issuePaths(raw)).toContain("plugins");
-  const res = migrate(raw);
-  expect(res.config?.plugins).toEqual(expected);
-  if (agents) {
-    expect(res.config?.agents).toEqual(agents);
-  }
-  expect(migrate(res.config)).toEqual({ config: null, changes: [] });
-});
-
 describe("legacy bundled provider discovery migrate", () => {
   it("rewrites legacy OpenAI Codex plugin policy ids", () => {
     const res = migratePaths({
+      "meta.migrations.skillWorkshopPlugin": true,
       "plugins.allow": ["telegram", "openai-codex", "openai"],
       "plugins.deny": ["openai-codex"],
       "plugins.entries.openai-codex.enabled": false,
@@ -1137,4 +1038,3 @@ describe("legacy memory search config migrate", () => {
     expect(res.config?.agents?.entries?.retired?.memory?.search).toBeUndefined();
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

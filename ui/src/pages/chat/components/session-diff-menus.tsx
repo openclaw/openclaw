@@ -2,6 +2,7 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { bindOverlayAnchor } from "../../../components/overlay-anchor.ts";
+import { HeaderSearch } from "../../../components/solid/header-search.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import {
   createMenuControls,
@@ -141,17 +142,14 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
     kind: "content",
     id: "jump-search",
     content: (
-      <input
-        ref={controls.ref()}
-        class="session-diff-menu__search"
-        type="search"
-        data-search=""
-        data-initial-focus=""
-        data-form-control=""
-        aria-label={t("chat.sessionDiff.searchFiles")}
-        placeholder={t("chat.sessionDiff.searchFiles")}
-        value={jumpQuery()}
-        onInput={(event) => setJumpQuery(event.currentTarget.value)}
+      <HeaderSearch
+        label={t("chat.sessionDiff.searchFiles")}
+        inputClass="session-diff-menu__search"
+        query={jumpQuery()}
+        autofocus="menu"
+        controlRef={() => controls.ref()}
+        inputProps={{ "data-search": "", "data-form-control": "" }}
+        onQueryChange={setJumpQuery}
       />
     ),
   };

@@ -224,6 +224,12 @@ unchanged; no partially saved value is advertised.
 
 ## Recover from tool errors
 
+Hidden catalog tools are not top-level model tools. Calling one directly returns
+a failed tool result with guidance to use JavaScript inside `exec`; the rejected
+call does not execute the tool or add it to the visible surface. Inside `exec`,
+use the callable from the quick index or `catalog.search(...)`, since normalized
+names, collisions, and MCP namespaces can differ from the original tool name.
+
 Thrown tool errors are catchable. Returned values may instead report failure.
 Follow the tool's result contract, and inspect possible effects before retrying.
 Guest code can inspect diagnostic fields on thrown errors: `code` identifies `input_contract`,

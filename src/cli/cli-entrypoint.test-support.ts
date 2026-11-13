@@ -51,6 +51,7 @@ export const cliMessageExitEntrypoints = {
   }),
   command: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "../commands/message" }),
   oneShotExit: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "one-shot-exit" }),
+  cleanup: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "runtime-cleanup" }),
 } as const;
 
 export const oneShotExitProbeEntrypoints = {
@@ -83,6 +84,12 @@ export const mcpImportBoundaryEntrypoints = {
     sourceWorkerName: "../plugins/tool-metadata",
   }),
 } as const;
+
+// Keep service inspection imports observable in a cold child process.
+export const cliServiceInspectionImportEntrypoint = legacy({
+  currentModuleUrl: import.meta.url,
+  sourceWorkerName: "run-main-service-installation",
+});
 
 // Preserve module boundaries so a child can retire only its own cleanup source copies.
 export const cliCleanupRetirementEntrypoints = {
@@ -150,6 +157,10 @@ export const updateFinalizationOutputEntrypoint = legacy({
 
 // Direct-stop children use the invocation's prepared graph before readiness starts.
 export const gatewayDirectStopEntrypoints = {
+  brokerCleanupFixture: worker({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "gateway-cli/run-loop.broker-cleanup.test-support",
+  }),
   forcedCronFixture: worker({
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "gateway-cli/run-loop.forced-cron.test-support",
@@ -182,6 +193,10 @@ export const gatewayDirectStopEntrypoints = {
   restartIntent: worker({
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../infra/restart-intent",
+  }),
+  bootLifecycle: worker({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/gateway-boot-lifecycle",
   }),
   restartPolicy: worker({
     currentModuleUrl: import.meta.url,

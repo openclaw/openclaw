@@ -63,8 +63,8 @@ vi.mock("../infra/windows-port-pids.js", async (original) => ({
   readWindowsPortUsageSync: () => "free",
 }));
 // mock-isolation: Synthetic task ownership must not read the real Gateway lease database.
-vi.mock("../infra/gateway-owner-lease.js", () => ({
-  readGatewayOwnerLease: () =>
+vi.mock("../infra/gateway-owner-lease.js", () => {
+  const readOwner = () =>
     native.ownerAlive
       ? {
           state: "live",
@@ -72,8 +72,9 @@ vi.mock("../infra/gateway-owner-lease.js", () => ({
           port: native.ownerPort,
           supervisor: { kind: "schtasks", name: native.ownerTask },
         }
-      : undefined,
-}));
+      : undefined;
+  return { readGatewayOwnerLease: readOwner, readGatewayOwnerLeaseAsync: async () => readOwner() };
+});
 beforeEach(() => {
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   resetNative();

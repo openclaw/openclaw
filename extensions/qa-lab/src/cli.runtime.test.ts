@@ -21,8 +21,6 @@ const {
   writeQaDockerHarnessFiles,
   buildQaDockerHarnessImage,
   runQaDockerUp,
-  defaultQaRuntimeModelForMode,
-  resolveQaRuntimeModelPair,
   readQaScenarioPack,
 } = vi.hoisted(() => ({
   runQaManualLane: vi.fn(),
@@ -35,9 +33,6 @@ const {
   writeQaDockerHarnessFiles: vi.fn(),
   buildQaDockerHarnessImage: vi.fn(),
   runQaDockerUp: vi.fn(),
-  defaultQaRuntimeModelForMode:
-    vi.fn<(mode: string, options?: { alternate?: boolean }) => string>(),
-  resolveQaRuntimeModelPair: vi.fn(),
   readQaScenarioPack: vi.fn<() => QaScenarioPack>(),
 }));
 
@@ -103,11 +98,6 @@ vi.mock("./docker-up.runtime.js", () => ({
   runQaDockerUp,
 }));
 
-vi.mock("./model-selection.runtime.js", () => ({
-  defaultQaRuntimeModelForMode,
-  resolveQaRuntimeModelPair,
-}));
-
 vi.mock("./scenario-catalog.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./scenario-catalog.js")>();
   readQaScenarioPack.mockImplementation(actual.readQaScenarioPack);
@@ -133,31 +123,13 @@ import { QaSuiteInfraError } from "./errors.js";
 import type { QaEvidenceSummaryJson } from "./evidence-summary.js";
 import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
-import { resolveQaLiveFrontierAlternateModel } from "./providers/live-frontier/model-selection.runtime.js";
 import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
-import type { QaProviderModeInput } from "./run-config.js";
 import { expandQaScenarioExecutionCells, type QaScenarioExecutionCell } from "./scenario-lane.js";
 import type { QaSuiteRunParams } from "./suite.js";
 
 const LEGACY_TEST_REPO_ROOT = path.resolve("/tmp/openclaw-repo");
 const nativeRealpath = fs.realpath.bind(fs);
 const tempDirs = createTempDirHarness();
-
-function resolveMockQaRuntimeModelPair(params: {
-  providerMode: string;
-  primaryModel?: string;
-  alternateModel?: string;
-}) {
-  const primaryModel =
-    params.primaryModel?.trim() || defaultQaRuntimeModelForMode(params.providerMode);
-  const alternateModel =
-    params.alternateModel?.trim() ||
-    (params.providerMode === "live-frontier"
-      ? (resolveQaLiveFrontierAlternateModel(primaryModel) ??
-        defaultQaRuntimeModelForMode(params.providerMode, { alternate: true }))
-      : defaultQaRuntimeModelForMode(params.providerMode, { alternate: true }));
-  return { primaryModel, alternateModel };
-}
 
 const QA_PASSING_SUITE_SCENARIO = {
   name: "channel chat baseline",
@@ -413,11 +385,6 @@ describe("qa cli", () => {
     ]) {
       mock.mockReset();
     }
-    defaultQaRuntimeModelForMode.mockImplementation(
-      (mode: string, options?: { alternate?: boolean }) =>
-        defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
-    );
-    resolveQaRuntimeModelPair.mockImplementation(resolveMockQaRuntimeModelPair);
     readQaScenarioPack.mockClear();
     runQaSuite.mockImplementation(async (params) => {
       const observedCells = executionCellsForSuiteParams(params);

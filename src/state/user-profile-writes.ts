@@ -323,6 +323,37 @@ export async function ensureCanonicalUserProfileForTailscaleIdentity(
   }
   return unwrap(await write("userProfiles.ensureTailscale", identity, options));
 }
+
+/** Ensures an exact OCID profile without email aliases or implicit profile merging. */
+export async function ensureCanonicalUserProfileForOpenClawIdIdentity(
+  input: UserProfileWriteOperations["userProfiles.ensureOpenClawId"]["input"],
+  options: ProfileWriteOptions = {},
+): Promise<UserProfile> {
+  return unwrap(await write("userProfiles.ensureOpenClawId", input, options));
+}
+
+/** Links an OCID account to an existing personal profile; refuses one bound elsewhere. */
+export async function linkCanonicalOpenClawIdUserProfile(
+  input: UserProfileWriteOperations["userProfiles.linkOpenClawId"]["input"],
+  options: ProfileWriteOptions = {},
+) {
+  return unwrap(await write("userProfiles.linkOpenClawId", input, options));
+}
+
+/** Removes a profile's OCID link; owner devices of that account return to the shared owner. */
+export async function unlinkCanonicalOpenClawIdUserProfile(
+  input: UserProfileWriteOperations["userProfiles.unlinkOpenClawId"]["input"],
+  options: ProfileWriteOptions = {},
+) {
+  return unwrap(await write("userProfiles.unlinkOpenClawId", input, options));
+}
+
+export async function ensureCanonicalDelegatedUserProfile(
+  input: UserProfileWriteOperations["userProfiles.ensureDelegated"]["input"],
+  options: ProfileWriteOptions = {},
+): Promise<UserProfile> {
+  return unwrap(await write("userProfiles.ensureDelegated", input, options));
+}
 export async function syncCanonicalGitHubIdentity(
   input: UserProfileWriteOperations["userProfiles.syncGitHub"]["input"],
   options: ProfileWriteOptions = {},

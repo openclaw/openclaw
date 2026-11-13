@@ -5,6 +5,9 @@ import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../../agents/admitted-run-context.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
+import { refreshPreparedModelRuntimeSnapshots } from "../../agents/prepared-model-runtime.js";
+import { resetPreparedModelCatalogStateForTest } from "../../agents/prepared-model-runtime.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
   callInProcessGatewayTool,
@@ -24,10 +27,14 @@ import {
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { installDiscordRegistryHooks } from "../../auto-reply/test-helpers/command-auth-registry-fixture.js";
 import {
+  listSessionEntriesReadOnly,
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { prepareChannelOperatorAdmin } from "../../gateway/channel-operator-authority.js";
+import {
+  prepareChannelOperatorAdmin,
+  prepareChannelOperatorAuthority,
+} from "../../gateway/channel-operator-authority.js";
 import { createSessionMutationTestContext } from "../../gateway/server-methods/sessions-mutations.owner.test-support.js";
 import { initializeSessionReadContext } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
@@ -438,7 +445,9 @@ it.each([false, true])(
         });
         githubIdentity("Renamed-Channel-Admin");
         expect(() => authority.assertCurrent()).toThrow();
-        expect(authorityFor(await context(admin.identity.senderId))).toBeUndefined();
+        expect(authorityFor(await context(admin.identity.senderId))?.scopes).not.toContain(
+          "operator.admin",
+        );
       }
     }),
 );
@@ -753,9 +762,10 @@ it("recovers an unknown channel owner through the canonical profile directory", 
 
 it.each([
   { channel: "slack", role: "admin" },
+  { channel: "discord", role: "admin" },
   { channel: "discord", role: "member" },
 ] as const)(
-  "assigns visible and newly created sessions to the linked $channel $role",
+  "preserves visible and independent creation authority for the linked $channel $role",
   ({ channel, role }) =>
     withAdminIngress(
       async (fixture) => {
@@ -764,45 +774,112 @@ it.each([
         const metadata = JSON.parse(
           buildInboundUserContextPrefix(turn).match(/```json\n([\s\S]*?)\n```/)![1]!,
         );
+        // Visible creation validates its inherited model against the prepared catalog.
+        fixture.cfg.agents = { defaults: { model: "anthropic/claude-opus-4-6" } };
+        fixture.cfg.models = {
+          providers: {
+            anthropic: {
+              baseUrl: "https://anthropic.example.test/v1",
+              models: [modelDefinition("claude-opus-4-6")],
+            },
+          },
+        };
+        await resetPreparedModelCatalogStateForTest();
+        await refreshPreparedModelRuntimeSnapshots(fixture.cfg, { gatewayLifecycle: true });
         using assignment = await prepareAssignment(fixture, turn, channel === "discord");
         const { operatorAuthority, execute, sessions, assign, run, scope } = assignment;
         const requester = human(metadata.requester_profile.id);
         const updated = { status: "updated", owner: human(fixture.admins[0]!.profile.id) };
         if (role === "member") {
-          expect(operatorAuthority).toBeUndefined();
+          expect(operatorAuthority).toMatchObject({
+            profileId: requester.id,
+            scopes: ["operator.read", "operator.write"],
+          });
+          expect(authorize(fixture.cfg, turn).senderIsOwner).toBe(false);
           for (const [action, params] of [
-            ["patch", { label: "forbidden" }],
+            ["patch", { icon: "forbidden" }],
             ["owner_profiles", {}],
           ] as const) {
-            await expect(sessions(action, params)).rejects.toThrow("Only assign_owner");
+            await expect(sessions(action, params)).rejects.toThrow(
+              "only permits archive, restore, and stop",
+            );
           }
         }
         if (role === "admin") {
           expect((await assign(humanSessionKey, requester.id)).details).toMatchObject(updated);
           expect(loadSessionEntry(scope(humanSessionKey))?.owner?.actor).toEqual(requester);
         }
-        await run(() =>
-          callInProcessGatewayToolWithCreation(
-            "sessions.create",
-            {
-              key: spawnedSessionKey,
-              agentId: "main",
-              visibility: "shared",
-              parentSessionKey: turn.SessionKey,
-              spawnDepth: 1,
-            },
-            {
-              via: "spawn",
-              actor: agent,
-              requesterSessionKey: turn.SessionKey,
-              inheritedToolPolicy: { version: 1, allow: [], deny: [] },
-            },
-          ),
-        );
+        const spawn = () =>
+          run(() =>
+            callInProcessGatewayToolWithCreation(
+              "sessions.create",
+              {
+                key: spawnedSessionKey,
+                agentId: "main",
+                visibility: "shared",
+                parentSessionKey: turn.SessionKey,
+                spawnDepth: 1,
+              },
+              {
+                via: "spawn",
+                actor: agent,
+                requesterSessionKey: turn.SessionKey,
+                inheritedToolPolicy: { version: 1, allow: [], deny: [] },
+              },
+            ),
+          );
+        if (role === "member") {
+          // A profile write grant does not make a shared-channel viewer a participant.
+          await expect(spawn()).rejects.toThrow("session is shared for this connection");
+          const beforeCreation = listSessionEntriesReadOnly({
+            agentId: "main",
+            env: fixture.state.env,
+          });
+          await expect(
+            execute("sessions_create", "member-create", { label: "Member work" }),
+          ).rejects.toThrow("session is shared for this connection");
+          expect(listSessionEntriesReadOnly({ agentId: "main", env: fixture.state.env })).toEqual(
+            beforeCreation,
+          );
+          const identity = fixture.admins[0]!.identity;
+          const retained = await prepareChannelOperatorAuthority(fixture.cfg, identity);
+          expect(retained?.isCurrent(fixture.cfg)).toBe(true);
+          const reference = JSON.stringify(retained!.recoveryReference);
+          const store = { agentId: "main", env: fixture.state.env };
+          const beforeRevocation = listSessionEntriesReadOnly(store);
+          unlinkUserChannelIdentity(requester.id, identity);
+          await expect(
+            execute("sessions_create", "revoked-member-create", { label: "Must not be created" }),
+          ).rejects.toThrow(revokedMessage);
+          expect(listSessionEntriesReadOnly(store)).toEqual(beforeRevocation);
+          await closeOpenClawStateDatabaseByPathAsync(
+            resolveOpenClawStateSqlitePath(fixture.state.env),
+          );
+          await expect(
+            prepareChannelOperatorAuthority(fixture.cfg, JSON.parse(reference)),
+          ).resolves.toBeUndefined();
+          return;
+        }
+        const created = await execute("sessions_create", "admin-create", { label: "Admin work" });
+        const details = created.details;
+        if (
+          !details ||
+          typeof details !== "object" ||
+          !("sessionKey" in details) ||
+          typeof details.sessionKey !== "string"
+        ) {
+          throw new Error("sessions_create did not return a session key");
+        }
+        expect(loadSessionEntry(scope(details.sessionKey))).toMatchObject({
+          createdVia: "spawn",
+          createdActor: agent,
+          owner: { actor: requester },
+        });
+        await spawn();
         expect(loadSessionEntry(scope(spawnedSessionKey))).toMatchObject({
           createdVia: "spawn",
           createdActor: agent,
-          owner: { actor: role === "admin" ? requester : agent },
+          owner: { actor: requester },
         });
         expect((await assign(spawnedSessionKey, requester.id)).details).toMatchObject(updated);
         const listed = await execute("sessions_list", "read-owner", {
@@ -846,41 +923,34 @@ it.each(["unlink", "role", "lifecycle", "gateway", "database", "stale-copy"] as 
     }),
 );
 
-it.each([
-  "asserted",
-  "unlinked",
-  "member",
-  "cloned",
-  "configured-owner",
-  "configured-owner-linked",
-] as const)("does not give a %s Slack sender an operator principal", async (kind) => {
-  await withSlack(async (fixture) => {
-    const admin = fixture.admins[0]!;
-    if (kind === "member") {
-      setUserProfileRole(admin.profile.id, "member");
-    }
-    const configuredOwner = kind === "configured-owner" || kind === "configured-owner-linked";
-    if (configuredOwner) {
-      fixture.cfg.commands!.ownerAllowFrom = [`slack:${admin.identity.senderId}`];
-      if (kind === "configured-owner") {
-        unlinkUserChannelIdentity(admin.profile.id, admin.identity);
+it.each(["asserted", "unlinked", "cloned", "configured-owner"] as const)(
+  "does not give a %s Slack sender an operator principal",
+  async (kind) => {
+    await withSlack(async (fixture) => {
+      const admin = fixture.admins[0]!;
+      const configuredOwner = kind === "configured-owner";
+      if (configuredOwner) {
+        fixture.cfg.commands!.ownerAllowFrom = [`slack:${admin.identity.senderId}`];
+        if (kind === "configured-owner") {
+          unlinkUserChannelIdentity(admin.profile.id, admin.identity);
+        }
       }
-    }
-    const original = await fixture.context(
-      kind === "unlinked" ? "unlinked" : admin.identity.senderId,
-      kind !== "asserted",
-    );
-    const turn = kind === "cloned" ? structuredClone(original) : original;
-    using assignment = await prepareAssignment(fixture, turn);
-    expect(assignment.operatorAuthority).toBeUndefined();
-    await expect(
-      assignment.run(() =>
-        callInProcessGatewayTool("sessions.assignOwner", {
-          key: humanSessionKey,
-          owner: human(admin.profile.id),
-        }),
-      ),
-    ).rejects.toThrow(/was not found/);
-    expect(loadSessionEntry(assignment.scope(humanSessionKey))?.owner).toBeUndefined();
-  });
-});
+      const original = await fixture.context(
+        kind === "unlinked" ? "unlinked" : admin.identity.senderId,
+        kind !== "asserted",
+      );
+      const turn = kind === "cloned" ? structuredClone(original) : original;
+      using assignment = await prepareAssignment(fixture, turn);
+      expect(assignment.operatorAuthority).toBeUndefined();
+      await expect(
+        assignment.run(() =>
+          callInProcessGatewayTool("sessions.assignOwner", {
+            key: humanSessionKey,
+            owner: human(admin.profile.id),
+          }),
+        ),
+      ).rejects.toThrow(/was not found/);
+      expect(loadSessionEntry(assignment.scope(humanSessionKey))?.owner).toBeUndefined();
+    });
+  },
+);

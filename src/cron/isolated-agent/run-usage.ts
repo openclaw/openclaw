@@ -75,8 +75,9 @@ export async function recordCronRunUsage(params: {
   if (billableRuns.length === 0) {
     return;
   }
-  const { estimateAggregateUsageCost, resolveModelCostConfig } =
+  const { estimateAggregateUsageCostAsync, captureModelCostPricing } =
     await import("../../utils/usage-format.js");
+  let pricing: ReturnType<typeof captureModelCostPricing> | undefined;
   let estimatedCostUsd: number | undefined = 0;
   let hasSessionUsage = false;
   for (const run of billableRuns) {
@@ -86,16 +87,17 @@ export async function recordCronRunUsage(params: {
     const diagnosticUsage = meta?.diagnosticUsage ?? usage;
     const provider = meta?.provider ?? run.fallbackProvider;
     const model = meta?.model ?? run.fallbackModel;
-    const costConfig = resolveModelCostConfig({
-      provider,
-      model,
-      config: prepared.cfgWithAgentDefaults,
-      agentDir: prepared.agentDir,
-    });
+    const prepareCost = async () =>
+      (
+        await (pricing ??= captureModelCostPricing(
+          prepared.cfgWithAgentDefaults,
+          prepared.agentDir,
+        ))
+      ).resolve(provider, model);
     if (hasBillableUsage(usage)) {
       hasSessionUsage = true;
       const cost = asNonNegativeFiniteNumber(
-        estimateAggregateUsageCost({ usage, cost: costConfig }),
+        await estimateAggregateUsageCostAsync({ usage, prepareCost }),
       );
       estimatedCostUsd =
         estimatedCostUsd !== undefined && cost !== undefined ? estimatedCostUsd + cost : undefined;
@@ -117,7 +119,7 @@ export async function recordCronRunUsage(params: {
         ? Math.max(bucketTotalTokens, diagnosticUsage.total)
         : bucketTotalTokens;
     const costUsd = asNonNegativeFiniteNumber(
-      estimateAggregateUsageCost({ usage: diagnosticUsage, cost: costConfig }),
+      await estimateAggregateUsageCostAsync({ usage: diagnosticUsage, prepareCost }),
     );
     const contextUsedTokens = deriveContextPromptTokens({
       lastCallUsage: meta?.lastCallUsage,

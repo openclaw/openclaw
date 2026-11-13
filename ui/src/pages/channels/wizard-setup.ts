@@ -53,7 +53,10 @@ export function createChannelSetup(deps: {
       return;
     }
     // Completion reloads config; keep any unsaved advanced-form edits intact.
-    if (deps.getContext().runtimeConfig.state.configFormDirty) {
+    if (
+      deps.getContext().runtimeConfig.state.configFormDirty ||
+      Object.keys(deps.channels.state.configEdits).length > 0
+    ) {
       setBlockedByDirtyConfig(true);
       return;
     }

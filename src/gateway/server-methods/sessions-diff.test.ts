@@ -479,8 +479,10 @@ describe("loadSessionDiff", () => {
     commitFiles("second change");
     append("second.txt", "working tree\n");
     write("loose.txt", "untracked\n");
+    repoGit("tag", baseRef);
+    repoGit("tag", "feature");
     const all = await readDiff();
-    expect(all.baseRef).toBe(baseRef);
+    expect(all).toMatchObject({ baseRef, branch: "feature" });
     expect(filePaths(all)).toEqual(["first.txt", "loose.txt", "second.txt"]);
     const uncommitted = await readDiff({ scope: "uncommitted" });
     expect(filePaths(uncommitted)).toEqual(["loose.txt", "second.txt"]);

@@ -114,3 +114,23 @@ it("retains report content and focus when a board refresh only changes widget me
   expect(element.querySelector("svg")).toBe(graphic);
   expect(document.activeElement).toBe(link);
 });
+
+it("associates each report table cell with its column label", async () => {
+  const element = await mount({
+    blocks: [
+      {
+        type: "table",
+        title: "Cost",
+        columns: ["Provider", "Model", "Tokens", "Cost"],
+        rows: [["alpha", "large", "1,024", "$3.11"]],
+      },
+    ],
+  } satisfies BoardReport);
+  const wide = element.querySelector("table");
+  expect([...(wide?.querySelectorAll("td") ?? [])].map((cell) => cell.dataset.label)).toEqual([
+    "Provider",
+    "Model",
+    "Tokens",
+    "Cost",
+  ]);
+});

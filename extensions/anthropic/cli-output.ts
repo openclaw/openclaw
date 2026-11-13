@@ -168,26 +168,40 @@ function parseClaudeJsonlRecord(line: string): Record<string, unknown> | null {
   }
 }
 
+function readClaudeTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
 /** Project Claude-owned lifecycle records without widening the legacy parser event union. */
 export const parseClaudeCliJsonlLifecycleEvent: CliBackendParseJsonlLifecycleEvent = (line) => {
-  if (!line.includes("compacting") && !line.includes("compact_result")) {
+  if (!/compacting|compact_result|compact_boundary/u.test(line)) {
     return null;
   }
   const parsed = parseClaudeJsonlRecord(line);
-  if (!parsed) {
-    return null;
+  if (parsed?.compact_result === "failed") {
+    return { kind: "compaction", phase: "end", completed: false };
   }
-  if (parsed.compact_result === "success" || parsed.compact_result === "failed") {
+  // Claude Code closes every successful compaction, automatic or manual, with this boundary right
+  // after its `compact_result: "success"` status. Only the boundary carries the sizes, so it alone
+  // ends the compaction and the status is progress only.
+  if (parsed?.type === "system" && parsed.subtype === "compact_boundary") {
+    const metadata = isRecord(parsed.compact_metadata) ? parsed.compact_metadata : {};
+    const tokensBefore = readClaudeTokenCount(metadata.pre_tokens);
+    const tokensAfter = readClaudeTokenCount(metadata.post_tokens);
     return {
       kind: "compaction",
       phase: "end",
-      completed: parsed.compact_result === "success",
+      completed: true,
+      ...(metadata.trigger === "auto" || metadata.trigger === "manual"
+        ? { trigger: metadata.trigger }
+        : {}),
+      ...(tokensBefore !== undefined ? { tokensBefore } : {}),
+      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
     };
   }
-  if (parsed.type === "system" && parsed.subtype === "status") {
-    return parsed.status === "compacting" ? { kind: "compaction", phase: "start" } : null;
-  }
-  return null;
+  return parsed?.type === "system" && parsed.subtype === "status" && parsed.status === "compacting"
+    ? { kind: "compaction", phase: "start" }
+    : null;
 };
 
 /** Reject malformed terminal Claude results before the generic CLI runner accepts them as prose. */

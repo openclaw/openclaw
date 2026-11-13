@@ -7,7 +7,8 @@ export const AGENT_GIT_CONFIG_PARAMETERS = AUTO_MAINTENANCE_CONFIG.map(
   ([key, value]) => `'${key}=${value}'`,
 ).join(" ");
 
-export const gitMaintenanceEnvironment = () => appendGitConfig({}, AUTO_MAINTENANCE_CONFIG);
+export const gitMaintenanceEnvironment = (env: NodeJS.ProcessEnv = {}) =>
+  appendGitConfig(env, AUTO_MAINTENANCE_CONFIG);
 
 /** Append entries without replacing configuration already owned by the caller. */
 export function appendGitConfig(

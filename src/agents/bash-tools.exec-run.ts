@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
@@ -42,6 +43,7 @@ import {
   resolveExecNotificationDefaults,
   resolvePreparedExecEnvironment,
 } from "./bash-tools.exec-request-preparation.js";
+import type { ExecToolApprovalReview, ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PENDING_MAX_OUTPUT,
@@ -59,12 +61,12 @@ import {
   buildExecForegroundResult,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
-import { resolveExecElevatedMode, resolveExecHost } from "./bash-tools.exec-target.js";
-import type {
-  ExecToolApprovalReview,
-  ExecToolDefaults,
-  ExecToolDetails,
-} from "./bash-tools.exec-types.js";
+import {
+  canInterruptExec,
+  resolveExecElevatedMode,
+  resolveExecHost,
+} from "./bash-tools.exec-target.js";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { createExecSchema, execSchema } from "./bash-tools.schemas.js";
 import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
@@ -131,30 +133,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     defaults?.processToolAvailabilityRef?.value ?? defaults?.allowBackground ?? true;
   const defaultTimeoutSec = resolveExecDefaultTimeoutSec(defaults?.timeoutSec);
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
-  const {
-    safeBins,
-    safeBinProfiles,
-    trustedSafeBinDirs,
-    unprofiledSafeBins,
-    unprofiledInterpreterSafeBins,
-  } = resolveExecSafeBinRuntimePolicy({
-    local: {
-      safeBins: defaults?.safeBins,
-      safeBinTrustedDirs: defaults?.safeBinTrustedDirs,
-      safeBinProfiles: defaults?.safeBinProfiles,
-    },
-    onWarning: logInfo,
-  });
-  if (unprofiledSafeBins.length > 0) {
-    logInfo(
-      `exec: ignoring unprofiled safeBins entries (${unprofiledSafeBins.toSorted().join(", ")}); use allowlist or define tools.exec.safeBinProfiles.<bin>`,
-    );
-  }
-  if (unprofiledInterpreterSafeBins.length > 0) {
-    logInfo(
-      `exec: interpreter/runtime binaries in safeBins (${unprofiledInterpreterSafeBins.join(", ")}) are unsafe without explicit hardened profiles; prefer allowlist entries`,
-    );
-  }
+  let safeBinPolicy: ReturnType<typeof resolveExecSafeBinRuntimePolicy> | undefined;
   const {
     notifyOnExit,
     notifyOnExitEmptySuccess,
@@ -169,20 +148,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
-  const buildUnavailableWorkdirResult = (params: {
-    cwd: string;
-    startedAt?: number;
-    warningText?: string;
-  }) =>
-    buildExecForegroundResult({
-      outcome: buildExecRuntimeErrorOutcome({
-        error: formatUnavailableWorkdirFailure(params.cwd),
-        aggregated: "",
-        durationMs: params.startedAt ? Date.now() - params.startedAt : 0,
-      }),
-      cwd: params.cwd,
-      warningText: params.warningText,
-    });
   const requestPreparation = createExecRequestPreparation({
     defaults,
     agentId,
@@ -199,6 +164,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       });
     },
     parameters: createExecSchema(defaults),
+    interruptible: (args) => canInterruptExec(args, defaults),
     getExecutionTimeoutMs: createExecToolExecutionTimeoutResolver(defaults),
     prepareBeforeToolCallParams: requestPreparation.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: requestPreparation.finalizeBeforeToolCallParams,
@@ -207,6 +173,28 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const approvalTransport = defaults?.createApprovalTransport?.(toolCallId, signal);
       const assertSourceActive = captureAgentToolSourceExecutionGuard(signal);
       assertSupportedExecParams(args);
+      const { safeBins, safeBinProfiles, trustedSafeBinDirs } = await (safeBinPolicy ??=
+        resolveExecSafeBinRuntimePolicy({
+          local: {
+            safeBins: defaults?.safeBins,
+            safeBinTrustedDirs: defaults?.safeBinTrustedDirs,
+            safeBinProfiles: defaults?.safeBinProfiles,
+          },
+          onWarning: logInfo,
+        }).then((policy) => {
+          if (policy.unprofiledSafeBins.length > 0) {
+            logInfo(
+              `exec: ignoring unprofiled safeBins entries (${policy.unprofiledSafeBins.join(", ")}); use allowlist or define tools.exec.safeBinProfiles.<bin>`,
+            );
+          }
+          if (policy.unprofiledInterpreterSafeBins.length > 0) {
+            logInfo(
+              `exec: interpreter/runtime binaries in safeBins (${policy.unprofiledInterpreterSafeBins.join(", ")}) are unsafe without explicit hardened profiles; prefer allowlist entries`,
+            );
+          }
+          return policy;
+        }));
+      assertSourceActive();
       // Capture settings and cancellation per execution; unused reviewers must not load model runtime.
       let autoReviewer: ExecAutoReviewer | undefined = defaults?.autoReviewer;
       if (!autoReviewer) {
@@ -373,9 +361,13 @@ export function createExecTool(defaults?: ExecToolDefaults) {
               sandbox,
             });
       if (workdirResolution.kind === "unavailable") {
-        return buildUnavailableWorkdirResult({
+        return buildExecForegroundResult({
+          outcome: buildExecRuntimeErrorOutcome({
+            error: formatUnavailableWorkdirFailure(workdirResolution.requestedCwd),
+            aggregated: "",
+            durationMs: Date.now() - startedAt,
+          }),
           cwd: workdirResolution.requestedCwd,
-          startedAt,
           warningText: warnings.join("\n"),
         });
       }
@@ -433,7 +425,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           execParams: params,
           host,
           sandbox,
-          containerWorkdir,
           channelContext: defaults?.channelContext,
           subagentExecution,
           defaultPathPrepend,
@@ -458,7 +449,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           nonInteractiveApproval: defaults?.nonInteractiveApproval,
           approvalFollowupMode: defaults?.approvalFollowupMode,
           turnSourceChannel: defaults?.messageProvider,
-          turnSourceTo: defaults?.currentChannelId,
+          turnSourceTo: defaults?.currentMessagingTarget ?? defaults?.currentChannelId,
           turnSourceAccountId: defaults?.accountId,
           turnSourceThreadId: defaults?.currentThreadTs,
           agentId,
@@ -690,7 +681,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           }
         }
         const completed = await result;
-        if (toolAborted) {
+        if (toolAborted && !(signal?.reason instanceof ToolInterruptedByUser)) {
           throw createAbortError("Tool execution was aborted", { cause: signal?.reason });
         }
         const deadlineAtMs = run.session.processActivity?.deadlineAtMs;
