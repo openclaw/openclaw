@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { createReadStream, lstatSync, readlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -22,7 +23,11 @@ import {
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
   MAX_WORKSPACE_MANIFEST_BYTES,
 } from "./workspace-inventory-limits.js";
-import { gitFileMode, type WorkerWorkspaceManifestEntry } from "./workspace-manifest.js";
+import {
+  WORKER_WORKSPACE_GIT_PATHS_UTF8_MESSAGE,
+  gitFileMode,
+  type WorkerWorkspaceManifestEntry,
+} from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
@@ -71,7 +76,13 @@ function validateGitRelativePath(file: string): string {
   return file;
 }
 
-async function* readBoundedGitPathCandidates(filePath: string): AsyncGenerator<string> {
+type GitPathCandidate = {
+  /** Bytes Git reported. `name` is their lossy spelling, their own path only when they round-trip. */
+  readonly raw: Buffer;
+  readonly name: string;
+};
+
+async function* readBoundedGitPathCandidates(filePath: string): AsyncGenerator<GitPathCandidate> {
   let pending = Buffer.alloc(0);
   let candidateCount = 0;
   let pathBytes = 0;
@@ -94,13 +105,40 @@ async function* readBoundedGitPathCandidates(filePath: string): AsyncGenerator<s
           `Cloud workspace Git path candidates exceed the ${MAX_WORKSPACE_GIT_CANDIDATES} limit`,
         );
       }
-      yield validateGitRelativePath(buffer.subarray(offset, separator).toString("utf8"));
+      const raw = buffer.subarray(offset, separator);
+      yield { raw, name: validateGitRelativePath(raw.toString("utf8")) };
       offset = separator + 1;
     }
     pending = Buffer.from(buffer.subarray(offset));
   }
   if (pending.length > 0) {
     throw new Error("Worker workspace git file list is not NUL terminated");
+  }
+}
+
+function gitPathIsDecodable(candidate: GitPathCandidate): boolean {
+  // Same predicate the manifest script applies to the names it captures.
+  return isUtf8(candidate.raw);
+}
+
+/**
+ * A name that does not survive UTF-8 decoding only reaches its file through its raw bytes; asking
+ * for the replacement spelling is what made an existing file look deleted. Vanished names stay
+ * tolerant here, matching the remote capture that records a reclaim deletion as absent (#108398).
+ */
+function existingRawGitPath(root: string, candidate: GitPathCandidate): boolean {
+  if (process.platform === "win32") {
+    return false;
+  }
+  const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  try {
+    lstatSync(Buffer.concat([Buffer.from(prefix), candidate.raw]));
+    return true;
+  } catch (error) {
+    if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
+      return false;
+    }
+    throw error;
   }
 }
 
@@ -191,9 +229,24 @@ export async function executeWorkspaceInventoryComputation(
       const transferredPaths = new Set<string>();
       const writer = createInventoryPathWriter();
       const inspectFile = async (
-        file: string,
+        candidate: GitPathCandidate,
       ): Promise<WorkerWorkspaceManifestEntry | undefined> => {
-        if (isDerivedWorkspacePath(file, await isStagedInput(file)) || transferredPaths.has(file)) {
+        const file = candidate.name;
+        if (isDerivedWorkspacePath(file, await isStagedInput(file))) {
+          return undefined;
+        }
+        // A name Git reported that UTF-8 spelling cannot reproduce never reaches `lstat` as
+        // itself, so probing the spelling silently dropped the file from the transfer list and
+        // the capture published a manifest without it. Stop instead, naming the rename. This runs
+        // before the decoded-name dedupe: a valid file spelled with U+FFFD can claim that name
+        // first, and the dedupe would then hide the file that actually holds the invalid bytes.
+        if (!gitPathIsDecodable(candidate)) {
+          if (existingRawGitPath(canonicalRoot, candidate)) {
+            throw workspaceInventoryError(WORKER_WORKSPACE_GIT_PATHS_UTF8_MESSAGE);
+          }
+          return undefined;
+        }
+        if (transferredPaths.has(file)) {
           return undefined;
         }
         const absolute = path.join(canonicalRoot, file);
@@ -236,18 +289,18 @@ export async function executeWorkspaceInventoryComputation(
         const selected = readBoundedGitPathCandidates(params.selectedPath);
         try {
           let selectedItem = await selected.next();
-          for await (const file of readBoundedGitPathCandidates(params.ignoredPath)) {
+          for await (const candidate of readBoundedGitPathCandidates(params.ignoredPath)) {
             while (
               !selectedItem.done &&
-              Buffer.compare(Buffer.from(selectedItem.value), Buffer.from(file)) < 0
+              Buffer.compare(selectedItem.value.raw, candidate.raw) < 0
             ) {
               selectedItem = await selected.next();
             }
             if (
-              (await isStagedInput(file)) ||
-              (!selectedItem.done && selectedItem.value === file)
+              (await isStagedInput(candidate.name)) ||
+              (!selectedItem.done && selectedItem.value.raw.equals(candidate.raw))
             ) {
-              yield file;
+              yield candidate;
             }
           }
           while (!selectedItem.done) {
@@ -257,11 +310,12 @@ export async function executeWorkspaceInventoryComputation(
           await selected.return(undefined);
         }
       }
-      for await (const file of candidates()) {
-        const entry = await inspectFile(file);
+      for await (const candidate of candidates()) {
+        const entry = await inspectFile(candidate);
         if (!entry) {
           continue;
         }
+        const file = candidate.name;
         transferredPaths.add(file);
         for (const ancestor of workspacePathAncestors(file)) {
           addEntry({ path: ancestor, type: "directory", mode: 0o700 });
@@ -280,17 +334,17 @@ export async function executeWorkspaceInventoryComputation(
     case "workspace.inventory.existing": {
       const params = command.input;
       const writer = createInventoryPathWriter();
-      for await (const file of readBoundedGitPathCandidates(params.preparedListPath)) {
+      for await (const { name } of readBoundedGitPathCandidates(params.preparedListPath)) {
         let stats;
         try {
-          stats = lstatSync(path.join(params.gitRoot, file));
+          stats = lstatSync(path.join(params.gitRoot, name));
         } catch (error) {
           if (!hasNodeErrorCode(error, "ENOENT")) {
             throw error;
           }
         }
         if (stats?.isFile() || stats?.isSymbolicLink()) {
-          const pendingWrite = writer.append(file);
+          const pendingWrite = writer.append(name);
           if (pendingWrite) {
             await pendingWrite;
           }
@@ -301,8 +355,8 @@ export async function executeWorkspaceInventoryComputation(
     }
     case "workspace.inventory.paths": {
       const paths = new Set<string>();
-      for await (const entry of readBoundedGitPathCandidates(command.input.filePath)) {
-        paths.add(entry);
+      for await (const { name } of readBoundedGitPathCandidates(command.input.filePath)) {
+        paths.add(name);
       }
       return paths;
     }

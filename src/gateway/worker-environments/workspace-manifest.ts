@@ -12,6 +12,14 @@ import {
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { projectWorkspaceEntries, buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
+/**
+ * One policy for both ends of a capture: the Gateway transfer inventory stops before it builds a
+ * file list that cannot name the file, and the remote manifest script stops before it publishes an
+ * inventory that omits it. The generated script carries a copy; both must read the same.
+ */
+export const WORKER_WORKSPACE_GIT_PATHS_UTF8_MESSAGE =
+  "worker workspace Git paths must be UTF-8; rename the invalid path before retrying";
+
 export type WorkerWorkspaceManifestEntry =
   | { path: string; type: "file"; mode: number; size: number; sha256: string }
   | { path: string; type: "symlink"; mode: number; target: string };

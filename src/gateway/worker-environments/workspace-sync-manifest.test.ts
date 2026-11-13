@@ -160,6 +160,128 @@ describe("remote workspace manifest script", () => {
     ]);
   });
 
+  // APFS and NTFS cannot hold a name with raw non-UTF-8 bytes, so both cases skip there.
+  const rawName = (workspace: string, relative: string) =>
+    Buffer.concat([
+      Buffer.from(`${workspace}/${relative}`),
+      Buffer.from([0xff]),
+      Buffer.from(".txt"),
+    ]);
+  it.skipIf(process.platform === "darwin" || process.platform === "win32")(
+    "rejects undecodable Git paths only when capture admits them",
+    async () => {
+      const { workspace, capture, runManifest } = await fixture(
+        "openclaw-manifest-non-utf8-paths-",
+      );
+      await writeFiles(workspace, {
+        ".gitignore": "private/**\ncache/**\n",
+        ".worktreeinclude": "cache/*.txt\n",
+        "cache/input.txt": "explicit input\n",
+        "private/notes.txt": "private\n",
+      });
+      const baseCommit = await initializeScriptGitWorkspace(workspace, ".gitignore");
+
+      // Ignored and unselected: nothing captures this file, so its bytes must not fail.
+      await fs.writeFile(rawName(workspace, "private/bad"), "private worker state\n");
+      const excluded = await capture(baseCommit, "eligible");
+      const captured = excluded.manifest.entries.map((entry) => entry.path);
+      expect(captured).toContain("cache/input.txt");
+      expect(captured.filter((capturedPath) => capturedPath.includes("\uFFFD"))).toEqual([]);
+      expect(captured.some((capturedPath) => capturedPath.startsWith("private/"))).toBe(false);
+
+      // A lossy decode renames this admitted path to "tracked\uFFFD.txt", so the tracked file
+      // would be reported missing and the published manifest silently omit it.
+      await fs.writeFile(rawName(workspace, "tracked"), "tracked\n");
+      const staged = await runCommandWithTimeout(["git", "-C", workspace, "add", "-A"], {
+        timeoutMs: 10_000,
+      });
+      expect(staged.code, staged.stderr).toBe(0);
+
+      const admitted = await runManifest([baseCommit, "eligible"]);
+
+      expect(admitted.code).not.toBe(0);
+      expect(admitted.stderr).toContain("worker workspace Git paths must be UTF-8");
+    },
+  );
+
+  it.skipIf(process.platform === "darwin" || process.platform === "win32")(
+    "admits a tracked file whose spelled name an unselected path shares",
+    async () => {
+      const { workspace, capture } = await fixture("openclaw-manifest-spelled-name-");
+      await writeFiles(workspace, {
+        ".gitignore": "private/**\n",
+        ".worktreeinclude": "cache/*.txt\n",
+        "cache/input.txt": "explicit input\n",
+      });
+      const baseCommit = await initializeScriptGitWorkspace(workspace, ".gitignore");
+      // The tracked name is valid UTF-8 and force-added past the ignore rule; the file beside it
+      // is ignored and unselected, so its bytes must not refuse the tracked one.
+      await writeFiles(workspace, { "private/bad\uFFFD.txt": "tracked\n" });
+      await fs.writeFile(rawName(workspace, "private/bad"), "ignored worker state\n");
+      const staged = await runCommandWithTimeout(
+        ["git", "-C", workspace, "add", "-f", "private/bad\uFFFD.txt"],
+        { timeoutMs: 10_000 },
+      );
+      expect(staged.code, staged.stderr).toBe(0);
+
+      const captured = (await capture(baseCommit, "eligible")).manifest.entries.map(
+        (entry) => entry.path,
+      );
+
+      expect(captured).toContain("private/bad\uFFFD.txt");
+      expect(captured).toContain("cache/input.txt");
+    },
+  );
+
+  // Git keeps a removed name in its index, and a reclaim deletes or renames without staging, so a
+  // vanished entry must not fail capture or hide the valid file that replaced it.
+  it.skipIf(process.platform === "darwin" || process.platform === "win32")(
+    "captures a workspace whose indexed undecodable names are gone",
+    async () => {
+      const { workspace, capture } = await fixture("openclaw-manifest-vanished-non-utf8-paths-");
+      await writeFiles(workspace, { ".gitignore": "" });
+      const baseCommit = await initializeScriptGitWorkspace(workspace, ".gitignore");
+      const removed = rawName(workspace, "gone");
+      const renamed = rawName(workspace, "tracked");
+
+      await fs.writeFile(removed, "tracked\n");
+      await fs.writeFile(renamed, "tracked\n");
+      const staged = await runCommandWithTimeout(["git", "-C", workspace, "add", "-A"], {
+        timeoutMs: 10_000,
+      });
+      expect(staged.code, staged.stderr).toBe(0);
+      await fs.unlink(removed);
+      await fs.rename(renamed, `${workspace}/tracked\uFFFD.txt`);
+
+      const paths = (await capture(baseCommit, "eligible")).manifest.entries.map(
+        (entry) => entry.path,
+      );
+
+      expect(paths).not.toContain("gone\uFFFD.txt");
+      expect(paths).toContain("tracked\uFFFD.txt");
+    },
+  );
+
+  // A complete capture walks the filesystem instead of Git's index, so the same name must reach
+  // the same refusal rather than the mangled spelling's raw lstat ENOENT.
+  it.skipIf(process.platform === "darwin" || process.platform === "win32")(
+    "rejects an undecodable directory entry in a complete capture",
+    async () => {
+      const { workspace, runManifest } = await fixture(
+        "openclaw-manifest-complete-non-utf8-paths-",
+      );
+      await writeFiles(workspace, { ".gitignore": "" });
+      await initializeScriptGitWorkspace(workspace, ".gitignore");
+      await fs.writeFile(rawName(workspace, "tracked"), "tracked\n");
+
+      const complete = await runManifest([]);
+
+      expect(complete.code).not.toBe(0);
+      expect(complete.stderr).toContain("worker workspace Git paths must be UTF-8");
+      expect(complete.stderr).not.toContain("ENOENT");
+    },
+  );
+
   it("atomically applies and rolls back accepted workspace paths", async () => {
     const { workspace, env } = await fixture("openclaw-accepted-paths-test-");
     await fs.writeFile(path.join(workspace, "node"), "old file\n");
