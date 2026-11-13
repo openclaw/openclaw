@@ -3851,7 +3851,7 @@ server.listen(0, "127.0.0.1", () => {
             ? `${legacy}-fresh`
             : legacy,
         );
-        const prefixes = render(restore.with?.["restore-keys"]).trim().split("\n");
+        const prefixes = render(restore.with?.["restore-keys"]).trim().split("\n").filter(Boolean);
         expect(prefixes.some((prefix) => legacy.startsWith(prefix))).toBe(true);
         expect(prefixes.some((prefix) => key.startsWith(prefix))).toBe(true);
       }
