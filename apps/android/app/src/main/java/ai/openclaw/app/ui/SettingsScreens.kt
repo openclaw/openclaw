@@ -147,6 +147,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -258,7 +259,11 @@ private fun CronJobsSettingsScreen(
   val cronRefreshing by viewModel.cronRefreshing.collectAsState()
   val cronErrorText by viewModel.cronErrorText.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
-  var selectedJobId by rememberSaveable { mutableStateOf<String?>(null) }
+  val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
+  // A job selection belongs to its Gateway, not to the retained settings route.
+  var selectedJobId by key(activeGatewayStableId) {
+    rememberSaveable { mutableStateOf<String?>(null) }
+  }
   var query by rememberSaveable { mutableStateOf("") }
   var filterName by rememberSaveable { mutableStateOf(CronJobsListFilter.All.name) }
   val filter = CronJobsListFilter.valueOf(filterName)
