@@ -48,6 +48,20 @@ describe("config CLI database effects", () => {
     await owner?.release();
   });
 
+  it("refuses an intentional size-drop patch while a Gateway owns state", async () => {
+    const result = await run(
+      env,
+      ["config", "patch", "--stdin", "--allow-size-drop"],
+      '{"logging":{"level":"warn"}}',
+    );
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(
+      "Intentional size-drop config writes require the Gateway stopped",
+    );
+    expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(originalConfig);
+    expect(await readLatestConfigSnapshotAuditRecordAsync({ env })).toBeNull();
+  });
+
   it.each(
     operations.flatMap((operation) => [
       { ...operation, mode: "preview", flags: ["--dry-run"], code: 0 },

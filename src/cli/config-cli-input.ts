@@ -64,6 +64,7 @@ export type ConfigPatchOptions = {
   allowExec?: boolean;
   json?: boolean;
   replacePath?: string[];
+  allowSizeDrop?: boolean;
 };
 
 export type ConfigUnsetOptions = {
@@ -75,6 +76,7 @@ export type ConfigUnsetOptions = {
 export type ConfigMutationOptions = ConfigUnsetOptions & {
   merge?: boolean;
   replace?: boolean;
+  allowSizeDrop?: boolean;
 };
 
 function modeError(message: string): Error {

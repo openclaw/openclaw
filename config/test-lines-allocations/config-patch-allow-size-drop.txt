@@ -1,0 +1,2 @@
+# Explicit offline size-drop acceptance, preserved deletion/mode guards, and real live-owner refusal.
+59

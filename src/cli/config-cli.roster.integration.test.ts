@@ -29,6 +29,51 @@ const withConfig = (raw: string, visit: Parameters<typeof withFile>[2]) =>
   withFile("config-cli-", raw, visit);
 
 describe("config cli roster integration", () => {
+  it.each(["accepted", "no opt-in", "implicit removal", "missing gateway mode"] as const)(
+    "guards intentional roster size drops: %s",
+    async (scenario) => {
+      const raw = JSON.stringify({
+        gateway: { mode: "local" },
+        agents: {
+          ownership: "explicit",
+          entries: { bootstrap: {}, coach: { name: "retained".repeat(1024) } },
+        },
+      });
+      await withConfig(raw, async ({ configPath, tempDir }) => {
+        const patchPath = path.join(tempDir, "projection.json");
+        writeFixtureJsonSync(patchPath, {
+          agents: {
+            entries: scenario === "implicit removal" ? { bootstrap: {} } : { coach: null },
+          },
+          ...(scenario === "missing gateway mode" ? { gateway: { mode: null } } : {}),
+        });
+        const args = ["config", "patch", "--file", patchPath];
+        if (scenario !== "no opt-in") {
+          args.push("--allow-size-drop");
+        }
+        if (scenario === "implicit removal") {
+          args.push("--replace-path", "agents.entries");
+        }
+        if (scenario === "accepted") {
+          await invoke(args);
+          expect(Object.keys(load(configPath).agents.entries)).toEqual(["bootstrap"]);
+          expect(read(`${configPath}.bak`)).toBe(raw);
+          expect((await readConfigFileSnapshot()).sourceConfig.agents?.entries).toEqual(
+            load(configPath).agents.entries,
+          );
+        } else {
+          await reject(invoke(args));
+          expect(errors.join("\n")).toContain(
+            scenario === "implicit removal"
+              ? "without an explicit deletion"
+              : "OpenClaw blocked this config update",
+          );
+          expect(read(configPath)).toBe(raw);
+        }
+      });
+    },
+  );
+
   it("preserves a shorthand subagent primary through an indexed roster edit", async () => {
     const raw = JSON.stringify({
       agents: { entries: { main: { subagents: { model: "fixture-model/allowed" } } } },

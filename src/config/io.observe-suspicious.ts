@@ -37,17 +37,14 @@ export function resolveConfigObserveSuspiciousReasons(params: {
 }): string[] {
   const reasons: string[] = [];
   const baseline = params.lastKnownGood;
-  if (!baseline) {
-    return reasons;
-  }
-  if (baseline.bytes >= 512 && params.bytes < Math.floor(baseline.bytes * 0.5)) {
+  if (baseline && baseline.bytes >= 512 && params.bytes < Math.floor(baseline.bytes * 0.5)) {
     reasons.push(`size-drop-vs-last-good:${baseline.bytes}->${params.bytes}`);
   }
   // ConfigMap seeds and operator-authored configs need not contain writer metadata.
-  if (baseline.gatewayMode && !params.gatewayMode) {
+  if (baseline?.gatewayMode && !params.gatewayMode) {
     reasons.push("gateway-mode-missing-vs-last-good");
   }
-  if (baseline.gatewayMode && isUpdateChannelOnlyRoot(params.parsed)) {
+  if (baseline?.gatewayMode && isUpdateChannelOnlyRoot(params.parsed)) {
     reasons.push("update-channel-only-root");
   }
   // Metadata stamping can conceal the original loss without restoring user data.
