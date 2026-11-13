@@ -2,9 +2,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import { prepareTelegramLinkedDirectReads } from "./session-channel-direct-read.js";
+import {
+  hasTelegramLegacyDirectAccess,
+  prepareTelegramLinkedDirectReads,
+  resolveTelegramSessionDirect,
+} from "./session-channel-direct-read.js";
 import { resolveTelegramSessionGroup } from "./session-channel-group.js";
 import {
+  prepareTelegramGroupMembership,
   prepareTelegramGroupMemberships,
   type TelegramGroupMembership,
 } from "./session-channel-membership.js";
@@ -149,16 +154,7 @@ export async function prepareTelegramSessionReads(params: {
     qualifyAccount: (_key, route) => {
       // The owner grants the complete legacy conversation explicitly. This does
       // not infer historical ownership from the last route or activate a global ACL.
-      return (
-        cfg.session?.sharing?.legacyDirectAccess?.some(
-          (grant) =>
-            grant.channel === "telegram" &&
-            grant.agentId === route.agentId &&
-            grant.accountId === route.accountId &&
-            grant.peerId === route.peerId &&
-            grant.profileIds.includes(profileId),
-        ) === true
-      );
+      return hasTelegramLegacyDirectAccess(cfg, profileId, route);
     },
   }).then((facts) => {
     if (owner.current() && owner.runtimeConfig === directRuntimeConfig) {
@@ -236,6 +232,44 @@ export async function prepareTelegramSessionReads(params: {
   } catch {
     owner.stop();
   }
+}
+
+/** Prepare one HTTP request's channel fact without creating a connection owner. */
+export async function prepareTelegramSessionEntryRead(params: {
+  cfg: OpenClawConfig;
+  getConfig: () => OpenClawConfig;
+  profileId: string;
+  key: string;
+  entry: Parameters<typeof resolveTelegramSessionGroup>[1];
+  signal?: AbortSignal;
+}): Promise<(key: string, entry: Parameters<typeof resolveTelegramSessionGroup>[1]) => boolean> {
+  const { cfg, getConfig, profileId, key, entry, signal } = params;
+  const group = resolveTelegramSessionGroup(key, entry);
+  if (group) {
+    const fact = await prepareTelegramGroupMembership({ cfg, profileId, ...group, signal });
+    const checkedAt = Date.now();
+    return (currentKey, currentEntry) => {
+      const current = resolveTelegramSessionGroup(currentKey, currentEntry);
+      return Boolean(
+        getConfig() === cfg &&
+        currentKey === key &&
+        current?.accountId === group.accountId &&
+        current.groupId === group.groupId &&
+        Date.now() - checkedAt < FRESH_MS &&
+        fact?.isCurrent(),
+      );
+    };
+  }
+  if (resolveTelegramSessionDirect(key, entry)) {
+    const direct = await prepareTelegramLinkedDirectReads({
+      profileId,
+      signal,
+      qualifyAccount: (_key, route) => hasTelegramLegacyDirectAccess(getConfig(), profileId, route),
+    });
+    return (currentKey, currentEntry) =>
+      getConfig() === cfg && currentKey === key && direct.canRead(currentKey, currentEntry);
+  }
+  return () => false;
 }
 
 /** Lists discover trusted existing group routes; membership never enumerates private sessions. */

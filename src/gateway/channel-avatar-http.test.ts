@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   resolveReference: vi.fn(),
   readMedia: vi.fn(),
   readSharing: vi.fn(),
+  channelRead: vi.fn(),
 }));
 
 vi.mock("./http-utils.js", () => ({
@@ -45,6 +46,11 @@ vi.mock("../media/store.js", () => ({
 // mock-isolation: image-format cases isolate DB workers; real-policy suite covers confidential ACL.
 vi.mock("./session-sharing-preparation.js", () => ({
   prepareSessionMutationFacts: async () => ({ readCurrent: mocks.readSharing, release() {} }),
+}));
+
+vi.mock("./session-channel-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-channel-read.js")>()),
+  prepareTelegramSessionEntryRead: async () => mocks.channelRead,
 }));
 
 const { handleChannelAvatarHttpRequest } = await import("./channel-avatar-http.js");
@@ -103,6 +109,7 @@ describe("handleChannelAvatarHttpRequest", () => {
   beforeEach(() => {
     authorityCurrent = true;
     sessionVisible = true;
+    mocks.channelRead.mockReset().mockReturnValue(false);
     mocks.authorize.mockReset().mockImplementation(({ res }: { res: ServerResponse }) =>
       bindHttpResponseAuthority(
         {
@@ -250,6 +257,58 @@ describe("handleChannelAvatarHttpRequest", () => {
     expect(mocks.readMedia).not.toHaveBeenCalled();
     sessionVisible = true;
     expect((await fetch(url)).status).toBe(200);
+  });
+
+  it("serves linked group avatars but denies private ACL and revoked membership", async () => {
+    const key = "agent:main:telegram:group:-123456";
+    const entry = {
+      sessionId: "linked-avatar",
+      updatedAt: 1,
+      createdVia: "channel" as const,
+      createdActor: { type: "human" as const, source: "channel" as const, id: "777" },
+      delivery: {
+        kind: "external" as const,
+        route: { channel: "telegram", accountId: "default", target: { to: "telegram:-123456" } },
+        context: {},
+        origin: {
+          provider: "telegram",
+          chatType: "group" as const,
+          nativeChannelId: "-123456",
+          avatar: AVATAR_REFERENCE,
+        },
+      },
+    };
+    const current = { entry };
+    mocks.loadEntry.mockResolvedValue({ entry });
+    mocks.readSharing.mockImplementation(() => ({
+      target: { entry: current.entry },
+      membership: new Set(),
+    }));
+    mocks.authorize.mockImplementation(({ res }: { res: ServerResponse }) =>
+      bindHttpResponseAuthority(
+        {
+          authMethod: "token",
+          operatorScopes: ["operator.read"],
+          authenticatedUserProfile: { profileId: "linked-reader" },
+          preparedSessionProfile: {
+            profileId: "linked-reader",
+            aliases: new Set(["linked-reader"]),
+          },
+          canReadSession: () => false,
+        },
+        res,
+        () => true,
+      ),
+    );
+    mocks.channelRead.mockReturnValue(true);
+    const url = new URL(avatarRoute(key));
+    url.searchParams.set("v", channelAvatarRevision(AVATAR_REFERENCE));
+    expect((await fetch(url)).status).toBe(200);
+    mocks.channelRead.mockReturnValue(false);
+    expect((await fetch(url)).status).toBe(403);
+    mocks.channelRead.mockReturnValue(true);
+    current.entry = { ...entry, access: { mode: "creator" } } as typeof entry;
+    expect((await fetch(url)).status).toBe(403);
   });
 
   it("rejects revoked authority while channel avatar bytes are loading", async () => {

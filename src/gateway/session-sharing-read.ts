@@ -133,6 +133,27 @@ type ChannelReadEntry = Pick<
   "createdActor" | "createdVia" | "delivery" | "visibility" | "incognito" | "access"
 >;
 
+/** Apply the channel extension only after the ordinary profile filter denies the row. */
+export function canReadChannelSession(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  entry: ChannelReadEntry;
+  isCreator: ReturnType<typeof prepareSessionCreatorProfile>;
+  scopes: readonly string[];
+  channelRead: (key: string, entry: ChannelReadEntry) => boolean;
+}): boolean {
+  const { cfg, key, entry, isCreator, scopes, channelRead } = params;
+  return Boolean(
+    entry.visibility !== "draft" &&
+    entry.incognito !== true &&
+    !isIncognitoSessionKey(key) &&
+    canReadSessionAccess(cfg, key, entry, isCreator) &&
+    operatorScopeSatisfied("operator.sessions.read", scopes) &&
+    (resolveTelegramSessionGroup(key, entry) || resolveTelegramSessionDirect(key, entry)) &&
+    channelRead(key, entry),
+  );
+}
+
 /** Share caller facts across synchronous selection/role projection, never across an await. */
 export function prepareSessionSharing(
   params: Pick<SessionSharingRoleParams, "cfg" | "client">,
@@ -171,15 +192,17 @@ export function prepareSessionSharing(
       return Boolean(
         key &&
         params.cfg &&
-        entry.visibility !== "draft" &&
-        entry.incognito !== true &&
-        !isIncognitoSessionKey(key) &&
-        canReadSessionAccess(params.cfg, key, entry, isCreator) &&
-        operatorScopeSatisfied("operator.sessions.read", params.client?.connect.scopes ?? []) &&
         !authorizeCurrentOperatorRoleScopes(params.client, params.cfg) &&
-        (resolveTelegramSessionGroup(key, entry) || resolveTelegramSessionDirect(key, entry)) &&
-        (prepared?.channelRead?.(key, entry) ??
-          readTelegramSessionMembership(params.client, params.cfg, key, entry)),
+        canReadChannelSession({
+          cfg: params.cfg,
+          key,
+          entry,
+          isCreator,
+          scopes: params.client?.connect.scopes ?? [],
+          channelRead: (sessionKey, row) =>
+            prepared?.channelRead?.(sessionKey, row) ??
+            readTelegramSessionMembership(params.client, params.cfg!, sessionKey, row),
+        }),
       );
     };
   };

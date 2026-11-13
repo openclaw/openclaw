@@ -1,4 +1,5 @@
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import {
   listCanonicalUserChannelIdentities,
@@ -53,6 +54,23 @@ export function resolveTelegramSessionDirect(
     return undefined;
   }
   return { agentId: agentId!, accountId, peerId: peerId!, accountInKey: keyAccount !== undefined };
+}
+
+export function hasTelegramLegacyDirectAccess(
+  cfg: OpenClawConfig,
+  profileId: string,
+  route: DirectRoute,
+): boolean {
+  return (
+    cfg.session?.sharing?.legacyDirectAccess?.some(
+      (grant) =>
+        grant.channel === "telegram" &&
+        grant.agentId === route.agentId &&
+        grant.accountId === route.accountId &&
+        grant.peerId === route.peerId &&
+        grant.profileIds.includes(profileId),
+    ) === true
+  );
 }
 
 /** A link proves only route identity; callers must still enforce role, scope and session ACLs. */

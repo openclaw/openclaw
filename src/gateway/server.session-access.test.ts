@@ -906,21 +906,7 @@ test("shows linked Telegram members group roots and topics without personal part
       expect((await describeSession(socket, spoofKey)).payload?.session?.key).not.toBe(spoofKey);
     }
     expect(membership).toHaveBeenCalled();
-    membership.mockResolvedValue(false);
-    const afterLeave = await rpcReq<{ sessions: Array<{ key: string }> }>(member, "sessions.list", {
-      archived: "all",
-    });
-    expect(afterLeave.ok, JSON.stringify(afterLeave.error)).toBe(true);
-    // Explicit source-audience access survives membership removal for its configured topic.
-    for (const key of keys) {
-      const sourceAudienceAllows = key === keys[2];
-      expect(afterLeave.payload?.sessions.some((row) => row.key === key)).toBe(
-        sourceAudienceAllows,
-      );
-      const history = await rpcReq(member, "chat.history", { sessionKey: key, limit: 10 });
-      expect(JSON.stringify(history.payload ?? {}).includes(text)).toBe(sourceAudienceAllows);
-    }
-    membership.mockResolvedValue(true);
+    // Unlink invalidates a positive witness immediately, independently of refresh.
     await changeCanonicalUserChannelIdentity("unlink", profileIds.get("selected")!, identity);
     const afterUnlink = await rpcReq<{ sessions: Array<{ key: string }> }>(
       member,
@@ -929,9 +915,36 @@ test("shows linked Telegram members group roots and topics without personal part
     );
     expect(afterUnlink.ok, JSON.stringify(afterUnlink.error)).toBe(true);
     for (const key of keys) {
-      expect(afterUnlink.payload?.sessions.some((row) => row.key === key)).toBe(key === keys[2]);
+      expect(afterUnlink.payload?.sessions.some((row) => row.key === key)).toBe(false);
+    }
+    await changeCanonicalUserChannelIdentity("link", profileIds.get("selected")!, identity);
+    const relinked = await rpcReq<{ sessions: Array<{ key: string }> }>(member, "sessions.list", {
+      archived: "all",
+    });
+    expect(relinked.ok, JSON.stringify(relinked.error)).toBe(true);
+    expect(relinked.payload?.sessions.some((row) => row.key === keys[0])).toBe(true);
+    membership.mockResolvedValue(false);
+    membership.mockClear();
+    // The connection retains positive facts until its scheduled refresh completes.
+    const afterLeave = await vi.waitFor(
+      async () => {
+        const result = await rpcReq<{ sessions: Array<{ key: string }> }>(member, "sessions.list", {
+          archived: "all",
+        });
+        expect(result.ok, JSON.stringify(result.error)).toBe(true);
+        expect(membership).toHaveBeenCalled();
+        expect(result.payload?.sessions.some((row) => row.key === keys[0])).toBe(false);
+        return result;
+      },
+      { timeout: 45_000, interval: 1_000 },
+    );
+    // Source-audience ACL remains an additional gate, not a replacement for channel membership.
+    for (const key of keys) {
+      expect(afterLeave.payload?.sessions.some((row) => row.key === key)).toBe(false);
+      const history = await rpcReq(member, "chat.history", { sessionKey: key, limit: 10 });
+      expect(JSON.stringify(history.payload ?? {}).includes(text)).toBe(false);
     }
   } finally {
     await changeCanonicalUserChannelIdentity("unlink", profileIds.get("selected")!, identity);
   }
-});
+}, 120_000);

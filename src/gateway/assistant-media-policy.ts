@@ -23,7 +23,10 @@ import { captureResidentUserProfileAccess } from "../state/user-profile-list.js"
 import { applyHttpOperatorRoleScopeCeiling, resolveHttpProfile } from "./http-auth-user-profile.js";
 import type { AuthorizedControlUiReadRequest } from "./http-auth-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { prepareTelegramSessionEntryRead } from "./session-channel-read.js";
+import { prepareSessionCreatorProfile } from "./session-creator.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { canReadChannelSession } from "./session-sharing-read.js";
 import { createProfileSessionEntryFilter } from "./session-sharing.js";
 import type { GatewaySessionEntryRead } from "./session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
@@ -45,7 +48,7 @@ export function assertAssistantMediaPolicyCurrent(
   policy.assertCurrent?.();
   // Ordinary session activity changes the global access epoch without revoking media tickets.
   const current = resolvePreparedAssistantMediaPolicy(
-    { ...selection, reader: policy.reader },
+    { ...selection, reader: policy.reader, channelRead: policy.channelRead },
     policy.readSession(),
     policy.readSession,
     policy.assertCurrent,
@@ -122,6 +125,7 @@ type AssistantMediaPolicyParams = {
   agentId?: string;
   requestAuth?: AuthorizedControlUiReadRequest;
   reader?: AssistantMediaReader;
+  channelRead?: Parameters<typeof canReadChannelSession>[0]["channelRead"];
 };
 type AssistantMediaSessionRead = Pick<
   GatewaySessionEntryRead,
@@ -196,6 +200,25 @@ async function resolveAssistantMediaSessionPolicy(params: AssistantMediaPolicyPa
       }
     }
     policy = resolvePreparedAssistantMediaPolicy(params, loaded, readSession, assertCurrent);
+    const profileId =
+      params.requestAuth?.authenticatedUserProfile?.profileId ?? params.reader?.profileId;
+    if (!policy && loaded?.entry && profileId) {
+      const channelRead = await prepareTelegramSessionEntryRead({
+        cfg: loaded.cfg,
+        getConfig: getRuntimeConfig,
+        profileId,
+        key: loaded.canonicalKey,
+        entry: loaded.entry,
+      });
+      assertCurrent?.();
+      loaded = readSession();
+      policy = resolvePreparedAssistantMediaPolicy(
+        { ...params, channelRead },
+        loaded,
+        readSession,
+        assertCurrent,
+      );
+    }
     return policy && { ...policy, releaseSession };
   } finally {
     if (!policy) {
@@ -275,7 +298,18 @@ function resolvePreparedAssistantMediaPolicy(
             profileId,
             sessionCap: auth.operatorRolePolicy?.sessions.others,
             cfg: config,
-          })(loaded.canonicalKey, entry)
+          })(loaded.canonicalKey, entry) &&
+          !(
+            params.channelRead &&
+            canReadChannelSession({
+              cfg: config,
+              key: loaded.canonicalKey,
+              entry,
+              isCreator: prepareSessionCreatorProfile(profileId),
+              scopes: auth.operatorScopes,
+              channelRead: params.channelRead,
+            })
+          )
         ) {
           return undefined;
         }
@@ -338,6 +372,7 @@ function resolvePreparedAssistantMediaPolicy(
     localRoots,
     workspaceOnly,
     reader,
+    channelRead: params.channelRead,
     canAllow: auth.operatorScopes.includes("operator.admin"),
   };
 }

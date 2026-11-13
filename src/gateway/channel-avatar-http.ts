@@ -22,11 +22,14 @@ import {
 } from "./http-image-response.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { authorizeControlUiSessionOwnerReadRequestOrReply } from "./http-utils.js";
+import { prepareTelegramSessionEntryRead } from "./session-channel-read.js";
+import { prepareSessionCreatorProfile } from "./session-creator.js";
 import {
   prepareSessionMutationFacts,
   type PreparedSessionSourceFacts,
   type SessionFactsRead,
 } from "./session-sharing-preparation.js";
+import { canReadChannelSession } from "./session-sharing-read.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 
 const CHANNEL_AVATAR_CACHE_MAX_ENTRIES = 128;
@@ -121,6 +124,45 @@ export async function handleChannelAvatarHttpRequest(
     return true;
   }
 
+  const profileId = requestAuth.authenticatedUserProfile?.profileId;
+  let channelRead: Parameters<typeof canReadChannelSession>[0]["channelRead"] | undefined;
+  const prepareChannelRead = async (
+    entry: NonNullable<ReturnType<NonNullable<typeof source>["readCurrent"]>>,
+  ) => {
+    if (!profileId || requestAuth.canReadSession(sessionKey, entry)) {
+      return;
+    }
+    const cfg = getRuntimeConfig();
+    channelRead = await prepareTelegramSessionEntryRead({
+      cfg,
+      getConfig: getRuntimeConfig,
+      profileId,
+      key: sessionKey,
+      entry,
+    });
+    requestAuth.assertCurrent();
+  };
+  const canReadEntry = (
+    entry: NonNullable<ReturnType<NonNullable<typeof source>["readCurrent"]>>,
+    membership?: ReadonlySet<string>,
+  ) =>
+    requestAuth.canReadSession(sessionKey, entry, membership) ||
+    Boolean(
+      profileId &&
+      channelRead &&
+      canReadChannelSession({
+        cfg: getRuntimeConfig(),
+        key: sessionKey,
+        entry,
+        isCreator: prepareSessionCreatorProfile(
+          profileId,
+          requestAuth.preparedSessionProfile?.aliases,
+        ),
+        scopes: requestAuth.operatorScopes,
+        channelRead,
+      }),
+    );
+
   const serve = async (
     reference: string | undefined,
     assertCurrent: () => void,
@@ -158,7 +200,10 @@ export async function handleChannelAvatarHttpRequest(
   };
   if (source) {
     const entry = source.readCurrent();
-    if (entry && !requestAuth.canReadSession(sessionKey, entry)) {
+    if (entry) {
+      await prepareChannelRead(entry);
+    }
+    if (entry && !canReadEntry(entry)) {
       sendSessionReadForbidden(res);
       return true;
     }
@@ -180,7 +225,7 @@ export async function handleChannelAvatarHttpRequest(
       assertCurrent,
       () => {
         const current = source.readCurrent();
-        return !current || requestAuth.canReadSession(sessionKey, current);
+        return !current || canReadEntry(current);
       },
     );
   }
@@ -208,12 +253,12 @@ export async function handleChannelAvatarHttpRequest(
       .catch(() => undefined);
     requestAuth.assertCurrent();
     const entry = loaded?.entry;
+    if (entry) {
+      await prepareChannelRead(entry);
+    }
     const canRead = () => {
       const current = sharing.readCurrent(getRuntimeConfig());
-      return (
-        !current.target ||
-        requestAuth.canReadSession(sessionKey, current.target.entry, current.membership)
-      );
+      return !current.target || canReadEntry(current.target.entry, current.membership);
     };
     if (!canRead()) {
       sendSessionReadForbidden(res);

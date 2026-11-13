@@ -17,6 +17,12 @@ import {
 } from "./assistant-media-policy.js";
 import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
+const channelFact = vi.hoisted(() => ({ current: true }));
+vi.mock("./session-channel-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-channel-read.js")>()),
+  prepareTelegramSessionEntryRead: async () => () => channelFact.current,
+}));
+
 // mock-isolation: The core test worker cannot host the unrelated placement broker.
 vi.mock("./session-worker-placement-context.js", () => ({
   resolveSessionWorkerPlacementContext: () => ({
@@ -150,6 +156,91 @@ it("enforces and revokes a roleless standalone media audience, including retaine
       ).toThrow("Media access changed");
       expect(await resolveAssistantMediaPolicy(params)).toBeUndefined();
     } finally {
+      policy.release();
+    }
+  }));
+
+it("allows a linked group media reader while retaining private ACL and witness revocation", () =>
+  withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (state) => {
+    const config = {
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
+      gateway: {
+        roles: {
+          default: "reader",
+          definitions: {
+            reader: {
+              agents: "*" as const,
+              scopes: ["operator.read"],
+              sessions: { others: "none" as const },
+            },
+          },
+        },
+      },
+    };
+    await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
+    const reader = ensureProfileForEmail("linked-media-reader@example.test");
+    const sessionKey = "agent:main:telegram:group:-123456";
+    const scope = { agentId: "main", sessionKey };
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    await upsertSessionEntryCore(scope, {
+      sessionId: "linked-media-group",
+      updatedAt: 1,
+      createdVia: "channel",
+      createdActor: { type: "human", source: "channel", id: "1234567" },
+      delivery: {
+        kind: "external",
+        route: { channel: "telegram", accountId: "default", target: { to: "telegram:-123456" } },
+        context: {},
+        origin: { provider: "telegram", chatType: "group", nativeChannelId: "-123456" },
+      },
+    });
+    const params = {
+      config,
+      agentId: "main",
+      sessionKey,
+      requestAuth: {
+        authMethod: "token" as const,
+        operatorScopes: ["operator.read"],
+        operatorRolePolicy: config.gateway.roles.definitions.reader,
+        authenticatedUserProfile: gatewayProfile(reader.id),
+      },
+    };
+    channelFact.current = true;
+    const policy = await resolveAssistantMediaPolicy(params);
+    expect(policy).toBeDefined();
+    if (!policy) {
+      throw new Error("linked group reader must receive a media policy");
+    }
+    try {
+      expect(() =>
+        assertAssistantMediaPolicyCurrent(params, policy, false, params.requestAuth),
+      ).not.toThrow();
+      channelFact.current = false;
+      expect(() =>
+        assertAssistantMediaPolicyCurrent(params, policy, false, params.requestAuth),
+      ).toThrow();
+      channelFact.current = true;
+      await applySessionEntryCanonicalReplacements({
+        agentId: "main",
+        storePath: database.path,
+        sessionKeys: [sessionKey],
+        update: (rows) => ({
+          result: undefined,
+          replacements: rows.map((row) => ({
+            ...row,
+            previousSessionKeys: [],
+            accessMutation: true,
+            entry: { ...row.entry, access: { mode: "creator" as const } },
+          })),
+        }),
+      });
+      expect(() =>
+        assertAssistantMediaPolicyCurrent(params, policy, false, params.requestAuth),
+      ).toThrow();
+      expect(await resolveAssistantMediaPolicy(params)).toBeUndefined();
+    } finally {
+      channelFact.current = true;
       policy.release();
     }
   }));

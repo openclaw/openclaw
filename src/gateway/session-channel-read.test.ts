@@ -8,16 +8,19 @@ import { resolveTelegramSessionGroup } from "./session-channel-group.js";
 const mocks = vi.hoisted(() => ({
   prepareRoleAuthority: vi.fn(),
   prepareMemberships: vi.fn(),
+  prepareMembership: vi.fn(),
 }));
 vi.mock("../state/user-channel-identity-operations.js", () => ({
   prepareUserProfileRoleAuthority: mocks.prepareRoleAuthority,
 }));
 vi.mock("./session-channel-membership.js", () => ({
   prepareTelegramGroupMemberships: mocks.prepareMemberships,
+  prepareTelegramGroupMembership: mocks.prepareMembership,
 }));
 
 import {
   prepareTelegramSessionReads,
+  prepareTelegramSessionEntryRead,
   readTelegramSessionMembership,
   telegramSessionMembershipKey,
 } from "./session-channel-read.js";
@@ -405,4 +408,34 @@ it("reuses fresh group authority across reads and still refreshes and revokes", 
   expect(mocks.prepareMemberships).toHaveBeenCalledTimes(3);
   expect(isMember(client, cfg, group)).toBe(false);
   controller.abort();
+});
+
+it("binds an HTTP group fact to the profile, route, current config and witness", async () => {
+  const cfg = config();
+  let currentConfig = cfg;
+  let current = true;
+  const group = { accountId: "default", groupId: "-123" };
+  const key = sessionKey(group);
+  const entry = sessionEntry(group);
+  mocks.prepareMembership.mockResolvedValue({ isCurrent: () => current });
+  const canRead = await prepareTelegramSessionEntryRead({
+    cfg,
+    getConfig: () => currentConfig,
+    profileId: "profile",
+    key,
+    entry,
+  });
+  expect(mocks.prepareMembership).toHaveBeenCalledWith({
+    cfg,
+    profileId: "profile",
+    ...group,
+    signal: undefined,
+  });
+  expect(canRead(key, entry)).toBe(true);
+  expect(canRead(sessionKey({ ...group, groupId: "-124" }), entry)).toBe(false);
+  current = false;
+  expect(canRead(key, entry)).toBe(false);
+  current = true;
+  currentConfig = config();
+  expect(canRead(key, entry)).toBe(false);
 });
