@@ -11,6 +11,7 @@ import * as doctorUi from "../../commands/doctor-ui.js";
 import * as doctor from "../../flows/doctor-health.js";
 import * as jsonFiles from "../../infra/json-files.js";
 import * as coldNavigation from "../../infra/state-migrations.cold-navigation.js";
+import * as databaseBackup from "../../infra/update-database-backup.js";
 import { recordUpdateDoctorDeferredInspectionChecks } from "../../infra/update-doctor-result.js";
 import * as updateHistory from "../../infra/update-run-ledger.js";
 import { listUpdateRuns } from "../../infra/update-run-reader.js";
@@ -606,3 +607,33 @@ it("refuses a future database before capture or Doctor mutation", async () => {
     await expect(fs.stat(`${backupRoot}.receipt.json`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
+
+it.each(["server", "portable"] as const)(
+  "honors the configured recovery captures in the migration database backup (%s)",
+  async (recoveryCaptures) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await state.writeConfig({ database: { postgres: { recoveryCaptures } } });
+      vi.spyOn(doctor, "runDoctorHealthFlow").mockImplementation(async () => {});
+      vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const captured: Array<{ stopped: boolean | undefined; postgresSchemaCaptures: boolean | undefined }> =
+        [];
+      const backupSpy = vi
+        .spyOn(databaseBackup, "createUpdateDatabaseBackup")
+        .mockImplementation(async (input) => {
+          captured.push({
+            stopped: input.stopped,
+            postgresSchemaCaptures: input.postgresSchemaCaptures,
+          });
+          throw new Error("stop migration after the backup input is captured");
+        });
+      const backupRoot = state.path("recovery-capture-policy", "native");
+      await expect(updateMigrateCommand(backupRoot)).rejects.toThrow(
+        "stop migration after the backup input is captured",
+      );
+      expect(backupSpy).toHaveBeenCalledOnce();
+      expect(captured).toEqual([
+        { stopped: true, postgresSchemaCaptures: recoveryCaptures === "server" },
+      ]);
+    });
+  },
+);
