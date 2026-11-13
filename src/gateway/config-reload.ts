@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { runOutsideSetupCredentialAccess } from "../agents/auth-profiles/setup-access.js";
 import type { ConfigRuntimeEnvPublication } from "../config/config-env-vars.js";
 import {
   configSnapshotAuditRecordMatchesPath,
@@ -46,6 +45,7 @@ import {
   candidateApplications,
   createObservedCandidate,
   isConfigReloadSuperseded,
+  createConfigReloadTransactionRunner,
   runWithCandidateWaitingRoots,
   settleCandidateApplications,
   transferCandidateApplications,
@@ -644,16 +644,10 @@ export function startGatewayConfigReloader(
     }
   };
 
-  const runAcceptedTransaction = async (
-    run: () => Promise<void>,
-    candidate?: GatewayConfigReloadCandidate,
-  ) => {
-    const runTransaction = candidate?.application?.runTransaction ?? opts.runTransaction;
-    const transaction = () => runWithCandidateWaitingRoots(run, candidate);
-    await runOutsideSetupCredentialAccess(() =>
-      runTransaction ? runTransaction(transaction) : transaction(),
-    );
-  };
+  const runAcceptedTransaction = createConfigReloadTransactionRunner(
+    runInReloadContext,
+    opts.runTransaction,
+  );
 
   const acceptCurrentRuntimeEcho = async (
     transactionEpoch: number,

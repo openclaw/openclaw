@@ -1,3 +1,4 @@
+import { runOutsideSetupCredentialAccess } from "../agents/auth-profiles/setup-access.js";
 import type {
   RuntimeConfigWriteApplicationClaim,
   RuntimeConfigWriteApplicationStatus,
@@ -9,6 +10,7 @@ import {
   runOutsideGatewayRootWorkAdmission,
   runWithGatewayReloadWaitingRoot,
 } from "../process/gateway-work-admission.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import type { GatewayConfigReloadCandidate } from "./config-reload.types.js";
 import { GatewayConfigReloadSupersededError } from "./server-reload-contracts.js";
 
@@ -101,4 +103,22 @@ export function createObservedCandidate(
         carriedApplications,
       }
     : null;
+}
+
+export function createConfigReloadTransactionRunner(
+  runInReloadContext: <T>(run: () => T) => T,
+  defaultRunTransaction?: RuntimeConfigWriteApplicationClaim["runTransaction"],
+) {
+  return async (run: () => Promise<void>, candidate?: GatewayConfigReloadCandidate) => {
+    const runTransaction = candidate?.application?.runTransaction ?? defaultRunTransaction;
+    const transaction = () => runWithCandidateWaitingRoots(run, candidate);
+    // A receipt retains the waiting RPC root, not its temporary async-work lifetime.
+    await runInReloadContext(() =>
+      runOutsideAsyncWorkScope(() =>
+        runOutsideSetupCredentialAccess(() =>
+          runTransaction ? runTransaction(transaction) : transaction(),
+        ),
+      ),
+    );
+  };
 }

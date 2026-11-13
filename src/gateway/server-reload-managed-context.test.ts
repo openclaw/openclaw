@@ -5,6 +5,10 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requestGatewayRestartWithSignalAdmission } from "../infra/restart.js";
 import {
@@ -16,6 +20,10 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import {
+  captureGatewayRootWorkAdmissionContinuationScope,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -32,7 +40,6 @@ import {
   createValidConfigSnapshot,
   enableChannelReloadsForTest,
   makePluginReloadResult,
-  publishConfigWrite,
 } from "./server-reload-handlers.config.test-support.js";
 import {
   createTestRuntimeSecretsActivator,
@@ -49,7 +56,7 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
   refreshPreparedModelRuntimeSnapshots: vi.fn(async () => {}),
 }));
 
-it("starts replacement channels with the current Gateway owner after a writer settles", async () => {
+it("starts replacement channels with the current Gateway owner while an admitted writer awaits its receipt", async () => {
   await using cleanup = new AsyncDisposableStack();
   const watcher = installWatcherMock();
   const pluginRegistrySnapshot = captureActivePluginRegistrySnapshot();
@@ -129,25 +136,38 @@ it("starts replacement channels with the current Gateway owner after a writer se
   await startupWork.drain();
   const listener = writeListenerRef.current;
   assert(listener, "Expected managed config write listener");
-  const applied = writerContext.run("channel-turn", () =>
-    writerWork.run(() =>
-      publishConfigWrite(
-        listener,
-        createConfigWriteNotification(
-          nextConfig,
-          "profile-change",
-          1,
-          "runtime-profile-change",
-          "source-profile-change",
-        ),
+  const applied = runWithGatewayIndependentRootWorkAdmission(
+    () =>
+      writerContext.run("channel-turn", () =>
+        writerWork.run(async () => {
+          const continuation = captureGatewayRootWorkAdmissionContinuationScope();
+          const application = createRuntimeConfigWriteApplication(continuation?.run);
+          try {
+            listener(
+              attachRuntimeConfigWriteApplication(
+                createConfigWriteNotification(
+                  nextConfig,
+                  "profile-change",
+                  1,
+                  "runtime-profile-change",
+                  "source-profile-change",
+                ),
+                application,
+              ),
+            );
+            return await application.result;
+          } finally {
+            continuation?.release();
+          }
+        }),
       ),
-    ),
+    "test:config-write",
   );
-  await writerWork.drain();
   expect(startChannel).not.toHaveBeenCalled();
   await time.advanceBy(0);
 
   const status = await applied;
+  await writerWork.drain();
   expect(startChannel).toHaveBeenCalled();
   expect(status, logReloadError.mock.calls.flat().join("\n")).toBe("applied");
 });
