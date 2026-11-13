@@ -443,6 +443,12 @@ claw's OpenClaw ID owner account then arrive as you (your name, sessions, person
 instructions and My GitHub) instead of the shared owner. Their owner authority still
 comes from each device's certificate, and linking grants or removes nothing.
 
+If this browser already signed in with OpenClaw ID through the same personal sign-in,
+**Link** uses that sign-in and asks for no second code. The Gateway reuses only an ID
+token it received from the issuer itself for your profile and that has not expired.
+Without one, for example after the sign-in expired or the Gateway restarted, **Link**
+shows one device code as before.
+
 - One profile per account: linking an account already linked to another profile, or to
   a member's profile, is refused. Merging profiles in **Users** carries the link.
 - **Unlink** returns owner devices to the shared owner on their next connection.
