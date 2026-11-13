@@ -22,6 +22,10 @@ import {
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { resolveTelegramMessageTurnSettings } from "./bot-message.js";
 import {
+  type TelegramNativeCommandHandoff,
+  withTelegramNativeCommandHandoffName,
+} from "./bot-native-command-handoff.js";
+import {
   resolveTelegramGroupAllowFromContext,
   resolveTelegramMessageThreadSpec,
   type TelegramThreadSpec,
@@ -54,6 +58,8 @@ export interface TelegramHandlerAuthorization {
     senderId?: string;
     threadSpec: TelegramThreadSpec;
     msg?: Message;
+    /** Native command names for this message; defaults to the registered names. */
+    nativeCommandNames?: ReadonlyMap<string, string>;
   }) => Promise<TelegramEventAuthorizationContext>;
   authorizeTelegramEventSender: (params: {
     chatId: number;
@@ -77,6 +83,7 @@ export interface TelegramHandlerAuthorization {
     senderId: string;
     requireConfiguredGroup: boolean;
     dmAccess: "challenge" | "silent";
+    commandHandoff?: TelegramNativeCommandHandoff;
   }) => Promise<TelegramInboundGate>;
 }
 
@@ -150,7 +157,7 @@ export function createTelegramHandlerAuthorization({
     const commandAuthorizedByConfig = params.msg
       ? await resolveTelegramNativeCommandAdmission({
           msg: params.msg,
-          nativeCommandNames,
+          nativeCommandNames: params.nativeCommandNames ?? nativeCommandNames,
           botUsername: bot.botInfo?.username ?? opts.botInfo?.username,
           cfg: authorizationCfg,
           accountId,
@@ -294,6 +301,14 @@ export function createTelegramHandlerAuthorization({
       isGroup: params.isGroup,
       senderId: params.senderId,
       threadSpec: resolveTelegramMessageThreadSpec(params.msg, params.isForum),
+      ...(params.commandHandoff
+        ? {
+            nativeCommandNames: withTelegramNativeCommandHandoffName(
+              nativeCommandNames,
+              params.commandHandoff,
+            ),
+          }
+        : {}),
     });
     const {
       dmPolicy,
