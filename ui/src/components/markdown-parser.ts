@@ -19,6 +19,7 @@ import {
   parseMarkdownDocumentFileLinkTarget,
   splitMarkdownFileLineSuffix,
 } from "./markdown-file-links.ts";
+import { installMarkdownGitHubFooter } from "./markdown-github-footer.ts";
 import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
 import { installMarkdownHumanMentions } from "./markdown-human-mentions.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
@@ -700,5 +701,6 @@ export function createMarkdownParser(): MarkdownItParser {
     );
     return `<span class="markdown-hex-color"><img class="markdown-hex-color__swatch" src="data:image/svg+xml,${image}" alt="" aria-hidden="true">${color}</span>`;
   };
+  installMarkdownGitHubFooter(markdownParser);
   return markdownParser;
 }

@@ -1568,3 +1568,27 @@
 .markdown-template-link:hover {
   background: var(--bg-hover);
 }
+
+/* Trailing source lists stay scannable without replacing links inside prose. */
+.chat-text .markdown-source-footer {
+  margin-block: 0.75em;
+  font-size: 0.9em;
+}
+
+.chat-text .markdown-source-footer__row {
+  min-width: 0;
+  margin-block: 0.25em;
+}
+
+.chat-text .markdown-source-footer__row > a {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.chat-text .markdown-source-footer__more {
+  margin-block: 0.25em 0;
+}
