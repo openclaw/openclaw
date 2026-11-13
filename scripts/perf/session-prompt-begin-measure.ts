@@ -305,11 +305,8 @@ function verifyProviderRequests() {
   };
 }
 const providerHashes = values["provider-requests"] ? verifyProviderRequests() : undefined;
-let branchReads = 0;
-const getEntries = () => {
-  branchReads++;
-  return manager.getBranch();
-};
+// Beginning a series no longer reads the transcript branch.
+const branchReads = 0;
 function runOne() {
   if (continuations) {
     const index = operation++;
@@ -323,14 +320,9 @@ function runOne() {
     }
     return prepared.restart;
   }
-  const params = {
-    state: lease.state,
-    routeKey: "synthetic-route",
-    enabled: !values.disabled,
-    entries: values["baseline-source"] ? getEntries() : undefined,
-    getEntries: () => getEntries(),
-  };
-  return beginSessionSystemPrompt(params);
+  // Every route pins its series; beginning a series no longer reads the branch.
+  beginSessionSystemPrompt(lease.state);
+  return false;
 }
 function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
   return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
@@ -343,7 +335,6 @@ try {
       assert.equal(restarted, false);
     }
   }
-  branchReads = 0;
   conversions = 0;
   globalThis.gc?.();
   if (values.allocation) {
@@ -373,10 +364,6 @@ try {
   if (!continuations || !values["baseline-source"]) {
     assert.equal(retirements, 0);
   }
-  assert.equal(
-    branchReads,
-    !continuations && (values["baseline-source"] || values.disabled) ? iterations : 0,
-  );
   console.log(
     JSON.stringify({
       revision: values["baseline-source"] ? "base" : "candidate",
