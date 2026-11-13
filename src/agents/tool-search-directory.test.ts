@@ -15,6 +15,7 @@ import {
 } from "./tool-search-directory.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogRef } from "./tool-search-types.js";
+import type { ToolUsageRankingSnapshot } from "./tool-usage-ranking.js";
 
 const optionalNames = [
   "browser",
@@ -177,4 +178,78 @@ describe("Tool Search directory omission count", () => {
     expect(renderedRows.length).toBeLessThan(tools.length);
     expect(directory).toContain(`${tools.length - renderedRows.length} additional tools omitted.`);
   });
+});
+
+describe("usage-ranked Tool Search directory", () => {
+  it.each([2, 80])(
+    "preserves full-fit/off bytes and ranks only row selection (%i tools)",
+    (count) => {
+      const tools = [
+        ...Array.from({ length: count }, (_, index) =>
+          createStubTool(`ranked_${String(index).padStart(3, "0")}`),
+        ),
+        createStubTool("read"),
+        createStubTool("zz_new"),
+        createStubTool("zz_old"),
+      ].map((tool) =>
+        Object.assign(tool, { description: "Search a synthetic archive. ".repeat(10) }),
+      );
+      const ref = catalogRef(tools);
+      const ctx = { catalogRef: ref };
+      const options = { contextTokenBudget: 10_000 };
+      const at = 20 * 24 * 60 * 60 * 1_000;
+      const history = tools
+        .filter((tool) => tool.name.startsWith("ranked_"))
+        .map((tool) => `openclaw:core:${tool.name}`);
+      const usageRanking: ToolUsageRankingSnapshot = {
+        version: 1,
+        at,
+        orderedToolIds: history.toReversed(),
+        newcomers: { "openclaw:core:zz_new": at, "openclaw:core:zz_old": 0 },
+      };
+      const baseline = buildToolSchemaDirectoryPrompt(ctx, options);
+      expect(
+        buildToolSchemaDirectoryPrompt(ctx, {
+          ...options,
+          usageRanking: { ...usageRanking, orderedToolIds: [] },
+        }),
+      ).toBe(baseline);
+      const ranked = buildToolSchemaDirectoryPrompt(ctx, { ...options, usageRanking });
+      expect(ranked.length).toBeLessThanOrEqual(1_000);
+      if (count === 2) {
+        expect(ranked).toBe(baseline);
+        expect(ranked).toContain("Search a synthetic archive.");
+        expect(ranked).not.toContain("additional tools omitted");
+        return;
+      }
+      expect(ranked).toContain("- read (core)\n");
+      expect(ranked).toContain("- ranked_079 (core)\n");
+      expect(ranked).toContain("- zz_new (core)\n");
+      expect(ranked).not.toContain("- zz_old ");
+      expect(ranked).not.toContain("Search a synthetic archive.");
+      expect(baseline).not.toContain("- zz_new ");
+      const rows = ranked.split("\n").filter((line) => line.startsWith("- "));
+      expect(rows).toEqual(rows.toSorted());
+      expect(ranked).toContain(`${tools.length - rows.length} additional tools omitted.`);
+      const swapped = [...usageRanking.orderedToolIds];
+      [swapped[0], swapped[1]] = [swapped[1]!, swapped[0]!];
+      expect(
+        buildToolSchemaDirectoryPrompt(ctx, {
+          ...options,
+          usageRanking: { ...usageRanking, orderedToolIds: swapped },
+        }),
+      ).toBe(ranked);
+      const different = buildToolSchemaDirectoryPrompt(ctx, {
+        ...options,
+        usageRanking: { ...usageRanking, orderedToolIds: history },
+      });
+      expect(different).not.toBe(ranked);
+      expect(buildToolSchemaDirectoryPrompt(ctx, { ...options, usageRanking })).toBe(ranked);
+      expect(buildToolSchemaDirectoryPrompt(ctx, options)).toBe(baseline);
+      const allowedIds = new Set(history.slice(0, 1));
+      expect(
+        buildToolSchemaDirectoryPrompt(ctx, { ...options, usageRanking, allowedIds }),
+      ).not.toContain("zz_new");
+    },
+  );
 });

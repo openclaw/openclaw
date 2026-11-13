@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { expect, it } from "vitest";
+import { chromium } from "playwright";
+import { expect, inject, it } from "vitest";
 import {
   formatEd25519PublicKey,
   formatIrohEndpointKey,
@@ -24,10 +25,53 @@ import {
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "OpenClaw ID account menu" });
+const suite = createControlUiE2eSuite({
+  name: "OpenClaw ID account menu",
+  // Chromium shares its clipboard across contexts. Keep real reads isolated
+  // from parallel chat-copy suites without serializing unrelated browser work.
+  browserLaunchOptions: {},
+});
 const label = "Sign in with OpenClaw ID";
 
 suite.define(() => {
+  it("retains its clipboard when a parallel browser suite writes", async () => {
+    const endpoint = inject("controlUiE2eChromium").wsEndpoint;
+    if (!endpoint) {
+      throw new Error("Expected the invocation's shared Chromium endpoint");
+    }
+    const peer = await chromium.connect(endpoint);
+    const context = await peer.newContext({ permissions: ["clipboard-read", "clipboard-write"] });
+    try {
+      await suite.withPage(
+        { permissions: ["clipboard-read", "clipboard-write"] },
+        async ({ page }) => {
+          const competingPage = await context.newPage();
+          for (const target of [page, competingPage]) {
+            await target.route("**/clipboard-isolation", (route) =>
+              route.fulfill({
+                contentType: "text/html",
+                body: "<!doctype html><title>Clipboard</title>",
+              }),
+            );
+            await target.goto(`${suite.server.baseUrl}clipboard-isolation`);
+          }
+          await page.evaluate(() =>
+            navigator.clipboard.writeText("https://synthetic.claws.example.test"),
+          );
+          await competingPage.evaluate(() =>
+            navigator.clipboard.writeText("Name\tValue\nalpha\t1"),
+          );
+          expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+            "https://synthetic.claws.example.test",
+          );
+        },
+      );
+    } finally {
+      await context.close();
+      await peer.close();
+    }
+  });
+
   it("keeps remote-access completion compact and actions reachable after the real ceremony", async () => {
     const signer = await generateEd25519Signer();
     const preparation: OpenClawIdLinkPreparation = {
@@ -135,27 +179,23 @@ suite.define(() => {
           await dialog.locator('input[type="checkbox"]').check();
           await dialog.getByRole("button", { name: "Continue", exact: true }).click();
           await gateway.waitForRequest("openclawId.authority", { match: { action: "commit" } });
-          const done = dialog.locator("openclaw-modal-actions").getByRole("button", {
+          const completion = dialog.locator("openclaw-modal-actions").getByRole("button", {
             name: published ? "Done" : "Close",
             exact: true,
           });
-          await done.waitFor();
+          await completion.waitFor();
           const glyphSizes = await dialog
             .locator("svg")
             .evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().height));
           expect.soft(glyphSizes.every((size) => size <= 32)).toBe(true);
           if (!published) {
-            expect(await dialog.getByRole("button", { name: "Done", exact: true }).count()).toBe(0);
-            await dialog
-              .getByRole("button", { name: /Remote access is not connected yet/ })
-              .click();
-            await dialog
-              .getByText("Remote access is not connected yet", { exact: false })
-              .waitFor();
+            const warning = "Remote access is not connected yet. This claw will keep trying.";
+            await dialog.getByRole("button", { name: warning, exact: true }).click();
+            await dialog.getByText(warning, { exact: true }).waitFor();
           }
-          await done.scrollIntoViewIfNeeded();
+          await completion.scrollIntoViewIfNeeded();
           expect(
-            await done.evaluate((element) => {
+            await completion.evaluate((element) => {
               const box = element.getBoundingClientRect();
               return (
                 box.top >= 0 &&
@@ -166,7 +206,7 @@ suite.define(() => {
               );
             }),
           ).toBe(true);
-          await done.click();
+          await completion.click();
           await dialog.waitFor({ state: "hidden" });
         },
       );
@@ -501,9 +541,13 @@ suite.define(() => {
                     expect(
                       await card.evaluate((node) => getComputedStyle(node).transitionDuration),
                     ).toBe("1e-05s");
-                    expect(
-                      await menu.evaluate((node) => node.getAnimations({ subtree: true }).length),
-                    ).toBe(0);
+                    // Style resolution above can start the 0.01ms reduced-motion
+                    // CSS transitions. Their completion, not focus, owns this receipt.
+                    await expect
+                      .poll(() =>
+                        menu.evaluate((node) => node.getAnimations({ subtree: true }).length),
+                      )
+                      .toBe(0);
                   }
                   publication = {
                     state: "published",

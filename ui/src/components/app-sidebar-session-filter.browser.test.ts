@@ -265,7 +265,9 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await tabTo("link", "Session sources");
       await userEvent.keyboard("{Escape}");
       await expect.element(trigger).toHaveFocus();
-      expect(query(".sidebar-session-sort-menu")).toBeNull();
+      // Focus returns synchronously; the caller removes the closed Solid view
+      // after its state update commits, independently of that focus receipt.
+      await expect.poll(() => query(".sidebar-session-sort-menu")).toBeNull();
       await expect.poll(occlusionTail).toEqual([false, true, false]);
       await trigger.click();
       await expect.element(role("radio", "Archived")).toHaveFocus();
