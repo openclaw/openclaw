@@ -10,20 +10,24 @@ import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import { readGatewayServiceUpdateOriginalRoot } from "../daemon/service-update-authority.js";
 import { resolveSystemdServiceName } from "../daemon/systemd-service-files.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   getFileLockProcessStartTime,
   isPidAlive,
   isPidDefinitelyDead,
 } from "../shared/pid-alive.js";
+import { artifactPreservingReads } from "../state/artifact-preserving-state-reads.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { prepareOpenClawStateReadSource } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { sleep } from "../utils/sleep.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { readLockPayloadSync, resolveGatewayLockPaths } from "./gateway-lock.js";
-import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
+import { readGatewayOwnerLeaseAsync } from "./gateway-owner-lease.js";
 import { readGatewayOwnerLeaseFromDatabase } from "./gateway-owner-lease.read.js";
 import { tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
 import {
@@ -40,6 +44,7 @@ import {
 import type { GatewayRestartIntent } from "./restart-lifecycle.types.js";
 import { spawnPsSync } from "./spawn-ps.js";
 import type { EngineConnection } from "./sql-connection.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -91,9 +96,12 @@ export async function prepareGatewayRestartIntentLegacyProcess(opts: {
   readRuntime: () => Promise<GatewayServiceRuntime>;
   assertCurrent: () => void;
 }): Promise<GatewayRestartIntentLegacyProcess | undefined> {
+  const signal = resolveSqliteInspectionSignal(getAsyncWorkSignal());
+  signal?.throwIfAborted();
   opts.assertCurrent();
   try {
-    const owner = readGatewayOwnerLease({ env: opts.env, current: true });
+    const owner = await readGatewayOwnerLeaseAsync({ env: opts.env, signal });
+    opts.assertCurrent();
     if (owner && owner.state !== "dead") {
       return undefined;
     }
@@ -117,6 +125,8 @@ export async function prepareGatewayRestartIntentLegacyProcess(opts: {
       return undefined;
     }
     const runtime = await opts.readRuntime();
+    opts.assertCurrent();
+    signal?.throwIfAborted();
     if (
       runtime.status !== "running" ||
       runtime.pid !== pid ||
@@ -129,7 +139,12 @@ export async function prepareGatewayRestartIntentLegacyProcess(opts: {
     // Wait for fresh evidence; an unpublished native PID never authorizes a signal.
     const deadline = Date.now() + resolveGatewayStartupTiming().deadlineMs;
     while (true) {
-      const published = readGatewayOwnerLease({ env: opts.env, current: true });
+      const published = await readGatewayOwnerLeaseAsync({
+        env: opts.env,
+        signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+      });
+      signal?.throwIfAborted();
+      opts.assertCurrent();
       if (published && published.state !== "dead") {
         break;
       }
@@ -149,12 +164,11 @@ export async function prepareGatewayRestartIntentLegacyProcess(opts: {
       ) {
         return undefined;
       }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 200);
-      });
+      await sleep(200, signal);
     }
     return { pid, startTime };
   } catch {
+    signal?.throwIfAborted();
     // Missing legacy evidence remains a typed serving-owner refusal at admission.
     return undefined;
   } finally {
@@ -218,6 +232,14 @@ function readLegacyGatewayRestartLockSync(env: NodeJS.ProcessEnv) {
 
 /** Called only for stopped native service state while physical cleanup exclusion is held. */
 function assertLegacyGatewayStoppedSync(env: NodeJS.ProcessEnv) {
+  // Doctor and embedded agents project this lock too. Killed, they leave it behind, and only a
+  // Gateway can serve; refusing here strands the stopped service an interrupted update must restart.
+  const { role, pid: ownerPid } =
+    readLockPayloadSync(resolveGatewayLockPaths(env).stateLockPath, true) ?? {};
+  const pid = asPositiveSafeInteger(ownerPid);
+  if (role !== undefined && role !== "gateway" && pid !== undefined && isPidDefinitelyDead(pid)) {
+    return;
+  }
   const legacy = readLegacyGatewayRestartLockSync(env);
   if (!legacy) {
     return;
@@ -278,7 +300,7 @@ export function writeGatewayServiceRestartIntentSync(opts: {
   legacyProcess?: GatewayRestartIntentLegacyProcess;
   intent?: GatewayRestartIntent;
   reason?: string;
-  assertCurrent: () => void;
+  assertCurrent: (database?: EngineConnection) => void;
   onRecorded?: (clear: () => void) => void;
 }): boolean {
   if (opts.nativeStopped) {
@@ -288,7 +310,15 @@ export function writeGatewayServiceRestartIntentSync(opts: {
       if (exclusion) {
         try {
           const inactive = exclusion.run(() => {
-            const owner = readGatewayOwnerLease({ env: opts.env, current: true });
+            // Exclusive stopped-service custody permits one native current read; never copy
+            // the database merely to decide whether this admitted repair has work to write.
+            const owner = artifactPreservingReads.run(false, () =>
+              withExistingOpenClawStateDatabaseCurrentReadOnly(
+                ({ db }) => readGatewayOwnerLeaseFromDatabase(db),
+                { env: opts.env, allowNativeRead: true },
+              ),
+            );
+            exclusion.assertCurrent();
             opts.assertCurrent();
             if (owner && owner.state !== "dead") {
               return false;
@@ -350,7 +380,7 @@ export function writeGatewayServiceRestartIntentSync(opts: {
 function writeGatewayRestartIntentForTargetSync(
   opts: Omit<Parameters<typeof writeGatewayRestartIntentSync>[0], "targetPid">,
   resolveTargetPid: (db: EngineConnection) => number | undefined,
-  assertCurrent?: () => void,
+  assertCurrent?: (database?: EngineConnection) => void,
 ): boolean {
   const env = opts.env ?? process.env;
   try {
@@ -370,9 +400,9 @@ function writeGatewayRestartIntentForTargetSync(
     const written = runExistingOpenClawStateWriteTransaction(
       ({ db }) => {
         // Coordinator/BEGIN admission can block while the supervised owner changes.
-        assertCurrent?.();
+        assertCurrent?.(db);
         const targetPid = asPositiveSafeInteger(resolveTargetPid(db)) ?? null;
-        assertCurrent?.();
+        assertCurrent?.(db);
         if (targetPid === null) {
           return false;
         }

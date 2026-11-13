@@ -42,7 +42,13 @@ type TelegramMessageProcessorTurnContext = {
 
 type ProcessTelegramMessageOptions = Pick<
   BuildTelegramMessageContextParams,
-  "allMedia" | "storeAllowFrom" | "options" | "replyMedia" | "replyChain" | "promptContext"
+  | "allMedia"
+  | "storeAllowFrom"
+  | "options"
+  | "replyMedia"
+  | "replyChain"
+  | "promptContext"
+  | "resolveSenderMedia"
 > & {
   ctx: TelegramContext;
   turnContext: TelegramMessageProcessorTurnContext;
@@ -68,7 +74,6 @@ export type TelegramNativeCommandCallbackDispatcher = (params: {
 
 type TelegramHandlerLogger = {
   info: (fields: Record<string, unknown>, message: string) => void;
-  warn: (fields: Record<string, unknown>, message: string) => void;
 };
 
 export type RegisterTelegramHandlerParams = {

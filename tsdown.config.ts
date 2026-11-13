@@ -10,6 +10,7 @@ import {
   collectSourceCheckoutPluginBuildEntries,
   createBundledPluginBuildInventory,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
+import { createCompactModuleLabelsPlugin } from "./scripts/lib/compact-module-labels.mts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./scripts/lib/fs-safe-windows-helper-asset.mts";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
 import { createManagedHandoffBuildConfigs } from "./scripts/lib/managed-handoff-build-config.mts";
@@ -241,21 +242,70 @@ function createBashParserAssetsPlugin(): TsdownPlugin {
   };
 }
 
+function createHighlightRuntimeChunkPlugin(): TsdownPlugin {
+  const runtimePath = fs.realpathSync(path.resolve("src/agents/utils/syntax-highlight.ts"));
+  const load = 'createRequire(import.meta.url)("highlight.js")';
+  return {
+    name: "openclaw:highlight-runtime-chunk",
+    transform(code, id) {
+      if (path.normalize(id) !== runtimePath) {
+        return undefined;
+      }
+      if (!code.includes(load)) {
+        this.error("highlight.js loader changed; update the packaged highlighter transform");
+      }
+      const require = createRequire(import.meta.url);
+      const entryPath = require.resolve("highlight.js");
+      const licensePath = path.join(
+        path.dirname(require.resolve("highlight.js/package.json")),
+        "LICENSE",
+      );
+      this.addWatchFile(licensePath);
+      // npm would otherwise install the package's 1,580 files, mostly unused ES,
+      // CSS, and SCSS copies. Keep the lazy synchronous load as one bundled chunk.
+      const runtime = this.emitFile({ type: "chunk", id: entryPath, name: "highlight-runtime" });
+      this.emitFile({
+        type: "asset",
+        fileName: "highlight.js.LICENSE",
+        source: fs.readFileSync(licensePath),
+      });
+      return {
+        code: `import { fileURLToPath as highlightRuntimePath } from "node:url";\n${code.replace(
+          load,
+          `createRequire(import.meta.url)(highlightRuntimePath(import.meta.ROLLUP_FILE_URL_${runtime})).default`,
+        )}`,
+        map: null,
+      };
+    },
+  };
+}
+
 function nodeBuildConfig(
   config: UserConfig,
   declarations: UserConfig["dts"] = TSDOWN_DECLARATIONS,
   build?: Parameters<typeof buildInputOptions>[1],
 ): UserConfig {
   return {
+    // Update compatibility and standalone codegen need module labels and top-level names.
+    minify:
+      typeof declarations === "object" && declarations.emitDtsOnly
+        ? undefined
+        : { codegen: true, compress: false, mangle: { toplevel: false, keepNames: true } },
     ...config,
     // Recovery diagnostics must parse on Node 22; runtime admission still guards live writers.
     target: "node22",
     dts: declarations,
     hooks: createDeclarationBoundaryHooks(config.hooks),
     plugins: [
+      !(typeof declarations === "object" && declarations.emitDtsOnly) && config.minify === undefined
+        ? createCompactModuleLabelsPlugin()
+        : undefined,
       typeof declarations === "object" && declarations.emitDtsOnly
         ? undefined
         : createBashParserAssetsPlugin(),
+      typeof declarations === "object" && declarations.emitDtsOnly
+        ? undefined
+        : createHighlightRuntimeChunkPlugin(),
       typeof declarations === "object" && declarations.emitDtsOnly
         ? undefined
         : createPublicSessionCardAssetsPlugin(),
@@ -983,6 +1033,7 @@ const configs: UserConfig[] = [
       {
         name: TSDOWN_UNIFIED_CONFIG_GROUP,
         entry: { [name]: source },
+        minify: { codegen: true, compress: true, mangle: { keepNames: true } },
         deps: {
           ...unifiedDeps,
           neverBundle: bundleFsSafe

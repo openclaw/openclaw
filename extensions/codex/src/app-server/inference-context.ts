@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog, type AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { defineCodexBuildState } from "../build-state.js";
 import { readCodexInferenceMetadata, type CodexInferenceMetadata } from "./inference-metadata.js";
@@ -11,6 +11,9 @@ const MAX_CONTEXT_BYTES = 256 * 1024;
 const MAX_ACTIVE_ROOTS = 64;
 const MAX_PREPARED_PREFIXES = 256;
 const MAX_RETAINED_REQUEST_BYTES = 32 * 1024 * 1024;
+export type CodexInferenceStreamParams = Parameters<
+  NonNullable<AgentHarnessV2["runIsolatedCompletionV2"]>
+>[0]["streamParams"];
 type PreparedPrefix = { text: string };
 const retained = defineCodexBuildState("openclaw.codexPreparedRequests", () => ({
   requests: new Map<PreparedPrefix, { body: JsonObject; bytes: number }>(),
@@ -67,6 +70,7 @@ type Registration = {
   text: string;
   forkPrefix?: JsonObject;
   denyToolCalls: boolean;
+  streamParams?: CodexInferenceStreamParams;
   controller: AbortController;
   assertCurrent: () => void;
   release: () => void;
@@ -99,6 +103,7 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
       retainPrefix?: boolean;
       forkPrefix?: JsonObject;
       denyToolCalls?: boolean;
+      streamParams?: CodexInferenceStreamParams;
     }) {
       assertOpen();
       params.signal.throwIfAborted();
@@ -125,6 +130,7 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
           text: params.text,
           forkPrefix: params.forkPrefix,
           denyToolCalls: params.denyToolCalls === true,
+          streamParams: params.streamParams,
           controller,
           assertCurrent: () => {
             assertOpen();
@@ -323,6 +329,14 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
         }
         if (registration.denyToolCalls) {
           preparedBody = { ...preparedBody, tool_choice: "none" };
+        }
+        const { maxTokens, temperature } = registration.streamParams ?? {};
+        if (maxTokens !== undefined || temperature !== undefined) {
+          preparedBody = {
+            ...preparedBody,
+            ...(maxTokens !== undefined ? { max_output_tokens: maxTokens } : {}),
+            ...(temperature !== undefined ? { temperature } : {}),
+          };
         }
         const retainedPrefix = metadata.threadId ? prefixes.get(metadata.threadId) : undefined;
         if (retainedPrefix) {

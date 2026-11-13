@@ -6,6 +6,7 @@ import {
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import { buildSessionTranscriptActiveFactsInsert } from "./session-transcript-active-facts.js";
 import {
   withPostgresSessionTranscriptFtsRows,
   type SessionTranscriptFtsSourceRow,
@@ -31,6 +32,7 @@ export function createPostgresProjectionFlusher(db: EngineConnection, sessionId:
   type Chunk = {
     activeRows: PreparedSessionTranscriptProjection["activeRows"];
     ftsRows: TranscriptIndexEntry[];
+    factRows: PreparedSessionTranscriptProjection["activeRows"];
     watermark?: SessionTranscriptProjectionState & { updatedAt: number };
   };
   const kysely =
@@ -40,6 +42,8 @@ export function createPostgresProjectionFlusher(db: EngineConnection, sessionId:
   const prepare = (
     activeCount: number,
     ftsCount: number,
+    factCount: number,
+    finalizedFacts: boolean,
     watermarkMode: "none" | "insert" | "update",
     windowUpdate?: TranscriptWindowUpdate,
   ) =>
@@ -84,9 +88,22 @@ export function createPostgresProjectionFlusher(db: EngineConnection, sessionId:
                   .returning("event_seq"),
               )
             : query;
+        const withFacts =
+          factCount > 0
+            ? withActive.with("projection_active_facts", () =>
+                buildSessionTranscriptActiveFactsInsert(
+                  db,
+                  sessionId,
+                  factCount,
+                  (read) => parameter((chunk) => read(chunk.factRows)),
+                  true,
+                  finalizedFacts,
+                ).returning("seq"),
+              )
+            : withActive;
         const withWatermark =
           watermarkMode !== "none"
-            ? withActive.with("projection_watermark", () => {
+            ? withFacts.with("projection_watermark", () => {
                 const values = {
                   active_event_count: parameter((chunk) => chunk.watermark!.activeEventCount),
                   active_message_count: parameter((chunk) => chunk.watermark!.activeMessageCount),
@@ -107,7 +124,7 @@ export function createPostgresProjectionFlusher(db: EngineConnection, sessionId:
                       .onConflict((conflict) => conflict.column("session_id").doUpdateSet(values))
                       .returning("session_id");
               })
-            : withActive;
+            : withFacts;
         // All writes target distinct tables and use prepared values. Only FTS content
         // depends on a sibling write, through the allocation owner's RETURNING rows.
         if (windowUpdate) {
@@ -126,7 +143,7 @@ export function createPostgresProjectionFlusher(db: EngineConnection, sessionId:
     );
   const writes = new Map<string, ReturnType<typeof prepare>>();
   return (
-    pending: Chunk,
+    pending: Omit<Chunk, "factRows">,
     persisted: boolean,
     windowUpdate?: TranscriptWindowUpdate,
   ): TranscriptWindowPostimage | undefined => {
@@ -137,20 +154,38 @@ export function createPostgresProjectionFlusher(db: EngineConnection, sessionId:
       pending.watermark || windowUpdate ? 1 : 0,
     );
     for (let offset = 0; offset < count; offset += TRANSCRIPT_INSERT_BATCH_SIZE) {
-      const chunk = {
-        activeRows: pending.activeRows.slice(offset, offset + TRANSCRIPT_INSERT_BATCH_SIZE),
+      const activeRows = pending.activeRows.slice(offset, offset + TRANSCRIPT_INSERT_BATCH_SIZE);
+      const chunk: Chunk = {
+        activeRows,
+        factRows: activeRows.filter((row) => row.facts !== undefined),
         ftsRows: pending.ftsRows.slice(offset, offset + TRANSCRIPT_INSERT_BATCH_SIZE),
         watermark: offset + TRANSCRIPT_INSERT_BATCH_SIZE >= count ? pending.watermark : undefined,
       };
       const mode = chunk.watermark ? (persisted ? "update" : "insert") : "none";
-      const key = `${chunk.activeRows.length}:${chunk.ftsRows.length}:${mode}`;
+      const finalizedFacts = chunk.factRows.every(
+        (row) => row.facts && "dependencyNavigationJson" in row.facts,
+      );
+      const key = `${chunk.activeRows.length}:${chunk.ftsRows.length}:${chunk.factRows.length}:${finalizedFacts}:${mode}`;
       const finalWindow = offset + TRANSCRIPT_INSERT_BATCH_SIZE >= count ? windowUpdate : undefined;
       // The supplied mutation contains this append's values; never cache those bindings.
       let write = finalWindow
-        ? prepare(chunk.activeRows.length, chunk.ftsRows.length, mode, finalWindow)
+        ? prepare(
+            chunk.activeRows.length,
+            chunk.ftsRows.length,
+            chunk.factRows.length,
+            finalizedFacts,
+            mode,
+            finalWindow,
+          )
         : writes.get(key);
       if (!write) {
-        write = prepare(chunk.activeRows.length, chunk.ftsRows.length, mode);
+        write = prepare(
+          chunk.activeRows.length,
+          chunk.ftsRows.length,
+          chunk.factRows.length,
+          finalizedFacts,
+          mode,
+        );
         writes.set(key, write);
       }
       const result = withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () =>

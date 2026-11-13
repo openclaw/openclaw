@@ -1,2 +1,0 @@
-# Six HTTP requester-policy cases and CLI preparation expectation for #171791.
-101

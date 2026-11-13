@@ -1,11 +1,32 @@
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   assertNativeUnit,
   assertNativeUpdate,
   planNativeUpgradeSurvivor,
+  prepareNativeRuntimePath,
 } from "../../scripts/e2e/lib/upgrade-survivor/native-systemd-contract.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("native upgrade survivor", () => {
+  it("runs the selected Node from the fixture's own runtime", () => {
+    const runtime = realpathSync(tempDirs.make("survivor-native-runtime-"));
+    const result = spawnSync(
+      "node",
+      ["-p", "JSON.stringify({version:process.version,execPath:process.execPath})"],
+      { env: { PATH: prepareNativeRuntimePath(runtime) }, encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      version: process.version,
+      execPath: path.join(runtime, "node"),
+    });
+  });
+
   it("selects sequential systemd cells with restart enabled and the extended-channel hop", () => {
     expect(planNativeUpgradeSurvivor()).toEqual([
       { flow: "systemd", baseline: "openclaw@2026.10.9", version: "2026.10.9", updateArgs: [] },

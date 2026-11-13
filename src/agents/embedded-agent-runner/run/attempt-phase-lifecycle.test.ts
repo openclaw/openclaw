@@ -543,7 +543,7 @@ describe("embedded attempt phase lifecycle state", () => {
         },
       });
       expect(context?.config).toBe(config);
-      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource).toEqual(
+      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].completedTurnSource).toEqual(
         sessionManager.getSessionTarget()
           ? { ...sessionManager.getSessionTarget(), entryId: terminalEntryId }
           : undefined,
@@ -780,7 +780,7 @@ describe("embedded attempt phase lifecycle state", () => {
         lastMessageRole: tail === "interrupted tool result" ? "tool_result" : "absent",
         finalTextState: tail === "interrupted tool result" ? "not_assistant" : "unavailable",
       });
-      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource).toEqual(
+      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].completedTurnSource).toEqual(
         tail === "interrupted tool result"
           ? { ...sessionManager.getSessionTarget(), entryId: toolResultEntryId }
           : undefined,

@@ -15,12 +15,17 @@ import {
 } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
+import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadTranscriptEventsSync,
+  patchSessionEntryWithKey,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
@@ -53,6 +58,8 @@ type ToolCall = { args: unknown; backgroundRun: unknown; runId: unknown; senderI
 type ForkProofState = {
   toolCalls: ToolCall[];
   settled: Array<Record<string, unknown>>;
+  /** `agent_end` contexts the plugin observed. */
+  agentEnds: Array<{ sessionKey: unknown; completedTurn: unknown }>;
   /** `api.runtime.subagent` of each loaded generation, oldest first. */
   runtimes: Array<{ runForkedTurn: (params: Record<string, unknown>) => Promise<unknown> }>;
   /** The result of a fork started by `forkproof.start`. */
@@ -68,6 +75,9 @@ const FORK_PROOF_SOURCE = `module.exports = { id: "fork-proof", register(api) {
   const state = () => globalThis.forkProofState;
   // Each loaded generation records its runtime, so a test can retain a retired one.
   state().runtimes.push(api.runtime.subagent);
+  api.on("agent_end", (_event, ctx) => {
+    state().agentEnds.push({ sessionKey: ctx.sessionKey ?? null, completedTurn: ctx.completedTurn ?? null });
+  });
   api.registerTool((ctx) => ({
     name: "fork_proof_note",
     description: "Record one note about the conversation",
@@ -208,6 +218,8 @@ type Fixture = {
   proof: ForkProofState;
   forkRequests: ProviderRequest[];
   foregroundRequests: ProviderRequest[];
+  /** The `Authorization` header of each provider request, by turn kind. */
+  authorizations: { foreground: unknown[]; fork: unknown[] };
   /** A dashboard turn by the authenticated operator; returns its completed assistant entry. */
   dashboardTurn: (sessionKey: string) => Promise<Turn>;
   /** A Telegram turn from one sender through `agentCommandFromIngress` (TUI, node, plugin runs). */
@@ -246,10 +258,11 @@ async function withForkGateway(
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     },
   });
-  const proof: ForkProofState = { toolCalls: [], settled: [], runtimes: [] };
+  const proof: ForkProofState = { toolCalls: [], settled: [], agentEnds: [], runtimes: [] };
   (globalThis as { forkProofState?: ForkProofState }).forkProofState = proof;
   const forkRequests: ProviderRequest[] = [];
   const foregroundRequests: ProviderRequest[] = [];
+  const authorizations: Fixture["authorizations"] = { foreground: [], fork: [] };
   let mode: "foreground" | "fork" = "foreground";
   let serial = 0;
   const modelHold: Fixture["modelHold"] = {};
@@ -280,6 +293,7 @@ async function withForkGateway(
           }
           const payload = JSON.parse(await readText(request)) as ProviderRequest;
           serial += 1;
+          authorizations[mode].push(request.headers.authorization);
           if (mode === "fork") {
             forkRequests.push(payload);
             const hold = modelHold.current;
@@ -390,6 +404,7 @@ async function withForkGateway(
           proof,
           forkRequests,
           foregroundRequests,
+          authorizations,
           dashboardTurn: async (sessionKey) => {
             mode = "foreground";
             const accepted = await client.request<{ runId: string }>("agent", {
@@ -529,12 +544,19 @@ describe("plugin forked turns through the real Gateway", () => {
           });
           expect(forkRequests).toEqual([]);
 
+          // The plugin's agent_end hook names the entry that ended the turn, ready to fork.
+          await expect
+            .poll(() => proof.agentEnds.find((end) => end.sessionKey === sessionKey))
+            .toEqual({ sessionKey, completedTurn: { sessionId, entryId } });
+          const completedTurn = proof.agentEnds.find((end) => end.sessionKey === sessionKey)
+            ?.completedTurn as { sessionId: string; entryId: string };
+
           const before = JSON.stringify(transcript());
           const runId = `fork-proof-${randomUUID()}`;
           const release = createDeferred();
           const started = createDeferred();
           proof.hold = { started, release: release.promise };
-          const pending = fixture.fork(turn, { runId });
+          const pending = fixture.fork(turn, { runId, through: completedTurn });
           await started.promise;
           // Settlement holds the fork's detached admission; a graceful restart waits for it.
           expect(getActiveGatewayRootWorkHolders()).toContain("plugin:fork-proof:session-fork");
@@ -693,6 +715,70 @@ describe("plugin forked turns through the real Gateway", () => {
           } finally {
             await disconnectGatewayClient(writer);
           }
+        },
+      );
+    },
+  );
+
+  it(
+    "runs the fork on the auth profile the session's turns use",
+    { timeout: 150_000 },
+    async () => {
+      const first = "mock-openai:first";
+      const rotated = "mock-openai:rotated";
+      await withForkGateway(
+        (config) => {
+          // Profiles are the only credential source: the provider config carries no key.
+          const { apiKey: _apiKey, ...mock } = expectDefined(
+            config.models?.providers?.["mock-openai"],
+            "mock provider",
+          );
+          return {
+            ...config,
+            auth: {
+              profiles: {
+                [first]: { provider: "mock-openai", mode: "api_key" },
+                [rotated]: { provider: "mock-openai", mode: "api_key" },
+              },
+              order: { "mock-openai": [first, rotated] },
+            },
+            models: { ...config.models, providers: { "mock-openai": mock } },
+          };
+        },
+        async (fixture) => {
+          await persistAuthProfileBatch({
+            profiles: [first, rotated].map((profileId) => ({
+              profileId,
+              credential: { type: "api_key", provider: "mock-openai", key: `key-${profileId}` },
+            })),
+          });
+          // With no stored selection, as in the fork's internal session, the order picks the first.
+          await fixture.dashboardTurn(
+            `agent:main:dashboard:direct:fork-proof-auth-${randomUUID()}`,
+          );
+          expect(fixture.authorizations.foreground.splice(0)).toEqual([`Bearer key-${first}`]);
+          const sessionKey = `agent:main:dashboard:direct:fork-proof-auth-${randomUUID()}`;
+          await fixture.client.request("sessions.create", { key: sessionKey });
+          // Automatic rotation moved the session off the first profile in the order.
+          await patchSessionEntryWithKey(
+            {
+              agentId: "main",
+              sessionKey,
+              storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+            },
+            () => ({ authProfileOverride: rotated, authProfileOverrideSource: "auto" }),
+          );
+          const turn = await fixture.dashboardTurn(sessionKey);
+          expect(fixture.authorizations.foreground).toEqual([`Bearer key-${rotated}`]);
+          await expect(fixture.fork(turn, {})).resolves.toMatchObject({
+            ok: true,
+            result: { status: "settled" },
+          });
+          // Both fork requests (tool call, then answer) use the session's profile.
+          expect(fixture.authorizations.fork).toEqual([
+            `Bearer key-${rotated}`,
+            `Bearer key-${rotated}`,
+          ]);
         },
       );
     },

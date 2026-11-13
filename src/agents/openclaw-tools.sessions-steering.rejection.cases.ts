@@ -94,6 +94,7 @@ export function registerSessionsSendRejectedSteeringTests({
         expect(queuedText).toContain("[TASK-COMPLETE] occupancy ready");
         expect(queueMessage).toHaveBeenCalledWith(queuedText, {
           abortSignal: expect.any(AbortSignal),
+          queueIdentity: expect.any(String),
           toolAuthorityFingerprint: expect.any(String),
           steeringMode: "all",
           isInboundUserReply: false,

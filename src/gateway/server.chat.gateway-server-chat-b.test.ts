@@ -1983,15 +1983,17 @@ describe("gateway server chat", () => {
           broadcast.mock.calls.flatMap(([event, payload]) =>
             event === "chat" && (payload as { runId?: string }).runId === runId ? [payload] : [],
           );
-        try {
-          await callDirectChat("chat.send", {
-            id: "queued-followup",
+        const sendQueuedInput = (id: string, respond: RespondFn) =>
+          callDirectChat("chat.send", {
+            id,
             params: makeChatSendParams({ message: "queued prompt", idempotencyKey: runId }),
             client: makeTuiClient(),
             isWebchatConnect: () => true,
-            respond: vi.fn() as RespondFn,
+            respond,
             context,
           });
+        try {
+          await sendQueuedInput("queued-followup", vi.fn() as RespondFn);
           await withinTest(dispatchStarted.promise, signal);
           expect(options?.turnAdoptionLifecycle?.ownerKey).toBe("connection:conn-tui");
           expect(chatEvents()).toEqual([]);
@@ -2010,14 +2012,7 @@ describe("gateway server chat", () => {
           // Live queued identity still fences replay if its receipt has been evicted.
           context.dedupe.delete(`chat:${runId}`);
           const replayRespond = vi.fn() as RespondFn;
-          await callDirectChat("chat.send", {
-            id: "queued-followup-replay",
-            params: makeChatSendParams({ message: "queued prompt", idempotencyKey: runId }),
-            client: makeTuiClient(),
-            isWebchatConnect: () => true,
-            respond: replayRespond,
-            context,
-          });
+          await sendQueuedInput("queued-followup-replay", replayRespond);
           expect(replayRespond).toHaveBeenCalledWith(
             true,
             { runId, status: "in_flight" },
@@ -2065,7 +2060,11 @@ describe("gateway server chat", () => {
             expect.objectContaining({
               runId,
               ...(settlement === "dropped"
-                ? { state: "error", errorMessage: "Queued input was dropped (queue-cap-old)." }
+                ? {
+                    state: "error",
+                    errorMessage:
+                      "Your queued message was dropped because the session queue is full.",
+                  }
                 : {
                     state: "final",
                     message: expect.objectContaining({

@@ -17,12 +17,23 @@ async function snapshotCandidateState(): Promise<void> {
   }
   // SAFETY: Only typed updater launchers serialize this private worker's stdin.
   const input = JSON.parse(Buffer.concat(chunks).toString("utf8")) as UpdateStateInspectionInput;
-  const value = await inspectCandidateState(input);
-  const { writeUpdateStateResult } = await import("./update-candidate-state.result.js");
-  await writeUpdateStateResult(value, input.resultPath);
+  // A killed launcher cannot release this worker's inspection/publication lifetime.
+  const release = input.stagingTokenDirectory
+    ? (await import("./sqlite-staging-token.js")).acquireSqliteStagingToken(
+        input.stagingTokenDirectory,
+        "read",
+      )
+    : undefined;
+  try {
+    const value = await inspectCandidateState(input);
+    const { writeUpdateStateResult } = await import("./update-candidate-state.result.js");
+    await writeUpdateStateResult(value, input.resultPath);
+  } finally {
+    release?.();
+  }
 }
 
-type UpdateStateInspectionInput = { resultPath?: string } & (
+type UpdateStateInspectionInput = { resultPath?: string; stagingTokenDirectory?: string } & (
   | (Parameters<
       typeof import("./update-retained-runtime-files.js").prepareRetainedRuntimeFiles
     >[0] & {
@@ -50,6 +61,7 @@ type UpdateStateInspectionInput = { resultPath?: string } & (
   | (Parameters<
       typeof import("./update-database-restore-source.js").prepareUpdateDatabaseRestoreSourceInProcess
     >[0] & { mode: "database-restore-preparation" })
+  | { mode: "sqlite-generations"; paths: string[]; stateDir: string }
   | { mode: "migration-filesystem-backup"; output: string; userPathBaseDirectory: string }
   | {
       mode: "database-generations";
@@ -61,6 +73,10 @@ type UpdateStateInspectionInput = { resultPath?: string } & (
 );
 
 async function inspectCandidateState(input: UpdateStateInspectionInput): Promise<unknown> {
+  if (input.mode === "sqlite-generations") {
+    const { readUpdateDatabaseGenerationPair } = await import("./update-database-generations.js");
+    return readUpdateDatabaseGenerationPair(input.paths);
+  }
   if (input.mode === "runtime-retention") {
     const { prepareRetainedRuntimeFiles } = await import("./update-retained-runtime-files.js");
     return prepareRetainedRuntimeFiles(input);
@@ -85,6 +101,15 @@ async function inspectCandidateState(input: UpdateStateInspectionInput): Promise
     // Older installed drivers omit this from their restricted environment payload.
     // Metadata discovery must use the same installation as the inspected databases.
     input.env = { ...input.env, OPENCLAW_STATE_DIR: input.stateDir };
+  }
+  if ("config" in input && "stateDir" in input) {
+    // Released drivers serialize config read without this candidate's normalization.
+    const { normalizeLegacyWorkboardDatabaseConfig } =
+      await import("../config/legacy-workboard-database.js");
+    input.config = normalizeLegacyWorkboardDatabaseConfig(input.config, {
+      ...process.env,
+      OPENCLAW_STATE_DIR: input.stateDir,
+    });
   }
   // Runtime retention needs no database/config inspection graph.
   const { createUpdateStateInspectionReporter } =

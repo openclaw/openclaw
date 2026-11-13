@@ -20,7 +20,7 @@ import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime
 type MaterializablePlan = Omit<UpdateCandidatePluginTreePlan, "bytes" | "entries">;
 
 export function ignoreUnresolvedPluginLink(error: unknown): undefined {
-  if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
+  if (["ENOENT", "ENOTDIR", "ELOOP"].some((code) => hasNodeErrorCode(error, code))) {
     return undefined;
   }
   throw error;

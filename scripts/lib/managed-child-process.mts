@@ -499,7 +499,9 @@ function isZombieProcessGroup(
   // which cannot write or respond to signals while awaiting their parent's reap.
   // Enumerate threads (-L): a process row reports only the group leader's state,
   // and a pthread_exit leader reads Z while sibling threads still run and write.
-  const selection = platform === "darwin" ? ["-g", String(pid)] : ["-s", String(pid), "-L"];
+  // Darwin -g changes meaning in legacy BSD mode. Enumerate all rows and select
+  // the PGID ourselves; completion still requires a positive zombie-only census.
+  const selection = platform === "darwin" ? ["-A"] : ["-s", String(pid), "-L"];
   const result = spawnSync("ps", [...selection, "-o", "pgid=,state="], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
@@ -518,14 +520,18 @@ function isZombieProcessGroup(
   // BSD ps appends flags (for example ZN for a niced zombie); Linux state is one letter.
   const state = platform === "darwin" ? "Z[+<>AELNSsVWX]*" : "Z";
   const zombie = new RegExp(`^\\s*${pid}\\s+${state}\\s*$`, "u");
+  const rows = result.stdout.trim().split("\n");
+  const groupRows =
+    platform === "darwin"
+      ? rows.filter((row) => row.trim().split(/\s+/u)[0] === String(pid))
+      : rows;
   // Missing, failed or unrecognized snapshots never certify completion.
   return (
     !result.error &&
     result.status === 0 &&
-    result.stdout
-      .trim()
-      .split("\n")
-      .every((row) => zombie.test(row))
+    rows.every((row) => /^\s*\d+\s+\S+\s*$/u.test(row)) &&
+    groupRows.length > 0 &&
+    groupRows.every((row) => zombie.test(row))
   );
 }
 

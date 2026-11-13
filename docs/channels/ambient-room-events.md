@@ -210,6 +210,13 @@ Room events stay strict even when other group requests use automatic replies. Un
 
 Supported room-event channels keep recent ambient room messages as context. Telegram keeps an always-on rolling per-group window bounded by `historyLimit`; user-request turns select entries after the bot's last recorded reply, while room-event turns receive the full recent window so the model can see its own recent posts. The retired Telegram `includeGroupHistoryContext` mode key is removed by `openclaw doctor --fix`.
 
+When a busy session reaches its queue cap, optional room events are discarded
+before user requests, without generating overflow-summary turns. The default
+`summarize` policy retains bounded previews on an eligible pending turn from the
+same conversation; `old` and `new` discard them. This sheds ambient processing,
+not channel history; the configured history window still
+bounds which recent messages are available as context. See [Queue options](/concepts/queue#queue-options).
+
 ## Troubleshooting
 
 If the room shows typing or token usage but no visible message:

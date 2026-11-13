@@ -57,7 +57,9 @@ it.each([
 
   if (code === 0) {
     const warning = maintenance!.warnings.join("\n");
-    expect(warning).toContain("Gateway started but readiness was not verified");
+    expect(warning).toContain(
+      "Gateway started after Doctor maintenance, but readiness was not verified",
+    );
     expect(warning).toContain(phase);
     expect(warning).toContain("openclaw gateway status --deep");
     expect(warning).toContain("openclaw gateway diagnostics export");
@@ -75,7 +77,7 @@ it.each([
     ]);
   }
   expect(boundary.log).not.toHaveBeenCalledWith(
-    "Gateway restarted and verified after Doctor repair.",
+    "Gateway restarted and verified after Doctor maintenance.",
   );
   expect(boundary.restart).toHaveBeenCalledOnce();
 });

@@ -28,6 +28,7 @@ import {
   type CiAutomationJobs,
 } from "../../../lib/session-pr-automation.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import { showToast } from "../../../lib/toast.ts";
 import {
   ChatCiAutomationError,
   ChatCiAutomationView,
@@ -365,7 +366,7 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
 
     async function commit() {
       try {
-        const job = await setCiAutomationEnabled(
+        const outcome = await setCiAutomationEnabled(
           admitted.client,
           admitted.target,
           option,
@@ -374,6 +375,10 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
         );
         if (!admitted.current()) {
           return;
+        }
+        const job = outcome?.job;
+        if (outcome?.warning) {
+          showToast({ severity: "warning", message: outcome.warning });
         }
         if (accepted) {
           accepted = { ...accepted, jobs: { ...accepted.jobs, [option]: job } };

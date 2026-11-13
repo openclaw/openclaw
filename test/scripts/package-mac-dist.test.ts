@@ -1,22 +1,29 @@
-import { spawnSync } from "node:child_process";
+import childProcess, { spawnSync } from "node:child_process";
 import {
+  constants,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const scriptPath = "scripts/package-mac-dist.sh";
 const packageSource = readFileSync(scriptPath, "utf8");
 const checkpointDirs = useAutoCleanupTempDirTracker(afterEach);
+const distributionSeedDirs = useAutoCleanupTempDirTracker(afterAll);
+const distributionSeeds = new Map<string, { binary: string; symbols: string; uuid: string }>();
 
 function packageBlock(start: string, end?: string) {
   const from = packageSource.indexOf(start);
@@ -345,6 +352,33 @@ it.each([false, true])("cleans failed audit mounts (detach fails: %s)", (detachF
   }
 });
 
+function distributionSeed(arch: string) {
+  const existing = distributionSeeds.get(arch);
+  if (existing) {
+    return existing;
+  }
+  // Seeds outlive each borrower; publish only complete binary, bundle and UUID facts.
+  const root = distributionSeedDirs.make("openclaw-dist-seed-");
+  const source = path.join(root, "main.c");
+  const binary = path.join(root, "OpenClaw");
+  const symbols = `${binary}.dSYM`;
+  writeFileSync(source, "int main(void) { return 0; }\n");
+  for (const args of [
+    ["clang", "-arch", arch, "-g", "-Wl,-adhoc_codesign", source, "-o", binary],
+    ["dsymutil", binary, "-o", symbols],
+  ]) {
+    checkedTool("xcrun", args);
+  }
+  const uuid = checkedTool("xcrun", ["dwarfdump", "--uuid", binary])
+    .trim()
+    .split(" ")
+    .slice(0, 3)
+    .join(" ");
+  const seed = { binary, symbols, uuid };
+  distributionSeeds.set(arch, seed);
+  return seed;
+}
+
 function makeDistributionFixture(layout: "native" | "xcode", missingArch?: string) {
   const f = packageFixture(false);
   const { tools } = f;
@@ -374,8 +408,6 @@ Path(__file__).resolve().parents[3].joinpath("async-frame-audit.log").write_text
 <key>SUFeedURL</key><string>https://example.com/appcast.xml</string>
 </dict></plist>`,
   );
-  const source = f.file("main.c");
-  writeFileSync(source, "int main(void) { return 0; }\n");
   const expectedUUIDs: string[] = [];
   for (const arch of ["arm64", "x86_64"]) {
     const build = f.file("apps/macos/.build", arch);
@@ -390,14 +422,10 @@ Path(__file__).resolve().parents[3].joinpath("async-frame-audit.log").write_text
     }
     const binary = path.join(products, "OpenClaw");
     const symbols = `${binary}.dSYM`;
-    for (const args of [
-      ["clang", "-arch", arch, "-g", "-Wl,-adhoc_codesign", source, "-o", binary],
-      ["dsymutil", binary, "-o", symbols],
-    ]) {
-      checkedTool("xcrun", args);
-    }
-    const uuid = checkedTool("xcrun", ["dwarfdump", "--uuid", binary]);
-    expectedUUIDs.push(uuid.trim().split(" ").slice(0, 3).join(" "));
+    const seed = distributionSeed(arch);
+    copyFileSync(seed.binary, binary, constants.COPYFILE_FICLONE);
+    cpSync(seed.symbols, symbols, { recursive: true });
+    expectedUUIDs.push(seed.uuid);
     if (arch === "arm64") {
       copyFileSync(binary, f.file(contents, "MacOS/OpenClaw"));
     }
@@ -551,7 +579,51 @@ it.each(["successful", "failed"] as const)(
 it.runIf(process.platform === "darwin").each(["app", "dmg"] as const)(
   "re-audits the retained %s before resuming without build products",
   (artifact) => {
-    const f = makeDistributionFixture("native");
+    let f: ReturnType<typeof makeDistributionFixture>;
+    if (artifact === "app") {
+      const setup = vi.spyOn(childProcess, "spawnSync");
+      syncBuiltinESMExports();
+      try {
+        // The first borrower leaves x86_64 cold; later borrowers own private copies.
+        const first = makeDistributionFixture("native", "x86_64");
+        expect(setup).toHaveBeenCalledTimes(3);
+        expect(setup.mock.calls[0]?.[1]).toEqual(expect.arrayContaining(["clang", "arm64"]));
+        const second = makeDistributionFixture("xcode");
+        expect(setup).toHaveBeenCalledTimes(6);
+        expect(setup.mock.calls[3]?.[1]).toEqual(expect.arrayContaining(["clang", "x86_64"]));
+        const product = "apps/macos/.build/arm64/release/OpenClaw";
+        const symbols = `${product}.dSYM`;
+        const dwarf = `${symbols}/Contents/Resources/DWARF/OpenClaw`;
+        const snapshot = (borrower: typeof second) => [
+          readFileSync(borrower.file(product)),
+          listDirectoryTreeStrictSync(borrower.file(symbols)).map(({ relativePath }) => [
+            relativePath,
+            statSync(borrower.file(symbols, relativePath)).isFile()
+              ? readFileSync(borrower.file(symbols, relativePath))
+              : null,
+          ]),
+        ];
+        const expectedContents = snapshot(second);
+        const expectedUUIDs = [...second.expectedUUIDs];
+        // Truncation preserves the inode, exposing hardlinks or a shared seed directory.
+        writeFileSync(first.file(product), "damaged binary");
+        writeFileSync(first.file(dwarf), "damaged DWARF");
+        first.expectedUUIDs.push("borrower-local UUID");
+        expect(snapshot(second)).toEqual(expectedContents);
+        rmSync(first.root, { recursive: true });
+        f = makeDistributionFixture("native");
+        expect(setup).toHaveBeenCalledTimes(6);
+        expect(snapshot(f)).toEqual(expectedContents);
+        expect(second.expectedUUIDs).toEqual(expectedUUIDs);
+        expect(f.expectedUUIDs).toEqual(expectedUUIDs);
+        expect(f.expectedUUIDs).not.toBe(second.expectedUUIDs);
+      } finally {
+        setup.mockRestore();
+        syncBuiltinESMExports();
+      }
+    } else {
+      f = makeDistributionFixture("native");
+    }
     const app = f.file("dist/OpenClaw.app");
     f.tool("/usr/bin/codesign", ["--force", "--sign", "-", app]);
     f.tool("git", ["init", "--quiet"]);

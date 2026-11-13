@@ -8,6 +8,7 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { appendSessionResetBoundary } from "./session-accessor.sqlite-reset-boundary.js";
+import { commitSessionCreationReceipt } from "./session-creation-receipts.js";
 import type { SessionResetCommit } from "./session-reset.types.js";
 
 /** Durable executor and retained native incognito/maintenance resets share this transaction. */
@@ -39,5 +40,13 @@ export function applySessionResetInDatabase(
   const written = writeSessionEntry(database, input.target.canonicalKey, input.nextEntry, {
     previousEntry: current?.entry ?? null,
   });
+  if (input.creationOperation) {
+    commitSessionCreationReceipt(
+      database,
+      input.creationOperation,
+      input.target.canonicalKey,
+      written,
+    );
+  }
   return { current, written, progressCardReset };
 }

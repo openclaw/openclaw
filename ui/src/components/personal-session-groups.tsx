@@ -18,6 +18,7 @@ import { Menu } from "./solid/menu.tsx";
 registerEnglishCatalog(registerSessionOrganizationSharedEnglish);
 
 const GROUP_DRAG_TYPE = "application/x-openclaw-personal-session-group";
+const REFERENCE_DRAG_TYPE = "application/x-openclaw-personal-session-reference";
 
 /** Personal navigation owns these references; no session/group RPC participates. */
 export function PersonalSessionGroups(props: { host: SidebarSessionListHost }) {
@@ -36,6 +37,7 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
   const navigation = projectOwner(context.navigation, (owner) => owner.snapshot);
   const groups = createMemo(() => navigation.read().personalSessionGroups ?? []);
   const [dropTarget, setDropTarget] = createSignal<string | null>(null);
+  let dragSource: { id: string; key: string; current: () => boolean } | undefined;
   const resolve = (key: string) =>
     props.host.resolvePersonalGroupSession
       ? props.host.resolvePersonalGroupSession(key)
@@ -77,14 +79,45 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
     if (!key || !row?.pinnable || row.archived) {
       return;
     }
-    const group = groups().find((candidate) => candidate.id === id);
-    if (!group || group.sessionKeys.includes(key)) {
+    const currentGroups = context.navigation.snapshot.personalSessionGroups ?? [];
+    const referenceSourceId = event.dataTransfer?.getData(REFERENCE_DRAG_TYPE);
+    // Only this connection's drag can move a reference. Foreign or retired drags cannot
+    // remove a same-named section's membership from the current profile.
+    if (
+      referenceSourceId &&
+      (dragSource?.id !== referenceSourceId || dragSource.key !== key || !dragSource.current())
+    ) {
       return;
     }
-    const updated = { ...group, sessionKeys: [...group.sessionKeys, key] };
-    const error = write(groups().map((candidate) => (candidate.id === id ? updated : candidate)));
+    const group = currentGroups.find((candidate) => candidate.id === id);
+    if (
+      !group ||
+      referenceSourceId === id ||
+      (referenceSourceId &&
+        !currentGroups.some(
+          (candidate) => candidate.id === referenceSourceId && candidate.sessionKeys.includes(key),
+        )) ||
+      (!referenceSourceId && group.sessionKeys.includes(key))
+    ) {
+      return;
+    }
+    const next: PersonalSessionGroup[] = [];
+    for (const candidate of currentGroups) {
+      if (candidate.id === referenceSourceId) {
+        next.push({
+          ...candidate,
+          sessionKeys: candidate.sessionKeys.filter((entry) => entry !== key),
+        });
+      } else if (candidate.id === id && !candidate.sessionKeys.includes(key)) {
+        next.push({ ...candidate, sessionKeys: [...candidate.sessionKeys, key] });
+      } else {
+        next.push(candidate);
+      }
+    }
+    const error = write(next);
+    dragSource = undefined;
     if (error) {
-      showToast({ message: error });
+      showToast({ severity: "error", message: error });
     }
     props.host.sessionOrganizer.finishSessionDrag();
   };
@@ -106,6 +139,25 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
                 },
               ]}
               data-personal-session-group={group().id}
+              onDragStart={(event: DragEvent) => {
+                dragSource = undefined;
+                const key = readSessionDragData(event.dataTransfer);
+                if (!event.dataTransfer || !key || !group().sessionKeys.includes(key)) {
+                  return;
+                }
+                event.dataTransfer.setData(REFERENCE_DRAG_TYPE, group().id);
+                const scope = context.sessions.captureConnectionScope();
+                if (scope) {
+                  dragSource = {
+                    id: group().id,
+                    key,
+                    current: () => context.sessions.isConnectionScopeCurrent(scope),
+                  };
+                }
+              }}
+              onDragEnd={() => {
+                dragSource = undefined;
+              }}
               onDragOver={(event: DragEvent) => {
                 if (
                   sessionDragActive(event.dataTransfer) ||
@@ -195,7 +247,10 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
                       void edit(group().id);
                     } else if (item.id === "remove") {
                       write(groups().filter((candidate) => candidate.id !== group().id));
-                      showToast({ message: t("sessionsView.personalGroupRemoved") });
+                      showToast({
+                        severity: "success",
+                        message: t("sessionsView.personalGroupRemoved"),
+                      });
                     } else {
                       move(group().id, item.id === "up" ? -1 : 1);
                     }

@@ -85,9 +85,9 @@ it("retires a held delete before rendering the destination route and ignores its
 
     await context.navigateAndWait("about");
     await waitForSolid(() => {
-      expect(container.querySelector("openclaw-about-page .about-hero__name")?.textContent).toBe(
-        "OpenClaw",
-      );
+      expect(
+        container.querySelector("openclaw-about-page .about-identity__name")?.textContent,
+      ).toBe("OpenClaw");
       expect(container.querySelector("openclaw-sessions-page")).toBeNull();
       expect(container.textContent).not.toContain(row.label);
       expect(container.textContent).not.toContain("Working…");
@@ -96,9 +96,9 @@ it("retires a held delete before rendering the destination route and ignores its
     pending.reject(new Error("Late deleted-session failure"));
     await Promise.allSettled([deletion.mock.results[0]!.value]);
     await waitForSolid(() => {
-      expect(container.querySelector("openclaw-about-page .about-hero__name")?.textContent).toBe(
-        "OpenClaw",
-      );
+      expect(
+        container.querySelector("openclaw-about-page .about-identity__name")?.textContent,
+      ).toBe("OpenClaw");
       expect(container.querySelector("openclaw-sessions-page")).toBeNull();
       expect(document.body.textContent).not.toContain("Late deleted-session failure");
     });

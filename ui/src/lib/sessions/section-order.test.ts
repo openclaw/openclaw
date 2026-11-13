@@ -28,10 +28,6 @@ describe("gateway-owned sidebar section order", () => {
           sectionOrder,
         };
       }
-      if (method === "sessions.groups.defaults") {
-        expect(params).toEqual({});
-        return { defaults: [] };
-      }
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
@@ -43,7 +39,7 @@ describe("gateway-owned sidebar section order", () => {
         assistantAgentId: "main",
         hello: {
           features: {
-            methods: ["sessions.groups.put", "sessions.groups.list", "sessions.groups.defaults"],
+            methods: ["sessions.groups.put", "sessions.groups.list"],
           },
         } as GatewayHelloOk,
       },

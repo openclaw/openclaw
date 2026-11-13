@@ -8,7 +8,7 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   readSkillUsageInDatabase as readUsage,
   recordSkillUsageInDatabase as recordUsage,
-} from "../skills/workshop/skill-usage.kernel.js";
+} from "../skills/runtime/skill-usage.kernel.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync as closeState,

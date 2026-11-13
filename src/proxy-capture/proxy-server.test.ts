@@ -26,7 +26,7 @@ function originalMethod<Owner, Key extends keyof Owner>(owner: Owner, key: Key) 
   return owner[key];
 }
 
-async function startProxy() {
+async function startProxy(host?: string) {
   const testRoot = tempDirs.make("openclaw-debug-proxy-server-");
   vi.stubEnv("OPENCLAW_STATE_DIR", testRoot);
   const settings = {
@@ -35,7 +35,7 @@ async function startProxy() {
     sessionId: "debug-proxy-server-test",
     sourceProcess: "test",
   };
-  const proxy = await startDebugProxyServer({ settings });
+  const proxy = await startDebugProxyServer({ settings, host });
   cleanup.push(proxy.stop);
   const events = () =>
     createDebugProxyCaptureReaderAsync({ env: process.env }).getSessionEvents(
@@ -288,9 +288,9 @@ afterEach(async () => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("startDebugProxyServer", () => {
-  it("caps UTF-8 previews on character boundaries while forwarding full bodies", async () => {
+  it.each(["127.0.0.1", "::1"])("forwards and captures UTF-8 on %s", async (host) => {
     const origin = await startOrigin(`${"r".repeat(8191)}😀tail`);
-    const { proxy, captured } = await startProxy();
+    const { proxy, captured } = await startProxy(host);
     const requestBody = `${"q".repeat(8191)}étail`;
 
     const response = await getThroughProxy(proxy.proxyUrl, origin.url, requestBody);

@@ -1,9 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import {
-  migrateMemoryIndexSourcesIdentity,
-  migrateMemoryIndexStorage,
-} from "../../packages/memory-host-sdk/src/host/memory-schema.js";
-import { migrateSessionCostUsageRollupStorage } from "../infra/session-cost-usage-cache-migration.js";
+import { migrateMemoryIndexSourcesIdentity } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { revokeSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
 import {
@@ -30,12 +26,13 @@ import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { configureSqlitePreSchemaPragmas } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import {
-  admitAgentDatabaseStartupStructure,
-  type AgentDatabaseStartupIntegrity,
-} from "./agent-database-startup-integrity.js";
+import { admitAgentDatabaseRuntimeStructure } from "./agent-database-startup-integrity.js";
 import { assertAgentDeletionRecoveryAllowsMutation } from "./agent-deletion-journal-recovery.js";
 import * as agentDeletion from "./agent-deletion-journal.js";
+import {
+  AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION,
+  AGENT_ACTIVE_EVENT_FACTS_SQL,
+} from "./openclaw-agent-active-event-facts-schema.js";
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "./openclaw-agent-board-schema.js";
 import {
   ensureLegacySessionEntryValidityTriggers,
@@ -48,6 +45,10 @@ import {
 } from "./openclaw-agent-canonical-validation-schema.js";
 import { AGENT_COLD_ARCHIVE_CHUNKS_SQL } from "./openclaw-agent-cold-archive-chunks-schema.js";
 import { migrateAgentColdNavigationInTransaction } from "./openclaw-agent-cold-navigation-schema.js";
+import {
+  AGENT_CREATION_OPERATIONS_SCHEMA_VERSION,
+  AGENT_CREATION_OPERATIONS_SQL,
+} from "./openclaw-agent-creation-operations-schema.js";
 import {
   AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION,
   AGENT_COLD_NAVIGATION_SCHEMA_VERSION,
@@ -62,7 +63,6 @@ import {
   CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
   CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
-  TRANSCRIPT_FTS_ROW_SCHEMA_VERSION,
   type OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
 import * as maintenanceAuthority from "./openclaw-agent-db-lease.js";
@@ -118,13 +118,16 @@ import {
   SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION,
   withoutSessionEntrySnapshotsSchema,
 } from "./openclaw-agent-session-snapshots-schema.js";
+import { migrateAgentStorageInTransaction } from "./openclaw-agent-storage-migration.js";
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
+import {
+  AGENT_TOOL_USAGE_SCHEMA_VERSION,
+  AGENT_TOOL_USAGE_SQL,
+} from "./openclaw-agent-tool-usage-schema.js";
 import {
   migrateAgentTrajectoryStorageInTransaction,
   withoutTrajectoryPayloadColumns,
 } from "./openclaw-agent-trajectory-storage-migration.js";
-import { migrateDeployedTranscriptFtsRowsInTransaction } from "./openclaw-agent-transcript-fts-schema.js";
-import { migrateTranscriptPayloadStorageInTransaction } from "./openclaw-agent-transcript-payload-migration.js";
 import { migrateAgentWriteLayoutInTransaction } from "./openclaw-agent-write-layout-migration.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
@@ -140,15 +143,27 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
   database: DatabaseSync,
   agentId: string,
   pathname: string,
-  diagnostics?: SqliteIntegrityDiagnostics,
-  verification?: { verifiedAt: number },
-  reuseRuntimeIntegrity = false,
-  admittedSchema = false,
-  integrityCheck?: "quick" | "full",
-  integrityTables?: readonly string[],
-  startupIntegrity?: AgentDatabaseStartupIntegrity,
+  {
+    runtimeAdmission = false,
+    diagnostics,
+    verification,
+    reuseRuntimeIntegrity = false,
+    admittedSchema = false,
+    integrityCheck,
+    integrityTables,
+  }: {
+    runtimeAdmission?: boolean;
+    diagnostics?: SqliteIntegrityDiagnostics;
+    verification?: { verifiedAt: number };
+    reuseRuntimeIntegrity?: boolean;
+    admittedSchema?: boolean;
+    integrityCheck?: "quick" | "full";
+    integrityTables?: readonly string[];
+  } = {},
 ): SqliteIntegrityOperation<boolean> {
-  if (reuseRuntimeIntegrity && admittedSchema) {
+  // Bounded runtime admission is not the verification required by startup or maintenance.
+  const reuseAdmission = runtimeAdmission && reuseRuntimeIntegrity;
+  if (reuseAdmission && admittedSchema) {
     if (diagnostics) {
       diagnostics.integrityGateOutcome = "cached";
     }
@@ -180,46 +195,34 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     integrityCheck,
   );
   const startedAt = performance.now();
-  if (diagnostics?.integrityGateReason === "stale-lease-full" && diagnostics.because) {
-    agentDbLog.info(
-      `agent database integrityGateReason=stale-lease-full because=${diagnostics.because}`,
-      {
-        agentId,
-        path: pathname,
-        ...diagnostics,
-      },
-    );
-  }
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
-    if (
-      !verification &&
-      !reuseRuntimeIntegrity &&
-      integrityCheck !== "full" &&
-      admitAgentDatabaseStartupStructure(database, pathname, agentId, startupIntegrity, diagnostics)
-    ) {
-      return false;
-    }
+    const boundedIndexes =
+      runtimeAdmission && !verification && !reuseAdmission && integrityCheck !== "full"
+        ? admitAgentDatabaseRuntimeStructure(database, pathname, agentId, diagnostics)
+        : undefined;
     const reuseIntegrity =
-      reuseRuntimeIntegrity ||
+      reuseAdmission ||
       (verification !== undefined && !migrationPending && !hasPendingCurrentVersionMigration);
     const validateSchema = (readTable?: SqliteTableContractReader) =>
       assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }, readTable);
-    const rebuiltIndexes = yield* verifyAndRepairCanonicalSqliteIndexSteps(
-      database,
-      pathname,
-      OPENCLAW_AGENT_SCHEMA_SQL,
-      {
-        allowMissingColumns: true,
-        validateAfterRepair: validateSchema,
-        validateUnchanged: validateSchema,
-        diagnostics,
-        reuseIntegrity,
-        // Current-schema callbacks do not repeat historical migration table coverage.
-        integrity: integrityCheck
-          ? { ...integrity, tables: integrityTables ?? integrity.tables }
-          : undefined,
-      },
-    );
+    const rebuiltIndexes =
+      boundedIndexes ??
+      (yield* verifyAndRepairCanonicalSqliteIndexSteps(
+        database,
+        pathname,
+        OPENCLAW_AGENT_SCHEMA_SQL,
+        {
+          allowMissingColumns: true,
+          validateAfterRepair: validateSchema,
+          validateUnchanged: validateSchema,
+          diagnostics,
+          reuseIntegrity,
+          // Current-schema callbacks do not repeat historical migration table coverage.
+          integrity: integrityCheck
+            ? { ...integrity, tables: integrityTables ?? integrity.tables }
+            : undefined,
+        },
+      ));
     if (rebuiltIndexes.length > 0) {
       agentDbLog.warn(
         `Rebuilt canonical agent SQLite indexes for ${agentId} (${pathname}): ${rebuiltIndexes.join(", ")}`,
@@ -244,45 +247,6 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     yield* sqliteIntegrityCheckSteps(database, pathname, diagnostics, integrity);
   }
   return hasPendingCurrentVersionMigration;
-}
-
-function migrateAgentStorageInTransaction(
-  db: DatabaseSync,
-  schemaSql: string,
-  previousVersion: number,
-  warnings: string[],
-): void {
-  maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
-  if (previousVersion === TRANSCRIPT_FTS_ROW_SCHEMA_VERSION) {
-    migrateDeployedTranscriptFtsRowsInTransaction(db, schemaSql);
-  } else if (
-    db.prepare("SELECT 1 FROM sqlite_schema WHERE name = ?").get("session_transcript_fts_rows")
-  ) {
-    throw new Error(
-      "Transcript FTS row map already exists before the schema-23 storage migration.",
-    );
-  }
-  maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
-  migrateTranscriptPayloadStorageInTransaction(db, schemaSql);
-  maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
-  migrateMemoryIndexStorage(db, {
-    renewAuthority: maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent,
-    onWarning: (warning) => warnings.push(warning),
-  });
-  maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
-  migrateSessionCostUsageRollupStorage(
-    db,
-    maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent,
-  );
-  maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
-  db.exec(schemaSql);
-  // Keep native 64-bit rowids, duplicate message IDs and FTS tie ordering intact.
-  if (previousVersion !== TRANSCRIPT_FTS_ROW_SCHEMA_VERSION) {
-    db.exec(`
-    INSERT INTO session_transcript_fts_rows (id, session_id, message_id)
-    SELECT rowid, session_id, message_id FROM session_transcript_fts;
-  `);
-  }
 }
 
 type AgentSchemaMutationGuard = <T>(run: () => T) => T;
@@ -420,6 +384,15 @@ function ensureAgentSchema(
         if (crossesVersion(AGENT_COLD_NAVIGATION_SCHEMA_VERSION)) {
           migrateAgentColdNavigationInTransaction(db);
         }
+        if (crossesVersion(AGENT_CREATION_OPERATIONS_SCHEMA_VERSION)) {
+          db.exec(AGENT_CREATION_OPERATIONS_SQL);
+        }
+        if (crossesVersion(AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION)) {
+          db.exec(AGENT_ACTIVE_EVENT_FACTS_SQL);
+        }
+        if (crossesVersion(AGENT_TOOL_USAGE_SCHEMA_VERSION)) {
+          db.exec(AGENT_TOOL_USAGE_SQL);
+        }
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.
         if (previousVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION) {
@@ -437,11 +410,24 @@ function ensureAgentSchema(
           identityMigration,
           assertMigration,
           schemaMigration
-            ? resolveSchemaMigrationIntegrityTables({
-                kind: "agent",
-                foundVersion: previousVersion,
-                supportedVersion: targetVersion,
-              })
+            ? {
+                tables: resolveSchemaMigrationIntegrityTables({
+                  kind: "agent",
+                  foundVersion: previousVersion,
+                  supportedVersion: targetVersion,
+                }),
+                // These empty-table steps do not change existing relations. Only v41 adds a FK.
+                ...(previousVersion >= 40 &&
+                targetVersion <= AGENT_TOOL_USAGE_SCHEMA_VERSION &&
+                integrity.check === "quick"
+                  ? {
+                      foreignKeyTables:
+                        previousVersion < AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION
+                          ? ["session_transcript_active_event_facts"]
+                          : [],
+                    }
+                  : {}),
+              }
             : undefined,
         );
       };
@@ -691,16 +677,9 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
   // The version-phase owner admitted every selected database before its scoped
   // checkpoint, under the same Doctor custody retained through this write.
   if (!options.versionMigrationOnly && readSqliteUserVersion(db) !== AGENT_MEDIA_SCHEMA_VERSION) {
-    const integrity = agentDatabaseIntegrityBeforeMutationSteps(
-      db,
-      agentId,
-      pathname,
-      undefined,
-      undefined,
-      false,
-      false,
-      options.integrityCheck,
-    );
+    const integrity = agentDatabaseIntegrityBeforeMutationSteps(db, agentId, pathname, {
+      integrityCheck: options.integrityCheck,
+    });
     try {
       let step = withIntegrityMutation(() => integrity.next());
       while (!step.done) {

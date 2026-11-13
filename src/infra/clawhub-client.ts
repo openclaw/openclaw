@@ -17,6 +17,8 @@ import {
   readResponseTextSnippet,
   readResponseWithLimit,
 } from "./http-body.js";
+import { fetchWithSsrFGuard, withTrustedEnvProxyGuardedFetchMode } from "./net/fetch-guard.js";
+import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "./net/ssrf.js";
 
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
@@ -192,14 +194,15 @@ async function requestClawHub(params: ClawHubRequestParams) {
   if (params.json !== undefined && params.form !== undefined) {
     throw new Error("ClawHub requests cannot contain both JSON and multipart bodies");
   }
+  const baseUrl = resolveClawHubBaseUrl(params.baseUrl);
   let url: URL;
   if (params.url) {
-    url = new URL(params.url, `${resolveClawHubBaseUrl(params.baseUrl)}/`);
+    url = new URL(params.url, `${baseUrl}/`);
   } else {
     if (!params.path) {
       throw new Error("ClawHub request path is required");
     }
-    url = new URL(`${resolveClawHubBaseUrl(params.baseUrl)}/`);
+    url = new URL(`${baseUrl}/`);
     const basePath = url.pathname.replace(/\/+$/, "");
     const requestPath = params.path.startsWith("/") ? params.path : `/${params.path}`;
     url.pathname = `${basePath}${requestPath}`;
@@ -249,13 +252,20 @@ async function requestClawHub(params: ClawHubRequestParams) {
       timeout = undefined;
     };
     try {
-      const response = await fetch(url, {
-        ...init,
-        signal: params.signal
-          ? AbortSignal.any([controller.signal, params.signal])
-          : controller.signal,
-      });
-      return { response, url, hasToken: Boolean(token), releaseDeadline };
+      // Only the operator-configured base origin may be private (self-hosted registries).
+      // Resolver URLs and every redirect hop elsewhere must reach public addresses.
+      const { response, release } = await fetchWithSsrFGuard(
+        withTrustedEnvProxyGuardedFetchMode({
+          url: url.toString(),
+          init,
+          signal: params.signal
+            ? AbortSignal.any([controller.signal, params.signal])
+            : controller.signal,
+          policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
+          auditContext: "clawhub",
+        }),
+      );
+      return { response, url, hasToken: Boolean(token), releaseDeadline, release };
     } catch (error) {
       releaseDeadline();
       throw error;
@@ -269,9 +279,10 @@ async function requestClawHub(params: ClawHubRequestParams) {
   }
   return await retryClawHubRead(request, {
     sleep: params.signal ? (ms) => sleepWithAbort(ms, params.signal) : undefined,
-    disposeRetry: async ({ response, releaseDeadline }) => {
+    disposeRetry: async ({ response, releaseDeadline, release }) => {
       releaseDeadline();
       await cancelUnreadResponseBody(response);
+      await release();
     },
   });
 }
@@ -286,7 +297,9 @@ export async function withClawHubResponse<T>(
     return await consume(result);
   } finally {
     result.releaseDeadline();
+    // Cancel before release: the guard's release aborts, which would error the unread body.
     await cancelUnreadResponseBody(result.response);
+    await result.release();
   }
 }
 

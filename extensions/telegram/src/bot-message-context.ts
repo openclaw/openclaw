@@ -108,6 +108,7 @@ export const buildTelegramMessageContext = async ({
   replyMedia = [],
   replyChain = [],
   promptContext = [],
+  resolveSenderMedia,
   storeAllowFrom,
   options,
   bot,
@@ -421,12 +422,17 @@ export const buildTelegramMessageContext = async ({
     }
   }
 
+  const senderMedia =
+    isGroup && requireMention && bodyResult.effectiveWasMentioned && !bodyResult.commandSource
+      ? await resolveSenderMedia?.()
+      : undefined;
   const { ctxPayload, skillFilter, turn } = await buildTelegramInboundContextPayload({
     ...inboundContext,
+    ...(senderMedia ? { allMedia: [...allMedia, ...senderMedia.media] } : {}),
     conversationAvatar: resolveDirectAvatar?.(primaryCtx, cfg),
     replyMedia,
     replyChain,
-    promptContext,
+    promptContext: senderMedia?.promptContext ?? promptContext,
     isForum,
     dmThreadId,
     route,

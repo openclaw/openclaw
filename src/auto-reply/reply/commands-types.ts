@@ -34,6 +34,8 @@ export type CommandContext = {
   /** Captured host owner capability, rechecked by handlers at awaited effect boundaries. */
   assertOwnerCurrent?: () => void;
   isAuthorizedSender: boolean;
+  /** Original command admission, rechecked after awaited preparation. */
+  assertAuthorizedCurrent?: () => void;
   senderId?: string;
   abortKey?: string;
   rawBodyNormalized: string;

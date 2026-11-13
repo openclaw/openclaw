@@ -216,6 +216,7 @@ export function createJob(
   delete initialState.scheduleActivatedAtMs;
   delete initialState.runningScheduleChangeId;
   delete initialState.autoDisabled;
+  delete initialState.admissionDeferred;
   delete initialState.lastMeaningfulResult;
   delete initialState.sourceIdentity;
   delete initialState.streamSourceIdentity;
@@ -445,6 +446,7 @@ export function applyJobPatch(
     delete statePatch.scheduleActivatedAtMs;
     delete statePatch.runningScheduleChangeId;
     delete statePatch.autoDisabled;
+    delete statePatch.admissionDeferred;
     delete statePatch.lastMeaningfulResult;
     delete statePatch.sourceIdentity;
     delete statePatch.streamSourceIdentity;

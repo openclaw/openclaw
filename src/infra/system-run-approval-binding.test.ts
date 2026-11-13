@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -272,10 +273,42 @@ describe("matchSystemRunApprovalBinding", () => {
 
 describe("mutable file operand binding", () => {
   afterEach(() => vi.restoreAllMocks());
+  it("prepares and revalidates executable approval bindings without synchronous filesystem calls", async () => {
+    await withTempDir("openclaw-approval-async-", async (cwd) => {
+      const executable = path.join(cwd, "approved-command");
+      await fsp.writeFile(executable, "#!/bin/sh\necho approved\n", { mode: 0o755 });
+      const argv = [executable];
+      const resolution = await resolveCommandResolutionFromArgv(argv, cwd);
+      const syncCalls = [
+        vi.spyOn(fs, "statSync"),
+        vi.spyOn(fs, "lstatSync"),
+        vi.spyOn(fs, "accessSync"),
+        vi.spyOn(fs, "realpathSync"),
+        vi.spyOn(fs, "readFileSync"),
+        vi.spyOn(fs, "openSync"),
+      ];
+      try {
+        const binding = await bind(
+          {
+            kind: "segments",
+            segments: [{ raw: executable, argv, resolution }],
+            shellCommand: false,
+          },
+          cwd,
+        );
+        await expectRevalidation(binding, cwd);
+        await fsp.writeFile(executable, "#!/bin/sh\necho replaced\n");
+        await expectRevalidation(binding, cwd, false);
+        expect(syncCalls.map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      } finally {
+        syncCalls.forEach((spy) => spy.mockRestore());
+      }
+    });
+  });
   it.runIf(process.platform !== "win32")(
     "binds protected executable identity without hashing or requiring one-shot approval",
     async () => {
-      vi.spyOn(mutableFilePolicy, "pathLooksMutableForShellPayloadSync").mockReturnValue(false);
+      vi.spyOn(mutableFilePolicy, "pathLooksMutableForShellPayload").mockResolvedValue(false);
       const binding = await bind({ kind: "shell", text: "ls *.ts" }, undefined, { PATH: "/bin" });
       expect(binding.operands).toEqual([
         expect.objectContaining({
@@ -286,7 +319,7 @@ describe("mutable file operand binding", () => {
           pathSearch: expect.objectContaining({ path: "/bin" }),
         }),
       ]);
-      const reads = vi.spyOn(fs, "readFileSync");
+      const reads = vi.spyOn(fsp, "readFile");
       await expectRevalidation(binding);
       expect(reads).not.toHaveBeenCalled();
       reads.mockRestore();
@@ -294,8 +327,8 @@ describe("mutable file operand binding", () => {
         await prepareSystemRunMutableFileApproval({ command: "/bin/ls *.ts" }),
       );
       expect(approval.requiresOneShot).toBe(false);
-      const access = fs.accessSync;
-      vi.spyOn(fs, "accessSync").mockImplementation((target, mode) => {
+      const access = fsp.access;
+      vi.spyOn(fsp, "access").mockImplementation(async (target, mode) => {
         if (target === "/bin/ls") {
           throw new Error("synthetic executable unavailable");
         }
@@ -308,22 +341,26 @@ describe("mutable file operand binding", () => {
   it.runIf(process.platform !== "win32")(
     "denies protected executable resolution drift after preparation",
     async () => {
-      vi.spyOn(mutableFilePolicy, "pathLooksMutableForShellPayloadSync").mockReturnValue(false);
-      const resolution = commandResolution.resolveCommandResolutionFromArgv(["ls"], undefined, {
-        PATH: "/bin:/usr/bin",
-      });
+      vi.spyOn(mutableFilePolicy, "pathLooksMutableForShellPayload").mockResolvedValue(false);
+      const resolution = await commandResolution.resolveCommandResolutionFromArgv(
+        ["ls"],
+        undefined,
+        {
+          PATH: "/bin:/usr/bin",
+        },
+      );
       if (!resolution) {
         throw new Error("expected executable resolution");
       }
       const resolve = vi
         .spyOn(commandResolution, "resolveCommandResolutionFromArgv")
-        .mockReturnValue(resolution);
+        .mockResolvedValue(resolution);
       const binding = await bind(
         { kind: "segments", segments: [{ argv: ["ls", "*.ts"], raw: "ls *.ts", resolution }] },
         undefined,
         { PATH: "/bin:/usr/bin" },
       );
-      resolve.mockReturnValue({
+      resolve.mockResolvedValue({
         ...resolution,
         execution: { ...resolution.execution, resolvedRealPath: "/synthetic/changed/ls" },
       });
@@ -595,9 +632,9 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
       fs.chmodSync(carrierPath, 0o755);
       const env = { PATH: `${cwd}${path.delimiter}${systemPath}` };
       const argv = [...prefix, "command", "true"];
-      const resolution = resolveCommandResolutionFromArgv(argv, cwd, env);
+      const resolution = await resolveCommandResolutionFromArgv(argv, cwd, env);
       expect(resolution?.execution.resolvedRealPath).toBe(fs.realpathSync("/usr/bin/true"));
-      const prepared = prepareSystemRunExecutableIdentityBinding({
+      const prepared = await prepareSystemRunExecutableIdentityBinding({
         segments: [{ argv, raw: argv.join(" "), resolution }],
         cwd,
         env,
@@ -616,10 +653,10 @@ describe.runIf(process.platform !== "win32")("dispatch wrapper executable bindin
     withTempDir("openclaw-wrapper-unavailable-", async (cwd) => {
       const argv = [path.join(cwd, "toybox"), "sh", "-c", "true"];
       const env = { PATH: systemPath };
-      const resolution = resolveCommandResolutionFromArgv(argv, cwd, env);
+      const resolution = await resolveCommandResolutionFromArgv(argv, cwd, env);
       expect(resolution?.execution.resolvedRealPath).toBeTruthy();
       expect(
-        prepareSystemRunExecutableIdentityBinding({
+        await prepareSystemRunExecutableIdentityBinding({
           segments: [{ argv, raw: argv.join(" "), resolution }],
           cwd,
           env,

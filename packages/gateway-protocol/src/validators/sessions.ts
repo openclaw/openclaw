@@ -283,6 +283,10 @@ export const validateSessionsGroupsDefaultsResult = createProtocolValidator(
   S.SessionsGroupsDefaultsResultSchema,
   Checks.isSessionsGroupsDefaultsResult,
 );
+export const validateSessionsGroupsCreateParams = createProtocolValidator(
+  S.SessionsGroupsCreateParamsSchema,
+  Checks.isSessionsGroupsCreateParams,
+);
 export const validateSessionsGroupsPutParams = createProtocolValidator(
   S.SessionsGroupsPutParamsSchema,
   Checks.isSessionsGroupsPutParams,

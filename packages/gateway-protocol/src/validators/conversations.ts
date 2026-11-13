@@ -234,6 +234,10 @@ export const validateChatPendingInputsDismissParams = createProtocolValidator(
   S.ChatPendingInputsDismissParamsSchema,
   Checks.isChatPendingInputsDismissParams,
 );
+export const validateChatSteerNowParams = createProtocolValidator(
+  S.ChatSteerNowParamsSchema,
+  Checks.isChatSteerNowParams,
+);
 export const validateChatPredictParams = createProtocolValidator(
   S.ChatPredictParamsSchema,
   Checks.isChatPredictParams,

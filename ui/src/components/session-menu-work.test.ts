@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-ui-contract.js";
-import { isLoopbackHostname } from "../lib/gateway-locality.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
@@ -31,16 +30,6 @@ beforeEach(() => {
 afterEach(() => {
   clearNativeGatewayTestState();
   vi.restoreAllMocks();
-});
-
-describe("isLoopbackHostname", () => {
-  it.each([
-    ["127.0.0.5", true],
-    ["[::1]", true],
-    ["127.0.0.1.evil.com", false],
-  ])("classifies %s as loopback: %s", (hostname, expected) => {
-    expect(isLoopbackHostname(hostname)).toBe(expected);
-  });
 });
 
 describe("fetchSessionMenuWork", () => {

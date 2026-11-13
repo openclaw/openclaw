@@ -129,6 +129,10 @@ unresolved SecretRef on the selected channel/account fails the action closed.
 | `search`        | Discord, Microsoft Teams                                                                                        | `--query`                                                      | `--guild-id` (Discord; resolved from `--channel-id` when omitted), `--channel-id` (required for Microsoft Teams as Graph `<team-id>/<channel-id>`), `--channel-ids` (repeat), `--author-id`, `--author-ids` (repeat), `--limit`.                                                                       |
 | `member info`   | Discord, Matrix, Microsoft Teams, Slack                                                                         | `--user-id`                                                    | `--channel-id` (required for Matrix and Microsoft Teams), `--guild-id` (Discord).                                                                                                                                                                                                                      |
 
+On Discord, Matrix, and Slack, `pins --limit <n>` returns at most `<n>` pinned
+messages in the same order as an unlimited listing, including in `--json` output.
+Omit `--limit` to list all pins on these channels.
+
 Reaction listings show labels, counts, and available users as plain terminal text.
 Use `--json` for the complete channel result.
 

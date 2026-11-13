@@ -268,6 +268,8 @@ export function createChatState<TState extends ChatPageHost>(
           () => {
             if (!state.chatQueuedEdit && hasPrivateDraft(state)) {
               showToast({
+                severity: "error",
+                actionPrimary: true,
                 message: t("chat.privateDraftReload.blocked"),
                 actionLabel: t("chat.privateDraftReload.review"),
                 onAction: () => void reviewPrivateDraft(state),
@@ -277,6 +279,8 @@ export function createChatState<TState extends ChatPageHost>(
             const edit = state.chatQueuedEdit;
             const client = state.client;
             showToast({
+              severity: "error",
+              actionPrimary: true,
               message: t("chat.queue.reloadBlocked"),
               actionLabel: state.reviewQueuedMessageEdit ? t("chat.queue.reviewEdit") : undefined,
               onAction: () => {
@@ -330,8 +334,7 @@ export function createChatState<TState extends ChatPageHost>(
     publishPendingRunState() {
       const state = stateValue;
       if (state?.chatStreamRenderFrame != null) {
-        chatRunPresentation(state).cancelFrame();
-        chatRunPresentation(state).publish();
+        chatRunPresentation(state).publish("immediate", false);
       }
     },
 
@@ -481,7 +484,7 @@ export function createChatState<TState extends ChatPageHost>(
       await retryReload?.();
     } catch {
       if (review.isCurrent()) {
-        showToast({ message: t("chat.privateDraftReload.unavailable") });
+        showToast({ severity: "error", message: t("chat.privateDraftReload.unavailable") });
       }
     } finally {
       if (privateDraftReview === review) {
@@ -495,6 +498,8 @@ export function createChatState<TState extends ChatPageHost>(
         hasPrivateDraft(state)
       ) {
         showToast({
+          severity: "error",
+          actionPrimary: true,
           message: t("chat.privateDraftReload.changed"),
           actionLabel: t("chat.privateDraftReload.review"),
           onAction: () => void reviewPrivateDraft(state),

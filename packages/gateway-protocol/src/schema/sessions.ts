@@ -511,6 +511,8 @@ export const SessionsMessagesSubscribeParamsSchema = closedObject({
   mode: Type.Optional(Type.Literal("narration")),
   /** Opt in to sanitized durable approval events for this session and its descendants. */
   includeApprovals: Type.Optional(Type.Literal(true)),
+  /** Opt in to optional live tool stdout; legacy tool updates and history are unchanged. */
+  includeLiveToolOutput: Type.Optional(Type.Literal(true)),
   /** Read the first transcript snapshot after this observer is admitted. */
   initialHistory: Type.Optional(
     closedObject({
@@ -544,6 +546,8 @@ export const SessionsAbortParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   /** Also discard followup and lane queues for a key-only non-global session abort. */
   clearQueued: Type.Optional(Type.Boolean()),
+  /** Explicit Stop action; presentation only, never cancellation authority. */
+  userInitiated: Type.Optional(Type.Boolean()),
 });
 
 /** Updates or clears one plugin namespace value on a session record. */
@@ -613,6 +617,11 @@ export const SessionsGroupsDefaultsParamsSchema = closedObject({});
 /** Write-scoped group defaults, kept separate from the read-scoped catalog. */
 export const SessionsGroupsDefaultsResultSchema = closedObject({
   defaults: Type.Array(SessionGroupDefaultsSchema),
+});
+
+/** Atomically adds a group without replacing existing groups, defaults, or order. */
+export const SessionsGroupsCreateParamsSchema = closedObject({
+  name: Type.String({ ...SessionLabelString, pattern: "\\S" }),
 });
 
 /** Replaces the ordered group catalog; creates listed names, keeps member categories untouched. */
@@ -813,6 +822,7 @@ export type SessionsGroupsListParams = Static<typeof SessionsGroupsListParamsSch
 export type SessionsGroupsListResult = Static<typeof SessionsGroupsListResultSchema>;
 export type SessionsGroupsDefaultsParams = Static<typeof SessionsGroupsDefaultsParamsSchema>;
 export type SessionsGroupsDefaultsResult = Static<typeof SessionsGroupsDefaultsResultSchema>;
+export type SessionsGroupsCreateParams = Static<typeof SessionsGroupsCreateParamsSchema>;
 export type SessionsGroupsPutParams = Static<typeof SessionsGroupsPutParamsSchema>;
 export type SessionsGroupsRenameParams = Static<typeof SessionsGroupsRenameParamsSchema>;
 export type SessionsGroupsUpdateParams = Static<typeof SessionsGroupsUpdateParamsSchema>;

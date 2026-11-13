@@ -1,4 +1,5 @@
 import { Type, type Static, type TSchema } from "typebox";
+import { ExpectedHash } from "./hash-fence.js";
 import { id, text, Evidence, RecordAnnotations, Envelope } from "./model.js";
 import {
   SavePage,
@@ -183,7 +184,7 @@ export const VerifyInput = Type.Object(
         {
           id,
           expectedRevision: Type.Optional(Type.Integer({ minimum: 1 })),
-          expectedHash: Type.Optional(hash),
+          expectedHash: Type.Optional(ExpectedHash),
           owner: Type.Optional(Type.Union([id, Type.Null()])),
           due_at: Type.Optional(Type.Union([text(40), Type.Null()])),
           occurred_at: Type.Optional(Type.Union([text(40), Type.Null()])),

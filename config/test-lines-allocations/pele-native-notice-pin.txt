@@ -1,2 +1,0 @@
-11
-# Native redistributed notices must identify the pinned compiler and sanitizer versions.

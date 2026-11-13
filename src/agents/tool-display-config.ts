@@ -141,7 +141,15 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       icon: "monitorSmartphone",
       title: "Nodes",
       actions: {
-        status: displayAction("status"),
+        status: { ...displayAction("status"), progress: { label: "List nodes", detailKeys: [] } },
+        invoke: {
+          label: "invoke",
+          detailKeys: ["invokeCommand", "node", "nodeId"],
+          progress: {
+            label: "Invoke node operation",
+            detailKeys: ["invokeCommand", "node", "nodeId"],
+          },
+        },
         describe: displayAction("describe", ["node", "nodeId"]),
         pending: displayAction("pending"),
         approve: displayAction("approve", ["requestId"]),
@@ -196,6 +204,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     suggest_task: displayTool("spark", "Suggest Task", ["title", "tldr", "cwd"]),
     dismiss_task: displayTool("trash", "Dismiss Task", ["task_id", "reason"]),
     skill_workshop: displayTool("wrench", "Skill Workshop", ["action", "name", "proposal_id"]),
+    skill_library: displayTool("wrench", "Skill Library", ["action", "name", "skill_id"]),
     openclaw: displayTool("claw", "OpenClaw", ["action", "path", "model"]),
     gateway: displayTool("plug", "Gateway", ["action", "path"]),
     plugins: displayTool("puzzle", "Plugins", ["action", "pluginId", "packageName", "query"]),
@@ -242,17 +251,22 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       "conversationRef",
       "timeoutSeconds",
     ]),
-    sessions_send: displayTool("send", "Session Send", [
-      "label",
-      "sessionKey",
-      "agentId",
-      "timeoutSeconds",
-    ]),
-    sessions_history: displayTool("fileText", "Session History", [
-      "sessionKey",
-      "limit",
-      "includeTools",
-    ]),
+    knowledge_record: {
+      ...displayTool("fileText", "Knowledge Record"),
+      progress: { label: "Read knowledge record", detailKeys: [] },
+    },
+    knowledge_remember: {
+      ...displayTool("brain", "Knowledge Remember"),
+      progress: { label: "Remember knowledge", detailKeys: [] },
+    },
+    sessions_send: {
+      ...displayTool("send", "Session Send", ["label", "sessionKey", "agentId", "timeoutSeconds"]),
+      progress: { label: "Send to session", detailKeys: ["label"], referenceKey: "sessionKey" },
+    },
+    sessions_history: {
+      ...displayTool("fileText", "Session History", ["sessionKey", "limit", "includeTools"]),
+      progress: { label: "Read session history", detailKeys: [], referenceKey: "sessionKey" },
+    },
     sessions_search: displayTool("search", "Session Search", ["query", "sessionKey", "limit"]),
     transcripts: {
       icon: "mic",
@@ -279,15 +293,18 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         summarize: displayAction("summarize", ["sessionId"]),
       },
     },
-    sessions_spawn: displayTool("bot", "Sub-agent", [
-      "label",
-      "taskName",
-      "agentId",
-      "model",
-      "thinking",
-      "runTimeoutSeconds",
-      "cleanup",
-    ]),
+    sessions_spawn: {
+      ...displayTool("bot", "Sub-agent", [
+        "label",
+        "taskName",
+        "agentId",
+        "model",
+        "thinking",
+        "runTimeoutSeconds",
+        "cleanup",
+      ]),
+      progress: { label: "Start subagent", detailKeys: ["label"] },
+    },
     agents_wait: displayTool("clock", "Wait for Agents", ["ids", "timeoutSeconds"]),
     structured_output: displayTool("fileText", "Structured Output", ["result"]),
     subagents: {
@@ -295,8 +312,14 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Subagents",
       actions: {
         list: displayAction("list", ["recentMinutes"]),
-        kill: displayAction("kill", ["target"]),
-        steer: displayAction("steer", ["target"]),
+        kill: {
+          ...displayAction("kill", ["target"]),
+          progress: { label: "Stop subagent", detailKeys: ["target"], referenceKey: "target" },
+        },
+        steer: {
+          ...displayAction("steer", ["target"]),
+          progress: { label: "Send to subagent", detailKeys: ["target"], referenceKey: "target" },
+        },
       },
     },
     agents_list: displayTool("users", "Agents", []),

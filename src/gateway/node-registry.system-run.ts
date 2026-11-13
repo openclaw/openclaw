@@ -107,6 +107,7 @@ type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
   connId: string;
   expiresAtMs: number | null;
   expiryTimer?: ReturnType<typeof setTimeout>;
+  resultDelivered?: boolean;
 };
 
 /** Owns delayed notices independently of the inline invocation's request lifetime. */
@@ -128,6 +129,7 @@ export class NodeSystemRunEvents {
         expectedTarget?: SessionEventTarget;
         release?: () => void;
         holdNotice?: (notify: () => void) => void;
+        resultDelivered?: true;
       })
     | null {
     if (!params.connId || !params.sessionKey) {
@@ -159,6 +161,11 @@ export class NodeSystemRunEvents {
     if (params.terminal) {
       this.authorizedSystemRunEvents.delete(match);
       clearTimeout(event?.expiryTimer);
+    }
+    if (event?.resultDelivered) {
+      return { resultDelivered: true };
+    }
+    if (params.terminal) {
       // The node reports completion before its result; a still-waiting caller receives that output.
       waiting = [...this.pendingInvokes.values()].find(
         (pending) =>
@@ -208,6 +215,22 @@ export class NodeSystemRunEvents {
     }
     this.forget(authorized);
     this.authorizedSystemRunEvents.set(authorizedSystemRunEventKey(authorized), authorized);
+  }
+
+  /** Bridged nodes may report completion after the result; that caller already has the output. */
+  settle(delivered: boolean, event: Omit<AuthorizedSystemRunEvent, "expiresAtMs">): void {
+    if (!delivered) {
+      this.forget(event);
+      return;
+    }
+    const authorized = this.authorizedSystemRunEvents.get(authorizedSystemRunEventKey(event));
+    if (authorized) {
+      // Keep the record until the late terminal event or expiry so it is consumed, not queued.
+      authorized.resultDelivered = true;
+      const source = authorized.source;
+      delete authorized.source;
+      source?.release();
+    }
   }
 
   forget(event: Omit<AuthorizedSystemRunEvent, "expiresAtMs">): void {

@@ -12,8 +12,7 @@ import {
   resolveLogicalModelCatalogEntryState,
   resolveLogicalVisibleModelCatalog,
 } from "../agents/model-catalog-visibility.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import {
   createProviderAuthChecker,
   type ProviderModelAuthChecker,

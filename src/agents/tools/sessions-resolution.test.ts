@@ -268,11 +268,12 @@ describe("resolveSessionReference", () => {
       missing: true,
       requesterOwned: false,
     });
+    // The key's own agent is implied; the probe must not repeat it (#164847).
     expect(callGatewayMock).toHaveBeenCalledWith({
       method: "sessions.resolve",
       params: {
         key: "agent:main:main",
-        agentId: "main",
+        agentId: undefined,
         spawnedBy: undefined,
         allowMissing: true,
       },

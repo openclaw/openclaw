@@ -319,7 +319,13 @@ describe("loadChatRoute", () => {
   );
 
   it("loads a specific synthetic catalog thread from its URL target", async () => {
-    const { context, list } = contextFor();
+    const { context, list, request } = contextFor();
+    request.mockImplementation(async (method) => {
+      if (method === "sessions.catalog.resolve") {
+        return null;
+      }
+      throw new Error(`Unexpected gateway request: ${method}`);
+    });
     await expect(
       loadRoute(context, "/chat/main", "?catalog=claude&host=gateway%3Alocal&thread=thread-2"),
     ).resolves.toEqual(

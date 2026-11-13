@@ -8,6 +8,7 @@ import { expect, it } from "vitest";
 import {
   PROXY_FIXTURE_CERTIFICATE,
   PROXY_FIXTURE_KEY,
+  PROXY_FIXTURE_SERVER_CERTIFICATE,
 } from "../../../../src/test-helpers/proxy-tls-fixture.js";
 import { loadBundledPluginFacade } from "../../../../src/test-utils/bundled-plugin-public-surface.js";
 import { reserveTestPortListener } from "../../../../src/test-utils/port-claims.js";
@@ -17,18 +18,6 @@ import { writeOpenAiResponsesText } from "../../../helpers/openai-responses-sse.
 import { createOpenClawTestInstance } from "../../../helpers/openclaw-test-instance.js";
 import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
-// Public test-only leaf signed by PROXY_FIXTURE_CERTIFICATE.
-const SERVER_CERTIFICATE = `-----BEGIN CERTIFICATE-----
-MIIBhTCCASugAwIBAgIBAjAKBggqhkjOPQQDAjAbMRkwFwYDVQQDDBBmaWxlcy5w
-cm94eS50ZXN0MCAXDTI2MTAyODA1MzQ0N1oYDzIxMjYxMDA0MDUzNDQ3WjAUMRIw
-EAYDVQQDDAkxMjcuMC4wLjEwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAS2agSj
-NN3IROHs3GAdJdxO0snmqgW2RetuJKeRbn/e082TR8Sx5/yPcAcyAp6hEH19g3tF
-/CT7/QGiGm96BZheo2UwYzAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAT
-BgNVHSUEDDAKBggrBgEFBQcDATAPBgNVHREECDAGhwR/AAABMB0GA1UdDgQWBBRQ
-mY8ZLuaAJjUU4JiehaVg+f+KoDAKBggqhkjOPQQDAgNIADBFAiEAv6I7QWvupklp
-hanSnrw4JsVCI2kI/YCizAz6F1Lcr6kCIFCwSRa2gtugKpCQ9YeTPCVylRLd/K+p
-IVAnJ8E0VJ6i
------END CERTIFICATE-----`;
 const PROVIDER = "command-fixture";
 const COMBINED_PROVIDER = "combined-fixture";
 const MODEL = "gpt-5.6-luna";
@@ -62,7 +51,7 @@ for (const combined of [false, true]) {
           signal,
           createListener: () =>
             https.createServer(
-              { key: PROXY_FIXTURE_KEY, cert: SERVER_CERTIFICATE },
+              { key: PROXY_FIXTURE_KEY, cert: PROXY_FIXTURE_SERVER_CERTIFICATE },
               (request, response) => {
                 void (async () => {
                   const endpoint = new URL(request.url ?? "/", "https://127.0.0.1").pathname;

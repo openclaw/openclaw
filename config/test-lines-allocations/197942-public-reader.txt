@@ -1,0 +1,3 @@
+# Public reader: title and localized status updates, inert framing, and login
+# handoff semantics extend existing cases; decorative count assertions were removed.
+14

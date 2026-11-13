@@ -24,6 +24,7 @@ export {
   buildGoogleSimpleThinking,
 } from "@openclaw/ai/internal/google";
 export {
+  applyProviderPayloadHook,
   coerceTransportToolCallArguments,
   consumeGoogleGenerateContentStream,
   convertGoogleTools,

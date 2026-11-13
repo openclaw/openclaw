@@ -14,6 +14,15 @@ let terminalRuntimePath = params.recoveryModulePath;
 let serviceStoppedAtMs, serviceDowntimeMs;
 let recoveryObservation;
 
+// Child JSON is untyped. Keep malformed supplied reasons reportable before
+// typed classification, sentinel publication, and terminal recording consume them.
+function parseManagedUpdateResult(output) {
+  let result;
+  try { result = JSON.parse(output); } catch { return null; }
+  if (Object.hasOwn(result ?? {}, "reason") && typeof result.reason !== "string") result.reason = "managed-service-handoff-failed";
+  return result;
+}
+
 async function observeUnrecordedRecovery() {
   if (!triageFailure || typeof triageFailure.restored === "boolean" || !ownsManagedUpdateLease()) return;
   const previous = closedUpdateResult?.steps?.findLast((step) => step.name === "gateway recovery verification");
@@ -111,11 +120,6 @@ async function finishManagedUpdateRun() {
     if (exit.signal || exit.code !== 0) throw new Error("recovery runtime could not finalize the update run");
   }
   runOutcome = undefined;
-}
-
-function isFailedUpdateOutcome(status, reason) {
-  return status === "error" || (status === "skipped" &&
-    !params.nonFailureSkippedReasons.includes(reason));
 }
 
 async function captureManagedUpdateResult() {
@@ -226,17 +230,21 @@ async function recoverInterruptedUpdater() {
       if (!ownsManagedUpdateLease()) throw new Error("managed update recovery ownership was lost");
     };
     const updaterStopped = !restorationArmed;
-    if (updaterStopped) {
+    const assertPendingStop = () => {
       const stop = readGatewayStop();
       if (stop?.runId !== params.runId || stop.started)
         throw new Error("Gateway stop intent was superseded by a later running service");
-    }
+    };
+    assertPendingStop();
     const recovered = await recoverInterruptedManagedUpdate({
       root: params.updateLeaseKey, runId: params.runId, owner: params.updateLeaseOwner,
       databaseIdentity: params.updateLeaseDatabaseIdentity, original: params.recovery,
       originalIdentity: originalInstallationIdentity, timeoutMs: params.recoveryTimeoutMs,
       assertCurrent,
       finalize: async () => {
+        // Recovery verified this installation before finalization. Repair can
+        // advance its schema even when it fails, so terminal writes must follow it.
+        terminalRuntimePath = params.recoveryModulePath;
         const repair = await runOwnedUpdateCommand("repair", params.finalizeCommandArgv,
           params.recoveryTimeoutMs, params.cwd, { ...process.env, OPENCLAW_UPDATE_RUN_HANDOFF: "1" });
         let repaired;
@@ -254,12 +262,17 @@ async function recoverInterruptedUpdater() {
     const restored = await restoreGatewayService(
       recovered.status === "rolled-back" ? "managed-service-handoff-cancelled" : reason,
       recovered.recovery, updaterStopped || recovered.status === "succeeded" ? "error" : undefined,
-      false, updaterStopped,
+      false, updaterStopped, assertPendingStop,
     );
     if (!restored) throw new Error("Recovered runtime could not restore Gateway readiness and identity");
     runOutcome = { status: recovered.status, reason: recovered.status === "succeeded"
       ? "managed-service-handoff-recovered" : reason,
       after: { version: recovered.recovery.version, buildId: recovered.recovery.buildId } };
+    if (recovered.warning) {
+      appendLog(recovered.warning);
+      runWarnings.set("warning:plugin-cohort-recovery", recovered.warning);
+      runOutcome.nextAction = "openclaw update repair";
+    }
     runLedger.recordUpdateRunStep(params.runId, { step: "managed-service-handoff-recovery", status: "completed",
       detail: recovered.status === "succeeded" ? "Succeeded with recovery after the updater exited without a result." : "Cancelled activation; original Gateway restored.", endedAtMs: Date.now() });
     triageFailure = undefined;

@@ -1,6 +1,5 @@
-import { constants } from "node:fs";
-import { open } from "node:fs/promises";
 import { request } from "node:https";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import type {
   InvokeNativeHookRelayParams,
   NativeHookRelayProcessResponse,
@@ -15,25 +14,15 @@ export async function invokeRemoteNativeHookRelay(
   params: InvokeNativeHookRelayParams,
   signal: AbortSignal,
 ): Promise<NativeHookRelayProcessResponse> {
-  const file = await open(credentialPath, constants.O_RDONLY | constants.O_NOFOLLOW);
   let credential: { url: string; token: string };
   try {
-    const stat = await file.stat();
-    if (!stat.isFile() || stat.size > MAX_CREDENTIAL_BYTES) {
-      throw new Error("Invalid native hook callback credential");
-    }
-    const buffer = Buffer.alloc(MAX_CREDENTIAL_BYTES + 1);
-    const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
-    if (bytesRead > MAX_CREDENTIAL_BYTES) {
-      throw new Error("Invalid native hook callback credential");
-    }
-    try {
-      credential = JSON.parse(buffer.subarray(0, bytesRead).toString("utf8"));
-    } catch {
-      throw new Error("Invalid native hook callback credential");
-    }
-  } finally {
-    await file.close();
+    const { buffer } = await readRegularFile({
+      filePath: credentialPath,
+      maxBytes: MAX_CREDENTIAL_BYTES,
+    });
+    credential = JSON.parse(buffer.toString("utf8"));
+  } catch {
+    throw new Error("Invalid native hook callback credential");
   }
   if (
     !credential ||

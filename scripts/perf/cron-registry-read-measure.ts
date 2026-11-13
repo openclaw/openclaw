@@ -17,7 +17,6 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { loadavg } from "node:os";
@@ -26,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { CronStoredJob } from "../../src/cron/types.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -272,12 +272,7 @@ try {
   counts = {};
   global.gc();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const hostLoadBefore = loadavg();
   const cpu = process.cpuUsage();
@@ -293,8 +288,6 @@ try {
     values.mode === "allocation"
       ? (await inspector.post("HeapProfiler.stopSampling")).profile
       : undefined;
-  const sampledBytes = (node: HeapProfiler.SamplingHeapProfileNode): number =>
-    node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
   assert(loadSessionEntry(session));
   const report = {
     scope: "Cron owner synthetic mix, not Gateway or production-frequency attribution",
@@ -316,7 +309,7 @@ try {
     elapsedMs,
     processCpuMs: (processCpu.user + processCpu.system) / 1000,
     mainThreadCpuMs: (mainCpu.user + mainCpu.system) / 1000,
-    sampledMainThreadBytes: profile ? sampledBytes(profile.head) : null,
+    sampledMainThreadBytes: profile ? sumSampledHeapBytes(profile.head) : null,
     hostLoadBefore,
     hostLoadAfter: loadavg(),
     memory: process.memoryUsage(),

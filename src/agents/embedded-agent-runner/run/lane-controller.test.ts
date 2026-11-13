@@ -1,3 +1,4 @@
+import { performance as nodePerformance } from "node:perf_hooks";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -5,11 +6,16 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
+import { startChatSendDiagnostics } from "../../../gateway/server-methods/chat-send-diagnostics.js";
 import {
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
+import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
+import { getDiagnosticSessionActivitySnapshot } from "../../../logging/diagnostic-run-activity.js";
+import { formatSessionActivityLogFields } from "../../../logging/diagnostic-session-attention.js";
 import {
+  enqueueCommandInLane,
   getCommandLaneSnapshot,
   setCommandLaneConcurrency,
   isCommandLaneTaskTimeoutError,
@@ -35,6 +41,7 @@ import { outsideExecutionCapacity } from "./execution-capacity.js";
 import { createLaneControllerFixture } from "./lane-controller.test-support.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS as GRACE_MS } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import { claimAgentSessionWriter } from "./session-bootstrap.js";
 
 // mock-isolation: Deadline and custody tests exercise raw work without durable writer admission.
 vi.mock("./session-bootstrap.js", () => ({
@@ -121,6 +128,112 @@ async function tickAt(time: number, ...states: ReturnType<typeof create>[]) {
 }
 
 describe("controller-owned execution guard", () => {
+  it("attributes a saturated lane in stuck diagnostics and the completed slow send", async () => {
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    vi.spyOn(nodePerformance, "now").mockImplementation(() => clock);
+    const gate = createDeferred();
+    setCommandLaneConcurrency(globalLane, 32);
+    const holders = Array.from({ length: 32 }, (_, index) =>
+      enqueueCommandInLane(globalLane, async () => gate.promise, {
+        taskIdentity: {
+          taskKind: "turn",
+          runId: `holder-${index}`,
+          sessionKey: `agent:main:holder-${index}`,
+        },
+      }),
+    );
+    const waiting = createDeferred();
+    const state = create("queued-turn");
+    const info = vi.fn();
+    const diagnostics = startChatSendDiagnostics({ info });
+    const run = withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+      state.controller.enqueueSession(() =>
+        state.controller.enqueueGlobal(result, { onQueued: () => waiting.resolve() }),
+      ),
+    );
+    try {
+      await waiting.promise;
+      clock = 13 * 60_000;
+      const activity = getDiagnosticSessionActivitySnapshot({
+        sessionKey: key,
+        sessionId: "incarnation",
+      });
+      const fields = formatSessionActivityLogFields(activity);
+      expect(fields).toContain("lastProgress=global_lane:waiting");
+      expect(fields).toContain('"blockedBy":"lane"');
+      expect(fields).toContain('"activeCount":32');
+      expect(fields).toContain('"queueAheadAtEnqueue":0');
+      expect(fields).toContain('"runId":"holder-0"');
+      expect(fields).toContain('"runId":"holder-31"');
+      gate.resolve();
+      await run;
+      diagnostics.finish();
+      const line = info.mock.calls[0]?.[0];
+      expect(line).toContain('"laneMs":780000');
+      expect(line).toContain(`"lane":"${globalLane}"`);
+      expect(line).not.toContain("holdersNow");
+      expect(getCommandLaneSnapshot(globalLane)).toMatchObject({ activeCount: 0, queuedCount: 0 });
+    } finally {
+      gate.resolve();
+      await Promise.allSettled([...holders, run]);
+    }
+  });
+
+  it("distinguishes admitted writer and placement waits from global capacity", async () => {
+    const writerEntered = createDeferred();
+    const writer = createDeferred();
+    const placementEntered = createDeferred();
+    const placement = createDeferred();
+    vi.mocked(claimAgentSessionWriter).mockImplementationOnce(async () => {
+      writerEntered.resolve();
+      await writer.promise;
+      return undefined;
+    });
+    const uninstall = installSessionPlacementAdmissionProvider({
+      assertCompactionSuccessorAllowed() {},
+      executeLocalTurn: async (_claim, runLocal) => runLocal(),
+      executeTurn: async (_claim, _params, runLocal, onAdmitted) => {
+        placementEntered.resolve();
+        await placement.promise;
+        onAdmitted?.();
+        return runLocal();
+      },
+    });
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    vi.spyOn(nodePerformance, "now").mockImplementation(() => clock);
+    const state = create("admitted-wait");
+    const info = vi.fn();
+    const diagnostics = startChatSendDiagnostics({ info });
+    const run = withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+      state.controller.enqueueSession(() => state.controller.enqueueGlobal(result)),
+    );
+    try {
+      await writerEntered.promise;
+      expect(getCommandLaneSnapshot(globalLane)).toMatchObject({ activeCount: 1, queuedCount: 0 });
+      expect(getDiagnosticSessionActivitySnapshot({ sessionKey: key }).lastProgressReason).toBe(
+        "session_writer:admission",
+      );
+      clock = 120_000;
+      writer.resolve();
+      await placementEntered.promise;
+      expect(getDiagnosticSessionActivitySnapshot({ sessionKey: key }).lastProgressReason).toBe(
+        "session_placement:admission",
+      );
+      clock = 180_000;
+      placement.resolve();
+      await run;
+      diagnostics.finish();
+      expect(info.mock.calls[0]?.[0]).toContain('"writerMs":120000,"placementMs":60000');
+    } finally {
+      writer.resolve();
+      placement.resolve();
+      await run.catch(() => {});
+      uninstall();
+    }
+  });
+
   it("keeps one admitted attempt while projection recovery releases global capacity", async () => {
     setCommandLaneConcurrency(globalLane, 1);
     const first = create("projection-wait");
@@ -148,7 +261,7 @@ describe("controller-owned execution guard", () => {
     });
     const run = first.controller.enqueueSession(() =>
       first.controller.enqueueGlobal(execute, {
-        onQueued: readmissionQueued.resolve,
+        onQueued: () => readmissionQueued.resolve(),
       }),
     );
     const sibling = pauseGlobal(second);
@@ -162,10 +275,9 @@ describe("controller-owned execution guard", () => {
       await sibling.entered;
       recovered.resolve();
       await readmissionQueued.promise;
-      expect(first.getParams().replyOperation!.watchdog.snapshot().waits).toContainEqual({
-        kind: "global_capacity",
-        deadlineAtMs: undefined,
-      });
+      expect(first.getParams().replyOperation!.watchdog.snapshot().waits).toContainEqual(
+        expect.objectContaining({ kind: "global_capacity", deadlineAtMs: undefined }),
+      );
       await tickAt(7_200_000, first);
       expect(first.controller.abortSignal.aborted).toBe(false);
       sibling.raw.resolve();

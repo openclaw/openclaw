@@ -1,14 +1,14 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { compareMcpCatalogTools } from "./agent-bundle-mcp-names.js";
-import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import type {
   McpCatalogTool,
   McpServerCatalog,
   McpToolCatalog,
   McpToolCatalogDiagnostic,
-  SessionMcpRuntime,
-} from "./agent-bundle-mcp-types.js";
+} from "./agent-bundle-mcp-catalog.types.js";
+import { compareMcpCatalogTools } from "./agent-bundle-mcp-names.js";
+import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
+import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { acquireNativeMcpServer, nativeMcpRuntimeBindings } from "./native-mcp-runtime.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 

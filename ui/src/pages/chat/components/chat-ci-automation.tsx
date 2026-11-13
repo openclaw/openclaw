@@ -1,5 +1,7 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { For, Show, type Element } from "solid-js";
 import type { CronJob } from "../../../api/types.ts";
+import { Checkbox } from "../../../components/solid/checkbox.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuControls } from "../../../components/solid/menu.tsx";
 import { SettingsToggle } from "../../../components/solid/settings-ui.tsx";
@@ -47,9 +49,15 @@ const MENU_OPTIONS = {
   },
 } as const;
 
-function JobError(props: { job?: CronJob }) {
+function JobError(props: { job?: CronJob; option: CiAutomationOption }) {
+  const blocker = () => {
+    const state = props.job?.state.triggerState;
+    return props.option === "autoFix" && isRecord(state) && typeof state.blocked === "string"
+      ? state.blocked
+      : undefined;
+  };
   return (
-    <Show when={props.job?.state.autoDisabled || props.job?.state.lastError}>
+    <Show when={props.job?.state.autoDisabled || props.job?.state.lastError || blocker()}>
       <div class="chat-ci__automation-job-error" role="status">
         <Show when={props.job?.state.autoDisabled}>
           {(disabled) => (
@@ -66,6 +74,7 @@ function JobError(props: { job?: CronJob }) {
         <Show when={props.job?.state.lastError}>
           {(error) => <div>{t("chat.pullRequests.automationLastError", { error: error() })}</div>}
         </Show>
+        <Show when={blocker()}>{(message) => <div>{message()}</div>}</Show>
       </div>
     </Show>
   );
@@ -88,10 +97,8 @@ export function ChatCiAutomationView(props: ChatCiAutomationProps) {
                     when={props.menuPresentation}
                     fallback={
                       <label class="chat-ci__automation-option">
-                        <input
+                        <Checkbox
                           ref={(element) => binding.ref?.(element)}
-                          class="chat-ci__automation-checkbox"
-                          type="checkbox"
                           name={entry[0]}
                           checked={props.options[entry[0]]}
                           disabled={props.pending[entry[0]] !== undefined}
@@ -129,7 +136,7 @@ export function ChatCiAutomationView(props: ChatCiAutomationProps) {
                       />
                     </label>
                   </Show>
-                  <JobError job={props.jobs?.[entry[0]]} />
+                  <JobError job={props.jobs?.[entry[0]]} option={entry[0]} />
                 </div>
               )}
             </Show>

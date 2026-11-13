@@ -17,6 +17,7 @@ import {
   createCrabboxNodeEnrollmentSetup,
   type CrabboxWorkerNodeEnrollment,
 } from "./crabbox-worker-node-enrollment.js";
+import { createCrabboxNodeResumer } from "./crabbox-worker-node-resume.js";
 import {
   assertAwsWorkerHasNoInstanceProfile,
   assertHetznerDesktopHasManagedCoordinator,
@@ -33,6 +34,7 @@ import {
   supportsCrabboxProjectPreparation,
 } from "./crabbox-worker-profile.js";
 import {
+  createCrabboxPreparedProjectRefresh,
   prepareCrabboxProjectFiles,
   prepareCrabboxWorkerRuntime,
 } from "./crabbox-worker-project.js";
@@ -690,11 +692,16 @@ export function createCrabboxWorkerProvider(
     supportsCleanupAcceptance: true,
     provisionBeforeInstallation: true,
     requiresNodeEnrollment: true,
+    resumeNode: createCrabboxNodeResumer({ resolveBinary, signal: providerAbort.signal }),
     supportsProjectPreparation: supportsCrabboxProjectPreparation,
     resolvePreparedIdleTimeoutMs: resolveCrabboxPreparedIdleTimeoutMs,
     resolvePreparationTarget: resolveCrabboxPreparationTarget,
     runSetupCommand: createCrabboxSetupCommandRunner({
       resolveBinary: async (...args) => (await resolveBinary(...args)).binary,
+    }),
+    refreshPreparedProject: createCrabboxPreparedProjectRefresh({
+      signal: providerAbort.signal,
+      resolveLeaseContext,
     }),
     notePreparedDemand: async (lease, preparation) =>
       await warmImages.notePreparedDemand(lease.leaseId, preparation),
