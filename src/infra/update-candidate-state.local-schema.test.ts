@@ -9,7 +9,10 @@ import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { UpdateCandidateStateSnapshotSchema } from "./update-candidate-state.js";
+import {
+  UpdateCandidateStateSnapshotSchema,
+  UpdateStateSchemaInspectionPlanSchema,
+} from "./update-candidate-state.js";
 import { inventoryUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -132,6 +135,45 @@ it.each(["legacy", "daemon-aware", "local-aware", "legacy-alias", "local-aware-a
   },
 );
 
+it("2026.9.x stripped discovery plans preserve shared and agent schema rows", async () => {
+  const root = await fs.realpath(dirs.make("update-stripped-schema-plan-"));
+  const stateDir = path.join(root, "source");
+  const shared = path.join(stateDir, "state", "openclaw.sqlite");
+  const main = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  const workboard = path.join(stateDir, "plugins", "workboard", "workboard.sqlite");
+  for (const [file, version] of [
+    [shared, 7],
+    [main, 3],
+    [workboard, 0],
+  ] as const) {
+    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    using db = openNodeSqliteDatabase(file);
+    db.exec(`PRAGMA user_version = ${version}; CREATE TABLE evidence(value TEXT);`);
+  }
+  const input = {
+    stateDir,
+    stagingRoot: path.join(root, "staging"),
+    config: {},
+    env: { OPENCLAW_STATE_DIR: stateDir },
+  };
+  await fs.mkdir(input.stagingRoot, { mode: 0o700 });
+  const discovery = UpdateStateSchemaInspectionPlanSchema.parse(
+    await runWorker({ ...input, mode: "discover" }),
+  );
+  // Published 2026.9.x drivers strip ownership when parsing the candidate plan.
+  const inspectionPlan = UpdateStateSchemaInspectionPlanSchema.parse({
+    ...discovery,
+    files: discovery.files.map(([identity, { spellings }]) => [identity, { spellings }]),
+  });
+  const versions = UpdateCandidateStateSnapshotSchema.shape.versions.parse(
+    await runWorker({ ...input, mode: "versions", inspectionPlan }),
+  );
+  expect(versions).toContainEqual({ path: shared, userVersion: 7, contentVersion: 7 });
+  expect(versions).toContainEqual({ path: main, userVersion: 3 });
+  expect(versions).toContainEqual({ path: workboard, userVersion: 0 });
+  expect(versions).toHaveLength(3);
+});
+
 it("legacy replies still expose wrong-schema agents to the released 2026.11.3 verifier", async () => {
   const root = await fs.realpath(dirs.make("update-legacy-agent-schemas-"));
   const stateDir = path.join(root, "source");
@@ -164,6 +206,7 @@ it("legacy replies still expose wrong-schema agents to the released 2026.11.3 ve
   const parse = (response: unknown) =>
     UpdateCandidateStateSnapshotSchema.shape.versions.parse(response);
   const legacy = parse(await runWorker(input));
+  expect(legacy).not.toContainEqual(expect.objectContaining({ path: workboard }));
   // The released verifier treats every non-shared, present row as an agent database
   // (src/cli/update-cli/update-command-migrated.ts at 847611dcaa3b).
   const flagged = legacy

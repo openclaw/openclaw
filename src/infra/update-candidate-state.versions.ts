@@ -8,7 +8,10 @@ import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.j
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { CLIENT_CREDENTIAL_SCHEMA_VERSION } from "./client-credential-schema.js";
 import { resolveUserPath } from "./home-dir.js";
-import type { StateDatabaseDiscovery } from "./update-candidate-paths.js";
+import {
+  resolveUpdateCandidateStateIdentity,
+  type StateDatabaseDiscovery,
+} from "./update-candidate-paths.js";
 import type { StateInput } from "./update-candidate-state.shared.js";
 
 export const UpdateStateSchemaVersionsSchema = z.array(
@@ -34,6 +37,7 @@ export function resolveAgentDirOverrideDatabasePaths(env: NodeJS.ProcessEnv | un
  * shared and agent databases. Their replies therefore omit supplemental stores
  * (plugin databases such as Workboard, retained roots, local stores); discovery
  * still captures, backs up, and fingerprints those stores.
+ * Plans stripped of ownership by 2026.9.x drivers retain all rows except local stores.
  * Released daemon-aware callers cannot classify the newer client credential family.
  */
 export function publishStateDatabaseVersions(
@@ -45,6 +49,11 @@ export function publishStateDatabaseVersions(
   >,
 ): UpdateStateSchemaVersion[] {
   const legacy = input.includeLocalStoreVersions === false;
+  const sharedIdentity = resolveUpdateCandidateStateIdentity(
+    input.stateDir,
+    path.resolve(input.stateDir, "state", "openclaw.sqlite"),
+  );
+  const strippedLegacyPlan = legacy && !files.get(sharedIdentity)?.owners?.length;
   const agentDirOverrides = new Set(legacy ? resolveAgentDirOverrideDatabasePaths(input.env) : []);
   const versions: UpdateStateSchemaVersion[] = [];
   for (const [identity, discovery] of files) {
@@ -52,6 +61,7 @@ export function publishStateDatabaseVersions(
     if (
       !result ||
       (legacy &&
+        !strippedLegacyPlan &&
         !discovery.owners?.length &&
         !discovery.registeredPaths?.length &&
         !discovery.spellings.some((spelling) => agentDirOverrides.has(spelling)))
@@ -62,10 +72,14 @@ export function publishStateDatabaseVersions(
       versions.push({ path: spelling, ...result });
     }
   }
-  if (legacy) {
+  if (legacy && !strippedLegacyPlan) {
     return versions;
   }
   const clientPath = resolveClientCredentialStorePath({ OPENCLAW_STATE_DIR: input.stateDir });
+  if (strippedLegacyPlan) {
+    const daemonPath = resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: input.stateDir });
+    return versions.filter(({ path: file }) => file !== clientPath && file !== daemonPath);
+  }
   return input.includeClientCredentialStoreVersion === false
     ? versions.filter(({ path: file }) => file !== clientPath)
     : versions;
