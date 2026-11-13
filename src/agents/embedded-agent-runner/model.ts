@@ -6,6 +6,7 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import { resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveDefaultAgentDir } from "../agent-scope.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
+import { FailoverError, MODEL_CHAT_UNSUPPORTED_TEXT } from "../failover/error.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
@@ -183,11 +184,12 @@ export async function resolveModelAsync(
         (entry) => matchesSelectedModel(entry) && modelTransportRoutesMatch(entry, declared ?? {}),
       );
     if ((captured?.inference?.chat ?? declared?.inference?.chat) === false) {
-      return {
-        error: `Model ${normalizedRef.provider}/${normalizedRef.model} does not support chat inference`,
-        authStorage,
-        modelRegistry,
-      };
+      throw new FailoverError(MODEL_CHAT_UNSUPPORTED_TEXT, {
+        reason: "format",
+        code: "model_chat_unsupported",
+        provider: normalizedRef.provider,
+        model: normalizedRef.model,
+      });
     }
     const runtimeHooks = resolveRuntimeHooks(options);
     let staticCatalogResolved = false;

@@ -24,6 +24,7 @@ import { classifyFailoverReasonCore } from "./classify-core.js";
 import {
   AUTH_PROFILE_COOLDOWN_ERROR_CODE,
   CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE,
+  MODEL_CHAT_UNSUPPORTED_TEXT,
   type CliTimeoutContext,
   type FallbackAttemptRecord,
 } from "./error.js";
@@ -49,15 +50,17 @@ export const OAUTH_REFRESH_CONTENTION_USER_TEXT =
 const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
   "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.";
 export const renderFailoverCodeUserCopy = (code: unknown): string | undefined =>
-  code === "selected_auth_profile_unavailable"
-    ? SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT
-    : code === AUTH_PROFILE_COOLDOWN_ERROR_CODE
-      ? RATE_LIMIT_ERROR_USER_MESSAGE
-      : code === "refresh_contention"
-        ? OAUTH_REFRESH_CONTENTION_USER_TEXT
-        : code === CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE
-          ? "⚠️ This host is low on memory, so it could not start another session. Try again after active conversations finish."
-          : undefined;
+  code === "model_chat_unsupported"
+    ? MODEL_CHAT_UNSUPPORTED_TEXT
+    : code === "selected_auth_profile_unavailable"
+      ? SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT
+      : code === AUTH_PROFILE_COOLDOWN_ERROR_CODE
+        ? RATE_LIMIT_ERROR_USER_MESSAGE
+        : code === "refresh_contention"
+          ? OAUTH_REFRESH_CONTENTION_USER_TEXT
+          : code === CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE
+            ? "⚠️ This host is low on memory, so it could not start another session. Try again after active conversations finish."
+            : undefined;
 const MODEL_CAPACITY_ERROR_USER_MESSAGE =
   "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =

@@ -90,14 +90,18 @@ describe("captured model catalog generations", () => {
         skipAgentDiscovery: true,
       });
 
-    expect(await resolve(denied)).toMatchObject({
-      error: "Model synthetic/first does not support chat inference",
+    await expect(resolve(denied)).rejects.toMatchObject({
+      reason: "format",
+      code: "model_chat_unsupported",
+      message: "This model doesn't support chat; pick another model.",
     });
     expect(await resolve(granted)).toMatchObject({
       model: { provider: "synthetic", id: "first", api: "openai-responses" },
     });
-    expect(await resolve(denied)).toMatchObject({
-      error: "Model synthetic/first does not support chat inference",
+    await expect(resolve(denied)).rejects.toMatchObject({
+      reason: "format",
+      code: "model_chat_unsupported",
+      message: "This model doesn't support chat; pick another model.",
     });
   });
 
@@ -114,18 +118,15 @@ describe("captured model catalog generations", () => {
       const f = fixture({ chat: false });
       f.replaceCatalog({ entries: [{ ...f.model, ...route }], routeVariants: [] });
       const snapshot = f.capture();
-      const result = await resolveModelAsync(
-        "synthetic",
-        "first",
-        snapshot.agentDir,
-        snapshot.config,
-        {
-          ...snapshot.createStores(),
-          preparedModelRuntime: snapshot,
-          skipAgentDiscovery: true,
-        },
-      );
-      expect(result.error).toBe("Model synthetic/first does not support chat inference");
+      const result = resolveModelAsync("synthetic", "first", snapshot.agentDir, snapshot.config, {
+        ...snapshot.createStores(),
+        preparedModelRuntime: snapshot,
+        skipAgentDiscovery: true,
+      });
+      await expect(result).rejects.toMatchObject({
+        code: "model_chat_unsupported",
+        reason: "format",
+      });
     },
   );
 
