@@ -8,6 +8,7 @@ import {
   createTestChatPane,
   nativeHistoryMessage,
 } from "./chat-pane.test-support.ts";
+import { publishChatSessionProjectionMessages } from "./history-merge.ts";
 
 it("fills an initially short transcript when its first geometry settles without an unrelated pane update", async () => {
   const historyRequest = vi.fn(async () => ({
@@ -23,7 +24,9 @@ it("fills an initially short transcript when its first geometry settles without 
   pane.paneId = "history-initial-geometry";
   pane.presentationId = pane.paneId;
   pane.sessionKey = state.sessionKey;
-  state.chatMessages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
+  // Seed through the projection owner like history loads do: an older page
+  // prepends to the reducer's entries, so rows it never saw would be dropped.
+  publishChatSessionProjectionMessages(state, [nativeHistoryMessage(3), nativeHistoryMessage(4)]);
   state.chatHistoryPagination = {
     hasMore: true,
     olderCursor: "older-settlement",
