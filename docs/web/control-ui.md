@@ -111,12 +111,22 @@ Rewinding does not undo external actions.
 
 ## Command palette file attachments
 
+The command palette has **Search** and **Compose** modes, switched from the bar
+along its bottom edge or with **Tab** from its main input, without losing text.
+Search finds commands and sessions; Compose prepares a new background session.
+While you are in Search, text of 60 characters or more, a second line, or a file
+moves the palette to Compose; emptying that draft returns it to Search. Choosing
+Search again keeps it for the current draft. Reopening the palette in the same
+app window returns to the mode you last chose, not to an automatic switch.
+**Shift+Tab** keeps normal focus navigation to the mode switch and session controls.
+
 Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop
 images or files onto the palette, or paste images into its input, to prepare a
 new background session without changing your current conversation or composer.
 
-The first attachment switches the palette from navigation to **New session**.
-Add optional instructions, adjust the session settings, then choose **New session**
+Each newly added attachment switches the palette to **Compose**, including after
+you return to Search with an attachment still in the draft.
+Add optional instructions, choose the agent, folder, and worktree, then send
 or press **Cmd/Ctrl+Enter**. Dropping a file does not start the session by itself.
 Files remain visible while preparing. If a file is rejected, an error toast
 explains the failure and only that file is removed. You can manually start a
@@ -124,8 +134,8 @@ session with the remaining text and files; a rejected file cancels a pending
 automatic start. File admission and size limits match the chat composer.
 
 Closing the palette keeps its attachment draft in memory for the same Gateway
-and account. Removing the final attachment keeps new-session mode while
-instructions remain; clearing both files and instructions restores navigation.
+and account. When files moved the palette to Compose, removing them and clearing
+the instructions returns it to Search.
 Reloading or leaving the app does not preserve this in-memory draft.
 
 ## Choose a session workspace
