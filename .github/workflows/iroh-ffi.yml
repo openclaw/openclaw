@@ -25,6 +25,7 @@ env:
 jobs:
   build:
     # Drafts deliberately run: native consumers need build proof before the stack is ready.
+    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45

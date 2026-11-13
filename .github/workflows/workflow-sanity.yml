@@ -25,7 +25,7 @@ env:
 
 jobs:
   actionlint:
-    if: (github.event_name != 'workflow_dispatch')
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && ((github.event_name != 'workflow_dispatch'))
     runs-on: &linux_runner_ubuntu ubuntu-24.04
     steps:
       - &workflow_sanity_checkout_step

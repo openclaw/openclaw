@@ -103,6 +103,41 @@ const PINNED_GIT_OWNER = {
   uses: "openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef",
 };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("skips all pull-request CI jobs for forks before allocating runners", () => {
+  for (const file of readdirSync(".github/workflows").filter((file) => /\.ya?ml$/u.test(file))) {
+    const workflow = readWorkflow(`.github/workflows/${file}`);
+    if (!Object.hasOwn(workflow.on ?? {}, "pull_request")) {
+      continue;
+    }
+    const skippedJobs = Object.fromEntries(
+      Object.keys(workflow.jobs).map((id) => [id, { result: "skipped" as const, outputs: {} }]),
+    );
+    for (const [id, job] of Object.entries(workflow.jobs)) {
+      const typedJob = job as { if?: string; needs?: unknown };
+      const condition = typedJob.if ?? "success()";
+      // Without a status function, GitHub skips jobs whose dependencies skipped.
+      if (typedJob.needs && !/\b(?:always|cancelled|success|failure)\s*\(/u.test(condition)) {
+        continue;
+      }
+      expect(
+        Boolean(
+          evaluateWorkflowCondition(condition, {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            headRepository: "contributor/openclaw",
+            runAttempt: 1,
+            preflightResult: "skipped",
+            preflightOutputs: { run_check: "" },
+            additionalNeeds: skippedJobs,
+          }),
+        ),
+        `${file}:${id} must skip a fork pull request`,
+      ).toBe(false);
+    }
+  }
+});
+
 const rootPackageManager = (
   JSON.parse(readFileSync("package.json", "utf8")) as {
     packageManager: string;
