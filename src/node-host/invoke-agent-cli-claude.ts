@@ -151,8 +151,13 @@ export async function runClaudeCliNodeCommand(params: {
         beforeSpawn: params.assertCurrent,
         argv,
         cwd: params.cwd,
-        // Apply the cache-stable Git policy locally without extending the node wire contract.
-        env: { ...(params.env ?? process.env), CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1" },
+        // Apply the cache-stable Git policy and the Gateway's Claude client label
+        // (extensions/anthropic/cli-backend.ts) locally without extending the node wire contract.
+        env: {
+          ...(params.env ?? process.env),
+          CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
+          CLAUDE_CODE_ENTRYPOINT: "openclaw",
+        },
         exactEnv: true,
         input:
           skillSession?.rewriteReferences(params.request.stdin ?? "") ?? params.request.stdin ?? "",

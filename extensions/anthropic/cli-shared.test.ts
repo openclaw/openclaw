@@ -421,7 +421,7 @@ describe("normalizeClaudeBackendConfig", () => {
   });
 
   it("leaves claude cli subscription-managed, restricts setting sources, and clears inherited env overrides", () => {
-    expect(backend.config.env).toBeUndefined();
+    expect(backend.config.env).toEqual({ CLAUDE_CODE_ENTRYPOINT: "openclaw" });
     expect(backend).toMatchObject({
       autoSelectAuthProfile: false,
       nativeToolMode: "selectable",

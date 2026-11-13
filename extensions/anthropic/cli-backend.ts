@@ -287,6 +287,9 @@ export function buildAnthropicCliBackend(
       systemPromptFileArg: "--append-system-prompt-file",
       systemPromptMode: "append",
       systemPromptWhen: "always",
+      // Claude Code reports this label as the transcript `entrypoint` and the
+      // request `cc_entrypoint`; unset, headless runs report `sdk-cli`. Paired
+      // nodes set the same label in src/node-host/invoke-agent-cli-claude.ts.
       env: { CLAUDE_CODE_ENTRYPOINT: "openclaw" },
       clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
       serialize: true,

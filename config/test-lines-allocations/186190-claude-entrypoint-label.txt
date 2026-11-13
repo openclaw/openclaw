@@ -1,0 +1,3 @@
+# Contract and paired-node regressions proving managed Claude Code runs carry the openclaw client
+# label on the Gateway and paired nodes (#186190). Exact net test growth.
+4

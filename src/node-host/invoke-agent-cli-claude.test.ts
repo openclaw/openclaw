@@ -398,11 +398,14 @@ process.stdout.write(JSON.stringify({
   rawPresent: Object.hasOwn(process.env, "CLAUDE_CODE_OAUTH_TOKEN") || Object.hasOwn(process.env, "ANTHROPIC_API_KEY"),
   scrubPresent: Object.hasOwn(process.env, "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"),
   gitInstructionsDisabled: process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS,
+  entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT,
 }) + "\\n");`,
         {
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
           CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "8",
           CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: "9",
+          // Inherited from a node host started inside another Claude Code session.
+          CLAUDE_CODE_ENTRYPOINT: "sdk-cli",
         },
         {
           env: { [rawEnv]: value },
@@ -421,6 +424,7 @@ process.stdout.write(JSON.stringify({
         rawPresent: false,
         scrubPresent: false,
         gitInstructionsDisabled: "1",
+        entrypoint: "openclaw",
       });
       expect(invocationResult(calls)).toMatchObject({
         ok: true,

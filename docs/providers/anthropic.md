@@ -82,6 +82,14 @@ usage currently draw from the signed-in subscription's limits. API-key auth
 uses separate pay-as-you-go billing and is preferable for shared automation or
 predictable production spend.
 
+OpenClaw starts Claude Code with `CLAUDE_CODE_ENTRYPOINT=openclaw`, on the Gateway
+and on paired nodes, so Claude Code reports these runs as `openclaw` instead of
+`sdk-cli`. Community measurements in
+[anthropics/claude-code#97074](https://github.com/anthropics/claude-code/issues/97074)
+observed `sdk-cli` runs using the 5-hour window faster than other labels.
+Anthropic has not documented this weighting, so any saving is observed, not
+guaranteed.
+
 Anthropic's current support articles can change this behavior without an
 OpenClaw release:
 
@@ -583,6 +591,8 @@ Code sessions on the Gateway and on connected node hosts:
   interactive (`cli`) and headless Agent SDK CLI (`sdk-cli`) sessions under
   `~/.claude/projects/`. Gateway-side discovery also recognizes bidirectional
   stream-json (`sdk-ts`) sessions; the native macOS node reader does not.
+  Runs that OpenClaw starts report `openclaw` and stay out of this fallback,
+  because they are already OpenClaw sessions.
 - Claude Desktop sessions use the Desktop title, activity time, and
   archive state when its metadata points to the same Claude Code session ID.
 - A CLI-only session has no archive flag, so it remains visible while its
