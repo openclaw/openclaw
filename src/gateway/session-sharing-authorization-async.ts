@@ -35,6 +35,8 @@ import {
   intersectOperatorRunModelPolicy,
 } from "./operator-run-authority.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
+import { resolveTelegramSessionGroup } from "./session-channel-group.js";
+import { prepareTelegramSessionReads } from "./session-channel-read.js";
 import { sessionMethodDatabaseAdmission, isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { restoreSessionOperatorSource } from "./session-operator-sources.js";
@@ -430,6 +432,19 @@ export async function resolveSessionMutationAuthorizationAsync(
         },
       });
     }
+    const rowProjection = getSessionRowProjection(params.context);
+    const policyConfig = rowProjection?.getPolicyConfig() ?? cfg;
+    await prepareTelegramSessionReads({
+      client: params.client,
+      cfg: policyConfig,
+      runtimeConfig: cfg,
+      getConfig: () => rowProjection?.getPolicyConfig() ?? params.context.getRuntimeConfig(),
+      groups: preparedTargets.flatMap((prepared) => {
+        const target = prepared.read().target;
+        const group = target && resolveTelegramSessionGroup(target.canonicalKey, target.entry);
+        return group ? [group] : [];
+      }),
+    });
     const authorize = (
       sessionRowRead: SessionMutationAuthorizationParams["sessionRowRead"] = params.sessionRowRead,
     ) => {

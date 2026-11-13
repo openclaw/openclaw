@@ -12,6 +12,7 @@ import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/s
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import type { HookExternalContentSource } from "../../security/external-content.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import type { SessionDeliveryState } from "./types.js";
 
 /** Persisted identity excludes display-only actor projections. */
 export type SessionActor = SchemaContract<
@@ -325,3 +326,29 @@ export type SessionEntryProvenance = {
   /** External hook source that has contributed content to this transcript. */
   hookExternalContentSource?: HookExternalContentSource;
 };
+
+/** Sharing retains route identity, not changing reply/display delivery context. */
+export function projectSessionSharingDelivery(
+  delivery: SessionDeliveryState | undefined,
+): SessionDeliveryState | undefined {
+  if (delivery?.kind !== "external") {
+    return delivery;
+  }
+  const { route, origin } = delivery;
+  return {
+    kind: "external",
+    context: {},
+    route: {
+      channel: route.channel,
+      accountId: route.accountId,
+      target: route.target ? { to: route.target.to } : undefined,
+      thread: route.thread ? { id: route.thread.id } : undefined,
+    },
+    origin: {
+      provider: origin.provider,
+      chatType: origin.chatType,
+      accountId: origin.accountId,
+      nativeChannelId: origin.nativeChannelId,
+    },
+  };
+}

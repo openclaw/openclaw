@@ -10,7 +10,10 @@ import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-conte
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { canReadSessionAccess, resolveSessionAccess } from "../config/sessions/session-access.js";
-import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
+import {
+  projectSessionSharingDelivery,
+  sessionCreatorProfileId,
+} from "../config/sessions/session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -75,6 +78,9 @@ export function hasSessionReadAccessChanged(
       sessionCreatorProfileId(current.createdActor) ||
     resolveSessionVisibility(previous) !== resolveSessionVisibility(current) ||
     JSON.stringify(previous.access) !== JSON.stringify(current.access) ||
+    previous.createdVia !== current.createdVia ||
+    JSON.stringify(projectSessionSharingDelivery(previous?.delivery)) !==
+      JSON.stringify(projectSessionSharingDelivery(current.delivery)) ||
     (previous.incognito === true) !== (current.incognito === true)
   );
 }

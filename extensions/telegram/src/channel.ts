@@ -21,7 +21,6 @@ import {
   projectCredentialSnapshotFields,
 } from "openclaw/plugin-sdk/channel-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { channelBlockedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -73,10 +72,7 @@ import {
 import { resolveTelegramConfigAccessorAccount, telegramConfigAdapter } from "./config-adapter.js";
 import { prepareTelegramConversationRouteOwnersAsync } from "./conversation-route-owner.js";
 import { resolveTelegramOutboundDirectBaseSessionKey } from "./conversation-route.js";
-import {
-  listTelegramDirectoryGroupsFromConfig,
-  listTelegramDirectoryPeersFromConfig,
-} from "./directory-config.js";
+import { telegramDirectoryAdapter } from "./directory-adapter.js";
 import { telegramDoctor } from "./doctor.js";
 import { buildTelegramExecApprovalPendingPayload } from "./exec-approval-forwarding.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
@@ -672,10 +668,7 @@ export const telegramPlugin = createChatChannelPlugin({
         },
       },
     },
-    directory: createChannelDirectoryAdapter({
-      listPeers: async (params) => listTelegramDirectoryPeersFromConfig(params),
-      listGroups: async (params) => listTelegramDirectoryGroupsFromConfig(params),
-    }),
+    directory: telegramDirectoryAdapter,
     actions: telegramMessageActions,
     message: telegramMessageAdapter,
     status: createComputedAccountStatusAdapter<ResolvedTelegramAccount, TelegramProbe>({

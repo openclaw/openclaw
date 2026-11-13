@@ -6,6 +6,7 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contra
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
 import type { SessionActorHotState } from "./session-actor-state.types.js";
+import { projectSessionSharingDelivery } from "./session-entry-provenance.js";
 import type { SessionMembershipFact } from "./session-membership-facts.types.js";
 import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 import type { SessionMaintenancePreservationPlan } from "./store-maintenance-preserve-snapshot.types.js";
@@ -73,6 +74,8 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     visibility: entry.visibility,
     access: entry.access ? structuredClone(entry.access) : undefined,
     incognito: entry.incognito,
+    createdVia: entry.createdVia,
+    delivery: projectSessionSharingDelivery(entry.delivery),
     createdActor: entry.createdActor,
     owner: entry.owner,
     sandbox: entry.sandbox,

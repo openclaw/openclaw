@@ -13,6 +13,7 @@ import {
 } from "./control-ui-session-pr-read.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { ResolvedInProcessGatewayDispatch } from "./server-plugin-in-process-dispatch.types.js";
+import { resolveTelegramSessionGroup } from "./session-channel-group.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import {
   toProjectedSessionSharingTarget,
@@ -103,7 +104,10 @@ export function prepareFactsRead(
       ) {
         return undefined;
       }
-      const visibilityCache = sharing.sessionCap === "invited" ? undefined : authority?.visibility;
+      const visibilityCache =
+        sharing.sessionCap === "invited" || resolveTelegramSessionGroup(record.key, record.entry)
+          ? undefined
+          : authority?.visibility;
       let visible = visibilityCache?.get(record.entry);
       if (visible === undefined) {
         visible = sharing.canReadTarget(toProjectedSessionSharingTarget(record));

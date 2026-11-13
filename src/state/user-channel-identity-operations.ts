@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   executeExistingOpenClawStateRead,
@@ -36,7 +37,9 @@ import type {
   UserChannelIdentityWorkerOperations,
 } from "./user-profiles.types.js";
 
-type IdentityOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env">;
+type IdentityOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
+  signal?: AbortSignal;
+};
 
 function captureAuthorityContext(options: IdentityOptions) {
   if (getActiveOpenClawStateDatabaseReadSnapshot(options)) {
@@ -77,10 +80,11 @@ export async function listCanonicalUserChannelIdentities(
   profileId: string,
   options: IdentityOptions = {},
 ): Promise<UserChannelIdentityLink[]> {
-  const reply = await executeExistingOpenClawStateRead(options, {
-    type: "userProfiles.channelIdentity.list",
-    profileId,
-  });
+  const reply = await executeExistingOpenClawStateRead(
+    options,
+    { type: "userProfiles.channelIdentity.list", profileId },
+    { signal: options.signal },
+  );
   if (!reply) {
     return [];
   }
@@ -248,14 +252,19 @@ export async function prepareUserChannelIdentityAuthority(
       : userChannelIdentitySubject(capturedIdentity);
   const context = captureAuthorityContext(options);
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const read = await captureUserProfileAuthorityRead(context.admission, subject);
+    const read = await racePromiseWithAbortSignal(
+      () => captureUserProfileAuthorityRead(context.admission, subject),
+      options.signal,
+    );
     const reply = await executeExistingOpenClawStateRead(
       { path: context.admission.databasePath, env: context.environment },
       {
         type: "userProfiles.channelIdentity.resolve",
         identity: capturedIdentity,
       },
+      { signal: options.signal },
     );
+    options.signal?.throwIfAborted();
     context.admission.assertCurrent();
     if (!reply) {
       return undefined;

@@ -1,0 +1,2 @@
+# Verified channel-group reads: real Gateway list/history denial and revocation, canonical identity/provenance, Telegram provider status, and connection refresh lifetime.
+1126

@@ -110,6 +110,8 @@ export type SessionListFilterParams = {
   /** Includes the caller in person-link resolution even without visible session associations. */
   viewerProfileId?: string;
   involvingActorId?: string;
+  /** Called only after entryFilter has authorized the current viewer. */
+  involvingChannelMember?: (key: string, entry: SessionEntry) => boolean;
   ownerFirstActorId?: string;
   projectActiveRun?: SessionListActiveRunProjector;
   involvementKeys: (profileId: string, personal: boolean) => ReadonlySet<string>;
@@ -544,7 +546,11 @@ export function filterSessionEntries(
       continue;
     }
     // Preserve the existing viewer-independent owner facet; explicit relations still narrow it.
-    if (personalKeys && !personalKeys.has(key)) {
+    if (
+      personalKeys &&
+      !personalKeys.has(key) &&
+      (opts.involvingProfileId || !params.involvingChannelMember?.(key, entry))
+    ) {
       continue;
     }
     if (opts.includePeople || opts.involvingProfileId) {

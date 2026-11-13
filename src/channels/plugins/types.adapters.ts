@@ -330,6 +330,15 @@ export type ChannelDirectoryAdapter = {
   listPeersLive?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
   listGroups?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
   listGroupsLive?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
+  /** True only for a confirmed current member; null means membership is unknown. */
+  isGroupMember?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    groupId: string;
+    memberId: string;
+    runtime: RuntimeEnv;
+    signal?: AbortSignal;
+  }) => Promise<boolean | null>;
   listGroupMembers?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;

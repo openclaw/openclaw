@@ -23,6 +23,11 @@ import {
 } from "./operator-role-policy.js";
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient, SessionMutationAuthorization } from "./server-methods/types.js";
+import { resolveTelegramSessionGroup } from "./session-channel-group.js";
+import {
+  readTelegramSessionMembership,
+  telegramSessionMembershipKey,
+} from "./session-channel-read.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
 import {
   SessionMutationAuthorizationChangedError,
@@ -122,6 +127,11 @@ export function canReceiveSessionEvent(params: {
   });
 }
 
+type ChannelReadEntry = Pick<
+  SessionEntry,
+  "createdActor" | "createdVia" | "delivery" | "visibility" | "incognito" | "access"
+>;
+
 /** Share caller facts across synchronous selection/role projection, never across an await. */
 export function prepareSessionSharing(
   params: Pick<SessionSharingRoleParams, "cfg" | "client">,
@@ -129,6 +139,7 @@ export function prepareSessionSharing(
     aliases: ReadonlySet<string>;
     sessionCap: ReturnType<typeof operatorSessionCap>;
     isMember: (target: SessionSharingTarget, identityId: string) => boolean;
+    channelRead?: (sessionKey: string, entry: ChannelReadEntry) => boolean;
   },
 ) {
   const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));
@@ -143,8 +154,33 @@ export function prepareSessionSharing(
       target,
       isMember ?? (prepared && Boolean(identity && prepared.isMember(target, identity.id))),
     );
-  const entryFilter = createSessionListEntryFilter(params, isCreator, { sessionCap });
-  const directEntryFilter = createSessionDirectEntryFilter(params, isCreator, { sessionCap });
+  const originalEntryFilter = createSessionListEntryFilter(params, isCreator, { sessionCap });
+  const originalDirectEntryFilter = createSessionDirectEntryFilter(params, isCreator, {
+    sessionCap,
+  });
+  // Only trusted channel groups can extend a denied read; explicit private ACLs stay closed.
+  const guardChannel = (filter: typeof originalEntryFilter): typeof originalEntryFilter => {
+    if (!identity || isGatewayAdmin(params.client)) {
+      return filter;
+    }
+    return (key, entry, member) => {
+      if (filter?.(key, entry, member) !== false) {
+        return true;
+      }
+      return Boolean(
+        key &&
+        params.cfg &&
+        canReadSessionAccess(params.cfg, key, entry, isCreator) &&
+        operatorScopeSatisfied("operator.sessions.read", params.client?.connect.scopes ?? []) &&
+        !authorizeCurrentOperatorRoleScopes(params.client, params.cfg) &&
+        resolveTelegramSessionGroup(key, entry) &&
+        (prepared?.channelRead?.(key, entry) ??
+          readTelegramSessionMembership(params.client, params.cfg, key, entry)),
+      );
+    };
+  };
+  const entryFilter = guardChannel(originalEntryFilter);
+  const directEntryFilter = guardChannel(originalDirectEntryFilter);
   return {
     identity,
     isCreator,
@@ -378,6 +414,7 @@ export function prepareProjectedSessionSharing(params: {
   client: GatewayClient | null;
   isMember: (target: SessionSharingTarget, identityId: string) => boolean;
   profiles?: PreparedSessionSharingProfiles;
+  channelRead?: (sessionKey: string, entry: ChannelReadEntry) => boolean;
 }) {
   const { cfg, client, isMember } = params;
   if (!params.profiles && client?.internal?.syntheticClient) {
@@ -411,6 +448,7 @@ export function prepareProjectedSessionSharing(params: {
       aliases: profile?.aliases ?? emptyProfileAliases,
       sessionCap: policy?.sessions.others,
       isMember,
+      channelRead: params.channelRead,
     }),
     policy,
     /** Connection facts follow config/access publications, independently of row revisions. */
@@ -420,6 +458,7 @@ export function prepareProjectedSessionSharing(params: {
       }
       const viewer = client ?? cfg;
       const scopes = client?.connect.scopes;
+      const channelKey = telegramSessionMembershipKey(client, cfg);
       const previous = projectedSharingKeys.get(viewer);
       const facts = previous?.facts;
       // Compare live authority directly; only misses need a new fact snapshot.
@@ -440,10 +479,11 @@ export function prepareProjectedSessionSharing(params: {
         facts[12] === cfg.session?.sharing?.accessPolicy &&
         facts[13] === (scopes !== undefined) &&
         facts[14] === ownerEquivalent &&
-        facts.length === 15 + (scopes?.length ?? 0)
+        facts[15] === channelKey &&
+        facts.length === 16 + (scopes?.length ?? 0)
       ) {
         let i = 0;
-        while (i < (scopes?.length ?? 0) && facts[15 + i] === scopes?.[i]) {
+        while (i < (scopes?.length ?? 0) && facts[16 + i] === scopes?.[i]) {
           i++;
         }
         if (i === (scopes?.length ?? 0)) {
@@ -465,6 +505,7 @@ export function prepareProjectedSessionSharing(params: {
         cfg.session?.sharing?.accessPolicy,
         // Equal effective scopes can retain different source sharing authority.
         ownerEquivalent,
+        channelKey,
       ]);
       const next: unknown[] = [
         cfg,
@@ -482,6 +523,7 @@ export function prepareProjectedSessionSharing(params: {
         cfg.session?.sharing?.accessPolicy,
         scopes !== undefined,
         ownerEquivalent,
+        channelKey,
       ];
       // Concatenation retains an exact-sized snapshot instead of push's spare capacity.
       projectedSharingKeys.set(viewer, {
@@ -500,11 +542,7 @@ export function createSessionListEntryFilter(
   isCreator?: ReturnType<typeof prepareSessionCreatorProfile>,
   prepared?: { sessionCap: ReturnType<typeof operatorSessionCap> },
 ):
-  | ((
-      sessionKey: string | undefined,
-      entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito" | "access">,
-      isMember?: boolean,
-    ) => boolean)
+  | ((sessionKey: string | undefined, entry: ChannelReadEntry, isMember?: boolean) => boolean)
   | undefined {
   const operatorActor = resolveGatewayOperatorRoleActor(params.client);
   const identity = sharingIdentity(params.client, operatorActor);

@@ -2,11 +2,12 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { beforeEach, expect, test } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import type { RawData, WebSocket } from "ws";
 import type { ResponseFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import * as channelRegistry from "../channels/plugins/registry.js";
 import {
   appendTranscriptMessage,
   listSessionPendingInputs,
@@ -17,6 +18,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { listActiveSessionRunIds } from "../sessions/session-controller.queries.js";
+import { changeCanonicalUserChannelIdentity } from "../state/user-channel-identity-operations.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
@@ -103,7 +105,7 @@ async function restartFixtureGateway() {
   harness = await createGatewaySuiteHarness();
 }
 
-async function configureAccess() {
+async function configureAccess(others: "write" | "none" = "write") {
   await configureBrowserAuth(browserProxyAuth(), {
     roles: {
       default: "staff",
@@ -111,7 +113,7 @@ async function configureAccess() {
         staff: {
           agents: ["main"],
           scopes: ["operator.read", "operator.write", "operator.talk"],
-          sessions: { others: "write" },
+          sessions: { others },
         },
         admin: { agents: "*", scopes: ["operator.admin"], sessions: { others: "write" } },
       },
@@ -126,6 +128,12 @@ async function configureAccess() {
             agentId: "main",
             channel: "telegram",
             peerId: "-100123",
+            profileIds: [profileIds.get("selected")!],
+          },
+          {
+            agentId: "main",
+            channel: "telegram",
+            peerId: "-100123450001",
             profileIds: [profileIds.get("selected")!],
           },
         ],
@@ -779,3 +787,149 @@ test.for(["sessions.send", "sessions.steer"] as const)(
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
   },
 );
+
+test("shows linked Telegram members group roots and topics without personal participation", async () => {
+  await configureAccess("none");
+  // The running fixture retains its committed policy; writing config alone does not publish it.
+  await restartFixtureGateway();
+  const memberId = "123450001";
+  const identity = { channelId: "telegram", accountId: "default", senderId: memberId };
+  await changeCanonicalUserChannelIdentity("link", profileIds.get("selected")!, identity);
+  const original = channelRegistry.resolveChannelPluginRegistration;
+  using registration = vi.spyOn(channelRegistry, "resolveChannelPluginRegistration");
+  const membership = vi.fn(
+    async ({ memberId: sender }: { memberId: string }) => sender === memberId,
+  );
+  const telegramRegistration = {
+    plugin: { directory: { isGroupMember: membership } },
+  } as unknown as NonNullable<ReturnType<typeof original>>;
+  registration.mockImplementation((id, options) =>
+    id === "telegram" ? telegramRegistration : original(id, options),
+  );
+  const keys: string[] = [];
+  try {
+    for (const [group, topic] of [
+      ["-123456", undefined],
+      ["-100123450001", "7641"],
+      ["-100123450001", "7642"],
+    ] as const) {
+      const suffix = topic ? `${group}:topic:${topic}` : group;
+      const key = `agent:main:telegram:group:${suffix}`;
+      keys.push(key);
+      const scope = { agentId: "main", sessionKey: key, sessionId: `membership-${suffix}` };
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: Date.now(),
+        createdVia: "channel",
+        ...(topic === "7642" ? { access: { mode: "source" as const } } : {}),
+        createdActor: { type: "human", source: "channel", id: "123450002" },
+        delivery: {
+          kind: "external",
+          route: {
+            channel: "telegram",
+            accountId: "default",
+            target: { to: `telegram:${suffix}` },
+            ...(topic ? { thread: { id: topic } } : {}),
+          },
+          context: {},
+          origin: { provider: "telegram", chatType: "group", nativeChannelId: suffix },
+        },
+      });
+      await appendTranscriptMessage(scope, {
+        eventId: `membership-seed-${suffix}`,
+        message: { role: "user", content: text, timestamp: Date.now() },
+      });
+    }
+    const otherAccountKey = "agent:main:telegram:group:-777777";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: otherAccountKey },
+      {
+        sessionId: "membership-other-account",
+        updatedAt: Date.now(),
+        createdVia: "channel",
+        createdActor: { type: "human", source: "channel", id: "123450002" },
+        delivery: {
+          kind: "external",
+          route: { channel: "telegram", accountId: "other", target: { to: "telegram:-777777" } },
+          context: {},
+          origin: { provider: "telegram", chatType: "group", nativeChannelId: "-777777" },
+        },
+      },
+    );
+    const spoofKey = "agent:main:telegram:group:-987654:topic:77";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: spoofKey },
+      {
+        sessionId: "membership-private-spoof",
+        updatedAt: Date.now(),
+        createdVia: "operator",
+        createdActor: { type: "human", source: "profile", id: profileIds.get("creator")! },
+        access: { mode: "creator" },
+        delivery: {
+          kind: "external",
+          route: {
+            channel: "telegram",
+            accountId: "default",
+            target: { to: "telegram:-987654:topic:77" },
+            thread: { id: "77" },
+          },
+          context: {},
+          origin: { provider: "telegram", chatType: "group", nativeChannelId: "-987654:topic:77" },
+        },
+      },
+    );
+    const member = await client("selected");
+    const outsider = await client("outsider");
+    for (const socket of [member, outsider]) {
+      const list = await rpcReq<{ sessions: Array<{ key: string }> }>(socket, "sessions.list", {
+        archived: "all",
+        involvingMe: true,
+      });
+      expect(list.ok, JSON.stringify(list.error)).toBe(true);
+      const all = await rpcReq<{ sessions: Array<{ key: string }> }>(socket, "sessions.list", {
+        archived: "all",
+      });
+      expect(all.ok, JSON.stringify(all.error)).toBe(true);
+      for (const key of keys) {
+        expect(all.payload?.sessions.some((row) => row.key === key)).toBe(socket === member);
+      }
+      expect(all.payload?.sessions.some((row) => row.key === otherAccountKey)).toBe(false);
+      expect(all.payload?.sessions.some((row) => row.key === spoofKey)).toBe(false);
+      for (const key of keys) {
+        expect(list.payload?.sessions.some((row) => row.key === key)).toBe(socket === member);
+        const history = await rpcReq(socket, "chat.history", { sessionKey: key, limit: 10 });
+        expect(JSON.stringify(history.payload ?? {}).includes(text)).toBe(socket === member);
+      }
+      expect(list.payload?.sessions.some((row) => row.key === privateKey)).toBe(false);
+      expect(list.payload?.sessions.some((row) => row.key === spoofKey)).toBe(false);
+      expect(list.payload?.sessions.some((row) => row.key === otherAccountKey)).toBe(false);
+      expect((await describeSession(socket, spoofKey)).payload?.session?.key).not.toBe(spoofKey);
+    }
+    expect(membership).toHaveBeenCalled();
+    membership.mockResolvedValue(false);
+    const afterLeave = await rpcReq<{ sessions: Array<{ key: string }> }>(member, "sessions.list", {
+      archived: "all",
+    });
+    expect(afterLeave.ok, JSON.stringify(afterLeave.error)).toBe(true);
+    // Explicit source-audience access survives membership removal for its configured topic.
+    for (const key of keys) {
+      const sourceAudienceAllows = key === keys[2];
+      expect(afterLeave.payload?.sessions.some((row) => row.key === key)).toBe(sourceAudienceAllows);
+      const history = await rpcReq(member, "chat.history", { sessionKey: key, limit: 10 });
+      expect(JSON.stringify(history.payload ?? {}).includes(text)).toBe(sourceAudienceAllows);
+    }
+    membership.mockResolvedValue(true);
+    await changeCanonicalUserChannelIdentity("unlink", profileIds.get("selected")!, identity);
+    const afterUnlink = await rpcReq<{ sessions: Array<{ key: string }> }>(
+      member,
+      "sessions.list",
+      { archived: "all" },
+    );
+    expect(afterUnlink.ok, JSON.stringify(afterUnlink.error)).toBe(true);
+    for (const key of keys) {
+      expect(afterUnlink.payload?.sessions.some((row) => row.key === key)).toBe(key === keys[2]);
+    }
+  } finally {
+    await changeCanonicalUserChannelIdentity("unlink", profileIds.get("selected")!, identity);
+  }
+});

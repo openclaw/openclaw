@@ -114,3 +114,32 @@ it("captures inherited tool policy once and keeps both sides independently mutab
   expect(entry.inheritedToolAllow).toEqual(["read", "write", "edit"]);
   expect(entry.inheritedToolDeny).toEqual(["browser"]);
 });
+
+it("retains channel provenance and invalidates sharing when its route changes", () => {
+  const entry: InternalSessionEntry = {
+    sessionId,
+    updatedAt: 1,
+    createdVia: "channel",
+    delivery: {
+      kind: "external",
+      route: { channel: "telegram", accountId: "default", target: { to: "telegram:-123" } },
+      context: {},
+      origin: { provider: "telegram", chatType: "group", nativeChannelId: "-123" },
+    },
+  };
+  const retained = projectSessionSharingEntry(entry);
+  expect(retained.createdVia).toBe("channel");
+  expect(retained.delivery).toEqual(entry.delivery);
+  expect(sessionSharingEntriesEqual(entry, retained, "session-access")).toBe(true);
+  if (entry.delivery?.kind !== "external") {
+    throw new Error("expected external route");
+  }
+  entry.delivery.origin.label = "A renamed topic";
+  entry.delivery.context.to = "telegram:-123";
+  expect(sessionSharingEntriesEqual(entry, retained, "session-access")).toBe(true);
+  entry.delivery.route.accountId = "other";
+  expect(sessionSharingEntriesEqual(entry, retained, "session-access")).toBe(false);
+  expect(retained.delivery?.kind === "external" && retained.delivery.route.accountId).toBe(
+    "default",
+  );
+});

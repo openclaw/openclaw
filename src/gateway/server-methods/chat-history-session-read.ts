@@ -5,6 +5,8 @@ import { readSessionHistoryPageInWorker } from "../../config/sessions/session-hi
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isIncognitoSessionKey, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
+import { resolveTelegramSessionGroup } from "../session-channel-group.js";
+import { prepareTelegramSessionReads } from "../session-channel-read.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
@@ -130,6 +132,19 @@ export async function prepareChatHistorySessionRead({
     current: NonNullable<ReturnType<typeof selectSession>>,
     read: SessionRowReadView,
   ) => authorizeSharingFacts(current, prepareProjectedSessionPresentation(read, client).sharing);
+  const candidateGroup = await withReadySessionRows(rowProjection, queries, (read) => {
+    const selected = selectSession(read);
+    return selected?.entry && resolveTelegramSessionGroup(selected.canonicalKey, selected.entry);
+  });
+  if (candidateGroup) {
+    await prepareTelegramSessionReads({
+      client,
+      cfg: rowProjection.getPolicyConfig(),
+      runtimeConfig: context.getRuntimeConfig(),
+      getConfig: () => rowProjection.getPolicyConfig(),
+      groups: [candidateGroup],
+    });
+  }
   const selectedSession = await measureDiagnosticsTimelineSpan(
     `gateway.${method}.session_entry`,
     () =>

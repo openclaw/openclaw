@@ -22,6 +22,8 @@ import { createVisibleActiveSessionRunProjector } from "./server-methods/session
 import { resolveGatewayModelSelectionPolicy } from "./server-methods/session-model-selection-policy.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
+import { resolveTelegramSessionGroup } from "./session-channel-group.js";
+import { prepareTelegramSessionListMembership } from "./session-channel-read.js";
 import {
   addSessionOwnerFacetIdentity,
   sortSessionOwnerFacet,
@@ -83,6 +85,7 @@ export function selectSessionEntries(
     params.retained &&
     !params.opts.includePeople &&
     !params.opts.involvingProfileId &&
+    !params.involvingChannelMember &&
     !params.opts.includeOwnerSessionCounts;
   let filteredResult: SessionListFilteredEntries;
   if (incremental) {
@@ -428,6 +431,8 @@ export function prepareProjectedSessionList(params: {
   searchIdentities?: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>>;
   /** Reused only within one admitted caller/configuration/profile authority epoch. */
   visibility?: WeakMap<object, boolean>;
+  /** Connection-owned, already prepared group membership. */
+  involvingChannelMember?: SessionListFilterParams["involvingChannelMember"];
 }) {
   const { projection, opts, key: exactKey, context, client, now } = params;
   if (params.searchIdentities && params.searchIdentities.cfg !== projection.state.cfg) {
@@ -465,6 +470,7 @@ export function prepareProjectedSessionList(params: {
     identityNames: params.searchIdentities?.names,
     entriesSorted: true,
     involvingActorId: opts.involvingMe ? identity : undefined,
+    involvingChannelMember: params.involvingChannelMember,
     ownerFirstActorId: opts.ownerFirst ? identity : undefined,
     restrictProfileReferences: client !== undefined,
     viewerProfileId: identity,
@@ -476,7 +482,10 @@ export function prepareProjectedSessionList(params: {
         ? undefined
         : (key, entry, row) => {
             const storeKey = row.storeKey ?? key;
-            let visible = visibility?.get(entry);
+            const entryVisibility = resolveTelegramSessionGroup(storeKey, entry)
+              ? undefined
+              : visibility;
+            let visible = entryVisibility?.get(entry);
             if (visible === undefined) {
               visible =
                 client === undefined ||
@@ -494,7 +503,7 @@ export function prepareProjectedSessionList(params: {
                   ),
                 ) ??
                   true);
-              visibility?.set(entry, visible);
+              entryVisibility?.set(entry, visible);
             }
             return (
               visible &&
@@ -550,6 +559,10 @@ export async function listProjectedSessions(params: {
       projection.needsSelectionPreparation(selectionPreparation) ||
       (searchIdentities && searchIdentities.cfg !== projection.state.cfg)
     );
+    const involvingChannelMember = await prepareTelegramSessionListMembership(
+      projection,
+      client ?? null,
+    );
     let prepareSyncMs = 0;
     const selectPage = () => {
       const started = performance.now();
@@ -567,6 +580,7 @@ export async function listProjectedSessions(params: {
             now,
             searchIdentities,
             metadataPrepared: true,
+            involvingChannelMember,
           });
         diagnostics?.mark("filterSetup");
         const select = (retained?: Map<object, SessionListFilteredEntries>) =>
