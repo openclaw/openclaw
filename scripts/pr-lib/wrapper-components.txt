@@ -160,6 +160,12 @@ packages/normalization-core/src/string-normalization.ts
 packages/normalization-core/src/stringified-error.ts
 packages/normalization-core/src/text-decoding.ts
 packages/normalization-core/src/utf16-slice.ts
+packages/openclaw-id-protocol/src/bytes.ts
+packages/openclaw-id-protocol/src/crypto.ts
+packages/openclaw-id-protocol/src/keys.ts
+packages/openclaw-id-protocol/src/statements/types.ts
+packages/openclaw-id-protocol/src/statements/validate.ts
+packages/openclaw-id-protocol/src/version.ts
 packages/plugin-package-contract/package.json
 packages/plugin-package-contract/src/categories.ts
 packages/plugin-package-contract/src/index.ts
@@ -2143,6 +2149,7 @@ src/state/openclaw-agent-standing-intents-schema.ts
 src/state/openclaw-agent-storage-migration.ts
 src/state/openclaw-agent-storage-schema.ts
 src/state/openclaw-agent-text-search-migration.ts
+src/state/openclaw-agent-tool-usage-schema.ts
 src/state/openclaw-agent-trajectory-storage-migration.ts
 src/state/openclaw-agent-transcript-fts-schema-source.ts
 src/state/openclaw-agent-transcript-fts-schema.ts

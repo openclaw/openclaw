@@ -483,6 +483,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/provider-crabbox-runtime-preflight.test.ts",
   "src/gateway/worker-environments/provider-create-authority.test.ts",
   "src/gateway/worker-environments/provider-create-recovery.test.ts",
+  "src/gateway/worker-environments/provider-destroy-authority.test.ts",
   "src/gateway/worker-environments/provider-destroy-timeout.test.ts",
   "src/gateway/worker-environments/provider-image-intent.test.ts",
   "src/gateway/worker-environments/provider-intent.test.ts",
