@@ -85,6 +85,12 @@ public final class OpenClawChatViewModel {
     }
 
     public internal(set) var isLoading = false
+    /// Reading needs an accepted transcript, not the rest of bootstrap. Keep `isLoading`
+    /// and the health, metadata, and outbox owners unchanged for startup and send readiness.
+    var hasReadableHistory: Bool {
+        self.hasAppliedLiveHistory || self.isShowingCachedTranscript
+    }
+
     public internal(set) var isSending = false
     public internal(set) var isSendingAttachmentDraft = false
     public internal(set) var isSubmittingDraft = false

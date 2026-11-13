@@ -223,6 +223,7 @@ struct ChatViewModelTranscriptCacheTests {
         }
         #expect(await MainActor.run { vm.isShowingCachedTranscript && vm.messages.count == 2 })
         #expect(await visibleTexts(vm) == ["cached question", "cached answer"])
+        #expect(await MainActor.run { vm.isLoading && vm.hasReadableHistory })
 
         releaseHistory.yield(())
 
@@ -231,7 +232,7 @@ struct ChatViewModelTranscriptCacheTests {
         await bootstrap.value
         #expect(await MainActor.run { vm.sessionId == "sess-live" })
         #expect(await visibleTexts(vm) == ["cached question", "live answer", "newer turn"])
-        #expect(await MainActor.run { !vm.isShowingCachedTranscript })
+        #expect(await MainActor.run { !vm.isShowingCachedTranscript && vm.hasReadableHistory })
     }
 
     @Test func `offline cold open keeps cached transcript browsable`() async throws {

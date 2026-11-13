@@ -6,6 +6,11 @@ import AppKit
 import UIKit
 #endif
 
+private struct ChatTranscriptSessionIdentity: Equatable {
+    let model: ObjectIdentifier
+    let generation: UInt64
+}
+
 private struct ChatTurnRecapObservation: Equatable {
     let sessionKey: String
     let indicatorVisible: Bool
@@ -489,7 +494,7 @@ extension OpenClawChatView {
                 self.handleTranscriptScrollPhase(phase)
             }
 
-            if self.viewModel.isLoading, self.composerChrome == .full {
+            if self.viewModel.isLoading, !self.viewModel.hasReadableHistory, self.composerChrome == .full {
                 ProgressView()
                     .controlSize(.large)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -500,7 +505,7 @@ extension OpenClawChatView {
             ChatJumpToLatestSlot(
                 scroll: self.scroll,
                 hasVisibleContent: hasVisibleContent,
-                isLoading: self.viewModel.isLoading)
+                isLoading: self.viewModel.isLoading && !self.viewModel.hasReadableHistory)
             {
                 self.jumpToLatestButton
             }
@@ -513,19 +518,32 @@ extension OpenClawChatView {
             TapGesture().onEnded {
                 self.dismissKeyboardIfNeeded()
             })
-        .onChange(of: self.viewModel.isLoading) { _, isLoading in
-            guard !isLoading, !self.hasPerformedInitialScroll else { return }
-            self.restoreInitialScrollPosition()
-            self.hasPerformedInitialScroll = true
-            self.lastTurnStartID = self.latestVisibleTurnStartID
+        .onChange(of: self.viewModel.hasReadableHistory, initial: true) { _, hasReadableHistory in
+            guard hasReadableHistory else { return }
+            self.restoreInitialScrollPositionIfNeeded()
+        }
+        .onChange(of: self.viewModel.isLoading) { wasLoading, isLoading in
+            // Failed history can still leave durable outbox rows to read. Only a completed
+            // load, never the idle state before onAppear, may provide this fallback.
+            guard wasLoading, !isLoading else { return }
+            self.restoreInitialScrollPositionIfNeeded()
         }
         #if os(iOS)
         .onChange(of: self.scroll.followTarget) { _, target in
             if target == .latest { self.readerHistorySnapshot = nil }
         }
         #endif
-        .onChange(of: self.viewModel.currentSessionTarget) { _, _ in
+        .onChange(of: ChatTranscriptSessionIdentity(
+            model: ObjectIdentifier(self.viewModel),
+            generation: self.viewModel.sessionGeneration)) { _, _ in
             self.resetTranscriptSession()
+            // A replacement can arrive after a failed load already settled. The retained
+            // bootstrap task distinguishes that fallback from a model that has never loaded.
+            if self.viewModel.hasReadableHistory ||
+                (self.viewModel.bootstrapTask != nil && !self.viewModel.isLoading)
+            {
+                self.restoreInitialScrollPositionIfNeeded()
+            }
         }
         .onChange(of: self.scenePhase) { _, newValue in
             if newValue == .background {
@@ -1303,6 +1321,13 @@ extension OpenClawChatView {
         return ("Something went wrong", error, "exclamationmark.triangle.fill", .orange)
     }
 
+    private func restoreInitialScrollPositionIfNeeded() {
+        guard !self.hasPerformedInitialScroll else { return }
+        self.restoreInitialScrollPosition()
+        self.hasPerformedInitialScroll = true
+        self.lastTurnStartID = self.latestVisibleTurnStartID
+    }
+
     private func restoreInitialScrollPosition() {
         #if os(iOS)
         self.scroll.followTarget = .latest
@@ -1359,13 +1384,7 @@ extension OpenClawChatView {
             self.scroll.hasNewerContentBelow = true
         }
         #else
-        guard self.hasPerformedInitialScroll else {
-            // A chat's cached or live rows paint while the rest of its load (sessions, models,
-            // health) is still running. Hold them at the initial position instead of the top;
-            // the load's completion still settles it.
-            if !self.viewModel.messages.isEmpty { self.restoreInitialScrollPosition() }
-            return
-        }
+        guard self.hasPerformedInitialScroll else { return }
         // A search result is an explicit reading position. Incoming replies
         // must not pull the reader away until they leave Find.
         guard self.searchMessageID == nil else { return }
