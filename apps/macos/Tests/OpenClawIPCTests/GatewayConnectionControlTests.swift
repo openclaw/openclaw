@@ -237,6 +237,69 @@ private func assertConfigLookupCannotRecreateRoute(
 }
 
 @Suite(.serialized, .testWaitLimit) struct GatewayConnectionControlTests {
+    @Test func `filtered subscriptions retain chat and lifecycle deliveries through unrelated traffic`() async throws {
+        let (connection, _) = makeRecordingGatewayConnection(responseData: {
+            GatewayWebSocketTestSupport.okResponseData(id: $0)
+        })
+        _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
+        await connection._test_handlePush(
+            .snapshot(makeGatewayGenerationSnapshot(version: "filtered")), socketGeneration: 1)
+        let chat = await connection.subscribe(
+            bufferingNewest: 1,
+            matching: { OpenClawChatGatewayPayloadCodec.acceptsEvent($0) })
+        let lifecycle = await connection.subscribe(bufferingNewest: 1, matching: { _ in false })
+        let all = await connection.subscribe(bufferingNewest: 1)
+        var chatIterator = chat.makeAsyncIterator()
+        var lifecycleIterator = lifecycle.makeAsyncIterator()
+        var allIterator = all.makeAsyncIterator()
+        await connection._test_handlePush(.event(EventFrame(
+            type: "event", event: "health", payload: AnyCodable(["ok": false]))), socketGeneration: 1)
+        for _ in 0..<250 {
+            await connection._test_handlePush(
+                .event(EventFrame(type: "event", event: "presence")), socketGeneration: 1)
+        }
+        let chatDelivery = await chatIterator.next()
+        if let push = chatDelivery?.push,
+           case .health(ok: false) = MacGatewayChatTransport.mapPushToTransportEvent(push)
+        {
+            #expect(chatDelivery?.isCurrent == true)
+        } else {
+            Issue.record("Unrelated traffic evicted the chat health event")
+        }
+        let lifecycleDelivery = await lifecycleIterator.next()
+        #expect(gatewayGenerationSnapshotVersion(lifecycleDelivery) == "filtered")
+        let allDelivery = await allIterator.next()
+        if case let .event(frame) = allDelivery?.push {
+            #expect(frame.event == "presence")
+        } else {
+            Issue.record("The unfiltered subscriber must still receive unrelated events")
+        }
+
+        await connection._test_handlePush(.seqGap(expected: 1, received: 3), socketGeneration: 1)
+        for stream in [chat, lifecycle] {
+            var iterator = stream.makeAsyncIterator()
+            let delivery = await iterator.next()
+            if let push = delivery?.push,
+               case .seqGap = MacGatewayChatTransport.mapPushToTransportEvent(push)
+            {
+                #expect(delivery?.isCurrent == true)
+            } else {
+                Issue.record("Event filters must not discard sequence gaps")
+            }
+        }
+        await connection._test_handleDisconnect(socketGeneration: 1)
+        for stream in [chat, lifecycle] {
+            var iterator = stream.makeAsyncIterator()
+            let delivery = await iterator.next()
+            if case .disconnected = delivery?.event {
+                #expect(delivery?.isCurrent == true)
+            } else {
+                Issue.record("Event filters must not discard disconnects")
+            }
+        }
+        await connection.shutdown()
+    }
+
     @Test func `direct shared connection success retires only its current route mismatch`() async throws {
         let urlA = try #require(URL(string: "ws://127.0.0.1:49220"))
         let urlB = try #require(URL(string: "ws://127.0.0.1:49221"))
