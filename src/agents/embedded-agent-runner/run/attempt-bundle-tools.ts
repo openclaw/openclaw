@@ -9,6 +9,7 @@ import {
 } from "../../agent-bundle-mcp-tools.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
+import { omitUnsupportedNodeTools } from "../../computer-use-node-capabilities.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
@@ -251,7 +252,10 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         sessionKey: params.attempt.sessionKey,
         sessionId: params.attempt.sessionId,
       });
-      return schemaProjection.tools;
+      return omitUnsupportedNodeTools(
+        schemaProjection.tools,
+        params.preparedToolBase.nodeToolAvailability,
+      );
     };
     phases.mark("attempt.bundle-tools.project");
     const uncompactedEffectiveTools = await withRuntimeToolSchemaQuarantine((record) =>

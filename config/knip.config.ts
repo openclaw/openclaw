@@ -39,6 +39,7 @@ const repositoryScriptEntries = [
   "scripts/lib/mac-runtime-portability.mjs!",
   "scripts/perf/agent-deletion-cancellation-measure.ts",
   "scripts/perf/template-retirement-measure.mts",
+  "scripts/perf/node-tool-availability.mjs!",
   "scripts/windows-release-promotion.mjs!",
   // Offline composition is documented; Docker executes the staged finalizer by path.
   "scripts/compose-installed-runtime.mts!",
