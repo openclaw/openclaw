@@ -585,24 +585,29 @@ internal fun OpenClawSidebar(
   val sessionRows: @Composable (List<ChatSessionEntry>, SidebarSessionDragSource?) -> Unit = { entries, dragSource ->
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
       entries.forEach { session ->
-        SidebarSessionRow(
-          session = session,
-          attention = attentionFor(listOf(sidebarAttentionSessionKey(session.key, session.ownerAgentId ?: selectedAgentId ?: defaultAgentId))),
-          selected = session.key == activeSessionKey,
-          palette = palette,
-          onClick = { onSelectSession(session) },
-          onDragCommit =
-            if (canMutateSessions && dragSource != null) {
-              { direction ->
-                sidebarSessionPinnedAfterDrag(dragSource, direction)?.let { pinned ->
-                  setSessionPinned(session.key, session.ownerAgentId, pinned)
-                }
-              }
-            } else {
-              null
-            },
-          onDragActiveChange = if (dragSource == null) ({}) else onDragActiveChange,
-        )
+        key(gatewayStableId, session.ownerAgentId, session.key) {
+          SessionRowActions(viewModel, session) { onLongClick ->
+            SidebarSessionRow(
+              session = session,
+              attention = attentionFor(listOf(sidebarAttentionSessionKey(session.key, session.ownerAgentId ?: selectedAgentId ?: defaultAgentId))),
+              selected = session.key == activeSessionKey,
+              palette = palette,
+              onClick = { onSelectSession(session) },
+              onLongClick = onLongClick,
+              onDragCommit =
+                if (canMutateSessions && dragSource != null) {
+                  { direction ->
+                    sidebarSessionPinnedAfterDrag(dragSource, direction)?.let { pinned ->
+                      setSessionPinned(session.key, session.ownerAgentId, pinned)
+                    }
+                  }
+                } else {
+                  null
+                },
+              onDragActiveChange = if (dragSource == null) ({}) else onDragActiveChange,
+            )
+          }
+        }
       }
     }
   }
@@ -903,6 +908,7 @@ internal fun OpenClawSidebar(
                     )
                     if (section.expanded) {
                       SidebarSessionCatalog(
+                        viewModel = viewModel,
                         attentionFor = ::attentionFor,
                         state = catalogState,
                         catalog = catalog,
@@ -1174,6 +1180,7 @@ private fun SidebarPagesHeader(
 
 @Composable
 private fun SidebarSessionCatalog(
+  viewModel: MainViewModel,
   attentionFor: (Collection<String>) -> SidebarAttention?,
   state: SessionCatalogState,
   catalog: SessionCatalog,
@@ -1291,19 +1298,24 @@ private fun SidebarSessionCatalog(
             }
             if (expanded) {
               workspace.sessions.forEach { session ->
-                SidebarCatalogSessionRow(
-                  session = session,
-                  attention = session.sessionKey?.let { attentionFor(listOf(sidebarAttentionSessionKey(it, session.agentId ?: state.agentId))) },
-                  liveSession = session.sessionKey?.let(liveSessionsByKey::get),
-                  selected = session.sessionKey == activeSessionKey,
-                  continuing = state.continuingEntryId == session.locatorId,
-                  selectionEnabled = state.continuingEntryId == null,
-                  palette = palette,
-                  onClick = { onSelectSession(session) },
-                  canMutateSessions = canMutateSessions,
-                  onPinSession = onPinSession,
-                  onDragActiveChange = onDragActiveChange,
-                )
+                key(session.locatorId) {
+                  SessionRowActions(viewModel, session.sessionKey?.let(liveSessionsByKey::get)) { onLongClick ->
+                    SidebarCatalogSessionRow(
+                      session = session,
+                      attention = session.sessionKey?.let { attentionFor(listOf(sidebarAttentionSessionKey(it, session.agentId ?: state.agentId))) },
+                      liveSession = session.sessionKey?.let(liveSessionsByKey::get),
+                      selected = session.sessionKey == activeSessionKey,
+                      continuing = state.continuingEntryId == session.locatorId,
+                      selectionEnabled = state.continuingEntryId == null,
+                      palette = palette,
+                      onClick = { onSelectSession(session) },
+                      onLongClick = onLongClick,
+                      canMutateSessions = canMutateSessions,
+                      onPinSession = onPinSession,
+                      onDragActiveChange = onDragActiveChange,
+                    )
+                  }
+                }
               }
             }
           }
@@ -1340,6 +1352,7 @@ private fun SidebarCatalogSessionRow(
   selectionEnabled: Boolean,
   palette: SidebarPalette,
   onClick: () -> Unit,
+  onLongClick: (() -> Unit)?,
   canMutateSessions: Boolean,
   onPinSession: (String, String?, Boolean) -> Unit,
   onDragActiveChange: (Boolean) -> Unit,
@@ -1371,6 +1384,7 @@ private fun SidebarCatalogSessionRow(
     palette = palette,
     enabled = enabled && selectionEnabled,
     onClick = onClick,
+    onLongClick = onLongClick,
     dragKey = session.locatorId.takeIf { draggableSession != null },
     onDragCommit =
       draggableSession?.let { live ->

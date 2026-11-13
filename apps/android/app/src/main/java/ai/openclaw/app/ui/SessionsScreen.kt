@@ -81,6 +81,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
@@ -415,29 +416,7 @@ internal fun SessionsScreen(
   }
 
   renameSessionTarget?.let { session ->
-    SessionTextDialog(
-      title = nativeString("Rename thread"),
-      stateKey = session.stateKey,
-      initialValue = session.label ?: session.displayName.orEmpty(),
-      confirmLabel = nativeString("Rename"),
-      allowEmpty = true,
-      onDismiss = { renameSessionTarget = null },
-      onConfirm = { value ->
-        renameSessionTarget = null
-        if (!session.matchesGateway(activeGatewayStableId)) return@SessionTextDialog
-        val label = value.trim()
-        coroutineScope.launch {
-          viewModel.patchChatSession(
-            ChatSessionPatch(
-              key = session.key,
-              ownerAgentId = session.ownerAgentId,
-              label = label.takeIf(String::isNotEmpty),
-              clearLabel = label.isEmpty(),
-            ),
-          )
-        }
-      },
-    )
+    SessionRenameDialog(viewModel, session, onDismiss = { renameSessionTarget = null })
   }
 
   groupSessionTarget?.let { session ->
@@ -614,9 +593,11 @@ private fun SessionRow(
     } else {
       (session.lastActivityAt ?: session.updatedAtMs)?.let { relativeSessionTime(it, nowMs) } ?: nativeString("now")
     }
-  var menuExpanded by remember { mutableStateOf(false) }
-  var submenu by remember { mutableStateOf<SessionRowSubmenu?>(null) }
+  val gatewayId by viewModel.activeGatewayStableId.collectAsState()
+  var menuExpanded by remember(gatewayId, session.ownerAgentId, session.key) { mutableStateOf(false) }
+  var submenu by remember(gatewayId, session.ownerAgentId, session.key) { mutableStateOf<SessionRowSubmenu?>(null) }
   val selectedColor = session.color.takeIf { it in sessionColorNames }
+  val context = LocalContext.current
   val canChangeArchived = !session.sessionId.isNullOrBlank()
   val snoozePresets = remember(menuExpanded, submenu) { SessionSnooze.presets(System.currentTimeMillis()) }
 
@@ -769,6 +750,10 @@ private fun SessionRow(
         onDismissRequest = ::dismissMenu,
       ) {
         if (submenu == null) {
+          SessionMenuItem(nativeString("Copy session reference")) {
+            dismissMenu()
+            if (gatewayId == viewModel.activeGatewayStableId.value) context.copySessionReference(session.key)
+          }
           SessionMenuItem(nativeString("Color")) { submenu = SessionRowSubmenu.Color }
         }
         if (submenu == SessionRowSubmenu.Color) {
@@ -966,7 +951,7 @@ private fun SessionMenuItem(
 }
 
 @Composable
-private fun SessionTextDialog(
+internal fun SessionTextDialog(
   title: String,
   stateKey: String,
   initialValue: String,
@@ -974,9 +959,11 @@ private fun SessionTextDialog(
   allowEmpty: Boolean,
   onDismiss: () -> Unit,
   onConfirm: (String) -> Unit,
+  enabled: Boolean = true,
+  error: String? = null,
 ) {
   var value by rememberSaveable(stateKey) { mutableStateOf(initialValue) }
-  val canConfirm = allowEmpty || value.isNotBlank()
+  val canConfirm = enabled && (allowEmpty || value.isNotBlank())
   AppAlertDialog(
     onDismissRequest = onDismiss,
     containerColor = ClawTheme.colors.surfaceRaised,
@@ -985,6 +972,9 @@ private fun SessionTextDialog(
       OutlinedTextField(
         value = value,
         onValueChange = { value = it },
+        enabled = enabled,
+        isError = error != null,
+        supportingText = error?.let { message -> { Text(message) } },
         singleLine = true,
         label = { Text(if (allowEmpty) nativeString("Name") else nativeString("Group name")) },
       )
@@ -1414,7 +1404,7 @@ private val SessionGroupActionTargetSaver =
 
 private const val SESSION_ACTION_TARGET_STATE_FIELDS = 9
 
-private val SessionActionTargetSaver =
+internal val SessionActionTargetSaver =
   Saver<SessionActionTarget?, ArrayList<String>>(
     save = { target -> target?.toSavedState() ?: arrayListOf() },
     restore = ::sessionActionTargetFromSavedState,

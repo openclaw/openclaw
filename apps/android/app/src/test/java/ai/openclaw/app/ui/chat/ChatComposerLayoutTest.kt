@@ -295,6 +295,33 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  fun chatActionsCopyCurrentReferenceAndRenameCancelPreservesDraft() {
+    val model = showChat(viewportHeight = { 640.dp })
+    val editor = composerEditor()
+    editor.performTextReplacement("Keep this draft")
+    composeRule.onNodeWithContentDescription("Chat actions").performClick()
+    composeRule.onNodeWithText("Copy session reference").performClick()
+    composeRule.runOnIdle {
+      val clipboard = app.getSystemService(android.content.ClipboardManager::class.java)
+      assertEquals(
+        model.chatSessionKey.value,
+        clipboard.primaryClip!!
+          .getItemAt(0)
+          .text
+          .toString(),
+      )
+    }
+    editor.assertTextEquals("Keep this draft")
+    composeRule.onNodeWithContentDescription("Chat actions").performClick()
+    composeRule.onNodeWithText("Rename…").performClick()
+    composeRule.onNodeWithText("Rename thread").assertIsDisplayed()
+    composeRule.onNode(hasSetTextAction() and hasAnyAncestor(isDialog())).performTextReplacement("Proposed name")
+    composeRule.onNodeWithText("Cancel").performClick()
+    composeRule.onNodeWithText("Rename thread").assertDoesNotExist()
+    editor.assertTextEquals("Keep this draft")
+  }
+
+  @Test
   fun placeholderFollowsComposerOwnerWithoutChangingBoundDrafts() {
     val scale = mutableStateOf(1f)
     val model = showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp }, fontScale = { scale.value })

@@ -68,8 +68,12 @@ import ai.openclaw.app.ui.AppModalBottomSheet
 import ai.openclaw.app.ui.FoldAwareDropdownMenu
 import ai.openclaw.app.ui.FoldAwareMenuItem
 import ai.openclaw.app.ui.ProviderSignInDialog
+import ai.openclaw.app.ui.SessionActionTarget
+import ai.openclaw.app.ui.SessionActionTargetSaver
+import ai.openclaw.app.ui.SessionRenameDialog
 import ai.openclaw.app.ui.TabletopPaneBounds
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
+import ai.openclaw.app.ui.copySessionReference
 import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawLoadingState
 import ai.openclaw.app.ui.design.ClawPanel
@@ -86,6 +90,7 @@ import ai.openclaw.app.ui.relativeSessionTime
 import ai.openclaw.app.ui.rememberWindowDisplayFeatureState
 import ai.openclaw.app.ui.sessionPresentationTitle
 import ai.openclaw.app.ui.sidebarCatalogHosts
+import ai.openclaw.app.ui.toActionTarget
 import android.os.SystemClock
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -878,9 +883,28 @@ internal fun ChatScreen(
     }
   }
 
+  var renameSessionTarget by rememberSaveable(composerOwner, stateSaver = SessionActionTargetSaver) {
+    mutableStateOf<SessionActionTarget?>(null)
+  }
+  renameSessionTarget?.let { target ->
+    SessionRenameDialog(viewModel, target, onDismiss = { renameSessionTarget = null })
+  }
+
   val headerContent: @Composable ((() -> Unit)?, () -> Unit) -> Unit = { onJumpToLatest, dismissDetails ->
     ChatHeader(
       sessionOwner = composerOwner,
+      renameEnabled = composerOwnerReady && !gatewayOffline && canWriteSessionSettings && activeSession != null && activeSession.archived != true,
+      copyReferenceEnabled = composerOwnerReady && activeSession != null,
+      onRename = {
+        if (viewModel.isCurrentChatSelection(composerOwner, selectionGeneration)) {
+          renameSessionTarget = activeSession?.toActionTarget(activeGatewayStableId)
+        }
+      },
+      onCopyReference = {
+        if (viewModel.isCurrentChatSelection(composerOwner, selectionGeneration)) {
+          activeSession?.let { context.copySessionReference(it.key) }
+        }
+      },
       contextUsage = contextUsage,
       contextEnabled = composerOwnerReady && gatewayConnectionDisplay.isConnected && operatorScopesAllowRead(operatorScopes),
       onOpenContext = {
@@ -1507,6 +1531,10 @@ internal fun chatHeaderProjectLabel(
 @Composable
 private fun ChatHeader(
   sessionOwner: ChatComposerOwner,
+  renameEnabled: Boolean,
+  copyReferenceEnabled: Boolean,
+  onRename: () -> Unit,
+  onCopyReference: () -> Unit,
   contextUsage: ChatContextUsage,
   contextEnabled: Boolean,
   onOpenContext: () -> Unit,
@@ -1659,6 +1687,8 @@ private fun ChatHeader(
           onDismissRequest = { actionsMenuExpanded = false },
           items =
             buildList {
+              add(FoldAwareMenuItem("rename", nativeString("Rename…"), onRename, enabled = renameEnabled))
+              add(FoldAwareMenuItem("copy-session-reference", nativeString("Copy session reference"), onCopyReference, enabled = copyReferenceEnabled))
               add(FoldAwareMenuItem("refresh", nativeString("Refresh chat"), onRefresh, Icons.Default.Refresh))
               add(
                 FoldAwareMenuItem(

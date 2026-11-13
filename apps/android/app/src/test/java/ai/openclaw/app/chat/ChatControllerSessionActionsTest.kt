@@ -54,6 +54,68 @@ class ChatControllerSessionActionsTest {
   }
 
   @Test
+  fun renameKeepsTheCapturedSessionAndGatewayAndReturnsSaveFailures() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      var gatewayScope = ChatCacheScope("gateway-a", 1)
+      val routes = mutableListOf<String>()
+      val response = CompletableDeferred<String>()
+      gateway.respond("sessions.patch") { response.await() }
+      val controller =
+        ChatController(
+          scope = this,
+          commandOutbox = createChatCommandOutbox(),
+          json = json,
+          requestGateway = gateway::request,
+          requestGatewayForGateway = { gatewayId, method, params ->
+            routes += gatewayId
+            gateway.request(method, params)
+          },
+          cacheScope = { gatewayScope },
+        )
+      val rename =
+        async {
+          controller.patchSession(
+            ChatSessionPatch(key = "agent:other:target", ownerAgentId = "other", label = "Renamed"),
+            expectedGatewayId = "gateway-a",
+          )
+        }
+      runCurrent()
+      val sent = json.parseToJsonElement(gateway.calls.single { it.method == "sessions.patch" }.paramsJson!!).jsonObject
+      assertEquals(JsonPrimitive("agent:other:target"), sent["key"])
+      assertEquals(JsonPrimitive("other"), sent["agentId"])
+      assertEquals(JsonPrimitive("Renamed"), sent["label"])
+      gatewayScope = ChatCacheScope("gateway-b", 2)
+      response.completeExceptionally(IllegalStateException("Rename rejected"))
+      assertFalse(rename.await())
+      assertNull("Old gateway errors must not appear on the replacement", controller.errorText.value)
+      assertEquals(listOf("gateway-a"), routes)
+      assertEquals(0, gateway.callCount("sessions.list"))
+      assertFalse(
+        controller.patchSession(
+          ChatSessionPatch(key = "agent:other:target", label = "Stale dialog"),
+          expectedGatewayId = "gateway-a",
+        ),
+      )
+      assertEquals(1, gateway.callCount("sessions.patch"))
+    }
+
+  @Test
+  fun renameAndClearLabelUseExistingPatchOwnerWithoutSwitchingChat() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("sessions.patch", "{}")
+      val controller = controller(this, gateway)
+      val originalKey = controller.sessionKey.value
+      assertTrue(controller.patchSession(ChatSessionPatch(key = "agent:main:other", label = "New title")))
+      assertTrue(controller.patchSession(ChatSessionPatch(key = "agent:main:other", clearLabel = true)))
+      val patches = gateway.calls.filter { it.method == "sessions.patch" }.map { json.parseToJsonElement(it.paramsJson!!).jsonObject }
+      assertEquals(listOf(JsonPrimitive("New title"), JsonNull), patches.map { it["label"] })
+      assertEquals(originalKey, controller.sessionKey.value)
+      assertEquals(2, gateway.callCount("sessions.list"))
+    }
+
+  @Test
   fun snoozeAndWakeSendLifecycleIdentityAndRefreshSessions() =
     runTest {
       val gateway = ScriptedGateway(json)

@@ -1324,10 +1324,14 @@ class ChatController internal constructor(
       }
     }
 
-  internal suspend fun patchSession(request: ChatSessionPatch): Boolean =
+  internal suspend fun patchSession(
+    request: ChatSessionPatch,
+    expectedGatewayId: String? = currentCacheScope()?.gatewayId,
+  ): Boolean =
     with(request) {
       val sessionKey = key.trim().takeIf { it.isNotEmpty() } ?: return@with false
       val requestCacheScope = currentCacheScope()
+      if (requestCacheScope?.gatewayId != expectedGatewayId) return@with false
       val capturedOwnerAgentId =
         normalizeSessionSelectionOwner(sessionKey, ownerAgentId)
           ?: if (sessionKey == _sessionKey.value) resolveAgentIdForSessionKey(sessionKey) else null
@@ -1351,7 +1355,9 @@ class ChatController internal constructor(
         updateErrorText("Session lifecycle action requires a durable session identity.")
         return@with false
       }
+      val lease = captureRequestLease(requestCacheScope)
       try {
+        val connection = lease ?: throw GatewayRequestNotEnqueued("not connected")
         val params =
           buildJsonObject {
             put("key", JsonPrimitive(sessionKey))
@@ -1380,8 +1386,7 @@ class ChatController internal constructor(
                   ?.takeIf { it.key == sessionKey && (it.observedSessionId == null || it.observedSessionId == lifecycleSessionId) }
               active to remembered
             }
-          val lease = captureRequestLease(requestCacheScope) ?: throw GatewayRequestNotEnqueued("not connected")
-          lease.request("sessions.patch", params.toString(), 10 * 60_000L)
+          connection.request("sessions.patch", params.toString(), 10 * 60_000L)
           publishGatewayState(lease) {
             // ACK retirement belongs to the captured choice, even after an agent switch.
             // A newer explicit choice or a history-observed successor keeps its intent.
@@ -1404,12 +1409,14 @@ class ChatController internal constructor(
             }
           }
         } else {
-          requestGateway("sessions.patch", params.toString())
+          connection.request("sessions.patch", params.toString())
         }
-        fetchSessionsForCurrentWindow()
+        if (requestCacheScope == currentCacheScope()) fetchSessionsForCurrentWindow()
         true
+      } catch (err: CancellationException) {
+        throw err
       } catch (err: Throwable) {
-        updateErrorText(err.message)
+        publishGatewayState(lease, { requestCacheScope == currentCacheScope() }) { updateErrorText(err.message) }
         false
       }
     }

@@ -45,6 +45,21 @@ configured icon; unknown tools use a puzzle piece. Tool Search calls use the
 called tool's icon. Failed rows retain their error mark, and progress cards keep
 their receipt presentation.
 
+## Session actions
+
+Long-press a session in the sidebar and release without dragging to open
+**Rename…** and **Copy session reference**. Keep holding and drag up or down to
+use the existing pin/unpin gesture. Both actions are also available in an open
+conversation's **Chat actions** menu and the **Threads** long-press menu.
+Native catalog rows offer these actions after they have a Gateway session in
+the loaded roster; unadopted native threads are unchanged.
+
+Copy places the Gateway session key, not its display title, on the clipboard and
+shows a confirmation. Paste that key when referring to the session in another
+conversation on the same Gateway; access permissions still apply. Renaming
+requires a connected writable Gateway. Failed saves keep the proposed name for
+retry, and canceling leaves the conversation and draft unchanged.
+
 ## Session colors
 
 Long-press a row on the **Threads** page and choose **Color**, then select a swatch or **Default** to clear it. The eight colors are red, blue, green, yellow, purple, orange, pink, and cyan. Colored sessions show a narrow leading stripe in the sidebar and Threads page, plus a colored ring around the agent avatar in the open chat header. Unset colors add no indicator. Colors sync through the Gateway and remain visible in the local session cache while offline.

@@ -1532,9 +1532,12 @@ class MainViewModel internal constructor(
     archived: Boolean = false,
   ): Unit = ensureRuntime().chat.refreshSessions(limit = limit, archived = archived)
 
-  internal suspend fun patchChatSession(patch: ChatSessionPatch) {
-    ensureRuntime().chat.patchSession(patch)
-  }
+  internal suspend fun patchChatSession(patch: ChatSessionPatch): Boolean = ensureRuntime().chat.patchSession(patch)
+
+  internal suspend fun patchChatSession(
+    patch: ChatSessionPatch,
+    expectedGatewayId: String?,
+  ): Boolean = ensureRuntime().chat.patchSession(patch, expectedGatewayId)
 
   suspend fun deleteChatSession(
     key: String,

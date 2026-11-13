@@ -51,6 +51,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -65,6 +66,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -360,6 +362,7 @@ internal fun SidebarSessionRow(
   selected: Boolean,
   palette: SidebarPalette,
   onClick: () -> Unit,
+  onLongClick: (() -> Unit)? = null,
   onDragCommit: ((Int) -> Unit)? = null,
   onDragActiveChange: (Boolean) -> Unit = {},
   attention: SidebarAttention? = null,
@@ -385,6 +388,7 @@ internal fun SidebarSessionRow(
     palette = palette,
     stripeColor = ClawTheme.colors.sessionColor(session.color),
     onClick = onClick,
+    onLongClick = onLongClick,
     dragKey = session.key,
     onDragCommit = onDragCommit,
     onDragActiveChange = onDragActiveChange,
@@ -429,6 +433,7 @@ internal fun SidebarRowSurface(
   enabled: Boolean = true,
   stripeColor: Color? = null,
   onClick: () -> Unit,
+  onLongClick: (() -> Unit)? = null,
   dragKey: Any? = null,
   onDragCommit: ((Int) -> Unit)? = null,
   onDragActiveChange: (Boolean) -> Unit = {},
@@ -439,6 +444,7 @@ internal fun SidebarRowSurface(
     dragKey = dragKey,
     enabled = enabled,
     onDragCommit = onDragCommit,
+    onLongClick = onLongClick,
     onDragActiveChange = onDragActiveChange,
   ) { visualDragging, dragModifier ->
     Row(
@@ -468,6 +474,17 @@ internal fun SidebarRowSurface(
             } else {
               Modifier.semantics { this.stateDescription = stateDescription }
             },
+          ).then(
+            if (enabled && onLongClick != null) {
+              Modifier.semantics {
+                onLongClick(label = nativeString("Chat actions")) {
+                  onLongClick()
+                  true
+                }
+              }
+            } else {
+              Modifier
+            },
           ).then(dragModifier)
           .padding(contentPadding),
       verticalAlignment = Alignment.CenterVertically,
@@ -483,15 +500,18 @@ private fun SidebarRowDrag(
   enabled: Boolean = true,
   onDragCommit: ((Int) -> Unit)?,
   onDragActiveChange: (Boolean) -> Unit,
+  onLongClick: (() -> Unit)? = null,
   commitOnRelease: Boolean = true,
   content: @Composable (visualDragging: Boolean, dragModifier: Modifier) -> Unit,
 ) {
   val dragThresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
   val haptic = LocalHapticFeedback.current
   val currentOnDragCommit by rememberUpdatedState(onDragCommit)
+  val currentOnLongClick by rememberUpdatedState(onLongClick)
   val currentOnDragActiveChange by rememberUpdatedState(onDragActiveChange)
   var dragOffset by remember(dragKey) { mutableFloatStateOf(0f) }
   var dragging by remember(dragKey) { mutableStateOf(false) }
+  var moved by remember(dragKey) { mutableStateOf(false) }
   val cancelDrag = {
     dragOffset = 0f
     if (dragging) {
@@ -504,17 +524,23 @@ private fun SidebarRowDrag(
     if (commitOnRelease && commit != null && abs(dragOffset) >= dragThresholdPx) {
       commit(if (dragOffset < 0f) -1 else 1)
     }
+    val openMenu = !moved
     cancelDrag()
+    if (openMenu) currentOnLongClick?.invoke()
   }
   val dragModifier =
-    if (!enabled || onDragCommit == null) {
+    if (!enabled || (onDragCommit == null && onLongClick == null)) {
       Modifier
     } else {
       Modifier.pointerInput(dragKey, dragThresholdPx) {
-        // Compose owns pointer cancellation; a fold during a held drag is best effort.
+        var displacement = Offset.Zero
+        // One recognizer owns both gestures: release a stationary hold for actions,
+        // or keep the existing vertical drag-to-pin/unpin. Cancellation does neither.
         detectDragGesturesAfterLongPress(
           onDragStart = {
             dragOffset = 0f
+            displacement = Offset.Zero
+            moved = false
             dragging = true
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             currentOnDragActiveChange(true)
@@ -523,7 +549,9 @@ private fun SidebarRowDrag(
           onDragCancel = cancelDrag,
         ) { change, dragAmount ->
           change.consume()
-          dragOffset += dragAmount.y
+          displacement += dragAmount
+          if (displacement.getDistance() > viewConfiguration.touchSlop) moved = true
+          if (currentOnDragCommit != null) dragOffset += dragAmount.y
           if (!commitOnRelease && abs(dragOffset) >= dragThresholdPx) {
             val direction = if (dragOffset < 0f) -1 else 1
             currentOnDragCommit?.invoke(direction)
@@ -533,7 +561,7 @@ private fun SidebarRowDrag(
       }
     }
 
-  val visualDragging = dragging
+  val visualDragging = dragging && onDragCommit != null
   Box(
     modifier =
       Modifier
