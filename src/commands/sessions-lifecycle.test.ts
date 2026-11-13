@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { ExpectedCliError } from "../cli/expected-cli-error.js";
 import { getMockCallOutput } from "../cli/test-runtime-capture.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createNonExitingRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { sessionsCompactCommand } from "./sessions-compact.js";
 import { sessionsLifecycleCommand } from "./sessions-lifecycle.js";
@@ -78,9 +79,13 @@ describe("sessions lifecycle commands", () => {
   const expectSuccess = (operation: string, results: unknown[], dryRun = false) =>
     expectJson({ ok: true, operation, dryRun, results });
   const expectMutation = (index: number, method: string, params: unknown) =>
-    expect(mocks.callGateway).toHaveBeenNthCalledWith(index, method, expect.any(Object), params, {
-      defaultTimeoutMs: 10 * 60_000,
-    });
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(
+      index,
+      method,
+      expect.any(Object),
+      params,
+      expect.objectContaining({ defaultTimeoutMs: 10 * 60_000 }),
+    );
   const expectMessage = (text: string, channel: "log" | "error" = "log") =>
     expect(runtime[channel]).toHaveBeenCalledWith(expect.stringContaining(text));
   const expectNoMessage = (text: string) =>
@@ -506,6 +511,83 @@ describe("sessions lifecycle commands", () => {
         expect.anything(),
         { key: "agent:work:main", agentId: "work", maxLines: 200 },
         expect.anything(),
+      );
+    });
+  });
+
+  describe("cancellation during batch lifecycle mutation", () => {
+    it("stops deleting further sessions once interrupted", async () => {
+      const scope = new AsyncWorkScope();
+      const keys = ["agent:main:s1", "agent:main:s2", "agent:main:s3"];
+      // describe resolves every key; the first delete completes, the second aborts the scope.
+      mocks.callGateway.mockImplementation(
+        async (method: string, _opts, params: { key: string }) => {
+          if (method === "sessions.describe") {
+            return described(params.key, "session-1");
+          }
+          // sessions.delete
+          if (params.key === "agent:main:s2") {
+            scope.beginClose(new Error("interrupted"));
+          }
+          return deleted(params.key);
+        },
+      );
+
+      await scope.run(() => run("delete", { keys, json: true, yes: true }));
+
+      // describe x3 + delete x2: the third delete never starts after the scope closes.
+      const deletes = mocks.callGateway.mock.calls.filter(
+        ([method]) => method === "sessions.delete",
+      );
+      expect(deletes).toHaveLength(2);
+      const deletedKeys = deletes.map(([, , params]) => params.key);
+      expect(deletedKeys).toEqual(["agent:main:s1", "agent:main:s2"]);
+      // The session reached by the interrupt stays out of the report; the command
+      // does not claim a result for work it never started.
+      expectJson(
+        expect.objectContaining({
+          ok: true,
+          results: [
+            expect.objectContaining({ key: "agent:main:s1", ok: true, status: "deleted" }),
+            expect.objectContaining({ key: "agent:main:s2", ok: true, status: "deleted" }),
+          ],
+        }),
+      );
+    });
+
+    it("stops describing further sessions once interrupted", async () => {
+      const scope = new AsyncWorkScope();
+      const keys = ["agent:main:s1", "agent:main:s2", "agent:main:s3"];
+      // The second describe aborts the scope before the third describe runs.
+      mocks.callGateway.mockImplementation(
+        async (method: string, _opts, params: { key: string }) => {
+          if (method === "sessions.describe" && params.key === "agent:main:s2") {
+            scope.beginClose(new Error("interrupted"));
+          }
+          if (method === "sessions.describe") {
+            return described(params.key, "session-1");
+          }
+          return deleted(params.key);
+        },
+      );
+
+      await scope.run(() => run("delete", { keys, json: true, yes: true }));
+
+      // Only s1 and s2 are described; s3 is never described, so it stays not_found.
+      const describes = mocks.callGateway.mock.calls.filter(
+        ([method]) => method === "sessions.describe",
+      );
+      expect(describes.map(([, , params]) => params.key)).toEqual([
+        "agent:main:s1",
+        "agent:main:s2",
+      ]);
+      expectJson(
+        expect.objectContaining({
+          ok: false,
+          results: expect.arrayContaining([
+            expect.objectContaining({ key: "agent:main:s3", ok: false, status: "not_found" }),
+          ]),
+        }),
       );
     });
   });

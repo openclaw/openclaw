@@ -15,6 +15,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { SESSION_ARCHIVE_REQUEST_TIMEOUT_MS } from "../shared/session-archive-timeout.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 
@@ -95,6 +96,7 @@ async function listRequestedSessions(
   agent: string | undefined,
   rpcOptions: SessionsLifecycleRpcOptions,
 ) {
+  const signal = getAsyncWorkSignal();
   const targets: Array<{ index: number; session: SessionsListRow }> = [];
   const results = keys.map((key): SessionsLifecycleResult | undefined =>
     notFoundResult(key, agent),
@@ -103,12 +105,15 @@ async function listRequestedSessions(
     if (!key) {
       continue;
     }
+    if (signal?.aborted) {
+      break;
+    }
     try {
       const response = (await callGatewayFromCliWithTransport(
         "sessions.describe",
         rpcOptions,
         { key, ...(agent ? { agentId: agent } : {}) },
-        { defaultTimeoutMs: 30_000 },
+        { defaultTimeoutMs: 30_000, signal },
       )) as SessionsDescribeResult;
       if (!response || !("session" in response)) {
         throw new Error("Gateway returned an invalid sessions.describe response.");
@@ -276,7 +281,11 @@ export async function sessionsLifecycleCommand(
     }
   }
 
+  const lifecycleSignal = getAsyncWorkSignal();
   for (const { index, session } of validTargets) {
+    if (lifecycleSignal?.aborted) {
+      break;
+    }
     if (operation === "archive" && session.archived === true) {
       results[index] = { key: session.key, ok: true, status: "already_archived" };
       continue;
@@ -312,7 +321,7 @@ export async function sessionsLifecycleCommand(
                 ...(session.archived === true ? { archivedOnly: true } : {}),
               }),
         },
-        { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
+        { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS, signal: lifecycleSignal },
       );
       if (operation === "archive") {
         const response = rawResponse as SessionsPatchResult;
