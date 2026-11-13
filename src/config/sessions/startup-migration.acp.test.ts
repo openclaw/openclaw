@@ -264,7 +264,7 @@ it.each(["retained-by-deletion", "unconfigured", "configured"] as const)(
         const before = fs.readFileSync(pathname);
         if (disposition === "configured") {
           await expect(startup()).rejects.toMatchObject({
-            name: "SqliteSchemaMismatchError",
+            code: "gateway.maintenance_required",
             message: expect.stringContaining("run openclaw doctor --fix to upgrade"),
           });
           expect(handoff).not.toHaveBeenCalled();
