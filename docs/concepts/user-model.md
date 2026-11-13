@@ -399,13 +399,13 @@ Unlinking takes effect on subsequent turns without a restart.
 
 ## GitHub connections
 
-Open **Settings → Profile → GitHub accounts** to connect **My GitHub** without changing the shared **System GitHub** account. Both accounts and their connection status remain visible together. Viewing these connections does not require selecting an agent or configuring a default agent. Connecting a credential does not change your verified GitHub sign-in identity, display name, avatar, Git co-author credit preference, or OpenClaw permissions.
+Open **Settings → Profile → GitHub accounts** to connect **My GitHub** without changing the **Shared agent account**, which every agent without its own account uses. An agent's account, own or shared, serves its commands, its authenticated dashboard data, and **Publish PR** unless you choose My GitHub. The page lists My GitHub, the shared agent account, and every agent with the account it uses and whether that is the shared account or its own. Viewing these connections does not require selecting an agent or configuring a default agent. Connecting a credential does not change your verified GitHub sign-in identity, display name, avatar, Git co-author credit preference, or OpenClaw permissions.
 
-My GitHub requires an authenticated, durable Gateway profile, including the local owner profile. An identified operator with `operator.read` can manage only their own connection, even without administrative or general write access. Shared-secret devices using the owner profile share that connection. Use per-person sign-in for a team. System and per-agent connection changes still require `operator.admin`.
+My GitHub requires an authenticated, durable Gateway profile, including the local owner profile. An identified operator with `operator.read` can manage only their own connection, even without administrative or general write access. Shared-secret devices using the owner profile share that connection. Use per-person sign-in for a team. Shared and per-agent connection changes still require `operator.admin`; administrators give an agent its own account, change it, or return it to the shared account from that agent's row. Changes apply to new replies; active replies keep their current account.
 
-1. Choose **For me** and connect GitHub. For identified administrators, this is the default purpose. **For the system** is an explicit alternative.
+1. Choose **Connect My GitHub** on its row. Setup opens beneath the account it changes; administrators change the shared agent account or an agent's own account from those rows instead.
 2. Open the displayed `github.com/login/device` link yourself and approve the one-time code. The Gateway verifies the account and keeps the credentials out of browser responses and agent context.
-3. Check the connected account before using it. Personal connections use device authorization. The existing PAT alternative remains available for admin-managed shared connections.
+3. Check the connected account before using it. Personal connections use device authorization. The PAT alternative remains available for admin-managed shared and per-agent connections.
 
 ### Inspect publication readiness
 
