@@ -91,8 +91,7 @@ export const telegramApprovalCapability: ChannelApprovalCapability = {
       getTelegramExecApprovalApprovers({ cfg, accountId }).length > 0,
     isExecAuthorizedSender: isTelegramExecApprovalAuthorizedSender,
     isPluginAuthorizedSender: isTelegramExecApprovalApprover,
-    isNativeDeliveryEnabled: async ({ cfg, accountId }) =>
-      isTelegramExecApprovalClientEnabled({ cfg, accountId }),
+    isNativeDeliveryEnabled: async (params) => isTelegramExecApprovalClientEnabled(params),
     resolveNativeDeliveryMode: resolveTelegramExecApprovalTarget,
     requireMatchingTurnSourceChannel: true,
     resolveSuppressionAccountId: ({ target, request }) =>

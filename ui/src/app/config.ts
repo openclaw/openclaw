@@ -31,6 +31,7 @@ type ApplicationConfig = {
   automaticallyFetchFavicons: boolean;
   communityInvite: boolean;
   chatBubblesEnabled?: boolean;
+  openclawIdEnabled?: boolean;
   composerPredictionsEnabled?: boolean;
   /** Null until the serving Gateway publishes its bootstrap policy. */
   newSessionModelDefaults?: "last-used" | "configured" | null;
@@ -73,6 +74,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   automaticallyFetchFavicons: false,
   communityInvite: false,
   chatBubblesEnabled: false,
+  openclawIdEnabled: false,
   composerPredictionsEnabled: false,
   newSessionModelDefaults: null,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
@@ -128,6 +130,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     automaticallyFetchFavicons: Boolean(parsed.automaticallyFetchFavicons),
     communityInvite: parsed.communityInvite === true,
     chatBubblesEnabled: parsed.chatBubblesEnabled === true,
+    openclawIdEnabled: parsed.openclawIdEnabled === true,
     composerPredictionsEnabled: parsed.composerPredictionsEnabled === true,
     newSessionModelDefaults: parsed.newSessionModelDefaults ?? "last-used",
     terminalEnabled: Boolean(parsed.terminalEnabled),

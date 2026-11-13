@@ -6,6 +6,8 @@ import type {
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { beginForegroundActivity } from "../app/foreground-activity.ts";
+import { registerPluginManagementEnglish } from "../i18n/locales/en-plugin-management.ts";
+import { registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { controlUiPluginAssetUrls } from "./control-ui-assets.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
@@ -13,6 +15,9 @@ import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-
 // Native views and contributions must be defined before activation can publish registrations.
 import "./control-ui-view.solid.tsx";
 import "./control-ui-contributions.solid.tsx";
+
+// Install action feedback before activation can publish buttons or menu entries.
+registerEnglishCatalog(registerPluginManagementEnglish);
 
 export async function initializeControlUiPlugin(
   getContext: () => ApplicationContext,

@@ -100,16 +100,10 @@ function findUtf8OverCapOffset(text: string, start: number): number | null {
 }
 
 export function findCandidateCallSequences(
-  candidate: StandalonePlainTextToolCallCandidate,
+  view: ReturnType<typeof createCandidateScanView>,
   matcher: PlainTextToolCallNameMatcher,
-  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver,
 ): ScannedCallSequence[] {
-  const {
-    text,
-    boundaries: structuralBoundaries,
-    structuralLineBreaks,
-  } = createCandidateScanView(candidate);
-  const protectedRanges = resolveProtectedRanges?.(text) ?? [];
+  const { text, boundaries: structuralBoundaries, structuralLineBreaks } = view;
   const sequences: ScannedCallSequence[] = [];
   const structuralBoundarySet = new Set(structuralBoundaries);
   let structuralBoundaryIndex = 0;
@@ -126,19 +120,15 @@ export function findCandidateCallSequences(
     }
     const sequenceStart = index;
     let callStart = skipLineIndentation(text, index);
-    if (isOffsetInProtectedRanges(callStart, protectedRanges)) {
-      index += 1;
-      continue;
-    }
     let sequenceEnd = callStart;
     let hasOverCap = false;
     let activeStart: number | undefined;
     let callCount = 0;
-    const first = scanPlainTextToolCall(text, callStart, {
-      matcher,
-      maxPayloadBytes: MAX_PAYLOAD_BYTES,
-      structuralLineBreaks,
-    });
+    const first = view.scan(callStart, matcher);
+    if (!first) {
+      index += 1;
+      continue;
+    }
     let call = scannedCall(first);
     if (!call && first.kind === "prefix" && scanHasNamedCandidate(first)) {
       activeStart = callStart;
@@ -187,14 +177,10 @@ export function findCandidateCallSequences(
       if (nextStart >= text.length) {
         break;
       }
-      if (isOffsetInProtectedRanges(nextStart, protectedRanges)) {
+      const nextScan = view.scan(nextStart, matcher);
+      if (!nextScan) {
         break;
       }
-      const nextScan = scanPlainTextToolCall(text, nextStart, {
-        matcher,
-        maxPayloadBytes: MAX_PAYLOAD_BYTES,
-        structuralLineBreaks,
-      });
       const next = scannedCall(nextScan);
       if (!next) {
         if (nextScan.kind === "prefix" && scanHasNamedCandidate(nextScan)) {
@@ -225,13 +211,11 @@ export function findCandidateCallSequences(
 
 /** Finds an unfinished marker at a candidate boundary; its suffix stays private. */
 export function findTrailingCallPrefix(
-  candidate: StandalonePlainTextToolCallCandidate,
+  view: ReturnType<typeof createCandidateScanView>,
   matcher: PlainTextToolCallNameMatcher,
-  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver,
   start = 0,
 ): { named: boolean; start: number } | undefined {
-  const { text, boundaries, structuralLineBreaks } = createCandidateScanView(candidate);
-  const protectedRanges = resolveProtectedRanges?.(text) ?? [];
+  const { text, boundaries } = view;
   const boundarySet = new Set(boundaries);
   let tail: { named: boolean; start: number } | undefined;
   let index = start;
@@ -246,15 +230,11 @@ export function findTrailingCallPrefix(
       continue;
     }
     const callStart = skipLineIndentation(text, index);
-    if (isOffsetInProtectedRanges(callStart, protectedRanges)) {
+    const scan = view.scan(callStart, matcher);
+    if (!scan) {
       index += 1;
       continue;
     }
-    const scan = scanPlainTextToolCall(text, callStart, {
-      matcher,
-      maxPayloadBytes: MAX_PAYLOAD_BYTES,
-      structuralLineBreaks,
-    });
     if (scan.kind === "prefix" && !scannedCall(scan)) {
       tail = { named: scanHasNamedCandidate(scan), start: index };
     }
@@ -263,14 +243,37 @@ export function findTrailingCallPrefix(
   return tail;
 }
 
-export function createCandidateScanView(candidate: StandalonePlainTextToolCallCandidate) {
+export function createCandidateScanView(
+  candidate: StandalonePlainTextToolCallCandidate,
+  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver,
+) {
   const boundaries = candidate.parts.slice(1).map((part) => part.start);
+  const structuralLineBreaks =
+    boundaries.length > 0 ? { lineBreakOffsets: new Set(boundaries) } : undefined;
+  let protectedRanges: ReturnType<PlainTextToolCallProtectedRangeResolver> | undefined;
   return {
     boundaries,
     text: candidate.text,
-    ...(boundaries.length > 0
-      ? { structuralLineBreaks: { lineBreakOffsets: new Set(boundaries) } }
-      : {}),
+    structuralLineBreaks,
+    // Grammar rejects ordinary prose first; all scans of this view share one ownership result.
+    scan: (offset: number, matcher: PlainTextToolCallNameMatcher) => {
+      if (protectedRanges && isOffsetInProtectedRanges(offset, protectedRanges)) {
+        return undefined;
+      }
+      const scan = scanPlainTextToolCall(candidate.text, offset, {
+        matcher,
+        maxPayloadBytes: MAX_PAYLOAD_BYTES,
+        structuralLineBreaks,
+      });
+      // Invalid payloads can skip later lines too; protected text must retain line traversal.
+      if (!protectedRanges && (scan.next > offset + 1 || scan.kind === "prefix")) {
+        protectedRanges = resolveProtectedRanges?.(candidate.text) ?? [];
+        if (isOffsetInProtectedRanges(offset, protectedRanges)) {
+          return undefined;
+        }
+      }
+      return scan;
+    },
   };
 }
 
@@ -361,9 +364,8 @@ export function projectScrubbedPlainTextToolCallMessage(params: {
     return undefined;
   }
   const sequences = findCandidateCallSequences(
-    candidate,
+    createCandidateScanView(candidate, params.resolveProtectedRanges),
     params.matcher,
-    params.resolveProtectedRanges,
   );
   const visibleOutsideCalls = Boolean(createRangeRemover(sequences)(candidate.text).trim());
   const ranges = sequences.filter(

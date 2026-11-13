@@ -419,6 +419,7 @@ export function getFollowupOriginRouting(source: FollowupRun) {
 export function createOverflowSummaryRetrySource(source: InternalFollowupRun): InternalFollowupRun {
   return {
     controllerInput: source.controllerInput,
+    ambientOverflowContext: source.ambientOverflowContext,
     prompt: source.prompt,
     sourceTurnId: source.sourceTurnId,
     createChannelCronAuthority: source.createChannelCronAuthority,

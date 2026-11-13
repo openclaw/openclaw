@@ -20,17 +20,20 @@ export async function prepareChatSendInterruptAdmission(params: {
   const sharing = source.client?.internal?.operatorRunAuthority
     ? undefined
     : sessionMutationAuthorization;
-  let releaseUntransferredSharing = sharing?.retain?.();
+  const invocationAuthority =
+    sharing?.retainForRun?.() ??
+    (sharing
+      ? {
+          assertCurrent: sharing.assertAdmittedInputCurrent ?? sharing.assertCurrent,
+          release: sharing.retain?.(),
+        }
+      : undefined);
+  let releaseUntransferredSharing = invocationAuthority?.release;
   try {
     const operator = await retainGatewayOperatorRun({
       ...source,
       entry: params.entry,
-      invocationAuthority: sharing
-        ? {
-            assertCurrent: sharing.assertAdmittedInputCurrent ?? sharing.assertCurrent,
-            release: releaseUntransferredSharing,
-          }
-        : undefined,
+      invocationAuthority,
     });
     if (operator.authority) {
       releaseUntransferredSharing = undefined;

@@ -5,6 +5,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/capability-provider.types.js";
 import { requireWorkerResourceReceipt } from "../../plugins/worker-resource-receipt.js";
 import { requireWorkerEnvironmentRetention } from "../../plugins/worker-retention.js";
@@ -13,6 +14,7 @@ import type {
   WorkerEnvironmentCredentials,
   WorkerEnvironments,
 } from "../../state/openclaw-state-db.generated.js";
+import { decodeQueuedOperatorRecoverySource } from "../operator-run-recovery-source.codec.js";
 import type { WorkerCredentialRecord } from "./credential.js";
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import type {
@@ -105,6 +107,13 @@ export function decodeWorkerEnvironmentRow(
     profileSnapshot: JSON.parse(row.profile_snapshot_json) as WorkerProfile,
     preparation: readWorkerEnvironmentPreparation(row),
     provisionOperationId: row.provision_operation_id,
+    ...(row.provision_source_json === null
+      ? {}
+      : {
+          provisionSource: decodeQueuedOperatorRecoverySource(
+            JSON.parse(row.provision_source_json),
+          ),
+        }),
     resourceReceipt:
       row.resource_receipt_json === null
         ? null
@@ -247,3 +256,10 @@ export function readWorkerEnvironmentFacts(
     attachments,
   };
 }
+
+export const workerEnvironmentReadOperations = {
+  "workerEnvironments.snapshot": (input: { ids?: readonly string[] }, db: EngineConnection) => ({
+    type: "workerEnvironments.snapshot" as const,
+    facts: runSqliteReadSnapshotSync(db, () => readWorkerEnvironmentFacts(db, input.ids)),
+  }),
+};

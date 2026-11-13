@@ -81,8 +81,9 @@ function assertPrivateState(location) {
   const scopedBackup = location.startsWith(stateDatabase + '.pre-startup-migration-') &&
     /^[a-f0-9-]+\\.scoped\\.bak$/.test(location.slice((stateDatabase + '.pre-startup-migration-').length));
   const staged = path.relative(snapshotCache, location).split(path.sep);
-  const snapshot = staged.length >= 3 && /^openclaw(?:-\\d+)?$/.test(staged[0]) &&
-    staged.slice(1, -1).every(name => /^openclaw-sqlite-readonly-v2-[A-Za-z0-9]{6}$/.test(name)) &&
+  const snapshot = staged.length >= 4 && /^openclaw(?:-\\d+)?$/.test(staged[0]) &&
+    /^sqlite-[a-f0-9]{24}$/.test(staged[1]) &&
+    staged.slice(2, -1).every(name => /^openclaw-sqlite-readonly-v2-[A-Za-z0-9]{6}$/.test(name)) &&
     ['owner.sqlite', 'database.sqlite', 'database.sqlite.partial'].includes(staged.at(-1));
   assert(location === stateDatabase || location === clientDatabase || scopedBackup || snapshot,
     'Unexpected provisioning SQLite store: ' + location);

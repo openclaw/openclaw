@@ -87,6 +87,9 @@ describe("mattermost target resolution", () => {
   });
 
   it.each([
+    ["", "Recipient is required"],
+    ["#", "Channel name is required"],
+    ["@", "Username is required"],
     ["channel: ", "Channel id is required for Mattermost sends"],
     ["channel: # ", "Channel name is required for Mattermost sends"],
     ["user: ", "User id is required for Mattermost sends"],

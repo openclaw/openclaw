@@ -102,11 +102,17 @@ function fixture(world: {
   const create = vi.fn(async () => "agent:main:dock:new");
   const open = vi.fn();
   const connection = { connected: true, canRead: true, canWrite: world.canWrite ?? true };
-  const host = { request, connection, sessions: { create, open }, basePath: "" };
+  // Gateway events the page listens to, by name.
+  const events = new Map<string, () => void>();
+  const onEvent = vi.fn((name: string, listener: () => void) => {
+    events.set(name, listener);
+    return () => events.delete(name);
+  });
+  const host = { request, connection, sessions: { create, open }, basePath: "", onEvent };
   const load = vi.fn(async () => true);
   const scribesTab = document.createElement("button");
   const ui = {
-    s: { context: { host }, scribe: "", storesSnapshot: undefined },
+    s: { context: { host }, scribe: "", storesSnapshot: undefined, tab: "scribes" },
     live: () => true,
     viewedAgent: () => "main",
     displayName: (id: string) => (id === "main" ? "Main" : id),
@@ -124,7 +130,7 @@ function fixture(world: {
     page.replaceChildren(target);
     return target;
   };
-  return { ui, calls, request, create, open, load, render, page, scribesTab };
+  return { ui, calls, request, create, open, load, render, page, scribesTab, events };
 }
 const reviewSetup = scribeSetup(
   "claim-consolidation",
@@ -456,6 +462,214 @@ it("runs, pauses, turns off and opens an On scribe from its detail", async () =>
     ]),
   );
   expect(load).toHaveBeenCalled();
+});
+
+it("asks an earlier scribe's conversation to update it once and offers an edited one the current message", async () => {
+  const runMessage = setupPrompt(reviewSetup).match(/```text\n([\s\S]+)\n```$/)![1]!;
+  // The claims-only consolidation message an earlier version generated.
+  const earlier = runMessage
+    .replace(
+      /Follow every step of [^\n]+ even when no claim is left to link\./,
+      'Follow the "Scribe runs" section of the knowledge-claim-consolidation skill: consolidate every claim that names no page until none is left to decide.',
+    )
+    .replace("; Timelines retired and left; pages reviewed, changed and left unchanged", "");
+  const legacy = { ...reviewJob, sessionKey: "s-review", payload: { kind: "agentTurn" } };
+  const legacyJob = {
+    ...legacy,
+    payload: { kind: "agentTurn", message: earlier, thinking: "high", toolsAllow: ["read"] },
+    idleOnly: true,
+  };
+  const unedited = fixture({ sessions: reviewSession, jobs: [legacyJob] });
+  // A send that fails is asked again on the next load.
+  const answer = unedited.request.getMockImplementation()!;
+  let failed = false;
+  unedited.request.mockImplementation(async (method, params) => {
+    if (method === "chat.send" && !failed) {
+      failed = true;
+      throw new Error("offline");
+    }
+    return answer(method, params);
+  });
+  await unedited.render();
+  expect(unedited.ui.announce).toHaveBeenCalledWith(
+    expect.stringContaining("the update was not sent"),
+  );
+  await unedited.render();
+  await unedited.render();
+  // The turn's first write (the target) is not the whole update: still updating, not asked again.
+  Object.assign(legacyJob, { configRevision: "rev-8", sessionTarget: "current" });
+  expect((await unedited.render()).querySelector(".scribe-row")?.textContent).toContain(
+    "Updating…",
+  );
+  const sent = unedited.calls.filter(([method]) => method === "chat.send");
+  // A turn in the conversation re-declares the automation; the page never edits it directly.
+  expect(unedited.calls.some(([method]) => method === "cron.update")).toBe(false);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]![1]).toMatchObject({
+    sessionKey: "s-review",
+    idempotencyKey: expect.stringMatching(
+      /^knowledge:scribe:claim-consolidation:update:job-review:rev-7:[0-9a-f-]{36}$/,
+    ),
+  });
+  const prompt = String(sent[0]![1]!.message);
+  expect(prompt).toMatch(/^Update the Knowledge scribe "Knowledge Consolidation"/);
+  expect(prompt).toContain(
+    'exactly as written: `{"thinking":"high","toolsAllow":["read"],"idleOnly":true,"failureAlert":{"after":2}}`. Pass `toolsAllowMode: "exact"`',
+  );
+  expect(prompt).toContain("- delivery and failure alert: as saved on the current automation");
+  expect(prompt).toContain("Leave `enabled` out");
+  expect(prompt.endsWith(`\`\`\`text\n${runMessage}\n\`\`\``)).toBe(true);
+  Object.assign(legacyJob, {
+    configRevision: "rev-9",
+    payload: { kind: "agentTurn", message: runMessage },
+  });
+  expect((await unedited.render()).querySelector(".scribe-row")?.textContent).not.toContain(
+    "Updating…",
+  );
+  expect(unedited.ui.announce).toHaveBeenCalledWith("Knowledge Consolidation: updated.");
+  unedited.page.remove();
+
+  const differing = `${earlier}\nAlso tidy page titles.`;
+  const job = {
+    ...legacy,
+    sessionTarget: "current",
+    payload: { kind: "agentTurn", message: differing },
+  };
+  const { render, ui, calls, page, events, request } = fixture({
+    sessions: reviewSession,
+    jobs: [job],
+    runs: [{ ts: 1_793_000_000_000, status: "ok", runId: "r1", sessionKey: "s-run" }],
+  });
+  const row = (await render()).querySelector(".scribe-row")?.textContent;
+  expect(row).toContain("New run instructions");
+  expect(calls.some(([method]) => method === "chat.send")).toBe(false);
+  ui.s.scribe = "claim-consolidation";
+  let view = await render();
+  expect(view.querySelector(".scribe-update")?.textContent).toContain(
+    "differs from what this version of Knowledge generates",
+  );
+  expect(buttonNamed(view, "Open run")).toBeTruthy();
+  buttonNamed(view, "Replace with new…").click();
+  const confirm = page.querySelector("dialog")!;
+  // Only the changed lines: the claims-only step and counts out, the five-step ones in.
+  const changed = [...confirm.querySelectorAll("pre del, pre ins")].map((line) => line.textContent);
+  expect(changed).toEqual([
+    expect.stringMatching(/^− 2\. Follow the "Scribe runs"/),
+    expect.stringMatching(/^− 3\. End your reply .*withdrawn and left>`\.\n$/),
+    expect.stringMatching(/^\+ 2\. Follow every step/),
+    expect.stringMatching(/^\+ 3\. End your reply .*left unchanged>`\.\n$/),
+    "− Also tidy page titles.\n",
+  ]);
+  // A lost response: confirming again repeats the same request, not a second turn.
+  const answerReplace = request.getMockImplementation()!;
+  let lost = false;
+  request.mockImplementation(async (method, params) => {
+    const result = await answerReplace(method, params);
+    if (method === "chat.send" && !lost) {
+      lost = true;
+      throw new Error("connection lost");
+    }
+    return result;
+  });
+  buttonNamed(confirm, "Replace with new").click();
+  await vi.waitFor(() => expect(lost).toBe(true));
+  await vi.waitFor(() =>
+    expect(buttonNamed(confirm, "Replace with new").hasAttribute("disabled")).toBe(false),
+  );
+  buttonNamed(confirm, "Replace with new").click();
+  await vi.waitFor(() =>
+    expect(calls.filter(([method]) => method === "chat.send")).toHaveLength(2),
+  );
+  const [first, second] = calls.filter(([method]) => method === "chat.send");
+  expect(second![1]!.idempotencyKey).toBe(first![1]!.idempotencyKey);
+  expect(String(calls.at(-1)![1]!.message).endsWith(`\`\`\`text\n${runMessage}\n\`\`\``)).toBe(
+    true,
+  );
+  // Updating until the automation's revision changes, which a cron change reloads to show.
+  view = await render();
+  expect(view.querySelector(".scribe-update")?.textContent).toMatch(/^Updating Knowledge/);
+  expect(events.has("cron.inventory.changed")).toBe(true);
+  // Another agent's read leaves this pending update alone.
+  ui.viewedAgent = () => "other";
+  await render();
+  ui.viewedAgent = () => "main";
+  expect((await render()).querySelector(".scribe-update")?.textContent).toMatch(/^Updating/);
+  // A closed page stops watching at its next tick.
+  ui.s.disposed = true;
+  events.get("cron.inventory.changed")!();
+  expect(events.has("cron.inventory.changed")).toBe(false);
+  ui.s.disposed = false;
+  Object.assign(job, {
+    configRevision: "rev-8",
+    payload: { kind: "agentTurn", message: runMessage },
+  });
+  view = await render();
+  expect(view.querySelector(".scribe-update")).toBeNull();
+  expect(ui.announce).toHaveBeenCalledWith("Knowledge Consolidation: updated.");
+  expect(events.has("cron.inventory.changed")).toBe(false);
+});
+
+it("says so when an update leaves the automation unchanged past the wait", async () => {
+  // A failing scribe offers Repair; its turn is watched like an update.
+  const failing = { ...reviewJob, state: { ...reviewJob.state, consecutiveErrors: 1 } };
+  const { render, ui, calls } = fixture({ sessions: reviewSession, jobs: [failing] });
+  ui.s.scribe = "claim-consolidation";
+  buttonNamed(await render(), "Repair").click();
+  await vi.waitFor(() => expect(calls.at(-1)?.[0]).toBe("chat.send"));
+  expect((await render()).querySelector(".scribe-update")?.textContent).toMatch(/^Updating/);
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 4 * 60_000);
+  try {
+    expect((await render()).querySelector(".scribe-update")?.textContent).toContain(
+      "hasn't changed after 3 minutes",
+    );
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
+
+it("offers Try again, as a new request, when an update left the automation unchanged", async () => {
+  const runMessage = setupPrompt(reviewSetup).match(/```text\n([\s\S]+)\n```$/)![1]!;
+  const legacy = {
+    ...reviewJob,
+    id: "job-retry",
+    sessionKey: "s-review",
+    payload: { kind: "agentTurn", message: runMessage },
+  };
+  const { render, ui, calls, request } = fixture({ sessions: reviewSession, jobs: [legacy] });
+  ui.s.scribe = "claim-consolidation";
+  const sends = () => calls.filter(([method]) => method === "chat.send").map(([, p]) => p);
+  await render();
+  await render();
+  expect(sends()).toHaveLength(1);
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 4 * 60_000);
+  try {
+    const view = await render();
+    expect(sends()).toHaveLength(1);
+    // A Try again whose send fails stays late, with the error, and can be tried again.
+    const answer = request.getMockImplementation()!;
+    request.mockImplementationOnce(async (method, params) => {
+      if (method === "chat.send") {
+        throw new Error("offline");
+      }
+      return answer(method, params);
+    });
+    const failing = view.querySelector(".scribe-update")!;
+    buttonNamed(view, "Try again").click();
+    await vi.waitFor(() =>
+      expect(ui.announce).toHaveBeenCalledWith(expect.stringContaining("Error: offline")),
+    );
+    expect(failing.textContent).toContain("hasn't changed");
+    expect((await render()).querySelector(".scribe-update")?.textContent).toContain(
+      "hasn't changed",
+    );
+    buttonNamed(await render(), "Try again").click();
+    await vi.waitFor(() => expect(sends()).toHaveLength(2));
+    // A new attempt: the Gateway must not answer it from the first request's record.
+    expect(sends()[1]!.idempotencyKey).not.toBe(sends()[0]!.idempotencyKey);
+    expect((await render()).querySelector(".scribe-update")?.textContent).toMatch(/^Updating/);
+  } finally {
+    vi.restoreAllMocks();
+  }
 });
 
 it("reports a skipped run that could not complete as failed", async () => {

@@ -24,6 +24,7 @@ import {
   isReplyPayloadStatusNotice,
   isReplyPayloadTerminalContent,
   isReplyPayloadTtsSupplement,
+  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplySource, setBlockReplyDelivery } from "./block-reply-delivery.js";
@@ -309,6 +310,7 @@ export async function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDe
           ...visiblePayload,
           text: text.trim() ? text : undefined,
         });
+        setReplyPayloadMetadata(visiblePayload, { ttsDirectivesParsed: true });
       }
     }
     const rawFinalText =
@@ -316,10 +318,7 @@ export async function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDe
         ? normalizeOptionalString(visiblePayload.text)
         : undefined;
     if (rawFinalText && !transcriptSource) {
-      if (state.accumulatedFinalText.length > 0) {
-        state.accumulatedFinalText += "\n";
-      }
-      state.accumulatedFinalText += rawFinalText;
+      state.accumulatedFinalText += `${state.accumulatedFinalText ? "\n" : ""}${rawFinalText}`;
     }
     const transcriptFinalText = !transcriptSource
       ? rawFinalText

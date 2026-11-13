@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { MessageChannel, Worker, type WorkerOptions } from "node:worker_threads";
 import { afterEach, assert, describe, expect, it as baseIt, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
+import { createSqliteFamilyEngines } from "../infra/database-engine/selection-fixture.test-support.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 import {
   readSqliteDatabaseWriteRevision,
@@ -41,6 +42,7 @@ const it = baseIt.extend<{ state: OpenClawTestState }>({
 });
 
 const heartbeatWorkers = vi.hoisted(() => ({
+  startupDelayMs: 0,
   beforeCreate: undefined as (() => void) | undefined,
   onCreate: undefined as ((worker: Worker, options: WorkerOptions) => void) | undefined,
 }));
@@ -59,7 +61,13 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         if (String(filename) === heartbeatUrl.href) {
           heartbeatWorkers.beforeCreate?.();
         }
-        super(filename, workerOptions);
+        const delayedFilename =
+          String(filename) === heartbeatUrl.href && heartbeatWorkers.startupDelayMs > 0
+            ? new URL(
+                `data:text/javascript,${encodeURIComponent(`await new Promise(resolve => setTimeout(resolve, ${heartbeatWorkers.startupDelayMs})); await import(${JSON.stringify(String(filename))});`)}`,
+              )
+            : filename;
+        super(delayedFilename, workerOptions);
         if (String(filename) === heartbeatUrl.href) {
           heartbeatWorkers.onCreate?.(this, workerOptions);
         }
@@ -99,6 +107,7 @@ function readLease(env: NodeJS.ProcessEnv) {
 }
 
 afterEach(() => {
+  heartbeatWorkers.startupDelayMs = 0;
   heartbeatWorkers.beforeCreate = undefined;
   heartbeatWorkers.onCreate = undefined;
   closeOpenClawStateDatabaseForTest();
@@ -170,6 +179,15 @@ describe("maintenance lease heartbeat", () => {
         },
       },
     });
+    expect(readLease(state.env)).toBeUndefined();
+  });
+
+  it("preserves native startup renewals beyond the initial lease expiry", async ({ state }) => {
+    openOpenClawStateDatabase({ env: state.env });
+    heartbeatWorkers.startupDelayMs = 1_500;
+    const entered = vi.fn(async (lease: OpenClawStateLeaseContext) => lease.assertOwned());
+    await withOpenClawStateLease(options(state.env), entered);
+    expect(entered).toHaveBeenCalledOnce();
     expect(readLease(state.env)).toBeUndefined();
   });
 
@@ -348,7 +366,10 @@ describe("maintenance lease heartbeat", () => {
   );
 });
 
-it("defers activation until contended renewal commits", async ({ state }) => {
+it("defers SQLite activation until renewal commits without PostgreSQL runtime", async ({
+  state,
+  signal,
+}) => {
   const database = openOpenClawStateDatabase({ env: state.env });
   const identity = { scope: "core:test", key: "activation", owner: "fixture-owner" };
   const acquired = runOpenClawStateWriteTransaction(
@@ -363,11 +384,26 @@ it("defers activation until contended renewal commits", async ({ state }) => {
   const moduleUrl = pathToFileURL(
     path.resolve("src/state/openclaw-state-lease-heartbeat.worker.ts"),
   ).href;
+  const loadGate = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   // Observe completion of the real activation handler without adding a production test hook.
   const driver = await state.writeText(
     "activation-worker.mts",
     `
-      import { parentPort } from "node:worker_threads";
+      import { parentPort, workerData } from "node:worker_threads";
+      import { registerHooks } from "node:module";
+      registerHooks({
+        resolve(specifier, context, nextResolve) {
+          if (specifier.includes("openclaw-state-db-engine.")) {
+            const gate = new Int32Array(workerData.fixtureLoadGate);
+            if (Atomics.load(gate, 0) === 0) {
+              throw new Error("SQLite heartbeat loaded PostgreSQL state runtime");
+            }
+            parentPort.postMessage({ fixture: "postgres-loading" });
+            Atomics.wait(gate, 0, 1);
+          }
+          return nextResolve(specifier, context);
+        },
+      });
       if (!parentPort) throw new Error("Missing fixture parent port");
       const on = parentPort.on.bind(parentPort);
       parentPort.on = (event, listener) => event === "message"
@@ -386,6 +422,7 @@ it("defers activation until contended renewal commits", async ({ state }) => {
   const loss = new MessageChannel();
   const worker = new Worker(driverUrl, {
     workerData: {
+      fixtureLoadGate: loadGate.buffer,
       databaseAdmissionPort: databaseAdmission.port,
       lossPort: loss.port2,
       path: database.path,
@@ -397,7 +434,7 @@ it("defers activation until contended renewal commits", async ({ state }) => {
       deferActivation: true,
       shared: shared.buffer,
       renewalProgress: new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
-    } satisfies LeaseHeartbeatWorkerData,
+    } satisfies LeaseHeartbeatWorkerData & { fixtureLoadGate: SharedArrayBuffer },
     transferList: [databaseAdmission.port, loss.port2],
     execArgv: resolveRuntimeWorkerThreadExecArgv(driverUrl),
     env: {},
@@ -446,6 +483,66 @@ it("defers activation until contended renewal commits", async ({ state }) => {
       .get(identity.scope, identity.key);
     expect(row?.expires_at).toBe(Number(Atomics.load(shared, leaseHeartbeatState.expiresAt)));
     expect(Number(row?.expires_at)).toBeGreaterThan(acquired.expiresAt);
+
+    const registrationPort = new MessageChannel();
+    const registrationLoss = new MessageChannel();
+    const registrationAdmission = createSqliteDatabaseAdmissionRelay(() => {});
+    const registrationState = new BigInt64Array(new SharedArrayBuffer(shared.byteLength));
+    Atomics.store(
+      registrationState,
+      leaseHeartbeatState.expiresAt,
+      Atomics.load(shared, leaseHeartbeatState.expiresAt),
+    );
+    try {
+      const rejected = once(registrationPort.port1, "message");
+      const loading = once(worker, "message");
+      Atomics.store(loadGate, 0, 1);
+      worker.postMessage(
+        {
+          registration: {
+            path: database.path,
+            expectedIdentity: readDatabasePathIdentitySync(database.path).key,
+            identity: { ...identity, key: "later-postgres" },
+            leaseMs: 30_000,
+            acquiredAt: acquired.expiresAt - 30_000,
+            heartbeatMs: 250,
+            shared: registrationState.buffer,
+            renewalProgress: new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
+            databaseAdmissionPort: registrationAdmission.port,
+            lossPort: registrationLoss.port2,
+            databaseEngineSelection: {
+              effectiveEngines: createSqliteFamilyEngines({ state: "postgres" }),
+              postgres: { connection: "postgres://fixture.invalid/state", schemaPrefix: "fixture" },
+            },
+          } satisfies LeaseHeartbeatWorkerData,
+          port: registrationPort.port2,
+        },
+        [registrationPort.port2, registrationLoss.port2, registrationAdmission.port],
+      );
+      expect(await withinTest(Promise.race([loading, failed.promise]), signal)).toEqual([
+        { fixture: "postgres-loading" },
+      ]);
+      Atomics.store(registrationState, leaseHeartbeatState.status, leaseHeartbeatState.closed);
+      Atomics.store(loadGate, 0, 2);
+      Atomics.notify(loadGate, 0);
+      expect(await withinTest(Promise.race([rejected, failed.promise]), signal)).toEqual([
+        { startupError: "state lease heartbeat startup deadline expired or owner stopped" },
+      ]);
+      const renewed = once(worker, "message");
+      worker.postMessage({ id: 1, operation: "renew" }, []);
+      expect(await withinTest(Promise.race([renewed, failed.promise]), signal)).toEqual([
+        { id: 1, ok: true, expiresAt: expect.any(Number) },
+      ]);
+      expect(Atomics.load(shared, leaseHeartbeatState.status)).toBe(leaseHeartbeatState.ready);
+    } finally {
+      Atomics.store(loadGate, 0, 2);
+      Atomics.notify(loadGate, 0);
+      registrationAdmission.finish();
+      registrationPort.port1.close();
+      registrationPort.port2.close();
+      registrationLoss.port1.close();
+      registrationLoss.port2.close();
+    }
   } finally {
     if (writer.isTransaction) {
       writer.exec("ROLLBACK");

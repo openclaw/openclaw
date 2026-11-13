@@ -57,6 +57,7 @@ function reserveQuestionPromptDelivery(
 
 type ToolStartRecord = {
   startTime: number;
+  toolUsageId?: string;
   args: unknown;
   hideFromChannelProgress?: boolean;
   parentToolCallId?: string;
@@ -195,11 +196,12 @@ export function finalizeToolActivity(ctx: ToolHandlerContext): void {
     ...active,
   ];
   for (const call of resolveCompletedActivityWrappers(calls)) {
-    if (call.activity && !call.activity.hideFromChannelProgress) {
-      emitToolActivityEvent(ctx, {
-        stream: "item",
-        data: { ...call.activity, hideFromChannelProgress: true },
-      });
+    const meta = ctx.state.toolMetas.find((entry) => entry.activity === call.activity);
+    if (meta?.activity && !meta.activity.hideFromChannelProgress) {
+      // Record the projection so later nested completions and agent_end do not
+      // retract the same wrapper again. Previously emitted events stay immutable.
+      meta.activity = { ...meta.activity, hideFromChannelProgress: true };
+      emitToolActivityEvent(ctx, { stream: "item", data: meta.activity });
     }
   }
 }
@@ -304,6 +306,9 @@ export function handleToolExecutionStart(
     const startedAt = Date.now();
     toolStartData.set(buildToolStartKey(runId, toolCallId), {
       startTime: startedAt,
+      ...(ctx.params.toolUsageRecorder
+        ? { toolUsageId: ctx.params.toolUsageIdsByName?.get(rawToolName) }
+        : {}),
       args,
       hideFromChannelProgress: evt.hideFromChannelProgress,
       parentToolCallId: evt.parentToolCallId,

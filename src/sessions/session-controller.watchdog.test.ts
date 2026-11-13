@@ -18,6 +18,7 @@ import type {
 import {
   SESSION_WATCHDOG_CLEANUP_MS,
   SESSION_WATCHDOG_QUIET_TOOL_MS,
+  SESSION_WATCHDOG_WARNING_MS,
 } from "./session-controller.watchdog-state.js";
 import {
   createSessionControllerWatchdog,
@@ -85,6 +86,77 @@ afterEach(() => {
   testing.resetSessionControllerForTest();
   resetDiagnosticEventsForTest();
   vi.useRealTimers();
+});
+
+describe("nested compaction attempts", () => {
+  it("keeps the foreground runtime wait live after maintenance closes", () => {
+    const watchdog = watchdogFixture({});
+    const foreground = watchdog.attachAttempt({ assertCurrent() {} });
+    foreground.setExecutionDeadline(abortMs * 2);
+    const maintenance = watchdog.attachAttempt({ nested: true, assertCurrent() {} });
+    maintenance.close();
+
+    expect(foreground.isCurrent()).toBe(true);
+    const wait = foreground.beginWait({ kind: "runtime_owned", isCurrent: () => true });
+    expect(watchdog.snapshot().waits).toEqual([{ kind: "runtime_owned" }]);
+    expect(watchdog.decide(abortMs).action).toBe("observe");
+    wait.close();
+    expect(watchdog.snapshot().executionDeadlineAtMs).toBe(abortMs * 2);
+    watchdog.close();
+  });
+
+  it.each([
+    { parentDeadline: 100, maintenanceDeadline: 50, earliest: 50 },
+    { parentDeadline: 50, maintenanceDeadline: 100, earliest: 50 },
+    { parentDeadline: undefined, maintenanceDeadline: 50, earliest: 50 },
+  ])("keeps parent and maintenance deadlines independent: %j", (deadlines) => {
+    const watchdog = watchdogFixture({});
+    const foreground = watchdog.attachAttempt({ assertCurrent() {} });
+    foreground.setExecutionDeadline(deadlines.parentDeadline);
+    const maintenance = watchdog.attachAttempt({ nested: true, assertCurrent() {} });
+    maintenance.setExecutionDeadline(deadlines.maintenanceDeadline);
+    expect(watchdog.snapshot().executionDeadlineAtMs).toBe(deadlines.earliest);
+    maintenance.close();
+    expect(watchdog.snapshot().executionDeadlineAtMs).toBe(deadlines.parentDeadline);
+    expect(foreground.isCurrent()).toBe(true);
+    watchdog.close();
+  });
+
+  it.each(["close", "replace"] as const)("retires nested resources on parent %s", (action) => {
+    const watchdog = watchdogFixture({});
+    const foreground = watchdog.attachAttempt({ assertCurrent() {} });
+    const maintenance = watchdog.attachAttempt({ nested: true, assertCurrent() {} });
+    maintenance.setExecutionDeadline(50);
+    maintenance.beginWait({ kind: "runtime_owned", isCurrent: () => true });
+    maintenance.beginTool({ toolCallId: "maintenance-tool", toolName: "read" });
+    maintenance.beginRequest({ deadlineAtMs: 100 });
+    if (action === "close") {
+      foreground.close();
+    } else {
+      watchdog.attachAttempt({ assertCurrent() {} }).setExecutionDeadline(200);
+    }
+    expect(maintenance.isCurrent()).toBe(false);
+    expect(watchdog.snapshot()).toMatchObject({ waits: [], tools: [] });
+    expect(watchdog.snapshot().requests).toBeUndefined();
+    maintenance.setExecutionDeadline(1);
+    maintenance.close();
+    expect(watchdog.snapshot().executionDeadlineAtMs).toBe(action === "replace" ? 200 : undefined);
+    watchdog.close();
+  });
+
+  it("uses ordinary replacement semantics for standalone maintenance", () => {
+    const watchdog = watchdogFixture({});
+    const maintenance = watchdog.attachAttempt({ nested: true, assertCurrent() {} });
+    maintenance.setExecutionDeadline(50);
+    expect(maintenance.isCurrent()).toBe(true);
+    const foreground = watchdog.attachAttempt({ assertCurrent() {} });
+    foreground.setExecutionDeadline(100);
+    maintenance.close();
+    expect(maintenance.isCurrent()).toBe(false);
+    expect(foreground.isCurrent()).toBe(true);
+    expect(watchdog.snapshot().executionDeadlineAtMs).toBe(100);
+    watchdog.close();
+  });
 });
 
 describe("execution deadline recovery", () => {
@@ -391,6 +463,30 @@ describe("operation-owned watchdog through controller admission", () => {
       expect(cancel).toHaveBeenCalledOnce();
     },
   );
+
+  it("starts the semantic horizon when a native runtime-owned wait releases, never retroactively", async () => {
+    const { operation, cancel } = running();
+    let live = true;
+    operation.watchdog.beginWait({
+      kind: "runtime_owned",
+      releaseStartsSemanticWindow: true,
+      isCurrent: () => live,
+    });
+    const releasedAt = abortMs * 4;
+    await tickAt(operation.watchdog, releasedAt);
+    expect(cancel).not.toHaveBeenCalled();
+    live = false; // The native turn completed and released liveness.
+    await operation.watchdog.tick();
+    expect(cancel).not.toHaveBeenCalled();
+    expect(operation.watchdog.decide().action).toBe("observe");
+    await tickAt(operation.watchdog, releasedAt + SESSION_WATCHDOG_WARNING_MS);
+    expect(operation.watchdog.decide().action).toBe("warn");
+    await tickAt(operation.watchdog, releasedAt + abortMs - 1);
+    expect(cancel).not.toHaveBeenCalled();
+    // A finalization that then makes no semantic progress is still stopped.
+    await tickAt(operation.watchdog, releasedAt + abortMs);
+    expectStalled(operation, cancel);
+  });
 
   it("uses actual approval expiry and revocation, without a second timeout", async () => {
     const { operation, cancel } = running();

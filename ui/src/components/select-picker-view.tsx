@@ -11,6 +11,7 @@ import {
   onSettled,
   untrack,
 } from "solid-js";
+import { keyboardHints } from "../lib/keyboard-hints.ts";
 import { acquireNativeOverlaySurface } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createAnchoredOverlay } from "../lib/reactive/overlay-anchor.ts";
@@ -20,6 +21,7 @@ import { nativeListener } from "../lib/solid-native-listener.ts";
 import type { OverlayPlacement } from "./overlay-anchor.ts";
 import { createOverlay } from "./overlay-lifecycle.ts";
 import type { OverlayNativeAdapter } from "./overlay-types.ts";
+import { createPickerPhoneSheet } from "./select-picker-phone-sheet.tsx";
 import { PickerOptionContent, PickerTriggerContent } from "./select-picker-presentation.tsx";
 import { pickerSearchInputProps } from "./select-picker-search.ts";
 import type { PickerOption, PickerParams, PickerGroup } from "./select-picker-types.ts";
@@ -97,7 +99,6 @@ export function PickerContent<Option extends PickerOption>(props: {
   const markPointerHighlight = () => (pointerHighlight = true);
   const pointerHighlightRef = nativeListener("pointermove", markPointerHighlight, true);
   const [searching, setSearching] = createSignal(false);
-  const [searchAvailable, setSearchAvailable] = createSignal(false);
   const [query, setQuery] = createSignal("");
   const [keyboard, setKeyboard] = createSignal(false);
   const [collapsed, setCollapsed] = createStore<string[]>([]);
@@ -179,6 +180,16 @@ export function PickerContent<Option extends PickerOption>(props: {
     options().find((option) => option.value === props.params.value),
   );
   const optionId = (value: string) => `${id}:${value}`;
+  const phone = createPickerPhoneSheet({
+    open: () => opened(),
+    wanted: () =>
+      !props.params.sheet &&
+      props.params.variant !== "submenu" &&
+      (props.params.phoneSheet ?? options().length > 8),
+    surface: () => surface,
+    dismiss: () => overlay.request(false, "return"),
+  });
+  const phoneSheet = phone.active;
   // Native presentation mode belongs to this mounted overlay lifetime.
   const initialSheet = untrack(() => props.params.sheet);
   const overlay = createOverlay(id, undefined, {
@@ -187,7 +198,13 @@ export function PickerContent<Option extends PickerOption>(props: {
     isValid: () => !props.params.disabled,
     acquireOcclusion: acquireNativeOverlaySurface,
     onInitialFocus(intent) {
-      const target = props.params.sheet && !keyboard() ? back : searching() ? input : list;
+      // Touch sheets leave the on-screen keyboard down until the field is tapped.
+      const target =
+        props.params.sheet && !keyboard()
+          ? back
+          : searching() && !phone.applies() && keyboardHints.visible()
+            ? input
+            : list;
       if (
         intent === "last" &&
         !rows().some((option) => option.value === props.params.value && !option.disabled)
@@ -266,11 +283,10 @@ export function PickerContent<Option extends PickerOption>(props: {
     if (props.params.disabled || overlay.open) {
       return;
     }
-    const available =
+    setSearching(
       props.params.searchable === "always" ||
-      Boolean(props.params.searchable && (props.params.groupBy || options().length > 8));
-    setSearchAvailable(available);
-    setSearching(available && Boolean(initialKey));
+        Boolean(props.params.searchable && (props.params.groupBy || options().length > 8)),
+    );
     queueMicrotask(() => {
       if (!props.host.isConnected) {
         return;
@@ -352,7 +368,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     if (
       event.target instanceof Element &&
       event.target.closest(
-        ".picker-select__back, .picker-select__group-toggle, .header-search__toggle",
+        ".picker-select__back, .picker-select__group-toggle, .header-search__clear",
       ) &&
       !event.key.startsWith("Arrow")
     ) {
@@ -404,6 +420,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     { region: () => list, revealTiming: "animation-frame" },
   );
   function onOpenChange(next: boolean) {
+    phone.onOpenChange(next);
     if (next) {
       pointerHighlight = false;
       props.params.onOpen?.();
@@ -415,7 +432,6 @@ export function PickerContent<Option extends PickerOption>(props: {
     } else {
       setQuery("");
       setSearching(false);
-      setSearchAvailable(false);
       setCollapsed(() => []);
       hoverOpened = false;
       if (sheetScroll) {
@@ -487,7 +503,11 @@ export function PickerContent<Option extends PickerOption>(props: {
           menu.setHighlightedValue(row.option().value);
         }
       },
-      onClick: () => commit(row.option().value),
+      onClick: (event) => {
+        // A value choice must not also activate an enclosing label's trigger.
+        event.preventDefault();
+        commit(row.option().value);
+      },
     });
     return (
       <Show
@@ -555,23 +575,25 @@ export function PickerContent<Option extends PickerOption>(props: {
           {
             "oc-overlay": !props.params.sheet,
             "picker-select__menu--grouped": Boolean(props.params.groupBy),
+            "picker-select__menu--phone-sheet": phoneSheet(),
           },
         ]}
         popover={props.params.sheet ? undefined : "manual"}
         hidden={props.params.sheet ? true : undefined}
       >
+        <phone.Chrome />
         <MenuNavigationError binding={menu} />
-        <Show when={!searchAvailable()}>{props.renderers?.header}</Show>
-        <Show when={props.params.sheet && !searchAvailable()}>
+        <Show when={!searching()}>{props.renderers?.header}</Show>
+        <Show when={props.params.sheet || phoneSheet()}>
           <div class="picker-select__page-header">
-            <SheetBack />
+            <Show when={props.params.sheet}>
+              <SheetBack />
+            </Show>
             <span>{props.params.label}</span>
           </div>
         </Show>
-        <Show when={searchAvailable()}>
+        <Show when={searching()}>
           <HeaderSearch
-            leading={props.params.sheet ? <SheetBack /> : undefined}
-            title={props.params.label}
             label={t("common.search")}
             placeholder={props.params.searchPlaceholder ?? t("common.search")}
             inputClass="picker-select__search"
@@ -582,9 +604,7 @@ export function PickerContent<Option extends PickerOption>(props: {
               active: active() !== null ? optionId(active()!) : undefined,
             })}
             query={query()}
-            open={searching()}
             inputRef={(element) => (input = element)}
-            onOpenChange={setSearching}
             onQueryChange={setQuery}
           />
         </Show>
@@ -599,9 +619,7 @@ export function PickerContent<Option extends PickerOption>(props: {
           aria-label={props.params.groupBy ? undefined : props.params.label}
           data-picker-focus={!searching() ? "" : undefined}
           tabindex={searching() ? -1 : 0}
-          aria-activedescendant={
-            opened() && !searching() && active() !== null ? optionId(active()!) : undefined
-          }
+          aria-activedescendant={opened() && active() !== null ? optionId(active()!) : undefined}
         >
           <Show
             when={opened() && windowed()}

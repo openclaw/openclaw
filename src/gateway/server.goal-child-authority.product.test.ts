@@ -98,6 +98,7 @@ function createScenario(index: number, scenario: (typeof cases)[number]) {
     held: createDeferredCore(),
     releaseRead: createDeferredCore(),
     requesterDelivered: createDeferredCore(),
+    closed: createDeferredCore<[number, string]>(),
     failed: createDeferredCore<never>(),
     receipt: undefined as SpawnReceipt | undefined,
     releaseDrain: undefined as (() => void) | undefined,
@@ -215,7 +216,6 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
   const cleanups: Array<() => Promise<unknown>> = [];
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>>;
-
   const receive = (recipient: string) => (event: { event?: string; payload?: unknown }) => {
     const payload = asOptionalRecord(event.payload);
     const target = scenarios.find((scenario) => scenario.sessionKey === payload?.sessionKey);
@@ -407,6 +407,7 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
           path: state.statePath("test-devices", String(index), "client", "credentials.sqlite"),
         }),
         onEvent: receive(scenario.email),
+        onClose: (code, reason) => scenario.closed.resolve([code, reason]),
       });
       clients.set(scenario.email, client);
       cleanups.push(() => disconnectGatewayClient(client));
@@ -564,12 +565,9 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
             scenario.releaseDrain?.();
             const drained = await wait(waitForGatewayActiveWork(30_000));
             expect(drained.drained, JSON.stringify(drained.snapshot.blockers)).toBe(true);
-            // Even the refusal response orders earlier publications on this socket.
+            // Revocation closes the socket; a retained connection still orders publications by RPC.
             if (scenario.gate === "enqueue") {
-              await expect(client.request("users.self", {})).rejects.toMatchObject({
-                code: "FORBIDDEN",
-                message: expect.stringContaining("operator role changed"),
-              });
+              expect(await wait(scenario.closed.promise)).toEqual([4001, "gateway policy changed"]);
             } else {
               await client.request("users.self", {});
             }

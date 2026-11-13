@@ -19,6 +19,7 @@ import type { CallGatewayOptions } from "../gateway/call.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { HealthSummary } from "./health.js";
 import type { StatusUsageSummaryOptions } from "./status-usage.runtime.js";
 import { formatDaemonRuntimeShort } from "./status.format.js";
@@ -206,7 +207,9 @@ async function buildDaemonStatusSummary(serviceLabel: "gateway" | "node", timeou
       ...(wrapperPath ? { wrapperPath } : {}),
       ...(installationDrift
         ? {
-            installationDrift: formatGatewayServiceInstallationDrift(installationDrift, state.env),
+            installationDrift: formatGatewayServiceInstallationDrift(installationDrift, state.env, {
+              command: state.command,
+            }),
           }
         : {}),
     };
@@ -233,6 +236,19 @@ async function buildDaemonStatusSummary(serviceLabel: "gateway" | "node", timeou
     runtime,
     runtimeShort: formatDaemonRuntimeShort(runtime),
   };
+}
+
+/** Ends an interrupted scan quietly; other scan failures keep their report. */
+export async function reportStatusScanFailureUnlessInterrupted(
+  error: unknown,
+  runtime: RuntimeEnv,
+  timeoutMs?: number,
+): Promise<undefined> {
+  const signal = getAsyncWorkSignal();
+  if (signal?.aborted && error === signal.reason) {
+    return undefined;
+  }
+  return await reportStatusScanFailure(error, runtime, timeoutMs);
 }
 
 /** Preserve independent service diagnostics when local status collection refuses state. */

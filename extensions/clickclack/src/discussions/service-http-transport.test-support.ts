@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import { z } from "zod";
 import type * as Http from "../http-client.js";
 import type { ClickClackMessage } from "../types.js";
@@ -37,7 +38,9 @@ type HttpErrorClass = typeof Http.ClickClackHttpError;
 
 export function registerDiscussionTestTransport(remote: Remote, HttpError: HttpErrorClass): string {
   const origin = `https://discussion-${++nextTransport}.fixture.invalid`;
-  transports.set(origin, async (input, init) => {
+  // A vi.fn transport is the SSRF guard's mocked-fetch contract, so synthetic
+  // fixture origins skip real DNS pinning.
+  const transport = vi.fn<typeof fetch>(async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
     try {
@@ -72,6 +75,7 @@ export function registerDiscussionTestTransport(remote: Remote, HttpError: HttpE
       });
     }
   });
+  transports.set(origin, transport);
   return origin;
 }
 

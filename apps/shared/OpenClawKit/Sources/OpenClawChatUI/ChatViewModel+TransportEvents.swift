@@ -34,7 +34,6 @@ extension OpenClawChatViewModel {
                 self.scheduleProgressCardFetch()
                 Task { [weak self] in await self?.refreshQuestions() }
                 Task { [weak self] in await self?.refreshSwarmCapability() }
-                Task { [weak self] in await self?.loadComposerCapabilities(force: true) }
             } else if !ok {
                 self.sourcePreviewState.invalidate()
                 self.invalidateAgentCatalog()
@@ -86,6 +85,7 @@ extension OpenClawChatViewModel {
             switch evt {
             case .routeChanged, .reconnected:
                 self.questionAttentionOwnerID = UUID()
+                self.outboxRestoreEvidence.connectionHistoryFloor = self.lastIssuedHistoryRequestID
                 self.applyProgressCard(nil)
             default: break
             }

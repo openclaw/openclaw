@@ -262,6 +262,7 @@ export async function writeRootBoundJsonFile(params: {
     {
       snapshot: { path: targetAtCommit.absolutePath, exists: currentRaw !== null, raw: currentRaw },
       includeGraph: params.includeGraph,
+      validateUtf8: true,
       targetPathProof: pathProof,
       preserveDirectoryMode: true,
       onRootRemoved: () => {

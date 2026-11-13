@@ -18,6 +18,7 @@ import { createSessionOwnerMenu } from "../../../components/session-owner-menu.t
 import { sessionPlacementAction } from "../../../components/session-placement-action.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import type { MenuControls, MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
+import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { readSessionMethodAccess } from "../../../lib/session-method-access.ts";
@@ -45,6 +46,7 @@ import { createMobileHeaderSessionMenu } from "./chat-header-session-menu-mobile
 import type {
   HeaderMenuContentProps,
   HeaderMenuProps,
+  HeaderMenuVersions,
   CompactMenuView,
 } from "./chat-header-session-menu.tsx";
 import { useChatQuickActionEntries } from "./chat-quick-action.tsx";
@@ -54,12 +56,14 @@ import { canManageChatSessionSharing } from "./chat-session-sharing-shared.tsx";
 const COMPACT_MENU_VIEW_BY_VALUE: Record<string, CompactMenuView> = {
   "compact:open-sharing": "sharing",
   "compact:open-view": "view",
+  "compact:open-versions": "versions",
 };
 
 const VIEW_SETTINGS = [
-  ["reasoning", "chatShowThinking", "chat.view.reasoning", false],
-  ["tool-calls", "chatShowToolCalls", "chat.view.toolCalls", true],
-  ["commentary", "chatPersistCommentary", "chat.view.commentary", undefined],
+  ["reasoning", "chatShowThinking", "chat.view.reasoning", false, true],
+  ["tool-calls", "chatShowToolCalls", "chat.view.toolCalls", true, true],
+  ["commentary", "chatPersistCommentary", "chat.view.commentary", undefined, true],
+  ["inline-commands", "chatInlineCommands", "chat.view.inlineCommands", false, false],
 ] as const;
 
 export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
@@ -333,14 +337,16 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
       return [...viewActions()];
     }
     return [
-      ...VIEW_SETTINGS.map(([value, key, label, onboarding]) => ({
+      ...VIEW_SETTINGS.map(([value, key, label, onboarding, defaultValue]) => ({
         id: `view:${value}`,
         label: t(label),
         class: "session-menu__item",
         labelClass: "session-menu__text",
         type: "checkbox" as const,
         checked:
-          props.onboarding && onboarding !== undefined ? onboarding : props.settings[key] !== false,
+          props.onboarding && onboarding !== undefined
+            ? onboarding
+            : (props.settings[key] ?? defaultValue),
         disabled: props.onboarding,
         attributes: { title: props.onboarding ? t("chat.onboardingDisabled") : undefined },
         closeOnSelect: false,
@@ -370,8 +376,81 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
       ...(props.preferencesBrowserOnly ? [browserOnlyInfo] : []),
     ];
   }
+  function groupItems(viewName: "view" | "sharing" | "versions"): readonly MenuEntry[] {
+    return viewName === "sharing"
+      ? sharing.items()
+      : viewName === "versions"
+        ? versionItems()
+        : viewOptions();
+  }
+  function versionItems(): MenuEntry[] {
+    const versions = props.versions;
+    if (!versions) {
+      return [];
+    }
+    return [
+      content(
+        "versions-help",
+        <div class="session-menu__info" role="note">
+          {t("chat.sessionHeader.versionsHelp")}
+        </div>,
+      ),
+      ...versions.branches.map((branch): MenuItem => {
+        const relativeTime = formatRelativeTimestamp(Date.parse(branch.updatedAt ?? ""), {
+          fallback: "",
+        });
+        return {
+          id: `version:${branch.leafEntryId}`,
+          label: branch.headline || t("chat.sessionHeader.untitledBranch"),
+          class: "chat-pane__branch-item",
+          disabled: branch.active || Boolean(versions.disabledReason),
+          attributes: { "data-active": branch.active ? "true" : "false" },
+          content: (
+            <span class="chat-pane__branch-copy">
+              <span class="chat-pane__branch-headline">
+                {branch.headline || t("chat.sessionHeader.untitledBranch")}
+              </span>
+              <span class="chat-pane__branch-meta">
+                {branch.active ? `${t("chat.sessionHeader.activeBranch")} · ` : ""}
+                {t(
+                  branch.messageCount === 1
+                    ? "chat.sessionHeader.oneMessage"
+                    : "chat.sessionHeader.messages",
+                  { count: String(branch.messageCount) },
+                )}
+                {!branch.active && relativeTime ? ` · ${relativeTime}` : ""}
+              </span>
+            </span>
+          ),
+          details: branch.active ? (
+            <span
+              class="chat-pane__branch-active"
+              aria-label={t("chat.sessionHeader.activeBranch")}
+            >
+              <Icon name="check" />
+            </span>
+          ) : (
+            <span class="chat-pane__branch-more" aria-hidden="true">
+              <Icon name="moreHorizontal" />
+            </span>
+          ),
+        };
+      }),
+    ];
+  }
+  function versionsGroup(versions: HeaderMenuVersions): MenuItem {
+    const item = group(
+      "versions",
+      t("chat.sessionHeader.branches"),
+      "history",
+      versions.branches.length < 2 || Boolean(versions.disabledReason),
+    );
+    return versions.disabledReason
+      ? { ...item, attributes: { title: versions.disabledReason } }
+      : item;
+  }
   function group(
-    viewName: "view" | "sharing",
+    viewName: "view" | "sharing" | "versions",
     label: string,
     icon: IconName,
     disabled = false,
@@ -392,11 +471,7 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
           <Icon name="chevronRight" />
         </span>
       ) : undefined,
-      children: props.compact
-        ? undefined
-        : viewName === "sharing"
-          ? sharing.items()
-          : viewOptions(),
+      children: props.compact ? undefined : groupItems(viewName),
       closeOnSelect: false,
     };
   }
@@ -405,6 +480,7 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
       return [
         ...quickActions(),
         ...(viewActions().length ? [group("view", t("chat.view.menu"), "eye")] : []),
+        ...(props.versions ? [versionsGroup(props.versions)] : []),
       ];
     }
     const board = props.boardWidgetMenu;
@@ -461,6 +537,7 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
         : []),
       ...quickActions().filter((entry) => entry.id === "quick:open-split-view"),
       group("view", t("chat.view.menu"), "eye"),
+      ...(props.versions ? [versionsGroup(props.versions)] : []),
       viewDivider,
       ...view.primary(),
       primaryDivider,
@@ -475,12 +552,14 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
     (): MenuEntry[] => {
       const current = inputs.compactView;
       if (mobile()) {
-        return current === "snooze" ? view.compact(current) : mobileMenu.root(root());
+        return current === "snooze" || current === "open-in"
+          ? view.compact(current)
+          : mobileMenu.root(root());
       }
       if (!props.compact || current === "root") {
         return root();
       }
-      if (current !== "sharing" && current !== "view") {
+      if (current !== "sharing" && current !== "view" && current !== "versions") {
         return view.compact(current);
       }
       return [
@@ -496,7 +575,7 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
           closeOnSelect: false,
         },
         backDivider,
-        ...(current === "sharing" && props.sharing ? sharing.items() : viewOptions()),
+        ...(current === "sharing" && !props.sharing ? viewOptions() : groupItems(current)),
       ];
     },
     { lazy: true },
@@ -516,8 +595,8 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
     if (nextView) {
       event.preventDefault();
       inputs.onCompactViewChange(nextView);
-      if (managementView === "icon") {
-        view.appearance.prepare();
+      if (managementView) {
+        view.prepareView(managementView);
       } else if (nextView === "sharing" && !props.sharing?.openDisabledReason) {
         props.sharing?.onOpen();
       }
@@ -560,6 +639,10 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
       }
       return;
     }
+    if (value.startsWith("version:")) {
+      props.versions?.onSelect(value.slice("version:".length));
+      return;
+    }
     if (value.startsWith("view:")) {
       event.preventDefault();
       if (props.onboarding) {
@@ -568,7 +651,7 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
       const setting = value.slice("view:".length);
       const option = VIEW_SETTINGS.find(([id]) => id === setting);
       if (option) {
-        props.onSettingsChange({ [option[1]]: props.settings[option[1]] === false });
+        props.onSettingsChange({ [option[1]]: !(props.settings[option[1]] ?? option[4]) });
       } else if (
         setting === "speech-bubbles" &&
         props.bubbleModeEnabled &&

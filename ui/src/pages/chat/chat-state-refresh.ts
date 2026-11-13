@@ -35,6 +35,7 @@ import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-queue-reconnect.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
+import { setSelectedChatSessionArchived } from "./chat-session-archive.ts";
 import { applyChatMetadataCommands } from "./chat-session-commands.ts";
 import {
   refreshCurrentChatSessionList,
@@ -651,7 +652,7 @@ export async function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOpti
     }
     const sessionInfo = selectedChatSessionRow(host);
     if (sessionInfo) {
-      host.selectedChatSessionArchived = sessionInfo.archived === true;
+      setSelectedChatSessionArchived(host, sessionInfo.archived === true);
       host.selectedChatSessionIncognito = sessionInfo.incognito === true;
     }
     const snapshotRunId = history.inFlightRun?.runId?.trim();

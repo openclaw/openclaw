@@ -31,6 +31,8 @@ class NodeForegroundService : Service() {
   private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
   private var notificationJob: Job? = null
   private var voiceCaptureMode = VoiceCaptureMode.Off
+  private var observedRuntime: NodeRuntime? = null
+  private var wakeMicrophoneGranted = false
 
   override fun onCreate() {
     super.onCreate()
@@ -61,6 +63,7 @@ class NodeForegroundService : Service() {
             stopSelfResult(startId)
             return@launch
           } ?: return@launch
+        observedRuntime = runtime
         if (app.nodeServiceStartAllowed) collectNotificationState(runtime)
       }
   }
@@ -93,7 +96,8 @@ class NodeForegroundService : Service() {
         base to capture
       }
     refreshNotificationOnLocaleChanges(
-      states = notificationStates,
+      // Visibility changes retry a microphone grant that Android refused while backgrounded.
+      states = combine(notificationStates, runtime.voiceWakeEnabled, runtime.isForeground) { state, _, _ -> state },
       localeChanges = nativeLocaleChanges,
     ).collect { update ->
       ensureChannelForLocaleRevision(update.localeRevision)
@@ -173,6 +177,8 @@ class NodeForegroundService : Service() {
 
   override fun onDestroy() {
     scope.cancel()
+    observedRuntime?.setVoiceWakeBackgroundListeningAllowed(false)
+    observedRuntime = null
     super.onDestroy()
   }
 
@@ -222,12 +228,33 @@ class NodeForegroundService : Service() {
   }
 
   private fun startForegroundWithTypes(notification: Notification) {
-    val serviceTypes =
+    val wakeRequested =
+      observedRuntime?.let {
+        (application as NodeApp).nodeServiceStartAllowed &&
+          it.voiceWakeEnabled.value && it.voiceWakeAvailable.value && hasPermission(Manifest.permission.RECORD_AUDIO) &&
+          (it.isForeground.value || wakeMicrophoneGranted)
+      } == true
+    val baseTypes =
       foregroundServiceTypes(
         voiceMode = voiceCaptureMode,
         backgroundLocationActive = isBackgroundLocationActive(),
       )
-    ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceTypes)
+    val serviceTypes =
+      if (wakeRequested) baseTypes or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else baseTypes
+    var wakeGranted = wakeRequested
+    try {
+      // Refresh while-in-use eligibility even if a sticky service was created in the background.
+      if (wakeRequested && !wakeMicrophoneGranted) start(this)
+      ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceTypes)
+    } catch (err: RuntimeException) {
+      if (serviceTypes == baseTypes) throw err
+      // A sticky background restart cannot acquire while-in-use microphone permission.
+      Log.w("OpenClawNodeService", "Wake microphone service type unavailable", err)
+      ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, baseTypes)
+      wakeGranted = false
+    }
+    wakeMicrophoneGranted = wakeGranted
+    observedRuntime?.setVoiceWakeBackgroundListeningAllowed(wakeGranted)
   }
 
   private fun isBackgroundLocationActive(): Boolean {

@@ -198,6 +198,18 @@ export function resolveSchemaMigrationIntegrityTables(
   ) {
     return ["schema_meta"];
   }
+  if (
+    migration.kind === "agent" &&
+    migration.foundVersion >= 40 &&
+    migration.foundVersion < migration.supportedVersion &&
+    migration.supportedVersion <= 42
+  ) {
+    return [
+      "schema_meta",
+      ...(migration.foundVersion < 41 ? ["session_transcript_active_event_facts"] : []),
+      ...(migration.supportedVersion >= 42 ? ["agent_tool_usage"] : []),
+    ];
+  }
   const tables = new Set(["schema_meta"]);
   if (migration.foundVersion === migration.supportedVersion) {
     for (const table of SCHEMA_MIGRATION_HISTORICAL_REPAIR_TABLES[migration.kind]) {

@@ -12,6 +12,15 @@ function snapshotWithPresence(presence: Record<string, unknown>) {
 }
 
 describe("SnapshotSchema", () => {
+  it("keeps the running Gateway's exposure optional for older Gateways", () => {
+    const snapshot = snapshotWithPresence({ ts: 1 });
+    expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);
+    expect(
+      Value.Check(SnapshotSchema, { ...snapshot, bindHost: "0.0.0.0", tailscaleMode: "off" }),
+    ).toBe(true);
+    expect(Value.Check(SnapshotSchema, { ...snapshot, tailscaleMode: "public" })).toBe(false);
+  });
+
   it.each(["accepting"])("accepts public suspension phase %s without lease tokens", (phase) => {
     const snapshot = { ...snapshotWithPresence({ ts: 1 }), suspension: { phase } };
     expect(Value.Check(SnapshotSchema, snapshot)).toBe(true);

@@ -15,7 +15,7 @@ import { dispatchWidgetPrompt } from "../../../components/mcp-app-security.ts";
 import type { McpAppViewProps } from "../../../components/mcp-app-view-types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
-import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
+import { registerChatToolWidgetsEnglish } from "../../../i18n/locales/en-chat-tool-widgets.ts";
 import { registerMcpAppEnglish } from "../../../i18n/locales/en-mcp-app.ts";
 import {
   canvasWidgetNameForDocument,
@@ -43,6 +43,7 @@ import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../../lib/widget-theme.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { RawOutputToggle } from "./chat-tool-content.solid.tsx";
 import { TranscriptRowKeyContext } from "./chat-transcript-layout.ts";
 import { WidgetCardMenu, type WidgetRawDetailsLabel } from "./widget-card-menu.tsx";
 import { exportWidget } from "./widget-export.ts";
@@ -53,7 +54,7 @@ import {
   widgetPreviewLayoutKey,
 } from "./widget-preview-layout.ts";
 
-registerEnglishCatalog(registerChatToolLabelsEnglish);
+registerEnglishCatalog(registerChatToolWidgetsEnglish);
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -86,7 +87,7 @@ function McpAppHost(
       prop:viewId={props.viewId}
       prop:height={props.height}
       prop:onHeightChange={props.onHeightChange}
-      style={{ display: "block", "min-height": `${props.height}px` }}
+      style={{ "min-height": `${props.height}px` }}
       title={props.title}
     />
   );
@@ -572,7 +573,7 @@ function CanvasPreview(props: {
                 }
                 const frame = source instanceof HTMLIFrameElement ? source : source?.previewFrame;
                 if (!frame) {
-                  showToast({ message: t("chat.toolCards.widgetExportFailed") });
+                  showToast({ severity: "error", message: t("chat.toolCards.widgetExportFailed") });
                   return;
                 }
                 const documentHtml =
@@ -580,15 +581,24 @@ function CanvasPreview(props: {
                 void exportWidget(value, frame, title, { documentHtml })
                   .then((result) => {
                     if (result === "rerender-required") {
-                      showToast({ message: t("chat.toolCards.widgetExportRerender") });
+                      showToast({
+                        severity: "error",
+                        message: t("chat.toolCards.widgetExportRerender"),
+                      });
                     } else if (result === "html") {
-                      showToast({ message: t("chat.toolCards.widgetExportHtmlFallback") });
+                      showToast({
+                        severity: undefined,
+                        message: t("chat.toolCards.widgetExportHtmlFallback"),
+                      });
                     } else if (value === "copy") {
-                      showToast({ message: t("common.copied") });
+                      showToast({ severity: "success", message: t("common.copied") });
                     }
                   })
                   .catch(() => {
-                    showToast({ message: t("chat.toolCards.widgetExportFailed") });
+                    showToast({
+                      severity: "error",
+                      message: t("chat.toolCards.widgetExportFailed"),
+                    });
                   });
               }}
             />
@@ -693,4 +703,35 @@ declare module "@solidjs/web" {
       "openclaw-youtube-video": HTMLAttributes<HTMLElement>;
     }
   }
+}
+
+/** Widget actions and their raw disclosure share the existing deferred renderer. */
+export function AssistantViewPreview(props: ToolPreviewProps) {
+  let rawToggle: HTMLButtonElement | undefined;
+  return (
+    <>
+      <ToolPreview
+        preview={props.preview}
+        surface={props.surface}
+        options={{
+          ...props.options,
+          toggleRawDetails: () => {
+            const open = rawToggle?.getAttribute("aria-expanded") !== "true";
+            rawToggle?.click();
+            return Boolean(rawToggle && open);
+          },
+        }}
+      />
+      <Show when={props.options?.rawText}>
+        <div class="chat-tool-card__widget-raw">
+          <openclaw-chat-tool-raw style={{ display: "contents" }}>
+            <RawOutputToggle
+              text={props.options!.rawText!}
+              toggleRef={(element) => (rawToggle = element)}
+            />
+          </openclaw-chat-tool-raw>
+        </div>
+      </Show>
+    </>
+  );
 }
