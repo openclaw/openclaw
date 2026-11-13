@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { readConfigFileSnapshotForWrite, registerConfigWriteListener } from "../config/config.js";
+import type { FsSafeStoreRemove, FsSafeStoreReply } from "../infra/fs-safe-copy-worker-contract.js";
+import * as filesystemWorker from "../infra/fs-safe-filesystem-worker.js";
 import * as fsSafe from "../infra/fs-safe.js";
 import * as snapshots from "../infra/sqlite-readonly-worker.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
@@ -14,9 +16,14 @@ import { createAgentTestState } from "./agent-create.integration.test-support.js
 import { createAgent } from "./agent-create.js";
 import { prepareAgentAuthProfileRowsRead } from "./auth-profiles/sqlite-read.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
+import type {
+  WorkspaceFilesystemCommand,
+  WorkspaceFilesystemReply,
+} from "./workspace-filesystem.types.js";
 import * as workspaceModule from "./workspace.js";
 import {
   DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
   ensureAgentWorkspace,
   isWorkspaceBootstrapPending,
 } from "./workspace.js";
@@ -43,12 +50,40 @@ function holdDuring(state: Awaited<ReturnType<typeof createState>>, stage: "root
       addRecoveryHold("guarded", state.path("held.sqlite"));
     }
   };
-  vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
-    const handle = await root(...args);
-    if (args[0] === state.workspaceDir) {
-      if (stage === "root") {
-        insert();
-      } else {
+  if (stage === "root") {
+    const run = filesystemWorker.runFsSafeFilesystemTask;
+    type Options = Parameters<typeof run>[1];
+    function intercept(
+      command: WorkspaceFilesystemCommand,
+      options?: Options,
+    ): Promise<WorkspaceFilesystemReply>;
+    function intercept(command: FsSafeStoreRemove, options?: Options): Promise<FsSafeStoreReply>;
+    function intercept(command: WorkspaceFilesystemCommand | FsSafeStoreRemove, options?: Options) {
+      if (command.type !== "workspace") {
+        return run(command, options);
+      }
+      const operation = command.operation;
+      if (
+        operation.kind !== "publish" ||
+        operation.dir !== state.workspaceDir ||
+        operation.name !== DEFAULT_SOUL_FILENAME
+      ) {
+        return run(command, options);
+      }
+      return run(command, {
+        ...options,
+        onNotification: (notification) => {
+          // This missing-file publication asks for authority after opening its worker root.
+          insert();
+          return options?.onNotification?.(notification);
+        },
+      });
+    }
+    vi.spyOn(filesystemWorker, "runFsSafeFilesystemTask").mockImplementation(intercept);
+  } else {
+    vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+      const handle = await root(...args);
+      if (args[0] === state.workspaceDir) {
         const read = handle.read.bind(handle);
         vi.spyOn(handle, "read").mockImplementation(async (...readArgs) => {
           const result = await read(...readArgs);
@@ -58,9 +93,9 @@ function holdDuring(state: Awaited<ReturnType<typeof createState>>, stage: "root
           return result;
         });
       }
-    }
-    return handle;
-  });
+      return handle;
+    });
+  }
   return () => expect(inserted).toBe(true);
 }
 
@@ -89,6 +124,7 @@ it("preserves IDENTITY.md when a recovery hold arrives during its awaited read",
 it("refuses bootstrap publication when a recovery hold arrives during root preparation", async () => {
   const state = await createState();
   await fs.writeFile(path.join(state.workspaceDir, "AGENTS.md"), "Synthetic instructions.\n");
+  expect(await fs.readdir(state.workspaceDir)).toEqual(["AGENTS.md"]);
   const expectHold = holdDuring(state, "root");
   await expect(
     ensureAgentWorkspace({

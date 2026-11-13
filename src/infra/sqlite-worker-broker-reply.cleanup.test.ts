@@ -127,8 +127,8 @@ function expectCalls(
 
 function expectEvents(outcome: "resolve" | "reject", warning = false) {
   expect(effects.events).toEqual([
-    "settle-native",
     "finish-admission",
+    "settle-native",
     "release-service",
     ...(warning ? ["warning"] : []),
     "detach",

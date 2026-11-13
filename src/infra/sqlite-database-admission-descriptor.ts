@@ -195,6 +195,7 @@ export function createSqliteDatabaseDescriptorOwner(
                   custody.file,
                 );
           state.registry.observeLocation(filename, retained.identity);
+          seals.markLoaded(retained);
           return observed;
         }
       }
@@ -375,23 +376,23 @@ export function createSqliteDatabaseDescriptorOwner(
   }
 
   function pathAdmission(location: string, observedIdentity?: string): Admission | undefined {
-    let retained = state.registry.forLocation(location);
-    if (!retained) {
-      exchange(
-        location,
-        undefined,
-        false,
-        observedIdentity !== undefined && threadId !== 0
-          ? { identity: observedIdentity, canonicalPath: fs.realpathSync.native(location) }
-          : undefined,
-      );
-      retained = state.registry.forLocation(location);
-    }
-    if (retained) {
-      seals.load(retained);
-      return retained;
-    }
     try {
+      let retained = state.registry.forLocation(location);
+      if (!retained) {
+        exchange(
+          location,
+          undefined,
+          false,
+          observedIdentity !== undefined && threadId !== 0
+            ? { identity: observedIdentity, canonicalPath: fs.realpathSync.native(location) }
+            : undefined,
+        );
+        retained = state.registry.forLocation(location);
+      }
+      if (retained) {
+        seals.load(retained);
+        return retained;
+      }
       retainSqliteDatabaseAdmissionLocation(location);
       return state.registry.forLocation(location);
     } catch (error) {

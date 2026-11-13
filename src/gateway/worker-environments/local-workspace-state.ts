@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import type { LocalWorkspacePausePhase } from "../../agents/sandbox/local-workspace-quiescence.js";
+import type { LocalWorkspacePausePhase } from "../../agents/sandbox/types.js";
 import { nativeWorktreeFilesystem } from "../../agents/worktrees/filesystem-native.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
@@ -29,16 +29,17 @@ import {
   selectLocalWorkspaceCanonicalPaths,
   readLocalWorkspaceGitExclusions,
 } from "./local-workspace-inventory.js";
-import type {
-  LocalWorkspaceManifestAction,
-  LocalWorkspaceManifestCheckpoint,
-} from "./local-workspace-manifest-scan.js";
 import {
   assertLocalWorkspaceProjectionOwner,
   bindLocalWorkspaceAuthority,
 } from "./local-workspace-owner-identity.js";
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
-import type { LocalWorkspaceCapture, LocalWorkspaceOwner } from "./local-workspace-types.js";
+import type {
+  LocalWorkspaceCapture,
+  LocalWorkspaceManifestAction,
+  LocalWorkspaceManifestCheckpoint,
+} from "./local-workspace-store.types.js";
+import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import {
   loadStagedWorkspaceManifest,
   captureWorkspaceManifestDocument,

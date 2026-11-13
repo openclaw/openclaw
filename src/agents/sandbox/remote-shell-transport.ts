@@ -70,8 +70,8 @@ export function createRemoteShellSandboxSession(
     if (command.argv.length === 0) {
       throw new Error("Remote shell command argv is empty");
     }
-    if (checkCurrent) {
-      await options.prepareCurrent?.();
+    if (checkCurrent && options.prepareCurrent) {
+      await options.prepareCurrent();
     }
     const launch = () => {
       if (checkCurrent) {

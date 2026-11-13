@@ -77,6 +77,25 @@ export type SpawnResult = {
   outputErrorStream?: "stdout" | "stderr";
 };
 
+type CommandProcessCleanup = Promise<NonNullable<SpawnResult["cleanup"]>>;
+const commandProcessCleanup = Symbol.for("openclaw.command-process-cleanup");
+
+/** Carry the existing cleanup owner without putting a Promise in public result payloads. */
+export function recordCommandProcessCleanup<Result extends object>(
+  result: Result,
+  cleanup: CommandProcessCleanup | undefined,
+): Result {
+  return cleanup
+    ? Object.defineProperty(result, commandProcessCleanup, { value: cleanup })
+    : result;
+}
+
+export function readCommandProcessCleanup(result: object): CommandProcessCleanup | undefined {
+  const descriptor: TypedPropertyDescriptor<CommandProcessCleanup> | undefined =
+    Object.getOwnPropertyDescriptor(result, commandProcessCleanup);
+  return descriptor?.value;
+}
+
 export type CommandProcessOutcome = Pick<
   SpawnResult,
   "pid" | "code" | "cleanup" | "termination" | "killIssuedByAbort" | "outputLimitExceeded"
@@ -116,6 +135,25 @@ export function readCommandProcessFailure(error: unknown): CommandProcessOutcome
 }
 
 export const TIMEOUT_EXIT_CODE = 124;
+
+export function createInterruptedCommandOutcome(params: {
+  reason: Exclude<SpawnResult["termination"], "exit"> | "output-limit";
+  pid: number | undefined;
+  killed: boolean;
+}) {
+  const { reason, pid, killed } = params;
+  return {
+    pid,
+    code: reason === "timeout" || reason === "no-output-timeout" ? TIMEOUT_EXIT_CODE : null,
+    signal: null,
+    killed,
+    killIssuedByAbort: reason === "signal" || reason === "output-limit" || undefined,
+    cleanup: "uncertain" as const,
+    termination: reason === "output-limit" ? ("signal" as const) : reason,
+    noOutputTimedOut: reason === "no-output-timeout",
+    outputLimitExceeded: reason === "output-limit" || undefined,
+  };
+}
 
 export function createSanitizedCommandError(result: {
   code?: unknown;

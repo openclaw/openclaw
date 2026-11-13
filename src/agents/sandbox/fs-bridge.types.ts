@@ -1,5 +1,18 @@
 import type { DirectoryEntry } from "../../infra/directory-entries.js";
 
+export type SandboxFsMount = {
+  hostRoot: string;
+  canonicalHostRoot?: string;
+  containerRoot: string;
+  writable: boolean;
+  source: "workspace" | "agent" | "bind" | "protectedSkill";
+};
+
+export type SandboxFsPreparation = {
+  mounts: SandboxFsMount[];
+  protectedSkills: Array<{ name: string; sourceFile: string; containerRoot: string }>;
+};
+
 export type SandboxResolvedPath = {
   hostPath?: string;
   relativePath: string;

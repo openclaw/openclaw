@@ -197,6 +197,9 @@ export function createSubagentRegistryMockState() {
       assertCurrent();
       return Promise.resolve({
         assertCurrent,
+        assertNativeTransactionCurrent: Object.assign(() => assertCurrent(), {
+          nativeSource: true,
+        }),
         readSessionSettings: () => {
           assertCurrent();
           const { permissionMode, toolOverrides } = mocks.entries[input.sessionKey] ?? {};

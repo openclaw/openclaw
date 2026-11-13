@@ -3,6 +3,7 @@ import { renameSync, rmSync } from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { expect, it as baseIt, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { readAgentDeleteDatabaseRegistry } from "../agents/agent-delete-databases.js";
 import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
@@ -46,9 +47,9 @@ const it = baseIt.extend<{ state: OpenClawTestState }>({
 const prepareMissing = (cfg: OpenClawConfig, sessionKey: string) =>
   prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main", allowMissing: true });
 
-it.for(["creation", "storage"] as const)(
+it.for(["creation", "storage", "early-storage"] as const)(
   "observes failed %s opening through the lifecycle readiness chain",
-  async (kind, { state }) => {
+  async (kind, { state, signal }) => {
     const cfg = { agents: { entries: { main: {} } } };
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
@@ -57,6 +58,20 @@ it.for(["creation", "storage"] as const)(
       sessionKey: "agent:main:sharing-opening-failure",
       storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
     };
+    const capturedInventory = createDeferredCore();
+    const releaseInventory = createDeferredCore();
+    const prepareInventory = discoveryResources.prepareSessionStoreCandidatesInWorker;
+    const interception =
+      kind === "early-storage"
+        ? vi
+            .spyOn(discoveryResources, "prepareSessionStoreCandidatesInWorker")
+            .mockImplementation(async (...args) => {
+              const result = await prepareInventory(...args);
+              capturedInventory.resolve();
+              await releaseInventory.promise;
+              return result;
+            })
+        : undefined;
     const ready = createDeferredCore();
     const failure = new Error("Synthetic opening registration refused");
     const observed: string[] = [];
@@ -77,7 +92,7 @@ it.for(["creation", "storage"] as const)(
     const onUnhandled = (error: unknown) => unhandled.push(error);
     process.on("unhandledRejection", onUnhandled);
     const opening =
-      kind === "storage"
+      kind !== "creation"
         ? prepareSessionEntryMutationDatabases(
             [{ scope, assertCurrent() {}, followRegistration }],
             ready.promise,
@@ -104,17 +119,27 @@ it.for(["creation", "storage"] as const)(
       ],
     });
     try {
-      ready.resolve();
+      if (kind === "early-storage") {
+        await withinTest(capturedInventory.promise, signal);
+        ready.reject(failure);
+        await setImmediate();
+        expect(observed).toEqual([]);
+        releaseInventory.resolve();
+      } else {
+        ready.resolve();
+      }
       await expect(lifecycle.preparations[0]).rejects.toBe(failure);
-      expect(failed).toBe(true);
+      expect(failed).toBe(kind !== "early-storage");
       expect(observed.slice(0, kind === "creation" ? 1 : 2)).toEqual(
-        kind === "creation" ? ["original"] : ["original", "observer"],
+        kind === "creation" ? ["original"] : kind === "storage" ? ["original", "observer"] : [],
       );
       await lifecycle[Symbol.asyncDispose]();
       await opening?.[Symbol.asyncDispose]();
       await setImmediate();
       expect(unhandled).toEqual([]);
     } finally {
+      releaseInventory.resolve();
+      interception?.mockRestore();
       ready.resolve();
       stop?.();
       await lifecycle[Symbol.asyncDispose]();

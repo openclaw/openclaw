@@ -22,6 +22,7 @@ import {
   assertSandboxRegistryEntryCurrent,
   assertSandboxBrowserRegistryEntryCurrent,
 } from "./registry.js";
+import type { LocalWorkspacePausePhase } from "./types.js";
 
 const log = createSubsystemLogger("sandbox/quiescence");
 const pauseCounts = {
@@ -33,24 +34,6 @@ const pauseCounts = {
   restore: 0,
 };
 export type LocalWorkspacePauseReason = keyof typeof pauseCounts;
-export type LocalWorkspacePausePhase =
-  | "pause"
-  | "operation"
-  | "recovery"
-  | "capture"
-  | "scan"
-  | "staging"
-  | "materialization"
-  | "preflight"
-  | "patch"
-  | "apply"
-  | "acceptance"
-  | "verification"
-  | "cleanup"
-  | "resume"
-  | "resumeInspect"
-  | "resumeAuthority"
-  | "unpause";
 
 /** Registered runtimes and retained stream children can write the exact private mount. */
 export async function readLocalWorkspaceRuntimes(

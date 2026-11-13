@@ -41,7 +41,6 @@ import {
   readLocalWorkspaceSweepCandidates,
   readLocalWorkspaceTree,
 } from "./local-workspace-cas.kernel.js";
-import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
 import {
   createLocalWorkspaceManifestTree,
   localWorkspaceManifestRootReference,
@@ -57,6 +56,7 @@ import {
   localWorkspaceProjectionFixture,
   readLocalWorkspaceProjection,
 } from "./local-workspace-store.test-support.js";
+import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-store.types.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>

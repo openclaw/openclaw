@@ -120,6 +120,7 @@ describe("fresh sandbox container cleanup", () => {
         if (effect === "create") {
           expect(registryMocks.updateRegistry).toHaveBeenLastCalledWith(
             expect.objectContaining({ workspaceDir }),
+            undefined,
           );
           throw new Error(error);
         }
@@ -152,6 +153,7 @@ describe("fresh sandbox container cleanup", () => {
     if (setup) {
       expect(registryMocks.updateRegistry).toHaveBeenCalledWith(
         expect.objectContaining({ runtimeState: "pending", workspaceDir }),
+        undefined,
       );
       expect(registryMocks.completeSandboxRegistryReservation).not.toHaveBeenCalled();
     }

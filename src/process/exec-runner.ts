@@ -39,9 +39,11 @@ import {
   type PreserveOutputLine,
 } from "./exec-output.js";
 import {
+  createInterruptedCommandOutcome,
   createSanitizedCommandError,
   isPlainCommandExitFailure,
   isPlainCommandSignalFailure,
+  recordCommandProcessCleanup,
   recordCommandProcessFailure,
   resolveProcessExitCode,
   TIMEOUT_EXIT_CODE,
@@ -600,22 +602,21 @@ async function runCommandWithOutputEncoding(
       // The result cannot claim extinction before admission settles. Keep the same
       // termination owner through late readiness and final output drainage.
       void processCleanup.finally(() => releaseOutput?.()).catch(() => {});
-      const stopped = {
+      const stopped = createInterruptedCommandOutcome({
+        reason: interrupted,
         pid: nodeChild.pid,
-        code:
-          interrupted === "timeout" || interrupted === "no-output-timeout"
-            ? TIMEOUT_EXIT_CODE
-            : null,
-        signal: null,
         killed: nodeChild.killed,
-        killIssuedByAbort: interrupted === "signal" || interrupted === "output-limit" || undefined,
-        cleanup: "uncertain" as const,
-        termination: interrupted === "output-limit" ? ("signal" as const) : interrupted,
-        noOutputTimedOut: interrupted === "no-output-timeout",
-        outputLimitExceeded: interrupted === "output-limit" || undefined,
-      };
+      });
       throwOutputError("uncertain");
-      return { ...stopped, ...finalizeOutput() };
+      return recordCommandProcessCleanup(
+        { ...stopped, ...finalizeOutput() },
+        interrupted === "output-limit" &&
+          killProcessTree &&
+          nodeChild.pid !== undefined &&
+          (process.platform === "linux" || process.platform === "android")
+          ? processCleanup
+          : undefined,
+      );
     }
     waitingForSpawn = false;
   }

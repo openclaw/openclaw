@@ -138,15 +138,21 @@ delay. Accepted reads and writes settle through their existing owners before the
 last writer closes. A reader that fails to retire retains its cleanup custody;
 it cannot cause an incomplete checkpoint to be recorded as a clean close.
 
-Completed memory index schema receipts also survive a clean close. They remain
-scoped to the cache, FTS, and tokenizer settings that were validated, so an
-unchanged restart skips memory schema setup and the resulting agent schema
-refresh. Owner-controlled FTS and vector replacements republish that receipt
-after commit when they preserve the admitted table contracts. Rollback cannot
-publish a replacement receipt. Changed settings, other in-process DDL, or a
-missing or invalid seal take the ordinary memory schema admission path. An
-unclean shutdown leaves full verification to startup's background owner;
-ordinary current-schema admission remains bounded. Imported-row backfills still run.
+Completed memory index schema receipts remain valid across native closes in the
+same process, even if the restart seal is missing. They remain scoped to the
+physical database and the cache, FTS, and tokenizer settings that were validated.
+Changed settings, other in-process DDL, explicit revocation, or file replacement
+require ordinary memory schema admission. Owner-controlled FTS and vector
+replacements republish the receipt after commit when they preserve the admitted
+table contracts. Rollback cannot publish a replacement receipt.
+
+A fresh process must load a valid clean-close seal to reuse those completed
+receipts. A missing or invalid seal takes the ordinary memory schema admission
+path; an unchanged compatible seal avoids repeated memory schema setup and the
+resulting agent schema refresh. An unclean shutdown leaves full verification to
+startup's background owner; ordinary current-schema admission remains bounded.
+Imported-row backfills still run, and completed data repair is reused only for
+the same write receipt.
 
 At startup, admission accepts the seal only when its JSON parses, its short
 checksum matches, and all of the following match the current database: device,

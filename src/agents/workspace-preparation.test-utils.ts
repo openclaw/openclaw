@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import * as writerQueue from "../shared/store-writer-queue.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as workspaceBootstrap from "./workspace-bootstrap-publish.js";
 import { holdWorkspacePreparationSnapshot } from "./workspace-preparation-queue.test-support.js";
@@ -319,8 +324,26 @@ export function registerWorkspacePreparationTests({
         await using held = holdSnapshot([dir, followerDir]);
         const first = held.run(() => ensureAgentWorkspace({ dir }));
         await held.ready(first, signal);
+        const enqueued = createDeferred();
+        const enqueue = writerQueue.runQueuedStoreWrite;
+        using _ = vi.spyOn(writerQueue, "runQueuedStoreWrite").mockImplementation((input) => {
+          const pending = enqueue(input);
+          if (input.label === "Workspace preparation" && input.storePath === dir) {
+            expect(input.queues.get(dir)?.pending).toHaveLength(1);
+            enqueued.resolve();
+          }
+          return pending;
+        });
         const follower = held.run(() =>
           ensureAgentWorkspace({ dir: followerDir, purpose: "Forbidden replacement write" }),
+        );
+        await withinTest(
+          awaitGateBeforeSettlement(
+            enqueued.promise,
+            follower,
+            "Workspace follower was not queued",
+          ),
+          signal,
         );
         held.expectQueued();
         if (replacement === "alias") {

@@ -50,7 +50,7 @@ import {
   canonicalSessionKeyMigrationRequiredError,
   readWithCanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
-import { readSessionColdMetadataInDatabase } from "./session-cold-storage-read.worker.js";
+import { readSessionColdMetadataInDatabase } from "./session-cold-storage-inventory.js";
 import { prepareSessionColdSourceGuard } from "./session-cold-storage-source-guard.worker.js";
 import { readSessionCreationReceipt } from "./session-creation-receipts.js";
 import { createSessionEntryReadScope } from "./session-entry-cohort.worker.js";

@@ -346,12 +346,16 @@ export async function prepareSessionMutationFacts(
       registryFilter,
     );
     if (storage) {
+      const {
+        followRegistration: followRegistryRegistration,
+        assertCurrent: assertRegistryCurrent,
+      } = registry;
       releases.push(
         storage.observeRegistration((change) => {
           assertActive();
           assertRoutingCurrent(params.cfg);
-          registry.followRegistration(change);
-          registry.assertCurrent();
+          followRegistryRegistration(change);
+          assertRegistryCurrent();
         }),
       );
     }

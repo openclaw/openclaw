@@ -24,8 +24,10 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { serialize } from "node:v8";
 import { transformSync } from "esbuild";
-import type { LocalWorkspaceManifestCheckpoint } from "../../src/gateway/worker-environments/local-workspace-manifest-scan.ts";
-import type { LocalWorkspaceProjection } from "../../src/gateway/worker-environments/local-workspace-store.types.ts";
+import type {
+  LocalWorkspaceManifestCheckpoint,
+  LocalWorkspaceProjection,
+} from "../../src/gateway/worker-environments/local-workspace-store.types.ts";
 import { BASE_GATEWAY_BENCH_CONFIG, createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 
 const { values } = parseArgs({

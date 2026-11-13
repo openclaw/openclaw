@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { isMainThread } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
@@ -7,6 +8,7 @@ import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.j
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 it("prepares cold Gateway read custody asynchronously and reuses warm admission", async () => {
+  expect(isMainThread).toBe(true);
   await withOpenClawTestState({ label: "state-read-gateway-custody" }, async (state) => {
     const database = openOpenClawStateDatabase({ env: state.env });
     const owner = acquireGatewayStateOwner({

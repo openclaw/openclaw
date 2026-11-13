@@ -19,13 +19,13 @@ import { hasErrnoCode } from "../../infra/errno.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { assertLocalWorkspaceDirectory } from "./local-workspace-checkout.js";
-import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
 import type { LocalWorkspaceStore } from "./local-workspace-store.js";
 import type {
+  LocalWorkspaceCapture,
+  LocalWorkspaceManifestCheckpoint,
   LocalWorkspaceProjection,
   LocalWorkspaceRejectedResult,
 } from "./local-workspace-store.types.js";
-import type { LocalWorkspaceCapture } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import { serializeWorkerWorkspaceReconciliationPlan } from "./workspace-manifest.js";
 import type { applyStagedWorkerWorkspace } from "./workspace-reconcile-apply.js";

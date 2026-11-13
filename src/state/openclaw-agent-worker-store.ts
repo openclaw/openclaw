@@ -455,6 +455,7 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
         const publicationValue = await runOpenClawAgentWorkerWrite(
           options,
           async () => {
+            assert();
             execution = await captureOpenClawAgentDatabaseExecutionAsync(
               options,
               { expectedIdentity },

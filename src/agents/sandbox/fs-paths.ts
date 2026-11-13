@@ -5,6 +5,7 @@ import { isPathInside } from "../../infra/path-guards.js";
 import type { SkillUsagePath } from "../../skills/types.js";
 import { normalizeSandboxInputPath, resolveSandboxInputPath } from "../sandbox-paths.js";
 import type { SandboxFsBridgeContext } from "./backend-handle.types.js";
+import type { SandboxFsMount, SandboxFsPreparation } from "./fs-bridge.types.js";
 import {
   isSandboxHostPathAbsolute,
   resolveSandboxHostPathViaExistingAncestor,
@@ -19,14 +20,6 @@ import {
   resolveSandboxBindMounts,
   resolveSandboxTmpfsMounts,
 } from "./workspace-mounts.js";
-
-export type SandboxFsMount = {
-  hostRoot: string;
-  canonicalHostRoot?: string;
-  containerRoot: string;
-  writable: boolean;
-  source: "workspace" | "agent" | "bind" | "protectedSkill";
-};
 
 export type SandboxResolvedFsPath = {
   hostPath: string;
@@ -51,11 +44,6 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
     source: mount.source,
   }));
 }
-
-export type SandboxFsPreparation = {
-  mounts: SandboxFsMount[];
-  protectedSkills: Array<{ name: string; sourceFile: string; containerRoot: string }>;
-};
 
 /** Prepare one run's mount/provenance projection on the skills filesystem worker. */
 export function resolveSandboxFsPreparation(input: {

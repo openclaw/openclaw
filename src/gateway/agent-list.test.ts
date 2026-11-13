@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -83,6 +84,7 @@ it.each([
 );
 
 it("lists cold deletion state without filesystem work in optional receipt lookup", async () => {
+  expect(isMainThread).toBe(true);
   const cfg = { agents: { entries: { main: {}, retired: {} } } };
   const original = resolveOpenClawStateSqlitePath();
   using reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");

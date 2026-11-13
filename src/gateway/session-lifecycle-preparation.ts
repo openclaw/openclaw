@@ -137,6 +137,12 @@ export function prepareGatewaySessionLifecycleTargets(params: {
         storageReady && "ready" in storageReady
           ? { ...storageReady, ready: storageReady.ready.then(observeStorage) }
           : storageReady?.then(observeStorage);
+      const readiness =
+        targetStorageReady && "ready" in targetStorageReady
+          ? targetStorageReady.ready
+          : targetStorageReady;
+      // Observe this derivative before selection or inventory work can yield.
+      void readiness?.catch(() => {});
       const selected = { ...target };
       const originalIdentity = {
         sessionId: entry?.sessionId,

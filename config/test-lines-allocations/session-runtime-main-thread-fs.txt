@@ -1,4 +1,4 @@
-# 10,683 net test LF against main 3ea0883 minus the single 400-line PR allowance.
+# 11,257 net test LF against main d1c800b minus the single 400-line PR allowance.
 # Real worker identity/alias refusal, async capture retirement, FIFO and settlement,
 # auth commit publication, Talk/trajectory lifecycle, and periodic maintenance FS proof.
 # Repairs retain real queued-custody, completion-context, and immediate-retirement proof.
@@ -8,4 +8,5 @@
 # Async tool-usage capture retains reset/flush invocation order through real writer admission.
 # Includes workspace/discovery, cold-reader, process, and accepted review corrections.
 # Real replacement, confinement, settlement, and main-thread sync-FS regressions.
-10283
+# Output-cap settlement, revoked-admission no-effect, and fresh-process schema reuse proof.
+10857

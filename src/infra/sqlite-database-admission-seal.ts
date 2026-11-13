@@ -98,7 +98,10 @@ function decodeSealValue(_key: string, value: unknown): unknown {
 }
 
 export class SqliteDatabaseCleanCloseSeals {
-  private readonly loaded = new WeakSet<Admission | SqliteDatabaseDescriptorCustody>();
+  private readonly loaded = new WeakMap<
+    Admission | SqliteDatabaseDescriptorCustody,
+    SharedArrayBuffer
+  >();
 
   constructor(
     private readonly publishFact: (
@@ -120,7 +123,16 @@ export class SqliteDatabaseCleanCloseSeals {
   }
 
   markLoaded(record: Admission): void {
-    this.loaded.add(this.references.descriptor(record) ?? record);
+    const custody = this.references.descriptor(record) ?? record;
+    const previous = this.loaded.get(custody);
+    if (previous && previous !== record.generation) {
+      Atomics.store(
+        new Int32Array(record.generation),
+        SqliteDatabaseGenerationSlot.sealPresent,
+        Atomics.load(new Int32Array(previous), SqliteDatabaseGenerationSlot.sealPresent),
+      );
+    }
+    this.loaded.set(custody, record.generation);
   }
 
   load(
@@ -137,9 +149,10 @@ export class SqliteDatabaseCleanCloseSeals {
     }
     const custody = this.references.descriptor(record) ?? record;
     if (this.loaded.has(custody)) {
+      this.markLoaded(record);
       return;
     }
-    this.loaded.add(custody);
+    this.markLoaded(record);
     record.cleanCloseRefusal = "malformed-proof";
     try {
       if (prepared?.refusal) {

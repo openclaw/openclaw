@@ -10,6 +10,7 @@ import {
 } from "../../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { createColdPluginFixture } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
+import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
@@ -31,9 +32,12 @@ it("admits a second workspace turn through real prepared runtime after registrat
     await fs.mkdir(bundled);
     const registrations: string[] = [];
     let activeTurn = 0;
-    const requests: Array<Context["systemPrompt"]> = [];
+    const requests: Array<Pick<Context, "systemPrompt" | "messages">> = [];
     const stream: StreamFn = (model, context) => {
-      requests.push(context.systemPrompt);
+      requests.push({
+        systemPrompt: context.systemPrompt,
+        messages: structuredClone(context.messages),
+      });
       const message = makeAgentAssistantMessage({
         api: model.api,
         provider: model.provider,
@@ -167,10 +171,21 @@ module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
             expect(network).not.toHaveBeenCalled();
             expect(registrations).toContain(`${siblingPluginId}:0`);
             expect(registrations).toContain(`${siblingPluginId}:1`);
-            expect(requests).toEqual([
-              expect.stringContaining("Original workspace instruction."),
-              expect.stringContaining("Updated workspace instruction."),
-            ]);
+            expect(requests).toHaveLength(2);
+            expect(requests[0]?.systemPrompt).toContain("Original workspace instruction.");
+            expect(requests[1]?.systemPrompt).toBe(requests[0]?.systemPrompt);
+            expect(requests[1]?.systemPrompt).not.toContain("Updated workspace instruction.");
+            expect(
+              requests.map(({ messages }) =>
+                messages
+                  .filter((message) =>
+                    extractTextFromChatContent(message.content)?.includes(
+                      "Updated workspace instruction.",
+                    ),
+                  )
+                  .map((message) => message.role),
+              ),
+            ).toEqual([[], ["user"]]);
           } finally {
             await resetPreparedModelRuntimeSnapshotsForTest();
             resetPluginLoaderTestStateForTest();

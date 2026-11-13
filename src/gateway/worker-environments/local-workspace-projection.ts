@@ -1,9 +1,6 @@
-import type {
-  LocalWorkspacePausePhase,
-  LocalWorkspacePauseReason,
-} from "../../agents/sandbox/local-workspace-quiescence.js";
+import type { LocalWorkspacePauseReason } from "../../agents/sandbox/local-workspace-quiescence.js";
 import type { SandboxStateOwnerPath } from "../../agents/sandbox/state-owner-path.js";
-import type { SandboxConfig } from "../../agents/sandbox/types.js";
+import type { LocalWorkspacePausePhase, SandboxConfig } from "../../agents/sandbox/types.js";
 import {
   startWorktreePreparationPhase,
   timeWorktreePreparationPhase,

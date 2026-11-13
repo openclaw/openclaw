@@ -77,6 +77,7 @@ export async function prepareMemorySessionGeneration(
   };
   return {
     assertCurrent,
+    assertNativeTransactionCurrent: Object.assign(() => assertCurrent(), { nativeSource: true }),
     assertDeliveryCurrent() {
       if (isSessionMutationActive(source.path, [input.sessionKey, input.sessionId ?? undefined])) {
         throw new SessionDeliveryGenerationUnavailableError();

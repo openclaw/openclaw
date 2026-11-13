@@ -605,7 +605,7 @@ it.each(["admitted", "facts-only", "revoked", "different-path"] as const)(
 
 it.each(["unadmitted", "retired"] as const)(
   "refuses %s database creation relays before creating files",
-  (scenario) => {
+  async (scenario) => {
     const location = path.join(tempDirs.make("sqlite-refused-creation-relay-"), "absent.sqlite");
     const admission =
       scenario === "retired"
@@ -615,7 +615,8 @@ it.each(["unadmitted", "retired"] as const)(
         : admissionFixture(() => {
             throw new Error("File creation must not request transaction authority");
           });
-    const { port2 } = channelFixture();
+    const { port1, port2 } = channelFixture();
+    const replied = once(port1, "close");
     const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
     onTestFinished(() => admission.finish());
     admission.port.postMessage(
@@ -630,6 +631,7 @@ it.each(["unadmitted", "retired"] as const)(
       [port2],
     );
     admission.service();
+    await replied;
     expect(Atomics.load(decision, 0)).toBe(2);
     expect(admission.failure).toMatchObject({
       message:

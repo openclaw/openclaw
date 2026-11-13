@@ -5,11 +5,8 @@ import { openRootFile, type RootFileOpenResult } from "../../infra/boundary-file
 import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import {
-  resolveSandboxFsMount,
-  type SandboxResolvedFsPath,
-  type SandboxFsMount,
-} from "./fs-paths.js";
+import type { SandboxFsMount } from "./fs-bridge.types.js";
+import { resolveSandboxFsMount, type SandboxResolvedFsPath } from "./fs-paths.js";
 import {
   getSandboxHostPathPolicyKey,
   normalizeSandboxHostPath,

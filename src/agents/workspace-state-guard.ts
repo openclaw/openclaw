@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import type { PreparedSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -24,7 +23,7 @@ export type WorkspaceFilesystemEvidence = {
 export function createWorkspaceFilesystemSource(
   evidence: WorkspaceFilesystemEvidence,
   assertCurrent: () => void,
-): PreparedSessionSourceAssertion {
+) {
   const prepared = { assertCurrent, checks: [], workspaceEvidence: [evidence] };
   return Object.assign(() => assertCurrent(), {
     prepareSessionSource: async () => prepared,

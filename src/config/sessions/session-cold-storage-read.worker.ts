@@ -4,7 +4,6 @@ import {
   matchesTranscriptEvent,
 } from "../../sessions/transcript-visible-record.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
@@ -20,7 +19,10 @@ import {
 } from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readVerifiedSessionColdChunks } from "./session-cold-storage-chunks.js";
 import { decodeSessionColdRecords } from "./session-cold-storage-codec.js";
-import { readSessionColdStorageInventory } from "./session-cold-storage-inventory.js";
+import {
+  readSessionColdMetadataInDatabase,
+  readSessionColdStorageInventory,
+} from "./session-cold-storage-inventory.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import type { SessionTranscriptMatchDiagnostics } from "./session-history-read.types.js";
 import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
@@ -34,38 +36,6 @@ import { projectAssistantTranscriptText } from "./transcript-assistant-delivery-
 export function readSessionColdStorageInventoryInWorker(options: OpenClawAgentDatabaseOptions) {
   const counts = withOpenClawAgentDatabaseReadOnly(readSessionColdStorageInventory, options);
   return counts.found ? counts.value : readSessionColdStorageInventory();
-}
-
-export function readSessionColdMetadataInDatabase(
-  database: Pick<OpenClawAgentDatabase, "db" | "path">,
-  sessionId: string,
-  readCustody?: readonly SessionStoreReadCustody[],
-): SessionColdMetadataWorkerResult {
-  const archive = readSessionColdTranscript(database.db, sessionId);
-  if (!archive) {
-    return { kind: "cold-metadata", archive: undefined };
-  }
-  const identity = readOpenClawAgentDatabaseIdentity(database);
-  const readIdentity = {
-    key: `file:${identity.identity}`,
-    canonicalPath: identity.canonicalPath,
-    birthtime: identity.birthtime,
-  };
-  return {
-    kind: "cold-metadata",
-    archive,
-    source: {
-      readIdentity,
-      readCustody: readCustody ?? [
-        {
-          sourcePath: database.path,
-          candidates: [
-            { path: database.path, physicalPath: identity.canonicalPath, identity: readIdentity },
-          ],
-        },
-      ],
-    },
-  };
 }
 
 export function readSessionColdMetadataInWorker(

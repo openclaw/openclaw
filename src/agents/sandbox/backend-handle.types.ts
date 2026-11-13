@@ -1,5 +1,4 @@
-import type { SandboxFsBridge } from "./fs-bridge.types.js";
-import type { SandboxFsPreparation } from "./fs-paths.js";
+import type { SandboxFsBridge, SandboxFsPreparation } from "./fs-bridge.types.js";
 
 export type SandboxBackendId = string;
 

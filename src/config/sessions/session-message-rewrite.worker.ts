@@ -66,7 +66,7 @@ import {
   readSessionActorRewriteFacts,
   type SessionActorRewriteFacts,
 } from "./session-actor-transcript-publication.worker.js";
-import { readSessionColdMetadataInDatabase } from "./session-cold-storage-read.worker.js";
+import { readSessionColdMetadataInDatabase } from "./session-cold-storage-inventory.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import {
   bindSessionWorkerBackend,

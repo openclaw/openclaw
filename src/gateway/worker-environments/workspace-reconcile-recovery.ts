@@ -36,11 +36,7 @@ import {
 } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
-import {
-  assertWorkspaceMatchesManifest,
-  ConcurrentWorkspacePathError,
-  localWorkspaceNode,
-} from "./workspace-reconcile-core.js";
+import { assertWorkspaceMatchesManifest, localWorkspaceNode } from "./workspace-reconcile-core.js";
 import {
   prepareNonDirectoryTargets,
   reconciliationDirectories,
@@ -61,10 +57,8 @@ type WorkspaceRecoveryContext = {
   isRetainedInput: ReturnType<typeof createStagedInputPathMatcher>;
   assertCurrent?: () => void;
 };
-function workspaceRecoveryConflict(entryPath: string): ConcurrentWorkspacePathError {
-  return new ConcurrentWorkspacePathError(
-    `Gateway workspace changed while cloud recovery was pending: ${entryPath}`,
-  );
+function workspaceRecoveryConflict(entryPath: string): Error {
+  return new Error(`Gateway workspace changed while cloud recovery was pending: ${entryPath}`);
 }
 
 async function requireGit(
@@ -511,6 +505,9 @@ export async function recoverWorkerWorkspaceReconciliation(params: {
   assertCurrent?: () => void;
   workerAuthority?: WorktreeWorkerAuthority;
 }): Promise<void> {
+  if (params.journal.appliedManifestRef) {
+    throw new Error("Cloud workspace result is already applied and awaits fence acceptance");
+  }
   if (!hasGitWorkerContext()) {
     const temporary = await prepareWorkspaceTemporaryDirectory(
       "openclaw-workspace-recovery-input-",
@@ -534,9 +531,6 @@ export async function recoverWorkerWorkspaceReconciliation(params: {
     } finally {
       await fs.rm(temporary, { recursive: true, force: true });
     }
-  }
-  if (params.journal.appliedManifestRef) {
-    throw new Error("Cloud workspace result is already applied and awaits fence acceptance");
   }
   const root = await fs.realpath(params.root);
   validateJournalSnapshot(params.journal);

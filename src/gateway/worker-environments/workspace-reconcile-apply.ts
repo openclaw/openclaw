@@ -34,7 +34,6 @@ import type {
   WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
 import {
-  ConcurrentWorkspacePathError,
   createWorkspaceManifestVerifier,
   preflightWorkspaceApply,
   prepareWorkspaceDirectoryChanges,
@@ -231,9 +230,7 @@ export async function applyStagedWorkerWorkspace(params: {
     await params.freezeTarget?.();
     const confirmedPreflight = await inspectPaths();
     if (!isDeepStrictEqual(confirmedPreflight, preflight)) {
-      throw new ConcurrentWorkspacePathError(
-        "Gateway workspace changed while cloud reconciliation was being prepared",
-      );
+      throw new Error("Gateway workspace changed while cloud reconciliation was being prepared");
     }
     // Revalidate before mutation, not after applying our own newly admitted paths.
     await assertInputOwnership();

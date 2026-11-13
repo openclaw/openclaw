@@ -79,6 +79,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/tools/sessions-tool.self-archive.test.ts",
   "src/agents/tools/terminal-tool.incognito.test.ts",
   // Physical admission and descriptor custody belong to the application host, not an unhosted test Worker.
+  "src/gateway/agent-list.test.ts",
   "src/infra/database-engine/cold-restoration.conformance.test.ts",
   "src/infra/database-engine/pending-input-source.conformance.test.ts",
   "src/infra/database-engine/backup-runs.conformance.test.ts",
@@ -140,6 +141,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-state-db-open.postgres.test.ts",
   "src/state/openclaw-state.worker.settlement.test.ts",
   "src/state/openclaw-state-read.worker.test.ts",
+  "src/state/openclaw-state-read.gateway-owner.test.ts",
   "src/state/openclaw-agent-db.postgres.test.ts",
   "src/state/openclaw-agent-doctor-media.postgres.test.ts",
   "src/state/openclaw-agent-db-engine.postgres.test.ts",

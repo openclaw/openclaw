@@ -19,7 +19,16 @@ vi.mock("node:fs", async (importOriginal) => ({
   readdirSync: proc.entries,
   readFileSync: proc.stat,
 }));
-vi.mock("node:fs/promises", () => ({ readdir: proc.entries, readFile: proc.stat }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const readFile = async (pathname: string) => proc.stat(pathname);
+  return {
+    ...actual,
+    readdir: proc.entries,
+    readFile,
+    default: { ...actual.default, readdir: proc.entries, readFile },
+  };
+});
 vi.mock("@openclaw/proc-safe/reaper", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/proc-safe/reaper")>()),
   isSupported: proc.supported,

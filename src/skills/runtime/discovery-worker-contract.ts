@@ -1,9 +1,7 @@
 import type { FsSafeNativeMode } from "@openclaw/fs-safe/config";
 import type { FsSafeErrorCode, FsSafeErrorDetails } from "@openclaw/fs-safe/errors";
-import type {
-  resolveSandboxFsPreparation,
-  SandboxFsPreparation,
-} from "../../agents/sandbox/fs-paths.js";
+import type { SandboxFsPreparation } from "../../agents/sandbox/fs-bridge.types.js";
+import type { resolveSandboxFsPreparation } from "../../agents/sandbox/fs-paths.js";
 import type {
   SandboxMountPlan,
   SandboxMountPlanInput,

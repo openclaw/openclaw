@@ -29,7 +29,6 @@ import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprint
 import {
   executeLocalWorkspaceManifestRead,
   readLocalWorkspaceManifestRows,
-  type LocalWorkspaceManifestAction,
 } from "./local-workspace-manifest-scan.js";
 import {
   createLocalWorkspaceManifestTree,
@@ -40,6 +39,7 @@ import {
   readLocalWorkspaceProjectionInDatabase,
 } from "./local-workspace-store.kernel.js";
 import { localWorkspaceProjectionFixture } from "./local-workspace-store.test-support.js";
+import type { LocalWorkspaceManifestAction } from "./local-workspace-store.types.js";
 import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);

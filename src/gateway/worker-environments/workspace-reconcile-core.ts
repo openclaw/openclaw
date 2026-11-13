@@ -36,8 +36,6 @@ export {
   type WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
 
-export class ConcurrentWorkspacePathError extends Error {}
-
 export type WorkerWorkspaceApplyResult = {
   manifestRef: string;
   manifest: WorkerWorkspaceManifest;
@@ -58,9 +56,7 @@ export async function assertWorkspaceMatchesManifest(params: {
   );
   for (const entry of expectedNodes) {
     if (!sameEntry(actual.get(entry.path), entry)) {
-      throw new ConcurrentWorkspacePathError(
-        `Gateway workspace changed after cloud dispatch: ${entry.path}`,
-      );
+      throw new Error(`Gateway workspace changed after cloud dispatch: ${entry.path}`);
     }
   }
 }
@@ -131,7 +127,7 @@ export async function assertActualWorkspaceManifest(params: {
 }): Promise<void> {
   const actual = await captureWorkspaceManifestReference(params);
   if (actual !== params.expectedRef) {
-    throw new ConcurrentWorkspacePathError("Gateway workspace changed after cloud reconciliation");
+    throw new Error("Gateway workspace changed after cloud reconciliation");
   }
 }
 
@@ -252,7 +248,7 @@ export async function assertWorkspaceInputOwnership({
       continue;
     }
     if (changesMarker || (isNew && (await workspaceRoot.exists(entryPath)))) {
-      throw new ConcurrentWorkspacePathError(
+      throw new Error(
         `Cloud input conflicts with an unowned Gateway directory: ${directory}. Keep the project directory unchanged and reattach the input.`,
       );
     }

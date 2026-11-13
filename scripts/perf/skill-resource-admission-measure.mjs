@@ -143,7 +143,7 @@ try {
   }
   const stat = fs.statSync;
   const realpath = fs.realpathSync.native;
-  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves each live receiver.
+  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the live pool receiver; finally restores this exact method.
   const run = WorkerTaskPool.prototype.run;
   let stats = 0;
   let realpaths = 0;

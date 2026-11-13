@@ -1,8 +1,8 @@
 import type {
-  LocalWorkspacePausePhase,
   LocalWorkspacePauseReason,
   quiesceLocalWorkspace,
 } from "../../agents/sandbox/local-workspace-quiescence.js";
+import type { LocalWorkspacePausePhase } from "../../agents/sandbox/types.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { localWorkspaceProjectionPath } from "./local-workspace-checkout.js";

@@ -4,7 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prunePluginNativeCaptureDirectories } from "./plugin-source-capture-directory.js";
-import { sweepPluginSourceCapturesForTest } from "./plugin-source-capture-directory.test-support.js";
+import {
+  interceptPluginCaptureReclamation,
+  sweepPluginSourceCapturesForTest,
+} from "./plugin-source-capture-directory.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const getuidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
@@ -55,22 +58,26 @@ it.each([
       fs.writeFileSync(path.join(root, "source.cjs"), "producer-owned bytes");
     }
     const lstat = fsPromises.lstat.bind(fsPromises);
-    const lstatSync = fs.lstatSync.bind(fs);
-    const inspected = new Set<number | bigint>();
-    const applyFixtureUid = <T extends fs.Stats | fs.BigIntStats>(target: unknown, stat: T): T => {
-      if ((typeof target === "string" && roots.includes(target)) || inspected.has(stat.ino)) {
-        Object.assign(stat, { uid: changed && inspected.has(stat.ino) ? peerUid : captureUid });
-        inspected.add(stat.ino);
+    vi.spyOn(fsPromises, "lstat").mockImplementation(async (target, options) => {
+      const stat = await lstat(target, options);
+      if (typeof target === "string" && roots.includes(target)) {
+        Object.assign(stat, { uid: captureUid });
       }
       return stat;
-    };
-    vi.spyOn(fsPromises, "lstat").mockImplementation(async (target, options) =>
-      applyFixtureUid(target, await lstat(target, options)),
-    );
-    vi.spyOn(fs, "lstatSync").mockImplementation((target, options) => {
-      const stat = lstatSync(target, options);
-      return stat && applyFixtureUid(target, stat);
     });
+    interceptPluginCaptureReclamation(`
+      import fs from "node:fs";
+      Object.defineProperty(process, "getuid", { configurable: true, value: () => ${uid} });
+      const roots = ${JSON.stringify(roots)};
+      const lstat = fs.lstatSync.bind(fs);
+      fs.lstatSync = (target, options) => {
+        const stat = lstat(target, options);
+        if (stat && typeof target === "string" && roots.includes(target)) {
+          Object.assign(stat, { uid: ${changed ? peerUid : captureUid} });
+        }
+        return stat;
+      };
+    `);
     await sweepPluginSourceCapturesForTest(stateDir);
     for (const root of roots) {
       expect(fs.existsSync(root), root).toBe(!removed);
