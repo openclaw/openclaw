@@ -369,28 +369,17 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   const subagent = isSubagentSessionKey(attempt.sessionKey);
   let subagentInstructions: string | undefined;
   if (subagent && attempt.sessionKey) {
-    const [
-      { getSubagentDepthFromSessionStoreInWorker },
-      { getLatestSubagentRunByChildSessionKey },
-    ] = await Promise.all([
-      import("../../subagents/spawn/subagent-depth.js"),
-      import("../../subagents/registry/subagent-registry-read.js"),
-    ]);
-    const [childDepth, recordedRun] = await Promise.all([
-      preparedSessionEntry?.spawnDepth ??
-        getSubagentDepthFromSessionStoreInWorker(attempt.sessionKey, {
+    const { getSubagentDepthFromSessionStoreInWorker } =
+      await import("../../subagents/spawn/subagent-depth.js");
+    // Durable inputs only, so every turn of the child renders the same standing policy.
+    subagentInstructions = buildSubagentStandingInstructions({
+      childDepth:
+        preparedSessionEntry?.spawnDepth ??
+        (await getSubagentDepthFromSessionStoreInWorker(attempt.sessionKey, {
           cfg: attempt.config,
           agentId: params.setup.sessionAgentId,
-        }),
-      getLatestSubagentRunByChildSessionKey(attempt.sessionKey, params.setup.sessionAgentId),
-    ]);
-    // Ordinary launches precede registry registration; their cleanup flag carries
-    // the producer's mode until the retained child record is available.
-    subagentInstructions = buildSubagentStandingInstructions({
-      childDepth,
+        })),
       maxSpawnDepth: attempt.config?.agents?.defaults?.subagents?.maxSpawnDepth,
-      spawnMode:
-        recordedRun?.spawnMode ?? (attempt.cleanupBundleMcpOnRunEnd === false ? "session" : "run"),
     });
   }
   // The spawn envelope also serves harnesses that do not render embedded prompts.

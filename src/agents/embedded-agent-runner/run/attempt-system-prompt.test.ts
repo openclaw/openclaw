@@ -289,7 +289,9 @@ describe("buildAttemptSystemPrompt", () => {
     });
   });
 
-  it.each(["conversation", "ephemeral", "persistent", "leaf"] as const)(
+  // "unrecorded": a persistent child whose later turn finds no registry record (archived or not
+  // yet written); its standing policy must not fall back to another spawn mode.
+  it.each(["conversation", "ephemeral", "persistent", "unrecorded", "leaf"] as const)(
     "preserves the provider prefix and standing policy across %s follow-ups",
     async (kind) =>
       withOpenClawTestState({ label: `suffix-${kind}` }, async () => {
@@ -297,7 +299,8 @@ describe("buildAttemptSystemPrompt", () => {
         setRuntimeConfigSnapshot(config);
         const childSessionKey = `agent:main:subagent:prefix-${kind}`;
         const childDepth = kind === "leaf" ? 2 : 1;
-        const spawnMode = kind === "persistent" ? "session" : "run";
+        const persistent = kind === "persistent" || kind === "unrecorded";
+        const spawnMode = persistent ? "session" : "run";
         if (kind !== "conversation") {
           await upsertSessionEntryCore(
             { sessionKey: childSessionKey },
@@ -311,7 +314,7 @@ describe("buildAttemptSystemPrompt", () => {
         const requests: Record<string, unknown>[] = [];
         const messages: Parameters<typeof convertToLlm>[0] = [];
         const child = buildSubagentSpawnEnvelope({
-          completionMode: kind === "persistent" ? "thread-direct" : "collector",
+          completionMode: persistent ? "thread-direct" : "collector",
           spawnMode,
           childDepth,
           maxSpawnDepth: 2,
@@ -319,7 +322,7 @@ describe("buildAttemptSystemPrompt", () => {
           childSessionKey,
         });
         for (const turn of ["operator", "completion"]) {
-          if (kind !== "conversation" && turn === "completion") {
+          if (kind !== "conversation" && kind !== "unrecorded" && turn === "completion") {
             const { addSubagentRunForTests } =
               await import("../../subagents/registry/subagent-registry.test-helpers.js");
             onTestFinished(async () => {
@@ -389,8 +392,12 @@ describe("buildAttemptSystemPrompt", () => {
             ]) {
               expect(system).toContain(rule);
             }
-            expect(system.includes("4. Ephemeral: termination after completion is normal.")).toBe(
-              spawnMode === "run",
+            // The spawn mode is one launch's fact: it rides in the launch message, not the prefix.
+            expect(system).not.toContain("Ephemeral: termination after completion is normal.");
+            expect(child.message).toContain(
+              spawnMode === "run"
+                ? "Ephemeral: termination after completion is normal."
+                : "This subagent session is persistent",
             );
             expect(system).not.toContain("apply only to this turn");
             expect(system).not.toContain("Inspect synthetic inputs.");
