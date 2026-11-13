@@ -92,4 +92,5 @@ One-time per machine; each step ends on a check.
    ```
 
    Check: `mobilebuildmcp simulator list-schemes` lists `OpenClaw`, and `mobilebuildmcp simulator build` succeeds.
+
 5. The `ios-sim` Gateway profile, with the Gateway stopped (`oc` = `node openclaw.mjs --profile ios-sim`): `oc config set gateway.mode local`, `oc config set gateway.port 19031`, `oc config set gateway.auth.mode token`, `oc config set gateway.auth.token "$(openssl rand -hex 24)"`. Chat replies need a model for its `main` agent: `oc models auth login` or `add` with test credentials. Check: the Gateway starts, and `pnpm ios:sim:pair` ends on the chat screen.
