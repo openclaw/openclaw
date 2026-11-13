@@ -18,6 +18,7 @@ import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 import { createTelegramIngressMonitor } from "./telegram-ingress-drain.js";
 import { openTelegramIngressQueue, resolveTelegramUpdateId } from "./telegram-ingress-spool.js";
+import { getPreparedTelegramWidgetQuery } from "./widgets/widget-query-context.js";
 import { recordTelegramSentWidget } from "./widgets/widget-store.js";
 
 async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
@@ -249,6 +250,85 @@ describe("telegram ingress spool ordering", () => {
       } finally {
         releaseTap();
         await monitor.stop();
+      }
+    });
+  });
+  it("restores a queued widget tap's topic from the spool after a restart", async () => {
+    await withTempState(async (stateDir) => {
+      const dm = { id: 7, type: "private" as const, first_name: "Ada" };
+      const widget = { name: "vote", title: "Vote", sourceHash: "h" };
+      await recordTelegramSentWidget({
+        accountId: "acct",
+        chatId: "7",
+        messageId: 50,
+        widget: { ...widget, messageThreadId: 42 },
+      });
+      const botInfo = { id: 1, is_bot: true, first_name: "Bot", has_topics_enabled: true } as never;
+      const startMonitor = (
+        dispatch: Parameters<typeof createTelegramIngressMonitor>[0]["dispatch"],
+      ) =>
+        createTelegramIngressMonitor({
+          queue: openTelegramIngressQueue({ accountId: "acct", stateDir }),
+          getConfig: () => ({}) as OpenClawConfig,
+          accountId: "acct",
+          botInfo,
+          dispatch,
+        });
+      // The first process admits the tap and a later topic message, then stops mid-dispatch.
+      const firstDispatched: (number | null)[] = [];
+      const { promise: interrupted, resolve: interrupt } = createDeferred<void>();
+      const first = startMonitor(async (update) => {
+        firstDispatched.push(resolveTelegramUpdateId(update));
+        await interrupted;
+        return { kind: "failed-retryable", error: new Error("stopped before the tap turn") };
+      });
+      first.start();
+      await first.waitForIdle();
+      await first.admit({
+        update_id: 20,
+        widget_query: { id: "q20", from: sender, chat: dm, message_id: 50, data: "vote:v" },
+      });
+      await first.admit({
+        update_id: 21,
+        message: {
+          chat: dm,
+          from: sender,
+          message_id: 60,
+          message_thread_id: 42,
+          is_topic_message: true,
+          date: 0,
+          text: "/new",
+        },
+      });
+      await vi.waitFor(() => expect(firstDispatched).toEqual([20]));
+      const stopped = first.stop();
+      interrupt();
+      await stopped;
+      // A later record change must not move the queued tap: its topic comes from the spool.
+      await recordTelegramSentWidget({
+        accountId: "acct",
+        chatId: "7",
+        messageId: 50,
+        widget: { ...widget, messageThreadId: 99 },
+      });
+
+      const dispatched: { updateId: number | null; topic?: number }[] = [];
+      const restarted = startMonitor(async (update) => {
+        dispatched.push({
+          updateId: resolveTelegramUpdateId(update),
+          topic: getPreparedTelegramWidgetQuery(update as object)?.messageThreadId,
+        });
+        return { kind: "completed" };
+      });
+      restarted.start();
+      try {
+        await vi.waitFor(() => expect(dispatched).toHaveLength(2), { timeout: 15_000 });
+        expect(dispatched).toEqual([
+          { updateId: 20, topic: 42 },
+          { updateId: 21, topic: undefined },
+        ]);
+      } finally {
+        await restarted.stop();
       }
     });
   });
