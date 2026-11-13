@@ -637,7 +637,12 @@ it("selects active startup orphans without changing baseline recovery eligibilit
       settled: { status: "done" },
       terminal: { restartRecoveryRuns: runs, restartRecoveryTerminalRunIds: ["previous-run"] },
       tombstoned: {
-        mainRestartRecovery: { chargedAttempts: 0, tombstone: { reason: "exhausted" } },
+        mainRestartRecovery: {
+          cycleId: "tombstoned-cycle",
+          revision: 1,
+          chargedAttempts: 0,
+          tombstone: { reason: "exhausted" },
+        },
       },
       "pending-delivery": { status: "done", restartRecoveryDeliveryRunId: "delivery-run" },
       "pending-execution": { status: "done", restartRecoveryRuns: runs },
