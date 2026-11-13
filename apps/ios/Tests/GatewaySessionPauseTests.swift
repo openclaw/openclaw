@@ -46,7 +46,8 @@ import Testing
             pauseReconnect: true)
         let rateLimit = try Self.rateLimitProblem()
 
-        #expect(GatewayConnection(node: .paused(pairing), operator: .connecting).isPausedOnlyForPairing)
+        #expect(GatewayConnection(node: .paused(pairing), operator: .connecting(reconnect: true))
+            .isPausedOnlyForPairing)
         #expect(GatewayConnection(node: .paused(pairing), operator: .paused(pairing)).isPausedOnlyForPairing)
         #expect(!GatewayConnection(node: .paused(pairing), operator: .paused(rateLimit)).isPausedOnlyForPairing)
         #expect(!GatewayConnection(node: .paused(rateLimit), operator: .idle).isPausedOnlyForPairing)
@@ -133,8 +134,9 @@ import Testing
             canRetryWithDeviceToken: false)))
     }
 
+    /// A real node session against a local Gateway fixture that issues no operator credential.
     @MainActor
-    private static func withFixtureGateway(
+    static func withFixtureGateway(
         connectFailures: [Int: NativeGatewayWebSocketFixture.ConnectFailure] = [:],
         _ body: (NativeGatewayWebSocketFixture, NodeAppModel) async throws -> Void) async throws
     {

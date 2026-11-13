@@ -726,7 +726,7 @@ export async function* executeClaudeCli(
             throw new Error("The Claude CLI turn is no longer active.");
           }
           turn.interrupted = true;
-          // The host requests this only after consuming a successful yield tool result.
+          // The host requests this only after a consumed yield or final source-reply result.
           // Native interrupt would persist a false user stop in the resumable transcript.
           turn.sawTerminalResult = true;
           // Native output owns the session ID; the input ID may still name a fork's parent.

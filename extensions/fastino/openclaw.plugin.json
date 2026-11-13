@@ -44,9 +44,6 @@
     }
   ],
   "modelCatalog": {
-    "discovery": {
-      "fastino": "runtime"
-    },
     "providers": {
       "fastino": {
         "baseUrl": "https://api.fastino.ai/v1",

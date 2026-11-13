@@ -1,2 +1,0 @@
-4
-# Unchanged replay extraction work-count regression alongside pairing reuse proof.

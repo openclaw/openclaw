@@ -385,6 +385,8 @@ describe("GitHub publication transcript reporting", () => {
         const events = await loadTranscriptEvents(identity);
         const messages = reportMessages(events, result.requestId, true);
         expect(messages).toHaveLength(1);
+        // A deferred report may be the only result after the agent has replied.
+        expect(messages[0]).not.toMatchObject({ message: { phase: "commentary" } });
         expect(JSON.stringify(messages[0])).toContain(visibleText);
         expect(markReportedAsync).toHaveBeenCalledWith(result.requestId);
       });

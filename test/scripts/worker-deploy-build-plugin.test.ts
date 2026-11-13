@@ -163,6 +163,9 @@ describe("worker deploy build plugin", () => {
             transform(code, id) {
               if (id === entrySource) {
                 return `${code}
+export { getLogger, setLoggerOverride } from "../logging/logger.js";
+export { fileLogTransport } from "../logging/logger-file-transport.js";
+export { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 export { highlight, supportsLanguage } from "../agents/utils/syntax-highlight.js";
 export { createOwnedStdioProcess, closeOwnedStdioProcess } from "../process/owned-stdio.js";
 export { explainShellCommand } from "../infra/command-explainer/extract.js";
@@ -226,6 +229,45 @@ export { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";`;
           await bundle[Symbol.asyncDispose]();
         }
       }
+    });
+
+    it("persists logs through the file worker in a relocated archive", async () => {
+      const root = tempDirs.make("openclaw-worker-file-log-");
+      const relocated = path.join(root, "bundle");
+      fs.mkdirSync(relocated);
+      await tar.extract({ file: preparedArchive, cwd: relocated });
+      const result = await runNodeScript(
+        [
+          "--input-type=module",
+          "--eval",
+          `
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const entry = process.argv[1];
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
+const { getLogger, setLoggerOverride, fileLogTransport, drainGlobalSingletonLifecycleState } = await import(pathToFileURL(entry).href);
+const file = path.join(process.cwd(), "portable.log");
+try {
+  setLoggerOverride({ level: "info", file });
+  getLogger().info("relocated file log persisted");
+  await fileLogTransport.flush();
+  assert.match(fs.readFileSync(file, "utf8"), /relocated file log persisted/);
+} finally {
+  await drainGlobalSingletonLifecycleState();
+}
+console.log("relocated file log persisted");
+`,
+          path.join(relocated, "worker.mjs"),
+        ],
+        workerEnv(root),
+        30_000,
+        { cwd: root },
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe("relocated file log persisted");
     });
 
     it("denies workspace exec without a Gateway transcript worker in the archive", async () => {

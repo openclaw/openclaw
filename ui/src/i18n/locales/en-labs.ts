@@ -40,6 +40,11 @@ const enLabs = {
       description:
         "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls; turning it off disables the global default.",
     },
+    usageRankedToolIndex: {
+      title: "Usage-ranked tool index",
+      description:
+        "Prefer frequently and recently used tools in Code Mode and Tool Search prompt indexes. Off by default. Stores tool IDs, scores, and timestamps for 90 days in operator-owned storage, excluding incognito sessions. Changes apply at the next prompt-prefix boundary. Inspect, import, or reset with openclaw tools usage.",
+    },
     composerPredictions: {
       title: "Composer predictions",
       description:

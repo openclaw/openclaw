@@ -117,15 +117,17 @@ function buildMessages(params: {
     );
 }
 
-export function finalizePluginLlmCompletion(params: {
+export async function finalizePluginLlmCompletion(params: {
   cfg: OpenClawConfig;
+  assertCurrent: () => void;
   hostPluginId?: string;
   suppressUsage?: boolean;
   rawUsage: unknown;
   result: Omit<LlmCompleteResult, "usage">;
-}): LlmCompleteResult {
-  const usage = finalizePluginModelUsage({
+}): Promise<LlmCompleteResult> {
+  const usage = await finalizePluginModelUsage({
     cfg: params.cfg,
+    assertCurrent: params.assertCurrent,
     hostPluginId: params.hostPluginId,
     suppressUsage: params.suppressUsage,
     rawUsage: params.rawUsage,
@@ -149,6 +151,7 @@ export function finalizePluginLlmCompletion(params: {
         usage: recordedUsage,
       }),
   });
+  params.assertCurrent();
   return { ...params.result, usage };
 }
 
@@ -274,9 +277,9 @@ export function createRuntimeLlm(
           operatorAuthority,
           assertCurrent,
         });
-        assertCurrent();
         return finalizePluginLlmCompletion({
           cfg,
+          assertCurrent,
           hostPluginId: pluginPolicyId,
           rawUsage: result.usage,
           result: {
@@ -336,6 +339,7 @@ export function createRuntimeLlm(
           throw new Error(`Plugin LLM completion failed: ${preparation.error}`);
         }
         await using prepared = preparation;
+        assertCurrent();
         let assertPreparedCurrent = assertCurrent;
 
         const work = new AsyncWorkScope();
@@ -418,6 +422,7 @@ export function createRuntimeLlm(
                 .join("");
               return finalizePluginLlmCompletion({
                 cfg,
+                assertCurrent: assertPreparedCurrent,
                 hostPluginId: pluginPolicyId,
                 // Provider failures resolve as messages; only visible successful output owns usage.
                 suppressUsage:

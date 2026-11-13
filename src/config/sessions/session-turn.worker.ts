@@ -418,7 +418,9 @@ export function applySessionTurn<T>(
                     {
                       ...committed.identity,
                       pendingArchiveRecovery: false,
-                      membershipInvalidatedKeys: [],
+                      membershipInvalidatedKeys: committed.membershipChanged
+                        ? [scope.sessionKey]
+                        : [],
                       maintenancePlans: [],
                     },
                     database,

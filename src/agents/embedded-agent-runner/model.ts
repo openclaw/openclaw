@@ -1,10 +1,9 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
-import { hasKnownPricing } from "../../model-catalog/pricing.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { providerOwnsDynamicModelPreparation } from "../../plugins/provider-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
-import { hasAuthoredProviderModelCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveDefaultAgentDir } from "../agent-scope.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
@@ -72,14 +71,20 @@ type AsyncModelResolutionOptions = {
  * price. Accepted edge: one authored row keeps that provider's other priced rows on their bundled
  * snapshot, as before.
  */
-function withResolvedPricing(model: Model, cfg: OpenClawConfig | undefined, agentDir: string) {
-  const owner = { provider: model.provider, config: cfg, agentDir };
-  if (hasKnownPricing(model.cost) && hasAuthoredProviderModelCost(owner)) {
-    return model;
-  }
-  const cost = resolveModelCostConfig({ ...owner, model: model.id });
+async function withResolvedPricing(
+  model: Model,
+  cfg: OpenClawConfig | undefined,
+  agentDir: string,
+) {
+  const cost = await resolveModelCostConfig({
+    provider: model.provider,
+    model: model.id,
+    config: cfg,
+    agentDir,
+    runtimeCost: model.cost,
+  });
   // The owner answers all-zero only for authored or publisher-validated free pricing.
-  return cost ? { ...model, cost } : model;
+  return cost && cost !== model.cost ? { ...model, cost } : model;
 }
 
 /** Creates isolated model/auth stores for harnesses that own model discovery themselves. */
@@ -240,8 +245,14 @@ export async function resolveModelAsync(
           : undefined;
       options?.assertCurrent?.();
       if (suppressedRuntimeModel) {
+        const pricedModel = await withResolvedPricing(
+          suppressedRuntimeModel,
+          cfg,
+          resolvedAgentDir,
+        );
+        options?.assertCurrent?.();
         return {
-          model: withResolvedPricing(suppressedRuntimeModel, cfg, resolvedAgentDir),
+          model: pricedModel,
           logicalRef,
           authStorage,
           modelRegistry,
@@ -342,8 +353,10 @@ export async function resolveModelAsync(
       }
     }
     if (model) {
+      const pricedModel = await withResolvedPricing(model, cfg, resolvedAgentDir);
+      options?.assertCurrent?.();
       return {
-        model: withResolvedPricing(model, cfg, resolvedAgentDir),
+        model: pricedModel,
         logicalRef,
         authStorage,
         modelRegistry,

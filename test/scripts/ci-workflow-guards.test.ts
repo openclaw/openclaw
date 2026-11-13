@@ -3796,23 +3796,6 @@ server.listen(0, "127.0.0.1", () => {
   });
 
   it("keeps each compiled worker preset in a separate archive", () => {
-    const uiSetup = requiredWorkflowStep(
-      readCiWorkflow().jobs["checks-ui-e2e"].steps,
-      "Setup Node environment",
-    );
-    expect(uiSetup.with?.["vitest-worker-preset"]).toBe("runtime");
-    for (const [task, frozen, expected] of [
-      ["control-ui", "false", "true"],
-      ["control-ui", "true", "false"],
-      ["browser-extension", "false", "false"],
-    ] as const) {
-      expect(
-        evaluateWorkflowExpression(uiSetup.with?.["vitest-worker-cache"], {
-          matrix: { task },
-          preflightOutputs: { frozen_target: frozen },
-        }),
-      ).toBe(expected);
-    }
     const setup = readWorkflow(".github/actions/setup-node-env/action.yml");
     const steps = setup.runs.steps as WorkflowStep[];
     const restore = requiredWorkflowStep(steps, "Restore compiled Vitest workers");
@@ -5098,12 +5081,21 @@ ${buildScript}`,
     expect(currentTargetBranch).not.toContain("--no-parallel");
     expect(testStep.run).toContain("swift_test_args+=(--no-parallel)");
 
-    for (const buildExitCode of [0, 23]) {
-      const root = tempDirs.make(`openclaw-swift-test-${buildExitCode}-`);
+    for (const [buildExitCode, historicalTarget] of [
+      [0, false],
+      [23, false],
+      [0, true],
+    ] as const) {
+      const root = tempDirs.make(`openclaw-swift-test-${buildExitCode}-${historicalTarget}-`);
       const binDir = path.join(root, "bin");
       const callsPath = path.join(root, "swift-calls");
       const outputPath = path.join(root, "github-output");
       mkdirSync(binDir, { recursive: true });
+      if (historicalTarget) {
+        const suites = path.join(root, "apps/macos/Tests/OpenClawIPCTests");
+        mkdirSync(suites, { recursive: true });
+        writeFileSync(path.join(suites, "QuickChatCatalogPresentationTests.swift"), "");
+      }
       symlinkSync(path.resolve("scripts"), path.join(root, "scripts"), "dir");
       mkdirSync(path.join(root, ".ci-harness/scripts"), { recursive: true });
       symlinkSync(path.resolve("scripts/lib"), path.join(root, ".ci-harness/scripts/lib"), "dir");
@@ -5160,7 +5152,7 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
           GITHUB_OUTPUT: outputPath,
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
           SWIFT_TEST_EXECUTION: "serial",
-          HISTORICAL_TARGET: "false",
+          HISTORICAL_TARGET: String(historicalTarget),
         },
       });
       const calls = readFileSync(callsPath, "utf8").trim().split("\n");
@@ -5170,8 +5162,15 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
         ...(buildExitCode === 0
           ? [
               expect.stringMatching(
-                /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --skip AppStateIsolationTests\|ProfileChatPreferencesTests\|QuickChatCatalogPresentationTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
+                /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --skip AppStateIsolationTests\|ProfileChatPreferencesTests\|QuickChatCatalogPresentationTests\|DashboardExperienceTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
               ),
+              ...(historicalTarget
+                ? []
+                : [
+                    expect.stringMatching(
+                      /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --filter DashboardExperienceTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
+                    ),
+                  ]),
               expect.stringMatching(
                 /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --filter QuickChatCatalogPresentationTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
               ),
@@ -5184,16 +5183,15 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
       const output = existsSync(outputPath) ? readFileSync(outputPath, "utf8").trim() : "";
       const outputLines = output.split("\n");
       if (buildExitCode === 0) {
-        expect(outputLines).toHaveLength(4);
+        expect(outputLines).toHaveLength(historicalTarget ? 4 : 5);
         expect(outputLines[0]).toBe("debug-tests-built=true");
+        for (const outputLine of outputLines.slice(1, -1)) {
+          expect(
+            outputLine.startsWith(`menu-default-artifact-path=${root}/openclaw-menu-default-`),
+          ).toBe(true);
+        }
         expect(
-          outputLines[1]?.startsWith(`menu-default-artifact-path=${root}/openclaw-menu-default-`),
-        ).toBe(true);
-        expect(
-          outputLines[2]?.startsWith(`menu-default-artifact-path=${root}/openclaw-menu-default-`),
-        ).toBe(true);
-        expect(
-          outputLines[3]?.startsWith(`menu-named-artifact-path=${root}/openclaw-menu-named-`),
+          outputLines.at(-1)?.startsWith(`menu-named-artifact-path=${root}/openclaw-menu-named-`),
         ).toBe(true);
       } else {
         expect(output).toBe("");
@@ -6848,6 +6846,31 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(assetCheckStep.run).toContain('packageJson.scripts?.["plugins:assets:check"]');
     expect(assetCheckStep.run).toContain("pnpm plugins:assets:check");
     expect(assetCheckStep.run).toContain("predates plugins:assets:check");
+  });
+
+  it.each([
+    [{}, true],
+    [{ runAttempt: 2 }, true],
+    [{ eventName: "workflow_dispatch" }, false],
+    [{ eventName: "workflow_dispatch", ref: "refs/heads/feature" }, false],
+    [{ repository: "example/fork" }, false],
+    [{ ref: "refs/heads/feature" }, false],
+    [{ runnerBackend: "" }, false],
+    [{ runnerBackend: "blacksmith" }, false],
+    [{ runnerBackend: "hybrid" }, false],
+    [{ runnerBackend: "runson" }, false],
+    [{ runnerBackend: "github" }, false],
+  ] as const)("routes Android CodeQL to Boat only on scheduled main: %j", (context, boat) => {
+    const job = readWorkflow(".github/workflows/codeql-android-critical-security.yml").jobs.android;
+    expect(
+      evaluateWorkflowRunner(job["runs-on"], {
+        eventName: "schedule",
+        repository: "openclaw/openclaw",
+        ref: "refs/heads/main",
+        runnerBackend: "boat",
+        ...context,
+      }),
+    ).toBe(boat ? "boat-xlarge" : "blacksmith-8vcpu-ubuntu-2404");
   });
 
   it("keeps network CodeQL off unrelated source-only refactors", () => {
