@@ -131,7 +131,9 @@ function readerConfig(scopes: GatewayOperatorRoleDefinition["scopes"], withDenie
   };
   return {
     agents: { defaults: { model: "fixture/a" } },
-    gateway: { roles: { definitions: { reader, ...(withDenied ? { denied } : {}) } } },
+    gateway: {
+      roles: { default: "reader", definitions: { reader, ...(withDenied ? { denied } : {}) } },
+    },
   } satisfies OpenClawConfig;
 }
 function registerProof(

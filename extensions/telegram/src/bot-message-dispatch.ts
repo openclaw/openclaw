@@ -320,11 +320,17 @@ export const dispatchTelegramMessage = async (
   try {
     turnDispatched = await runTelegramDispatchTurn(turn);
   } catch (err) {
-    turn.dispatchError = err;
     turn.previewLifecycle.observeFailure(
       isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
     );
-    runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
+    // A flood-refused final that the delivery queue still holds is not a turn failure:
+    // recovery owns its resend, so it must not trigger the "something went wrong" fallback.
+    if (turn.finalHandoff === "delivery-queue" && err === turn.finalDeliveryError) {
+      logVerbose(`telegram: final reply queued for recovery after flood refusal: ${String(err)}`);
+    } else {
+      turn.dispatchError = err;
+      runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
+    }
   } finally {
     // Stop producers before draining drafts, finalizing accepted text, and cleaning previews.
     turn.progressCompositor.cancel();
@@ -369,7 +375,7 @@ export const dispatchTelegramMessage = async (
     (!suppressFailureFallback || turn.agentRunFailed) &&
     !turn.previewLifecycle.finalDelivered &&
     (terminalFailure ||
-      (!turn.progressContinuationAdopted &&
+      (turn.finalHandoff === undefined &&
         (deliverySummary.failedNonSilent > 0 ||
           (deliverySummary.skippedNonSilent > 0 && !turn.suppressSilentReplyFallback))));
   if (shouldSendFailureFallback) {
@@ -393,6 +399,7 @@ export const dispatchTelegramMessage = async (
     !deliverySummary.delivered &&
     !turn.suppressSilentReplyFallback &&
     !turn.finalDispatchClaimed &&
+    turn.finalHandoff === undefined &&
     turn.noVisibleReplyFallbackEligible
   ) {
     sentFallback = (await deliverFallback(turn, [{ text: EMPTY_RESPONSE_FALLBACK }], false))
@@ -412,13 +419,14 @@ export const dispatchTelegramMessage = async (
   const hasFinalResponse =
     intentionalNoResponse ||
     turn.previewLifecycle.finalDelivered ||
-    turn.progressContinuationAdopted ||
+    // The handoff owner delivers the final; do not re-run the turn.
+    turn.finalHandoff !== undefined ||
     sentFallback;
   const hasVisibleResponse = deliverySummary.delivered || sentFallback;
   const deliveryFailureWithoutFinalResponse =
     !intentionalNoResponse &&
     !turn.previewLifecycle.finalDelivered &&
-    !turn.progressContinuationAdopted &&
+    turn.finalHandoff === undefined &&
     (turn.previewLifecycle.finalFailed ||
       deliverySummary.skippedNonSilent > 0 ||
       deliverySummary.failedNonSilent > 0);

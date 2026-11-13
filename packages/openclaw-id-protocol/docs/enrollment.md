@@ -20,6 +20,12 @@ must perform (`disconnect`, `invalidate_tokens`, `cancel_runs`, `notify_owners`,
 | `tunnel`         | an authenticated device over the iroh tunnel                                                                             |
 | `mailbox`        | through Discovery                                                                                                        |
 
+The Gateway also runs the link ceremony (`linkClaw` and its first owner device) on
+`local_operator` for an administrator whose direct connection carries a verified personal
+identity (Tailscale, a trusted proxy, an enterprise principal), never for a shared token or
+password, a member or the tunnel. Every other `local_operator` write, re-bind and owner reset
+stay on direct loopback.
+
 ### Write rules
 
 | Write                                         | Function                                   | Allowed channels       | Notes                                                                                               |

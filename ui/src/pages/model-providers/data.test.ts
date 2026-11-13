@@ -9,6 +9,7 @@ import type {
 import {
   buildModelProviderCards,
   buildUnconfiguredProviderOptions,
+  listAgentUtilityOverrides,
   type DefaultModelSelection,
   modelCatalogRef,
   readModelProviderConfig,
@@ -467,4 +468,23 @@ it("uses Gateway presentation ahead of auth and usage labels, retaining provider
     providerIcon,
     modelCount: 1,
   });
+});
+
+it("lists agents with their own utility model or fallbacks and what they select", () => {
+  const config = {
+    agents: {
+      defaults: { utilityModel: "openai/gpt-5-mini" },
+      entries: {
+        forge: { utilityModel: { primary: "anthropic/claude-sonnet-4-6", fallbacks: ["a/b"] } },
+        quiet: { utilityModel: "" },
+        backup: { utilityModel: { fallbacks: ["a/b", "c/d"] } },
+      },
+    },
+  };
+  const agents = ["forge", "quiet", "backup", "scout"].map((id) => ({ id, name: id }));
+  expect(listAgentUtilityOverrides(config, agents)).toEqual([
+    { agentId: "forge", label: "forge", model: "anthropic/claude-sonnet-4-6", fallbacks: ["a/b"] },
+    { agentId: "quiet", label: "quiet", model: "", fallbacks: [] },
+    { agentId: "backup", label: "backup", model: undefined, fallbacks: ["a/b", "c/d"] },
+  ]);
 });

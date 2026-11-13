@@ -626,6 +626,24 @@ struct ChatStreamReplayTests {
         #expect(vm.liveText(vm.streamingAssistantText) == nil)
     }
 
+    @Test @MainActor func `a durable reply retires the live bubble while pacing holds its last words`() {
+        let transport = ScriptedChatTransport(history: replayHistory())
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer {
+            vm.detachTransport()
+            transport.finish()
+        }
+        let user = replayDurableMessage(role: "USER", text: "Again", timestamp: 100)
+        vm.updateStreamingAssistantText("The layout")
+        vm.updateStreamingAssistantText("The layout is ready.")
+        #expect(vm.liveAssistantTextShape == "The layout")
+
+        // The saved reply and the live bubble must never be on screen together.
+        let reply = replayDurableMessage(role: "ASSISTANT", text: "The layout is ready.", timestamp: 200)
+        vm.replaceMessages([user, reply])
+        #expect(vm.liveAssistantTextShape == nil)
+    }
+
     @Test @MainActor func `live text comparison preserves supported text types and block boundaries`() {
         let transport = ScriptedChatTransport(history: replayHistory())
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)

@@ -7,6 +7,14 @@ const enBrowser = {
     nativeTab: "App tab",
     remoteTab: "Agent browser tab",
     stop: "Stop loading",
+    takeControl: "Take control",
+    takeControlHint:
+      "Take control: the agent's browser actions wait until you release it or stop using the browser for 5 minutes",
+    releaseControl: "Release control",
+    releaseControlHint: "Release control: let the agent use this browser again",
+    controlReleased:
+      "Control was released after 5 minutes without input, or from another window. The agent can use this browser again.",
+    controlInvalidReply: "The browser returned an invalid control reply.",
     profile: "Browser profile: {profile}",
     title: "Browser",
     moreActions: "More actions",

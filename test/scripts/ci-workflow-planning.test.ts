@@ -13214,6 +13214,44 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it.each(["schedule", "pull_request"] as const)(
+    "assigns one separate CLI audit row only for schedules (%s)",
+    (eventName) => {
+      const cli = "test/vitest/vitest.cli-process.config.ts";
+      const unit = "test/vitest/vitest.unit-fast.config.ts";
+      const rows = [
+        { name: "first-cli", configs: [cli] },
+        { name: "unit", configs: [unit] },
+        { name: "mixed", configs: [unit, cli] },
+        { name: "second-cli", configs: [cli] },
+      ];
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName,
+        changedPaths: [],
+        nodeTestShards: rows.map(({ name, configs }) => ({
+          checkName: name,
+          shardName: name,
+          configs,
+          requiresDist: false,
+          runner: "ubuntu-24.04",
+        })),
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      const result: {
+        check_name: string;
+        audit_cli_observations?: boolean;
+        adaptive_observations?: boolean;
+      }[] = readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include;
+      expect(
+        result.filter((row) => row.audit_cli_observations).map((row) => row.check_name),
+      ).toEqual(eventName === "schedule" ? ["first-cli"] : []);
+      expect(
+        result.filter((row) => row.adaptive_observations).map((row) => row.check_name),
+      ).toEqual(["unit", "mixed"]);
+    },
+  );
+
   it.each([
     ...(["github", "hybrid", "blacksmith"] as const).map((runnerProfile) => ({
       label: `${runnerProfile} compact PR`,

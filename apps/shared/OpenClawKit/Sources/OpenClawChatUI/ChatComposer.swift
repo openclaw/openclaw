@@ -1648,6 +1648,7 @@ extension OpenClawChatComposer {
 
     private func sendDraftIfEnabled(queueMode: OpenClawChatQueueMode? = nil) {
         guard self.canSendMessage else { return }
+        ChatBehaviorProbe.mark("send")
         self.inputModel?.send(queueMode: queueMode)
     }
 }
