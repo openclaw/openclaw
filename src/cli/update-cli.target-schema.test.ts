@@ -391,7 +391,7 @@ describe("update-cli", () => {
     runtimeRecovery.stubNodeRuntime();
     // This case specifies a non-container system runtime, independent of the test host.
     runtimeRecovery.mockNonContainerSystemRuntime();
-    const root = await mockPackageInstallAtCaseDir("openclaw-runtime-target");
+    await mockPackageInstallAtCaseDir("openclaw-runtime-target");
     vi.mocked(cli.fetchNpmPackageTargetStatus)
       .mockResolvedValueOnce(packageTargetStatus({ nodeEngine: ">=999.0.0" }))
       .mockResolvedValue(packageTargetStatus({ nodeEngine: ">=22.19.0" }));
