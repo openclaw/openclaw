@@ -537,7 +537,12 @@ export async function hydrateAttachmentParamsForAction(params: {
         optimizeImages,
       });
     }
-    const media = await loadWebMedia(mediaSource, mediaOptions);
+    // Apply only the operator deny list; web_fetch's private-network opt-ins stay out of attachments.
+    const blockedHostnames = params.cfg.tools?.web?.fetch?.ssrfPolicy?.blockedHostnames;
+    const media = await loadWebMedia(mediaSource, {
+      ...mediaOptions,
+      ...(blockedHostnames?.length ? { ssrfPolicy: { blockedHostnames } } : {}),
+    });
     params.args.buffer = media.buffer.toString("base64");
     if (!contentTypeParam && media.contentType) {
       params.args.contentType = media.contentType;

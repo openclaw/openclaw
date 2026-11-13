@@ -307,6 +307,35 @@ describe("runMessageAction media behavior", () => {
         });
       }
     });
+
+    it("denies configured blockedHostnames before fetching host and sandbox attachment URLs", async () => {
+      await restoreRealMediaLoader();
+      const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+      setTestPlugin(
+        mediaPlugin("attachmentchat", ["sendAttachment"], handleAction),
+        "attachmentchat",
+      );
+      // A mocked fetch skips DNS, so this stays offline while hostname policy still runs.
+      const fetchMock = vi.fn(async () => new Response(onePixelPng));
+      vi.stubGlobal("fetch", fetchMock);
+      const cfg = {
+        channels: { attachmentchat: { enabled: true } },
+        tools: { web: { fetch: { ssrfPolicy: { blockedHostnames: ["blocked.example"] } } } },
+      };
+      const media = "https://blocked.example/pic.png";
+      try {
+        await expect(runAttachment({ media }, { cfg })).rejects.toThrow(/configured blocklist/);
+        await withSandbox(async (sandboxRoot) => {
+          await expect(runAttachment({ media }, { cfg, sandboxRoot })).rejects.toThrow(
+            /configured blocklist/,
+          );
+        });
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(handleAction).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
   });
 
   describe("reply hydration", () => {
