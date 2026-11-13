@@ -47,8 +47,10 @@ An agent-turn automation bound to a persistent session and carrying a server-aut
 
 A post-restart input uses the session's current authority and tool policy. It does
 not inherit an old browser connection or device presentation rights. Inline
-previews still require a connected client with `inline-widgets`; use the normal
-pinned-widget surface only when the current turn is authorized to do so.
+previews still require a connected client with `inline-widgets`. A session that
+retains its recorded widget capability can continue creating or updating pinned
+widgets without reconnecting a browser, subject to the current tool policy and
+board-write authority.
 
 A `status: "pinned"` tool result means the widget is on the session dashboard. Open that dashboard tab in the Control UI, or use `dashboard` with `action: "focus_tab"` and the saved widget's `tabId` when the tool is available. Widget hosting URLs are internal rendering resources and should not be opened in the Browser panel to substitute for widget presentation.
 

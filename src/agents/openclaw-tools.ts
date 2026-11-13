@@ -427,13 +427,14 @@ function* createOpenClawToolsSteps(
     denylist: explicitFactoryDenylist,
   });
   const widgetBoardSessionKey = scheduledTargets?.boardSessionKey ?? sessionKey;
-  // Admitted Control UI recovery and explicitly capped scheduled turns can
-  // keep authoring their durable board without claiming an inline renderer.
+  // A recorded widget surface can keep authoring its durable board on internal
+  // wakes. Tool policy and board authority still apply; this grants no renderer.
   // A run admitted with scheduled tool targets is a scheduled turn on every runtime.
   const scheduledCaller =
     options?.gatewayCallerScheduled === true || scheduledTargets !== undefined;
   const pinnedWidgetAuthoringAdmitted =
-    (options?.pinnedWidgetAuthoring === true ||
+    ((inlineWidgetClientAvailable && !scheduledCaller) ||
+      options?.pinnedWidgetAuthoring === true ||
       (scheduledCaller && scheduledWidgetExplicitlyAllowed)) &&
     !currentChannelWidgetPresenter &&
     Boolean(widgetBoardSessionKey) &&
