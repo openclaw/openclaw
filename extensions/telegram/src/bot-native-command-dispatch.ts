@@ -258,7 +258,29 @@ async function resolveTelegramCommandAuth(params: {
     logVerbose(`Blocked telegram command in DM ${chatId}: requireTopic=true but no topic present`);
     return null;
   }
+  const { effectiveAllow: dmAllow } = await resolveTelegramDmAllow({
+    cfg,
+    allowFrom: groupAllowOverride ?? params.allowFrom,
+    accountId,
+    senderId,
+    storeAllowFrom: isGroup ? [] : storeAllowFrom,
+    dmPolicy: effectiveDmPolicy,
+  });
+  // A DM sender the policy does not admit is ignored, as for ordinary messages (#181955).
+  // Owners and explicit command grants keep the refusal, as do admitted senders (#131408).
+  const ignoreUnadmittedDmSender =
+    !isGroup &&
+    !preContextCommandAccess.senderIsOwner &&
+    !preContextCommandAccess.authorizedByConfig &&
+    (effectiveDmPolicy === "disabled" ||
+      (effectiveDmPolicy === "allowlist" &&
+        !dmAllow.hasWildcard &&
+        !dmAllow.entries.includes(senderId)));
   const rejectNotAuthorized = async () => {
+    if (ignoreUnadmittedDmSender) {
+      logVerbose(`Dropped telegram native command in DM ${chatId} (sender not admitted)`);
+      return null;
+    }
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
       fn: () =>
@@ -319,14 +341,6 @@ async function resolveTelegramCommandAuth(params: {
     }
   }
 
-  const { effectiveAllow: dmAllow } = await resolveTelegramDmAllow({
-    cfg,
-    allowFrom: groupAllowOverride ?? params.allowFrom,
-    accountId,
-    senderId,
-    storeAllowFrom: isGroup ? [] : storeAllowFrom,
-    dmPolicy: effectiveDmPolicy,
-  });
   const {
     authorized: commandAuthorized,
     senderIsOwner,

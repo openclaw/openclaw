@@ -96,7 +96,7 @@ export async function configureBifrostInteractive(ctx: ProviderAuthContext) {
           signal: ctx.signal,
           beforeRequest: ctx.assertCurrent,
         })
-      ).models;
+      ).models.filter((entry) => entry.inference?.chat !== false);
     } catch {
       // Discovery is advisory; authority and cancellation remain terminal below.
     }
@@ -114,7 +114,7 @@ export async function configureBifrostInteractive(ctx: ProviderAuthContext) {
       : "";
     if (!models.length) {
       await ctx.prompter.note(
-        "No models were discovered. Check the gateway URL and authentication, or enter a model ID manually.",
+        "No declared chat models were discovered. Check the gateway URL and authentication, or enter a known chat model ID manually.",
         "Bifrost models",
       );
     }
@@ -190,14 +190,16 @@ export async function configureBifrostNonInteractive(ctx: ProviderAuthMethodNonI
   let model = explicitId ? manualModel(config, explicitId) : undefined;
   if (!model) {
     try {
-      model = (await listBifrostModels({ config, apiKey: resolved?.key })).models[0];
+      model = (await listBifrostModels({ config, apiKey: resolved?.key })).models.find(
+        (entry) => entry.inference?.chat !== false,
+      );
     } catch {
       // The failure below gives non-interactive callers an actionable next step.
     }
   }
   if (!model) {
     ctx.runtime.error(
-      "No Bifrost models were discovered. Check the gateway or pass --custom-model-id.",
+      "No Bifrost chat models were discovered. Check the gateway or pass --custom-model-id for a known chat model.",
     );
     ctx.runtime.exit(1);
     return null;

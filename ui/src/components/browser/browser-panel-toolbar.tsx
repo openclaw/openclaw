@@ -51,6 +51,16 @@ export function BrowserToolbar(
     () =>
       nativeTab()?.url || props.controller.view?.metrics?.url || props.controller.view?.url || "",
   );
+  // Take-over covers browsers this Gateway hosts, as the Gateway confirmed for this route;
+  // node-routed and native app tabs have no fence.
+  const canTakeControl = createMemo(
+    () =>
+      props.controller.controlling ||
+      (!nativeTab() &&
+        Boolean(props.controller.activeTargetId) &&
+        props.controller.controlAvailable &&
+        !props.controller.host.dashboardTarget?.sessionScoped),
+  );
   const addressEdited = createMemo(
     () =>
       Boolean(props.controller.urlDraft.trim()) &&
@@ -395,6 +405,31 @@ export function BrowserToolbar(
             }
           }}
         />
+        <Show when={canTakeControl()}>
+          <PanelIconButton
+            class={[
+              "bp-icon",
+              {
+                "session-panel-rail__button": !props.mobilePresentation,
+                "bp-toolbar-active": props.controller.controlling,
+              },
+            ]}
+            label={t(
+              props.controller.controlling ? "browser.releaseControl" : "browser.takeControl",
+            )}
+            title={t(
+              props.controller.controlling
+                ? "browser.releaseControlHint"
+                : "browser.takeControlHint",
+            )}
+            pressed={props.controller.controlling}
+            icon={<Icon name={props.controller.controlling ? "bot" : "hand"} />}
+            onClick={() => {
+              props.controller.urlDraftEditing = false;
+              props.controller.toggleControl();
+            }}
+          />
+        </Show>
         <Menu
           id={menuId}
           class="bp-toolbar-menu-anchor"

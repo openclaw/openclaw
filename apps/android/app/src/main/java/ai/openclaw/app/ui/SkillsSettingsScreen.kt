@@ -6,7 +6,9 @@ import ai.openclaw.app.GatewayClawHubSkillSearchState
 import ai.openclaw.app.GatewayClawHubSkillSummary
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.isClawHubSkillInstalled
 import ai.openclaw.app.isClawHubSkillOperationActive
 import ai.openclaw.app.ui.design.ClawIconButton
@@ -77,6 +79,7 @@ internal fun SkillsSettingsScreen(
   onBack: () -> Unit,
 ) {
   val skillsState by viewModel.skillsState.collectAsState()
+  val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
   val skillMutationKeys by viewModel.skillMutationKeys.collectAsState()
   val clawHubState by viewModel.clawHubSkillSearchState.collectAsState()
   val clawHubMethodsAvailable by viewModel.clawHubSkillMethodsAvailable.collectAsState()
@@ -84,7 +87,7 @@ internal fun SkillsSettingsScreen(
   val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val canManageSkills = isConnected && operatorAdminScopeAvailable
   val skills = skillsState.summary?.skills.orEmpty()
-  var selectedSkillKey by remember { mutableStateOf<String?>(null) }
+  var selectedSkillKey by remember(activeGatewayStableId) { mutableStateOf<String?>(null) }
   var selectedTabName by rememberSaveable { mutableStateOf(SkillsTab.Installed.name) }
   var installedSearch by rememberSaveable { mutableStateOf("") }
   var installedFilterName by rememberSaveable { mutableStateOf(InstalledSkillFilter.All.name) }
@@ -108,6 +111,7 @@ internal fun SkillsSettingsScreen(
       isConnected = isConnected,
       canManageSkills = canManageSkills,
       isMutating = skillKey in skillMutationKeys,
+      errorText = skillsState.errorText,
       onSkillEnabledChange = viewModel::setSkillEnabled,
       onBack = { selectedSkillKey = null },
     )
@@ -192,6 +196,7 @@ private fun SkillDetailSettingsScreen(
   isConnected: Boolean,
   canManageSkills: Boolean,
   isMutating: Boolean,
+  errorText: NativeText?,
   onSkillEnabledChange: (String, Boolean) -> Unit,
   onBack: () -> Unit,
 ) {
@@ -203,6 +208,9 @@ private fun SkillDetailSettingsScreen(
     route = SettingsRoute.Skills,
     onBack = onBack,
   ) {
+    errorText?.let { error ->
+      SettingsMessagePanel(text = error.resolveNativeTextResource(), color = ClawTheme.colors.warning)
+    }
     skill?.let { summary ->
       SettingsMetricPanel(
         rows =

@@ -101,6 +101,15 @@ describe("compaction summarization fallback", () => {
     );
   });
 
+  it("does not replay a deterministic provider rejection", async () => {
+    agentSessionMocks.generateSummary.mockRejectedValue(
+      new Error(
+        '400 {"error":{"code":"401006","type":"invalid_request_error","message":"Unsupported operation"}}',
+      ),
+    );
+    await finish(expect(summarizeHello()).rejects.toThrow("Unsupported operation"), 1);
+  });
+
   it("throws CompactionError with the last error after retries are exhausted", async () => {
     agentSessionMocks.generateSummary.mockRejectedValue(new Error("provider unavailable"));
 

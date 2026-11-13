@@ -704,6 +704,60 @@ preservation review found no lost coverage. Focused checks, full local review
 and hosted outcomes are tracked in
 [PR #198168](https://github.com/openclaw/openclaw/pull/198168).
 
+### Guarded fetch redirect caller headers
+
+At `91046f7bbbb8b064491ee2ecbfd782cb12b0124c`, the cross-origin header case
+only supplies a symbol-bearing dictionary. Header normalization copies that
+representation before redirect handling, so the case misses mutation of an
+ordinary caller-owned dictionary. The repair adds the plain representation to
+the same declaration and checks the original string fields after the redirect.
+It retains the symbol stripping and exact safe-header expectations. All 28
+owner declarations remain; expanded cases increase from 49 to 50. Test code
+grows by nine lines; no production or shared support code changes.
+
+The baseline owner and header-normalizer suites pass all 55 cases. They also
+pass all 55 when the redirect filter temporarily removes unsafe fields from
+its input in place. The repair rejects that same mutation in the new plain
+row, with the other 55 cases passing. Temporary changes are restored byte for
+byte. The clean candidate passes all 56 cases. Targeted checks and full review
+are tracked in [PR #198181](https://github.com/openclaw/openclaw/pull/198181).
+
+The other 27 guarded-fetch declarations retain their policy, redirect,
+transport, deadline and lifecycle contracts. Independent source review retains
+all ten declarations (13 expanded cases) in `ssrf.dispatcher.test.ts` and
+`fetch-guard.configured-origin-linklocal.test.ts`: their negative inputs reach
+the intended guard. The separate Ollama transport integration supplies the
+positive provider-owned link-local exemption proof. These additional retention
+decisions are source-only; no runtime result or removal is claimed for them.
+
+### Runtime FormData payload fidelity
+
+At `5dfccbb92b2ab016c8c2082968f0b87798dc13bb`, the runtime FormData case checks
+the filename but not file bytes or MIME type. It now checks the dispatched
+Blob's exact bytes and MIME type while retaining its filename, model-field and
+stale-header assertions. All seven declarations and ten expanded cases across
+runtime-fetch, proxy-fetch and the FormData helper remain. Test code grows by
+seven lines; production and shared support code do not change.
+
+The baseline and clean candidate pass all ten cases. Empty-file and explicit
+generic-MIME mutations both pass the baseline but fail the repaired case at
+the corresponding assertion, with the other nine cases passing. A first
+rewrapping-only MIME control stayed green and was not counted as proof; the
+explicit control substitutes `application/octet-stream` while preserving bytes.
+All temporary production and test changes were restored byte for byte.
+The precise scanner mistakes the bounded fixture Blob read for an untrusted
+HTTP response read; a rule-specific exception documents that false positive.
+Focused checks, independent preservation review, full local review and hosted
+outcomes are tracked in [PR #198305](https://github.com/openclaw/openclaw/pull/198305).
+
+The adjacent SSRF, dispatcher-pool, guarded-body-stream and hostname suites
+retain 24 declarations and 48 expanded cases. They protect policy
+and DNS boundaries, pool capacity and lifetime, stream cleanup and metadata,
+and hostname normalization. The request-body,
+authority and release suites retain another ten declarations and 21 expanded
+cases covering wire payloads, caller authority and release ownership. These
+retention decisions are source-only; no runtime pass or removal is claimed.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.

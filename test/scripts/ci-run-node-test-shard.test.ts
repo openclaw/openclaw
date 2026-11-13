@@ -765,6 +765,55 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
   );
 
+  it.each([
+    { event: "schedule", attempt: "1", mixed: false, extra: false, observed: true },
+    { event: "schedule", attempt: "2", mixed: false, extra: false, observed: false },
+    { event: "pull_request", attempt: "1", mixed: false, extra: false, observed: false },
+    { event: "schedule", attempt: "1", mixed: true, extra: false, observed: false },
+    { event: "schedule", attempt: "1", mixed: false, extra: true, observed: false },
+  ])("bounds CLI audit capture ($event/$attempt, mixed=$mixed, extra=$extra)", async (test) => {
+    const config = "test/vitest/vitest.cli-process.config.ts";
+    const runChild = vi.fn<NonNullable<RunOptions["runChild"]>>().mockResolvedValue(0);
+    const code = await runPlans(
+      groupPlans([
+        { configs: [config], shard_name: "first-cli" },
+        { configs: [config], shard_name: "second-cli" },
+        ...(test.mixed ? [{ configs: [bunConfig], shard_name: "unit" }] : []),
+      ]),
+      {
+        concurrency: 1,
+        runChild,
+        env: {
+          CI: "true",
+          GITHUB_ACTIONS: "true",
+          GITHUB_EVENT_NAME: test.event,
+          GITHUB_RUN_ATTEMPT: test.attempt,
+          OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-all",
+          OPENCLAW_CI_TEST_AUDIT_CLI_DIR: makeScratchDir(),
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(
+            test.extra ? ["--testTimeout=30000"] : [],
+          ),
+        },
+      },
+    );
+    expect(code).toBe(0);
+    expect(runChild.mock.calls.filter(([args]) => args[0] === config)).toHaveLength(2);
+    const captures = runChild.mock.calls.filter(([, env]) => env.OPENCLAW_VITEST_OBSERVATION_DIR);
+    expect(captures).toHaveLength(test.observed ? 1 : 0);
+    if (test.observed) {
+      expect(captures[0]![0]).toEqual([
+        config,
+        "--",
+        "--reporter=verbose",
+        "--reporter=github-actions",
+        "--reporter=./scripts/lib/vitest-resource-reporter.mts",
+      ]);
+      expect(captures[0]![1].OPENCLAW_VITEST_OBSERVATION_AUDIT_ONLY).toBe("1");
+      expect(captures[0]![1].OPENCLAW_VITEST_RUNTIME).toBe("bun");
+      expect(runChild.mock.calls[1]![0]).toEqual([config]);
+    }
+  });
+
   it.each([{ flags: ["--root", "alternate"] }])(
     "preserves the native Gateway invocation for $flags",
     ({ flags }) => {

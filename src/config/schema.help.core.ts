@@ -190,17 +190,17 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.auth.trustedProxy.deviceAutoApprove.scopes":
     "Maximum scopes granted to auto-approved operator devices. Defaults to operator.read, operator.write, operator.approvals, and operator.questions. Requested scopes are capped to this list; requests without scopes receive this list. When unset, auto-approval also adds operator.questions for older UI clients; an explicit list is never widened. Explicitly listing operator.admin lets every proxy-authenticated user auto-approve full admin and makes scope-less requests receive full admin automatically; it also triggers a critical security audit finding and Gateway startup warning.",
   "gateway.roles":
-    "Optional profile-bound operator roles for team Gateways. Each named role controls access to other people's sessions, sandbox isolation, session and run agents, and granted operator scopes; omitting this section preserves existing operator behavior.",
+    "Named operator-role definitions for team Gateways. Setting gateway.roles.default enables profile-bound enforcement of session access, sandbox isolation, agents, and operator scopes. Definitions without a default are a catalog only and preserve the behavior of a Gateway without gateway.roles.",
   "gateway.roles.default":
-    "Required role applied to authenticated profiles without a valid explicit assignment or matching GitHub login assignment whenever operator roles are configured. Its name must match a configured role definition.",
+    "Optional default that enables named-role enforcement and applies to authenticated profiles without a valid explicit or GitHub login assignment. Its name must match a configured definition. Omitting it leaves named-role enforcement off, even when definitions exist.",
   "gateway.roles.assignments":
     "Optional declarative role assignments for authenticated profiles. A valid explicit assignment made with users.setRole takes precedence over these mappings, followed by the default role.",
   "gateway.roles.assignments.byGithubLogin":
-    "Maps cached GitHub identity logins to configured role names, matching case-insensitively after trimming. Invalid logins, duplicate normalized logins, and unknown roles are rejected. Profiles without a cached GitHub identity use their explicit assignment or default role.",
+    "Requires gateway.roles.default, even for an empty mapping. Maps cached GitHub identity logins to configured role names, matching case-insensitively after trimming. Invalid logins, duplicate normalized logins, and unknown roles are rejected. Profiles without a cached GitHub identity use their explicit assignment or default role.",
   "gateway.roles.assignments.byGithubLogin.*":
     "Configured role name for this GitHub login. Applies when the profile has a matching cached GitHub identity and no valid explicit role assignment. Changes hot-apply when config reload is enabled.",
   "gateway.roles.definitions":
-    "Nonempty administrator-named role definitions bundling the closed session-sharing, sandbox-isolation, agent-access, and operator-scope policies applied to authenticated user profiles.",
+    "Nonempty administrator-named role catalog bundling session-sharing, sandbox-isolation, agent-access, and operator-scope policies. Definitions alone do not enable enforcement; set gateway.roles.default to apply named roles to authenticated profiles.",
   "gateway.roles.definitions.*":
     "One named operator role. Every definition must explicitly provide its session-sharing policy, allowed session and run agents, and operator-scope ceiling, and can require sandbox isolation for newly created sessions and a plugin access policy.",
   "gateway.roles.definitions.*.sessions":
