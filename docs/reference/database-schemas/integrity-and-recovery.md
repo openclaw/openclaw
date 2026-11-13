@@ -233,8 +233,13 @@ These diagnostics do not weaken integrity checks or change the seal lifetime.
 Worker admission checks current authority after lease cleanup and before opening
 the native agent database. A refusal at that boundary releases its unopened lease
 without revoking an earlier clean-close seal. Once native opening begins, failed
-or uncertain cleanup still invalidates proof. Shutdown cancellation alone is not
-evidence that a previously sealed database needs another full scan.
+or uncertain cleanup still invalidates proof. When the host later refuses the
+open of an existing database, such as for a cancelled caller, cleanup closes the
+new handle and releases its lease; with no handle left, the Worker reports a
+refused open and keeps serving its other databases instead of retiring. A
+refused cold creation still retires the Worker so its cleanup fences readers of
+the partial file. Shutdown cancellation alone is not evidence that a previously
+sealed database needs another full scan.
 
 Existing-file integrity and schema preparation may be shared by current callers.
 Every preparation effect still requires a live caller; cancellation cannot leave

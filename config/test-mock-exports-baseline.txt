@@ -5958,7 +5958,6 @@
 ["src/state/openclaw-agent-execution.registration.test.ts","../process/output-drain.js","80ab4eb4822c11689123696f24fa9024c600ba10419092b075302ef0f4e2c707",1]
 ["src/state/openclaw-agent-execution.registration.test.ts","./openclaw-agent-db-identity.js","c50cd6b830ed02e0c4c5e748f53318399b82dc56f6babedec18686f3e7940352",1]
 ["src/state/openclaw-agent-execution.registration.test.ts","./openclaw-agent-db-lease.js","360109ec4f331fe50af5bb03123e80cf0810319fd44682ffcc710bbd1f3fc670",1]
-["src/state/openclaw-agent-execution.registration.test.ts","./openclaw-agent-db.js","e4f8f88ba4f470261d246b4d4dd02d28468464755d51856270303493d92f43f8",1]
 ["src/state/openclaw-agent-execution.registration.test.ts","./openclaw-state-db-cache.js","cc0bc8eaeab0b719cf1dfa4d00e936d74e01185429489af86ca14f8d9122c668",1]
 ["src/state/openclaw-agent-execution.registration.test.ts","./openclaw-state-db.js","133c13316f9f64fccc9f10f05814725ddf042e9061e39938d546af593790322f",1]
 ["src/state/openclaw-agent-worker-store.env-capture.test.ts","../config/state-dir.js","53ee2526e9a1fec0b2a4b57b76b82d386cdbef079f67681e308b3ffa5c825005",1]
