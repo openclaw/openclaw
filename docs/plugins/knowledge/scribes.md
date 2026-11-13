@@ -30,8 +30,9 @@ which can be started again.
 
 - **Knowledge Consolidation** files claims that
   [maintenance](/plugins/knowledge/maintenance) left unlinked, creates pages for
-  subjects that deserve one, supersedes status snapshots by their outcome, and
-  records outcomes in page State. It runs on its
+  subjects that deserve one, supersedes status snapshots by their outcome,
+  records outcomes in page State, retires written Timelines, and reviews up to
+  five pages a run so each reads as a current explanation. It runs on its
   own schedule: weekly on Sundays at 3:45 AM in your time zone by default, or
   nightly at 3:45 AM, after maintenance links what it can. Each run is an agent
   turn over every unlinked claim, so nightly uses more tokens. Maintenance

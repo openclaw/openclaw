@@ -5,7 +5,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -574,7 +574,8 @@ suite.define(() => {
           await page.reload();
           await ready(page);
           if (width === 390) {
-            await openChatSidePanelType(page, "Browser");
+            await pane(page).locator(".agent-chat__header--mobile").waitFor();
+            await openChatPanels(pane(page), "mobile");
           }
           await pane(page).locator("openclaw-browser-panel[embedded] .bp").waitFor();
           await pane(page).locator("openclaw-browser-panel .bp-shot").waitFor();

@@ -216,6 +216,27 @@ openclaw gateway --verbose --ws-log compact
 openclaw gateway --verbose --ws-log full
 ```
 
+### Operator authority failures
+
+The existing `lane task error` record carries three additional fields when a
+retained operator authority becomes inactive, including through sandbox and
+state-lease error wrappers:
+
+- `operatorAuthorityReason`: `source-invalidated`, `gateway-identity-retired`,
+  `closure-released`, or `closure-revoked`.
+- `operatorAuthorityCheck`: `source-current`, `source-revocation`, `gateway-current`,
+  `before-sources`, or `after-sources`, identifying the owner check that failed.
+- `operatorAuthorityAgeMs`: elapsed monotonic milliseconds from the original
+  run-authority capture to creation of that failure. Retained/delegated copies
+  keep the original capture age; a new admission creates a new capture.
+
+`source-invalidated` identifies the failed source check or revocation callback;
+it does not identify which upstream policy or lifecycle event invalidated it.
+`gateway-identity-retired` means the captured Gateway resolver no longer returns
+the same owner. Closure reasons distinguish a released final hold from a revoked
+closure. These fields add no content or identifiers and emit no additional log
+record. The recovery message remains visible to the user.
+
 ### Steering and input cancellation
 
 Ordinary channel reply routing logs
@@ -433,6 +454,11 @@ enabled.
 latency, and request fields such as method, URL, timeout, proxy, and policy)
 uses `debug` by default. Responses with a non-2xx status remain at `info`,
 and transport failures remain warnings.
+HTTP `400` records also include a bounded, credential-redacted `providerError`
+from the provider's JSON error message when available. This distinguishes request
+validation failures from upstream credit failures that use the same status code.
+Diagnostics read at most 16 KiB with a one-second deadline; the SDK still receives
+the original response body.
 `[model-fetch]` and `[responses]` report caller-signaled `AbortError` as `aborted`
 at `debug` (or `info` with the targeted flags), rather than as provider failures.
 The requesting layer owns the final cancellation or timeout outcome; an SDK can

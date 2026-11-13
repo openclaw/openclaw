@@ -281,6 +281,145 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "watch-message-delivery")
     }
 
+    func testCustomHeaderInvalidNameStaysAndValidNameSurvivesReopen() {
+        XCUIDevice.shared.orientation = .portrait
+        self.addUIInterruptionMonitor(withDescription: "Local network access") { alert in
+            guard alert.buttons["Allow"].exists else { return false }
+            alert.buttons["Allow"].tap()
+            return true
+        }
+        let app = XCUIApplication()
+        // Argument-domain flags outrank the reset's application-domain writes, so
+        // onboarding stays dismissed while the manual host field starts empty.
+        app.launchArguments += [
+            "--openclaw-reset-onboarding",
+            "--openclaw-initial-tab", "settings",
+            "--openclaw-initial-destination", "gateway",
+            "--openclaw-ui-test-readiness",
+            "-gateway.onboardingComplete", "YES",
+            "-gateway.hasConnectedOnce", "YES",
+            "-onboarding.completed", "YES",
+            "-onboarding.quickSetupDismissed", "YES",
+            "-AppleLanguages", "(en)",
+            "-AppleLocale", "en_US",
+        ]
+        app.launch()
+        self.app = app
+        let gatewayBar = app.navigationBars["Gateway"]
+        guard gatewayBar.waitForExistence(timeout: 8) else {
+            self.recordHeaderHierarchy(app)
+            XCTFail("Gateway settings did not open")
+            return
+        }
+        let statusBarHeight = gatewayBar.frame.minY - app.frame.minY
+        if statusBarHeight > 0 {
+            app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: 20, dy: statusBarHeight / 2)).tap()
+        }
+        let host = app.textFields["Host"]
+        self.reveal(host, in: app)
+        guard host.isHittable else {
+            self.recordHeaderHierarchy(app)
+            XCTFail("Manual host field did not appear")
+            return
+        }
+        host.tap()
+        host.typeText("headers.example.com")
+        self.dismissKeyboard(in: app)
+        self.tapLabeled("Custom Headers", in: app)
+        let name = app.textFields["Header name"]
+        guard name.waitForExistence(timeout: 6) else {
+            self.recordHeaderHierarchy(app)
+            XCTFail("Custom header editor did not open")
+            return
+        }
+        name.tap()
+        name.typeText("X Client ID")
+        let value = app.secureTextFields["Header value"]
+        XCTAssertTrue(value.waitForExistence(timeout: 4))
+        value.tap()
+        value.typeText("synthetic-value")
+        self.dismissKeyboard(in: app)
+        let add = app.buttons["Add Header"].firstMatch
+        XCTAssertTrue(add.waitForExistence(timeout: 4))
+        XCTAssertFalse(add.isEnabled)
+        XCTAssertTrue(app.staticTexts[
+            "Header names cannot include spaces or other characters outside a single HTTP token.",
+        ].waitForExistence(timeout: 4))
+        XCTAssertEqual(name.value as? String, "X Client ID")
+        self.saveScreen(named: "invalid-name-kept")
+
+        name.tap()
+        self.clearTextField(name)
+        name.typeText("X-Client-ID")
+        self.dismissKeyboard(in: app)
+        XCTAssertTrue(add.isEnabled)
+        add.tap()
+        XCTAssertTrue(app.staticTexts["X-Client-ID"].waitForExistence(timeout: 6))
+        let back = app.navigationBars["Custom Headers"].buttons["Gateway"]
+        if back.waitForExistence(timeout: 2) {
+            back.tap()
+        } else {
+            app.navigationBars["Custom Headers"].buttons.element(boundBy: 0).tap()
+        }
+        self.tapLabeled("Custom Headers", in: app)
+        XCTAssertTrue(app.staticTexts["X-Client-ID"].waitForExistence(timeout: 6))
+        let draft = app.textFields["Header name"].value as? String ?? ""
+        // An empty SwiftUI field reports its prompt as the accessibility value.
+        XCTAssertTrue(draft.isEmpty || draft == "Header name")
+        self.saveScreen(named: "valid-name-reopened")
+    }
+
+    private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
+        for _ in 0..<14 where !element.isHittable {
+            app.swipeUp()
+        }
+    }
+
+    private func tapLabeled(_ label: String, in app: XCUIApplication) {
+        let button = app.buttons[label]
+        let text = app.staticTexts[label]
+        for _ in 0..<14 {
+            if button.isHittable {
+                button.tap()
+                return
+            }
+            if text.isHittable {
+                text.tap()
+                return
+            }
+            app.swipeUp()
+        }
+        self.recordHeaderHierarchy(app)
+        XCTFail("Could not tap \(label)")
+    }
+
+    private func dismissKeyboard(in app: XCUIApplication) {
+        guard app.keyboards.firstMatch.waitForExistence(timeout: 2) else { return }
+        let bar = app.navigationBars.firstMatch
+        if bar.exists {
+            bar.tap()
+        }
+        if app.keyboards.firstMatch.exists {
+            app.swipeDown()
+        }
+    }
+
+    private func recordHeaderHierarchy(_ app: XCUIApplication) {
+        try? app.debugDescription.write(
+            to: URL(fileURLWithPath: "/tmp/oc-header-ui.txt"),
+            atomically: true,
+            encoding: .utf8)
+    }
+
+    private func saveScreen(named name: String) {
+        self.attachScreenshot(named: name)
+        let directory = URL(fileURLWithPath: "/tmp/oc-193595-ui-shots", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let screenshot = self.app?.screenshot() ?? XCUIScreen.main.screenshot()
+        try? screenshot.pngRepresentation.write(to: directory.appendingPathComponent("\(name).png"))
+    }
+
     func testAgentsNavigateToSettingsThroughSidebar() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar navigation only")
         self.launchApp(for: Self.agentScreenshotTarget)

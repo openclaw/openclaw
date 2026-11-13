@@ -4,6 +4,7 @@ import { createSignal } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { CronCompactJob, CronJobsListResult } from "../../../api/types.ts";
+import type { TooltipElement } from "../../../components/solid/tooltip.tsx";
 import { createApplicationGateway } from "../../../test-helpers/application-context.ts";
 import {
   createGatewayRequestMock,
@@ -19,6 +20,7 @@ import {
   ChatSummaryAutomations,
   createSessionAutomationInventory,
 } from "./chat-summary-automations.tsx";
+import { sessionAutomationNextRun } from "./session-automation-schedule-non-cron.ts";
 
 type Page = CronJobsListResult<CronCompactJob>;
 
@@ -280,6 +282,10 @@ it("updates a held automation's runtime state without rereading its inventory", 
   });
   await current.ready("Every 10 minutes");
   expect(current.element.textContent).not.toContain("Running");
+  expect(current.element.querySelector("openclaw-tooltip")).toHaveProperty(
+    "content",
+    sessionAutomationNextRun(600_003),
+  );
   expect(current.request).toHaveBeenCalledTimes(1);
   current.unmount();
 });
@@ -890,4 +896,32 @@ it("describes cron weekdays and non-uniform minute steps without inventing a fix
     { timeout: 5_000 },
   );
   expect(minutes.textContent).not.toContain("Every 7 minutes");
+});
+
+const later = Date.now() + 10 * 86_400_000;
+const failing = { reason: "schedule-errors", atMs: 1, consecutiveErrors: 3 } as const;
+const idle = "Not scheduled to run again";
+it.each([
+  [{ nextRunAtMs: later }, sessionAutomationNextRun(later)],
+  [{ nextRunAtMs: null }, idle],
+  [{ enabled: false, nextRunAtMs: later }, idle],
+  [{ autoDisabled: failing, nextRunAtMs: later }, idle],
+] satisfies [Partial<CronCompactJob>, string][])(
+  "row tooltip shows only: %j",
+  async (state, text) => {
+    const current = component(jobsRequest(job(state)));
+    await current.ready("Check the task");
+    expect(current.element.querySelector<TooltipElement>("openclaw-tooltip")?.content).toBe(text);
+    current.unmount();
+  },
+);
+
+it.each([
+  [new Date(2026, 10, 4, 14, 6), "Next run today at 2:06 PM"],
+  [new Date(2026, 10, 5, 9, 0), "Next run tomorrow at 9:00 AM"],
+  [new Date(2027, 0, 3, 9, 0), "Next run on Jan 3, 2027 at 9:00 AM"],
+])("words the next run at %s in local terms", (at, expected) => {
+  vi.useFakeTimers({ toFake: ["Date"], now: new Date(2026, 10, 4, 9, 0) });
+  onTestFinished(() => void vi.useRealTimers());
+  expect(sessionAutomationNextRun(at.getTime())).toBe(expected);
 });

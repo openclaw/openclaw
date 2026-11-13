@@ -45,10 +45,11 @@ import {
   selectAgentDatabaseInspectionTargets,
 } from "./openclaw-database-preflight-targets.js";
 import {
-  formatIndeterminateDatabaseReadiness,
+  createIndeterminateDatabaseReadinessError,
   OpenClawDatabaseSchemaPreflightError,
 } from "./openclaw-database-preflight.messages.js";
 import type {
+  AgentDatabasePreflightStats,
   IndeterminateOpenClawDatabase,
   OpenClawDatabaseSchemaPreflight,
   OpenClawDatabasePreflightOptions,
@@ -145,25 +146,12 @@ export async function assertOpenClawDatabasesReady(
     );
   }
   if (schemas.indeterminate.length > 0) {
-    const causes = schemas.indeterminate.flatMap((row) =>
-      indeterminateCauses.has(row) ? [indeterminateCauses.get(row)] : [],
-    );
-    // Preserve a single strict inspection's typed refusal; multiple rows keep the complete report.
     failures.push(
-      options.operation === "gateway-startup" &&
-        schemas.indeterminate.length === 1 &&
-        causes.length === 1
-        ? causes[0]
-        : new Error(
-            formatIndeterminateDatabaseReadiness(
-              schemas.indeterminate,
-              options.operation,
-              indeterminateCauses,
-            ),
-            {
-              cause: new AggregateError(causes),
-            },
-          ),
+      createIndeterminateDatabaseReadinessError(
+        schemas.indeterminate,
+        options.operation,
+        indeterminateCauses,
+      ),
     );
   }
   if (failures.length > 0) {
@@ -191,6 +179,8 @@ export async function preflightOpenClawDatabaseSchemas(
   inputOptions: OpenClawDatabasePreflightOptions,
   purpose: AgentDeletionJournalPurpose = "maintenance",
 ): Promise<OpenClawDatabaseSchemaPreflight> {
+  const startedAt = performance.now();
+  const stateMetrics: Partial<AgentDatabasePreflightStats> = {};
   const options = isArtifactPreservingStateRead("agent")
     ? { ...inputOptions, preserveSourceArtifacts: true }
     : inputOptions;
@@ -370,6 +360,7 @@ export async function preflightOpenClawDatabaseSchemas(
           throw new Error("Missing state schema inspection result");
         }
         Object.assign(result, inspection.schemas);
+        Object.assign(stateMetrics, inspection.startupMetrics);
         stateInspectionErrors.push(...inspection.inspectionErrors);
         if (
           startup &&
@@ -414,6 +405,7 @@ export async function preflightOpenClawDatabaseSchemas(
   if (options.scope === "state") {
     return result;
   }
+  const agentStartedAt = performance.now();
   const { candidates, configuredTargets, isRetainedPath, failures, preparedDiscovery } =
     collectAgentDatabasePreflightTargets({
       ...options,
@@ -718,7 +710,12 @@ export async function preflightOpenClawDatabaseSchemas(
     options.onAgentDatabaseDiscovery?.(preparedDiscovery);
   }
   stats.schemaProcessCount += prestartedReader?.processCount ?? 0;
-  options.onAgentInspection?.(stats);
+  options.onAgentInspection?.({
+    ...stats,
+    ...stateMetrics,
+    statePreflightMs: agentStartedAt - startedAt,
+    agentPreflightMs: performance.now() - agentStartedAt,
+  });
   options.onRegisteredAgentDatabases?.(registeredDatabases);
   return result;
 }

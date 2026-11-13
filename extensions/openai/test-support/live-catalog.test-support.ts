@@ -1,7 +1,7 @@
 import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { vi } from "vitest";
-import { buildOpenAIProvider } from "../openai-provider.js";
+import discoveryProvider from "../provider-discovery.js";
 
 const mocks = vi.hoisted(() => ({
   resolveApiKeyForProvider: vi.fn(),
@@ -52,7 +52,7 @@ export async function runCatalogWithFetchGuard(params: {
     return guarded.response;
   });
   try {
-    const result = await buildOpenAIProvider().catalog?.run({
+    const result = await discoveryProvider.catalog?.run({
       resolveProviderAuth: () => params.auth,
       resolveProviderApiKey: () => ({
         apiKey: params.auth.apiKey,

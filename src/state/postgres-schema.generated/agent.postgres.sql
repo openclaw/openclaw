@@ -473,6 +473,15 @@ CREATE TABLE "session_suggestions" (
   CHECK (("dispatch_token" IS NULL AND "dispatch_started_at" IS NULL AND "dispatch_resolution" IS NULL) OR ("dispatch_token" IS NOT NULL AND "dispatch_started_at" IS NOT NULL AND "dispatch_resolution" IS NOT NULL))
 );
 
+CREATE TABLE "session_transcript_active_event_facts" (
+  "session_id" text COLLATE "C" NOT NULL,
+  "seq" bigint NOT NULL,
+  "serialized_bytes" bigint NOT NULL,
+  "dependency_navigation_json" text COLLATE "C" NOT NULL,
+  PRIMARY KEY ("session_id", "seq"),
+  CHECK (("serialized_bytes" >= 1))
+);
+
 CREATE TABLE "session_transcript_active_events" (
   "session_id" text COLLATE "C" NOT NULL,
   "active_position" bigint NOT NULL,
@@ -835,6 +844,8 @@ ALTER TABLE "session_progress_cards" ADD FOREIGN KEY ("session_key") REFERENCES 
 ALTER TABLE "session_reactions" ADD FOREIGN KEY ("session_key") REFERENCES "session_nodes" ("session_key") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 
 ALTER TABLE "session_suggestions" ADD FOREIGN KEY ("session_key") REFERENCES "session_nodes" ("session_key") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
+
+ALTER TABLE "session_transcript_active_event_facts" ADD FOREIGN KEY ("session_id", "seq") REFERENCES "session_transcript_active_events" ("session_id", "event_seq") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 
 ALTER TABLE "session_transcript_active_events" ADD FOREIGN KEY ("session_id", "event_seq") REFERENCES "transcript_events" ("session_id", "seq") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 

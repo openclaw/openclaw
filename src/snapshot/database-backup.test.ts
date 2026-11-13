@@ -120,7 +120,12 @@ it.each(["empty", "duplicate", "invalid-namespace", "unreadable"])(
       }
     }
     expect(() => readBackupEngine(source)).toThrow(
-      kind === "unreadable" ? /not a database/ : /Invalid PostgreSQL anchor/,
+      kind === "unreadable"
+        ? expect.objectContaining({
+            message: expect.stringContaining("not a database"),
+            errcode: 26,
+          })
+        : /Invalid PostgreSQL anchor/,
     );
   },
 );

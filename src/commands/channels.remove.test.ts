@@ -218,6 +218,12 @@ describe("channelsRemoveCommand", () => {
     expect(offsetMocks.deleteTelegramUpdateOffset).toHaveBeenCalledWith({ accountId: "default" });
   });
 
+  it("rejects an unknown channel before asking for confirmation", async () => {
+    await channelsRemoveCommand({ channel: "nope" }, runtime, { hasFlags: true });
+    expect(prompterMocks.confirm).not.toHaveBeenCalled();
+    expectNoRemoval('Unknown channel "nope"');
+  });
+
   it("keeps omitted removal on literal default when the plugin selects another default", async () => {
     const plugin = createExternalChatDeletePlugin();
     const defaultAccountId = vi.fn(() => "work");
@@ -262,9 +268,6 @@ describe("channelsRemoveCommand", () => {
         },
       }),
     );
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      createExternalChatCatalogEntry(),
-    ]);
     const sectionKey = "external-chat";
     const scopedPlugin: ChannelPlugin = {
       ...createExternalChatDeletePlugin(),
@@ -502,11 +505,6 @@ describe("channelsRemoveCommand", () => {
         },
       },
     });
-    plugin.config.deleteAccount = (params) =>
-      deleteAccountFromConfigSection({
-        ...params,
-        sectionKey: "external-chat",
-      });
     plugin.gateway = { startAccount: vi.fn() };
     const onAccountRemoved = vi.fn();
     plugin.lifecycle = { onAccountRemoved };

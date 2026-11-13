@@ -10,7 +10,6 @@ import {
 } from "../../../components/panel-toggle-contract.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
-import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
@@ -19,7 +18,6 @@ import { createTabFocus } from "../../../lib/tabs.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import { SidebarPanel as SidebarPanelView } from "../chat-pane-embedded-view.tsx";
 import {
-  SIDEBAR_GEOMETRY_COMMIT_EVENT,
   isSidebarNewTabActive,
   sidebarMainPanel,
   sidebarSidePanels,
@@ -30,6 +28,7 @@ import {
 } from "../sidebar-layout.ts";
 import { MobilePanelLauncher } from "./chat-panel-launcher-mobile.tsx";
 import { SidebarRegionDivider } from "./chat-sidebar-region-divider.tsx";
+import { createSidebarRegionGeometry } from "./chat-sidebar-region-geometry.ts";
 import {
   SidebarRegionHeader,
   closeEmptyMobileHost,
@@ -55,6 +54,8 @@ const regionOperations = new WeakMap<
 function Region(props: RegionProps, host: RegionElement) {
   const panelHosts = new Map<SidebarSlotId, SidebarPanelHost>();
   const panelElements = new Map<string, HTMLDivElement>();
+  let panelElement: HTMLDivElement | undefined;
+  const geometry = createSidebarRegionGeometry(host, props, panelElements, () => panelElement);
   const panelRef = (id: string) =>
     elementRef((element: HTMLDivElement) => {
       panelElements.set(id, element);
@@ -74,11 +75,15 @@ function Region(props: RegionProps, host: RegionElement) {
       null,
     focusActiveSideTab: tabFocus.focusActive,
     inputsChanged(key: keyof RegionProps) {
+      if (key === "visualPresentation") {
+        geometry.bindPresentation();
+        geometry.schedule();
+      }
       if (key === "elements") {
         bindHostedTabsRoot();
       }
       if (key === "elements" || key === "layout" || key === "panelDefinitions") {
-        scheduleGeometryCommit();
+        geometry.schedule();
       }
       if (key === "elements" || key === "sideFocusLocked") {
         scheduleFocusTransition();
@@ -86,8 +91,6 @@ function Region(props: RegionProps, host: RegionElement) {
     },
   };
   regionOperations.set(host, operations);
-  let panelElement: HTMLDivElement | undefined;
-  let previousGeometry = "";
   let focusFrame: number | null = null;
   let focusedSurface: Element | null = null;
   let focusBeforeSideLock: HTMLElement | null = null;
@@ -95,7 +98,7 @@ function Region(props: RegionProps, host: RegionElement) {
   const [hostedRevision, setHostedRevision] = createSignal(0, { ownedWrite: true });
   const refreshHostedTabs = () => {
     setHostedRevision((value) => value + 1);
-    scheduleGeometryCommit();
+    geometry.schedule();
   };
   function notifyPanelReady() {
     if (!props.onPanelReady) {
@@ -242,41 +245,6 @@ function Region(props: RegionProps, host: RegionElement) {
     refreshHostedTabs();
     await finishClose();
   };
-
-  function scheduleGeometryCommit() {
-    scheduleLayout(host, () => {
-      const elements = props.elements;
-      if (!host.isConnected || !elements) {
-        return undefined;
-      }
-      const geometry = [
-        elements.primary,
-        ...(props.layout.columns[0]?.panels.flatMap((panel) => {
-          const element = panelElements.get(panel.id);
-          return element ? [element] : [];
-        }) ?? []),
-      ]
-        .map(
-          (content) =>
-            `${content.dataset.panelSlot ?? "conversation"}:${content.getBoundingClientRect().width}`,
-        )
-        .join(":");
-      // The panel commit is the geometry boundary for its transcript.
-      // Track content, not region roles: swapping can keep the same main/side
-      // widths while changing the transcript width and its row measurements.
-      return () => {
-        panelElement?.dispatchEvent(
-          new CustomEvent(SIDEBAR_GEOMETRY_COMMIT_EVENT, {
-            bubbles: true,
-            detail: {
-              widthChanged: geometry !== previousGeometry,
-            },
-          }),
-        );
-        previousGeometry = geometry;
-      };
-    });
-  }
 
   const openPanelFromLauncher = (slot: SidebarSlotId) => {
     const alreadyOpen = props.layout.columns[0]?.panels.some((panel) => panel.slot === slot);
@@ -629,7 +597,7 @@ function Region(props: RegionProps, host: RegionElement) {
         (event.target === shell || event.target.matches("[data-region], [data-region-header]")) &&
         event.target.closest(".sidebar-region") === shell
       ) {
-        scheduleGeometryCommit();
+        geometry.schedule();
       }
     };
     const stops = [
@@ -641,6 +609,7 @@ function Region(props: RegionProps, host: RegionElement) {
   }
   // Descendants can publish hosted tabs synchronously during their first commit.
   bindHostedTabsRoot();
+  geometry.bindPresentation();
   listen(document, "pointerdown", trackFocus, options);
   listen(document, "focusin", trackFocus, options);
   listen(
@@ -652,15 +621,15 @@ function Region(props: RegionProps, host: RegionElement) {
     options,
   );
   onSettled(() => {
-    scheduleGeometryCommit();
+    geometry.schedule();
     scheduleFocusTransition();
     notifyPanelReady();
     return () => {
       regionOperations.delete(host);
+      geometry.dispose();
       stopHostedTabs();
       listeners.abort();
       focusedSurface = null;
-      cancelLayout(host);
       if (focusFrame !== null) {
         cancelAnimationFrame(focusFrame);
       }
@@ -682,6 +651,7 @@ export const ChatSidebarRegion = defineSolidBridge<RegionProps, RegionMethods>(
   Region,
   {
     properties: {
+      visualPresentation: { default: undefined, attribute: false },
       elements: { default: null, attribute: false },
       mobileHost: { default: undefined, attribute: false },
       onScrollPortRef: { default: undefined, attribute: false },

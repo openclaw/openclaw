@@ -88,6 +88,14 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Web-tool policy grouping for search/fetch providers, limits, and fallback behavior tuning. Keep enabled settings aligned with API key availability and outbound networking policy.",
   "tools.exec":
     "Exec-tool policy grouping for shell execution host, security mode, approval behavior, and runtime bindings. Keep conservative defaults in production and tighten elevated execution paths.",
+  "tools.openclaw":
+    "Approval policy for persistent changes delegated to the OpenClaw system agent.",
+  "tools.openclaw.autoApproveChanges":
+    "Standing authorization for permitted delegated administration, including configuration that can execute code on the Gateway host. True authorizes changes without individual approval, even when direct execution tools are denied; false always requires approval. Omitted uses explicit Full Access or independently proven unrestricted Gateway execution. Filesystem, sandbox, operation, and current-run restrictions still apply.",
+  "agents.entries.*.tools.openclaw":
+    "Per-agent approval policy for changes delegated to the OpenClaw system agent.",
+  "agents.entries.*.tools.openclaw.autoApproveChanges":
+    "Overrides tools.openclaw.autoApproveChanges for this agent. True is a standing delegated-administration grant that can enable Gateway-host code execution; false requires individual approval, including in Full Access. Omitted inherits the global setting, then the requesting run's effective authority. Filesystem, sandbox, and operation restrictions still apply.",
   "tools.github":
     "Managed local GitHub CLI profile and optional Git author for agent tools. Omit this object to preserve the Gateway runtime user's native account and author; repository remote credentials are never overridden.",
   "tools.github.profileId":

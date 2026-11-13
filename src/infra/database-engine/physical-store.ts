@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
+import { resolvePathViaExistingAncestorSync } from "../boundary-path.js";
 import {
   StateDatabaseAdmissionPendingError,
   StateDatabaseOfflineMaintenanceError,
@@ -50,16 +51,32 @@ export function readBackupEngine(sourcePath: string): BackupEngine {
   );
 }
 
+/** Keys use the canonical spelling a backup worker compares against its inventory. */
+export function readBackupEngines(sourcePaths: readonly string[]): Record<string, BackupEngine> {
+  return Object.fromEntries(
+    sourcePaths.map((file) => [resolvePathViaExistingAncestorSync(file), readBackupEngine(file)]),
+  );
+}
+
 /** Child-only: ordinary live reads need only the schema and anchor pages. */
 export async function readBackupEngineInProcess(
   sourcePath: string,
   preserveSourceArtifacts = false,
 ): Promise<BackupEngine> {
+  return inspectPhysicalStoreInProcess(sourcePath, preserveSourceArtifacts, (db) =>
+    readEngineAnchorIdentity(db, sourcePath),
+  );
+}
+
+/** Child-only physical inspection shares the engine reader's source and cleanup custody. */
+export async function inspectPhysicalStoreInProcess<T>(
+  sourcePath: string,
+  preserveSourceArtifacts: boolean,
+  inspect: (db: DatabaseSync) => T,
+): Promise<T> {
   if (!preserveSourceArtifacts) {
     try {
-      const inspected = tryInspectSqliteReadOnlyInProcess(sourcePath, (db) =>
-        readEngineAnchorIdentity(db, sourcePath),
-      );
+      const inspected = tryInspectSqliteReadOnlyInProcess(sourcePath, inspect);
       if (inspected) {
         return inspected.value;
       }
@@ -88,6 +105,9 @@ export async function readBackupEngineInProcess(
       },
     },
     "SQLite engine inspection",
-    () => readBackupEngineImage(prepared.location, sourcePath),
+    () => {
+      using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
+      return inspect(db);
+    },
   );
 }

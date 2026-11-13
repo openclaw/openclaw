@@ -325,14 +325,18 @@ it.each([
 });
 
 it("creates a worker from a configured profile", async () => {
-  const create = vi.fn(async () =>
+  const createWithRequest = vi.fn(async () =>
     workerRecord({ desktopAvailable: true, desktopApps: ["browser", "terminal"] }),
   );
-  const service = workerService({ create });
+  const service = workerService({ createWithRequest });
   const [ok, payload] = await call("environments.create", createParams, { service });
 
   expect(ok).toBe(true);
-  expect(create).toHaveBeenCalledWith("development", "request-1");
+  expect(createWithRequest).toHaveBeenCalledWith({
+    ...createParams,
+    provisionSource: { kind: "unavailable" },
+    beforeProvision: expect.any(Function),
+  });
   expect(payload).toMatchObject({
     id: "worker-1",
     type: "worker",
@@ -348,7 +352,7 @@ it("creates a worker from a configured profile", async () => {
 
 it("hides provider failure details when worker creation fails", async () => {
   const service = workerService({
-    create: rejectService("provider_failure", "private endpoint details"),
+    createWithRequest: rejectService("provider_failure", "private endpoint details"),
   });
   expectFailure(
     await call("environments.create", createParams, { service }),

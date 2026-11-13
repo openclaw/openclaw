@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type {
+  EnvironmentsCreateParams,
   EnvironmentsPrepareParams,
   EnvironmentsPrepareResult,
   SessionPlacementMachine,
@@ -19,6 +20,7 @@ import type {
   WorkerProfile,
 } from "../../plugins/capability-provider.types.js";
 import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
+import type { QueuedOperatorRecoverySource } from "../operator-run-recovery-source.codec.js";
 import type {
   WorkerEnvironmentPreparation,
   WorkerEnvironmentRecord,
@@ -185,6 +187,12 @@ export type WorkerEnvironmentServiceContract = {
     signal?: AbortSignal,
     os?: string,
     runSetupScript?: boolean,
+  ): Promise<WorkerEnvironmentServiceRecord>;
+  createWithRequest(
+    request: EnvironmentsCreateParams & {
+      beforeProvision?: () => void;
+      provisionSource?: QueuedOperatorRecoverySource;
+    },
   ): Promise<WorkerEnvironmentServiceRecord>;
   destroy(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   /** Stop session work and return after provider acceptance; physical cleanup remains owned. */

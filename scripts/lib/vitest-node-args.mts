@@ -14,5 +14,5 @@ export function resolveNodeCompilerArgs(env: NodeJS.ProcessEnv = process.env): s
 
 export function resolveVitestNodeArgs(env: NodeJS.ProcessEnv = process.env): string[] {
   // Node 24 gates the native browser byte APIs used by UI modules under test.
-  return [...resolveNodeCompilerArgs(env), "--js-base-64"];
+  return [...resolveNodeCompilerArgs(env), "--js-base-64", "--expose-gc"];
 }

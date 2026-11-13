@@ -138,11 +138,11 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
     },
     begin,
     activateDraft,
-    activateCommand: (command: SlashCommandDef, inline: boolean) => {
+    activateCommand: (command: SlashCommandDef, inline: boolean, objective?: string) => {
       if (command.key !== "goal" || command.source !== "native" || inline) {
         return false;
       }
-      return begin();
+      return begin(undefined, objective);
     },
     cancel,
     restoreCommand,

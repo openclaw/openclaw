@@ -14,7 +14,6 @@
   font-size: 14px;
   line-height: 1.55;
   letter-spacing: -0.01em;
-  -webkit-font-smoothing: antialiased;
 }
 .knowledge-page *,
 .knowledge-page *::before,
@@ -788,6 +787,9 @@
   font-size: 15px;
   line-height: 1.65;
   overflow-wrap: anywhere;
+  /* Reading text keeps macOS stem darkening; app chrome inherits the body's antialiasing. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 .knowledge-page .knowledge-markdown > :first-child {
   margin-top: 0;
@@ -899,6 +901,9 @@
   display: grid;
   gap: 4px;
   min-width: 0;
+  /* Reading text keeps macOS stem darkening; app chrome inherits the body's antialiasing. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 .knowledge-page .knowledge-claim-text {
   display: block;

@@ -11,6 +11,7 @@ import {
   readWindowsTaskSupervisorRestartExitCode,
 } from "../daemon/windows-task-supervisor-contract.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   probeChildRuntimeExecutable,
   registerChildRuntimeRecovery,
@@ -25,6 +26,8 @@ import {
   type GatewayNativeWorkerRecoveryRequest,
   type GatewayRuntimeRecoveryResult,
 } from "./gateway-native-worker-recovery.js";
+import { resolveStateOwnerIdentity } from "./gateway-state-owner-directory.js";
+import { assertPersistedStateDatabaseAccessAllowed } from "./gateway-state-owner-record.js";
 import { rewritePnpmVersionedOpenClawEntryPath } from "./openclaw-root.js";
 import type { GatewayRestartIntent } from "./restart-lifecycle.types.js";
 import { requestGatewayRestartWithSignalAdmission, triggerOpenClawRestart } from "./restart.js";
@@ -44,6 +47,19 @@ type GatewayRespawnOptions = {
   env?: NodeJS.ProcessEnv;
   decision?: GatewayRestartDecision;
 };
+
+function assertGatewayRespawnOutsideMaintenance(env: NodeJS.ProcessEnv): void {
+  const databasePath = resolveOpenClawStateSqlitePath(env);
+  // Reuse Doctor's live state ownership rather than a second maintenance marker.
+  // Even same-process maintenance cannot lend custody to a replacement Gateway.
+  assertPersistedStateDatabaseAccessAllowed({
+    databasePath,
+    ownerPath: resolveStateOwnerIdentity(databasePath).ownerPath,
+    assertMaintenance: () => {
+      throw new Error("Gateway respawn is blocked while offline maintenance owns the state.");
+    },
+  });
+}
 
 export type GatewayRestartDecision =
   | { mode: "disabled"; reason: "no-respawn" }
@@ -237,6 +253,11 @@ export function restartGatewayProcessWithFreshPid(
       ? { mode: "disabled" }
       : { mode: "disabled", detail: decision.detail };
   }
+  try {
+    assertGatewayRespawnOutsideMaintenance({ ...process.env, ...opts.env });
+  } catch (error) {
+    return { mode: "failed", detail: formatErrorMessage(error) };
+  }
   const { supervisor } = decision;
   if (supervisor === "launchd") {
     const handoff = scheduleDetachedLaunchdRestartHandoff({
@@ -287,13 +308,15 @@ export function respawnGatewayProcessForUpdate(
     return { mode: "disabled", detail: "OPENCLAW_NO_RESPAWN" };
   }
   try {
+    const env = opts.env ? { ...process.env, ...opts.env } : process.env;
     const [entryArg, ...entryArgs] = process.argv.slice(1);
     const invocation = resolveOpenClawCliInvocation({
       entryPath: entryArg ? rewritePnpmVersionedOpenClawEntryPath(entryArg) : undefined,
       args: entryArgs,
     });
+    assertGatewayRespawnOutsideMaintenance(env);
     const child = spawn(invocation.command, invocation.args, {
-      env: opts.env ? { ...process.env, ...opts.env } : process.env,
+      env,
       detached: true,
       stdio: "inherit",
     });

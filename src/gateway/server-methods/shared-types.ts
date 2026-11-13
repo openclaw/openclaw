@@ -200,7 +200,7 @@ type GatewayKernelContext = {
   getRuntimeConfig: () => OpenClawConfig;
   /** Instance-owned startup observation; never lends preparation or write authority. */
   agentDatabaseStartup?: import("../../state/agent-database-preparation-context.js").AgentDatabasePreparation;
-  restartResumeWindow?: import("../../infra/gateway-boot-lifecycle.js").GatewayRestartResumeWindow;
+  restartResumeWindows?: import("../../infra/gateway-boot-lifecycle.js").GatewayRestartResumeWindows;
   channelAdmissionAudit?: import("../../channels/message-access/admission-evidence.js").ChannelAdmissionAudit;
   /** Last serving policy committed by this Gateway, excluding tentative secret activation. */
   getCommittedRuntimeConfig?: () => OpenClawConfig;
@@ -362,7 +362,8 @@ type GatewayTransportContext = {
     record?: ExecApprovalRecord<TPayload>;
   }) => ReadonlySet<string>;
   disconnectClientsForDevice?: (deviceId: string, opts?: { role?: string }) => void;
-  disconnectClientsForUserProfile?: (profileId: string) => void;
+  /** With `roleOnly`, current owner devices stay: their certificate, not the role, bounds them. */
+  disconnectClientsForUserProfile?: (profileId: string, opts?: { roleOnly?: boolean }) => void;
   invalidateClientsForDevice?: (
     deviceId: string,
     opts?: { role?: string; reason?: string },
@@ -477,7 +478,7 @@ export type GatewayRequestContext = GatewayKernelContext &
     /** Entry-only access; the kernel owns closure. Absent in embedded-only contexts. */
     requestEntryLifetime?: Pick<
       import("../server-request-entry.js").GatewayRequestEntryLifetime,
-      "enter" | "signal"
+      "enter" | "signal" | "retainedSignal"
     >;
   };
 

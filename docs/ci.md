@@ -43,7 +43,8 @@ source-build step; release-workflow budgets and package-integrity checks are unc
 
 Precise PR plans can run the complete source-boundary gate first in an existing
 short, serial 8-class tooling job. Both configs retain separate test processes;
-a 90-second boundary reservation must fit the existing 150-second test budget.
+the boundary reservation is 60 seconds for `bun-all` and 90 seconds for other
+runtime policies, within the existing 150-second test budget.
 Other runners, preparation modes, parallel jobs, and full validation keep their
 standalone boundary ownership.
 
@@ -83,6 +84,9 @@ Committed `config/postgres-conformance-timings.json` measurements price file wor
 configuration startup, and preparation; they never select the test inventory.
 Cold file scheduling follows Vitest's file-size order. The allocator minimizes
 predicted tail time, then total work, so preparation consumers can share one job.
+Shard 1 reserves 150 seconds for the PR-only PostgreSQL 16 Gateway cron smoke,
+including its second worker preparation and service lifecycle. All callers use
+the same deterministic assignment, including runs without that extra smoke.
 Unknown targets retain a default weight. Inspect any assignment with
 `--shard 1/3 --list` (or `2/3`, `3/3`). Refresh measurements from successful natural
 runs as the suite changes. The latest two file samples track recent workload
@@ -137,15 +141,22 @@ a release-only test selects that test; full manual/release runs retain the
 complete inventory, including desktop resize proof. Unlabeled PRs keep
 change-selected UI coverage; the label does not expand unrelated platform lanes.
 
-Current UI unit/browser CI retains three native shards with three workers each,
+Current UI unit/browser CI retains up to three native shards with three workers each.
+Partial PR unit selections target three files per row to avoid repeated setup.
+Full UI owners and manual validation retain their existing shard layout,
 complete discovery, runtime ownership, and first-shard WebKit selection.
-Two-shard trials did not reduce measured runner minutes and exceeded the
+Full-inventory two-shard trials did not reduce measured runner minutes and exceeded the
 critical-path budget.
 
 Compact mocked Control UI E2E uses six 16-class jobs with four workers each,
 matching the four observed CPUs per runner and retaining 24 aggregate worker slots.
 Private source-server projects stay serial. The conditional browser-extension
 row, noncompact plans, and real-Gateway worker limits retain their existing rules.
+The Mantis chat recording runs in its dedicated evidence workflow and full release
+validation, or when its test changes; routine CI keeps the equivalent chat lifecycle
+assertions without recording the same scenario again.
+Sidebar cached-row parity screenshots and JSON require `OPENCLAW_CAPTURE_UI_PROOF=1`;
+the parity assertions still run during routine CI.
 Browser suites that only exercise the rendered UI borrow the invocation's
 production bundle. Private source servers are reserved for source-module
 interception, custom build identities, or development-server contracts.
@@ -180,6 +191,15 @@ use the runtime-only compiled-worker registry. The local TUI file does the same
 when its existing built-CLI mode is enabled; source TUI and broad, mixed, or
 custom selections retain the full registry.
 
+Packed Node groups also share the runtime-only registry when every group has
+one known configuration and only explicitly qualified files. This includes
+the Gateway client callsite guard, Codex abort settlement, and native search
+authority proofs, plus the synthetic CI timing-refitter tooling suite. Parent
+and child resolve the same include-file selection;
+broad or mixed selections, extra Vitest arguments, and groups requiring a build
+retain the full registry. Test inventory, process isolation, and artifact
+verification are unchanged.
+
 When the artifact producer selects both channels and core support checks with
 matching compiler heap options, they share one full compiled-worker generation.
 Both test commands still run concurrently with their original configurations,
@@ -192,8 +212,14 @@ changed Node plan defers its boundary coverage to that producer. This opt-in doe
 not enable unrelated proof-tier checks.
 
 Full and runtime-only compiled workers reserve separate live/cache slots, so
-runtime checks cannot replace a retained full generation. The protected warmer
-keeps its prebuild full seed for source-only Node shards and publishes the full
+runtime checks cannot replace a retained full generation. Control UI E2E rows
+compile workers locally: bundled Settings preparation can change their installed
+namespace after the source-only seed was captured. Do not restore that seed
+until reuse is qualified against the prepared UI topology. Worker-cache identity
+ignores the compiler's heap ceiling while preserving other Node options; the
+warmer and test job keep their own memory limits.
+
+The protected warmer keeps its prebuild full seed for source-only Node shards and publishes the full
 generation already prepared by postbuild collection separately. Only selected
 source verifiers in the artifact producer restore that postbuild seed, keyed by
 the existing Node toolchain identity. A missing archive keeps their uncached path;
@@ -226,7 +252,7 @@ For the published-upgrade regression gate, see [selection and routing](/ci/scope
 
 Main-tier and selected manual/release CI run the [published-driver update cell](/ci/scope-and-routing/selection#published-driver-update-cell). One GitHub-hosted Linux job runs the latest stable npm updater against the candidate package with two synthetic agents. The Docker cell retains its twenty-minute budget, followed by a fifteen-minute native systemd survivor step using the same candidate and published `2026.10.9`. Both results are included in `openclaw/ci-gate`; the broader main/release Docker survivor remains separate.
 
-Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted upstream `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches run static correctness gates, owner-bounded tests, transitive import consumers, protected regressions, and a six-file runtime smoke set. Node rows target at most 150 estimated test seconds. Single files and indivisible standard groups can exceed that target; setup, builds, and queues are separate from test time. Node shards selecting sandbox container E2E cases prepare the Docker sandbox image when the runner does not already have it. Missing or unbounded runtime selection fails preflight instead of falling back to every test. Windows, browser, Docker, QA Smoke, packaging, contract, and extension families opt in through their existing owners; individual built-process proofs have independent owner flags. Full static fallback does not widen them. The [PR-exempt integration tier](/ci/scope-and-routing/node-test-lanes) retains measured slow tests in hourly `main` and Full Release Validation, with PR opt-in when their tests or subjects change. The existing Plugin Prerelease workflow owns complete extension runtime coverage hourly and in Full Release Validation; normal CI selects affected extension owners on PRs. Windows retains its complete inventory across five measured file shards on hourly main and ordinary manual/release validation; Windows-owner PRs retain that complete inventory.
+Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. On every main push, `security-fast` also runs the direct-stop cleanup process contract and production lint-suppression inventory on both Node and pinned Bun, independently of changed paths. These two regressions reuse its dependency setup and collect all four results before failing; hourly main CI retains their existing owners. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted upstream `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches run static correctness gates, owner-bounded tests, transitive import consumers, protected regressions, and a six-file runtime smoke set. Node rows target at most 150 estimated test seconds. Single files and indivisible standard groups can exceed that target; setup, builds, and queues are separate from test time. Node shards selecting sandbox container E2E cases prepare the Docker sandbox image when the runner does not already have it. Missing or unbounded runtime selection fails preflight instead of falling back to every test. Windows, browser, Docker, QA Smoke, packaging, contract, and extension families opt in through their existing owners; individual built-process proofs have independent owner flags. Full static fallback does not widen them. The [PR-exempt integration tier](/ci/scope-and-routing/node-test-lanes) retains measured slow tests in hourly `main` and Full Release Validation, with PR opt-in when their tests or subjects change. The existing Plugin Prerelease workflow owns complete extension runtime coverage hourly and in Full Release Validation; normal CI selects affected extension owners on PRs. Windows retains its complete inventory across five measured file shards on hourly main and ordinary manual/release validation; Windows-owner PRs retain that complete inventory.
 
 Hourly iOS retains `ios-build (tests)` with Rust, voice, native Access, and focused lifecycle coverage. Successful current iOS builds run SwiftLint and SwiftFormat once through their required Xcode prebuild phases; a standalone fallback retains both checks after failed or skipped builds and for historical or frozen targets. Debug builds select their simulator before compiling, overlap its boot and SimSlim preparation with compilation, and join preparation before either focused simulator test group. Preparation failures or a timed-out join fail the job with its log; test selection and build settings stay unchanged. Current smoke builds prepare testing products once with `build-for-testing`; the voice cleanup and lifecycle groups separately reuse those products with `test-without-building`. Historical targets and other phases retain their existing build actions. Managed attachment UI/export, Watch operation, and Watch delivery UI suites retain every assertion in full manual/release validation. Main-tier simulator builds use the native architecture without indexing or verbose test diagnostics; logs and xcresult bundles remain available. A coalesced scheduled iOS cancellation can leave `openclaw/ci-gate` green with a notice delegating iOS proof to a later scheduled job; it does not validate the canceled revision, and the workflow can still be canceled. Genuine failures remain red. Screenshot capture runs for its own changed inputs and full manual/release validation. See [scope selection](/ci/scope-and-routing/selection) and [capacity](/ci/capacity#owner-path-and-release-coverage) for the coverage trade-off.
 
@@ -279,6 +305,8 @@ Both release destinations share a separate Watch RTC device-library cache, popul
 The same release job caches Xcode's `SourcePackages` downloads separately from ordinary CI, keyed by runner platform, architecture, Xcode, package manifests, and available lockfiles. Both destinations use the canonical `$RUNNER_TEMP/ios-release-recovery/source` project path, which determines Xcode's default DerivedData directory. Automatic package resolution and clean compilation remain enabled; build products and screenshot DerivedData are excluded. Only successful release jobs save downloads, and cache transfer failures retain the cold resolution path. Changing the canonical project path requires a new cache namespace.
 
 Release qualification disables Spotlight indexing on the disposable runner's Data volume before checkout. After Simulator boot, it requires ten seconds of at least 30% idle host CPU within five minutes before issuing the pairing credential. This keeps first-launch background work out of the Gateway and XCTest deadlines. Local qualification uses the same CPU readiness check and leaves host indexing settings to the operator.
+
+iOS qualification proof records assertion basenames and line numbers from the snapshot suite and its Chat and Helpers files, without assertion text or checkout paths. Pairing handles the expected Local Network permission prompt directly before opening manual setup, and also supports authorization retained by subsequent tests. Raw XCTest output and result bundles remain private and are cleaned up by the harness.
 
 Android screenshot-input PRs and ordinary full manual CI run the existing phone
 and Wear store capture script in one hosted Ubuntu job. The final CI gate requires
@@ -354,11 +382,15 @@ runner startup, then reject expired requests before checkout and hydration. This
 queue allowance does not extend running-job or idle deadlines; see
 [Testbox spending limits](/ci/runners#testbox-spending-limits).
 
-Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. The last four rows then each run one root-test partition serially, leaving extension tests and scripts in the central row. Narrow plans reuse four already-selected rows when available; smaller selections retain central root checking. This adds no jobs or compiler overlap. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts retain both packed core-lint rows on the Blacksmith 16-class. Ordinary upstream hybrid push and scheduled runs, plus same-repository PRs, place `preflight`, the selected `pr-failure-report`, and `openclaw/ci-gate` on hosted `ubuntu-24.04`; fork first attempts and all dispatch, qualification, release, and other backend routes retain their existing overrides. The mandatory controls count toward the existing hosted-row budget. See [critical-path assignment evidence](/ci/routing-costs#hosted-assignment-on-the-critical-path). Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
+Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. Eligible current-target Blacksmith core type rows in ordinary runs request the 2-vCPU class; dispatches and frozen, compatibility, or unclassified targets keep the 4-vCPU class. Compiler concurrency, graph selection, and hosted routing are unchanged. The last four rows then each run one root-test partition serially, leaving extension tests and scripts in the central row. Narrow plans reuse four already-selected rows when available; smaller selections retain central root checking. This adds no jobs or compiler overlap. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts retain both packed core-lint rows on the Blacksmith 16-class. Ordinary upstream hybrid push and scheduled runs, plus same-repository PRs, place `preflight`, the selected `pr-failure-report`, and `openclaw/ci-gate` on hosted `ubuntu-24.04`; fork first attempts and all dispatch, qualification, release, and other backend routes retain their existing overrides. The mandatory controls count toward the existing hosted-row budget. See [critical-path assignment evidence](/ci/routing-costs#hosted-assignment-on-the-critical-path). Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
 
 Additional checks and narrow-PR guards and dependency scans start directly after preflight. Ordinary PRs selecting Madge or Kysely divide guards into `check-guards` and `check-guards-architecture`, with the same runner routing and no compiler-plan wait. The manifest retains every check once, and both selected rows must pass. Other events retain their existing rows. Guards retain the exact comparison base and shared check commands; compiler and lint rows wait for their selected graphs. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
 
 Changed compiler planning queries each config's complete file membership with `--listFilesOnly`, using tsrs by default and tsgo on unsupported hosts or when `OPENCLAW_TYPECHECKER=tsgo`. Type-only consumers and dependency declarations remain included; the selected compiler's bundled library directory is excluded because it describes compiler identity, not repository membership. Config expansion and shard/buildinfo validation still use tsgo's `--showConfig`. Queries run serially without opening native API snapshots. Upstream first-attempt `check-plan` jobs use the 16-class when the backend is unset, `blacksmith`, or `hybrid`, including fork PRs. Fork type stripes also use the 16-class with an unset or `blacksmith` backend; their logical GitHub profile and restore-only cache policy stay intact. Existing hybrid health admission, the explicit GitHub override, retries, and frozen routing remain in effect.
+
+When shared SDK declarations are enabled, explicitly selected core-only lint rows skip SDK restoration. Selected extension consumers restore this run's SDK; unselected legacy rows retain their existing cache restoration.
+
+Central lint also skips the SDK cache when the check planner assigns it no extension work. A retained extension tail, missing planner metadata, or a frozen or compatibility target keeps the existing restore path.
 
 The extension package boundary row has a 40-minute job budget for SDK preparation,
 all selected plugin compiles, input-receipt validation, the required negative
@@ -431,6 +463,10 @@ Control UI, repo E2E, and native live browser CI restore the Chromium revision p
 
 The first `checks-ui` shard also runs a curated WebKit overlay and composer-focus project when changed paths touch its interaction owners, their styles, or the subset in `ui/vitest.config.ts`. The manifest owns that selection. WebKit runs sequentially after the existing UI tests, with the same three-worker limit and no additional runner or matrix row. Scheduled runs without changed paths and frozen targets omit it. The selected row installs the pinned Playwright WebKit browser and Linux dependencies. Run the same project explicitly with `OPENCLAW_UI_WEBKIT=1 pnpm --dir ui test --project=webkit --maxWorkers=3`; ordinary UI test runs remain Chromium-only. CDP-dependent modal media and accessibility-tree suites stay on Chromium until their browser-neutral replacements land.
 
+Control UI E2E skips Vitest requirement discovery when its selected files cannot
+include a WebKit or Gateway-runtime suite. Matching or unspecified selections
+retain the existing shard discovery before installing WebKit or preparing runtime.
+
 The WebKit project requires every selected assertion to pass, with no expected-failure exceptions. Shared fixtures wait for usable overlay content, inspect native adopted stylesheets, and establish keyboard traversal independently of Safari's pointer-focus behavior.
 
 Linux baseline ratchets and native grep tests reuse an existing `rg` or download the checksum-pinned ripgrep 15.2.0 release directly into the runner's temporary directory. Setup does not use apt, sudo, package-index refreshes, or package-manager locks. The small archive download has bounded retries and transfer timeouts; unsupported architectures and checksum failures fail the job.
@@ -451,6 +487,12 @@ Changed-owner Node rows use existing file/group timing evidence with a
 150-test-second admission target and the existing 130-row PR cap. Complete files,
 standard configs, and worker policies remain intact; predicted test seconds
 are separate from measured CI wall time.
+Private-QA direct targets can share up to 196 predicted test seconds when the
+same execution policy already selects a slower target. This reserves 104 seconds
+for preparation within a 300-second job budget without increasing the policy's
+longest predicted test row. Repacking must reduce total jobs without adding jobs
+to either private-QA policy. The 12-target limit and hourly reservations remain
+unchanged.
 Compatible selected serial jobs share setup after singleton worker limits are
 fixed. Combined jobs retain the shortest contributing timeout and the existing
 test-work budget; complete and scheduled plans keep their original layout.
@@ -487,6 +529,10 @@ Audited synchronous unit-fast tests can use Bun's native runner; changed test or
 setup bytes return to Vitest. Full Release Validation retains complete Node
 coverage plus qualified Bun coverage; see
 [test runtime selection](/ci/pipeline#test-runtime-selection).
+The protected main warmer publishes the pinned Bun release assets for both Linux
+backends. Readers restore by the complete pin hash and recheck metadata, archive,
+executable, architecture, and revision before use. A cache miss downloads normally;
+a valid cache avoids GitHub Release downloads, including metadata requests.
 Both runtimes group uncached, non-isolated UI files by environment in batches
 to reduce worker restarts while retaining native shard ownership and worker budgets.
 Bun UI workers also use an [allocation-based collection trigger](/ci/scope-and-routing/job-budgets)

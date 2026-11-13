@@ -53,6 +53,8 @@ type TelegramSequentialKeyContext = {
     channel_post?: Message;
     edited_channel_post?: Message;
     callback_query?: { message?: Message; data?: string };
+    /** Bot API 10.4 widget tap; it routes like a callback on its widget's chat. */
+    widget_query?: { chat?: { id?: number } };
     message_reaction?: {
       chat?: { id?: number; type?: string; is_forum?: boolean; is_direct_messages?: boolean };
       message_id?: number;
@@ -159,7 +161,7 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     return `telegram:poll:${pollId}`;
   }
   const msg = getTelegramSequentialMessage(ctx) ?? ctx.update?.callback_query?.message;
-  const chatId = msg?.chat?.id ?? ctx.chat?.id;
+  const chatId = msg?.chat?.id ?? ctx.chat?.id ?? ctx.update?.widget_query?.chat?.id;
   const chatLane = typeof chatId === "number" ? `telegram:${chatId}` : "telegram";
   const rawText = msg?.text ?? msg?.caption;
   const botUsername = ctx.me?.username;

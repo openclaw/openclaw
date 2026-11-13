@@ -100,7 +100,10 @@ describe("provider replay helpers", () => {
 
   it.each([
     ["claude-fable-5-1", true],
-    ["claude-mythos-5-1", false],
+    // Unknown and newer Claude ids take the strict prefix-bound contract.
+    ["claude-mythos-5-1", true],
+    ["claude-zzz-9-9", true],
+    ["claude-opus-5", false],
   ])("scopes append-only replay to prefix-binding %s", (modelId, expected) => {
     for (const buildPolicy of [anthropic, nativeAnthropic]) {
       expect(buildPolicy(modelId).appendOnlyRuntimeContext).toBe(expected);
@@ -151,12 +154,15 @@ describe("provider replay helpers", () => {
       "claude-3-7-sonnet-20250219",
       "claude-3-5-sonnet-20240620",
       "claude-3-opus-20240229",
-      "claude-opus-50",
-      "claude-sonnet-50",
       "claude-sonnet-4-60",
     ]) {
       const policy = anthropic(modelId);
       expect(policy.dropThinkingBlocks).toBe(true);
+    }
+
+    // Ids that only resemble a released generation are unknown models and keep their thinking.
+    for (const modelId of ["claude-opus-50", "claude-sonnet-50", "claude-zzz-9-9"]) {
+      expect(anthropic(modelId)).not.toHaveProperty("dropThinkingBlocks");
     }
   });
 

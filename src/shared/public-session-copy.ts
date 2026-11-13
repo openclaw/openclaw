@@ -8,6 +8,7 @@ export const PUBLIC_SESSION_COPY = {
   checkingAccess: "Checking access…",
   accessFailed: "Could not check access",
   accessRetry: "Check your connection, then reload or log in to try again.",
+  reload: "Reload",
   checkingUpdates: "Checking for updates…",
   updatesDelayed: "Updates delayed · Retrying automatically",
   upToDate: "Up to date",

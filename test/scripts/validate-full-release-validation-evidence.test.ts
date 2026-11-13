@@ -207,6 +207,16 @@ describe("full release validation evidence", () => {
     "windows-after-admission",
     "missing-publication",
     "new-publish-without-admission",
+    "subset",
+    "subset-outside-roster",
+    "subset-duplicate",
+    "subset-route",
+    "subset-channel",
+    "subset-empty",
+    "subset-windows",
+    "subset-core",
+    "subset-wrong-origin",
+    "subset-tampered-evidence",
   ])("authenticates new source-admission evidence: %s", (scenario) => {
     const selection: PublicationSelection = {
       route: "normal",
@@ -241,7 +251,10 @@ describe("full release validation evidence", () => {
         ? null
         : {
             version: "2026.9.9",
-            packages: [{ name: "openclaw", version: "2026.9.9", targets: ["npm"] }],
+            packages: [
+              { name: "@openclaw/test", version: "2026.9.9", targets: ["clawhub", "npm"] },
+              { name: "openclaw", version: "2026.9.9", targets: ["npm"] },
+            ],
             platforms: [],
           },
     );
@@ -276,22 +289,56 @@ describe("full release validation evidence", () => {
           (scenario === "missing-publication"
             ? '  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n'
             : ""),
-        expectedPublicationSelection: (): PublicationSelection => ({
-          ...selection,
-          route: scenario === "selection" ? "prepared" : "normal",
-          ...(scenario === "windows-after-admission"
-            ? {
-                windowsNodeTag: "v0.6.3",
-                windowsNodeInstallerDigests: {
-                  "OpenClawCompanion-Setup-x64.exe": `sha256:${"d".repeat(64)}`,
-                },
-              }
-            : {}),
+        expectedReleaseTag: "v2026.9.9",
+        validateEvidenceReuseStrictly: () => ({
+          valid: true,
+          current: {
+            runId: scenario === "subset-wrong-origin" ? "124" : "123",
+            runAttempt: 2,
+            targetSha,
+            conclusion: "success",
+            manifest:
+              scenario === "subset-tampered-evidence"
+                ? { ...manifest, targetSha: workflowSha }
+                : manifest,
+          },
         }),
+        expectedPublicationOperation: scenario.startsWith("subset")
+          ? {
+              ...selection,
+              publishOpenclawNpm: scenario === "subset-core",
+              pluginPublishScope: "selected",
+              plugins:
+                scenario === "subset-empty"
+                  ? []
+                  : scenario === "subset-outside-roster"
+                    ? ["@openclaw/unknown"]
+                    : scenario === "subset-duplicate"
+                      ? ["@openclaw/test", "@openclaw/test"]
+                      : ["@openclaw/test"],
+              route: scenario === "subset-route" ? "prepared" : "normal",
+              npmDistTag: scenario === "subset-channel" ? "beta" : "latest",
+              ...(scenario === "subset-windows" ? { windowsNodeTag: "v0.6.3" } : {}),
+            }
+          : undefined,
+        expectedPublicationSelection: scenario.startsWith("subset")
+          ? undefined
+          : (): PublicationSelection => ({
+              ...selection,
+              route: scenario === "selection" ? "prepared" : "normal",
+              ...(scenario === "windows-after-admission"
+                ? {
+                    windowsNodeTag: "v0.6.3",
+                    windowsNodeInstallerDigests: {
+                      "OpenClawCompanion-Setup-x64.exe": `sha256:${"d".repeat(64)}`,
+                    },
+                  }
+                : {}),
+            }),
       });
     if (scenario === "windows-after-admission") {
       expect(run).toThrow("windows-node-release.yml");
-    } else if (scenario === "publish") {
+    } else if (scenario === "publish" || scenario === "subset") {
       expect(run).not.toThrow();
     } else {
       expect(run).toThrow(

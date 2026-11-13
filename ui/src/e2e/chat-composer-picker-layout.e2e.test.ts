@@ -220,11 +220,11 @@ suite.define(() => {
           expect(layout.gap).toBeGreaterThanOrEqual(0);
           expect(layout.gap).toBeLessThanOrEqual(8);
           expect(layout.centerOffset).toBeLessThanOrEqual(1);
-          // Reuse the document through 50 Escape and 50 pointer closes at the
-          // mobile breakpoint. Reloading between presses hid WebKit close hangs.
+          // The third close reproduced the WebKit hang. Exercise every delay with
+          // both dismissal paths without reloading the document between presses.
           const delays =
             width === 560
-              ? Array.from({ length: 50 }, (_, i) => [100, 0, 16, 32, 64][i % 5]!)
+              ? Array.from({ length: 10 }, (_, i) => [100, 0, 16, 32, 64][i % 5]!)
               : [0];
           for (const [cycle, delay] of delays.entries()) {
             for (const [triggerSelector, menuSelector, otherMenuSelector] of [

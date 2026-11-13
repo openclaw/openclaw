@@ -138,5 +138,11 @@ substantial missing subjects, retires exact duplicates, supersedes explicitly
 replaced claims and status snapshots by their outcome, and folds durable
 outcomes into page State. The same skill runs as a claim consolidation review
 over other scopes when you ask for one: the claims on one hub or oversized page,
-or the claims about one subject since a date. Scribe runs only review the
-unlinked residue.
+or the claims about one subject since a date. A one-page review ends by
+reviewing that page against its type's layout. The default result is no
+change: a page with a current State and sections that fit its type only gets
+fixes such as a broken citation or a fact a newer claim contradicts.
+Restructuring or splitting a page needs a reason the report names, and dated
+sections and written Timelines are retired into State, claims and source notes
+without losing any citation. Scribe runs review the unlinked residue, retire up
+to 10 written Timelines, and review up to 5 pages, tracked on a checkpoint note.

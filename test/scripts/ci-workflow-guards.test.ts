@@ -584,6 +584,43 @@ describe("ci workflow guards", () => {
     expect(evidence.with.path).toContain("wearScreenshots/*.jpg");
   });
 
+  it.each([
+    ["openclaw-performance", ["kova", "source_performance", "gateway_concurrency"]],
+    [
+      "qa-live-transports-convex",
+      [
+        "run_mock_parity",
+        "run_live_runtime_token_efficiency",
+        "run_live_matrix",
+        "run_live_buzz",
+        "run_live_telegram",
+        "run_live_discord",
+        "run_live_whatsapp",
+        "run_live_slack",
+      ],
+    ],
+  ] as const)("routes %s runtime jobs to hosted Ubuntu in Boat mode", (name, jobs) => {
+    const workflow = readWorkflow(`.github/workflows/${name}.yml`);
+    for (const runnerBackend of ["", "blacksmith", "hybrid", "runson", "github", "boat"] as const) {
+      const labels = ["github", "boat"].includes(runnerBackend)
+        ? "ubuntu-24.04"
+        : "blacksmith-4vcpu-ubuntu-2404";
+      for (const group of ["", "release-runners"]) {
+        for (const job of jobs) {
+          expect(
+            evaluateWorkflowRunner(workflow.jobs[job]["runs-on"], {
+              runnerBackend,
+              runnerGroup: group,
+              releaseRunnerGroup: group,
+              dispatchId: "full-release-validation-routing-proof",
+            }),
+            job,
+          ).toEqual(group ? { group, labels } : labels);
+        }
+      }
+    }
+  });
+
   it("separates release QA lanes without weakening their resource locks", () => {
     const workflow = readWorkflow(".github/workflows/qa-live-transports-convex.yml");
     const releaseWorkflow = readReleaseChecksWorkflow();
@@ -1445,6 +1482,7 @@ AFTER_CD
         "clone",
         "-q",
         "--no-local",
+        "--no-checkout",
         "--filter=blob:none",
         "--depth=2",
         origin,
@@ -1520,9 +1558,11 @@ AFTER_CD
             eventName: "pull_request",
             repository: "openclaw/openclaw",
             runAttempt: 1,
+            failed: true,
             preflightOutputs: { run_docs_content: enabled },
             steps: {
               node_setup: { outcome: "success", outputs: {} },
+              bun_setup: { outcome: "failure", outputs: {} },
               clawhub_docs: { outcome: "success", outputs: {} },
             },
           }),
@@ -1532,15 +1572,20 @@ AFTER_CD
     }
     const format = job.steps.find((step: WorkflowStep) => step.name === "Check formatting");
     expect(format.if).not.toContain("run_docs_content");
-    expect(
-      evaluateWorkflowCondition(format.if, {
-        eventName: "pull_request",
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-        preflightOutputs: { run_docs_content: "false", run_format_check: "true" },
-        steps: { node_setup: { outcome: "success", outputs: {} } },
-      }),
-    ).toBe(true);
+    for (const outcome of ["success", "failure"] as const) {
+      expect(
+        evaluateWorkflowCondition(format.if, {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          preflightOutputs: { run_docs_content: "false", run_format_check: "true" },
+          steps: {
+            node_setup: { outcome: "success", outputs: {} },
+            bun_setup: { outcome, outputs: {} },
+          },
+        }),
+      ).toBe(outcome === "success");
+    }
     const preflight = readCiWorkflow().jobs.preflight;
     expect(preflight.outputs.run_docs_content).toBe(
       "${{ steps.manifest.outputs.run_docs_content }}",
@@ -2406,6 +2451,88 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     expect(actionCheckoutIndex).toBeLessThan(setupIndex);
   });
 
+  it.each(["", "release-fixture"])(
+    "preserves SDK report capacity with runner group %s",
+    (releaseRunnerGroup) => {
+      const context = {
+        eventName: "workflow_dispatch",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerBackend: "blacksmith",
+        matrix: {
+          group: "plugin-sdk-api-diff",
+          runner: "blacksmith-32vcpu-ubuntu-2404",
+        },
+        preflightOutputs: { node_runner_backend: "github", ci_qualification: "false" },
+        dispatchId: "full-release-validation-sdk-routing",
+        releaseRunnerGroup,
+      } as const;
+      const cases: Array<{
+        name: string;
+        overrides: Partial<Parameters<typeof evaluateWorkflowExpression>[1]>;
+        expected: string;
+      }> = [
+        { name: "default dispatch", overrides: {}, expected: context.matrix.runner },
+        {
+          name: "configured GitHub backend",
+          overrides: { runnerBackend: "github" },
+          expected: "ubuntu-24.04",
+        },
+        ...(["hybrid", "runson"] as const).map((backend) => ({
+          name: `admitted ${backend} qualification`,
+          overrides: {
+            preflightOutputs: {
+              ci_qualification: "true",
+              qualification_runner_backend: "hybrid",
+              node_runner_backend: backend,
+            },
+          },
+          expected: context.matrix.runner,
+        })),
+        { name: "retry", overrides: { runAttempt: 2 }, expected: "ubuntu-24.04" },
+        {
+          name: "noncanonical repository",
+          overrides: { repository: "contributor/openclaw" },
+          expected: "ubuntu-24.04",
+        },
+        {
+          name: "unrelated additional check",
+          overrides: { matrix: { group: "boundaries", runner: "blacksmith-4vcpu-ubuntu-2404" } },
+          expected: "ubuntu-24.04",
+        },
+      ];
+      for (const { name, overrides, expected } of cases) {
+        expect(
+          ciValue("check-additional-shard", "runs-on", { ...context, ...overrides }),
+          name,
+        ).toEqual(releaseRunnerGroup ? { group: releaseRunnerGroup, labels: expected } : expected);
+      }
+      expect(
+        ciValue("check-additional-shard", "runs-on", {
+          ...context,
+          dispatchId: "",
+          releaseGate: true,
+          validationTier: "full",
+        }),
+      ).toBe(context.matrix.runner);
+      const timeouts: Array<[Partial<Parameters<typeof evaluateWorkflowExpression>[1]>, number]> = [
+        [{}, 30],
+        [{ dispatchId: "", releaseGate: true, validationTier: "full" }, 30],
+        [{ dispatchId: "" }, 60],
+        [{ dispatchId: "", releaseGate: true, validationTier: "main" }, 60],
+        [{ runAttempt: 2 }, 60],
+        [{ repository: "contributor/openclaw" }, 60],
+        [{ eventName: "push" }, 60],
+      ];
+      for (const [overrides, expected] of timeouts) {
+        expect(
+          ciValue("check-additional-shard", "timeout-minutes", { ...context, ...overrides }),
+          JSON.stringify(overrides),
+        ).toBe(expected);
+      }
+    },
+  );
+
   it("keeps tiny hybrid controls hosted without moving security or fork first attempts", () => {
     const context = {
       eventName: "pull_request",
@@ -2494,9 +2621,9 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
 
   it.each([
     {
-      file: "full-release-validation.yml",
+      file: "full-release-state-watcher.yml",
       runner: "blacksmith-2vcpu-ubuntu-2404",
-      job: "release_decision",
+      job: "watch",
     },
     {
       file: "openclaw-npm-preflight.yml",
@@ -2685,6 +2812,11 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     const suite = "ui/src/e2e/stale-build-recovery.production.e2e.test.ts";
     mkdirSync(bin);
     mkdirSync(vitest, { recursive: true });
+    mkdirSync(path.join(root, "test/vitest"), { recursive: true });
+    symlinkSync(
+      path.resolve("test/vitest/vitest.pattern-file.ts"),
+      path.join(root, "test/vitest/vitest.pattern-file.ts"),
+    );
     mkdirSync(path.dirname(path.join(root, suite)), { recursive: true });
     writeFileSync(path.join(root, suite), "");
     writeFileSync(
@@ -2727,6 +2859,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
           SELECT_RUNTIME: selected,
           PREPARE_EXIT: exit,
           OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: "",
+          OPENCLAW_VITEST_INCLUDE_FILE: "",
           VITEST_SHARD_INDEX: "1",
           VITEST_SHARD_COUNT: "1",
         },
@@ -2777,8 +2910,6 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       ).trim();
     git(source, "init", "--initial-branch=main");
     writeFileSync(path.join(source, "base.txt"), "base\n");
-    mkdirSync(path.join(source, "config"));
-    writeFileSync(path.join(source, "config/test-lines-baseline.txt"), "0\n");
     for (const file of collectRuntimeImportClosure(process.cwd(), [
       "scripts/check-test-lines-ratchet.mts",
     ])) {
@@ -2789,7 +2920,10 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     git(source, "commit", "-m", "base");
     git(source, "checkout", "-b", "pull-request");
     for (let index = 0; index < 3; index++) {
-      writeFileSync(path.join(source, "change.test.ts"), `export const change = ${index};\n`);
+      writeFileSync(
+        path.join(source, "change.test.ts"),
+        `export const change = ${index};\n`.repeat(401),
+      );
       git(source, "add", ".");
       git(source, "commit", "-m", `change ${index}`);
     }
@@ -2859,13 +2993,13 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       });
     const unallocated = check();
     expect(unallocated.status, unallocated.stdout + unallocated.stderr).toBe(1);
-    expect(unallocated.stderr).toContain("over by: 1; net delta: +1.");
-    mkdirSync(path.join(selected, "config/test-lines-allocations"));
+    expect(unallocated.stderr).toContain("Net test lines: +401; allowance: 400;");
+    mkdirSync(path.join(selected, "config/test-lines-allocations"), { recursive: true });
     writeFileSync(path.join(selected, "config/test-lines-allocations/regression.txt"), "1\n");
     git(selected, "add", "config/test-lines-allocations/regression.txt");
     const allocated = check();
     expect(allocated.status, allocated.stdout + allocated.stderr).toBe(0);
-    expect(allocated.stdout).toContain("Test lines OK: 1; ceiling: 1; slack: 0.");
+    expect(allocated.stdout).toContain("allocation credit: 1.");
   });
 
   it("keeps action manifests within the runner's anchor-free YAML grammar", () => {
@@ -3216,7 +3350,7 @@ process.exit(JSON.parse(process.env.RECIPE_EXITS)[count] ?? 99);
           cwd: workspace,
           encoding: "utf8",
           env: {
-            PATH: process.env.PATH,
+            PATH: `${bin}${path.delimiter}${process.env.PATH}`,
             NODE_BIN: bin,
             GITHUB_ACTION_PATH: path.resolve(".github/actions/setup-node-env"),
             GITHUB_WORKSPACE: workspace,
@@ -3661,6 +3795,34 @@ server.listen(0, "127.0.0.1", () => {
     }
   });
 
+  it("keeps each compiled worker preset in a separate archive", () => {
+    const setup = readWorkflow(".github/actions/setup-node-env/action.yml");
+    const steps = setup.runs.steps as WorkflowStep[];
+    const restore = requiredWorkflowStep(steps, "Restore compiled Vitest workers");
+    expect(restore.with?.path).toBe("${{ steps.vitest-worker-cache-meta.outputs.path }}");
+    expect(restore.with?.["restore-keys"]).toBe(
+      "${{ steps.vitest-worker-cache-meta.outputs.prefix }}-${{ steps.vitest-worker-cache-meta.outputs.preset }}-\n",
+    );
+    const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
+    const warmSteps = warmer.jobs.warm.steps as WorkflowStep[];
+    for (const preset of ["full", "runtime", "tooling"]) {
+      const save = requiredWorkflowStep(
+        warmSteps,
+        preset === "full"
+          ? "Save compiled Vitest workers"
+          : `Save ${preset} compiled Vitest workers`,
+      );
+      expect(save.with?.path).toBe(
+        `.artifacts/vitest-worker-cache/run-cache${preset === "full" ? "" : `-${preset}`}-0`,
+      );
+      expect(save.with?.key).toBe(
+        preset === "full"
+          ? "${{ steps.setup-node-env.outputs.vitest-worker-cache-key }}"
+          : `\${{ steps.setup-node-env.outputs.vitest-worker-cache-prefix }}-${preset}-\${{ github.run_id }}-\${{ github.run_attempt }}`,
+      );
+    }
+  });
+
   it("warms full builds with the release runtime without changing test cache selectors", () => {
     const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
     const npm = readWorkflow(".github/workflows/openclaw-npm-preflight.yml");
@@ -3797,6 +3959,152 @@ server.listen(0, "127.0.0.1", () => {
         "retention-days": 14,
       },
     });
+  });
+
+  it("keeps pinned Bun cache publication with the protected warmer", () => {
+    const action = readWorkflow(".github/actions/setup-test-bun/action.yml");
+    const restore = requiredWorkflowStep(action.runs.steps, "Restore pinned Bun release assets");
+    const save = requiredWorkflowStep(action.runs.steps, "Save pinned Bun release assets");
+    const identity = requiredWorkflowStep(action.runs.steps, "Resolve pinned Bun cache identity");
+    expect(identity.run).toContain("$GITHUB_ACTION_PATH/../../..");
+    expect(identity.run).toContain('sha256sum "$pin"');
+    expect(identity.run).toContain("path=~/.cache/openclaw-bun/$tag");
+    const install = requiredWorkflowStep(action.runs.steps, "Install pinned Bun test runtime");
+    expect(install.run).toContain('echo "OPENCLAW_BUN_PATH=$bun_dir/bin/bun" >> "$GITHUB_ENV"');
+    expect(restore.uses).toBe(CACHE_V5);
+    expect(restore.with).not.toHaveProperty("restore-keys");
+    expect(save.uses).toBe(CACHE_SAVE_V5);
+    expect(save.with).toEqual(restore.with);
+    const publisher = {
+      eventName: "schedule" as const,
+      repository: "openclaw/openclaw",
+      ref: "refs/heads/main",
+      workflow: "Vitest Cache Warm",
+      inputs: { "cache-mode": "read-write" },
+      steps: { cache: { outputs: { "cache-hit": "false" } } },
+      runAttempt: 1,
+    };
+    expect(evaluateWorkflowCondition(save.if, publisher)).toBe(true);
+    for (const rejected of [
+      { repository: "contributor/openclaw" },
+      { ref: "refs/pull/123/merge" },
+      { workflow: "CI" },
+      { inputs: { "cache-mode": "restore" } },
+      { steps: { cache: { outputs: { "cache-hit": "true" } } } },
+      { failed: true },
+    ]) {
+      expect(evaluateWorkflowCondition(save.if, { ...publisher, ...rejected })).toBe(false);
+    }
+    const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
+    const publish = requiredWorkflowStep(
+      warmer.jobs.dependencies.steps,
+      "Warm pinned Bun release assets",
+    );
+    expect(publish).toMatchObject({
+      if: "runner.os == 'Linux'",
+      uses: "./.github/actions/setup-test-bun",
+      with: { "cache-mode": "read-write" },
+    });
+    for (const name of ["checks-node-core-test-nondist-shard", "checks-ui"]) {
+      const reader = requiredWorkflowStep(
+        readCiWorkflow().jobs[name].steps,
+        "Setup pinned Bun test runtime",
+      );
+      expect(reader.with?.["cache-mode"]).toBe("${{ needs.preflight.outputs.cache_mode }}");
+    }
+    for (const [name, condition] of [
+      ["check-docs", "needs.preflight.outputs.run_format_check == 'true'"],
+      ["check-additional-shard", "matrix.group == 'boundaries'"],
+    ] as const) {
+      const reader = requiredWorkflowStep(
+        readCiWorkflow().jobs[name].steps,
+        "Setup pinned Bun parity runtime",
+      );
+      expect(reader).toMatchObject({
+        id: "bun_setup",
+        if: condition,
+        uses: "./.ci-harness/.github/actions/setup-test-bun",
+        with: { "cache-mode": "${{ needs.preflight.outputs.cache_mode }}" },
+      });
+      for (const enabled of [true, false]) {
+        expect(
+          evaluateWorkflowCondition(reader.if, {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: { run_format_check: String(enabled) },
+            matrix: { group: enabled ? "boundaries" : "source-contracts" },
+          }),
+        ).toBe(enabled);
+      }
+    }
+  });
+
+  it("prepares Bun once for lint consumers and prevents restaging after setup failure", () => {
+    const workflow = readCiWorkflow();
+    const context = {
+      eventName: "pull_request",
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+    } as const;
+    for (const [name, task] of [
+      ["check-shard", "lint"],
+      ["checks-fast-core", "release-lint-core-1"],
+      ["check-lint-hosted-core-shard", ""],
+      ["check-lint-hosted-extension-shard", ""],
+    ] as const) {
+      const reader = requiredWorkflowStep(
+        workflow.jobs[name].steps,
+        "Setup pinned Bun parity runtime",
+      );
+      expect(reader).toMatchObject({
+        id: "bun_setup",
+        uses: "./.ci-harness/.github/actions/setup-test-bun",
+        with: { "cache-mode": "${{ needs.preflight.outputs.cache_mode }}" },
+      });
+      if (task) {
+        for (const selected of [true, false]) {
+          expect(
+            evaluateWorkflowCondition(reader.if, {
+              ...context,
+              matrix: { task: selected ? task : "npm-lock" },
+            }),
+          ).toBe(selected);
+        }
+      } else {
+        expect(reader.if).toBeUndefined();
+      }
+    }
+    for (const [job, name] of [
+      ["check-shard", "Run changed lint"],
+      ["check-shard", "Run check shard"],
+      ["check-lint-hosted-core-shard", "Run shared central lint"],
+    ] as const) {
+      const step = requiredWorkflowStep(workflow.jobs[job].steps, name);
+      expect(
+        evaluateWorkflowCondition(step.if, {
+          ...context,
+          failed: true,
+          steps: {
+            check_setup: { outputs: {}, outcome: "success" },
+            bun_setup: { outputs: {}, outcome: "failure" },
+          },
+          matrix: { task: "lint", shared_central_lint_selection_json: "{}" },
+          preflightOutputs: { central_lint_selection_json: name === "Run check shard" ? "" : "{}" },
+        }),
+      ).toBe(false);
+    }
+    const otherCheck = requiredWorkflowStep(workflow.jobs["check-shard"].steps, "Run check shard");
+    expect(
+      evaluateWorkflowCondition(otherCheck.if, {
+        ...context,
+        steps: {
+          check_setup: { outputs: {}, outcome: "success" },
+          bun_setup: { outputs: {}, outcome: "skipped" },
+        },
+        matrix: { task: "npm-lock" },
+      }),
+    ).toBe(true);
   });
 
   it("persists isolated transform and compile caches through immutable protected archives", () => {
@@ -4568,7 +4876,9 @@ ${buildScript}`,
     const packages = workflow.jobs["macos-swift-packages"];
     expect(native.needs).toEqual(["preflight", "build-artifacts"]);
     expect(packages.needs).toEqual(["preflight"]);
-    expect(packages.strategy.matrix.phase).toEqual(["packages"]);
+    expect(packages.strategy.matrix.phase).toContain(
+      "needs.preflight.outputs.run_mlx_native_proof",
+    );
     expect(packages.steps).toEqual(native.steps);
     expect(packages["timeout-minutes"]).toBe(30);
     for (const result of ["success", "skipped", "failure", "cancelled"] as const) {
@@ -4771,12 +5081,21 @@ ${buildScript}`,
     expect(currentTargetBranch).not.toContain("--no-parallel");
     expect(testStep.run).toContain("swift_test_args+=(--no-parallel)");
 
-    for (const buildExitCode of [0, 23]) {
-      const root = tempDirs.make(`openclaw-swift-test-${buildExitCode}-`);
+    for (const [buildExitCode, historicalTarget] of [
+      [0, false],
+      [23, false],
+      [0, true],
+    ] as const) {
+      const root = tempDirs.make(`openclaw-swift-test-${buildExitCode}-${historicalTarget}-`);
       const binDir = path.join(root, "bin");
       const callsPath = path.join(root, "swift-calls");
       const outputPath = path.join(root, "github-output");
       mkdirSync(binDir, { recursive: true });
+      if (historicalTarget) {
+        const suites = path.join(root, "apps/macos/Tests/OpenClawIPCTests");
+        mkdirSync(suites, { recursive: true });
+        writeFileSync(path.join(suites, "QuickChatCatalogPresentationTests.swift"), "");
+      }
       symlinkSync(path.resolve("scripts"), path.join(root, "scripts"), "dir");
       mkdirSync(path.join(root, ".ci-harness/scripts"), { recursive: true });
       symlinkSync(path.resolve("scripts/lib"), path.join(root, ".ci-harness/scripts/lib"), "dir");
@@ -4833,7 +5152,7 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
           GITHUB_OUTPUT: outputPath,
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
           SWIFT_TEST_EXECUTION: "serial",
-          HISTORICAL_TARGET: "false",
+          HISTORICAL_TARGET: String(historicalTarget),
         },
       });
       const calls = readFileSync(callsPath, "utf8").trim().split("\n");
@@ -4843,8 +5162,15 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
         ...(buildExitCode === 0
           ? [
               expect.stringMatching(
-                /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --skip AppStateIsolationTests\|ProfileChatPreferencesTests\|QuickChatCatalogPresentationTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
+                /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --skip AppStateIsolationTests\|ProfileChatPreferencesTests\|QuickChatCatalogPresentationTests\|DashboardExperienceTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
               ),
+              ...(historicalTarget
+                ? []
+                : [
+                    expect.stringMatching(
+                      /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --filter DashboardExperienceTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
+                    ),
+                  ]),
               expect.stringMatching(
                 /^test --package-path apps\/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build --experimental-maximum-parallelization-width 4 --filter QuickChatCatalogPresentationTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
               ),
@@ -4857,16 +5183,15 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
       const output = existsSync(outputPath) ? readFileSync(outputPath, "utf8").trim() : "";
       const outputLines = output.split("\n");
       if (buildExitCode === 0) {
-        expect(outputLines).toHaveLength(4);
+        expect(outputLines).toHaveLength(historicalTarget ? 4 : 5);
         expect(outputLines[0]).toBe("debug-tests-built=true");
+        for (const outputLine of outputLines.slice(1, -1)) {
+          expect(
+            outputLine.startsWith(`menu-default-artifact-path=${root}/openclaw-menu-default-`),
+          ).toBe(true);
+        }
         expect(
-          outputLines[1]?.startsWith(`menu-default-artifact-path=${root}/openclaw-menu-default-`),
-        ).toBe(true);
-        expect(
-          outputLines[2]?.startsWith(`menu-default-artifact-path=${root}/openclaw-menu-default-`),
-        ).toBe(true);
-        expect(
-          outputLines[3]?.startsWith(`menu-named-artifact-path=${root}/openclaw-menu-named-`),
+          outputLines.at(-1)?.startsWith(`menu-named-artifact-path=${root}/openclaw-menu-named-`),
         ).toBe(true);
       } else {
         expect(output).toBe("");
@@ -5128,6 +5453,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     () => {
       const directory = tempDirs.make("ci-preflight-dependencies-");
       const harness = exportPreflightHarness(directory);
+      const adaptiveImport = spawnSync(
+        testNodeExecPath,
+        [
+          "--input-type=module",
+          "-e",
+          `await import(${JSON.stringify(pathToFileURL(path.join(harness, "scripts/ci-adaptive-priors.mjs")).href)});`,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(adaptiveImport.status, adaptiveImport.stderr).toBe(0);
       const harnessPaths = new Set<string>();
       const steps: WorkflowStep[] = readCiWorkflow().jobs.preflight.steps;
       for (const step of steps) {
@@ -6422,13 +6757,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           GITHUB_ENV: output,
           FIXTURE_CORES: String(cores),
           RUNSON_JOB: "true",
+          OPENCLAW_NODE_TEST_CPU_BUDGET: "",
           RUNNER_ENVIRONMENT: "self-hosted",
           FROZEN_TARGET: "false",
           SHARD_PLAN_CONCURRENCY: "1",
         },
       });
       expect(result.status, result.stderr).toBe(0);
-      expect(readWorkflowOutputs(output)).toEqual({ OPENCLAW_VITEST_MAX_WORKERS: String(workers) });
+      expect(readWorkflowOutputs(output)).toEqual({
+        OPENCLAW_NODE_TEST_CPU_BUDGET: "",
+        OPENCLAW_VITEST_MAX_WORKERS: String(workers),
+      });
     }
   });
 
@@ -6507,6 +6846,31 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(assetCheckStep.run).toContain('packageJson.scripts?.["plugins:assets:check"]');
     expect(assetCheckStep.run).toContain("pnpm plugins:assets:check");
     expect(assetCheckStep.run).toContain("predates plugins:assets:check");
+  });
+
+  it.each([
+    [{}, true],
+    [{ runAttempt: 2 }, true],
+    [{ eventName: "workflow_dispatch" }, false],
+    [{ eventName: "workflow_dispatch", ref: "refs/heads/feature" }, false],
+    [{ repository: "example/fork" }, false],
+    [{ ref: "refs/heads/feature" }, false],
+    [{ runnerBackend: "" }, false],
+    [{ runnerBackend: "blacksmith" }, false],
+    [{ runnerBackend: "hybrid" }, false],
+    [{ runnerBackend: "runson" }, false],
+    [{ runnerBackend: "github" }, false],
+  ] as const)("routes Android CodeQL to Boat only on scheduled main: %j", (context, boat) => {
+    const job = readWorkflow(".github/workflows/codeql-android-critical-security.yml").jobs.android;
+    expect(
+      evaluateWorkflowRunner(job["runs-on"], {
+        eventName: "schedule",
+        repository: "openclaw/openclaw",
+        ref: "refs/heads/main",
+        runnerBackend: "boat",
+        ...context,
+      }),
+    ).toBe(boat ? "boat-xlarge" : "blacksmith-8vcpu-ubuntu-2404");
   });
 
   it("keeps network CodeQL off unrelated source-only refactors", () => {
@@ -6647,7 +7011,7 @@ it("pins generated publisher and maturity owners before credentials and selected
   ]);
   expect(action.runs.steps[0]).toEqual({
     ...PINNED_GIT_OWNER,
-    uses: "openclaw/openclaw/.github/actions/git-owner@c30efcb58a050bc5c449381e732125662e87faae",
+    uses: "openclaw/openclaw/.github/actions/git-owner@8743f1bfafa41aebdb3a33a7137eaa6d70bd0eb7",
   });
   const sanitySteps: WorkflowStep[] = readWorkflowSanityWorkflow().jobs.actionlint.steps;
   const audit = sanitySteps.findIndex(
@@ -6745,6 +7109,7 @@ it.each(["publish", "promote"])(
             finalize_release_before_docker: false,
           },
           needs: {
+            resolve_release_target: { outputs: { prepared_plugins: "" } },
             publish: { result: "success" },
             publish_docker: { result: "success" },
             finalize_github_release_before_docker: { result: "skipped" },
@@ -7409,15 +7774,23 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     const steps = job.steps as WorkflowStep[];
     const checkout = requiredWorkflowStep(steps, "Checkout selected tag");
     expect(job.permissions, jobName).toEqual({ contents: "read" });
-    expect(checkout.with?.["persist-credentials"], jobName).toBe(false);
     const jobJson = JSON.stringify(job);
     expect(jobJson, jobName).not.toContain("${{ secrets.");
     for (const envName of tauriSigningEnvNames) {
       expect(jobJson, jobName).not.toContain(envName);
     }
     if (jobName === "validate_release") {
+      expect(checkout.uses).toBeUndefined();
+      expect(checkout.env).toEqual({
+        RELEASE_TAG: "${{ steps.request.outputs.release_tag }}",
+      });
+      expect(checkout.run).toContain('f"+refs/tags/{release_tag}:refs/tags/{release_tag}"');
+      expect(checkout.run).toContain("for attempt in range(1, 4):");
+      expect(checkout.run).toContain("timeout=120");
+      expect(checkout.run).toContain('git_output(workspace, "rev-parse", "HEAD")');
       continue;
     }
+    expect(checkout.with?.["persist-credentials"], jobName).toBe(false);
     const checkoutIndex = steps.indexOf(checkout);
     expect(checkout.with?.ref).toBe("${{ needs.validate_release.outputs.tag_sha }}");
     expect(checkoutIndex, `${jobName} selected checkout order`).toBeGreaterThan(0);
@@ -7449,7 +7822,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     path: ".release-tooling",
     "persist-credentials": false,
     "sparse-checkout":
-      "apps/linux/src-tauri/tauri.conf.json\nscripts/lib/record-shared.mjs\nscripts/release-tooling-identity.mjs\nscripts/linux-updater-manifest.mjs\nscripts/lib/release-version.mjs\n",
+      "apps/linux/src-tauri/tauri.conf.json\nscripts/lib/record-shared.mjs\nscripts/lib/plain-gh.mjs\nscripts/release-tooling-identity.mjs\nscripts/linux-updater-manifest.mjs\nscripts/lib/release-version.mjs\n",
   });
   const tooling = requiredWorkflowStep(linuxSteps, "Verify trusted release tooling identity");
   expect(tooling?.env).toMatchObject({

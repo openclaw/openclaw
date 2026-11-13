@@ -378,6 +378,8 @@ const startupEnglish = {
     dashboard: "Dashboard",
   },
   common: {
+    reportBug: "Report a bug",
+    suggestFeature: "Suggest a feature",
     showDetails: "Show details",
     uploadsDisabled: "File and image uploads are disabled.",
     ok: "OK",
@@ -466,6 +468,7 @@ const startupEnglish = {
     colorMode: "Color mode",
     colorModeOption: "Color mode: {mode}",
     search: "Search",
+    clearSearch: "Clear search",
     pickerNoMatches: "No matches",
     save: "Save",
     saving: "Saving…",
@@ -1551,7 +1554,6 @@ const startupEnglish = {
       billingProblem: "{provider} reports a billing problem",
       openModels: "Open Models",
       failedRepeatCount: "{count} times",
-      failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
       tryAgain: "Try again",
       continuePrompt:
         "Continue from where you stopped. Check which actions already completed before retrying anything.",
@@ -1688,7 +1690,7 @@ const startupEnglish = {
     codeBlock: {},
     workspaceConflict: {},
     compaction: {
-      savedTokens: "saved {count} tokens",
+      savedTokensWithPercent: "saved {count} tokens ({percent}%)",
     },
     sessionReset: {
       label: "Session reset",
@@ -1927,6 +1929,7 @@ const startupEnglish = {
     },
     permissions: {},
     toolCards: {
+      tool: "Tool",
       activity: {},
       review: {},
       verbs: {},

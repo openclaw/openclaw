@@ -170,6 +170,18 @@ async function createOfflineSurface(warm = false) {
 }
 
 describe("warm boot app root", () => {
+  it("renders an admitted warm shell without waiting for cold construction", async () => {
+    const yielding = Promise.withResolvers<void>();
+    vi.stubGlobal("chrome", {});
+    vi.stubGlobal("scheduler", { yield: () => yielding.promise });
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    onTestFinished(() => yielding.resolve());
+
+    const { container } = await createWarmSurface();
+    expect(runtime!.warmBoot).toBe(true);
+    expect(container.querySelector("openclaw-app-shell")).not.toBeNull();
+  });
+
   it("loads a focused dashboard after startup and reports its committed result to automation", async () => {
     window.history.replaceState({}, "", `/focus${focusSource}`);
     const starting = Promise.withResolvers<void>();
@@ -452,6 +464,21 @@ describe("warm boot app root", () => {
     first.container.remove();
     const second = await createOfflineSurface();
     expect(loginGate(second.container).props.showGatewaySecret).toBe(false);
+  });
+
+  it("connects a paired browser to the Gateway that issued its approval", async () => {
+    const { container } = await createOfflineSurface();
+    const gate = loginGate(container);
+    const connect = vi.spyOn(runtime!.context.gateway, "connect").mockImplementation(() => {});
+    gate.props.onGatewayUrlChange("wss://edited.example");
+    gate.props.onBrowserPaired("wss://issuing.example");
+    // No session credentials, so the stored device token for that Gateway is selected.
+    expect(connect).toHaveBeenCalledWith({
+      gatewayUrl: "wss://issuing.example",
+      token: "",
+      password: "",
+      bootstrapToken: "",
+    });
   });
 
   it("keeps credential drafts until the Gateway client changes", async () => {

@@ -107,3 +107,21 @@ C/A and C/B ratios with A/B; retain both application median/p95 and Chromium
 thread CPU. WebKit has application timings, not untraced CPU measurements.
 Native shimmer counts run after timing, because Inspector enumeration can
 retain wrappers and normal DOM animation queries omit detached targets.
+
+The comparator accepts `--engines chromium,webkit,firefox`, `--samples` and
+`--actions typing,model-picker,sidebar-toggle` for a bounded comparison. Both
+checkpoints warm the probe's lazy picker after restoring its retained pane keys.
+State files are written before equality checks so a failed setup remains
+inspectable. The census records stylesheet/rule counts and rendered descendants;
+different retained-pane node counts within a checkpoint still reject the comparison.
+
+For diagnosis, `--ablate-scrollbar` removes only the scrollbar dimension
+declarations in arm C, without editing the bundle. `--park-inactive-content`
+applies `content-visibility: hidden` to its inactive retained panes. These flags
+are interventions, not product settings. `--resources` counts observers,
+listeners and timers; `--trace` collects separate, instrumented Timeline results.
+Do not pool those timings with uninstrumented samples. `--native-census` now
+records all native WebKit animations, including target connection and play state.
+`--heap` captures aged arms and an independently launched fresh control after
+timing, summarizes detached wrappers, and deletes the raw snapshots. Firefox has
+no heap/Timeline collection in this harness.

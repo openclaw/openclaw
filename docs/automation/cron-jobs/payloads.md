@@ -151,7 +151,10 @@ source; names, schedules, and other executable inputs remain bound. A fresh
 owner capture applies only to the definition captured, even if another manager
 edits the job before the update commits. Disabling or removing a job still
 cancels its active occurrence; re-enabling it does not revive that cancelled
-occurrence.
+occurrence. A turn the occurrence already started in another session, for
+example with `sessions_send`, belongs to that session: it keeps running when the
+occurrence ends or the job is removed, and still revalidates the operator's
+role, device, and access grant.
 
 A continuation waits for its current conversation turn to finish before reading
 the current job and checking its source at launch. Trigger-supplied context does
@@ -235,8 +238,16 @@ and compatible authentication route. OAuth and API keys can remain enabled toget
 changing interactive defaults, profile order, or the job’s plain model selection does
 not switch the job’s account or billing route. Automatic ownership remains distinct
 from an explicit user profile pin. Token refresh within the same authorization is
-allowed; deleting, replacing, or revoking that authorization stops the job rather
-than falling back to another account. Model and route compatibility still apply.
+allowed. Deleting, replacing, or revoking that authorization refuses the job's models on
+that provider instead of switching to another of its accounts. Model and route
+compatibility still apply.
+
+The recorded account governs only its own provider. Configured fallback models on other
+providers select their credentials live, the same way an interactive run does, so a job
+bound to one provider still fails over when that provider is out of quota or down. This
+also applies when the recorded account was replaced or removed: its provider is refused,
+and the rest of the fallback chain still runs. If a job has no model of its own and the
+default model moves to another provider, the job follows it with live credentials.
 
 At creation, account capture follows scheduled-model selection, including an
 allowed `model@profile` value in per-agent or global `subagents.model`. A disallowed
@@ -264,8 +275,11 @@ missing profile from account order or recreate its credentials automatically.
 
 Managed updates and the standard container entrypoint run repairing Doctor before
 activation. A manual source upgrade must include `openclaw doctor --fix` before
-starting the Gateway. Startup reports potentially unmigrated host-account jobs
-before scheduling; it does not capture credentials or rewrite jobs.
+starting the Gateway. Startup checks potentially unmigrated host-account jobs in the background without
+delaying cron readiness or operations. The scan has a five-second aggregate budget;
+if it expires, one warning reports how many jobs were not checked and points to
+`openclaw doctor --lint` for a complete check. Startup does not capture credentials
+or rewrite jobs.
 
 Keys in the environment or provider config have no stored account to record. A job
 on such a route stays unbound and runs on that key; once a stored account becomes eligible for its route, the
@@ -273,9 +287,15 @@ job stops with the adoption instructions instead of switching to that account. J
 creation follows the same rule. An account refusal ends the run; it never falls back
 to another model or provider. Credentialless models remain usable without an account.
 
-Unbound CLI-runtime automations use the CLI's own login and do not require an
-inference binding. OpenClaw does not forward a stored inference profile on this
-native-only path. Jobs with a saved inference binding keep using that account.
+Unbound CLI-runtime automations need no inference binding when the CLI account
+selector chooses native login. If it selects a stored profile, scheduled runs refuse
+to borrow that account: Doctor, lint, and startup name the job and its explicit
+`openclaw automations edit <jobId> --model <provider/model>@<profileId>` recovery
+command. This edit also sets the primary model; Doctor never adopts CLI accounts
+automatically. To explicitly choose Claude CLI's native login, use
+`anthropic/<model>@anthropic:claude-cli` with the same edit command.
+OpenClaw does not forward a stored inference profile on the native-only path.
+Jobs with a saved inference binding keep using that account.
 Known provider-auth environment variables and the backend's credential exclusions
 are removed after environment overrides, even when the live-test preserve-env
 option is set. Runtime settings, such as the context window, are retained.
@@ -516,7 +536,7 @@ With `announce`, agent, command, and script results belong to the chat or topic 
 
   </Accordion>
   <Accordion title="What 'fresh session' means for isolated jobs">
-    A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, display names, sidebar placement, custom categories and icons, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older automation session row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
+    A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, display names, sidebar placement, custom categories, icons and colors, dashboard face and presentation, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older automation session row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
 
     Messages sent to the job's `cron:<jobId>` session, for example with `sessions_send`, address its latest run. A message still queued when that run ends can fail, and the next run reassigns the key, so later runs start without it. Put information that later runs need in the job payload or [scratch](#job-scratch-and-quiet-results).
 

@@ -177,7 +177,7 @@ export function registerGatewayStartupReadinessTests(params: {
     expect(trace.mark).toHaveBeenCalledWith("sidecars.ready");
     expect(trace.detail).toHaveBeenCalledWith("sidecars.ready", [
       ["loadedPluginCount", 2],
-      ["postReadySidecarCount", 3],
+      ["postReadySidecarCount", 4],
     ]);
   });
 }

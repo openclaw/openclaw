@@ -722,7 +722,7 @@ it("fails named probes for disabled MCP servers", async () => {
 });
 
 it("reports omitted enabled servers while accepting omitted disabled servers", async () => {
-  const invocationExitCode = process.exitCode;
+  const invocationExitCode = process.exitCode ?? 0;
 
   let catalogServers: Record<
     string,
@@ -813,7 +813,6 @@ it("fails when removing an unknown MCP server", async () => {
 it("starts the channel bridge with parsed serve options", async () => {
   const tokenFile = path.join(workspaceDir, "gateway.token");
   await fs.writeFile(tokenFile, "secret-token\n", "utf-8");
-
   await mcp(
     "serve",
     ...flags({
@@ -823,7 +822,6 @@ it("starts the channel bridge with parsed serve options", async () => {
       "--verbose": true,
     }),
   );
-
   expect(serveOpenClawChannelMcp).toHaveBeenCalledWith({
     gatewayUrl: "ws://127.0.0.1:18789",
     gatewayToken: "secret-token",
@@ -833,14 +831,16 @@ it("starts the channel bridge with parsed serve options", async () => {
   });
 });
 
-it("points serve startup failures at the deep Gateway health diagnostic", async () => {
-  serveOpenClawChannelMcp.mockRejectedValueOnce(new Error("gateway unavailable"));
-
+it("reports serve flag errors as-is and start failures with one hint period", async () => {
+  const modeError = 'Invalid --claude-channel-mode value. Use "auto", "on", or "off".';
+  await expectFailure(modeError, "serve", "--claude-channel-mode", "bad");
+  serveOpenClawChannelMcp.mockRejectedValueOnce(new Error("gateway closed (1006)."));
   await expectFailure(
-    "MCP server failed to start: gateway unavailable. Run openclaw gateway status --deep --require-rpc to inspect Gateway health.",
+    "MCP server failed to start: gateway closed (1006). Run openclaw gateway status --deep --require-rpc to inspect Gateway health.",
     "serve",
   );
 });
+
 it("emits one JSON failure for an unknown server in show", async () => {
   expect(await readJsonFailure("show", "missing")).toMatchObject({
     ok: false,

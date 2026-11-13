@@ -1,7 +1,7 @@
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, tryResolveSoleAgentId } from "../../agents/agent-scope.js";
 import {
-  applyPluginAutoEnable,
+  applyPluginAutoEnableAsync,
   materializePluginAutoEnableCandidates,
 } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -298,11 +298,13 @@ export async function runDoctorRepairSequence(params: {
   if (missingConfiguredPluginInstallRepair.changes.length > 0) {
     appendNotes(changeNotes, missingConfiguredPluginInstallRepair.changes);
     applyMutation(
-      applyPluginAutoEnable({
-        config: state.candidate,
-        env,
-        manifestRegistry: pluginMetadataSnapshotState.current?.manifestRegistry,
-      }),
+      await runWithCurrentPluginMetadata(() =>
+        applyPluginAutoEnableAsync({
+          config: state.candidate,
+          env,
+          manifestRegistry: pluginMetadataSnapshotState.current?.manifestRegistry,
+        }),
+      ),
     );
     if (repairedPluginIds.length > 0) {
       applyMutation(

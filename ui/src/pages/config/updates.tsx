@@ -495,8 +495,8 @@ function GatewayUpdates(props: UpdatesViewProps) {
               : undefined
           }
           control={
-            <div class="updates-status-control">
-              <div>
+            <div class="updates-status-control" style={{ width: "340px", "max-width": "100%" }}>
+              <div style={{ flex: "1 1 0", "min-width": "0" }}>
                 <Errored
                   fallback={(error, reset) => (
                     <span class="updates-status-check-failed">

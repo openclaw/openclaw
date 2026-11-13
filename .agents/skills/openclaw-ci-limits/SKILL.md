@@ -697,6 +697,9 @@ These are intentionally guarded by the `ci-workflow-guards`,
   ownership. Test-only files and unrelated runtime changes omit this lane;
   manual runs, unknown paths and older planners retain coverage. Preserve the
   target's existing performance-script capability checks.
+- Partial PR UI unit selections target three files per job within the existing
+  three-row cap and three-worker limit. Full UI owners and manual validation
+  retain their established shards, runtime policy and first-row WebKit checks.
 - Eligible Control UI E2E rows request the 16-vCPU class with unchanged live
   backend/event routing. Compact plans use six mocked Control UI shards with four
   workers each, matching four observed CPUs per runner and retaining 24 aggregate

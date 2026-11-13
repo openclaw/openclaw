@@ -3,8 +3,17 @@ import { hash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
-const { values } = parseArgs({ options: { "fixture-json": { type: "string" } } });
+const { values } = parseArgs({
+  options: { "fixture-json": { type: "string" }, "inactive-entries": { type: "string" } },
+});
+const inactiveEntries = parseStrictIntegerOption({
+  raw: values["inactive-entries"],
+  fallback: 20,
+  min: 0,
+  label: "--inactive-entries",
+});
 const stateDir = process.env.OPENCLAW_STATE_DIR;
 assert(
   stateDir && path.isAbsolute(stateDir),
@@ -107,7 +116,7 @@ for (let index = 0; index < 400; index++) {
   }
   if (index === 220) {
     const branchParent = parentId;
-    for (let side = 0; side < 20; side++) {
+    for (let side = 0; side < inactiveEntries; side++) {
       entries.push({
         type: "message",
         id: `side-${side}`,
@@ -118,7 +127,7 @@ for (let index = 0; index < 400; index++) {
     }
   }
 }
-assert.equal(entries.length, 1222);
+assert.equal(entries.length, 1202 + inactiveEntries);
 const json = JSON.stringify(entries);
 if (values["fixture-json"]) {
   await writeFile(values["fixture-json"], json, { flag: "wx" });

@@ -1,4 +1,8 @@
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import {
+  readDaemonRuntimePin,
+  withDaemonRuntimePinMigration,
+} from "../../daemon/runtime-pin-state.js";
 import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -20,18 +24,9 @@ import {
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
 
 export async function prepareUpdateRestart(
-  input: UpdateRestartParams & { assertCurrent: () => void },
+  params: UpdateRestartParams & { assertCurrent: () => void },
   restartConfigSnapshot: ConfigFileSnapshot,
 ) {
-  let params = input;
-  const original = params.originalManagedServiceRuntime;
-  if (original && !original.definition.runtimePin && params.preManagedServiceStop) {
-    params = {
-      ...params,
-      result: { ...params.result, root: original.root },
-      preManagedServiceStop: { ...params.preManagedServiceStop, ...original.service },
-    };
-  }
   let refreshGatewayServiceEnv = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
   let gatewayServiceInstallEnv: NodeJS.ProcessEnv | null | undefined;
@@ -74,6 +69,18 @@ export async function prepareUpdateRestart(
         preManagedServiceStop: params.preManagedServiceStop,
         allowInstallRootChange: true,
       });
+      const original = params.originalManagedServiceRuntime;
+      if (original && !original.definition.runtimePin) {
+        // Doctor may have completed the legacy handoff since pre-update capture.
+        // Capture that intent before the existing native rebind owner verifies it.
+        original.definition.runtimePin = await withDaemonRuntimePinMigration(serviceState.env, () =>
+          readDaemonRuntimePin(
+            { kind: "gateway", env: serviceState.env },
+            original.definition.command,
+          ),
+        );
+        params.assertCurrent();
+      }
       gatewayServiceEnv = serviceState.env;
       serviceManagerUid ??= serviceState.runtime?.systemd?.managerUid;
       const useInstalledState =

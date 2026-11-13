@@ -105,7 +105,8 @@ const enChatSession = {
       noMatches: "No emoji match your search.",
       you: "You",
       andOthers: "{names} and {count} others",
-      reactedWith: "{names} reacted with {emoji}",
+      andOneOther: "{names} and 1 other",
+      current: "Reactions on this message",
     },
     sessionHeader: {
       people: "People",
@@ -164,6 +165,9 @@ const enChatSession = {
       speechBubbles: "Speech bubbles",
       reasoning: "Reasoning",
       toolCalls: "Tool calls",
+      inlineCommands: "Inline command trail (this browser)",
+      inlineCommandsUnavailable:
+        "Couldn’t load the inline command trail. Grouped commands remain available. In View, turn Inline command trail off and on to retry.",
       commentary: "Keep commentary",
     },
     workspaceConflict: {
@@ -252,8 +256,9 @@ const enChatSession = {
     },
     pendingInputs: {
       sendNow: "Send now",
-      steerBlocked: "Waiting for {tools}; cannot interrupt safely.",
-      steerUnavailable: "Waiting for the next model turn; this runtime cannot interrupt tools.",
+      steering: "Steering…",
+      steerBlocked: "Steering — sends when the current step finishes.",
+      steerUnavailable: "Steering — sends on the next model turn.",
       agentUpdate: {
         cancelled: "This agent update was cancelled before delivery.",
       },

@@ -22,6 +22,7 @@ import type { InternalSessionEntry, SessionEntry } from "../../../config/session
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { buildDashboardSessionTitleSource } from "../../../gateway/dashboard-session-title.js";
 import type { FreshChildSession } from "../../../gateway/in-process-session-run.js";
+import type { ProjectRequester } from "../../../gateway/project-access.js";
 import {
   normalizeTrustedGroupMetadata,
   resolveAgentSessionGroup,
@@ -68,6 +69,8 @@ type InitialSubagentSession = {
 
 export async function createInitialSubagentSession(input: {
   cfg: OpenClawConfig;
+  /** Operator (or creator role) the spawn acts for; bounds projectId and inherited sources. */
+  projectRequester: ProjectRequester;
   requesterAgentId: string;
   targetAgentId: string;
   childSessionKey: string;
@@ -241,7 +244,12 @@ export async function createInitialSubagentSession(input: {
               throw new Error("projectId cannot be combined with cwd");
             }
             const project = projectId
-              ? await resolveSessionProjectRoot(params.cfg, projectId, true)
+              ? await resolveSessionProjectRoot(
+                  params.cfg,
+                  projectId,
+                  true,
+                  params.projectRequester,
+                )
               : undefined;
             params.assertActive?.();
             if (project && !project.ok) {
@@ -261,6 +269,7 @@ export async function createInitialSubagentSession(input: {
                 !projectId && !params.spawnedCwd && parentTarget.agentId === params.targetAgentId
                   ? params.requesterInternalKey
                   : undefined,
+              projectRequester: params.projectRequester,
               name: params.worktree.worktreeName,
               baseRef: params.worktree.worktreeBaseRef,
               deferWorktree: true,

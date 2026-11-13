@@ -8,6 +8,8 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { resolveLaunchableNodePath } from "../../infra/stable-node-path.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { prepareAgentCoreDumpLimit } from "../linux-core-dump.js";
+import type { ProcessExecutionIntent } from "../linux-exec-cgroup.js";
 import { withChildProcessOperation } from "../spawn-diagnostics.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 import { spawnProcess } from "../spawn-utils.js";
@@ -140,6 +142,7 @@ function createServiceChildCleanup() {
 
 /** Publish cleanup ownership before waiting for the broker's pipe and IPC handoff. */
 export function spawnServiceChildRelay(params: {
+  executionIntent?: ProcessExecutionIntent;
   workerUrl: URL;
   stdio: SpawnOptions["stdio"];
   env: NodeJS.ProcessEnv;
@@ -152,6 +155,11 @@ export function spawnServiceChildRelay(params: {
   transportReady: Promise<void> | undefined;
 } {
   const executable = resolveLaunchableNodePath();
+  const limited = prepareAgentCoreDumpLimit(
+    executable,
+    resolveRuntimeWorkerArgv(params.workerUrl, executable),
+    params.executionIntent,
+  );
   const child = withChildProcessOperation(
     "service.relay",
     () => {
@@ -163,7 +171,7 @@ export function spawnServiceChildRelay(params: {
       if (params.nativeProcessOwner === params.workerUrl.href) {
         delete env.BUN_BE_BUN;
       }
-      return spawnProcess(executable, resolveRuntimeWorkerArgv(params.workerUrl, executable), {
+      return spawnProcess(limited.command, limited.args, {
         stdio: params.stdio,
         detached: params.detached,
         windowsHide: true,

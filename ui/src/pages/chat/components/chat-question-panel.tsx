@@ -9,7 +9,7 @@ import {
 } from "solid-js";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { nextRadio } from "../../../components/solid/radio.tsx";
+import { nextRadio } from "../../../components/solid/radio-navigation.ts";
 import { SessionLink } from "../../../components/solid/session-link.tsx";
 import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";

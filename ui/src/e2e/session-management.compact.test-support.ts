@@ -151,3 +151,13 @@ export async function archiveSession(
   const menu = surface === "header" ? "openclaw-chat-header-session-menu" : "openclaw-session-menu";
   await support.activateSelfRemovingControl(menuItem(page.locator(menu), "Archive session"));
 }
+
+/** Closes the held archive's Undo toast, which ends its window and sends the archive. */
+export async function closeArchiveUndoToast(page: Page) {
+  const held = page
+    .locator("openclaw-toast-host .app-toast")
+    .filter({ has: page.getByRole("button", { name: "Undo", exact: true }) })
+    .first();
+  await held.waitFor({ state: "visible", timeout: 10_000 });
+  await held.getByRole("button", { name: "Dismiss" }).click();
+}

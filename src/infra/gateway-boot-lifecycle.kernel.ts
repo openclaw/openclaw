@@ -1,10 +1,18 @@
+import { readConfigMachineStateRowInDatabase } from "../state/config-machine-state-row.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
+import { GATEWAY_CRASH_STATE_KEY, type GatewayCrashState } from "./gateway-crash.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenance-required.js";
 import { TAILSCALE_BACKEND_AUTH_REQUIRED_REASON } from "./tailscale-backend-auth-required-error.js";
 import { TAILSCALE_BACKEND_STOPPED_REASON } from "./tailscale-backend-stopped-error.js";
+
+export function readGatewayCrashStateInDatabase(db: EngineConnection): GatewayCrashState {
+  const row = readConfigMachineStateRowInDatabase(db, GATEWAY_CRASH_STATE_KEY);
+  // SAFETY: The boot lifecycle is the sole writer of this machine-state key and shape.
+  return row ? (JSON.parse(row.value_json) as GatewayCrashState) : { recent: [] };
+}
 
 type GatewayBootLifecycleDatabase = Pick<DB, "gateway_boot_lifecycle">;
 const GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD = 3;
@@ -123,6 +131,10 @@ function readGatewayLastShutdownInDatabase(db: EngineConnection) {
 }
 
 export const gatewayBootReadOperations = {
+  "gatewayBoot.crashes": (_input: undefined, db) => ({
+    type: "gatewayBoot.crashes" as const,
+    crashes: readGatewayCrashStateInDatabase(db).recent,
+  }),
   "gatewayBoot.lastShutdown": (_input: undefined, db) => ({
     type: "gatewayBoot.lastShutdown" as const,
     shutdown: readGatewayLastShutdownInDatabase(db),

@@ -105,6 +105,10 @@ import {
 import { prepareConfigWriteTopology } from "./io.write-topology.js";
 import { formatConfigIssueLines } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
+import {
+  normalizeLegacyWorkboardDatabaseConfig,
+  projectLegacyWorkboardWrite,
+} from "./legacy-workboard-database.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { prepareRootPluginCohortIntent } from "./plugin-cohort-publication.js";
 import { setConfigResolutionFacts } from "./resolution-facts.js";
@@ -143,7 +147,8 @@ export async function writeConfigFileFromContext(
     : undefined;
   const configForWrite = preserveDeferredPluginMigrationConfig({
     sourceConfig: snapshot.sourceConfig,
-    nextConfig: cfg,
+    // Canonical intent must survive beforeCommit replacing the Workboard anchor.
+    nextConfig: normalizeLegacyWorkboardDatabaseConfig(cfg, deps.env),
     pending: pendingMigrations ?? [],
     writeOptions: options,
   });
@@ -197,6 +202,7 @@ export async function writeConfigFileFromContext(
     ...(options.unsetPaths ?? []),
   ]);
   const hasAuthoredIncludes = containsConfigIncludeDirective(snapshot.parsed);
+  const rootAuthoredConfig = projectLegacyWorkboardWrite(snapshot, configForWrite, deps.env);
   // Preserve roster includes during Doctor repairs; bootstrap rosters use explicitSetPaths.
   if (snapshot.valid || (snapshot.exists && hasAuthoredIncludes)) {
     const webhookMigration = hasAuthoredIncludes
@@ -213,7 +219,7 @@ export async function writeConfigFileFromContext(
       sourceConfigValid: snapshot.valid,
       sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
       nextConfig: webhookMigration?.config ?? authoredConfig,
-      rootAuthoredConfig: snapshot.parsed,
+      rootAuthoredConfig,
       agentRosterIncludeOwned: snapshot.agentRosterIncludeOwned,
       keyedAgentEntryIncludePaths: keyedAgentEntryIncludes?.includePaths,
       unsetPaths,
@@ -232,7 +238,7 @@ export async function writeConfigFileFromContext(
         persistedCandidate: persistCandidate,
         runtimeConfig: authoredRuntimeConfig,
         sourceConfig: authoredSourceConfig,
-        rootAuthoredConfig: snapshot.parsed,
+        rootAuthoredConfig,
         explicitSetPaths: webhookMigration.paths,
         allowIncludeAncestorExplicitSetPaths: true,
       });

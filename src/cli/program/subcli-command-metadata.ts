@@ -31,6 +31,7 @@ const commands = [
     { parentDefaultHelp: true },
   ),
   command("users", "Manage durable user profiles and email aliases", { parentDefaultHelp: true }),
+  command("id", "OpenClaw ID remote access of this machine's Gateway", { parentDefaultHelp: true }),
   command("node", "Run and manage the headless node host service"),
   command("connect", "Connect this machine to an OpenClaw Gateway as a node", {
     hasSubcommands: false,
@@ -58,6 +59,7 @@ const commands = [
   command("hooks", "Manage internal agent hooks"),
   command("webhooks", "Webhook helpers and integrations"),
   command("qr", "Generate a mobile pairing QR code and setup code", { hasSubcommands: false }),
+  command("pair", "Approve a browser showing a pairing code", { hasSubcommands: false }),
   command("clawbot", "Legacy clawbot command aliases"),
   command("pairing", "Secure DM pairing (approve inbound requests)"),
   command("plugins", "Manage OpenClaw plugins and extensions", { parentDefaultHelp: true }),

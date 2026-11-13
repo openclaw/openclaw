@@ -5,8 +5,9 @@ import "../../styles/channels.css";
 import { ChannelIcon } from "../../components/solid/channel-icon.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import "../../components/openclaw-mascot.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import "../../components/openclaw-mascot.tsx";
+import { LoadingState } from "../../components/solid/loading-state.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
@@ -130,7 +131,10 @@ export function ChannelsView(props: ChannelsProps) {
   );
 
   return (
-    <>
+    <Show
+      when={snapshot() || props.channels.channelsError || !props.channels.channelsLoading}
+      fallback={<LoadingState route />}
+    >
       <SettingsPage>
         <ChannelStatusFeedback channels={props.channels} />
         {/* An open channel shows this above its own footer instead. */}
@@ -193,7 +197,7 @@ export function ChannelsView(props: ChannelsProps) {
       </Show>
       {props.canAdmin ? <ChannelWizard {...props} /> : undefined}
       {renderChannelPairingPrompt(props)}
-    </>
+    </Show>
   );
 }
 

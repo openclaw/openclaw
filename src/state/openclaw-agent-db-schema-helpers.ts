@@ -25,9 +25,9 @@ import {
   SqliteSchemaMismatchError,
   throwSqliteSchemaMismatches,
 } from "../infra/sqlite-schema-issues.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
+import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { readMainTableList } from "../infra/sqlite-strict.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { readSqliteUserVersion, writeSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   AGENT_V14_BOARD_SCHEMA_SQL,
@@ -441,18 +441,25 @@ export function finishAgentSchemaMigration(
   schemaSql: string,
   requiresMaintenance: boolean,
   assertMigration: () => void,
-  integrityTables?: readonly string[],
+  integrity?: { tables: readonly string[]; foreignKeyTables?: readonly string[] },
 ): void {
-  db.exec(`PRAGMA user_version = ${targetVersion};`);
+  writeSqliteUserVersion(db, targetVersion);
   persistAgentSchemaMetadata(db, agentId, targetVersion);
   assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion }, schemaSql);
-  for (const table of integrityTables ?? []) {
+  for (const table of integrity?.tables ?? []) {
     if (tableExists(db, table)) {
       assertSqliteTableIntegrity(db, pathname, table);
     }
   }
-  if (requiresMaintenance && db.prepare("PRAGMA foreign_key_check").all().length > 0) {
-    throw new Error(`Agent schema migration failed foreign key validation for ${pathname}.`);
+  if (requiresMaintenance) {
+    const checks = integrity?.foreignKeyTables?.map(
+      (table) => `PRAGMA foreign_key_check(${quoteSqliteIdentifier(table)})`,
+    ) ?? ["PRAGMA foreign_key_check"];
+    for (const check of checks) {
+      if (db.prepare(check).all().length > 0) {
+        throw new Error(`Agent schema migration failed foreign key validation for ${pathname}.`);
+      }
+    }
   }
   assertMigration();
 }

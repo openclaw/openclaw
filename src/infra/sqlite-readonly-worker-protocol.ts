@@ -21,6 +21,7 @@ export type SqliteReadOnlyWorkerMode =
   | "sync"
   | "backup-engine"
   | "backup-engine-preserving"
+  | "state-sqlite-populated"
   | "private-fork"
   | "content-version"
   | "file-generation"
@@ -50,12 +51,13 @@ export function isSqliteSnapshotStagingMode(mode: unknown): boolean {
 
 export type SqliteReadOnlyWorkerResult =
   | { ok: true; engine: BackupEngine }
+  | { ok: true; hasExistingData: boolean }
   | { ok: true; reclamation: SqliteSnapshotReclamation }
   | { ok: true; location: string }
   | { ok: true; contentVersion: string }
   | { ok: true; generation: string }
   | { ok: true; taskDeliveryRecovery: PreservedOrphanTaskDelivery }
-  | { ok: false; message: string };
+  | { ok: false; message: string; errcode?: number };
 
 export class SqliteReadOnlyInspectionContentionError extends Error {}
 
@@ -156,6 +158,7 @@ export type SqliteReadOnlyWorkerOutput =
   | { kind: "launch-failed"; error: Error };
 export type SqliteReadOnlyWorkerValue =
   | BackupEngine
+  | boolean
   | SqliteSnapshotReclamation
   | string
   | SqliteAuthProfileRows
@@ -166,6 +169,22 @@ export const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
 export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteReadOnlyWorkerResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
+  }
+  if (
+    "ok" in value &&
+    value.ok === false &&
+    "message" in value &&
+    typeof value.message === "string"
+  ) {
+    return (
+      Object.keys(value).length === 2 ||
+      (Object.keys(value).length === 3 &&
+        "errcode" in value &&
+        typeof value.errcode === "number" &&
+        Number.isInteger(value.errcode) &&
+        value.errcode >= 0 &&
+        value.errcode <= 0x7fff_ffff)
+    );
   }
   if (Object.keys(value).length !== 2 || !("ok" in value)) {
     return false;
@@ -184,6 +203,9 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
       [value.reclamation.removed, value.reclamation.bytes, value.reclamation.skipped].every(
         (count) => typeof count === "number" && Number.isFinite(count) && count >= 0,
       )) ||
+    (value.ok === true &&
+      "hasExistingData" in value &&
+      typeof value.hasExistingData === "boolean") ||
     (value.ok === true && "location" in value && typeof value.location === "string") ||
     (value.ok === true &&
       "contentVersion" in value &&
@@ -198,8 +220,7 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
       Number.isSafeInteger(value.taskDeliveryRecovery.count) &&
       value.taskDeliveryRecovery.count > 0 &&
       typeof value.taskDeliveryRecovery.payloadSha256 === "string" &&
-      /^[a-f0-9]{64}$/u.test(value.taskDeliveryRecovery.payloadSha256)) ||
-    (value.ok === false && "message" in value && typeof value.message === "string")
+      /^[a-f0-9]{64}$/u.test(value.taskDeliveryRecovery.payloadSha256))
   );
 }
 
@@ -235,6 +256,10 @@ function parseSqliteReadOnlyWorkerResult(
   return message;
 }
 
+export function readSqliteReadOnlyWorkerValue(
+  params: SqliteReadOnlyWorkerOutput,
+  mode: "state-sqlite-populated",
+): boolean;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
   mode: "backup-engine" | "backup-engine-preserving",
@@ -301,6 +326,16 @@ export function readSqliteReadOnlyWorkerValue(
       params.stderr,
       { cause: params.cause },
     );
+    if (
+      !result.ok &&
+      result.errcode !== undefined &&
+      (mode === "backup-engine" ||
+        mode === "backup-engine-preserving" ||
+        mode === "state-sqlite-populated") &&
+      (params.status === 0 || params.status === 1)
+    ) {
+      Object.assign(error, { errcode: result.errcode });
+    }
     if (capacity) {
       throw new SqliteSnapshotCapacityError(error.message, { cause: params.cause });
     }
@@ -328,6 +363,9 @@ export function readSqliteReadOnlyWorkerValue(
   }
   if ((mode === "backup-engine" || mode === "backup-engine-preserving") && "engine" in result) {
     return result.engine;
+  }
+  if (mode === "state-sqlite-populated" && "hasExistingData" in result) {
+    return result.hasExistingData;
   }
   if (mode === "content-version" && "contentVersion" in result) {
     return result.contentVersion;

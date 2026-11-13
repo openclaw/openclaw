@@ -34,6 +34,7 @@ export type SqliteIntegrityWorkerInput = {
   identity: FileIdentityStat;
   busyTimeoutMs: number;
   reuse?: true;
+  background?: true;
   integrity?: SqliteIntegrityCheckOptions;
 };
 
@@ -211,6 +212,7 @@ export function assertSqliteIntegrityInWorker(
   databaseLabel = pathname,
   timing?: SqliteIntegrityCheckTiming,
   integrity?: SqliteIntegrityCheckOptions,
+  scheduling?: { priority: "background" },
 ): Promise<void> {
   const scope = integrityScope.getStore();
   const run = async (heldScope?: IntegrityScope) => {
@@ -404,6 +406,7 @@ export function assertSqliteIntegrityInWorker(
             identity,
             busyTimeoutMs,
             integrity,
+            ...(scheduling?.priority === "background" ? { background: true as const } : {}),
             ...(heldScope ? { reuse: true as const } : {}),
           } satisfies SqliteIntegrityWorkerInput,
           (error) => {

@@ -487,7 +487,8 @@ export async function prepareGatewayKernelState(params: {
     getAgentDatabaseAdmissionRefusals: () => {
       const cfg = getRuntimeConfig();
       return listAgentDatabaseAdmissionRefusals().filter(
-        (refusal) => !canIsolateAgentDatabase(cfg, refusal.agentId),
+        (refusal) =>
+          refusal.code === "agent-deletion" || !canIsolateAgentDatabase(cfg, refusal.agentId),
       );
     },
     getPluginReloadStatus: params.getPluginReloadStatus,

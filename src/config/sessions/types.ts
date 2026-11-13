@@ -284,6 +284,21 @@ type SessionEntryCore = SessionEntryProvenance &
     pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
     /** Trusted session initialization is incomplete; all work admission stays blocked. */
     initializationPending?: true;
+    /** Ordinary Template admission owns this exact pending incarnation until verified setup. */
+    templateInitialization?: {
+      source: { packageName: string; version?: string };
+      agentConfig: import("../types.agents.js").AgentEntryConfig;
+      workspaceIdentity: string;
+      /** Verified intent recorded before instructions or config can change. */
+      preparing?: {
+        agentConfig: import("../types.agents.js").AgentEntryConfig;
+        planDigest: string;
+        sourceIntegrity: string;
+        /** Only previously absent files (digest) and directories (null). */
+        workspaceAdditions: Record<string, string | null>;
+      };
+      configured?: { planDigest: string; sourceIntegrity: string };
+    };
     /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
     pluginExtensionSlotKeys?: Record<string, Record<string, string>>;
     /** Durable one-shot prompt additions drained before the next agent turn. */
@@ -641,7 +656,24 @@ export type SessionProfileInvolvement = {
   lastMention?: { generation: string; sequence: number; timestamp: number };
 };
 
+/**
+ * The scheduled parent a cron `:run:` row's occurrence was admitted against: the
+ * parent's exact incarnation and the occurrence's owner bit.
+ */
+export type SessionScheduledMemoryParent = {
+  sessionKey: string;
+  sessionId: string;
+  /** Absent when the job's link recorded only the parent session id. */
+  lifecycleRevision?: string;
+  senderIsOwner: boolean;
+};
+
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /**
+   * Written only by cron run preparation on a child-placement `:run:` row, so a
+   * session the run spawns can resolve its memory audience through that parent.
+   */
+  scheduledMemoryParent?: SessionScheduledMemoryParent;
   /** Atomic history-cut receipt for the exact settled local projection, cleared after adoption. */
   localWorkspaceHandoff?: {
     worktreeId: string;
@@ -683,7 +715,18 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Written only by committed graceful shutdown, consumed by the next startup. */
-  resumeAfterRestart?: { queuedInputIds: string[]; hadBackgroundExec?: true };
+  resumeAfterRestart?: {
+    queuedInputIds: string[];
+    /** Original per-input limits, restored only after current source revalidation. */
+    queuedInputSources?: Record<
+      string,
+      {
+        runId: string;
+        source: import("../../gateway/operator-run-recovery-source.codec.js").QueuedOperatorRecoverySource;
+      }
+    >;
+    hadBackgroundExec?: true;
+  };
   /**
    * Latest authenticated source per person who sent input here, keyed by profile ID. Restored only
    * through current device, auth, profile and role revalidation; never an executable grant.

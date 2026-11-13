@@ -1,18 +1,34 @@
 import * as crypto from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, beforeEach, expect, it, vi } from "vitest";
 import { model } from "../../../../packages/agent-core/src/agent-loop.test-support.js";
+import { configureAiTransportHost, getAiTransportHost } from "../../../../packages/ai/src/host.js";
+import {
+  anthropicModel,
+  anthropicEvents,
+  createAnthropicResponse,
+} from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
+import { createAnthropicMessagesTransportStreamFn } from "../../../../packages/ai/src/transports/anthropic-transport-stream.js";
 import { createAssistantOutput } from "../../../../packages/ai/src/transports/assistant-output.js";
 import { convertResponsesMessages } from "../../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import {
+  freezeJsonSnapshot,
+  isDeeplyFrozenPlainData,
+  isPlainData,
+} from "../../../shared/immutable-data.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { convertToLlm } from "../../sessions/messages.js";
 import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
+import { transformTransportMessages } from "../../transport-message-transform.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
+import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 
 // mock-isolation: Count repeated history hashing while preserving native digests.
 vi.mock("node:crypto", { spy: true });
@@ -43,7 +59,9 @@ vi.mock("../../../config/sessions/session-accessor.js", () => ({
     throw new Error("main-thread hierarchy read");
   },
 }));
-vi.mock("../replay-history.js", () => ({
+// mock-isolation: Keep normalization real while isolating recovery-history setup.
+vi.mock("../replay-history.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../replay-history.js")>()),
   sanitizeSessionHistory: async ({ messages }: { messages: AgentMessage[] }) => [...messages],
   validateReplayTurns: async ({ messages }: { messages: AgentMessage[] }) => messages,
 }));
@@ -156,6 +174,87 @@ it("publishes restored assistant history without rehashing it on later model req
     vi.mocked(crypto.hash).mockClear();
     await observer.onModelRequest(model, { messages: [published] });
     expect(crypto.hash).not.toHaveBeenCalled();
+  }
+});
+
+it("reuses restored tool history fragments across turns without changing request bytes", async () => {
+  const fixture = createFixture();
+  mocks.readEntry.mockResolvedValue(undefined);
+  const target = { ...anthropicModel, id: "claude-sonnet-4-5", maxTokens: 8192 };
+  const appendTurn = (turn: number) => {
+    const assistant = createAssistantOutput(target);
+    assistant.content = [{ type: "toolCall", id: `call_${turn}`, name: "lookup", arguments: {} }];
+    assistant.stopReason = "toolUse";
+    return [
+      assistant,
+      {
+        role: "toolResult" as const,
+        toolCallId: `call_${turn}`,
+        toolName: "lookup",
+        content: [{ type: "text" as const, text: `Result ${turn}: ` + "café 🦞\n".repeat(4096) }],
+        isError: false,
+        timestamp: turn,
+      },
+    ];
+  };
+  for (let turn = 0; turn < 99; turn++) {
+    fixture.messages.push(...appendTurn(turn));
+  }
+  const next = appendTurn(99).map(freezeJsonSnapshot);
+  const initialHost = getAiTransportHost();
+  const response = createAnthropicResponse(anthropicEvents);
+  let wire = "";
+  configureAiTransportHost({
+    ...initialHost,
+    transformTransportMessages,
+    immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData },
+    buildModelFetch: () => async (input, init) => {
+      wire = await new Request(input, init).text();
+      return response.clone();
+    },
+  });
+  const send = async (messages: AgentMessage[]) => {
+    const stream = await createAnthropicMessagesTransportStreamFn()(
+      target,
+      {
+        systemPrompt: "Stable instructions",
+        messages: convertToLlm(normalizeMessagesForLlmBoundary(messages)),
+      },
+      {
+        apiKey: "synthetic-request-key",
+        cacheRetention: "long",
+        reasoning: "low",
+        onPayload: () => undefined,
+      },
+    );
+    expect((await stream.result()).stopReason).toBe("stop");
+    return wire;
+  };
+  try {
+    // The writable restored view supplies independent pre-publication wire bytes.
+    const expected = [await send(fixture.messages), await send([...fixture.messages, ...next])];
+    await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);
+    const published = fixture.agent.state.messages;
+    expect(await send(published)).toBe(expected[0]);
+    const stringify = JSON.stringify;
+    let messageEncodes = 0;
+    const spy = vi.spyOn(JSON, "stringify").mockImplementation((value, replacer, space) => {
+      if (isRecord(value) && (value.role === "user" || value.role === "assistant")) {
+        messageEncodes++;
+      }
+      return stringify(value, replacer, space);
+    });
+    let second: string;
+    try {
+      second = await send([...published, ...next]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(second).toBe(expected[1]);
+    // Only the two moving checkpoints and two appended messages may be encoded.
+    expect(messageEncodes).toBeLessThanOrEqual(4);
+  } finally {
+    configureAiTransportHost(initialHost);
   }
 });
 

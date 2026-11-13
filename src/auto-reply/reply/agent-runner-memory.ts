@@ -840,7 +840,7 @@ export async function runMemoryFlushIfNeeded(
         return result;
       },
     });
-    emitInternalRunUsageDiagnostic(flushExecution.result, {
+    await emitInternalRunUsageDiagnostic(flushExecution.result, {
       config: params.cfg,
       agentId: params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg),
       agentDir: params.followupRun.run.agentDir,

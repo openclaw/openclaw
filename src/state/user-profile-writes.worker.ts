@@ -20,6 +20,7 @@ import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { CHANNEL_IDENTITY_PROVIDER } from "./user-channel-identities.js";
 import type { UserGitHubConnectionCommit } from "./user-github-connections.types.js";
 import { ensureUserPreferencesSchema } from "./user-preferences.store.js";
+import { assertProfilesAreNotDelegated } from "./user-profile-delegation.worker.js";
 import { normalizeProfileEmail as normalizeEmail } from "./user-profile-email.kernel.js";
 import { publishUserProfileAuthorityChange } from "./user-profile-events.js";
 import {
@@ -43,6 +44,7 @@ import {
   requireResolvedUserProfileMetadataById,
   userProfilesDb,
   toUserProfile,
+  isUserProfileEmailAddress,
   selectUserProfileEmails,
   userProfileAvatarPresence,
   type UserProfileRow,
@@ -111,7 +113,7 @@ function selectUserProfileListItemById(
   }
   return {
     ...toUserProfile(profile),
-    emails: selectUserProfileEmails(db, profileId),
+    emails: selectUserProfileEmails(db, profileId).filter(isUserProfileEmailAddress),
     githubIdentity: selectUserProfileGitHubIdentities(db, [profileId]).get(profileId) ?? null,
     hasAvatar: profile.has_avatar === 1,
   };
@@ -427,6 +429,7 @@ export function linkEmail(
         return selectUserProfileListItemById(db, target.id);
       }
       const changedIds = [target.id, ...(existingAlias ? [existingAlias.profile_id] : [])];
+      assertProfilesAreNotDelegated(db, changedIds);
       options.mutation?.before(db, ...changedIds);
       setUserProfileEmailBinding(db, normalizedEmail, target.id, now);
       const remainingAliases = existingAlias

@@ -119,6 +119,10 @@ describe("ManagedWorktreeService garbage collection", () => {
       expect((await service.gc()).orphansDeleted).toBe(1);
       expect(acquire.mock.calls.length).toBe(1);
       await expect(fs.stat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
+      await git(repo, "branch", "openclaw/later-orphan");
+      expect((await service.gc()).failedCount).toBe(0);
+      expect(acquire.mock.calls.length).toBe(2);
+      expect(await git(repo, "branch", "--list", "openclaw/later-orphan")).toBe("");
       expect(await fs.readFile(path.join(registered.path, "README.md"), "utf8")).toBe("base\n");
     } finally {
       acquire.mockRestore();

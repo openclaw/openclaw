@@ -1,10 +1,13 @@
 import { Show } from "solid-js";
 import type { GuestWelcomeHandle } from "../../../app/guest-welcome-handle.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 
-/** Non-blocking welcome-session setup progress in the composer status lane. */
+registerEnglishCatalog(registerChatSessionEnglish);
+
+/** Non-blocking welcome setup progress, including when Home has no chat pane. */
 export function renderGuestWelcomeStatus(owner: GuestWelcomeHandle) {
   const state = projectOwner(owner, (current) => current.presentation);
   const failed = () => {

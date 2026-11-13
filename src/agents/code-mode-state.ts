@@ -451,7 +451,9 @@ export function reserveActiveRunSlot(ownedRunId?: string): () => void {
   if (ownedRunId === undefined) {
     removeExpiredRuns();
     if (activeRuns.size + activeRunReservations >= MAX_ACTIVE_CODE_MODE_RUNS) {
-      throw new ToolInputError("too many suspended code mode runs.");
+      throw new ToolInputError(
+        "too many suspended code mode runs. Resume an existing run with wait, or use exec with awaitResults:true to collect an existing tool result without suspending. Do not repeat already-dispatched work.",
+      );
     }
   } else {
     const state = activeRuns.get(ownedRunId);

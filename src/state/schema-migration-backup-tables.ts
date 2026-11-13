@@ -43,6 +43,8 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     39: ["transcript_events"],
     // New receipt table only; existing session data is not rewritten.
     40: ["session_creation_operations"],
+    // Empty companion only; transcript payloads and the active projection stay untouched.
+    41: ["session_transcript_active_event_facts"],
   },
   state: {
     [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [
@@ -100,5 +102,6 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     37: ["worker_environments"],
     38: ["session_repository_workspaces", "worker_workspace_pending_results"],
     39: ["worker_environments"],
+    40: ["worker_environments"],
   },
 };

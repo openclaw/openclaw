@@ -1,4 +1,5 @@
 import { createStore } from "solid-js";
+import { findMarkdownCodeRegions } from "../../../../../packages/markdown-core/src/markdown-code-regions.js";
 import { handleComposerMenuKeydown } from "../../../components/composer-menu.ts";
 import {
   getSkillCommandCompletions,
@@ -54,7 +55,10 @@ function findSkillMentionTarget(value: string, caret: number): SkillMentionTarge
     return null;
   }
   const dollar = start - 1;
-  if (isEscapedReference(value, dollar)) {
+  if (
+    isEscapedReference(value, dollar) ||
+    findMarkdownCodeRegions(value).some((region) => region.start <= dollar && dollar < region.end)
+  ) {
     return null;
   }
   let end = safeCaret;

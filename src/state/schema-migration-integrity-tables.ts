@@ -198,6 +198,13 @@ export function resolveSchemaMigrationIntegrityTables(
   ) {
     return ["schema_meta"];
   }
+  if (
+    migration.kind === "agent" &&
+    migration.foundVersion === 40 &&
+    migration.supportedVersion === 41
+  ) {
+    return ["schema_meta", "session_transcript_active_event_facts"];
+  }
   const tables = new Set(["schema_meta"]);
   if (migration.foundVersion === migration.supportedVersion) {
     for (const table of SCHEMA_MIGRATION_HISTORICAL_REPAIR_TABLES[migration.kind]) {

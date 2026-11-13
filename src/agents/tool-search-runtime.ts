@@ -565,11 +565,14 @@ export function formatToolSearchControlResult<T>(
   options: {
     parentToolCallId?: string;
     terminalBatchStatus?: "waiting" | "completed" | "failed";
-    compact?: boolean;
+    /** Model-facing projection of payload; details keep the full payload. */
+    modelPayload?: unknown;
     images?: Extract<AgentToolResult<unknown>["content"][number], { type: "image" }>[];
   } = {},
 ): AgentToolResult<T> {
-  const serialized = serializeToolSearchControlResult(payload, options.compact);
+  const serialized = serializeToolSearchControlResult(
+    "modelPayload" in options ? options.modelPayload : payload,
+  );
   const networkContent = runtime?.hasNetworkContent(options.parentToolCallId) ?? false;
   const { text } = renderToolSearchControlText(serialized, networkContent);
   const result = textResult(text, payload);

@@ -28,12 +28,12 @@ it("can retry a failed toast import and dismiss the recovered notice", async () 
   });
 
   await waitForSolid(() => expect(getByRole(host, "button", { name: "Retry" })).toBeTruthy());
-  expect(getByRole(host, "alert").textContent).toContain("Couldn’t load this panel.");
+  expect(getByRole(host, "alert").textContent).toContain("Synthetic saved notice");
   expect(getByRole(host, "button", { name: "Dismiss" })).toBeTruthy();
   vi.doUnmock("./toast-view.tsx");
   getByRole(host, "button", { name: "Retry" }).click();
-  await waitForSolid(() => expect(host.textContent).toContain("Synthetic saved notice"));
-  expect(host.querySelector('[role="alert"]')).toBeNull();
+  await waitForSolid(() => expect(host.querySelector('[role="alert"]')).toBeNull());
+  expect(host.textContent).toContain("Synthetic saved notice");
   getByRole(host, "button", { name: "Dismiss" }).click();
   await waitForSolid(() => expect(dismissed).toHaveBeenCalledExactlyOnceWith("dismiss"));
   expect(host.toasts).toEqual([]);

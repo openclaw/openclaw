@@ -66,9 +66,10 @@ controls keep their distinct presentation. Text appears as it arrives, including
 short fragments before a tool call or the final response.
 
 If an inactive run's saved history ends during tool use and has no terminal
-assistant message, Chat keeps its commentary and tool activity visible and marks
-the run **Interrupted**. This presentation does not resume the run or recover an
-answer that was never saved.
+assistant message, Chat keeps its commentary and tool activity visible. It marks
+the run **Interrupted** only when the Gateway recorded that run as aborted; a run
+that ended while its background command keeps working is not marked. This
+presentation does not resume the run or recover an answer that was never saved.
 
 Archived sessions keep earlier messages and recorded failures readable in the
 transcript. Past run failures do not show a recovery banner above the archived
@@ -83,6 +84,11 @@ shows the tool label instead of leaving the text blank. Activity summaries stay
 dimmed until hover or keyboard focus brightens their text, without an icon tooltip;
 screen readers retain the exact tool identity. Expanding an activity group keeps the individual tool details
 and outcomes available. Completed group summaries retain their operation counts.
+The **Worked for** summary and reply metadata use the same saved elapsed time,
+from the initiating message to the last recorded output for that run. This includes
+request preparation and waiting, not just model execution. Starting another turn
+or reloading the same complete history does not switch the timing source. If either
+saved endpoint is unavailable, the elapsed duration is omitted.
 Tool Search calls use the called tool's name, icon, and input details in tool rows
 and activity summaries. Built-in tools use semantic icons, including an envelope
 for messages, a calendar clock for scheduled jobs, and an image for image generation.
@@ -92,6 +98,14 @@ confirmed a non-OpenClaw ClawHub publisher. Bundled and OpenClaw-published plugi
 keep their monochrome activity icons. Missing or unreadable logos fall back to
 the plugin activity icon, then the normal tool glyph; unknown tools use a puzzle
 icon. Unknown publisher metadata does not enable branding.
+
+Choose **View → Inline command trail (this browser)** in the session menu to show
+compact command, read, and search rows in conversation order while work is running.
+Command output advances in place; expand a row for captured output and details.
+Grouped tool activity remains the default, and completed dashboard turns keep their
+**Worked for…** folding. This preference stays in this browser for this Gateway.
+If the trail cannot load, grouped commands remain available. Turn the option off
+and on to retry; the error’s details retain the technical failure.
 
 A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,
@@ -241,6 +255,41 @@ When the macOS app embeds a single conversation beside its native sidebar, the c
 In the macOS Web experience and Tauri desktop app on macOS, Linux, and Windows, the navigation panel header and content header share the 52px titlebar row, with back/forward before the conversation title and search in the persistent rail.
 Collapsing the panel leaves only expand-sidebar beside the rail, which keeps New session and search; the content header still starts with back/forward.
 Drag an empty area of the titlebar row to move the window; its buttons keep their normal actions.
+
+## Inline command trail
+
+In the conversation menu, choose **View → Inline command trail (this browser)**
+to show commands, file reads, and searches in the conversation as they run.
+Each row keeps its status and a preview of its latest output; expand it
+for tool details and more captured output. The preview shows at most three visual
+rows, keeping the newest text visible when lines wrap. Truncated capture has its
+own notice. Inline commands start compact even with Full
+verbosity, and your manual expand or collapse choices take precedence. Finished
+commands stay visible while the turn continues.
+Turning the trail off restores ordinary disclosure defaults and keeps your manual choices.
+Edits and other tools keep their existing views.
+Compact previews keep the captured text's line structure, including JSON.
+Expanded output retains its usual formatting.
+
+For running Codex commands, the preview continues following recent stdout after
+the 10,000-character capture limit. This live tail is bounded to 600 characters
+and three visible rows. **View captured beginning** opens the retained prefix,
+which can differ from the recent output shown in the live tail.
+Completion and Stop retire the live tail. Completed output and saved history
+keep their existing capture limits. If an interrupted command has no saved tool
+result, its partial output may be unavailable after terminal reconciliation or
+reload.
+
+Completed dashboard turns still fold their intermediate work into **Worked for…**.
+Open that disclosure to inspect the chronological trail again. Channel sessions
+and speech bubbles keep their existing completion behavior. The preference
+persists in this browser for this Gateway; grouped activity remains the default.
+Live Codex stdout is delivered to panes that enable the inline trail. Switching
+it on during a running command recovers the latest bounded output, including
+when the command has stopped producing new text. The default grouped view does
+not subscribe to this live stdout stream. Channel verbosity stays independent.
+If the inline trail cannot load, the conversation stays available in grouped
+view and reports an error. Turn the option off and back on to retry.
 
 ## Slash-command feedback
 
@@ -412,10 +461,16 @@ Double-click selections stay inside the message where they started, including
 when you drag on the second click. Ordinary drag selection and Select All can
 still span multiple messages.
 
-Highlight text and choose **Add to message** to attach a comment to the main
+Highlight text and choose **Add to chat** to attach a comment to the main
 composer. The optional comment field starts on one line, grows to five lines,
 then scrolls internally. Confirm or press Enter to save; Shift+Enter adds a line.
 Saving keeps your existing draft and does not send a message.
+
+**Ask in side chat** asks about the passage in Side chat. **New session**
+opens the new-session launcher with the passage attached as a
+comment; starting the session sends it as a quote ahead of your prompt. The
+launcher's comment preview can delete the passage but not edit it, and your
+current chat draft is left unchanged.
 
 Saving leaves a small, filled comment marker beside the selected passage. Click
 that marker, or the pencil in the comment count's hover preview, to reopen the
@@ -458,7 +513,10 @@ file links also support spaces, emoji, and punctuation in filenames; for example
 `[Read notes](notes/caf%C3%A9%20note.md)` opens the workspace file. Bare CSV
 filenames in authored links, such as `[Read inventory](inventory.csv)`, and code
 spans also open the file preview. Plain-text and inline-code file detection stays
-conservative to avoid turning prose into links.
+conservative to avoid turning prose into links. Unprefixed paths such as
+`src/index.ts` require a recognized file extension, so repository names such as
+`openclaw/openclaw.ai` remain text. For uncommon file extensions, use an explicit
+path such as `./assets/logo.ai` or an authored Markdown link.
 
 In a workspace Markdown file's **Preview**, authored relative file links resolve
 from the document's folder. For example, a report in `reports/review.md` can open
@@ -537,7 +595,7 @@ model configuration, provider credentials, and session access rules still apply.
 
 ## Composer capability menu
 
-Select **+** beside the chat composer to open attachments and session capabilities in one menu:
+Select **+** beside the chat composer to open attachments and session capabilities in one menu. Available attachment choices appear first, above the session capability controls:
 
 - **Skills** enables or disables individual skills for this session.
 - **Plugins** enables or disables configured MCP servers for this session.
@@ -777,8 +835,9 @@ large numbers, and escape sequences. Raw keeps the usual long-code preview,
 reveal control, and word wrapping.
 
 Unfinished streaming fences, invalid JSON, and JSON beyond the tree rendering
-budget stay readable as source. User-message fences and passive previews remain
-plain code without interactive controls.
+budget stay readable as source. User-message fences remain plain code that wraps
+long lines; when a line wraps, a toggle in the block's corner switches to
+horizontal scrolling and back. Passive previews have no interactive controls.
 
 ## Chat behavior
 
@@ -1424,6 +1483,9 @@ lists above the composer. The mobile **Publish PR** control appears only for an
 undismissed branch with publishable work or a retained publication result or
 recovery state. An empty workspace or account discovery alone does not show it.
 
+Subagent rows show elapsed time once the child starts, just like ordinary child-session rows.
+Queued rows have no elapsed label; finished work stops at its recorded end time.
+
 The progress header shows the current step, not a completed-step total. On desktop,
 its options menu stays available when the card is expanded or collapsed and contains
 **Refresh task progress** and **Hide this card**. Hiding the card does not stop
@@ -1504,9 +1566,11 @@ transcript search is filtering messages.
 
 In completed dashboard turns, commentary, reasoning-only messages, and tool activity
 share one **Worked for…** disclosure above the answers. Expanding it shows the
-activity in its original order; explicit answer segments and visual results stay
-visible below it. Browser tab previews keep their execution order relative to those
-visible results, so a page opened after an inline widget appears after that widget.
+activity in its original order; explicit answer segments and delivered visual
+results stay visible below it. Images returned for tool inspection remain inside
+that tool's activity instead of splitting the completed response. Browser tab
+previews keep their execution order relative to those visible results, so a page
+opened after an inline widget appears after that widget.
 Speech bubble view keeps commentary in place; contiguous tool activity uses its own
 activity disclosure instead of the **Worked for…** rollup.
 Failed tool results after the last answer stay visible outside

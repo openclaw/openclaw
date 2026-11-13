@@ -4,6 +4,7 @@ import { wrapWebContent } from "../../../../../src/security/external-content.js"
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
+import * as inlineCommandPresentation from "./chat-inline-command-presentation.tsx";
 import { createChatThreadHarness } from "./chat-message-native.test-support.tsx";
 import * as textPreparation from "./chat-message-text-preparation.ts";
 import {
@@ -45,6 +46,114 @@ it("keeps settled message preparation out of minute-boundary scroll updates", as
   transcript.update();
   await waitForSolid(() => expect(container.textContent).toContain("Workspace checked"));
   expect(prepare).not.toHaveBeenCalled();
+});
+
+it("shows the inline command trail during a turn and folds it behind completed work", async () => {
+  const runId = "inline-trail-run";
+  const messages: unknown[] = [
+    { role: "user", content: "Check the workspace", timestamp: 1_000 },
+    {
+      role: "assistant",
+      runId,
+      timestamp: 2_000,
+      content: [
+        { type: "toolCall", id: "first-check", name: "exec", arguments: { command: "npm test" } },
+      ],
+    },
+    {
+      role: "toolResult",
+      runId,
+      timestamp: 3_000,
+      toolCallId: "first-check",
+      toolName: "exec",
+      content: "All checks passed",
+    },
+    {
+      role: "assistant",
+      runId,
+      timestamp: 4_000,
+      phase: "commentary",
+      content: "Checking the next step.",
+    },
+    {
+      role: "assistant",
+      runId,
+      timestamp: 5_000,
+      content: [
+        {
+          type: "toolCall",
+          id: "second-check",
+          name: "exec",
+          arguments: { command: "npm run build" },
+        },
+      ],
+    },
+  ];
+  const props = threadProps("pane-inline-fold", "agent:main:dashboard:inline-fold", messages, {
+    runId,
+    runActive: true,
+    runWorking: true,
+    showToolCalls: true,
+    inlineCommands: inlineCommandPresentation,
+    autoExpandToolCalls: true,
+  });
+  const transcript = createTestTranscript(props.paneId);
+  const container = document.body.appendChild(document.createElement("div"));
+  const thread = createChatThreadHarness(container, transcript);
+  const draw = () => {
+    thread.render(props);
+    transcript.update();
+  };
+  onTestFinished(() => {
+    thread.unmount();
+    transcript.dispose();
+    container.remove();
+  });
+  draw();
+  await waitForSolid(() =>
+    expect(container.querySelectorAll(".chat-tool-row__cmd")).toHaveLength(2),
+  );
+  expect(container.textContent).toContain("All checks passed");
+  expect(container.querySelectorAll(".chat-tool-msg-collapse.is-open")).toHaveLength(0);
+  expect(container.textContent).toContain("Checking the next step.");
+  expect(container.querySelector(".chat-work-group")).toBeNull();
+  props.inlineCommands = undefined;
+  draw();
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-command-trail__preview")).toBeNull(),
+  );
+  props.inlineCommands = inlineCommandPresentation;
+  props.runActive = false;
+  props.runWorking = false;
+  props.messages = [
+    ...messages,
+    {
+      role: "toolResult",
+      runId,
+      timestamp: 6_000,
+      toolCallId: "second-check",
+      toolName: "exec",
+      content: "Build passed",
+    },
+    {
+      role: "assistant",
+      runId,
+      timestamp: 7_000,
+      phase: "final_answer",
+      content: "Workspace verified.",
+    },
+  ];
+  draw();
+  const toggle = () => container.querySelector<HTMLButtonElement>(".chat-work-group > button");
+  await waitForSolid(() => expect(toggle()?.getAttribute("aria-expanded")).toBe("false"));
+  expect(container.textContent).toContain("Workspace verified.");
+  expect(container.querySelector(".chat-tool-row__cmd")).toBeNull();
+  toggle()!.click();
+  await waitForSolid(() =>
+    expect(container.querySelectorAll(".chat-tool-row__cmd")).toHaveLength(2),
+  );
+  expect(container.textContent).toContain("All checks passed");
+  expect(container.textContent).toContain("Build passed");
 });
 
 it.each([false, true])(

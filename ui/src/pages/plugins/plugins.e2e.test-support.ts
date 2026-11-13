@@ -526,9 +526,22 @@ async function captureScreenshot(
     artifactDir = createControlUiE2eArtifactDir("plugins");
     artifacts.set(page, artifactDir);
   }
-  await (target === "viewport" ? page : page.locator(".content")).screenshot({
+  const clip =
+    target === "content"
+      ? await page.locator(".content").evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          return {
+            x: bounds.left + element.clientLeft,
+            y: bounds.top + element.clientTop,
+            width: element.clientWidth,
+            height: element.clientHeight,
+          };
+        })
+      : undefined;
+  await page.screenshot({
     animations: "disabled",
     caret: "hide",
+    clip,
     path: path.join(artifactDir, name),
   });
 }

@@ -27,8 +27,10 @@ import type {
 } from "../../../lib/chat/chat-types.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import type { InlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 // Pane-local search, context menus, selection actions, and presentation resets.
 import type { TurnRecapWatch } from "../chat-progress.ts";
+import type { ChatToolMessageSource } from "../chat-run-presentation.ts";
 import type { SubagentRoster } from "../chat-spawned-subagent.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
@@ -70,6 +72,25 @@ export type ChatThreadState = Parameters<typeof createAsyncQuestionPresentation>
   search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
+    actions?: Pick<
+      ChatThreadProps,
+      | "onOpenSidebar"
+      | "onOpenWorkspaceFile"
+      | "onFindWorkspaceFile"
+      | "onPermissionRetry"
+      | "onOpenImage"
+      | "onAssistantAttachmentLoaded"
+      | "onOpenSessionLink"
+      | "onOpenSubagent"
+      | "onOpenSubagents"
+      | "onRetryQueuedMessage"
+      | "onSteerNow"
+      | "onRewindMessage"
+      | "onFocusComposer"
+      | "loadFullAssistantMessage"
+      | "personActivity"
+      | "displayFacts"
+    >;
     threadMediaMessages?: ReadonlyMap<
       string,
       readonly import("./chat-thread-media-gallery.ts").ThreadMediaMessage[]
@@ -137,6 +158,8 @@ export type ChatThreadProps = Omit<
     historyPagination?: ChatHistoryBoundaryProps;
     messages: unknown[];
     toolMessages: unknown[];
+    /** Existing pane owner, forwarded into the transcript's detached render root. */
+    toolMessageSource?: ChatToolMessageSource;
     latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
     guardianNotices?: ChatGuardianNotice[];
     streamSegments: ChatStreamSegment[];
@@ -152,6 +175,7 @@ export type ChatThreadProps = Omit<
     chatBubbleMode?: boolean;
     showThinking: boolean;
     showToolCalls: boolean;
+    inlineCommands?: InlineCommandPresentation;
     persistCommentary?: boolean;
     runWorking?: boolean;
     runFinalizing?: boolean;
@@ -198,6 +222,7 @@ export type ChatThreadProps = Omit<
     commentsDisabled?: boolean;
     onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
     onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
+    onNewSessionSelection?: (selection: ChatSelectionSource) => void;
     /** Shows one of the session's subagents. */
     onOpenSubagent?: (sessionKey: string) => void;
     /** Shows the session's subagents; absent where the pane has no list of them to show. */
@@ -215,6 +240,7 @@ type TranscriptInteractionProps = Pick<
   | "onFocusComposer"
   | "onAddToChat"
   | "onCompanionSelection"
+  | "onNewSessionSelection"
 >;
 
 const transcriptStates = new Map<string, ChatThreadState>();
@@ -464,6 +490,7 @@ export function handleTranscriptPointerUp(
     paneId: props.paneId,
     onAddToChat: props.onAddToChat,
     onAskSideChat: (selection, anchorRect) => props.onCompanionSelection?.(selection, anchorRect),
+    onAskNewSession: (selection) => props.onNewSessionSelection?.(selection),
   });
 }
 

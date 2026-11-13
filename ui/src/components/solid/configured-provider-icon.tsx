@@ -1,8 +1,5 @@
-import { createMemo, createSignal, onCleanup, Show } from "solid-js";
-import {
-  fetchGatewayContextResource,
-  readAvatarGatewayContext,
-} from "../../lib/identity-avatar-context.ts";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { AuthenticatedAvatarRouteLoader } from "../../lib/authenticated-avatar-route.ts";
 import { iconData, type IconName } from "../icon-data.ts";
 import { resolveProviderIconName } from "../provider-icon-data.ts";
 import { Icon } from "./icon.tsx";
@@ -31,40 +28,20 @@ export default function ConfiguredProviderIcon(props: Parameters<typeof Provider
       ? selected.name
       : undefined;
   };
-  const artwork = createMemo(
-    async () => {
-      const selected = icon();
-      if (selected.source !== "asset") {
-        return undefined;
-      }
-      let active = true;
-      let objectUrl: string | undefined;
-      onCleanup(() => {
-        active = false;
-        if (objectUrl) {
-          URL.revokeObjectURL(objectUrl);
-        }
-      });
-      try {
-        const { origin, resourceBasePath } = readAvatarGatewayContext();
-        const url = new URL(resourceBasePath + selected.url, origin ?? globalThis.location.origin)
-          .href;
-        const response = await fetchGatewayContextResource(url, 5_000);
-        if (!response.ok) {
-          return undefined;
-        }
-        const blob = await response.blob();
-        if (!active) {
-          return undefined;
-        }
-        objectUrl = URL.createObjectURL(blob);
-        return objectUrl;
-      } catch {
-        return undefined;
-      }
-    },
-    { lazy: true },
-  );
+  const [revision, invalidate] = createSignal(0, { ownedWrite: true });
+  const loader = new AuthenticatedAvatarRouteLoader(() => invalidate((value) => value + 1), {
+    gatewayContext: true,
+  });
+  onSettled(() => {
+    loader.connect();
+    return () => loader.disconnect();
+  });
+  const artwork = createMemo(() => {
+    revision();
+    const selected = icon();
+    const routeUrl = selected.source === "asset" && !failed() ? selected.url : null;
+    return loader.withActiveRoutes(() => (routeUrl ? loader.resolve(routeUrl) : null));
+  });
   const brand = () => {
     const selected = icon();
     return selected.source === "builtin" ? resolveProviderIconName(selected.name) : null;

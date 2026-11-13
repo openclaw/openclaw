@@ -14,7 +14,10 @@ import {
   LOCAL_WORKSPACE_CONTENT_BATCH,
   type LocalWorkspacePreparation,
 } from "./local-workspace-cas.js";
-import type { LocalWorkspaceManifestMutation } from "./local-workspace-store.types.js";
+import type {
+  LocalWorkspaceCheckpointReceipt,
+  LocalWorkspaceManifestMutation,
+} from "./local-workspace-store.types.js";
 
 const packs = "local_workspace_tree_packs";
 const pathSets = "local_workspace_source_path_sets";
@@ -226,11 +229,17 @@ export function readLocalWorkspaceSweepCandidates(
     }
     if (row.checkpoint_json) {
       // SAFETY: The projection owner writes this recovery document with its pending receipt.
-      const checkpoint = JSON.parse(row.checkpoint_json) as LocalWorkspaceManifestMutation;
-      if (checkpoint.treeRoot) {
+      const receipt = JSON.parse(row.checkpoint_json) as LocalWorkspaceCheckpointReceipt;
+      const checkpoint =
+        receipt.kind === "rejected"
+          ? receipt.checkpoint
+            ? (JSON.parse(receipt.checkpoint) as LocalWorkspaceManifestMutation) // SAFETY: Preserved owner-written checkpoint.
+            : undefined
+          : receipt;
+      if (checkpoint?.treeRoot) {
         reachable.add(checkpoint.treeRoot);
       }
-      if (checkpoint.previousTreeRoot) {
+      if (checkpoint?.previousTreeRoot) {
         reachable.add(checkpoint.previousTreeRoot);
       }
     }

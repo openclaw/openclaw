@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it as baseIt, vi } from "vitest";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
@@ -15,7 +16,6 @@ import {
 } from "./capability-provider-runtime.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import * as discovery from "./discovery.js";
-import { writeJson } from "./generated-plugin-test-helpers.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -87,9 +87,9 @@ export default { id: "${id}", register(api) {
     body: body("source"),
   });
   const manifestPath = path.join(plugin.dir, "openclaw.plugin.json");
-  writeJson(manifestPath, { id, configSchema: EMPTY_PLUGIN_SCHEMA, contracts });
+  writeJsonFile(manifestPath, { id, configSchema: EMPTY_PLUGIN_SCHEMA, contracts });
   const writeEntryPackage = (dir: string, entry: string) =>
-    writeJson(path.join(dir, "package.json"), { openclaw: { extensions: [`./${entry}`] } });
+    writeJsonFile(path.join(dir, "package.json"), { openclaw: { extensions: [`./${entry}`] } });
   writeEntryPackage(plugin.dir, "index.ts");
   const builtDir = path.join(root, "dist", "extensions", id);
   mkdirSafe(builtDir);
@@ -205,7 +205,7 @@ afterAll(() => {
 
 function patchManifest(dir: string, patch: object) {
   const file = path.join(dir, "openclaw.plugin.json");
-  writeJson(file, { ...JSON.parse(fs.readFileSync(file, "utf8")), ...patch });
+  writeJsonFile(file, { ...JSON.parse(fs.readFileSync(file, "utf8")), ...patch });
 }
 
 const it = baseIt.extend<{ speech: SpeechFixture }>({
