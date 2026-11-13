@@ -104,6 +104,11 @@ export function assertControlUiE2eOwnership(
   });
 
   expect(privateServerFiles).toEqual(uiE2ePrivateServerTestFiles);
+  expect(uiE2eRealGatewayTestFiles).toEqual(
+    expect.arrayContaining(
+      trackedUiE2eFiles.filter((file) => file.endsWith(".real-gateway.e2e.test.ts")),
+    ),
+  );
   expect(uiE2eRealGatewayTestFiles.every((file) => uiE2eSerialTestFiles.includes(file))).toBe(true);
   expect(uiE2eSerialTestFiles).toContain(uiE2eRuntimeBudgetTestFile);
 
