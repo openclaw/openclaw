@@ -23,6 +23,15 @@ const FIX_TITLES = new Map([
   ["auth_permanent", "credentialsRejected"],
   ["billing", "billingProblem"],
 ]);
+// The provider gave no cause, or rejected what OpenClaw sent. Any other reason explains the
+// failure, so only these (and a run with no reason at all) offer bug reporting.
+const UNEXPLAINED_REASONS = new Set([
+  "format",
+  "empty_response",
+  "no_error_details",
+  "unclassified",
+  "unknown",
+]);
 
 /** Details open away from the conversation's edges, so they never cover the composer. */
 function panelPlacement(line: HTMLElement, panel: HTMLElement): "bottom" | "top" {
@@ -55,6 +64,8 @@ export function ChatRunFailureNotice(props: {
     });
   const app = useOptionalApplication();
   const openModels = () => (app && fixTitle() ? props.cause?.provider : undefined);
+  const reportable = () =>
+    !props.cause?.failoverReason || UNEXPLAINED_REASONS.has(props.cause.failoverReason);
   const detail = createMemo(() => formatWebUiIconErrorText(props.summary).trim());
   const concise = createMemo(() => {
     const firstLine = detail().split(/\r?\n/u)[0] ?? "";
@@ -189,7 +200,9 @@ export function ChatRunFailureNotice(props: {
             {t("chat.recovery.tryAgain")}
           </button>
         </Show>
-        <ReportIssueLink />
+        <Show when={reportable()}>
+          <ReportIssueLink />
+        </Show>
       </div>
     </openclaw-chat-run-failure-notice>
   );

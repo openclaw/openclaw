@@ -200,6 +200,8 @@ it("names a provider's billing problem and sends its fix to Models, not another 
   expect(openModels?.textContent).toBe("Open Models");
   expect(openModels?.classList.contains("primary")).toBe(true);
   expect(tryAgain?.classList.contains("primary")).toBe(false);
+  // A named cause is not a bug to report.
+  expect(query("a.report-issue-link")).toBeNull();
   openModels?.click();
   expect(navigate).toHaveBeenCalledExactlyOnceWith("model-providers", {
     search: "?provider=openrouter",
@@ -212,4 +214,5 @@ it("names a provider's billing problem and sends its fix to Models, not another 
   expect(part("title")?.textContent).toBe("Couldn’t finish this reply");
   expect(container.querySelectorAll(".chat-run-failure__retry")).toHaveLength(1);
   expect(query(".chat-run-failure__retry")?.classList.contains("primary")).toBe(true);
+  expect(query("a.report-issue-link")).toBeNull();
 });
