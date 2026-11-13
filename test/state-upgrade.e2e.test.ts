@@ -23,6 +23,8 @@ const CHAIN_RETIRED_VALUES = new Set([
   // Pending pairing requests expire; delivery rows leave `queued` once the Gateway drains them.
   "corpus-device-1",
   "queued ",
+  // The running Gateway consumes its one-shot restart sentinel; the swap keeps it.
+  "Synthetic restart",
 ]);
 
 type Manifest = { verification: Record<string, Array<{ value: string; found_in?: string[] }>> };

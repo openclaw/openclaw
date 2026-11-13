@@ -24,6 +24,8 @@ export type SqliteSwapMap = {
   ephemeral?: ReadonlySet<string>;
   /** Fill a new NOT NULL column that has no default: `table.column` -> SQL over source columns. */
   backfill?: Readonly<Record<string, string>>;
+  /** Renamed enum values: `table.column` (new names) -> old value -> new value. */
+  values?: Readonly<Record<string, Readonly<Record<string, string>>>>;
 };
 
 export type SqliteSwapTarget = {
@@ -311,7 +313,12 @@ function copyTable(
     const values: SQLInputValue[] = keepRowid ? [row.swaprowid ?? null] : [];
     let castFailure: string | undefined;
     plan.forEach(({ column }, index) => {
-      const cast = castValue(row[`swapc${index}`] ?? null, column.type);
+      const raw = row[`swapc${index}`] ?? null;
+      const renamedValue =
+        typeof raw === "string"
+          ? map.values?.[`${targetTable.name}.${column.name}`]?.[raw]
+          : undefined;
+      const cast = castValue(renamedValue ?? raw, column.type);
       if (!cast.ok) {
         castFailure ??= `${column.name} cannot be stored as ${column.type}`;
         values.push(null);
@@ -522,7 +529,10 @@ export function buildSqliteByCopy(
       // in-memory journal still undoes a failed statement.
       "PRAGMA auto_vacuum = INCREMENTAL; PRAGMA journal_mode = MEMORY; PRAGMA synchronous = OFF; PRAGMA foreign_keys = OFF;",
     );
-    target.createSchema(built, new Set(sourceTables.keys()));
+    target.createSchema(
+      built,
+      new Set([...sourceTables.keys()].map((name) => target.map.tables?.[name] ?? name)),
+    );
     // Triggers would rewrite derived rows during the copy; reinstall them after.
     const triggers = built
       .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND sql IS NOT NULL")

@@ -7,12 +7,14 @@ import { VERSION } from "../version.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { migrateSingletonStateFoldInV12 } from "./openclaw-state-db-schema-v12-foldin.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
+import { TEMPLATE_RECORD_VERSIONS } from "./openclaw-state-db-schema-v36-template-names.js";
 import { CONTENT_VERSION_KEY } from "./openclaw-state-db-schema-version.js";
 import { getOpenClawStateFeatureSchemaSql } from "./openclaw-state-feature-schema.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   buildSqliteByCopy,
+  type SqliteSwapMap,
   type SqliteSwapReport,
   type SqliteSwapTarget,
 } from "./sqlite-copy-swap.js";
@@ -36,6 +38,40 @@ const STATE_FOLD_IN_STEPS = [
   id: string;
   run: (db: DatabaseSync, fromVersion: number) => boolean;
 }>;
+
+/**
+ * Meaning changes between released shared-state schemas (2026.7.1 to 2026.11.3)
+ * and this build that a name-matched copy cannot express. Found by diffing the
+ * released schemas; everything else copies by name.
+ */
+export const STATE_SWAP_MAP: SqliteSwapMap = {
+  // v36: Claw tables and fields became Templates.
+  tables: {
+    claw_installs: "template_installs",
+    claw_package_refs: "template_package_refs",
+    claw_cron_refs: "template_cron_refs",
+    claw_mcp_server_refs: "template_mcp_server_refs",
+    claw_workspace_files: "template_workspace_files",
+  },
+  columns: {
+    "template_installs.claw_name": "template_name",
+    "template_installs.claw_version": "template_version",
+    "template_package_refs.claw_name": "template_name",
+  },
+  values: {
+    "template_package_refs.origin": { "claw-introduced": "template-introduced" },
+    "template_mcp_server_refs.origin": { "claw-introduced": "template-introduced" },
+    "agent_provenance.created_via": { claw: "template" },
+    ...Object.fromEntries(
+      TEMPLATE_RECORD_VERSIONS.map(([table, versions]) => [
+        `${table}.schema_version`,
+        Object.fromEntries(versions),
+      ]),
+    ),
+  },
+  // Leases belong to processes that are gone once the old file is replaced.
+  ephemeral: new Set(["state_leases", "agent_database_leases"]),
+};
 
 function createStateSchema(db: DatabaseSync, sourceTables: ReadonlySet<string>): void {
   db.exec(
@@ -72,8 +108,7 @@ export function createStateSwapTarget(): SqliteSwapTarget {
     version: OPENCLAW_STATE_SCHEMA_VERSION,
     createSchema: createStateSchema,
     stamp: stampStateSchema,
-    // Leases belong to processes that are gone once the old file is replaced.
-    map: { ephemeral: new Set(["state_leases", "agent_database_leases"]) },
+    map: STATE_SWAP_MAP,
   };
 }
 
