@@ -403,6 +403,58 @@ describe("Browser panel streaming", () => {
     expect(createdUrls.filter((url) => !revokedUrls.includes(url))).toEqual(["blob:frame-2"]);
   });
 
+  it.each(["viewport sync", "panel refresh"])(
+    "keeps an input's policy error visible through %s while frames stream",
+    async (work) => {
+      const { controller, resizes } = setup(async (request) => {
+        if (request.path === "/operator/input") {
+          throw new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "browser navigation blocked by policy",
+            details: { reason: "navigation_blocked" },
+          });
+        }
+        return undefined;
+      });
+      if (work === "viewport sync") {
+        controller.handleViewportResize(640, 480);
+      }
+      const socket = await start(controller);
+      await vi.advanceTimersByTimeAsync(400);
+      controller.input.handleViewportKeydown(
+        new KeyboardEvent("keydown", { key: "a", cancelable: true }),
+      );
+      await flush();
+      const policyError = controller.errorText;
+      expect(policyError).toContain("navigation rules block this address");
+      if (work === "panel refresh") {
+        void controller.refreshAll();
+      }
+      for (let second = 0; second < 10; second += 1) {
+        await receive(
+          socket,
+          work === "viewport sync" ? screencastFrame(PAGE_URL, 1300, 800) : screencastFrame(),
+        );
+        await vi.advanceTimersByTimeAsync(1000);
+      }
+      if (work === "viewport sync") {
+        expect(resizes().length).toBeGreaterThan(1);
+      }
+      expect(controller.errorText).toBe(policyError);
+    },
+  );
+
+  it("lets an explicit refresh replace an action's error", async () => {
+    const { controller } = setup();
+    await controller.runAction(async () => {
+      throw new Error("Synthetic action failure");
+    });
+    expect(controller.errorText).toContain("Synthetic action failure");
+    void controller.retryEmptyError();
+    await flush();
+    expect(controller.errorText).toBeNull();
+  });
+
   it("does not let continuous mismatched frames postpone the debounced viewport sync", async () => {
     const { controller, resizes } = setup();
     controller.handleViewportResize(500, 300);
