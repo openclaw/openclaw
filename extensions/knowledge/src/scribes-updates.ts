@@ -85,7 +85,9 @@ export async function update(
       agentId,
       (next) => !needsUpdate(next),
       async () => {
-        map.delete(asked);
+        if (map.get(asked)?.sent) {
+          map.delete(asked);
+        }
         await update(ui, snapshot, agentId, true);
       },
     );
@@ -235,14 +237,17 @@ export function updateNotice(
         "Replace with new",
         async () => {
           await updateScribe(ui.s.context.host, snapshot, job, agentId, next, attempt);
-          // Try again is a new attempt.
+          // Keep a late retry's identity until its send succeeds.
+          let retryAttempt = crypto.randomUUID();
           markUpdating(
             ui,
             job,
             agentId,
             (read) => read.job?.payload?.message === next,
-            () =>
-              updateScribe(ui.s.context.host, snapshot, job, agentId, next, crypto.randomUUID()),
+            async () => {
+              await updateScribe(ui.s.context.host, snapshot, job, agentId, next, retryAttempt);
+              retryAttempt = crypto.randomUUID();
+            },
           );
           ui.announce(`${scribe.title}: replacing the run message…`);
           void ui.load();

@@ -585,6 +585,24 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
   expect(String(calls.at(-1)![1]!.message).endsWith(`\`\`\`text\n${runMessage}\n\`\`\``)).toBe(
     true,
   );
+  // A late replacement is a new attempt, but losing its response keeps that attempt's key.
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 4 * 60_000);
+  try {
+    lost = false;
+    buttonNamed(await render(), "Try again").click();
+    await vi.waitFor(() =>
+      expect(ui.announce).toHaveBeenCalledWith(expect.stringContaining("connection lost")),
+    );
+    buttonNamed(await render(), "Try again").click();
+    await vi.waitFor(() =>
+      expect(calls.filter(([method]) => method === "chat.send")).toHaveLength(4),
+    );
+    const sends = calls.filter(([method]) => method === "chat.send");
+    expect(sends[2]![1]!.idempotencyKey).not.toBe(first![1]!.idempotencyKey);
+    expect(sends[3]![1]!.idempotencyKey).toBe(sends[2]![1]!.idempotencyKey);
+  } finally {
+    vi.restoreAllMocks();
+  }
   // Updating until the automation's revision changes, which a cron change reloads to show.
   view = await render();
   expect(view.querySelector(".scribe-update")?.textContent).toMatch(/^Updating Knowledge/);
@@ -648,10 +666,11 @@ it("offers Try again, as a new request, when an update left the automation uncha
     // A Try again whose send fails stays late, with the error, and can be tried again.
     const answer = request.getMockImplementation()!;
     request.mockImplementationOnce(async (method, params) => {
+      const result = await answer(method, params);
       if (method === "chat.send") {
         throw new Error("offline");
       }
-      return answer(method, params);
+      return result;
     });
     const failing = view.querySelector(".scribe-update")!;
     buttonNamed(view, "Try again").click();
@@ -663,9 +682,10 @@ it("offers Try again, as a new request, when an update left the automation uncha
       "hasn't changed",
     );
     buttonNamed(await render(), "Try again").click();
-    await vi.waitFor(() => expect(sends()).toHaveLength(2));
-    // A new attempt: the Gateway must not answer it from the first request's record.
+    await vi.waitFor(() => expect(sends()).toHaveLength(3));
+    // A new attempt for the completed turn, retained when that attempt loses its response.
     expect(sends()[1]!.idempotencyKey).not.toBe(sends()[0]!.idempotencyKey);
+    expect(sends()[2]!.idempotencyKey).toBe(sends()[1]!.idempotencyKey);
     expect((await render()).querySelector(".scribe-update")?.textContent).toMatch(/^Updating/);
   } finally {
     vi.restoreAllMocks();
