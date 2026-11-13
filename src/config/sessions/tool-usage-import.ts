@@ -2,6 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createToolUsageCatalogResolver,
   isToolUsageWrapper,
+  readMcpToolUsageIdName,
   mergeToolUsage,
   classifyToolUsage,
   type ToolUsageCatalogEntry,
@@ -36,7 +37,10 @@ export function createToolUsageTranscriptAccumulator(input: {
   const resolve = createToolUsageCatalogResolver(input.catalog);
   const catalogNames = new Map(input.catalog.map((entry) => [entry.id, entry.name]));
   const rows = new Map<string, ToolUsageRow>();
-  const calls = new Map<string, { name: string; target?: string; codeModeControl: boolean }>();
+  const calls = new Map<
+    string,
+    { name: string; target?: string; dispatchId?: string; codeModeControl: boolean }
+  >();
   const seen = new Set<string>();
   const nestedParents = new Set<string>();
   const dispatches = new Map<
@@ -172,12 +176,19 @@ export function createToolUsageTranscriptAccumulator(input: {
           excluded.wrappers++;
         } else {
           const parent = parentToolCallId ? calls.get(parentToolCallId) : undefined;
+          // A dispatch counts only the target it named; never a same-named other owner.
+          const dispatched =
+            parent?.name === "dispatch_action"
+              ? (parent.target ??
+                (parent.dispatchId === toolName ? resolve(toolName, result) : undefined))
+              : undefined;
           const target =
             parent?.name === "dispatch_action"
-              ? parent.target && catalogNames.get(parent.target) === toolName
-                ? parent.target
+              ? dispatched &&
+                (catalogNames.get(dispatched) ?? readMcpToolUsageIdName(dispatched)) === toolName
+                ? dispatched
                 : undefined
-              : resolve(toolName);
+              : resolve(toolName, result);
           count(toolCallId, target, nested.details.timestamp, eventNavigation);
         }
         return;
@@ -195,6 +206,9 @@ export function createToolUsageTranscriptAccumulator(input: {
           const args = asOptionalRecord(call.arguments);
           calls.set(call.id, {
             name: call.name,
+            ...(call.name === "dispatch_action" && typeof args?.id === "string"
+              ? { dispatchId: args.id }
+              : {}),
             codeModeControl:
               (call.name === "exec" && typeof args?.code === "string") ||
               (call.name === "wait" && typeof args?.runId === "string"),
@@ -244,17 +258,20 @@ export function createToolUsageTranscriptAccumulator(input: {
       const at = timestamp(message.timestamp, timestamp(envelope?.timestamp, createdAt));
       if (name === "dispatch_action") {
         excluded.wrappers++;
-        if (call?.target) {
+        const toolId =
+          call?.target ?? (call?.dispatchId ? resolve(call.dispatchId, dispatchResult) : undefined);
+        if (toolId) {
           dispatches.set(message.toolCallId, {
-            toolId: call.target,
+            toolId,
             at,
             navigation: eventNavigation,
           });
-        } else {
+        } else if (!nestedParents.has(message.toolCallId)) {
+          // A nested target activity already accounts for this dispatch.
           excluded.unknownTools++;
         }
       } else if (!isToolUsageWrapper(name)) {
-        count(message.toolCallId, call?.target ?? resolve(name), at, eventNavigation);
+        count(message.toolCallId, call?.target ?? resolve(name, message), at, eventNavigation);
       } else {
         excluded.wrappers++;
       }

@@ -15,6 +15,7 @@ import {
   captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptReader,
 } from "../../../config/sessions/transcript-write-context.js";
+import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import * as processExec from "../../../process/exec.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
@@ -38,7 +39,9 @@ import {
   sessionManagerReadToolResultProjectionEntries,
   sessionManagerReadTranscriptBranch,
 } from "../../sessions/session-manager-view-types.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { createToolSearchTools, applyToolSearchCatalog } from "../../tool-search.js";
 import { createGitHubPublishTool } from "../../tools/github-publish-tool.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
@@ -60,10 +63,17 @@ const mocks = vi.hoisted(() => ({
   >(async () => "/tmp/trajectory.jsonl"),
   prepareTransport: vi.fn(),
   restoreProjections: vi.fn(),
+  readToolUsage: vi.fn<typeof import("../../../config/sessions/tool-usage.js").readAgentToolUsage>(
+    async () => [],
+  ),
 }));
 
 vi.mock("../../anthropic-payload-log.js", () => ({
   createAnthropicPayloadLogger: mocks.createAnthropicPayloadLogger,
+}));
+vi.mock("../../../config/sessions/tool-usage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/sessions/tool-usage.js")>()),
+  readAgentToolUsage: mocks.readToolUsage,
 }));
 vi.mock("../../cache-trace.js", () => ({ createCacheTrace: mocks.createCacheTrace }));
 vi.mock("../session-prompt-state.js", async (importOriginal) => ({
@@ -480,6 +490,62 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       });
     },
   );
+  it.each([false, true])(
+    "ranks the MCP directory from learned MCP usage only with the lab on (%s)",
+    async (enabled) => {
+      const fixture = createFixture();
+      const config = { tools: { toolSearch: { mode: "tools" as const } } };
+      const catalogRef = {};
+      const mcpTools = Array.from({ length: 400 }, (_, index) => {
+        const tool = Object.assign(createStubTool(`granola__op_${index}`), {
+          description: "Read meeting notes for the caller with a fairly long description.",
+        });
+        setPluginToolMeta(tool, {
+          pluginId: "bundle-mcp",
+          optional: false,
+          mcp: {
+            serverName: "granola",
+            safeServerName: "granola",
+            toolName: `op_${index}`,
+            operation: "tool",
+          },
+        });
+        return tool;
+      });
+      const { tools } = applyToolSearchCatalog({
+        tools: [
+          ...createToolSearchTools({ config, runtimeConfig: config, catalogRef }),
+          ...mcpTools,
+        ],
+        config,
+        catalogRef,
+      });
+      const description = tools.find((tool) => tool.name === "tool_search")!.description;
+      expect(description).toContain("- granola server: 400 tools, names omitted");
+      mocks.readToolUsage.mockResolvedValueOnce([
+        { toolId: "mcp:granola:granola__op_321", score: 4, updatedAt: Date.now() },
+      ]);
+      fixture.input.attempt.config = {
+        ...config,
+        agents: { defaults: { experimental: { usageRankedToolIndex: enabled } } },
+      };
+      fixture.input.toolBase.toolSearchCatalogRef = catalogRef;
+      await fixture.prepare();
+      const { pinTools } = mocks.prepareAgentSession.mock.calls.at(-1)![0].clientToolPreparation;
+      const sent = pinTools(tools).find(
+        (tool: { name: string }) => tool.name === "tool_search",
+      ).description;
+      if (!enabled) {
+        expect(mocks.readToolUsage).not.toHaveBeenCalled();
+        expect(sent).toBe(description);
+        return;
+      }
+      expect(sent).not.toBe(description);
+      expect(sent).toContain("- mcp:granola:granola__op_321\n");
+      expect(sent).toMatch(/- granola server: \d+ more tools, names omitted/u);
+    },
+  );
+
   it("passes the frozen ranking to renderers after disabling the lab without a boundary", async () => {
     const fixture = createFixture();
     const first = await fixture.prepare();

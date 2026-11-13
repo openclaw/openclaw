@@ -18,6 +18,7 @@ import {
   sessionManagerReadTranscriptBranch,
 } from "../../sessions/session-manager-view-types.js";
 import { resolveToolSearchConfig } from "../../tool-search-config.js";
+import { applyUsageRankedMcpToolSearchDirectory } from "../../tool-search.js";
 import {
   readToolUsageRankingSnapshot,
   type ToolUsageRankingSnapshot,
@@ -203,10 +204,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       entries: sessionManager[sessionManagerReadTranscriptBranch](),
       historyBoundaryCount: sessionManager.getBoundaryCount(),
       enabled: rankingEnabled,
-      catalogIds:
-        toolSearchCatalogRef?.current?.entries
-          .filter((entry) => entry.source !== "mcp")
-          .map((entry) => entry.id) ?? [],
+      catalogIds: toolSearchCatalogRef?.current?.entries.map((entry) => entry.id) ?? [],
       inherited: inheritedRanking,
       now,
       readRankedIds: async () => {
@@ -342,7 +340,12 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           toolPolicy: toolPolicyDigest,
           entries: sessionManager[sessionManagerReadTranscriptBranch](),
           historyBoundaryCount: sessionManager.getBoundaryCount(),
-          tools,
+          // The pin freezes this description with the series, like the ranking itself.
+          tools: applyUsageRankedMcpToolSearchDirectory(
+            tools,
+            toolSearchCatalogRef?.current,
+            usageRanking,
+          ),
         });
         if (sessionPromptState.pendingToolSurface !== pending) {
           declarePromptToolPin(attempt);

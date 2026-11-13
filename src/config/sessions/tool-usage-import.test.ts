@@ -212,7 +212,7 @@ it("recognizes Code Mode command aliases from their native result envelope", () 
   expect(scan.result()).toMatchObject({ rows: [], successfulCalls: 0, excluded: { wrappers: 1 } });
 });
 
-it("never attributes a nested MCP dispatch to a same-named native tool", () => {
+it("attributes a nested MCP dispatch to its exact id, never a same-named native tool", () => {
   const scan = createToolUsageTranscriptAccumulator({
     catalog: [{ id: "openclaw:notes:lookup", name: "lookup" }],
     since: 0,
@@ -256,9 +256,121 @@ it("never attributes a nested MCP dispatch to a same-named native tool", () => {
     120,
   );
   expect(scan.result()).toMatchObject({
-    successfulCalls: 0,
-    rows: [],
-    excluded: { unknownTools: 1 },
+    successfulCalls: 1,
+    rows: [{ toolId: "mcp:bundle-mcp:lookup", score: 1, updatedAt: 120 }],
+  });
+});
+
+it("backfills direct, bare-name dispatch, and Code Mode MCP calls from server evidence", () => {
+  const scan = createToolUsageTranscriptAccumulator({
+    catalog: [
+      { id: "openclaw:core:exec", name: "exec" },
+      { id: "openclaw:notes:granola__shadow", name: "granola__shadow" },
+    ],
+    since: 0,
+    before: 1000,
+  });
+  const mcpDetails = { mcpServer: "granola", mcpTool: "list_meetings" };
+  const nested = (
+    toolCallId: string,
+    parentToolCallId: string,
+    toolName: string,
+    details = mcpDetails,
+  ) =>
+    createNestedToolActivity({
+      runId: "synthetic",
+      scopeId: "synthetic",
+      afterEntryId: null,
+      startOrder: 0,
+      parentToolCallId,
+      toolCallId,
+      toolName,
+      input: {},
+      result: { content: [], details },
+      isError: false,
+      startedAt: 110,
+      timestamp: 120,
+    });
+  scan.append(
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "direct", name: "granola__list_meetings", arguments: {} },
+          { type: "toolCall", id: "unproven", name: "granola__get_notes", arguments: {} },
+          {
+            type: "toolCall",
+            id: "bare",
+            name: "dispatch_action",
+            arguments: { id: "granola__list_meetings" },
+          },
+          { type: "toolCall", id: "code", name: "exec", arguments: { code: "await MCP.x()" } },
+        ],
+      },
+    },
+    100,
+  );
+  for (const [toolCallId, details] of [
+    ["direct", mcpDetails],
+    ["unproven", {}],
+  ] as const) {
+    scan.append(
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolCallId,
+          toolName: toolCallId === "direct" ? "granola__list_meetings" : "granola__get_notes",
+          isError: false,
+          details,
+        },
+      },
+      120,
+    );
+  }
+  scan.append(
+    { type: "message", message: nested("n-bare", "bare", "granola__list_meetings") },
+    120,
+  );
+  scan.append(
+    { type: "message", message: nested("n-code", "code", "granola__list_meetings") },
+    120,
+  );
+  // A name the native catalog owns never falls back to MCP evidence.
+  scan.append({ type: "message", message: nested("n-shadow", "code", "granola__shadow") }, 120);
+  // A failed MCP call is excluded even with server evidence.
+  scan.append(
+    {
+      type: "message",
+      message: nested("n-failed", "code", "granola__list_meetings", {
+        ...mcpDetails,
+        status: "error",
+      } as typeof mcpDetails),
+    },
+    120,
+  );
+  for (const toolCallId of ["bare", "code"]) {
+    scan.append(
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolCallId,
+          toolName: toolCallId === "bare" ? "dispatch_action" : "exec",
+          isError: false,
+        },
+      },
+      130,
+    );
+  }
+  expect(scan.result()).toMatchObject({
+    rows: [
+      { toolId: "mcp:granola:granola__list_meetings", score: 3 },
+      { toolId: "openclaw:notes:granola__shadow", score: 1 },
+    ],
+    successfulCalls: 4,
+    excluded: { unknownTools: 1, errors: 1 },
   });
 });
 
