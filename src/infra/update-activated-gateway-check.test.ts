@@ -37,9 +37,10 @@ const activated: UpdateRunResult = {
   steps: [],
   durationMs: 1,
 };
-const check = (result = activated) =>
+const check = (result = activated, gateway?: { remote: boolean; tls: boolean }) =>
   checkActivatedGatewayStartup({
     result,
+    gateway,
     env: {},
     stateDir: "/state",
     assertCurrent: () => {},
@@ -89,4 +90,21 @@ it("leaves failed or rootless results to their existing owner", async () => {
   const failed = { ...activated, status: "error" as const, reason: "doctor-failed" };
   expect(await check(failed)).toBe(failed);
   expect(mocks.owner).not.toHaveBeenCalled();
+});
+
+it.each([
+  [{ remote: true, tls: false }, "remote Gateway"],
+  [{ remote: false, tls: true }, "serves TLS"],
+])("reports a non-check instead of failing %o", async (gateway, message) => {
+  const result = await check(activated, gateway);
+  expect(result.status).toBe("ok");
+  expect(result.steps.at(-1)?.advisory?.message).toContain(message);
+  expect(mocks.launch).not.toHaveBeenCalled();
+});
+
+it("settles preparation errors as a failed update so rollback runs", async () => {
+  mocks.port.mockRejectedValue(Object.assign(new Error("bind"), { code: "EADDRNOTAVAIL" }));
+  const result = await check();
+  expect(result).toMatchObject({ status: "error", reason: "activated-gateway-startup-failed" });
+  expect(mocks.launch).not.toHaveBeenCalled();
 });

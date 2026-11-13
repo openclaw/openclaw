@@ -2,6 +2,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import { checkActivatedGatewayStartup } from "../../infra/update-activated-gateway-check.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
+import { readUpdateCandidateSource } from "./update-command-managed-context.js";
 
 /** A restarted service is verified by its own readiness check; otherwise boot once here. */
 export async function checkActivatedRelease(
@@ -15,9 +16,18 @@ export async function checkActivatedRelease(
     return result;
   }
   const env = managedEnv ?? params.opts.run?.env ?? process.env;
+  // An unreadable config is not a release failure; the boot itself reports it.
+  const config = await readUpdateCandidateSource(env, params.legacyConfigPlan).then(
+    (source) => source.config,
+    () => undefined,
+  );
   return await checkActivatedGatewayStartup({
     result,
     env,
+    gateway: {
+      remote: config?.gateway?.mode === "remote",
+      tls: config?.gateway?.tls?.enabled === true,
+    },
     stateDir: resolveStateDir(env),
     nodeRunner: params.packageUpdateNodeRunner,
     assertCurrent,

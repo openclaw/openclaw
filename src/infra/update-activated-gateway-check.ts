@@ -36,6 +36,8 @@ const QUIET_STARTUP_ENV = {
 export async function checkActivatedGatewayStartup(params: {
   result: UpdateRunResult;
   env: NodeJS.ProcessEnv;
+  /** Remote-only profiles run no local Gateway; the probe speaks plain HTTP only. */
+  gateway?: { remote: boolean; tls: boolean };
   stateDir: string;
   nodeRunner?: string;
   assertCurrent: () => void;
@@ -63,21 +65,33 @@ export async function checkActivatedGatewayStartup(params: {
           steps: [...result.steps, recorded],
         };
   };
-  const owner = await readActiveGatewayLockIdentity({ env });
-  if (owner) {
-    return finish({
-      exitCode: null,
-      advisory: {
-        kind: "recoverable-maintenance",
-        message: `Gateway pid ${owner.pid} keeps serving the previous release until it restarts; the activated release was not started.`,
-      },
-    });
+  const skipped = (message: string) =>
+    finish({ exitCode: null, advisory: { kind: "recoverable-maintenance", message } });
+  if (params.gateway?.remote) {
+    return skipped("This profile uses a remote Gateway; the activated release was not started.");
   }
-  const entry = await resolveGatewayInstallEntrypoint(root);
+  if (params.gateway?.tls) {
+    // Accepted: the readiness probe is plain HTTP. TLS Gateways are verified on restart.
+    return skipped("The Gateway serves TLS; startup is verified when it restarts.");
+  }
+  let entry: string | undefined;
+  let port: number | void;
+  try {
+    const owner = await readActiveGatewayLockIdentity({ env });
+    if (owner) {
+      return skipped(
+        `Gateway pid ${owner.pid} keeps serving the previous release until it restarts; the activated release was not started.`,
+      );
+    }
+    entry = (await resolveGatewayInstallEntrypoint(root)) ?? undefined;
+    port = entry ? await tryListenOnPort({ port: 0, host: "127.0.0.1" }) : undefined;
+  } catch (error) {
+    // Preparation failures still settle through post-activation rollback.
+    return finish({ exitCode: 1, stderrTail: `Startup check could not start: ${String(error)}` });
+  }
   if (!entry) {
     return finish({ exitCode: 1, stderrTail: "The update is missing its Gateway executable." });
   }
-  const port = await tryListenOnPort({ port: 0, host: "127.0.0.1" });
   if (!port) {
     return finish({ exitCode: 1, stderrTail: "No loopback port is available for startup." });
   }
