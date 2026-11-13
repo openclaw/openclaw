@@ -178,7 +178,16 @@ machine; it does not create a separate kind of permanent credential. Without
 Use `--agent <agentId>` to target a configured agent and `--profile-id <profileId>`
 to name the saved credential. Login saves and prioritizes that credential for the
 agent. Add `--set-default` to select the provider's recommended model; otherwise
-the existing default model is preserved.
+the existing model selection is preserved. A successful API-key login, ChatGPT
+browser or device-code login, or inference-enabled SIWC sign-in initializes
+`openai/gpt-6.1-sol` when the agent has no selected model and policy permits it.
+Existing narrower model restrictions retain their permitted implicit default.
+Identity-only SIWC does not initialize a model. On a multi-agent Gateway,
+initialization applies only to the target agent. Personal-account connections
+do not change the agent's model selection.
+Offline login may reuse compatible existing Codex OAuth or API-key credentials
+instead of starting another sign-in. Reused credentials follow the same Sol
+initialization and model-policy rules.
 
 For guided setup, use `openclaw onboard`. An existing compatible login may be
 offered for reuse.

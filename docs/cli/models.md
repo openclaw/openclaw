@@ -412,8 +412,10 @@ and honors plugin disablement and allowlists.
 For these online logins, `--profile-id`, `--force`, `--set-default`, and Copilot
 `--yes` are refused before starting sign-in because the Gateway login API does
 not represent those options. Stop the Gateway to use those options offline.
-The current default model stays unchanged. Plugin methods that require local
-CLI imports or are not declared as credential-only sign-in remain offline.
+Existing model selections stay unchanged. OpenAI login can initialize Sol when
+no model has been selected and policy permits it; see the behavior below.
+Plugin methods that require local CLI imports or are not declared as
+credential-only sign-in remain offline.
 
 The wizard stays on one authenticated connection. Ctrl-C cancels that session;
 disconnecting closes it rather than replaying the login on another connection.
@@ -474,7 +476,19 @@ Saving credentials for a provider makes its models visible. When a model restric
 The CLI reports the allowlist change separately from confirmed Gateway application.
 Offline changes become active when the Gateway next starts.
 
-Without `--set-default`, login preserves the current default, including an unset default, and keeps unrelated configuration edits made while login is running. If credentials are saved but provider settings cannot be applied, the error reports the saved credentials separately. A Gateway refresh warning does not undo a saved change; start the Gateway after the offline operation finishes.
+Without `--set-default`, login preserves the current default and keeps unrelated
+configuration edits made while login is running. OpenAI API-key login, ChatGPT
+browser OAuth, device code, and inference-enabled SIWC initialize
+`openai/gpt-6.1-sol` when no model has been selected and policy permits it. An
+explicit primary or configured provider-model default is not replaced, and
+narrower restrictions retain their permitted implicit default. On multi-agent
+Gateways, only the target agent is initialized. Offline login that reuses
+compatible Codex OAuth or API-key credentials follows the same rule without
+starting another sign-in. Identity-only SIWC and methods without an initial-model
+recommendation preserve an unset default. If credentials are saved but
+provider settings cannot be applied, the error reports the saved credentials
+separately. A Gateway refresh warning does not undo a saved change; start the
+Gateway after the offline operation finishes.
 
 For the shared-main agent, `--force` clears the provider's shared credentials and main-agent local overrides, including their order and health state. For another agent it clears only that agent's local profiles, leaving shared credentials unchanged. A busy auth store stops the command before login starts; close other OpenClaw commands using the same state directory and retry. SQLite lock diagnostics can name either the shared state database or an agent database, so checking only the legacy auth file for open handles does not rule out contention.
 

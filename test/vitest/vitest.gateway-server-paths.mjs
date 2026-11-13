@@ -182,6 +182,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/probe.device-auth-scope.test.ts",
   "src/gateway/progress-card-store.worker.test.ts",
   "src/gateway/provider-auth-account-relogin.persistence.integration.test.ts",
+  "src/gateway/provider-auth-initial-model.persistence.integration.test.ts",
   "src/gateway/provider-browser-auth/persistence.integration.test.ts",
   "src/gateway/queued-chat-inputs.metadata.test.ts",
   "src/gateway/remote-control-ui-ingress.integration.test.ts",

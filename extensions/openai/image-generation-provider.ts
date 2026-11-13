@@ -23,10 +23,7 @@ import {
   isOpenAICodexBaseUrl,
   OPENAI_CODEX_RESPONSES_BASE_URL,
 } from "./base-url.js";
-import {
-  OPENAI_CODEX_DEFAULT_MODEL,
-  OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL,
-} from "./default-models.js";
+import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "./default-models.js";
 import {
   annotateDirectImageAuthFailure,
   sanitizeLogValue,
@@ -39,6 +36,7 @@ import {
   OPENAI_SUPPORTED_SIZES,
   OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL,
 } from "./image-generation-models.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "./model-default-refs.js";
 import { resolveModelAuthPolicy } from "./provider-policy-api.js";
 import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 
@@ -381,9 +379,8 @@ async function resolveOptionalImageAuth(req: OpenAIImageRequest, apiKeyOnly = fa
   }
 }
 
-// ChatGPT plans do not all offer the Codex default model. The default stays first so
-// working installs keep their route; configured OpenAI models are the recovery order
-// when the account rejects the model that hosts the image_generation tool.
+// Use the shared ChatGPT default first. Only configured OpenAI primary/fallback
+// models are recovery candidates when the account rejects the image-tool host.
 function resolveCodexImageResponsesModels(cfg: OpenClawConfig | undefined): [string, ...string[]] {
   const agentModel = cfg?.agents?.defaults?.model;
   const retryModels = new Set<string>();

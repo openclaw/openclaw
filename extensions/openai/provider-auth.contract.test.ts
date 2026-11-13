@@ -1,7 +1,6 @@
 // Openai tests cover provider auth.contract plugin behavior.
 import { describeOpenAICodexProviderAuthContract } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it, vi } from "vitest";
-import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
 import { resolveModelAuthPolicy } from "./provider-policy-api.js";
 
 const loginOpenAICodexOAuthMock = vi.hoisted(() => vi.fn());
@@ -11,7 +10,7 @@ vi.mock("./openai-chatgpt-oauth.runtime.js", () => ({
 }));
 
 describeOpenAICodexProviderAuthContract(() => import("./index.js"), {
-  expectedCodexDefaultModel: OPENAI_CODEX_DEFAULT_MODEL,
+  expectedCodexDefaultModel: "openai/gpt-6.1-sol",
   loginOpenAICodexOAuthMock,
 });
 

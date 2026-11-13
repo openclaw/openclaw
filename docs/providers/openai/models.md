@@ -11,19 +11,19 @@ sidebarTitle: "Models"
 
 ## Quick choice
 
-| Goal                                              | Use                                                                | Notes                                                               |
-| ------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------- |
-| ChatGPT/Codex subscription, native Codex runtime  | `openai/gpt-6-astra`                                               | Fresh subscription setup; sign in with Codex auth.                  |
-| Direct API-key billing for agent turns            | `openai/gpt-6-astra` plus an ordered API-key auth profile          | Fresh API-key setup uses Astra.                                     |
-| GPT-6.1 Sol                                       | `openai/gpt-6.1-sol`                                               | Select explicitly; reasoning cannot be disabled.                    |
-| GPT-6 Sol                                         | `openai/gpt-6-sol`                                                 | Select explicitly; account access can differ between auth routes.   |
-| Lower-cost GPT-6 Luna                             | `openai/gpt-6-luna`                                                | Select explicitly; check the account catalog for availability.      |
-| Choose an exact GPT-5.6 tier                      | `openai/gpt-5.6-sol`, `-terra`, or `-luna`                         | Check `models list` for the tiers available to this account.        |
-| Account without GPT-5.6 access                    | `openai/gpt-5.5`                                                   | Explicit recovery choice; OpenClaw does not silently downgrade.     |
-| Direct API-key billing, explicit OpenClaw runtime | `openai/gpt-5.6` plus provider/model `agentRuntime.id: "openclaw"` | Select a normal `openai` API-key profile.                           |
-| Latest ChatGPT Instant model alias                | `openai/chat-latest`                                               | Direct API-key only; moving alias, not the stable default.          |
-| Image generation or editing                       | `openai/gpt-image-2`                                               | Works with `OPENAI_API_KEY` or Codex OAuth.                         |
-| Transparent-background images                     | `openai/gpt-image-1.5`                                             | Set `outputFormat` to `png` or `webp` and `background=transparent`. |
+| Goal                                              | Use                                                                | Notes                                                                 |
+| ------------------------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| ChatGPT OAuth sign-in                             | `openai/gpt-6.1-sol`                                               | Default for Codex browser, device-code, and SIWC sign-in.             |
+| Direct API-key billing for agent turns            | `openai/gpt-6.1-sol` plus an ordered API-key auth profile          | Fresh API-key setup uses Sol.                                         |
+| GPT-6.1 Sol                                       | `openai/gpt-6.1-sol`                                               | API-key and subscription setup default; reasoning cannot be disabled. |
+| GPT-6 Sol                                         | `openai/gpt-6-sol`                                                 | Select explicitly; account access can differ between auth routes.     |
+| Lower-cost GPT-6 Luna                             | `openai/gpt-6-luna`                                                | Select explicitly; check the account catalog for availability.        |
+| Choose an exact GPT-5.6 tier                      | `openai/gpt-5.6-sol`, `-terra`, or `-luna`                         | Check `models list` for the tiers available to this account.          |
+| Account without GPT-5.6 access                    | `openai/gpt-5.5`                                                   | Explicit recovery choice; OpenClaw does not silently downgrade.       |
+| Direct API-key billing, explicit OpenClaw runtime | `openai/gpt-5.6` plus provider/model `agentRuntime.id: "openclaw"` | Select a normal `openai` API-key profile.                             |
+| Latest ChatGPT Instant model alias                | `openai/chat-latest`                                               | Direct API-key only; moving alias, not the stable default.            |
+| Image generation or editing                       | `openai/gpt-image-2`                                               | Works with `OPENAI_API_KEY` or Codex OAuth.                           |
+| Transparent-background images                     | `openai/gpt-image-1.5`                                             | Set `outputFormat` to `png` or `webp` and `background=transparent`.   |
 
 Isolated and utility completions on the Codex runtime use the same account routes
 as the model picker. A model listed by your ChatGPT account does not require an
@@ -343,8 +343,10 @@ a 1,050,000-token context window with up to 128,000 output tokens. Direct
 OpenAI API-key traffic keeps its 272,000-token active input budget by default.
 The OpenClaw harness defaults to a 500,000-token active window with ChatGPT/Codex
 subscription auth; native Codex owns its context window and compaction. Explicit
-context budgets, other models, and the Astra setup default are unchanged. A successful account
-catalog remains authoritative, including smaller account-specific windows;
+context budgets and other model settings are unchanged. Fresh API-key and
+subscription setup both recommend GPT-6.1 Sol; existing model choices and
+restrictions are preserved.
+A successful account catalog remains authoritative, including smaller account-specific windows;
 subscription offline hints do not imply access.
 
 Reasoning defaults to `medium` and supports `low`, `medium`, `high`, `xhigh`,
@@ -374,8 +376,8 @@ Use `openclaw models set openai/gpt-6-luna` to select Luna. API organization
 and Codex workspace access can differ. A successful account catalog is
 authoritative; OpenClaw does not add subscription access or silently substitute
 another model. When subscription discovery is unavailable, the offline fallback
-list omits both models. Existing model selections stay unchanged, and fresh
-OpenAI setup continues to use Astra.
+list omits both models. Existing model selections stay unchanged. Fresh direct
+OpenAI API-key and ChatGPT/Codex subscription setup both use GPT-6.1 Sol.
 
 Both models use the Responses API for agent tool calls and support text and
 image input, a 1,050,000-token context window, and up to 128,000 output tokens.
@@ -412,8 +414,7 @@ and [access guide](https://help.openai.com/en/articles/20001325-a-preview-of-gpt
 
 OpenAI's [GPT-5.6 Sol model page](https://developers.openai.com/api/docs/models/gpt-5.6-sol)
 documents the bare `openai/gpt-5.6` id as a supported alias for Sol. Fresh
-API-key and ChatGPT/Codex OAuth setup use `openai/gpt-6-astra`. Existing
-GPT-5.6 selections retain their full Sol identity. Run
+API-key and ChatGPT/Codex OAuth setup both use `openai/gpt-6.1-sol`. Existing GPT-5.6 selections retain their full Sol identity. Run
 `openclaw doctor --fix` to rewrite persisted bare OpenAI refs to that full
 identity. The native Codex catalog can show the exact Sol, Terra, and Luna ids depending on
 workspace access. Check the current account with:

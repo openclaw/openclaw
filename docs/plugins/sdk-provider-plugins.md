@@ -32,6 +32,18 @@ Auth methods can return `agentRuntimeId` with `defaultModel` when sign-in belong
 to a native harness. Models applies that runtime to the selected agent's
 model entry, not to global model defaults.
 
+An auth method can declare `defaultModelSelection: "if-unset"` to recommend an
+initial chat model after credentials are saved. A normal login must still return
+an inference-capable result's `defaultModel`; identity-only authorization omits
+that recommendation. A completed credential import uses the same method's
+`starterModel`. The host initializes only when there is no existing primary or
+configured provider-model default and policy permits the recommendation,
+including in connection-only flows. Existing and concurrent selections win.
+The host does not widen an existing narrower provider restriction to initialize
+a recommended model. On multi-agent Gateways, only the target agent is
+initialized. Omit the policy to preserve existing behavior, including an unset
+model. Personal-account login does not change an agent's model.
+
 `ProviderAuthContext.agentId` identifies the target agent when the caller has one.
 Native sign-in methods may use it to check previously remembered permissions.
 After explicit user consent, return `ProviderAuthResult.nativeRuntimeConsent`

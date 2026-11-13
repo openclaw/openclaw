@@ -1,4 +1,5 @@
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+import { OPENAI_DEFAULT_MODEL } from "./model-default-refs.js";
 
 const noopAuth = async () => ({ profiles: [] });
 const OPENAI_ACCOUNT_WIZARD_GROUP = {
@@ -29,6 +30,8 @@ export function createOpenAIProviderMetadata(): ProviderPlugin {
         {
           id: "oauth",
           kind: "oauth",
+          starterModel: OPENAI_DEFAULT_MODEL,
+          defaultModelSelection: "if-unset",
           label: "Codex login (browser)",
           hint: "Sign in to Codex locally with your ChatGPT account",
           credentialImport: CODEX_CHATGPT_IMPORT,
@@ -40,6 +43,8 @@ export function createOpenAIProviderMetadata(): ProviderPlugin {
         {
           id: "device-code",
           kind: "device_code",
+          starterModel: OPENAI_DEFAULT_MODEL,
+          defaultModelSelection: "if-unset",
           label: "Codex login (device code)",
           hint: "Use a browser code when OpenClaw runs on a remote VM",
           credentialImport: CODEX_CHATGPT_IMPORT,
@@ -52,6 +57,8 @@ export function createOpenAIProviderMetadata(): ProviderPlugin {
         {
           id: "siwc",
           kind: "oauth",
+          starterModel: OPENAI_DEFAULT_MODEL,
+          defaultModelSelection: "if-unset",
           label: "Sign in with ChatGPT (Beta)",
           hint: "Authorize OpenClaw for eligible Responses models using your Codex allowance",
           wizard: {
@@ -62,6 +69,8 @@ export function createOpenAIProviderMetadata(): ProviderPlugin {
         {
           id: "api-key",
           kind: "api_key",
+          starterModel: OPENAI_DEFAULT_MODEL,
+          defaultModelSelection: "if-unset",
           label: "OpenAI API Key",
           hint: "Use your OpenAI API key directly",
           credentialImport: CODEX_API_KEY_IMPORT,
