@@ -57,7 +57,7 @@ import {
   getTelegramCallbackQueryAnswerPromise,
   startTelegramCallbackQueryAnswer,
 } from "./callback-query-answer-state.js";
-import { buildCommandsPaginationKeyboard, resolveCommandsPageAgentId } from "./command-ui.js";
+import { buildCommandsPaginationKeyboard } from "./command-ui.js";
 import { escapeTelegramHtml } from "./format-html.js";
 import { markdownToTelegramHtml } from "./format.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
@@ -362,9 +362,7 @@ export function createTelegramCallbackRouter({
         if (page === undefined) {
           return;
         }
-        const agentId =
-          resolveCommandsPageAgentId(runtimeCfg, paginationMatch[2]) ||
-          (await resolveSessionState()).agentId;
+        const agentId = paginationMatch[2]?.trim() || (await resolveSessionState()).agentId;
         const result = await retryModelAction(async () => {
           const skillCommands = await prepareSkillCommandsForAgents({
             cfg: runtimeCfg,
