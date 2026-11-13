@@ -58,8 +58,10 @@ The review completion provides private file references, not a visible image send
 The agent inspects the candidate against the request and reference images, then
 chooses an exact-task action:
 
-- `action=review` lists saved candidates in the current original session, including
-  after a restart. Add `taskId` to prepare private `inspectionFiles` for one
+- `action=review` lists at most eight saved candidate summaries in stable task
+  order in the current original session, including after a restart. Continue with
+  `cursor=nextCursor` until `nextCursor` is null; omit the cursor to refresh this
+  live list. Add `taskId` to prepare private `inspectionFiles` for one
   candidate without widening filesystem access; original sandbox references
   remain available in its `inspectionContext`.
 - `action=deliver taskId="<task-id>"` approves only that candidate for the existing

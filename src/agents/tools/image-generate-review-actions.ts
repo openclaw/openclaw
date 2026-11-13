@@ -30,10 +30,13 @@ import {
 import { captureMediaGenerationAdmission } from "./media-generate-background-shared.js";
 import type { MediaGenerateActionResult } from "./media-generate-tool-actions-shared.js";
 
+const REVIEW_CANDIDATE_PAGE_SIZE = 8;
+
 /** Decisions stay scoped to one original task, never the newest job in a conversation. */
 export async function createImageGenerateReviewActionResult(params: {
   action: "review" | "deliver" | "supersede";
   taskId?: string;
+  cursor?: string;
   sessionKey?: string;
   requesterRunSessionKey?: string;
   agentId?: string;
@@ -143,11 +146,16 @@ export async function createImageGenerateReviewActionResult(params: {
   );
   const candidate = candidates[0];
   if (action === "review") {
+    // Task IDs are stable cursors even after a preceding candidate is approved.
+    const remaining = candidates
+      .filter((entry) => entry?.kind === "mediaCandidate")
+      .filter((entry) => taskId || !params.cursor || entry.taskId.localeCompare(params.cursor) > 0)
+      .toSorted((left, right) => left.taskId.localeCompare(right.taskId));
+    const page = taskId ? remaining : remaining.slice(0, REVIEW_CANDIDATE_PAGE_SIZE);
+    const nextCursor =
+      !taskId && remaining.length > page.length ? (page.at(-1)?.taskId ?? null) : null;
     const held = [];
-    for (const entry of candidates) {
-      if (entry?.kind !== "mediaCandidate") {
-        continue;
-      }
+    for (const entry of page) {
       const inspectionFiles: string[] = [];
       if (taskId) {
         // Reuse the generated-media owner instead of granting workspace-only
@@ -170,8 +178,13 @@ export async function createImageGenerateReviewActionResult(params: {
       held.push({
         taskId: entry.taskId,
         disposition: entry.disposition,
-        files: entry.expectedMediaUrls ?? [],
-        ...(taskId ? { inspectionFiles, inspectionContext: entry.inspectionContext } : {}),
+        ...(taskId
+          ? {
+              files: entry.expectedMediaUrls ?? [],
+              inspectionFiles,
+              inspectionContext: entry.inspectionContext,
+            }
+          : { imageCount: entry.expectedMediaUrls?.length ?? 0 }),
       });
     }
     assertCurrent();
@@ -180,12 +193,12 @@ export async function createImageGenerateReviewActionResult(params: {
         {
           type: "text",
           text: held.length
-            ? "Saved image candidates (not delivery confirmation). For private inspection, prefer inspectionFiles or the original sandbox references in inspectionContext; add taskId to prepare inspectionFiles:\n" +
-              JSON.stringify(held)
+            ? "Saved image candidates (not delivery confirmation). For private inspection, add taskId for inspectionFiles and inspectionContext; continue a listing with cursor=nextCursor:\n" +
+              JSON.stringify({ candidates: held, nextCursor })
             : "No held image candidates found for this session.",
         },
       ],
-      details: { action, candidates: held, media: { outbound: false } },
+      details: { action, candidates: held, nextCursor, media: { outbound: false } },
     };
   }
   if (!candidate || !taskId) {

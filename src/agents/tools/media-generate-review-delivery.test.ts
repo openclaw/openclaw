@@ -36,6 +36,7 @@ import { findDuplicateGuardImageGenerationTaskForSession } from "../media-genera
 import * as direct from "../subagents/announce/subagent-announce-direct-delivery.js";
 import { createImageGenerateTool } from "./image-generate-tool.js";
 import { createImageTool } from "./image-tool.js";
+import { mediaGenerationCompletionDeliveryKey } from "./media-generate-background-completion.js";
 import {
   createMediaGenerationTaskLifecycle,
   scheduleMediaGenerationTaskCompletion,
@@ -88,6 +89,84 @@ async function task(
   assert(handle);
   return handle;
 }
+
+it("pages candidate summaries without losing exact private inspection or a deleted cursor", async () => {
+  await withOpenClawTestState({ label: "review-candidate-pages" }, async (state) => {
+    await requester(state);
+    const source = state.statePath("media", "candidate.png");
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.writeFile(source, createSolidPngBuffer(1, 1, { r: 17, g: 34, b: 51 }));
+    const context = captureOpenClawStateWorkerContext();
+    const ids = Array.from(
+      { length: 25 },
+      (_, index) => "candidate-list-" + String(index).padStart(3, "0"),
+    );
+    for (const [index, taskId] of ids.entries()) {
+      const key = mediaGenerationCompletionDeliveryKey("image_generate", taskId);
+      await queue.enqueueClaimedSessionDelivery(
+        {
+          kind: "mediaCandidate",
+          sessionKey,
+          messageId: key,
+          idempotencyKey: key,
+          requesterBinding: {
+            agentId: "main",
+            sessionKey,
+            storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+            sessionId: "creative-review-session",
+            lifecycleRevision: null,
+          },
+          expectedMediaUrls: [source],
+          taskId,
+          inspectionContext: "Synthetic candidate",
+          disposition: index % 3 === 0 ? "superseded" : "review_pending",
+        },
+        0,
+        context,
+      );
+    }
+    const tool = createImageGenerateTool(
+      { agentSessionKey: sessionKey, requesterAgentId: "main" },
+      true,
+    );
+    assert(tool);
+    let cursor: string | undefined;
+    const seen: unknown[] = [];
+    for (let page = 0; page < 4; page++) {
+      const result = await tool.execute("candidate-page", {
+        action: "review",
+        ...(cursor ? { cursor } : {}),
+      });
+      const details = asRecord(result.details);
+      const candidates = details.candidates;
+      assert(Array.isArray(candidates));
+      expect(candidates).toHaveLength(page === 3 ? 1 : 8);
+      expect(JSON.stringify(result.content).length).toBeLessThan(4_000);
+      expect(candidates[0]).toHaveProperty("imageCount", 1);
+      expect(candidates[0]).not.toHaveProperty("files");
+      seen.push(...candidates.map((candidate) => asRecord(candidate).taskId));
+      if (page < 3) {
+        assert(typeof details.nextCursor === "string");
+        cursor = details.nextCursor;
+      } else {
+        expect(details.nextCursor).toBeNull();
+      }
+      if (page === 0) {
+        await expect(
+          decide({ action: "deliver", taskId: ids[7], sessionKey, agentId: "main" }),
+        ).resolves.toMatchObject({ details: { status: "approved" } });
+      }
+    }
+    expect(seen).toEqual(ids);
+    await expect(
+      decide({ action: "review", taskId: ids[24], sessionKey, agentId: "main" }),
+    ).resolves.toMatchObject({
+      details: {
+        candidates: [{ taskId: ids[24], files: [source], inspectionFiles: [expect.any(String)] }],
+      },
+    });
+  });
+});
 
 it("durably holds produced candidates before waiting for the requester's turn", async () => {
   await withOpenClawTestState({ label: "creative-review" }, async (state) => {
@@ -251,8 +330,8 @@ it.each(["review", "automatic-retired"] as const)(
       ).resolves.toMatchObject({
         details: {
           candidates: expect.arrayContaining([
-            { taskId: older.taskId, disposition: "superseded", files: olderFiles },
-            { taskId: sibling.taskId, disposition: "review_pending", files: siblingFiles },
+            { taskId: older.taskId, disposition: "superseded", imageCount: 1 },
+            { taskId: sibling.taskId, disposition: "review_pending", imageCount: 1 },
           ]),
         },
       });

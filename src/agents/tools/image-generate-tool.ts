@@ -117,6 +117,12 @@ const ImageGenerateToolSchema = Type.Object({
         "Exact task for action=review|deliver|supersede. Supersede preserves accepted paid generation and suppresses only that task delivery.",
     }),
   ),
+  cursor: Type.Optional(
+    Type.String({
+      description:
+        "For action=review without taskId: pass nextCursor from the previous candidate page.",
+    }),
+  ),
   image: Type.Optional(
     Type.String({
       description: "Reference image path/URL for edit.",
@@ -345,6 +351,7 @@ export function createImageGenerateTool(
           return createImageGenerateReviewActionResult({
             action,
             taskId: readToolStringParam(args, "taskId"),
+            cursor: readToolStringParam(args, "cursor"),
             sessionKey: options?.agentSessionKey,
             requesterRunSessionKey: options?.requesterRunSessionKey,
             agentId: options?.requesterAgentId,
