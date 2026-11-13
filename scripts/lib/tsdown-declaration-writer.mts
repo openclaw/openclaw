@@ -60,8 +60,12 @@ export async function writeTsdownDeclarations(
       const before = cacheEnabled
         ? new CompilerInputSnapshot(root, {
             toolchainFiles: resolveTsdownCompilerFiles(),
-            generatorInputs,
-            isGeneratorInput: (file) => /(?:^|\/)(?:package|openclaw\.plugin)\.json$/u.test(file),
+            // The compiler reports read sources, not failed resolution probes or the
+            // manifests and configs it consulted; key on all of them instead.
+            generatorInputs: [...generatorInputs, "pnpm-lock.yaml"],
+            isGeneratorInput: (file) =>
+              /(?:^|\/)(?:package|openclaw\.plugin)\.json$/u.test(file) ||
+              (/(?:^|\/)tsconfig[^/]*\.json$/u.test(file) && !file.includes("node_modules/")),
           })
         : undefined;
       const liveDist = path.join(root, "dist");
