@@ -173,7 +173,10 @@ async function resolveUploadPaths({
       strict,
     });
     if (!inboundPathsResult.ok) {
-      return inboundPathsResult;
+      return {
+        ok: false,
+        error: `${inboundPathsResult.error}. Uploads must be placed in the uploads directory (${DEFAULT_UPLOAD_DIR}) or reference a direct inbound media file`,
+      };
     }
     paths.push(inboundPathsResult.paths[0] ?? requestedPath);
   }

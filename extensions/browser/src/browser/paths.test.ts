@@ -196,6 +196,20 @@ describe("resolveExistingUploadPaths", () => {
     ["rejects nested absolute inbound media paths", "nested-absolute", directChild],
     ["rejects files outside both managed upload roots", "outside", "inbound media directory"],
   ]);
+
+  it("names both accepted upload sources when a path matches neither root", async () => {
+    pathFixture.root = fixture.baseDir;
+    vi.resetModules();
+    const resolve = (await import("./paths.js")).resolveExistingUploadPaths;
+    const prepared = await prepareUploadPathCase(fixture, "outside");
+    const result = await resolve({ requestedPaths: prepared.requestedPaths });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("inbound media directory");
+    expect(result.error).toContain("uploads directory");
+  });
 });
 
 describe("resolveStrictExistingUploadPaths", () => {
