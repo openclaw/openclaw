@@ -6,6 +6,7 @@ import {
   onSettled,
   Show,
   useContext,
+  type Element as SolidElement,
 } from "solid-js";
 import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
 import {
@@ -439,7 +440,7 @@ function NewSessionComposerInput(props: {
 }
 
 export function NewSessionComposer(props: {
-  contextControls?: JSX.Element;
+  contextControls?: SolidElement;
   options: NewSessionComposerOptions;
   surroundings?: () => Pick<LobsterComposerElements, "root" | "obstacles"> | undefined;
 }) {

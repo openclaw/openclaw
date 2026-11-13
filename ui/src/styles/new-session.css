@@ -1077,15 +1077,47 @@ div.new-session-page__project-search {
   }
 }
 
+/* Keep the keyboard's visible canvas separate from its panned layout extent. */
+:root[data-shell-keyboard] .new-session-page__scroll {
+  container: new-session / size;
+  max-height: var(--shell-visible-height);
+  margin-top: auto;
+}
+
 /* Safari keeps height media queries on the full layout viewport while the
    keyboard shrinks the shell. Use the page's actual available canvas instead. */
 @container new-session (max-width: 932px) and (max-height: 500px) {
   .new-session-page .agent-chat__welcome {
+    flex-shrink: 1;
+    min-height: 0;
     padding-block: 8px 0;
   }
 
   .new-session-page__draft {
+    flex-shrink: 1;
     margin-top: 8px;
+  }
+
+  /* A long draft yields to the tray and Send inside the available canvas. */
+  .new-session-page__composer {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    min-height: 0;
+  }
+
+  .new-session-page__context-tray {
+    flex-shrink: 0;
+  }
+
+  .new-session-page__composer > .agent-chat__input,
+  .new-session-page__composer .agent-chat__composer-input-row {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .new-session-page__composer .agent-chat__composer-combobox {
+    min-height: 0;
   }
 
   .new-session-page__composer .new-session-page__message {
