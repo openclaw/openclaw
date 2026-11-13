@@ -2120,6 +2120,14 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   user-select: none;
 }
 
+.chat-controls__model-picker > summary {
+  /* The summary fills its details block without a percentage width. WebKit can
+     retain a stale intrinsic size when that percentage depends on the picker
+     flex item whose width is itself derived from the changing model label. */
+  width: auto;
+  max-width: 100%;
+}
+
 .agent-chat__input .chat-controls__inline-select-trigger {
   /* The chip fills the action row's box (see --chat-composer-chip-height) and
      paints its pill one step inside it, on the same 30px tier as the primary
