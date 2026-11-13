@@ -466,9 +466,9 @@ readiness verification as active steps. `openclaw update status`, including `--j
 shows the recorded operation, wait reason, start time, and budget. Readiness observations
 refresh at most every 30 seconds within each check stage. Verification checks the managed
 service, listener identity, installed version/build, health RPC, and HTTP readiness.
-Its implicit allowance is ten times the canary startup duration, with a five-minute minimum
-and one-hour ceiling; an explicit `--timeout` takes precedence. The ceiling preserves
-headroom for slow hardware while bounding observation of the already-serving Gateway.
+Older updaters allow ten times the canary startup duration, with a five-minute minimum
+and one-hour ceiling. Current updaters allow five minutes (90 minutes on Windows);
+an explicit `--timeout` takes precedence.
 Expiry records a warning and continues with previous-Gateway readiness unverified;
 automatic rollback cannot restart an unverified previous Gateway. Run
 `openclaw gateway status --deep --require-rpc` to inspect it.
@@ -711,7 +711,7 @@ installation's [manual update method](/install/updating/update-methods), then ru
 `openclaw update repair` from the updated installation.
 
 Before stopping the previous Gateway, the updater waits for affirmative readiness.
-Its observation window is five minutes, or the explicit per-step timeout. A transient readiness miss does
+Its observation window is five minutes (90 minutes on Windows), or the explicit per-step timeout. A transient readiness miss does
 not discard the previous generation's rollback eligibility. Native service and
 Gateway boot identities must still match through the final observation.
 

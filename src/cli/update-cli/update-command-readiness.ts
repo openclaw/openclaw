@@ -43,7 +43,6 @@ export async function verifyPreviousGatewayForUpdate(params: {
   env: NodeJS.ProcessEnv;
   opts: UpdateCommandOptions;
   timeoutMs?: number;
-  observedStartupMs?: number;
   assertCurrent?: () => void;
   signal?: AbortSignal;
   requirePluginHealth?: boolean;
@@ -56,9 +55,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
   const run = proofOptions.run;
   const { deadlineMs: timeoutMs, derivation } = resolveGatewayStartupTiming(process.platform, {
     timeoutMs: params.timeoutMs,
-    observedStartupMs: params.observedStartupMs,
     migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
-    previousGateway: true,
   });
   const startedAtMs = Date.now();
   const sharedDeadline = params.opts.run?.deadline;
@@ -190,7 +187,6 @@ export type UpdateGatewayReadinessParams = {
   deadlineMs?: number;
   deadline?: GatewayRestartDeadline;
   onProgress?: (stage: string, reason: string) => void;
-  observedStartupMs?: number;
   expectedVersion?: string;
   expectedBuildId?: string;
   requireRunningService?: boolean;
@@ -234,7 +230,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
   const waitForStartup = params.waitForStartup !== false;
   const { deadlineMs: timeoutMs } = resolveGatewayStartupTiming(process.platform, {
     timeoutMs: params.timeoutMs,
-    observedStartupMs: params.observedStartupMs,
     migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
   });
   const startedAtMs = performance.now();
