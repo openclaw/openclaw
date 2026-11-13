@@ -100,7 +100,8 @@ export function createManagedMediaSourceLoader(params: {
             },
       );
     }
-    if (localMediaPath && params.mediaAccess) {
+    // Relative references also belong to the sender, not the Gateway working directory.
+    if (params.mediaAccess && !hasHttpUrlPrefix(source)) {
       const { loadWebMediaRaw } = await import("../media/web-media.js");
       const media = await loadWebMediaRaw(
         source,

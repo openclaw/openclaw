@@ -70,6 +70,7 @@ async function withSource(
       deliveredPayload: { ok: true, messageId: "confirmed", chatId: "123" },
       deliveredPayloads: [{ text: "Chart", mediaUrl }],
       mediaAccess: {
+        workspaceDir: state.workspaceDir,
         localRoots: [state.workspaceDir],
         readFile: vi.fn((file) => fs.readFile(file)),
       },
@@ -99,6 +100,45 @@ it("reuses accepted attachment custody on concurrent replay and rejects conflict
     expect(await read()).toEqual(before);
     expect(await listManagedImageRecordEntries({ sessionKey: input.sessionKey })).toEqual(records);
   }));
+
+it.each([false, true])("keeps relative media within the sender boundary (denied=%s)", (denied) =>
+  withSource(async (input) => {
+    const cwdDir = await fs.mkdtemp(path.join(process.cwd(), ".source-media-"));
+    try {
+      const source = path.relative(process.cwd(), path.join(cwdDir, "chart.png"));
+      const workspace = expectDefined(input.mediaAccess?.workspaceDir, "sender workspace");
+      const senderPath = path.join(workspace, source);
+      const image = createSolidPngBuffer(3, 2, { r: 20, g: 100, b: 180 });
+      await fs.mkdir(path.dirname(senderPath), { recursive: true });
+      await fs.writeFile(senderPath, image);
+      await fs.writeFile(
+        path.join(cwdDir, "chart.png"),
+        createSolidPngBuffer(4, 2, { r: 200, g: 20, b: 20 }),
+      );
+      const readFile = vi.fn(async (file: string) => {
+        expect(file).toBe(senderPath);
+        if (denied) {
+          throw new Error("sender denied");
+        }
+        return await fs.readFile(file);
+      });
+      input.mediaAccess = { ...input.mediaAccess, readFile };
+      input.deliveredPayloads = [{ text: "Chart", mediaUrl: source }];
+      expect(await mirror(input)).toBe(true);
+      expect(readFile).toHaveBeenCalledOnce();
+      const records = await listManagedImageRecordEntries({ sessionKey: input.sessionKey });
+      expect(records).toHaveLength(denied ? 0 : 1);
+      if (!denied) {
+        const { original } = expectDefined(records[0], "sender attachment").record;
+        expect(
+          await fs.readFile(path.join(original.mediaRoot, original.mediaSubdir, original.mediaId)),
+        ).toEqual(image);
+      }
+    } finally {
+      await fs.rm(cwdDir, { recursive: true, force: true });
+    }
+  }),
+);
 
 it("preserves a published filename-only mirror on replay without retroactively ingesting its file", () =>
   withSource(async (input, read) => {
