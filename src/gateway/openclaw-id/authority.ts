@@ -30,7 +30,7 @@ import {
   ROOT_EPOCH,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
-import { callerGone, type AuthorityAccepted, type AuthorityRefusal } from "./authority-result.js";
+import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
 import { verifyBinding } from "./binding-check.js";
 import {
   needsAllowlistUpgrade,
@@ -330,6 +330,8 @@ export function createOpenClawIdAuthority(
       kSrv: IrohEndpointKey;
       kGw: Ed25519PublicKey;
       hostname: string;
+      /** Throws once the caller's ceremony authority is gone; checked at the write. */
+      guard?: () => void;
     }): Promise<LinkPreparation | AuthorityRefusal> {
       return serialize(async () => {
         const current = await load();
@@ -339,7 +341,7 @@ export function createOpenClawIdAuthority(
         const next = current ?? emptyRecord(bytesToHex(randomBytes(16)));
         const hostname = params.hostname;
         if (next !== current || next.hostname !== hostname) {
-          await commit({ ...next, hostname });
+          await commit({ ...next, hostname }, params.guard);
         }
         return {
           claw_id: next.claw_id,
@@ -355,7 +357,8 @@ export function createOpenClawIdAuthority(
     /**
      * Pins R for good, admits owner device D1 and stores the ServerBinding.
      * Only on the `local_operator` ceremony channel: relayed traffic never runs a root
-     * ceremony. `expected.guard` throws once the caller's live ceremony authority is gone.
+     * ceremony. `expected.guard` throws once the caller's live ceremony authority is gone;
+     * it is checked at the write, which then rejects.
      */
     commitLink(
       input: LinkCommit,
@@ -382,20 +385,21 @@ export function createOpenClawIdAuthority(
         if (!added.ok) {
           return { ok: false, code: added.code, detail: added.detail };
         }
-        // The caller's live ceremony authority, last checked inside this serialized write.
-        const binding =
-          callerGone(expected.guard) ??
-          (await verifyBinding(
-            added.state,
-            input.binding,
-            current,
-            { ...expected, bindingSeq: 1 },
-            now,
-          ));
+        const binding = await verifyBinding(
+          added.state,
+          input.binding,
+          current,
+          { ...expected, bindingSeq: 1 },
+          now,
+        );
         if (!binding.ok) {
           return binding;
         }
-        await commit({ ...current, authority: added.state, binding: binding.statement });
+        // The caller's live ceremony authority is checked at the durable write itself.
+        await commit(
+          { ...current, authority: added.state, binding: binding.statement },
+          expected.guard,
+        );
         return {
           ok: true,
           status: "applied",

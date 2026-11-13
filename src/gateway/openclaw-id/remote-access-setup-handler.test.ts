@@ -293,6 +293,20 @@ describe("Turn on remote access over a personal sign-in", () => {
     expect(() => assertCurrent?.()).toThrow("this connection changed");
   });
 
+  it("refuses a commit whose write the admin's lost authority stopped", async () => {
+    const josh = admin();
+    service.commitLink.mockImplementationOnce(async (_channel, _input, _code, guard) => {
+      josh.roleLowered = true;
+      guard?.();
+      return { ok: true };
+    });
+    expect(await authority(josh, commitParams)).toMatchObject({ ok: false, code: "not_admin" });
+    expect(store.link).not.toHaveBeenCalled();
+    expect(logGateway.warn).toHaveBeenCalledWith(
+      expect.stringContaining("remote access commit denied code=not_admin route=personal_admin"),
+    );
+  });
+
   it("keeps the claw linked but reports why the profile was not linked", async () => {
     const josh = admin();
     // No token, or a token this Gateway never redeemed for this profile.
@@ -378,9 +392,11 @@ describe("Turn on remote access over a personal sign-in", () => {
     expect(service.prepareLink).not.toHaveBeenCalled();
     expect(service.commitLink).not.toHaveBeenCalled();
     expect(service.publish).not.toHaveBeenCalled();
-    expect(logGateway.warn).toHaveBeenCalledWith(
-      expect.stringContaining(`remote access commit denied code=${code}`),
-    );
+    for (const action of ["commit", "link_code", "publish"]) {
+      expect(logGateway.warn).toHaveBeenCalledWith(
+        expect.stringContaining(`remote access ${action} denied code=${code}`),
+      );
+    }
   });
 
   it("keeps Move to new keys on the computer that runs the claw", async () => {
@@ -415,6 +431,9 @@ describe("Turn on remote access over a personal sign-in", () => {
       payload: { publication: { state: "published" } },
     });
     expect(service.publish).toHaveBeenCalledWith("c");
+    expect(logGateway.info).toHaveBeenCalledWith(
+      expect.stringContaining("remote access link_code success route=personal_admin"),
+    );
     expect(logGateway.info).toHaveBeenCalledWith(
       expect.stringContaining("remote access publish success route=personal_admin"),
     );

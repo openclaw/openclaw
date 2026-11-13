@@ -13,13 +13,3 @@ export type AuthorityAccepted = {
   status: "applied" | "pending";
   events: AuthorityEvent[];
 };
-
-/** A refusal once a ceremony caller's live authority is gone (`assertCurrent` throws). */
-export function callerGone(assertCurrent: (() => void) | undefined): AuthorityRefusal | undefined {
-  try {
-    assertCurrent?.();
-    return undefined;
-  } catch {
-    return { ok: false, code: "not_admin", detail: "this connection changed" };
-  }
-}

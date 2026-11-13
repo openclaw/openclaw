@@ -731,7 +731,7 @@ export function createOpenClawIdService(params: {
      */
     async prepareLink(
       channel: Channel | undefined,
-      request: ClawNameRequest,
+      request: ClawNameRequest & { guard?: () => void },
     ): Promise<LinkPreparation | AuthorityRefusal> {
       const checked = await checkClawName(channel, request);
       if ("ok" in checked) {
@@ -747,14 +747,14 @@ export function createOpenClawIdService(params: {
       const { pub } = await gatewayKey.load();
       return await (
         await getAuthority()
-      ).prepareLink({ kSrv, kGw: pub, hostname: checked.hostname });
+      ).prepareLink({ kSrv, kGw: pub, hostname: checked.hostname, guard: request.guard });
     },
 
     checkClawName,
 
     /**
      * Step 2: pin fp(R), admit owner device D1, store the binding, then publish.
-     * `guard` throws once the caller's live ceremony authority is gone; checked before the write.
+     * `guard` throws once the caller's live ceremony authority is gone; checked at the write.
      */
     async commitLink(
       channel: Channel | undefined,
