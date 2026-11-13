@@ -990,10 +990,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "image": {
         const meta = (token.meta as AssistantTranscriptRoleImageMeta | undefined)
           ?.assistantTranscriptRoleImage;
-        appendImageAlternative(
-          resolveRenderTarget(state),
-          meta ?? { text: token.content ?? "", spans: [] },
-        );
+        appendImageAlternative(resolveRenderTarget(state), meta, token);
         break;
       }
       case "softbreak":
