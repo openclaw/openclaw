@@ -1,7 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import type { PreparedAgentRunAdmission } from "../agents/admitted-run-context.js";
 import {
   bindCronManagementToolConstruction,
@@ -328,17 +329,7 @@ describe("MCP HTTP keepalive", () => {
     }
   });
 
-  async function within<T>(promise: Promise<T>): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error("HTTP idle timeout")), 500);
-    });
-    try {
-      return await Promise.race([promise, timeout]);
-    } finally {
-      clearTimeout(timer);
-    }
-  }
+  const within = <T>(promise: Promise<T>) => withTestTimeout(promise, 500, "HTTP idle timeout");
 
   const toolCall = mcp.toolCall("wait_probe");
   const heartbeatResult = { content: [{ type: "text", text: "completed once" }] };
@@ -433,7 +424,14 @@ describe("MCP HTTP keepalive", () => {
     },
   );
 
-  it("keeps a GET notification stream alive and releases it during shutdown", async () => {
+  it("releases a GET notification stream and aborts a pending call during shutdown", async () => {
+    const entered = createDeferred();
+    execute.mockImplementation((_id: string, _params: unknown, signal: AbortSignal) => {
+      entered.resolve();
+      return once(signal, "abort");
+    });
+    const pending = send("POST", toolCall);
+    await within(entered.promise);
     const response = await send("GET");
     expect(response.headers.get("content-type")).toBe("text/event-stream");
     expect(response.headers.get("connection")).toBe("close");
@@ -443,8 +441,8 @@ describe("MCP HTTP keepalive", () => {
       await vi.advanceTimersByTimeAsync(30_000);
       expect(await readText(reader)).toMatch(/^(?::\n\n)+$/);
       await within(closeMcpLoopbackServer());
-      const buffered = await within(drain(() => reader.read()));
-      expect(buffered).toMatch(/^(?::\n\n)*$/);
+      await (await pending).body?.cancel();
+      expect(await within(drain(() => reader.read()))).toMatch(/^(?::\n\n)*$/);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       await reader.cancel();
