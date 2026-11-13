@@ -54,6 +54,18 @@ describe("browser engine route admission", () => {
     },
   );
 
+  it("answers operator input on Lightpanda with the panel's per-action fallback code", async () => {
+    const { ctx, ensureTabAvailable, routes, request } = setup();
+    registerBrowserRoutes(routes.app, ctx);
+    const response = await request("post", "/operator/input", {
+      body: { inputs: [{ kind: "press", key: "a" }] },
+      query: { profile: "selected" },
+    });
+    expect(response.statusCode).toBe(501);
+    expect(response.body).toMatchObject({ code: "OPERATOR_INPUT_UNSUPPORTED" });
+    expect(ensureTabAvailable).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["lightpanda", "post", "/act", { body: { kind: "click", ref: "e1" } }],
     ["chromium", "post", "/act", { body: { kind: "wait", selector: "main" } }],

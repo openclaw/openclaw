@@ -120,6 +120,8 @@ type CreateAgentParams = {
   transformConfig?: typeof transformConfigFileWithRetry;
   /** Revalidate delegated authority before each new persistent effect. */
   beforePersistentApply?: () => void;
+  /** Revalidate prepared config before publication replaces its source snapshot. */
+  assertBeforePublish?: () => void;
   /** Doctor may restore only the backed-up stores selected by its recovery policy. */
   restorePaths?: readonly string[];
   /** Admit new identity input until its first successful publication. */
@@ -428,6 +430,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           assertConfigPathForWrite: () => {
             params.stagedConfig?.writeSnapshot.writeOptions.assertConfigPathForWrite?.();
             beforePersistentApply();
+          },
+          assertBeforePublish: () => {
+            params.stagedConfig?.writeSnapshot.writeOptions.assertBeforePublish?.();
+            params.assertBeforePublish?.();
           },
         },
         transform: async (currentConfig, context) => {

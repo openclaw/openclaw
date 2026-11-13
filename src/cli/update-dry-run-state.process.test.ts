@@ -78,7 +78,17 @@ function runPreview(root: string, command = "update") {
 
 async function snapshotTree(root: string): Promise<string[]> {
   const snapshot: string[] = [];
+  const logDirectory = path.join("state", "logs");
   for (const { relativePath, dirent } of await listDirectoryTreeStrict(root)) {
+    // Startup refusals can write daily diagnostics without mutating update state.
+    if (
+      (relativePath === logDirectory && dirent.isDirectory()) ||
+      (path.dirname(relativePath) === logDirectory &&
+        dirent.isFile() &&
+        /^openclaw-\d{4}-\d{2}-\d{2}\.log$/u.test(dirent.name))
+    ) {
+      continue;
+    }
     const absolutePath = path.join(root, relativePath);
     if (dirent.isDirectory()) {
       snapshot.push(`d ${relativePath}`);
@@ -409,16 +419,18 @@ channel("sqlite.db.query").subscribe(({ database }) => {
       "{}\n",
       " copied state ",
     );
+    // Runtime diagnostics use a separate state root from the copied snapshot path.
+    await fs.mkdir(path.join(root, "state"));
     const before = await snapshotTree(root);
 
-    const valid = await runMigrationPlan(root, stateDir, [], { OPENCLAW_STATE_DIR: stateDir });
+    const valid = await runMigrationPlan(root, stateDir);
     expect(valid.code, valid.stderr).toBe(1);
     expect(JSON.parse(valid.stdout)).toMatchObject({
       outcome: "refused",
       snapshot: { stateDir },
     });
 
-    const blank = await runMigrationPlan(root, " \t ", [], { OPENCLAW_STATE_DIR: " \t " });
+    const blank = await runMigrationPlan(root, " \t ");
     expect(blank.code).toBe(1);
     expect(blank.stderr).toContain("--snapshot-state must not be blank");
     expect(await snapshotTree(root)).toEqual(before);

@@ -310,6 +310,14 @@ const getEntries = () => {
   branchReads++;
   return manager.getBranch();
 };
+// The baseline owner predates universal pinning: it takes route parameters and reads the branch.
+type BaselineBegin = (params: {
+  state: typeof lease.state;
+  routeKey: string;
+  enabled: boolean;
+  entries: unknown;
+  getEntries: () => unknown;
+}) => boolean;
 function runOne() {
   if (continuations) {
     const index = operation++;
@@ -323,14 +331,19 @@ function runOne() {
     }
     return prepared.restart;
   }
-  const params = {
-    state: lease.state,
-    routeKey: "synthetic-route",
-    enabled: !values.disabled,
-    entries: values["baseline-source"] ? getEntries() : undefined,
-    getEntries: () => getEntries(),
-  };
-  return beginSessionSystemPrompt(params);
+  if (values["baseline-source"]) {
+    // SAFETY: --baseline-source replaces this module with the historical owner and its signature.
+    return (beginSessionSystemPrompt as unknown as BaselineBegin)({
+      state: lease.state,
+      routeKey: "synthetic-route",
+      enabled: !values.disabled,
+      entries: getEntries(),
+      getEntries,
+    });
+  }
+  // Every route now pins its series; beginning one no longer reads the branch.
+  beginSessionSystemPrompt(lease.state);
+  return false;
 }
 function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
   return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
@@ -373,10 +386,7 @@ try {
   if (!continuations || !values["baseline-source"]) {
     assert.equal(retirements, 0);
   }
-  assert.equal(
-    branchReads,
-    !continuations && (values["baseline-source"] || values.disabled) ? iterations : 0,
-  );
+  assert.equal(branchReads, !continuations && values["baseline-source"] ? iterations : 0);
   console.log(
     JSON.stringify({
       revision: values["baseline-source"] ? "base" : "candidate",

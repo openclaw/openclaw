@@ -30,6 +30,7 @@ export async function sendTelegramWidget(params: {
       to: params.to,
       context,
       opts: {},
+      thread: {},
     });
     const caption = Array.from(params.title).slice(0, TELEGRAM_WIDGET_CAPTION_MAX_CHARS).join("");
     const request: TelegramSendWidgetParams = {
@@ -63,6 +64,9 @@ export async function sendTelegramWidget(params: {
         sourceHash: hashTelegramWidgetSource(params.source),
         title: caption,
         source: params.source,
+        ...(prepared.threadSpec?.scope === "dm" && prepared.threadSpec.id !== undefined
+          ? { messageThreadId: prepared.threadSpec.id }
+          : {}),
         ...(params.state ? { state: params.state } : {}),
       },
     });

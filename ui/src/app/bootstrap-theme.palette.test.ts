@@ -128,9 +128,14 @@ it.each(["superseded", "disposed"])("ignores a %s palette completion", (state) =
   expect(document.documentElement.dataset.themeMode).toBe("light");
 });
 
-it.each([false, true])(
-  "publishes Board preferences without reapplying or retiring the palette (pending: %s)",
-  (pending) => {
+it.each([
+  ["Board", false],
+  ["Board", true],
+  ["readiness", false],
+  ["readiness", true],
+] as const)(
+  "publishes %s without reapplying or retiring the palette (pending: %s)",
+  (source, pending) => {
     if (pending) {
       patchSettings({ theme: "tide", themeMode: "dark" });
     }
@@ -138,9 +143,13 @@ it.each([false, true])(
     const palette = theme.appliedPalette;
     const rootWrites = vi.spyOn(document.documentElement, "setAttribute");
     const styleWrites = vi.spyOn(document.documentElement.style, "setProperty");
-    patchSettings({ boardSessionViews: { example: { activeTabId: "reports" } } });
+    if (source === "Board") {
+      patchSettings({ boardSessionViews: { example: { activeTabId: "reports" } } });
+      expect(theme.settings.boardSessionViews?.example?.activeTabId).toBe("reports");
+    } else {
+      theme.refresh({ notify: true });
+    }
     expect(snapshots).toHaveBeenCalledOnce();
-    expect(theme.settings.boardSessionViews?.example?.activeTabId).toBe("reports");
     expect(theme.appliedPalette).toBe(palette);
     expect(rootWrites).not.toHaveBeenCalled();
     expect(styleWrites).not.toHaveBeenCalled();

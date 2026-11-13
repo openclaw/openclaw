@@ -3,7 +3,13 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
-import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
+import {
+  normalizeMessage,
+  normalizeRoleForGrouping,
+  resolveMessageRole,
+} from "../../lib/chat/message-normalizer.ts";
+import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
+import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
@@ -21,6 +27,29 @@ import {
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 
 const TERMINAL_WORK_STATUSES = new Set(["done", "failed", "timeout", "killed"]);
+
+export function isActivityMessageGroup(group: MessageGroup, bubbleMode = false): boolean {
+  if (normalizeRoleForGrouping(group.role) !== "tool") {
+    return false;
+  }
+  if (
+    bubbleMode &&
+    group.messages.some(
+      (item) => item.hasVisibleContent && resolveMessageRole(item.message) === "assistant",
+    )
+  ) {
+    return false;
+  }
+  const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
+  return (
+    bubbleMode ||
+    group.messages.length > 1 ||
+    cards.length > 1 ||
+    (cards.length === 0 &&
+      group.messages.some(({ message }) => hasVisiblePreparedActivity(message))) ||
+    cards.some((card) => readToolApprovalReviews(card.details).length > 0)
+  );
+}
 
 type RenderChatItem = ChatItem | MessageGroup;
 export type StreamRunRenderItem = {
@@ -80,8 +109,6 @@ export type WorkGroupRenderItem = {
   replyRunId?: string;
   /** No visible reply owns this rollup; nested execution identities must not frame it. */
   ownerless?: true;
-  /** Hidden group -> preceding preserved output; absent entries stay under the summary. */
-  previewAfterGroup?: ReadonlyMap<string, string>;
   durationMs: number | null;
 };
 
@@ -388,8 +415,6 @@ export function collapseCompletedTurnWork(
     }
     const groups: MessageGroup[] = [];
     const answers: TurnRenderItem[] = [];
-    const previewAfterGroup = new Map<string, string>();
-    let precedingAnswerKey: string | undefined;
     // CLI runtimes import tool rows and interim text without a run id; only the
     // persisted reply that follows them carries it. Such rows belong to that run.
     const workRunIds = new Set<string | undefined>();
@@ -412,12 +437,8 @@ export function collapseCompletedTurnWork(
           }
           workRunIds.add(runId);
         }
-        if (precedingAnswerKey) {
-          previewAfterGroup.set(item.key, precedingAnswerKey);
-        }
       } else {
         answers.push(item);
-        precedingAnswerKey = item.key;
       }
     }
     if (groups.length === 0) {
@@ -462,7 +483,6 @@ export function collapseCompletedTurnWork(
       // Above several runs' replies, work owned by none of them stays unframed
       // even when its rows share one run.
       ...(earlierRunReplies.size > 0 && !replyRunId ? { ownerless: true as const } : {}),
-      ...(previewAfterGroup.size > 0 ? { previewAfterGroup } : {}),
       durationMs,
     });
     result.push(...answers, ...turn.slice(segmentEnd + 1));

@@ -333,7 +333,7 @@ export function coordinateWorkerPlacementDispatch(
       registerOperation({ kind: "dispatch", request, ...tracked });
       return await tracked.operation;
     },
-    forceDestroyEnvironment: async (environmentId, onCleanupError) => {
+    forceDestroyEnvironment: async (environmentId, onCleanupError, authorize) => {
       const sessionIds = new Set(await service.readEnvironmentSessionIds(environmentId));
       for (const sessionId of service.getEnvironmentAttachedSessionIds(environmentId)) {
         sessionIds.add(sessionId);
@@ -349,7 +349,7 @@ export function coordinateWorkerPlacementDispatch(
       return await admission.hold(
         (async () => {
           await admission.ready;
-          return await service.forceDestroyEnvironment(environmentId, onCleanupError);
+          return await service.forceDestroyEnvironment(environmentId, onCleanupError, authorize);
         })(),
       );
     },

@@ -380,10 +380,13 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
       }
       const { provider, model, modelFallbacksOverride, runtimePluginCandidates } = preflight;
       // A captured runtime replaces the override the cron session copied from its source row.
-      const runtimeSessionEntry = resolveCronRuntimeSessionEntry(
-        input.job.inferenceBinding,
-        cronSession.sessionEntry,
-      );
+      const runtimeSessionEntryFor = (candidateProvider: string) =>
+        resolveCronRuntimeSessionEntry(
+          input.job.inferenceBinding,
+          cronSession.sessionEntry,
+          candidateProvider,
+        );
+      const runtimeSessionEntry = runtimeSessionEntryFor(provider);
       const effectiveAgentRuntime = resolveEffectiveAgentRuntime({
         cfg: cfgWithAgentDefaults,
         provider,
@@ -434,7 +437,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           runtimePluginSelections: runtimePluginCandidates.map((candidate) => {
             const runtime = resolveSessionRuntimeOverrideForProvider({
               provider: candidate.provider,
-              entry: runtimeSessionEntry,
+              entry: runtimeSessionEntryFor(candidate.provider),
               cfg: cfgWithAgentDefaults,
             });
             return runtime
@@ -589,12 +592,17 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           job: input.job,
           cronSession,
         });
+        // A recorded account selects only for its own provider; another provider selects live.
+        const recordedBinding =
+          input.job.inferenceBinding?.provider === provider
+            ? input.job.inferenceBinding
+            : undefined;
         const authSelection = input.job.runtimeAuthority
           ? undefined
-          : input.job.inferenceBinding
+          : recordedBinding
             ? {
-                profileId: input.job.inferenceBinding.profileId,
-                source: input.job.inferenceBinding.source,
+                profileId: recordedBinding.profileId,
+                source: recordedBinding.source,
               }
             : await resolveCronAuthSelection({
                 agentId,

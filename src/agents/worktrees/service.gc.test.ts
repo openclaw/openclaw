@@ -28,8 +28,9 @@ import * as worktreeGit from "./git.js";
 import { requireGit } from "./git.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.test-support.js";
+import { IDLE_GC_MS } from "./retention.js";
 import { managedWorktreeGcEntrypoint } from "./service-gc-runtime.test-support.js";
-import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
+import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import {
   useManagedWorktreeTestRepository,
   materializeManagedWorktreeFixture,

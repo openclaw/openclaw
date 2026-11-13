@@ -4,7 +4,12 @@ import { assert, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 import { collectWorktreeTemplates, prepareWorktreeTemplate } from "./template-cache.js";
-import { listTemplatesAsync } from "./template-registry-async.js";
+import {
+  listTemplatesAsync,
+  markTemplateReadyAsync,
+  reserveTemplateAsync,
+} from "./template-registry-async.js";
+import { retainedWorktreeTemplateKey } from "./template-registry.js";
 
 const directories = useWorktreeStateRoots();
 const guard = { commitGuard: () => {} };
@@ -140,6 +145,45 @@ it.each([false, true])(
     }
   },
 );
+
+it("retains the newest four generations when background builds share foreground recency", async () => {
+  for (const [index, commit] of ["a", "b", "c", "d", "e"].entries()) {
+    // Reverse UUID order so recency ties cannot accidentally select the newest build.
+    const id = `00000000-0000-4000-8000-00000000000${5 - index}`;
+    const templatePath = path.join(root, "templates", ".templates", id);
+    await fs.mkdir(templatePath, { recursive: true });
+    await fs.writeFile(path.join(templatePath, "dependency"), commit);
+    await reserveTemplateAsync(
+      env,
+      {
+        cacheKey:
+          commit === "e" ? "runtime-one" : retainedWorktreeTemplateKey("runtime-one", commit),
+        id,
+        repoRoot: path.join(root, "repo"),
+        commonDir: path.join(root, "repo", ".git"),
+        worktreeRoot: path.join(root, "templates"),
+        path: templatePath,
+        backend: "sandbox-test",
+        sourceCommit: commit,
+        contentKey: commit,
+        status: "preparing",
+        createdAt: now + index,
+        lastUsedAt: now,
+      },
+      guard.commitGuard,
+    );
+    await markTemplateReadyAsync(env, id, now, guard.commitGuard);
+  }
+  await collect();
+  expect((await listTemplatesAsync(env)).map((record) => record.sourceCommit)).toEqual([
+    "b",
+    "c",
+    "d",
+    "e",
+  ]);
+  await (await prepare("e")).release();
+  expect(installs).toEqual([]);
+});
 
 it("retires idle identity keys after six hours without damaging completed clones", async () => {
   now -= 7 * 60 * 60_000;

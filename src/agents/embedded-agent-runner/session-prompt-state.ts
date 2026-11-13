@@ -15,6 +15,10 @@ import { getOpenClawSystemUpdateKind } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 import { shareSystemPromptPrefix } from "../sessions/system-prompt-pool.js";
+import {
+  readToolUsageRankingSnapshot,
+  type ToolUsageRankingSnapshot,
+} from "../tool-usage-ranking.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {
   prepareCacheTtlCheckpoint,
@@ -34,6 +38,12 @@ export type ToolResultPromptProjectionState = CacheTtlProjectionInput & {
 
 type EmbeddedSessionPromptState = {
   activeAttempts: number;
+  usageRanking?: {
+    routeKey: string;
+    historyId: string | null;
+    snapshot?: ToolUsageRankingSnapshot;
+  };
+  persistedUsageRanking?: ToolUsageRankingSnapshot;
   toolResults: ToolResultPromptProjectionState;
   systemPrompt?: SystemPromptSeries;
   pendingSystemPrompt?: SystemPromptSeries;
@@ -52,6 +62,7 @@ type SystemPromptSeries = {
   routeKey: string;
   historyId: string | null;
   permissionNotice?: string;
+  usageRanking?: ToolUsageRankingSnapshot;
   restart: boolean;
 };
 
@@ -62,6 +73,8 @@ const SYSTEM_PROMPT_ROUTE_PARTS = [
   "baseUrl",
   "inHistorySystemUpdates",
   "personalProfile",
+  "harness",
+  "surface",
 ] as const;
 type SystemPromptRoutePart = (typeof SYSTEM_PROMPT_ROUTE_PARTS)[number];
 type SystemPromptRestartReason =
@@ -73,7 +86,7 @@ export type SystemPromptSeriesStatus = "pinned" | `restarted:${SystemPromptResta
 
 /** One owner for the series key layout; saved checkpoints compare these exact bytes. */
 export function buildSystemPromptRouteKey(
-  route: Record<SystemPromptRoutePart, string | boolean | undefined>,
+  route: Partial<Record<SystemPromptRoutePart, string | boolean | undefined>>,
 ): string {
   return JSON.stringify(SYSTEM_PROMPT_ROUTE_PARTS.map((part) => route[part]));
 }
@@ -158,6 +171,89 @@ function resolvePromptHistoryId(params: {
     params.state.historyBoundary = { count: params.historyBoundaryCount, id };
   }
   return id;
+}
+
+/** The prompt owner alone decides when persisted usage may enter provider-visible text. */
+export async function prepareSessionToolUsageRanking(params: {
+  state: EmbeddedSessionPromptState;
+  routeKey: string;
+  entries: SessionEntry[];
+  historyBoundaryCount?: number;
+  enabled: boolean;
+  catalogIds: readonly string[];
+  inherited?: ToolUsageRankingSnapshot;
+  now: number;
+  readRankedIds: () => Promise<readonly string[]>;
+}): Promise<ToolUsageRankingSnapshot | undefined> {
+  const historyId = resolvePromptHistoryId(params);
+  const markerIndex = params.entries.findLastIndex(
+    (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
+  );
+  const marker = params.entries[markerIndex];
+  const data = marker?.type === "custom" && isRecord(marker.data) ? marker.data : undefined;
+  const afterModelChange = params.entries
+    .slice(markerIndex + 1)
+    .some((entry) => entry.type === "model_change");
+  const previous = params.state.usageRanking;
+  if (!previous) {
+    // Both checkpoint consumers share the ranking owner's one restored identity.
+    params.state.persistedUsageRanking = readToolUsageRankingSnapshot(data?.usageRanking);
+  }
+  const sameBoundary = previous
+    ? previous.routeKey === params.routeKey && previous.historyId === historyId
+    : data?.routeKey === params.routeKey && data.historyId === historyId && !afterModelChange;
+  let snapshot = sameBoundary
+    ? previous
+      ? previous.snapshot
+      : params.state.persistedUsageRanking
+    : undefined;
+  const frozen = snapshot;
+  if (!sameBoundary && params.enabled) {
+    const inherited = !data && !historyId ? params.inherited : undefined;
+    const allowed = new Set(params.catalogIds);
+    const orderedToolIds = (
+      inherited ? inherited.orderedToolIds : [...(await params.readRankedIds())]
+    ).filter((id) => allowed.has(id));
+    const firstSeen =
+      inherited?.newcomers ??
+      previous?.snapshot?.newcomers ??
+      params.state.persistedUsageRanking?.newcomers;
+    snapshot = {
+      version: 1,
+      at: inherited?.at ?? params.now,
+      orderedToolIds,
+      newcomers: Object.fromEntries(
+        params.catalogIds.map((id) => [id, firstSeen?.[id] ?? params.now]),
+      ),
+    };
+  } else if (
+    frozen &&
+    (params.catalogIds.some((id) => frozen.newcomers?.[id] === undefined) ||
+      frozen.orderedToolIds.some((id) => !params.catalogIds.includes(id)))
+  ) {
+    // Catalog refresh admits newcomers without rereading scores or disturbing surviving order.
+    snapshot = {
+      ...frozen,
+      orderedToolIds: frozen.orderedToolIds.filter((id) => params.catalogIds.includes(id)),
+      newcomers: {
+        ...frozen.newcomers,
+        ...Object.fromEntries(
+          params.catalogIds
+            .filter((id) => frozen.newcomers?.[id] === undefined)
+            .map((id) => [id, params.now]),
+        ),
+      },
+    };
+  }
+  params.state.usageRanking = { routeKey: params.routeKey, historyId, snapshot };
+  return snapshot;
+}
+
+/** Spawn captures the parent's admitted preference, never its live usage or tool authority. */
+export function getSessionToolUsageRanking(
+  sessionId: string,
+): ToolUsageRankingSnapshot | undefined {
+  return sessionPromptStates.get(sessionId)?.usageRanking?.snapshot;
 }
 
 function sameToolParameters(left: unknown, right: unknown): boolean {
@@ -340,28 +436,10 @@ export function readSessionSentTools(entries: SessionEntry[]): AnyAgentTool[] | 
   return readToolSurfaceCheckpoint(entries)?.tools.map(refusePinnedTool);
 }
 
-/** Unsent preparation belongs to its attempt; an incapable route rebuilds the full prompt. */
-export function beginSessionSystemPrompt(params: {
-  state: EmbeddedSessionPromptState;
-  routeKey: string;
-  enabled: boolean;
-  getEntries: () => SessionEntry[];
-}): boolean {
-  params.state.pendingSystemPrompt = undefined;
-  params.state.historyBoundary = undefined;
-  if (params.enabled) {
-    return false;
-  }
-  params.state.systemPrompt = undefined;
-  params.state.systemPromptRouteKey = params.routeKey;
-  const previous = params
-    .getEntries()
-    .findLast((entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt");
-  return (
-    previous?.type === "custom" &&
-    isRecord(previous.data) &&
-    previous.data.routeKey !== params.routeKey
-  );
+/** Unsent preparation belongs to its attempt. */
+export function beginSessionSystemPrompt(state: EmbeddedSessionPromptState): void {
+  state.pendingSystemPrompt = undefined;
+  state.historyBoundary = undefined;
 }
 
 function promptSections(text: string): Map<string, string> {
@@ -391,7 +469,19 @@ function promptDelta(previous: string, current: string): string[] {
   return sections;
 }
 
-/** Restore the admitted series; refreshed instructions append after its conversation prefix. */
+/**
+ * Restore the admitted series; refreshed instructions append after its conversation prefix.
+ *
+ * Every session pins one system prompt on every route and runtime. Later changes go out
+ * as appended `prompt-update` deltas: an in-history system message where the route
+ * accepts one, otherwise a user-role note. The series rebuilds only at these points:
+ * - `new`: the session's first request, or `/new` and `/reset` (a new session);
+ * - `history`: an explicit compaction or a transcript reset;
+ * - `model-change` and `route:*`: a model or provider switch, including its API, base
+ *   URL, system-message capability, harness or tool surface, or a change of the
+ *   session's selected person.
+ * The operator refresh is one of these: `/compact`, `/new` or a model switch.
+ */
 export function prepareSessionSystemPrompt(params: {
   state: EmbeddedSessionPromptState;
   routeKey: string;
@@ -438,6 +528,7 @@ export function prepareSessionSystemPrompt(params: {
         historyId,
         permissionNotice:
           typeof data.permissionNotice === "string" ? data.permissionNotice : undefined,
+        usageRanking: params.state.persistedUsageRanking,
         restart: false,
       };
       params.state.systemPrompt = series;
@@ -475,9 +566,16 @@ export function prepareSessionSystemPrompt(params: {
         routeKey: params.routeKey,
         historyId,
         permissionNotice,
+        usageRanking: params.state.usageRanking?.snapshot,
         restart: true,
       }
-    : { ...series!, renderedPrefix, permissionNotice, restart: false };
+    : {
+        ...series!,
+        renderedPrefix,
+        permissionNotice,
+        usageRanking: params.state.usageRanking?.snapshot,
+        restart: false,
+      };
   // Admission callbacks need the series, not the transcript used to restore it.
   const { state, routeKey } = params;
   let committed = false;
@@ -541,7 +639,8 @@ export async function persistSessionSystemPrompt(
     snapshot.renderedPrefix !== previous.renderedPrefix ||
     snapshot.routeKey !== previous.routeKey ||
     snapshot.historyId !== previous.historyId ||
-    snapshot.permissionNotice !== previous.permissionNotice
+    snapshot.permissionNotice !== previous.permissionNotice ||
+    snapshot.usageRanking !== previous.usageRanking
   ) {
     try {
       await appendEntry(
@@ -563,22 +662,9 @@ export async function persistSessionSystemPrompt(
     }
   }
   state.systemPrompt = { ...snapshot, restart: false };
+  state.persistedUsageRanking = snapshot.usageRanking;
   state.pendingSystemPrompt = undefined;
   state.toolSurface = toolSurface;
-  state.pendingToolSurface = undefined;
-}
-
-/** Routes without the prompt series checkpoint the tool pin alone. */
-export async function persistSessionToolSurface(
-  state: EmbeddedSessionPromptState,
-  appendEntry: (customType: string, data: unknown) => unknown,
-): Promise<void> {
-  const surface = state.pendingToolSurface;
-  if (!surface) {
-    return;
-  }
-  await appendEntry("openclaw.system-prompt", surface);
-  state.toolSurface = surface;
   state.pendingToolSurface = undefined;
 }
 

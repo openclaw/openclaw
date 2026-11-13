@@ -26,9 +26,8 @@ export async function preparePublishingSession(
           await prepareGitHubPublicationSession(params.publishingSessionKey, { assertCurrent }),
         )
       : source;
-  const readers: SessionRead[] = [source, selected];
+  const readers: SessionRead[] = source === selected ? [source] : [source, selected];
   const assertSessions = () => {
-    assertCurrent();
     for (const reader of readers) {
       if (!reader.readCurrent().entry?.sessionId) {
         throw new Error("The GitHub publication session is unavailable.");

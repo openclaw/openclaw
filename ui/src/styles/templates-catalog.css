@@ -320,6 +320,7 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
 .template-creator__category {
   & .template-creator__contents {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 12px;
   }
   & .template-creator__row {

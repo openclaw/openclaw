@@ -17,14 +17,18 @@ logs live, how to read them, and how to configure log levels and formats.
 
 ## Where logs live
 
-By default, the Gateway writes a rolling log file per day. The default profile
-keeps the historical path:
+By default, the Gateway writes a rolling log file per day under the selected
+state directory's `logs/` directory. With the default state directory:
 
-`/tmp/openclaw/openclaw-YYYY-MM-DD.log`
+`~/.openclaw/logs/openclaw-YYYY-MM-DD.log`
 
-Named profiles use a profile-qualified filename in the same directory:
+Named profiles use their own state directory and a profile-qualified filename:
 
-`/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`
+`~/.openclaw-<profile>/logs/openclaw-<profile>-YYYY-MM-DD.log`
+
+`OPENCLAW_STATE_DIR` relocates both state and default logs. Test harnesses that
+allocate temporary state therefore keep their logs in that same temporary tree;
+separate Gateways no longer append to a host-wide daily file.
 
 The filename profile segment is lowercase and limited to letters, numbers, and
 dashes. Simple lowercase names stay readable, so the `--dev` shorthand writes
@@ -34,10 +38,18 @@ Oversized values set directly through the environment use a bounded hash suffix
 to stay within filesystem filename limits. An explicit `logging.file` overrides
 these defaults.
 
-The date uses the gateway host's local timezone. When `/tmp/openclaw` is unsafe
-or unavailable (and always on Windows), OpenClaw uses a user-scoped
-`openclaw-<uid>` directory under the OS temp dir instead. Dated log files are
-pruned after 24 hours.
+The date uses the gateway host's local timezone. When `logs/` is unsafe or
+unavailable (and always on Windows), OpenClaw uses `tmp/openclaw-<uid>` under
+the same state directory instead (`tmp/openclaw` without a numeric user ID).
+It never falls back to another Gateway's logs. Dated log files are pruned after
+24 hours.
+
+After upgrading from the host-wide `/tmp/openclaw/` default, use `openclaw logs`
+to discover the active path or update external file collectors to the selected
+state directory. Existing old files are not moved or imported into the new log.
+An explicit `logging.file` remains unchanged; distinct Gateways must use distinct
+override paths. The macOS `scripts/clawlog.sh` utility reads unified logs rather
+than these JSONL files and is unaffected.
 
 Each file rotates when the next write would exceed `logging.maxFileBytes`
 (default: 100 MB). OpenClaw keeps up to five numbered archives beside the

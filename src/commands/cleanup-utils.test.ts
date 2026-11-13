@@ -36,7 +36,8 @@ async function attemptGatewayLockInChild(env: NodeJS.ProcessEnv): Promise<string
       report("blocked");
     }
   `;
-  const childEnv = { ...env };
+  // The lock-only probe must not recreate state with diagnostic log files during cleanup.
+  const childEnv: NodeJS.ProcessEnv = { ...env, OPENCLAW_LOG_LEVEL: "silent" };
   delete childEnv.NODE_ENV;
   delete childEnv.VITEST;
   delete childEnv.VITEST_POOL_ID;
