@@ -67,6 +67,36 @@ struct RootTabsSourceGuardTests {
             gatewayStableID: secondID).token == "second-token")
     }
 
+    @Test @MainActor func `a password typed after onboarding pairing reaches the active gateway`() {
+        let instanceID = "credential-active-\(UUID().uuidString)"
+        defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
+        let activeID = "manual|gateway.example.ts.net|443"
+        let entry = GatewaySettingsStore.GatewayRegistryEntry(
+            stableID: activeID,
+            kind: .manual,
+            name: "gateway.example.ts.net:443",
+            host: "gateway.example.ts.net",
+            port: 443,
+            useTLS: true,
+            lastConnectedAtMs: nil)
+        let registry = GatewaySettingsStore.GatewayRegistry(
+            activeStableID: activeID,
+            connectedStableIDs: [activeID],
+            entries: [entry])
+        // Onboarding pairing leaves Settings' manual host empty.
+        let target = SettingsProTab.defaultCredentialTargetStableID(manualStableID: nil, registry: registry)
+        var fields = GatewayConnectionController.ManualAuthOverride.Fields()
+        fields.password = "rotated-password"
+        fields.persist(instanceId: instanceID, targetStableID: target)
+        #expect(GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: activeID).password == "rotated-password")
+
+        let manualID = "manual|other.example|443"
+        #expect(SettingsProTab
+            .defaultCredentialTargetStableID(manualStableID: manualID, registry: registry) == manualID)
+    }
+
     private static func source(_ path: String) throws -> String {
         try String(contentsOf: self.iOSRoot.appendingPathComponent(path), encoding: .utf8)
     }
