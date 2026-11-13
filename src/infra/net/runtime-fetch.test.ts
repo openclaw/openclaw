@@ -84,6 +84,8 @@ describe("fetchWithRuntimeDispatcher", () => {
     const blob = file?.value;
     assert.instanceOf(blob, Blob);
     expect(blob.type).toBe("audio/ogg");
+    // This fixed three-byte upload Blob is not an untrusted HTTP response.
+    // nosemgrep: security.opengrep.ghsa-p536-vvpp-9mc8.openclaw.web-fetch-or-media-unbounded-response-read
     expect(new Uint8Array(await blob.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
     const sentHeaders = new Headers(sentInit.headers);
     expect(sentHeaders.has("content-length")).toBe(false);

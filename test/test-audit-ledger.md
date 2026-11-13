@@ -737,7 +737,7 @@ the filename but not file bytes or MIME type. It now checks the dispatched
 Blob's exact bytes and MIME type while retaining its filename, model-field and
 stale-header assertions. All seven declarations and ten expanded cases across
 runtime-fetch, proxy-fetch and the FormData helper remain. Test code grows by
-five lines; production and shared support code do not change.
+seven lines; production and shared support code do not change.
 
 The baseline and clean candidate pass all ten cases. Empty-file and explicit
 generic-MIME mutations both pass the baseline but fail the repaired case at
@@ -745,6 +745,8 @@ the corresponding assertion, with the other nine cases passing. A first
 rewrapping-only MIME control stayed green and was not counted as proof; the
 explicit control substitutes `application/octet-stream` while preserving bytes.
 All temporary production and test changes were restored byte for byte.
+The precise scanner mistakes the bounded fixture Blob read for an untrusted
+HTTP response read; a rule-specific exception documents that false positive.
 Focused checks, independent preservation review, full local review and hosted
 outcomes are tracked in [PR #198305](https://github.com/openclaw/openclaw/pull/198305).
 
