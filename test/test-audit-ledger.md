@@ -761,18 +761,21 @@ retention decisions are source-only; no runtime pass or removal is claimed.
 ### Provider WebSocket proxy DNS pin proof
 
 At `cd61ce32dd28e92003b213f8d2014608504515fb`, the provider WebSocket proxy
-case uses localhost and accepts any function-valued socket lookup. It does not
-establish that the connection consumes the prepared proxy DNS pin. The proposed
-repair gives the proxy a synthetic hostname resolved through the real SSRF
-owner, then uses the existing successful CONNECT and WebSocket assertions as
-proof. Baseline and deliberate unpinned-lookup qualification are pending.
+case used localhost and accepted any function-valued socket lookup. Replacing
+the prepared proxy lookup with Node's default DNS lookup still passed all 21
+WebSocket and Node proxy cases. The repaired fixture uses `proxy.invalid`, pinned
+to loopback through the real SSRF resolver, so the existing successful CONNECT
+and WebSocket assertions require the prepared pin. The same mutation now fails
+only the proxy transport row with `ENOTFOUND proxy.invalid`; restoring production
+passes all 21 cases. Production was restored byte for byte. No cases were added
+or removed; the test file shrinks by one line and production is unchanged.
 
 Source review covers 35 declarations and 59 expanded cases across proxy-env,
 node-proxy-agent, provider-websocket, undici-runtime and undici-global-dispatcher.
 The environment, admission, deadline, TLS and lifecycle contracts remain useful.
 Separate follow-ups are the WSL temporary-family dispatch ordering assertion and
 the supplied-env SOCKS CA fixture's setup/cleanup ownership. These are source-only
-findings; no runtime result or production defect is claimed.
+findings; no runtime result or production defect is claimed for those follow-ups.
 
 ## Pending qualification and proof repairs
 
