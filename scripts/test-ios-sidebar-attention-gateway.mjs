@@ -396,7 +396,14 @@ wss.on("connection", (ws) => {
               updatedAt: created - 60000,
               totalTokens: 84,
             },
-            { key: "agent:main:attention-grandchild", displayName: "Family grandchild", label: "Family grandchild", category: "Other", kind: "direct", updatedAt: created - 90000 },
+            {
+              key: "agent:main:attention-grandchild",
+              displayName: "Family grandchild",
+              label: "Family grandchild",
+              category: "Other",
+              kind: "direct",
+              updatedAt: created - 90000,
+            },
           ],
         });
         break;
