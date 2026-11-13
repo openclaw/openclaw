@@ -2074,7 +2074,7 @@ div.new-session-page__project-search {
     align-items: stretch;
     gap: 2px;
     height: auto;
-    padding: 0 calc(var(--chat-composer-editor-inset-inline, 14px) + 1px);
+    padding: 0;
   }
 
   .new-session-page__context-tray .new-session-page__workspace {
@@ -2087,11 +2087,11 @@ div.new-session-page__project-search {
     max-width: none;
   }
 
-  .new-session-page__context-tray .new-session-page__trigger {
+  .new-session-page__context-tray span.new-session-page__select > .new-session-page__trigger {
     justify-content: flex-start;
     width: 100%;
     height: 36px;
-    padding: 0;
+    padding: 0 calc(var(--chat-composer-editor-inset-inline, 14px) + 1px);
   }
 
   .new-session-page__context-tray .new-session-page__trigger-label {
@@ -2205,6 +2205,23 @@ div.new-session-page__project-search {
     rgb(0 0 0) calc(100% - 14px),
     transparent
   );
+}
+
+@media (max-width: 768px) {
+  .new-session-page__project-popover .new-session-page__picker-scroll[data-fade-end] {
+    mask-image: linear-gradient(to top, transparent, rgb(0 0 0) 16px);
+  }
+
+  .new-session-page__project-popover
+    .new-session-page__picker-scroll[data-fade-start][data-fade-end] {
+    mask-image: linear-gradient(
+      to bottom,
+      transparent,
+      rgb(0 0 0) 14px,
+      rgb(0 0 0) calc(100% - 16px),
+      transparent
+    );
+  }
 }
 
 .new-session-page__picker-popover .new-session-page__browser-empty {
