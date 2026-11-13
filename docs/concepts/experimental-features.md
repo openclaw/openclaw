@@ -389,6 +389,11 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   approve or deny their request, and remove members. Use an approved owner
   browser to change access. Devices paired with this Gateway are in
   **Settings → Devices**.
+- **Member names**: an approved member is named from their OpenClaw ID account,
+  or from the part of their email before the `@` when the account reports no
+  name. Their first visit opens a new session, which asks for a name and photo
+  before it offers a composer; they can skip it and set both later in
+  **Settings → Profile**. Both are stored only in this Gateway's profile.
 - **Your devices**, in the account menu: view approved owner browsers and choose
   **Remove access** for a browser. The confirmation lists any other devices that
   will also lose access. They disconnect immediately; use another approved owner
