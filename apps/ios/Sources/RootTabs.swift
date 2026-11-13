@@ -207,7 +207,7 @@ struct RootTabs: View {
                 .onChange(of: layoutMode, initial: true) { _, mode in
                     self.updateSidebarLayout(mode)
                 }
-                // Single refresh owner: identity/session changes, scene activation,
+                // Single refresh owner: gateway/agent changes, scene activation,
                 // and the periodic attention refresh all land here.
                 .task(id: self.sidebarRefreshID) {
                     guard self.scenePhase == .active else { return }
@@ -238,9 +238,10 @@ struct RootTabs: View {
     }
 
     private var sidebarRefreshID: String {
+        // Roster, dashboard, and approval reads are not scoped to the selected chat.
+        // RootSidebar observes selection directly; keep its shared tasks alive when only that changes.
         [
             self.appModel.chatViewModelIdentityID,
-            self.appModel.chatSessionKey,
             String(self.appModel.operatorAuthorityGeneration),
             self.scenePhase == .active ? "active" : "inactive",
         ].joined(separator: ":")
