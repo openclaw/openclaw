@@ -644,10 +644,7 @@ export function startGatewayConfigReloader(
     }
   };
 
-  const runAcceptedTransaction = createConfigReloadTransactionRunner(
-    runInReloadContext,
-    opts.runTransaction,
-  );
+  const runAcceptedTransaction = createConfigReloadTransactionRunner(opts.runTransaction);
 
   const acceptCurrentRuntimeEcho = async (
     transactionEpoch: number,

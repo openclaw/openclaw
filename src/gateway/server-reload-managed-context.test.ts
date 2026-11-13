@@ -15,6 +15,7 @@ import {
   getLegacyPluginSdkResourceHost,
   LegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
+import { hasPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -89,7 +90,14 @@ it("starts replacement channels with the current Gateway owner while an admitted
   const logReloadError = vi.fn<(message: string) => void>();
   const startChannel = vi.fn(async () => {
     const host = getLegacyPluginSdkResourceHost();
-    expect([writerContext.getStore(), getAsyncWorkSignal()]).toEqual([undefined, undefined]);
+    expect(hasPluginLifecycleLease(), "reload must retain its already-owned lifecycle lease").toBe(
+      true,
+    );
+    expect(writerContext.getStore()).toBeUndefined();
+    const workSignal = getAsyncWorkSignal();
+    expect(workSignal, "reload work must remain owned by its scheduler").toBeDefined();
+    expect(workSignal).not.toBe(writerWork.signal);
+    expect(workSignal).not.toBe(startupWork.signal);
     expect(host, "reload must use the current Gateway SDK host").toBe(currentGateway);
     return host.invoke(() => new Map());
   });

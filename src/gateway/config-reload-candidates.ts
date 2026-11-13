@@ -10,7 +10,6 @@ import {
   runOutsideGatewayRootWorkAdmission,
   runWithGatewayReloadWaitingRoot,
 } from "../process/gateway-work-admission.js";
-import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import type { GatewayConfigReloadCandidate } from "./config-reload.types.js";
 import { GatewayConfigReloadSupersededError } from "./server-reload-contracts.js";
 
@@ -106,19 +105,14 @@ export function createObservedCandidate(
 }
 
 export function createConfigReloadTransactionRunner(
-  runInReloadContext: <T>(run: () => T) => T,
-  defaultRunTransaction?: RuntimeConfigWriteApplicationClaim["runTransaction"],
+  runTransaction?: RuntimeConfigWriteApplicationClaim["runTransaction"],
 ) {
   return async (run: () => Promise<void>, candidate?: GatewayConfigReloadCandidate) => {
-    const runTransaction = candidate?.application?.runTransaction ?? defaultRunTransaction;
     const transaction = () => runWithCandidateWaitingRoots(run, candidate);
-    // A receipt retains the waiting RPC root, not its temporary async-work lifetime.
-    await runInReloadContext(() =>
-      runOutsideAsyncWorkScope(() =>
-        runOutsideSetupCredentialAccess(() =>
-          runTransaction ? runTransaction(transaction) : transaction(),
-        ),
-      ),
+    // Keep the scheduler-owned work scope and lifecycle lease. Writer receipts
+    // contribute waiting roots, not the context or lifetime of the reload itself.
+    await runOutsideSetupCredentialAccess(() =>
+      runTransaction ? runTransaction(transaction) : transaction(),
     );
   };
 }
