@@ -108,7 +108,10 @@ async function findDuplicateGuardMediaGenerationTaskForSession(params: {
   if (!sessionKey) {
     return undefined;
   }
-  const tasks = listMediaGenerationOperations(sessionKey, params.agentId);
+  // Explicitly superseded work still settles, but must not block its replacement.
+  const tasks = listMediaGenerationOperations(sessionKey, params.agentId).filter(
+    (task) => !task.superseded,
+  );
   const active = selectActiveMediaGenerationTasks(params, tasks)[0];
   if (active || !params.requestKey) {
     return active;

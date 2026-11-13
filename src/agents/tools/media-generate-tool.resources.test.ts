@@ -24,7 +24,10 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
+import {
+  admitMediaHandle,
+  resetGeneratedMediaTaskActivityForTests,
+} from "../media-generation-activity.test-support.js";
 import * as taskRuntime from "../media-generation-task-status.js";
 import { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
 import { discardPreparedPluginGeneration } from "../prepared-model-runtime.plugin-lifetime.js";
@@ -244,6 +247,30 @@ afterEach(() => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
+it("requires durable review custody before buying an image", async () => {
+  const fixture = createNativeFixture("image");
+  fixture.resumeProvider.resolve();
+  fixture.resumeGeneration.resolve();
+  await fixture.withEnvironment(async () => {
+    const acquired = await acquirePluginRegistryForInspection({ config: fixture.config });
+    try {
+      await withPluginRuntimeRegistryScope(acquired.registry, async () => {
+        const tool = createImageGenerateTool({ config: fixture.config });
+        expect(tool).not.toBeNull();
+        await expect(
+          tool!.execute("review-without-session", {
+            prompt: "A candidate",
+            deliveryMode: "review",
+          }),
+        ).rejects.toThrow("Review-before-delivery requires a durable chat session");
+        expect(fixture.connections[0]!.generated).toBe(0);
+      });
+    } finally {
+      await acquired.release();
+    }
+  });
+});
+
 describe.each(["image", "music", "video"] as const)(
   "prepared %s job registration resources",
   (kind) => {
@@ -383,13 +410,15 @@ describe.each(["image", "music", "video"] as const)(
           fs.writeFileSync(referencePath, png);
           const prepared = await prepareSnapshot(fixture, first.registry);
           const { snapshot } = prepared;
-          const createTask = vi.spyOn(lifecycle, "createTaskRun").mockResolvedValue({
-            taskId: "preflight-image-task",
-            detach: true,
-            runId: "preflight-image-run",
-            requesterSessionKey: "agent:main:discord:direct:synthetic-media",
-            taskLabel: "Synthetic media edit",
-          });
+          const createTask = vi.spyOn(lifecycle, "createTaskRun").mockImplementation(async () =>
+            admitMediaHandle({
+              taskId: "preflight-image-task",
+              detach: true,
+              runId: "preflight-image-run",
+              requesterSessionKey: "agent:main:discord:direct:synthetic-media",
+              taskLabel: "Synthetic media edit",
+            }),
+          );
           const loadReference = webMedia.loadWebMedia;
           const reference = vi
             .spyOn(webMedia, "loadWebMedia")

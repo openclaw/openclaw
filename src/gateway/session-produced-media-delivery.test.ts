@@ -1,9 +1,12 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadPendingSessionDelivery } from "../infra/session-delivery-queue-storage.js";
+import { enqueueUnclaimedSessionDeliveryFixture } from "../infra/session-delivery-queue.test-helpers.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -55,11 +58,9 @@ it("promotes produced media before publishing its transcript message and settlin
         updates.push(update);
       }
     });
-    let settled = false;
-    const outcome = deliverQueuedSessionDelivery({
-      deps: {},
-      queueContext: captureOpenClawStateWorkerContext(),
-      entry: createGeneratedMediaDeliveryEntry({
+    const queueContext = captureOpenClawStateWorkerContext();
+    const id = await enqueueUnclaimedSessionDeliveryFixture(
+      createGeneratedMediaDeliveryEntry({
         id: "produced-media",
         sessionKey,
         messageId: "image:media-completion:agent-loop",
@@ -69,7 +70,12 @@ it("promotes produced media before publishing its transcript message and settlin
         expectedMediaUrls: [originalPath],
         preparedMediaBlocks: { [originalPath]: blocks },
       }),
-    }).finally(() => {
+      queueContext,
+    );
+    const entry = await loadPendingSessionDelivery(id, queueContext);
+    assert(entry);
+    let settled = false;
+    const outcome = deliverQueuedSessionDelivery({ deps: {}, queueContext, entry }).finally(() => {
       settled = true;
     });
     try {

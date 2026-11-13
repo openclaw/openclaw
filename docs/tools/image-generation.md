@@ -42,6 +42,47 @@ A key in `models.providers.<provider>.apiKey` also makes the tool available,
 including an env-backed SecretRef. Inline keys in an auth or billing cooldown
 remain unavailable.
 
+## Review before delivery
+
+Automatic preview delivery remains the default. For creative work that needs a
+quality check before the user sees an image, the agent can opt in per request:
+
+```text
+action=generate deliveryMode=review prompt="..."
+```
+
+The tool returns a task ID immediately. Once generation finishes, OpenClaw saves
+the candidate and its held disposition in the existing durable delivery queue
+**before** waiting for the originating turn or waking the agent to review it.
+The review completion provides private file references, not a visible image send.
+The agent inspects the candidate against the request and reference images, then
+chooses an exact-task action:
+
+- `action=review` lists saved candidates in the current original session, including
+  after a restart. Add `taskId` to prepare private `inspectionFiles` for one
+  candidate without widening filesystem access; original sandbox references
+  remain available in its `inspectionContext`.
+- `action=deliver taskId="<task-id>"` approves only that candidate for the existing
+  delivery queue. Approval is not delivery confirmation; the agent must not send
+  the same files independently.
+- `action=supersede taskId="<task-id>"` suppresses only that older task's automatic
+  delivery. Accepted generation continues and its paid output is retained. Other
+  concurrent jobs are unaffected. Generate a corrected candidate separately with
+  `deliveryMode=review`.
+
+Review mode requires a durable chat session. Cancelling the requesting turn does
+not cancel already accepted generation. A failed reviewer wake or Gateway restart
+leaves the candidate held; startup does not start a review or provider inference.
+Use `action=review` in a later turn to resume the decision. Files whose delivery has
+already started cannot be retracted. Ambiguous send evidence is reconciled from
+its original receipt, never by blindly sending again.
+
+Held candidates use an inert queue payload kind and candidate-specific names in
+the existing durable media spool. Readers predating this feature leave those rows
+and files alone. Upgrade to a version supporting review mode to make a decision;
+rolling back does not approve a held candidate. No database schema migration,
+configuration change, or global media-retention extension is required.
+
 ## Quick start
 
 <Steps>

@@ -33,6 +33,7 @@ import {
   type AnyAgentTool,
 } from "./common.js";
 import { persistGeneratedMediaBuffers } from "./generated-media-batch-persistence.js";
+import { createImageGenerateReviewActionResult } from "./image-generate-review-actions.js";
 import {
   createImageGenerateDuplicateGuardResult,
   createImageGenerateListActionResult,
@@ -98,8 +99,23 @@ const SUPPORTED_ASPECT_RATIOS = [
 const log = createSubsystemLogger("agents/tools/image-generate");
 
 const ImageGenerateToolSchema = Type.Object({
-  action: Type.Optional(Type.String({ description: MEDIA_GENERATE_DESCRIPTIONS.action })),
+  action: Type.Optional(
+    Type.String({
+      description:
+        "generate (default), list, status, review (list held candidates), deliver (approve exact taskId), supersede (suppress exact taskId).",
+    }),
+  ),
   prompt: Type.Optional(Type.String({ description: "Image prompt." })),
+  deliveryMode: optionalStringEnum(["review"], {
+    description:
+      "Opt in to agent review before visible delivery. Saved candidates remain held until action=deliver for their exact taskId; default sends automatically.",
+  }),
+  taskId: Type.Optional(
+    Type.String({
+      description:
+        "Exact task for action=review|deliver|supersede. Supersede preserves accepted paid generation and suppresses only that task delivery.",
+    }),
+  ),
   image: Type.Optional(
     Type.String({
       description: "Reference image path/URL for edit.",
@@ -318,9 +334,23 @@ export function createImageGenerateTool(
     label: "Image Generation",
     name: "image_generate",
     description:
-      'Create/edit images. Batch via count; aspectRatio and resolution up to 4K. Session chat runs in background: call once/request; the result returns as a later turn that sends the media. This turn: short ack at most, then end; no poll/yield. Transparent: outputFormat png|webp + background="transparent"; OpenAI also openai.background, default gpt-image-1.5. action=list providers/models/readiness/auth; status active task.',
+      'Create/edit images. Batch via count; aspectRatio and resolution up to 4K. Session chat runs in background: call once/request; the result returns as a later turn that sends the media. This turn: short ack at most, then end; no poll/yield. Transparent: outputFormat png|webp + background="transparent"; OpenAI also openai.background, default gpt-image-1.5. action=list providers/models/readiness/auth; status active task. Opt in with deliveryMode="review" to hold candidates privately; inspect using available image/file tools, then action=deliver + taskId. action=review lists held candidates; action=supersede + taskId suppresses only that task without cancelling accepted generation.',
     parameters: ImageGenerateToolSchema,
     execute: createMediaGenerateExecute({
+      customAction: (args, signal) => {
+        const action = readToolStringParam(args, "action")?.toLowerCase();
+        if (action === "review" || action === "deliver" || action === "supersede") {
+          signal?.throwIfAborted();
+          return createImageGenerateReviewActionResult({
+            action,
+            taskId: readToolStringParam(args, "taskId"),
+            sessionKey: options?.agentSessionKey,
+            requesterRunSessionKey: options?.requesterRunSessionKey,
+            agentId: options?.requesterAgentId,
+          });
+        }
+        return undefined;
+      },
       options,
       list: (auth) =>
         withImageGenerationProviders(cfg, (providers) =>
@@ -329,6 +359,10 @@ export function createImageGenerateTool(
       status: createImageGenerateStatusActionResult,
       generate: (params, signal) => {
         const model = readToolStringParam(params, "model");
+        const deliveryMode = readToolStringParam(params, "deliveryMode");
+        if (deliveryMode !== undefined && deliveryMode !== "review") {
+          throw new ToolInputError('deliveryMode must be "review" when provided.');
+        }
         return prepareMediaGenerationTask({
           generationLabel: "image",
           cfg,
@@ -503,6 +537,7 @@ export function createImageGenerateTool(
               kind: "task" as const,
               params: {
                 lifecycle: imageGenerationTaskLifecycle,
+                deliveryMode,
                 ...taskOptions(),
                 prompt,
                 requestKey,

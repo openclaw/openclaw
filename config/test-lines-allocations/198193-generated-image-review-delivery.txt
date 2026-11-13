@@ -1,0 +1,5 @@
+# Required #198193 review-first delivery regressions: real completion/SQLite/filesystem
+# custody, source retirement and store isolation, private native-vision inspection,
+# exact-task correction, requester aliases, incognito eligibility and write admission.
+# Net test growth is 723 lines; this covers only the excess above 400.
+323
