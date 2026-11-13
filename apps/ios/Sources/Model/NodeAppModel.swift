@@ -707,6 +707,8 @@ final class NodeAppModel {
     private var apnsLastRegisteredGatewayStableID: String?
     @ObservationIgnored private let pushRegistrationManager = PushRegistrationManager()
 
+    let sessionGroups = SessionGroupModel()
+
     var operatorSession: GatewayNodeSession {
         self.operatorGateway
     }
@@ -1271,6 +1273,8 @@ final class NodeAppModel {
         switch phase {
         case .background:
             self.isBackgrounded = true
+            // iOS may terminate a suspended app; do not leave typing behind the save pause.
+            self.chatPresentation.viewModel?.flushComposerDraftText()
             // This durable reason outlives asynchronous PTT/Talk teardown. A
             // late lease release cannot reopen Voice Wake while backgrounded.
             self.voiceWake.setSuppressed(true, reason: .background)

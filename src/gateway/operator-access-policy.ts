@@ -14,6 +14,7 @@ import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "../state/user-profile-events.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import type { UserProfileAccessFacts } from "../state/user-profiles.types.js";
+import type { OpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
 import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 
@@ -305,13 +306,22 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
   }
 }
 
-/** Recheck current facts, returning the original grant's live authority for retained work. */
+/**
+ * Recheck current facts, returning the original grant's live authority for retained work.
+ * `subject` is the run's OpenClaw ID principal. A linked owner device was admitted as the
+ * owner, outside its person's access policies, and resumes the same way; the caller checks
+ * that its principal is current.
+ */
 export function resumeGatewayOperatorAccessGrant(
   profile: UserProfileAccessFacts,
   config: OpenClawConfig,
   grant: GatewayAccessGrantRef | null,
   retained?: PluginGatewayAccessAuthority,
+  subject?: OpenClawIdTunnelPrincipal,
 ): PluginGatewayAccessAuthority | undefined {
+  if (subject?.kind === "owner" && grant === null) {
+    return undefined;
+  }
   const policies = currentAccessPolicies();
   const requiredPlugin = resolveOperatorRolePolicyForAssignment(
     profile.profileId,

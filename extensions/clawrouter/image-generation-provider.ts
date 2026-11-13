@@ -1,8 +1,8 @@
 import {
   generatedImageAssetFromBase64,
-  inlineOpenAiCompatibleImageUrls,
   type GeneratedImageAsset,
   type ImageGenerationRequest,
+  inlineOpenAiCompatibleImageUrls,
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
   sniffImageMimeType,
@@ -22,7 +22,6 @@ import {
   assertClawRouterImageResponseOk,
   assertClawRouterImageLimits,
   CLAWROUTER_IMAGE_CAPABILITIES,
-  CLAWROUTER_GOOGLE_IMAGE_CAPABILITIES,
   CLAWROUTER_GOOGLE_IMAGE_MODELS,
   fetchClawRouterImageModels,
   isSupportedClawRouterImageModel,
@@ -30,6 +29,9 @@ import {
 } from "./image-model-catalog.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
+// ClawRouter's JSON Images API ingress cap includes base64 references and all options.
+const MAX_EDIT_REQUEST_BYTES = 8 * 1024 * 1024;
+
 const GOOGLE_JSON_MAX_BYTES = 8 * 1024 * 1024;
 
 function buildGoogleImageBody(req: ImageGenerationRequest): Record<string, unknown> {
@@ -152,12 +154,13 @@ export function buildClawRouterImageGenerationProvider(): ImageGenerationProvide
     capabilities: {
       ...CLAWROUTER_IMAGE_CAPABILITIES,
       edit: {
-        ...CLAWROUTER_GOOGLE_IMAGE_CAPABILITIES.edit,
-        // The provider-wide edit flag is not a grant to edit with OpenAI/unknown models.
+        ...CLAWROUTER_IMAGE_CAPABILITIES.edit,
+        // Per-model limits keep unknown models from inheriting editing support.
         maxInputImages: 0,
-        maxInputImagesByModel: Object.fromEntries(
-          CLAWROUTER_GOOGLE_IMAGE_MODELS.map((model) => [model, 5]),
-        ),
+        maxInputImagesByModel: {
+          ...CLAWROUTER_IMAGE_CAPABILITIES.edit?.maxInputImagesByModel,
+          ...Object.fromEntries(CLAWROUTER_GOOGLE_IMAGE_MODELS.map((model) => [model, 5])),
+        },
       },
       output: {
         ...CLAWROUTER_IMAGE_CAPABILITIES.output,
@@ -174,9 +177,8 @@ export function buildClawRouterImageGenerationProvider(): ImageGenerationProvide
     },
     async generateImage(req) {
       const google = CLAWROUTER_GOOGLE_IMAGE_MODELS.includes(req.model);
-      if (!google && req.inputImages?.length) {
-        throw new Error("ClawRouter image editing is not supported.");
-      }
+      const inputImages = req.inputImages ?? [];
+      const mode = inputImages.length ? "edit" : "generate";
       if (!isSupportedClawRouterImageModel(req.model)) {
         throw new Error(
           "Unsupported ClawRouter image model; select a qualified model from the image catalog.",
@@ -189,42 +191,80 @@ export function buildClawRouterImageGenerationProvider(): ImageGenerationProvide
       if (!Number.isInteger(requestedCount) || requestedCount < 1 || requestedCount > 10) {
         throw new Error("ClawRouter image count must be an integer from 1 to 10.");
       }
-      const options = req.providerOptions;
-      if (options && Object.keys(options).some((key) => key !== "openai")) {
-        throw new Error("Unsupported ClawRouter image options; only JSON generation is supported.");
-      }
-      const openai = asOptionalRecord(options?.openai);
-      if (
-        openai &&
-        Object.keys(openai).some(
-          (key) => !["background", "moderation", "outputCompression", "user"].includes(key),
-        )
-      ) {
-        throw new Error(
-          "Unsupported ClawRouter image option; edits, masks, variations and streaming are not supported.",
-        );
-      }
-      let body: Record<string, unknown> = {
-        model: req.model,
-        prompt: req.prompt,
-        n: requestedCount,
-      };
-      const optional = {
-        size: req.size,
-        quality: req.quality,
-        output_format: req.outputFormat,
-        background: req.background ?? openai?.background,
-        moderation: openai?.moderation,
-        output_compression: openai?.outputCompression,
-        user: openai?.user,
-      };
-      for (const [key, value] of Object.entries(optional)) {
-        if (value !== undefined) {
-          body[key] = value;
-        }
-      }
+      let body: Record<string, unknown>;
       if (google) {
         body = buildGoogleImageBody(req);
+      } else {
+        if (inputImages.length > 16) {
+          throw new Error("ClawRouter image editing supports at most 16 reference images.");
+        }
+        if (inputImages.some((image) => image.buffer.byteLength > 4 * 1024 * 1024)) {
+          throw new Error("ClawRouter reference images must not exceed 4 MiB each.");
+        }
+        if (
+          inputImages.reduce(
+            (bytes, image) => bytes + 4 * Math.ceil(image.buffer.byteLength / 3),
+            0,
+          ) > MAX_EDIT_REQUEST_BYTES
+        ) {
+          throw new Error("ClawRouter image edit request exceeds the 8 MiB JSON size limit.");
+        }
+        for (const image of inputImages) {
+          const detected = sniffImageMimeType(image.buffer, "");
+          if (
+            !["image/png", "image/jpeg", "image/webp"].includes(detected.mimeType) ||
+            image.mimeType !== detected.mimeType
+          ) {
+            throw new Error("ClawRouter reference images must contain PNG, JPEG or WebP data.");
+          }
+        }
+        const options = req.providerOptions;
+        if (options && Object.keys(options).some((key) => key !== "openai")) {
+          throw new Error(
+            "Unsupported ClawRouter image options; only JSON generation is supported.",
+          );
+        }
+        const openai = asOptionalRecord(options?.openai);
+        if (
+          openai &&
+          Object.keys(openai).some(
+            (key) => !["background", "moderation", "outputCompression", "user"].includes(key),
+          )
+        ) {
+          throw new Error(
+            "Unsupported ClawRouter image option; masks, variations and streaming are not supported.",
+          );
+        }
+        body = {
+          model: req.model,
+          prompt: req.prompt,
+          n: requestedCount,
+          ...(mode === "edit"
+            ? {
+                images: inputImages.map((image) => ({
+                  image_url:
+                    "data:" + image.mimeType + ";base64," + image.buffer.toString("base64"),
+                })),
+              }
+            : {}),
+        };
+        const optional = {
+          size: req.size,
+          quality: req.quality,
+          output_format: req.outputFormat,
+          background: req.background ?? openai?.background,
+          moderation: openai?.moderation,
+          output_compression: openai?.outputCompression,
+          user: openai?.user,
+        };
+        for (const [key, value] of Object.entries(optional)) {
+          if (value !== undefined) {
+            body[key] = value;
+          }
+        }
+        if (mode === "edit" && Buffer.byteLength(JSON.stringify(body)) > MAX_EDIT_REQUEST_BYTES) {
+          throw new Error("ClawRouter image edit request exceeds the 8 MiB JSON size limit.");
+        }
       }
       req.signal?.throwIfAborted();
       const deadline = createProviderOperationDeadline({
@@ -257,10 +297,12 @@ export function buildClawRouterImageGenerationProvider(): ImageGenerationProvide
         signal: req.signal,
         ssrfPolicy: req.ssrfPolicy,
       });
-      const selected = catalog.find((row) => row.model === req.model);
+      const selected = catalog.find((row) => row.model === req.model && row.modes?.includes(mode));
       if (!selected) {
         throw new Error(
-          "ClawRouter image model is not available in this key's current catalog; check the deployment, image grants and budget.",
+          "ClawRouter image " +
+            mode +
+            " is not available for this model in this key's current catalog; check the deployment, image grants and budget.",
         );
       }
       if (selected.format === "openai") {
@@ -269,7 +311,11 @@ export function buildClawRouterImageGenerationProvider(): ImageGenerationProvide
       req.signal?.throwIfAborted();
       const headers = new Headers(context.headers);
       headers.set("Content-Type", "application/json");
-      const url = selected.url;
+      const url =
+        selected.format === "google"
+          ? selected.url
+          : context.baseUrl.replace(/\/+$/u, "") +
+            (mode === "edit" ? "/images/edits" : "/images/generations");
       const { response, release } = await postJsonRequest({
         url,
         headers,
@@ -283,7 +329,7 @@ export function buildClawRouterImageGenerationProvider(): ImageGenerationProvide
       });
       try {
         assertClawRouterImageResponseOk(response, "ClawRouter image generation");
-        // Gemini has no native count parameter. Retain all (at most four) returned images.
+        // Gemini has no count parameter; retain every completed output without another purchase.
         const count = google ? 4 : requestedCount;
         const maxBytes = resolveGeneratedImageDownloadMaxBytes(req.cfg);
         const payload = await readProviderJsonResponse(response, "clawrouter.image-generation", {

@@ -129,6 +129,7 @@ Request elevated mode: escape the sandbox onto the configured host path when the
 
 Notes:
 
+- Shared agent instructions direct agents to reuse repositories already in their workspace, including for multi-PR batches. A second checkout should use the repository's checkout workflow or `git worktree add` to share objects. Independent scratch clones and copied or hardlinked object stores retain storage outside the shared owner's lifecycle. Agents should report inaccessible shared paths before creating an independent clone. Both the regular prompt and the native harness base prompt carry this guidance, even when tool descriptions are deferred; it does not rewrite or restrict clone commands in exec.
 - `host` only accepts `auto`, `sandbox`, `gateway`, or `node`. It is not a hostname selector. Hostname-like values are rejected before the command runs.
 - Per-call `host=node` and `host=gateway` are allowed from `auto` only when no sandbox runtime is active. While a sandbox runtime is active, `auto` keeps exec in the sandbox and rejects both overrides. Set `tools.exec.host=node` (or `gateway`) explicitly to run there.
 - With no extra config, `host=auto` still "just works": no sandbox means it resolves to `gateway`. A live sandbox means it stays in the sandbox.

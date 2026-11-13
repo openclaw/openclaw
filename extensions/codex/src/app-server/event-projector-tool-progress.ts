@@ -109,7 +109,12 @@ export class CodexToolProgressProjection {
   readonly approvalTimeoutKinds = new Map<string, CodexApprovalKind>();
   private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
 
-  constructor(private readonly params: EmbeddedRunAttemptParams) {}
+  constructor(
+    private readonly params: EmbeddedRunAttemptParams,
+    private readonly emitAgentEvent: (
+      event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
+    ) => void,
+  ) {}
 
   get outputTextByItem(): ReadonlyMap<string, string> {
     return this.output.textByItem;
@@ -217,6 +222,27 @@ export class CodexToolProgressProjection {
       rawLength: storedOutput.normalizedLength,
       rawPrefix: storedOutput.rawPrefix,
       streamedDisplay: true,
+    });
+    // The WebUI consumes cumulative snapshots; channel verbosity only governs
+    // the separate formatted progress messages below.
+    this.emitAgentEvent({
+      stream: "tool",
+      data: {
+        phase: "update",
+        outputOnly: true,
+        name: toolName,
+        itemId,
+        toolCallId: itemId,
+        // Each notification publishes a new immutable fact; observers cannot
+        // change output retained for another observer or reconnect recovery.
+        partialResult: Object.freeze({
+          text: storedOutput.text,
+          ...(storedOutput.liveOutput
+            ? { liveOutput: Object.freeze(storedOutput.liveOutput) }
+            : {}),
+        }),
+        hideFromChannelProgress: true,
+      },
     });
     if (!this.shouldEmitToolOutput()) {
       return;

@@ -52,7 +52,15 @@ export const CLAWROUTER_IMAGE_CAPABILITIES: ImageGenerationProvider["capabilitie
     supportsAspectRatio: false,
     supportsResolution: false,
   },
-  edit: { enabled: false },
+  edit: {
+    enabled: true,
+    maxCount: 10,
+    maxInputImages: 0,
+    maxInputImagesByModel: Object.fromEntries([...SUPPORTED_IMAGE_MODELS].map((id) => [id, 16])),
+    supportsSize: true,
+    supportsAspectRatio: false,
+    supportsResolution: false,
+  },
   output: {
     qualities: ["low", "medium", "high", "xhigh", "max", "auto"],
     formats: ["png", "jpeg", "webp"],
@@ -69,9 +77,8 @@ type ImageLimits = {
   maxEdge: number;
   maxAspectRatio: number;
 };
-type ImageCatalogEntry = UnifiedModelCatalogEntry<ImageGenerationProvider["capabilities"]> & {
-  url: string;
-} & ({ format: "openai"; limits: ImageLimits } | { format: "google" });
+type ImageCatalogEntry = UnifiedModelCatalogEntry<ImageGenerationProvider["capabilities"]> &
+  ({ format: "openai"; limits: ImageLimits } | { format: "google"; url: string });
 
 function parseImageLimits(value: unknown): ImageLimits | undefined {
   const pricing = asOptionalRecord(value);
@@ -175,12 +182,11 @@ export async function fetchClawRouterImageModels(params: {
   ssrfPolicy?: ImageGenerationRequest["ssrfPolicy"];
 }): Promise<ImageCatalogEntry[]> {
   const offers = await fetchClawRouterCapabilityOffers(params);
-  const result: ImageCatalogEntry[] = [];
-  const seen = new Set<string>();
+  const result = new Map<string, ImageCatalogEntry>();
   for (const offer of offers) {
     const model = offer.model;
     const id = normalizeOptionalString(model?.id);
-    if (!model || !id || seen.has(id) || !Array.isArray(model.capabilities)) {
+    if (!model || !id || !Array.isArray(model.capabilities)) {
       continue;
     }
     if (
@@ -195,8 +201,7 @@ export async function fetchClawRouterImageModels(params: {
       model.upstream === id.slice("google/".length) &&
       model.capabilities.includes("image.generate")
     ) {
-      seen.add(id);
-      result.push({
+      result.set(id, {
         kind: "image_generation",
         provider: "clawrouter",
         model: id,
@@ -209,15 +214,16 @@ export async function fetchClawRouterImageModels(params: {
       });
       continue;
     }
+    const mode = offer.endpoint === "images_edits" ? "edit" : "generate";
     if (
       offer.providerId !== "openai" ||
-      offer.endpoint !== "images_generations" ||
+      !["images_generations", "images_edits"].includes(offer.endpoint) ||
       offer.routeKind !== "unified" ||
-      offer.requestFormat !== "openai.images_generations" ||
+      offer.requestFormat !== `openai.${offer.endpoint}` ||
       offer.responseFormat !== "openai.images_generations" ||
       !offer.methods.includes("POST") ||
       !SUPPORTED_IMAGE_MODELS.has(id) ||
-      !model.capabilities.includes("image.generation")
+      !model.capabilities.includes(mode === "edit" ? "image.edit" : "image.generation")
     ) {
       continue;
     }
@@ -225,24 +231,27 @@ export async function fetchClawRouterImageModels(params: {
     if (!limits) {
       continue;
     }
-    seen.add(id);
-    result.push({
+    const existing = result.get(id);
+    const modes = [...new Set([...(existing?.modes ?? []), mode])];
+    result.set(id, {
       kind: "image_generation",
       provider: "clawrouter",
       model: id,
       label: normalizeOptionalString(model.displayName) ?? id,
       source: "live",
-      modes: ["generate"],
+      modes,
       capabilities: {
         ...CLAWROUTER_IMAGE_CAPABILITIES,
         generate: { ...CLAWROUTER_IMAGE_CAPABILITIES.generate, maxCount: limits.maxImages },
+        edit: modes.includes("edit")
+          ? { ...CLAWROUTER_IMAGE_CAPABILITIES.edit, maxCount: limits.maxImages }
+          : { enabled: false },
       },
       format: "openai",
-      url: offer.url,
       limits,
     });
   }
-  return result;
+  return [...result.values()];
 }
 
 export async function listClawRouterImageModelCatalog(

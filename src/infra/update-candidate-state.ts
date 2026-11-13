@@ -67,6 +67,7 @@ import {
 } from "./update-candidate-state.sizes.js";
 import {
   publishStateDatabaseVersions,
+  resolveAgentDirOverrideDatabasePaths,
   UpdateStateSchemaVersionsSchema,
   type UpdateStateSchemaVersion,
 } from "./update-candidate-state.versions.js";
@@ -161,10 +162,8 @@ export async function collectStateDatabasePaths(
       ? (await listDefaultAgentDatabasePaths(input.stateDir)).map((entry) => entry.agentId)
       : [];
   const configured = Object.entries(input.config.agents?.entries ?? {});
-  for (const directory of [input.env?.OPENCLAW_AGENT_DIR, input.env?.PI_CODING_AGENT_DIR]) {
-    if (directory?.trim()) {
-      queue(path.join(resolveUserPath(directory, input.env), "openclaw-agent.sqlite"));
-    }
+  for (const file of resolveAgentDirOverrideDatabasePaths(input.env)) {
+    queue(file);
   }
   const projected = (input.config.agents?.list ?? []).map((agent) => [agent.id, agent] as const);
   for (const [id, agent] of [...configured, ...projected]) {

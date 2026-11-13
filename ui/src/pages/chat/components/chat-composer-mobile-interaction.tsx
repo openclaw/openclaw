@@ -1,5 +1,6 @@
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { containsComposed, registryFor } from "../../../components/overlay-registry.ts";
+import { composerInputElement, focusComposerInput } from "../../../lib/composer-input.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
@@ -164,6 +165,12 @@ export function createComposerMobileInteraction(
       target.matches(
         'textarea:not(:disabled):not([readonly]), input:not(:disabled):not([readonly]):is(:not([type]), [type="text"], [type="search"], [type="email"], [type="url"], [type="tel"], [type="password"], [type="number"]), [contenteditable="true"]',
       );
+    const isEditorTarget = (target: EventTarget | undefined) => {
+      const textarea = state.composerTextarea;
+      return Boolean(
+        textarea && target instanceof Node && composerInputElement(textarea).contains(target),
+      );
+    };
     let pointerOrigin: EventTarget | undefined;
     let disposed = false;
     const stops = [
@@ -174,17 +181,24 @@ export function createComposerMobileInteraction(
           if (!props.mobileComposer) {
             return;
           }
-          pointerOrigin = event.composedPath()[0];
+          const origin = event.composedPath()[0];
+          // The editor forwards pointer events through its hidden raw-value port.
+          // Those controller events must not replace the visible gesture target.
+          if (origin === state.composerTextarea && state.composerTextarea?.hidden) {
+            return;
+          }
+          pointerOrigin = origin;
           setKeyboardNavigation(false);
           // Focus during the tap, before expansion moves the native hit target.
           // iOS needs this user gesture to open the software keyboard.
           if (
             event.button === 0 &&
-            pointerOrigin instanceof HTMLTextAreaElement &&
-            pointerOrigin === state.composerTextarea &&
-            editable(pointerOrigin)
+            isEditorTarget(pointerOrigin) &&
+            state.composerTextarea &&
+            !state.composerTextarea.disabled &&
+            !state.composerTextarea.readOnly
           ) {
-            pointerOrigin.focus({ preventScroll: true });
+            focusComposerInput(state.composerTextarea, { preventScroll: true });
             changeEditing(true);
           }
           if (pointerOrigin instanceof Node && !insideComposer(pointerOrigin)) {
@@ -201,7 +215,7 @@ export function createComposerMobileInteraction(
           // belongs to the editor, never to the action now occupying its position.
           if (
             props.mobileComposer &&
-            pointerOrigin === state.composerTextarea &&
+            isEditorTarget(pointerOrigin) &&
             event.composedPath()[0] !== pointerOrigin &&
             event.detail > 0
           ) {

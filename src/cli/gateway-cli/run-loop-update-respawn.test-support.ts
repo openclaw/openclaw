@@ -258,16 +258,17 @@ process.send("parked");`;
       } else {
         process.env.OPENCLAW_SUPERVISOR_MODE = "external";
       }
-      await f.withRunningGateway(async ({ captureSignal, start, runtime, exited }) => {
+      await f.withRunningGateway(async ({ captureSignal, close, start, runtime, exited }) => {
+        const replacement = f.createSignaledStart(close);
+        start.mockImplementationOnce(replacement.start);
         if (launchd) {
           vi.useFakeTimers();
         }
         captureSignal("SIGUSR2")();
         if (launchd) {
           await vi.advanceTimersByTimeAsync(1500);
-        } else {
-          await waitForCalls(start, 2);
         }
+        await replacement.started;
         expect(start).toHaveBeenCalledTimes(2);
         expect(runtime.exit).not.toHaveBeenCalled();
         if (update) {
