@@ -474,7 +474,7 @@ export function createCliLiveSessionCapability(params: {
         .then(() => record.cleanup?.())
         .finally(() => {
           // A failed cleanup fails the turns that join it, not every later turn. Process owners
-          // only reject after SIGKILL and their hard deadline, so retaining it cannot help.
+          // reject only after their own hard deadline; a retained rejection can never settle.
           retiringSessionHandles.delete(handle);
           if (retiredSessionCleanup.get(ownerKey) === record.cleanupPromise) {
             retiredSessionCleanup.delete(ownerKey);
