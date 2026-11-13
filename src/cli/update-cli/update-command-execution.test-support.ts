@@ -34,6 +34,10 @@ const mocks = vi.hoisted(() => ({
   runPackageUpdate: vi.fn(),
   runtimeError: vi.fn(),
   checkCandidate: vi.fn(),
+  activatedCheck:
+    vi.fn<
+      typeof import("../../infra/update-activated-gateway-check.js").checkActivatedGatewayStartup
+    >(),
   nativeSupport: vi.fn<typeof serviceCommand.isUpdatedInstallGatewayExecutorSupported>(),
   serviceStopped: false,
   shouldBlockServiceUpdate: vi.fn(),
@@ -75,7 +79,7 @@ vi.mock("../../infra/update-candidate-check.js", () => ({
 // Like the candidate check above, the activated-release boot is a process boundary.
 vi.mock(import("../../infra/update-activated-gateway-check.js"), async (original) => ({
   ...(await original()),
-  checkActivatedGatewayStartup: async ({ result }) => result,
+  checkActivatedGatewayStartup: mocks.activatedCheck,
 }));
 vi.mock("./update-command-plugin-preflight.js", () => ({
   preflightConfiguredNpmPluginTargets: mocks.pluginPreflight,
@@ -234,6 +238,7 @@ beforeEach(() => {
   vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([]);
   mocks.serviceStopped = false;
   mocks.checkCandidate.mockResolvedValue(readyCandidate([]));
+  mocks.activatedCheck.mockImplementation(async ({ result }) => result);
   mocks.captureManagedContext.mockResolvedValue(undefined);
   mocks.captureManagedPreflight.mockResolvedValue(schemaContext("default"));
   mocks.captureSchemaContext.mockResolvedValue(schemaContext("invoker"));

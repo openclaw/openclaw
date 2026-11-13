@@ -232,13 +232,26 @@ it.each(["caller", "service"] as const)(
       await writeProfile(serviceState, { gateway: { mode: "local", bind: "lan" } });
       primeManagedProfile(root, serviceState);
     }
-    mocks.candidateCheck.mockImplementationOnce(async () => {
+    // The candidate refuses through its real result contract while the authored bytes are intact.
+    const refusal = `candidate refused the ${owner} config`;
+    mocks.candidateCheck.mockImplementationOnce(async ({ root: candidateRoot }) => {
       expect(await fs.readFile(configPath, "utf8")).toBe(before);
-      throw new Error(
-        owner === "caller"
-          ? "candidate refused the projected config"
-          : "candidate refused materialized config",
-      );
+      return {
+        status: "error",
+        steps: [
+          {
+            name: "candidate-recovery",
+            command: "--check",
+            cwd: candidateRoot,
+            durationMs: 1,
+            exitCode: 1,
+            stderrTail: refusal,
+            failureFacts: [
+              { check: "runtime", code: "candidate-runtime-failed", message: refusal },
+            ],
+          },
+        ],
+      };
     });
     await withConfig(
       configPath,
@@ -246,6 +259,17 @@ it.each(["caller", "service"] as const)(
       owner === "service" ? { OPENCLAW_PROFILE: "personal" } : {},
     );
     expect(mocks.candidateCheck).toHaveBeenCalledTimes(1);
+    // The terminal result is the candidate's refusal, not an incidental error.
+    expect(checks.lastWriteJsonCall()).toMatchObject({
+      status: "error",
+      reason: "runtime-verification-failed",
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          name: "candidate-recovery",
+          failureFacts: [expect.objectContaining({ message: refusal })],
+        }),
+      ]),
+    });
     expect(await fs.readFile(configPath, "utf8")).toBe(before);
     checks.expectNoSideEffects(
       cli.replaceConfigFile,

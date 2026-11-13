@@ -40,6 +40,100 @@ export function resolveRollbackWorkerInputs() {
   return { gatewayLockUrl, databaseGenerationsUrl, sourceLoader };
 }
 
+/**
+ * Package IPC for both releases: `--check` and `--doctor` model the candidate
+ * worker, and the default mode serves the fixture Gateway on retained state.
+ */
+export function buildRollbackPackageSource(p: {
+  files: string[];
+  firstDoctorSkipsMigration: boolean;
+  initialDoctor: string;
+  migratedVersions: number[];
+  createsMissing: boolean;
+  missing: string;
+  doctorEvidence: string;
+  doctorSucceeds: boolean;
+  preservesMigrated: boolean;
+  sharedVersion: number;
+}) {
+  const { gatewayLockUrl, databaseGenerationsUrl, sourceLoader } = resolveRollbackWorkerInputs();
+  return `
+    import assert from 'node:assert/strict';
+    import fs from 'node:fs';
+    import http from 'node:http';
+    import { DatabaseSync } from 'node:sqlite';
+    import { isDeepStrictEqual } from 'node:util';
+    const files = ${JSON.stringify(p.files)};
+    const manifest=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8'));
+    const acquireCustody = async (role, port) => {
+      ${sourceLoader}
+      const {acquireGatewayLock}=await import(${JSON.stringify(gatewayLockUrl.href)});
+      const owner=await acquireGatewayLock({env:process.env,role,port,allowInTests:true,timeoutMs:0});
+      assert(owner);
+      return owner;
+    };
+    const read = file => {
+      const db = new DatabaseSync(file, {readOnly:true});
+      try { return { version:db.prepare('PRAGMA user_version').get().user_version, rows:db.prepare('SELECT rowid,value FROM payload ORDER BY rowid').all() }; }
+      finally { db.close(); }
+    };
+    if (process.argv[2] === '--check') {
+      process.stdout.write(JSON.stringify({...manifest.openclaw.schemaVersions,doctorConfigWrites:'pid-start-v1'}));
+    } else if (process.argv[2] === '--doctor') {
+      assert.equal(process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION,'0');
+      const input=JSON.parse(fs.readFileSync(0,'utf8'));
+      assert(input.executor && input.runId && input.root);
+      assert.equal(fs.realpathSync(input.root),fs.realpathSync(new URL('../',import.meta.url)));
+      ${sourceLoader}
+      const {readUpdatePhysicalDatabaseGenerations}=await import(${JSON.stringify(databaseGenerationsUrl.href)});
+      const custody=await acquireCustody('sqlite-maintenance');
+      try {
+        const expected=input.databaseGenerations;
+        const fromGenerations=expected && await readUpdatePhysicalDatabaseGenerations(Object.keys(expected));
+        const unchanged=expected && isDeepStrictEqual(fromGenerations,expected);
+        let result;
+        if (${p.firstDoctorSkipsMigration} && !fs.existsSync(${JSON.stringify(p.initialDoctor)})) {
+          fs.writeFileSync(${JSON.stringify(p.initialDoctor)},'completed without migration');
+          result={status:'ok'};
+        } else {
+          for (const [index,file] of files.entries()) {
+            const db = new DatabaseSync(file);
+            try { db.exec("BEGIN; ALTER TABLE payload ADD COLUMN migrated TEXT; UPDATE payload SET value='candidate' WHERE rowid IN (7,42); PRAGMA user_version=" + ${JSON.stringify(p.migratedVersions)}[index] + ';');
+              if(index===0) db.prepare("UPDATE schema_meta SET schema_version=? WHERE meta_key='primary'").run(${JSON.stringify(p.migratedVersions)}[index]);
+              db.exec('COMMIT;'); }
+            finally { db.close(); }
+          }
+          if (${p.createsMissing}) {
+            fs.mkdirSync(${JSON.stringify(path.dirname(p.missing))},{recursive:true});
+            const created = new DatabaseSync(${JSON.stringify(p.missing)});
+            created.exec('PRAGMA user_version=23'); created.close();
+          }
+          fs.writeFileSync(${JSON.stringify(p.doctorEvidence)},JSON.stringify(files.map(read)));
+          result=${JSON.stringify(p.doctorSucceeds ? { status: "ok" } : { status: "error", maintenanceRefusal: { kind: "data-at-risk", reason: "incomplete-migration" } })};
+          process.exitCode=${p.doctorSucceeds ? 0 : 1};
+        }
+        if(expected) result.databaseWrites={unchanged,fromGenerations,generations:await readUpdatePhysicalDatabaseGenerations(Object.keys(expected))};
+        fs.writeFileSync(process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH,JSON.stringify(result));
+      } finally {
+        await custody.release();
+      }
+    } else {
+      const {version}=manifest;
+      assert(version==='1.0.0'||${p.preservesMigrated},'only the compatible candidate may serve preserved writes');
+      const custody=await acquireCustody('gateway',Number(process.argv[3]));
+      assert.deepEqual(files.map(file=>read(file).version),version==='1.0.0'?${JSON.stringify([p.sharedVersion, 21])}:${JSON.stringify(p.migratedVersions)},'runtime must match the retained state');
+      const server=http.createServer((request,response)=>{
+        if(request.url==='/commit') for(const file of files) {const db=new DatabaseSync(file);db.exec("INSERT INTO payload(rowid,value) VALUES(99,'after-capture')");db.close();}
+        response.setHeader('content-type','application/json');response.end(JSON.stringify({version,databases:files.map(read)}));
+      });
+      server.listen(Number(process.argv[3]),'127.0.0.1',()=>process.send(server.address().port));
+      const shutdown=()=>server.close(async()=>{await custody.release();process.exit(0);});
+      process.on('SIGTERM',shutdown);
+      process.on('disconnect',shutdown);
+    }
+  `;
+}
+
 let preparedHost: ReturnType<typeof prepareCompiledSdkHost> | undefined;
 
 /** Keep settlement on the real candidate's delegated native owner. */
