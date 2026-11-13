@@ -13,7 +13,6 @@ import {
   prepareTranscriptMessageAppendForWorker,
   type PreparedTranscriptMessageAppend,
 } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
-import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
 import type {
   SessionMetadataOperations,
   SessionMetadataWorkerOperations,
@@ -34,7 +33,6 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { isSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { Message } from "../../llm/types.js";
-import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
@@ -78,12 +76,7 @@ export async function appendSessionTranscriptMessage(
   input.assertCurrent();
   const actorBinding = getOwnedSessionTranscriptActor(input.target);
   if (actorBinding) {
-    return appendOwnedActorTranscriptMessage(
-      input,
-      prepared,
-      actorBinding.actor,
-      actorBinding.database,
-    );
+    return appendOwnedActorTranscriptMessage(input, prepared, actorBinding);
   }
   if (!input.candidate) {
     throw new Error("Unbound transcript append requires a captured store candidate");
@@ -150,9 +143,9 @@ function throwTranscriptAppendError(
 async function appendOwnedActorTranscriptMessage(
   input: TranscriptAppendInput<TranscriptAppendMessage>,
   prepared: PreparedTranscriptMessage,
-  actor: SessionActor,
-  options: Readonly<OpenClawAgentDatabaseOptions & { agentId: string; path: string }>,
+  binding: NonNullable<ReturnType<typeof getOwnedSessionTranscriptActor>>,
 ): Promise<SessionTranscriptAppendResult<TranscriptAppendMessage>> {
+  const { actor, database: options, toolUsageRecorder } = binding;
   const databasePath = options.path;
   const assertCurrent = () => {
     input.assertCurrent();
@@ -166,6 +159,7 @@ async function appendOwnedActorTranscriptMessage(
     const { env: _env, ...writeTarget } = input.target;
     const receipt = await appendSessionManagerActor({
       actor,
+      toolUsageRecorder,
       toolResult: false,
       message: prepared.persistedMessage,
       assertCurrent,

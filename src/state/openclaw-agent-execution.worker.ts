@@ -54,6 +54,7 @@ import {
 import {
   createAgentDatabaseExecutionCloser,
   isOpenRefusalWithoutHandle,
+  prepareCreatedAgentDatabaseBackend,
 } from "./openclaw-agent-execution-close.js";
 import type {
   AgentDatabaseFileExecutionIdentity,
@@ -92,14 +93,7 @@ export function createSqliteWorkerBackend(
   input: AgentDatabaseExecutionOpen,
   opening: { databasePath: string },
 ): SqliteWorkerPreparedBackend<AgentDatabaseOperations> {
-  const backend = openAgentDatabaseBackend(input, opening, true);
-  try {
-    backend.execute({ type: "database.prepareWrite", input: undefined });
-    backend.assertSettled?.();
-    return backend;
-  } catch (error) {
-    throw backend.closeAfterFailedOpen(error);
-  }
+  return prepareCreatedAgentDatabaseBackend(openAgentDatabaseBackend(input, opening, true), input);
 }
 
 /** The broker supplies a private admission channel before invoking this native factory. */
@@ -112,9 +106,7 @@ function openAgentDatabaseBackend(
   input: AgentDatabaseFileExecutionOpen,
   opening: { databasePath: string; existingIdentity?: string },
   preparingCreation = false,
-): SqliteWorkerPreparedBackend<AgentDatabaseOperations> & {
-  closeAfterFailedOpen(error: unknown): unknown;
-} {
+): SqliteWorkerPreparedBackend<AgentDatabaseOperations> & { closeAfterFailedOpen(): void } {
   if (opening.databasePath !== input.databasePath) {
     throw new Error("Agent database open does not match its captured execution owner");
   }
@@ -135,7 +127,8 @@ function openAgentDatabaseBackend(
     input.creatingIdentity?.key ??
     opening.existingIdentity ??
     readDatabasePathIdentitySync(input.databasePath).key;
-  let admittedFileBirthtime = input.creatingIdentity?.birthtime;
+  let admittedFileBirthtime =
+    input.creatingIdentity?.birthtime ?? input.expectedIdentity?.birthtime;
   const assertFileIdentity = () => {
     try {
       if (!database && input.expectedIdentity) {
@@ -415,6 +408,17 @@ function openAgentDatabaseBackend(
     transferList?: Transferable[],
     requestAdmission?: AgentDatabaseAdmissionRestriction,
   ) => {
+    // Admitted reads finish on their retained file; mutations must still own the pathname.
+    if (stage !== "prepare") {
+      const operation = currentSqliteWorkerOperationAdmission.getStore();
+      if (operation) {
+        operation.owner.databaseIdentity ??= {
+          databasePath: input.databasePath,
+          key: admittedFileIdentity,
+          birthtime: admittedFileBirthtime,
+        };
+      }
+    }
     const request: SqliteWorkerAdmissionRequest = {
       stage,
       facts: {
@@ -565,7 +569,7 @@ function openAgentDatabaseBackend(
         releaseBorrow,
         sharedBorrow,
       };
-    }, input),
+    }),
     prepare(command) {
       if (isSessionActorCommand(command)) {
         return import("../config/sessions/session-actor.worker.js").then(

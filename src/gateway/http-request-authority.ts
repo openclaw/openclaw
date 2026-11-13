@@ -55,56 +55,59 @@ export function runGatewayHttpRequest(
     const ingress = getRemoteControlUiIngressContext(req);
     assertRemoteControlUiIngressCurrent(ingress);
     const work = new AsyncWorkScope();
-    const requestContext = work.run(() => AsyncLocalStorage.snapshot());
-    const client = createHttpRequestAbortSignal(req, res);
-    const shutdown = context?.requestEntryLifetime?.signal;
-    const signal = AbortSignal.any([
-      client.signal,
-      ...(shutdown ? [shutdown] : []),
-      ...(ingress ? [ingress.signal] : []),
-    ]);
-    let cancelledBy: "client" | "shutdown" | undefined;
-    const cancel = () =>
-      requestContext(() => {
-        cancelledBy = client.signal.aborted ? "client" : "shutdown";
-        work.beginClose(signal.reason);
-        // A streaming handler can return before its response finishes; wake the transport join too.
-        if (cancelledBy === "shutdown" && !res.writableFinished && !res.destroyed) {
-          res.destroy();
-        }
-      });
-    signal.addEventListener("abort", cancel, { once: true });
-    if (signal.aborted) {
-      cancel();
-    }
-    let failed = false;
-    try {
-      await work.track(() =>
-        runHttpConnectionRequest(
-          req,
-          async () => {
-            failed = (await handle()) === "failed";
-          },
-          res,
-        ),
-      );
-    } catch (error) {
-      failed = true;
-      throw error;
-    } finally {
-      signal.removeEventListener("abort", cancel);
-      client.cleanup();
-      // Rejections can finish their framed body by half-closing without res.end().
-      if (
-        cancelledBy &&
-        !failed &&
-        res.statusCode < 500 &&
-        !(cancelledBy === "client" && waitForHttpRequestRejection(req))
-      ) {
-        emitInternalDiagnosticEvent({ type: "gateway.http.cancelled", source: cancelledBy });
+    // Setup and dispatch share one entry; cancellation retains this exact request frame.
+    return work.run(async () => {
+      const requestContext = AsyncLocalStorage.snapshot();
+      const client = createHttpRequestAbortSignal(req, res);
+      const shutdown = context?.requestEntryLifetime?.signal;
+      const signal = AbortSignal.any([
+        client.signal,
+        ...(shutdown ? [shutdown] : []),
+        ...(ingress ? [ingress.signal] : []),
+      ]);
+      let cancelledBy: "client" | "shutdown" | undefined;
+      const cancel = () =>
+        requestContext(() => {
+          cancelledBy = client.signal.aborted ? "client" : "shutdown";
+          work.beginClose(signal.reason);
+          // A streaming handler can return before its response finishes; wake the transport join too.
+          if (cancelledBy === "shutdown" && !res.writableFinished && !res.destroyed) {
+            res.destroy();
+          }
+        });
+      signal.addEventListener("abort", cancel, { once: true });
+      if (signal.aborted) {
+        cancel();
       }
-      await requestContext(() => work.drain());
-    }
+      let failed = false;
+      try {
+        await work.track(() =>
+          runHttpConnectionRequest(
+            req,
+            async () => {
+              failed = (await handle()) === "failed";
+            },
+            res,
+          ),
+        );
+      } catch (error) {
+        failed = true;
+        throw error;
+      } finally {
+        signal.removeEventListener("abort", cancel);
+        client.cleanup();
+        // Rejections can finish their framed body by half-closing without res.end().
+        if (
+          cancelledBy &&
+          !failed &&
+          res.statusCode < 500 &&
+          !(cancelledBy === "client" && waitForHttpRequestRejection(req))
+        ) {
+          emitInternalDiagnosticEvent({ type: "gateway.http.cancelled", source: cancelledBy });
+        }
+        await requestContext(() => work.drain());
+      }
+    });
   };
   return context ? context.trackExecution(run) : run();
 }

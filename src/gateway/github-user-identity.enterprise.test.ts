@@ -154,7 +154,8 @@ it.each(["ghe.example.test", "code.example.test"])(
       expect(respond).toHaveBeenCalledWith(true, {
         profile: expect.objectContaining({
           id: profile.id,
-          emails: [principal],
+          // Authentication principals are retained as aliases, not presented as email addresses.
+          emails: [],
           githubIdentity: {
             host,
             login: "enterprise-ada",
@@ -164,6 +165,7 @@ it.each(["ghe.example.test", "code.example.test"])(
         }),
       });
       expect(validateUsersSelfResult(respond.mock.calls[0]?.[1])).toBe(true);
+      expect(ensureProfileForEmail(principal).id).toBe(profile.id);
       respond.mockClear();
       await call("users.list");
       expect(respond).toHaveBeenCalledWith(true, {

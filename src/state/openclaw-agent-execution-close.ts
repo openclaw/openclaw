@@ -13,6 +13,7 @@ import {
   SQLITE_WORKER_CLOSE_RECEIPT,
   SqliteWorkerOpenRefusedError,
   type SqliteWorkerCloseReceipt,
+  type SqliteWorkerPreparedBackend,
 } from "../infra/sqlite-worker-contract.js";
 import { currentSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-settlement.js";
 import { stopAgentDatabaseWalMaintenance } from "./openclaw-agent-db-close.js";
@@ -22,6 +23,7 @@ import { isOpenClawAgentDatabaseOpen } from "./openclaw-agent-db.js";
 import type {
   AgentDatabaseFileExecutionIdentity,
   AgentDatabaseFileExecutionOpen,
+  AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
 
 type AgentDatabaseExecutionCloseState = {
@@ -35,8 +37,9 @@ type AgentDatabaseExecutionCloseState = {
 /**
  * True for an explicit pre-open refusal, and for the host refusing an existing database's open
  * (for example, for a cancelled caller) once the opener closed its handle. Neither leaves native
- * state for Worker retirement to reclaim. A refused cold creation still retires the Worker, so
- * its cleanup fences readers of the partly created file.
+ * state for Worker retirement to reclaim. A create-capable caller also captures an existing
+ * file's identity, so only an absent file (`path:` identity) is a cold creation; a refused cold
+ * creation still retires the Worker, so its cleanup fences readers of the partly created file.
  */
 export function isOpenRefusalWithoutHandle(
   error: unknown,
@@ -44,7 +47,7 @@ export function isOpenRefusalWithoutHandle(
 ): boolean {
   return (
     error instanceof SqliteWorkerOpenRefusedError ||
-    (opening.creatingIdentity === undefined &&
+    (!opening.creatingIdentity?.key.startsWith("path:") &&
       currentSqliteWorkerOperationAdmission.getStore()?.owner.refusal === error &&
       !isOpenClawAgentDatabaseOpen(opening.databasePath))
   );
@@ -55,32 +58,17 @@ export function createAgentDatabaseExecutionCloser(
   capture: () => AgentDatabaseExecutionCloseState & {
     sharedBorrow: { release(): void; releaseAsync(): Promise<void> } | undefined;
   },
-  opening: AgentDatabaseFileExecutionOpen,
 ) {
   let receipt: SqliteWorkerCloseReceipt | undefined;
   return {
     [SQLITE_WORKER_CLOSE_RECEIPT]: () => receipt,
-    /** Closes a failed eager open and returns the failure its open job reports. */
-    closeAfterFailedOpen(error: unknown): unknown {
+    closeAfterFailedOpen() {
       const { sharedBorrow, ...state } = capture();
       receipt = undefined;
-      try {
-        receipt = closeAgentDatabaseExecution({
-          ...state,
-          releaseSharedBorrow: () => sharedBorrow?.release(),
-        });
-      } catch (cleanupError) {
-        return createSqliteLifecycleAggregateError(
-          [error, cleanupError],
-          "Agent creation and cleanup failed",
-          error,
-        );
-      }
-      // Cleanup closed every handle, so a host refusal reaches the broker as a refused open.
-      return !(error instanceof SqliteWorkerOpenRefusedError) &&
-        isOpenRefusalWithoutHandle(error, opening)
-        ? new SqliteWorkerOpenRefusedError(error)
-        : error;
+      receipt = closeAgentDatabaseExecution({
+        ...state,
+        releaseSharedBorrow: () => sharedBorrow?.release(),
+      });
     },
     async close() {
       const { sharedBorrow, ...state } = capture();
@@ -156,4 +144,31 @@ function closeAgentDatabaseExecution({
     };
   }
   return undefined;
+}
+
+/** Creation owns failed-open cleanup until the prepared native backend is handed off. */
+export function prepareCreatedAgentDatabaseBackend(
+  backend: SqliteWorkerPreparedBackend<AgentDatabaseOperations> & { closeAfterFailedOpen(): void },
+  opening: AgentDatabaseFileExecutionOpen,
+): SqliteWorkerPreparedBackend<AgentDatabaseOperations> {
+  try {
+    backend.execute({ type: "database.prepareWrite", input: undefined });
+    backend.assertSettled?.();
+    return backend;
+  } catch (error) {
+    try {
+      backend.closeAfterFailedOpen();
+    } catch (cleanupError) {
+      throw createSqliteLifecycleAggregateError(
+        [error, cleanupError],
+        "Agent creation and cleanup failed",
+        error,
+      );
+    }
+    // Cleanup closed every handle, so a host refusal reaches the broker as a refused open.
+    if (!(error instanceof SqliteWorkerOpenRefusedError) && isOpenRefusalWithoutHandle(error, opening)) {
+      throw new SqliteWorkerOpenRefusedError(error);
+    }
+    throw error;
+  }
 }

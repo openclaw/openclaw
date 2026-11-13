@@ -362,7 +362,8 @@ type GatewayTransportContext = {
     record?: ExecApprovalRecord<TPayload>;
   }) => ReadonlySet<string>;
   disconnectClientsForDevice?: (deviceId: string, opts?: { role?: string }) => void;
-  disconnectClientsForUserProfile?: (profileId: string) => void;
+  /** With `roleOnly`, current owner devices stay: their certificate, not the role, bounds them. */
+  disconnectClientsForUserProfile?: (profileId: string, opts?: { roleOnly?: boolean }) => void;
   invalidateClientsForDevice?: (
     deviceId: string,
     opts?: { role?: string; reason?: string },

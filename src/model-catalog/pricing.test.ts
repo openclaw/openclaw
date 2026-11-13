@@ -7,7 +7,7 @@ import type {
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { MODELS_JSON_STATE } from "../agents/models-config-state.js";
+import { MODELS_JSON_STATE, publishModelsJsonCostSource } from "../agents/models-config-state.js";
 import * as runtimeNormalization from "../agents/provider-model-normalization.runtime.js";
 import { resolveResponseUsageLine } from "../auto-reply/reply/agent-runner-usage-line.js";
 import {
@@ -31,15 +31,12 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { buildStatusMessageParts, statusModelRefs } from "../status/status-message.test-support.js";
 import {
+  captureModelCostPricing,
   estimateAggregateUsageCost,
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
 } from "../utils/usage-format.js";
-import {
-  prepareModelPricingContext,
-  resolveModelPricing,
-  resolveModelPricingContext,
-} from "./pricing.js";
+import { prepareModelPricingContext, resolveModelPricing } from "./pricing.js";
 import {
   prepareRemoteModelCatalogStartupSnapshot,
   getRemoteModelCatalogProviderOverlay,
@@ -179,22 +176,34 @@ describe("hosted model pricing", () => {
     enumeratePolicies.mockClear();
     const agentDir = tempDirs.make("openclaw-policy-pricing-");
     const lookup = () =>
-      [firstConfig, secondConfig].flatMap((config) =>
-        ["first", "second"].map(
-          (modelId) =>
-            resolveModelCostConfig({ config, agentDir, provider: "fixture", model: modelId })
-              ?.input,
+      Promise.all(
+        [firstConfig, secondConfig].flatMap((config) =>
+          ["first", "second"].map(
+            async (modelId) =>
+              (
+                await resolveModelCostConfig({
+                  config,
+                  agentDir,
+                  provider: "fixture",
+                  model: modelId,
+                })
+              )?.input,
+          ),
         ),
       );
-    expect(lookup()).toEqual([3, undefined, undefined, 3]);
-    expect(lookup()).toEqual([3, undefined, undefined, 3]);
+    expect(await lookup()).toEqual([3, undefined, undefined, 3]);
+    expect(await lookup()).toEqual([3, undefined, undefined, 3]);
 
     const fileModel = { ...model, id: "alias", cost: { ...model.cost, input: 17 } };
     await fs.writeFile(
       path.join(agentDir, "models.json"),
       JSON.stringify({ providers: { fixture: { ...providers.fixture, models: [fileModel] } } }),
     );
-    expect(lookup()).toEqual([17, undefined, undefined, 17]);
+    publishModelsJsonCostSource(
+      agentDir,
+      await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+    );
+    expect(await lookup()).toEqual([17, undefined, undefined, 17]);
     expect(metadataSpy).toHaveBeenCalledTimes(2);
     expect(enumeratePolicies).not.toHaveBeenCalled();
   });
@@ -218,11 +227,11 @@ describe("hosted model pricing", () => {
       })
       .mockResolvedValue(createPluginMetadataSnapshotFixture());
     const preparing = withPluginCache(cache, () => prepareModelPricingContext(config));
-    const settled = expect(preparing).resolves.toBeUndefined();
+    const settled = expect(preparing).resolves.toBeDefined();
     reading.reject(new Error("optional metadata unavailable"));
     await settled;
     expect(readStoredCatalog).not.toHaveBeenCalled();
-    expect(costFor(config, "gpt-external")).toBeUndefined();
+    expect(await costFor(config, "gpt-external")).toBeUndefined();
   });
 
   it("rejects native metadata admission refusal without caching fallback absence", async () => {
@@ -267,7 +276,7 @@ describe("hosted model pricing", () => {
         "venice/zero-fixture": { input: 0, output: 0 },
       },
     });
-    expect(costFor(config, "zero-fixture", agentDir, "venice")).toEqual(tokenRates(0, 0));
+    expect(await costFor(config, "zero-fixture", agentDir, "venice")).toEqual(tokenRates(0, 0));
   });
 
   // The bundled Anthropic manifest prices its claude-cli backend as anthropic.
@@ -278,7 +287,7 @@ describe("hosted model pricing", () => {
     await prepareCatalog({ pricing });
     await prepareModelPricingContext(config);
     const resolve = (provider: string) => costFor(config, "claude-opus-5-5", agentDir, provider);
-    return { cli: resolve("claude-cli"), anthropic: resolve("anthropic") };
+    return { cli: await resolve("claude-cli"), anthropic: await resolve("anthropic") };
   }
 
   it("prices a priceAs provider with its target's catalog row", async () => {
@@ -305,6 +314,7 @@ describe("hosted model pricing", () => {
           { external, authoritative: false, passthroughSources: [], priceAs: "anthropic" },
         ],
       ]),
+      vendorKeys: new Map(),
       fingerprint: "price-as-exclusions",
     });
     const key = "claude-cli/claude-opus-5-5";
@@ -313,6 +323,24 @@ describe("hosted model pricing", () => {
     expect(resolveModelPricing(contextFor({}, true), key)).toEqual(rates);
     expect(resolveModelPricing(contextFor({}, false), key)).toBeUndefined();
     expect(resolveModelPricing(contextFor(privateEndpoint, true), key)).toBeUndefined();
+  });
+
+  it("prices a proxy serving a vendor's exact model id at the vendor's rate", async () => {
+    const agentDir = tempDirs.make("openclaw-vendor-price-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", agentDir);
+    const ids = ["claude-opus-5-5", "claude-opus-5-5-unpublished"].map((id) => ({ id, name: id }));
+    const [config, local] = [
+      configFor(hostedUrl, ids, "proxy"),
+      configFor(privateUrl, ids, "proxy"),
+    ];
+    await prepareCatalog({});
+    await Promise.all([prepareModelPricingContext(config), prepareModelPricingContext(local)]);
+    const anthropic = await costFor(config, "claude-opus-5-5", agentDir, "anthropic");
+    expect(anthropic).toMatchObject({ input: 4, output: 20 });
+    expect(await costFor(config, "claude-opus-5-5", agentDir, "proxy")).toEqual(anthropic);
+    // Only an id the vendor publishes inherits its price; a local server never does.
+    expect(await costFor(config, "claude-opus-5-5-unpublished", agentDir, "proxy")).toBeUndefined();
+    expect(await costFor(local, "claude-opus-5-5", agentDir, "proxy")).toBeUndefined();
   });
 
   it("keeps a priceAs provider's own price ahead of its target's", async () => {
@@ -350,106 +378,119 @@ describe("hosted model pricing", () => {
         tieredPricing: [{ ...tokenRates(7, 9, 1, 2), range: [0, Infinity] }],
       },
     ),
-  ])("resolves $name from authored pricing (display=$display)", ({ cost, expected, display }) => {
-    const allowPluginNormalization = !display;
-    const [total, price] = display ?? [];
-    const source: OpenClawConfig = {
-      ...configFor(hostedUrl, [
-        {
-          id: "gpt-authored",
-          name: "Authored GPT",
-          contextWindow: 64_000,
-          ...(cost ? { cost } : {}),
-        },
-      ]),
-      messages: { responseUsage: "full" },
-    };
-    const runtime = structuredClone(source);
-    const model = expectDefined(runtime.models?.providers?.openai?.models[0], "materialized model");
-    model.cost = {
-      ...preparedRates,
-      tieredPricing: [{ ...preparedRates, range: [0] }],
-    };
-    setRuntimeConfigSnapshot(runtime, source);
-    const agentDir = tempDirs.make("openclaw-authored-pricing-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", agentDir);
-    const fetch = vi.fn(() => {
-      throw new Error("pricing display must not use the network");
-    });
-    vi.stubGlobal("fetch", fetch);
-    for (const config of [runtime, structuredClone(runtime)]) {
-      MODELS_JSON_STATE.costCache.clear();
-      const discoverySpies = allowPluginNormalization
-        ? []
-        : [
-            vi.spyOn(manifestNormalization, "resolveManifestModelIdNormalizationPolicies"),
-            vi.spyOn(runtimeNormalization, "normalizeProviderModelIdWithRuntime"),
-            vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot"),
-          ];
-      const params = { config, agentDir, provider: "openai", model: "gpt-authored" };
-      const resolvedCost = resolveModelCostConfig({ ...params, allowPluginNormalization });
-      expect.soft(resolvedCost).toEqual(expected);
-      if (allowPluginNormalization) {
-        expect(resolveModelCostConfigFingerprint(config, agentDir)).toBe(
-          resolveModelCostConfigFingerprint(source, agentDir),
-        );
-        continue;
-      }
-      const usage = { input: 1000, output: 1000, cacheRead: 1000, cacheWrite: 1000 };
-      const estimate = estimateAggregateUsageCost({ usage, cost: resolvedCost });
-      if (total === undefined) {
-        expect.soft(estimate).toBeUndefined();
-      } else {
-        expect.soft(estimate).toBeCloseTo(total);
-      }
-      expect
-        .soft(resolveResponseUsageLine({ ...params, usage }))
-        .toBe(
-          `Usage: 1.0k in / 1.0k out · cache 1.0k cached / 1.0k new${price ? ` · est ${price}` : ""}`,
-        );
-      for (const spy of discoverySpies) {
-        expect.soft(spy).not.toHaveBeenCalled();
-        spy.mockRestore();
-      }
-      const status = buildStatusMessageParts({
-        modelRefs: statusModelRefs({ provider: "openai", model: "gpt-authored" }),
-        config,
-        agent: { model: "openai/gpt-authored" },
-        modelAuth: "api-key",
-        activeModelAuth: "api-key",
-        sessionEntry: {
-          sessionId: "prepared-pricing",
-          updatedAt: 0,
-          modelProvider: "openai",
-          model: "gpt-authored",
-          inputTokens: 1000,
-          outputTokens: 1000,
-          cacheRead: 1000,
-          cacheWrite: 1000,
-        },
-      });
-      if (price) {
-        expect.soft(status.text).toContain(`Cost: ${price}`);
-      } else {
-        expect.soft(status.text).not.toContain("Cost:");
-      }
-      const rows = status.presentation.blocks.flatMap((block) =>
-        block.type === "table" ? block.rows : [],
+  ])(
+    "resolves $name from authored pricing (display=$display)",
+    async ({ cost, expected, display }) => {
+      const allowPluginNormalization = !display;
+      const [total, price] = display ?? [];
+      const source: OpenClawConfig = {
+        ...configFor(hostedUrl, [
+          {
+            id: "gpt-authored",
+            name: "Authored GPT",
+            contextWindow: 64_000,
+            ...(cost ? { cost } : {}),
+          },
+        ]),
+        messages: { responseUsage: "full" },
+      };
+      const runtime = structuredClone(source);
+      const model = expectDefined(
+        runtime.models?.providers?.openai?.models[0],
+        "materialized model",
       );
-      expect.soft(rows.find((row) => row[0] === "💵 Cost")?.[1]).toBe(price);
-    }
-    expect(fetch).not.toHaveBeenCalled();
-    expect(model.contextWindow).toBe(64_000);
-  });
+      model.cost = {
+        ...preparedRates,
+        tieredPricing: [{ ...preparedRates, range: [0] }],
+      };
+      setRuntimeConfigSnapshot(runtime, source);
+      const agentDir = tempDirs.make("openclaw-authored-pricing-");
+      vi.stubEnv("OPENCLAW_STATE_DIR", agentDir);
+      const fetch = vi.fn(() => {
+        throw new Error("pricing display must not use the network");
+      });
+      vi.stubGlobal("fetch", fetch);
+      for (const config of [runtime, structuredClone(runtime)]) {
+        MODELS_JSON_STATE.costCache.clear();
+        const discoverySpies = allowPluginNormalization
+          ? []
+          : [
+              vi.spyOn(manifestNormalization, "resolveManifestModelIdNormalizationPolicies"),
+              vi.spyOn(runtimeNormalization, "normalizeProviderModelIdWithRuntime"),
+              vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot"),
+            ];
+        const params = { config, agentDir, provider: "openai", model: "gpt-authored" };
+        const resolvedCost = await resolveModelCostConfig({ ...params, allowPluginNormalization });
+        expect.soft(resolvedCost).toEqual(expected);
+        if (allowPluginNormalization) {
+          expect(await resolveModelCostConfigFingerprint(config, agentDir)).toBe(
+            await resolveModelCostConfigFingerprint(source, agentDir),
+          );
+          continue;
+        }
+        const usage = { input: 1000, output: 1000, cacheRead: 1000, cacheWrite: 1000 };
+        const estimate = estimateAggregateUsageCost({ usage, cost: resolvedCost });
+        if (total === undefined) {
+          expect.soft(estimate).toBeUndefined();
+        } else {
+          expect.soft(estimate).toBeCloseTo(total);
+        }
+        expect
+          .soft(
+            await resolveResponseUsageLine({
+              ...params,
+              usage,
+              preparePricing: () => captureModelCostPricing(config, agentDir, false),
+            }),
+          )
+          .toBe(
+            `Usage: 1.0k in / 1.0k out · cache 1.0k cached / 1.0k new${price ? ` · est ${price}` : ""}`,
+          );
+        for (const spy of discoverySpies) {
+          expect.soft(spy).not.toHaveBeenCalled();
+          spy.mockRestore();
+        }
+        const status = buildStatusMessageParts({
+          estimatedCostUsd: estimate,
+          modelRefs: statusModelRefs({ provider: "openai", model: "gpt-authored" }),
+          config,
+          agent: { model: "openai/gpt-authored" },
+          modelAuth: "api-key",
+          activeModelAuth: "api-key",
+          sessionEntry: {
+            sessionId: "prepared-pricing",
+            updatedAt: 0,
+            modelProvider: "openai",
+            model: "gpt-authored",
+            inputTokens: 1000,
+            outputTokens: 1000,
+            cacheRead: 1000,
+            cacheWrite: 1000,
+          },
+        });
+        if (price) {
+          expect.soft(status.text).toContain(`Cost: ${price}`);
+        } else {
+          expect.soft(status.text).not.toContain("Cost:");
+        }
+        const rows = status.presentation.blocks.flatMap((block) =>
+          block.type === "table" ? block.rows : [],
+        );
+        expect.soft(rows.find((row) => row[0] === "💵 Cost")?.[1]).toBe(price);
+      }
+      expect(fetch).not.toHaveBeenCalled();
+      expect(model.contextWindow).toBe(64_000);
+    },
+  );
 
-  it("preserves independent configured pricing with an incompatible runtime snapshot", () => {
+  it("preserves independent configured pricing with an incompatible runtime snapshot", async () => {
     const runtime = { agents: { defaults: {} } } satisfies OpenClawConfig;
     setRuntimeConfigSnapshot(runtime, {});
     const config = configFor(hostedUrl, [
       { id: "gpt-authored", name: "Authored GPT", cost: { output: 3 } },
     ]);
     const agentDir = tempDirs.make("openclaw-independent-pricing-");
-    expect(costFor(config, "gpt-authored", agentDir)).toEqual({ ...catalogRates, output: 3 });
+    expect(await costFor(config, "gpt-authored", agentDir)).toEqual({ ...catalogRates, output: 3 });
     const preparedCost = (model: string) =>
       resolveModelCostConfig({
         config,
@@ -458,52 +499,64 @@ describe("hosted model pricing", () => {
         model,
         allowPluginNormalization: false,
       });
-    expect(preparedCost("gpt-authored")).toEqual(tokenRates(0, 3));
-    expect(preparedCost("missing")).toBeUndefined();
+    expect(await preparedCost("gpt-authored")).toEqual(tokenRates(0, 3));
+    expect(await preparedCost("missing")).toBeUndefined();
   });
 
-  it("invalidates pricing fingerprints when authored empty tiers replace inherited tiers", () => {
+  it("invalidates pricing fingerprints when authored empty tiers replace inherited tiers", async () => {
     const cost = {} as ModelDefinitionConfig["cost"];
     const config = configFor(hostedUrl, [{ id: "gpt-authored", name: "Authored GPT", cost }]);
     const agentDir = tempDirs.make("openclaw-empty-tier-pricing-");
-    expect(costFor(config, "gpt-authored", agentDir)).toEqual({
+    expect(await costFor(config, "gpt-authored", agentDir)).toEqual({
       ...catalogRates,
       tieredPricing: catalogTiers,
     });
-    const before = resolveModelCostConfigFingerprint(config, agentDir);
+    const before = await resolveModelCostConfigFingerprint(config, agentDir);
     cost.tieredPricing = [];
-    expect(resolveModelCostConfigFingerprint(config, agentDir)).not.toBe(before);
-    expect(costFor(config, "gpt-authored", agentDir)).toEqual(catalogRates);
+    expect(await resolveModelCostConfigFingerprint(config, agentDir)).not.toBe(before);
+    expect(await costFor(config, "gpt-authored", agentDir)).toEqual(catalogRates);
   });
 
-  it("does not apply hosted pricing to private endpoints or unknown models", () => {
+  it("does not apply hosted pricing to private endpoints or unknown models", async () => {
     const agentDir = tempDirs.make("openclaw-private-pricing-");
-    expect(costFor(configFor(privateUrl), "gpt-external", agentDir)).toBeUndefined();
-    expect(resolveModelCostConfigFingerprint(configFor(hostedUrl))).not.toBe(
-      resolveModelCostConfigFingerprint(configFor(privateUrl)),
+    expect(await costFor(configFor(privateUrl), "gpt-external", agentDir)).toBeUndefined();
+    expect(await resolveModelCostConfigFingerprint(configFor(hostedUrl))).not.toBe(
+      await resolveModelCostConfigFingerprint(configFor(privateUrl)),
     );
-    expect(costFor(configFor("https://fc-proxy.example.com/v1"), "gpt-external", agentDir)).toEqual(
-      tokenRates(2.5, 10, 1.25),
-    );
-    expect(costFor(configFor(privateUrl), "gpt-catalog", agentDir)).toBeUndefined();
-    expect(costFor(configFor(hostedUrl), "unknown-model", agentDir)).toBeUndefined();
-    expect(costFor(configFor(hostedUrl), "gpt-zero-hosted", agentDir)).toBeUndefined();
+    expect(
+      await costFor(configFor("https://fc-proxy.example.com/v1"), "gpt-external", agentDir),
+    ).toEqual(tokenRates(2.5, 10, 1.25));
+    expect(await costFor(configFor(privateUrl), "gpt-catalog", agentDir)).toBeUndefined();
+    expect(await costFor(configFor(hostedUrl), "unknown-model", agentDir)).toBeUndefined();
+    expect(await costFor(configFor(hostedUrl), "gpt-zero-hosted", agentDir)).toBeUndefined();
     const disabled = configFor(hostedUrl);
     disabled.models = {
       ...disabled.models,
       catalogRefresh: { enabled: false },
     };
-    expect(costFor(disabled, "gpt-external", agentDir)).toBeUndefined();
+    expect(await costFor(disabled, "gpt-external", agentDir)).toBeUndefined();
   });
 
-  it("fingerprints provider overlays without explicit model rows", () => {
+  it("fingerprints vendor ownership of unpriced rows", async () => {
+    const proxy = configFor(hostedUrl, [{ id: "vendor-owned", name: "Vendor owned" }], "proxy");
+    const withVendorRow = async (models: unknown[]) => {
+      await prepareCatalog({ minVersion: "2026.7.0", providers: { anthropic: { models } } });
+      return (await prepareModelPricingContext(proxy)).fingerprint;
+    };
+    // An unpriced vendor row moves no price table, but it decides who prices the proxy row.
+    expect(await withVendorRow([{ id: "vendor-owned", pricing: { status: "unknown" } }])).not.toBe(
+      await withVendorRow([]),
+    );
+  });
+
+  it("fingerprints provider overlays without explicit model rows", async () => {
     const config = {
       models: { providers: { openai: { baseUrl: "https://api.openai.com/v1" } } },
     } as unknown as OpenClawConfig;
-    expect(() => resolveModelCostConfigFingerprint(config)).not.toThrow();
+    await expect(resolveModelCostConfigFingerprint(config)).resolves.toEqual(expect.any(String));
   });
 
-  it("keeps optional pricing non-throwing without an ambient agent owner", () => {
+  it("keeps optional pricing non-throwing without an ambient agent owner", async () => {
     const config: OpenClawConfig = {
       ...configFor(
         "https://fixture.invalid",
@@ -513,9 +566,9 @@ describe("hosted model pricing", () => {
       agents: { ownership: "explicit", entries: { main: {}, other: {} } },
     };
 
-    expect(costFor(config, "priced", undefined, "fixture")).toEqual(tokenRates(1, 2));
-    expect(costFor(config, "missing", undefined, "fixture")).toBeUndefined();
-    expect(() => resolveModelCostConfigFingerprint(config)).not.toThrow();
+    expect(await costFor(config, "priced", undefined, "fixture")).toEqual(tokenRates(1, 2));
+    expect(await costFor(config, "missing", undefined, "fixture")).toBeUndefined();
+    await expect(resolveModelCostConfigFingerprint(config)).resolves.toEqual(expect.any(String));
   });
 
   it("bounds fingerprints for multi-megabyte hosted pricing catalogs", async () => {
@@ -537,8 +590,8 @@ describe("hosted model pricing", () => {
     useCatalog(readStoredCatalog);
     await prepareRemoteModelCatalogStartupSnapshot();
     const config = configFor(hostedUrl);
-    const fingerprint = resolveModelCostConfigFingerprint(config);
-    const contextFingerprint = resolveModelPricingContext(config).fingerprint;
+    const fingerprint = await resolveModelCostConfigFingerprint(config);
+    const contextFingerprint = (await prepareModelPricingContext(config)).fingerprint;
     const withoutHostedPricing = configFor(hostedUrl);
     withoutHostedPricing.models = {
       ...withoutHostedPricing.models,
@@ -548,9 +601,9 @@ describe("hosted model pricing", () => {
     expect(fingerprint).toMatch(/^[0-9a-f]{64}$/u);
     expect(contextFingerprint.length).toBe(64);
     expect(contextFingerprint).not.toBe(
-      resolveModelPricingContext(withoutHostedPricing).fingerprint,
+      (await prepareModelPricingContext(withoutHostedPricing)).fingerprint,
     );
-    expect(fingerprint).not.toBe(resolveModelCostConfigFingerprint(withoutHostedPricing));
+    expect(fingerprint).not.toBe(await resolveModelCostConfigFingerprint(withoutHostedPricing));
   });
 });
 
@@ -589,13 +642,13 @@ describe("OpenRouter routing shortcut estimates", () => {
     };
     const configWith = (baseUrl: string, modelEntry = entry) =>
       configFor(baseUrl, [modelEntry], "openrouter");
-    const resolve = (config: OpenClawConfig) => {
-      const context = resolveModelPricingContext(config);
+    const resolve = async (config: OpenClawConfig) => {
+      const context = await prepareModelPricingContext(config);
       return resolveModelPricing(context, context.normalizeKey("openrouter", model));
     };
-    expect(resolve(configWith(routerUrl))).toEqual(rates);
+    expect(await resolve(configWith(routerUrl))).toEqual(rates);
     expect(
-      resolve(
+      await resolve(
         configFor(
           routerUrl,
           [entry, { ...entry, id: "openai/gpt-catalog", baseUrl: privateUrl }],
@@ -603,9 +656,9 @@ describe("OpenRouter routing shortcut estimates", () => {
         ),
       ),
     ).toEqual(rates);
-    expect(resolve(configWith(privateUrl))).toBeUndefined();
+    expect(await resolve(configWith(privateUrl))).toBeUndefined();
     expect(
-      resolve(
+      await resolve(
         configWith(routerUrl, {
           ...entry,
           baseUrl: privateUrl,
@@ -615,7 +668,7 @@ describe("OpenRouter routing shortcut estimates", () => {
     for (const input of [0, 9]) {
       const cost = tokenRates(input, input);
       expect(
-        resolveModelCostConfig({
+        await resolveModelCostConfig({
           config: configWith(routerUrl, { ...entry, cost }),
           agentDir,
           provider: "openrouter",
@@ -633,8 +686,8 @@ describe("OpenRouter routing shortcut estimates", () => {
     const config = configFor(routerUrl, [], "openrouter");
     const resolve = (model: string, provider = "openrouter") =>
       resolveModelCostConfig({ config, agentDir, provider, model });
-    expect(resolve("openai/gpt-catalog:nitro")).toEqual(tokenRates(7, 8));
-    expect(resolve("openai/gpt-catalog:free")).toEqual(tokenRates(3, 4));
+    expect(await resolve("openai/gpt-catalog:nitro")).toEqual(tokenRates(7, 8));
+    expect(await resolve("openai/gpt-catalog:free")).toEqual(tokenRates(3, 4));
     for (const suffix of [
       "batch",
       "extended",
@@ -644,10 +697,10 @@ describe("OpenRouter routing shortcut estimates", () => {
       "free:nitro",
       "nitro:floor",
     ]) {
-      expect(resolve(`openai/gpt-catalog:${suffix}`), suffix).toBeUndefined();
+      expect(await resolve(`openai/gpt-catalog:${suffix}`), suffix).toBeUndefined();
     }
-    expect(resolve("openai/unknown:floor")).toBeUndefined();
-    expect(resolve("gpt-catalog:floor", "openai")).toBeUndefined();
+    expect(await resolve("openai/unknown:floor")).toBeUndefined();
+    expect(await resolve("gpt-catalog:floor", "openai")).toBeUndefined();
   });
 });
 
@@ -657,7 +710,7 @@ describe("standalone v2 pricing", () => {
   beforeEach(async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-v2-standalone-"));
     MODELS_JSON_STATE.costCache.clear();
-    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot").mockReturnValue(
+    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync").mockResolvedValue(
       createPluginMetadataSnapshotFixture({
         plugins: [
           {
@@ -731,9 +784,9 @@ describe("standalone v2 pricing", () => {
     ["vendor/catalogued", undefined],
     ["gateway/vendor/rowpriced", tokenRates(4, 20)],
     ["litegate/vendor/listed", tokenRates(2.5, 5)],
-  ] as const)("resolves standalone pricing for %s", (ref, cost) => {
+  ] as const)("resolves standalone pricing for %s", async (ref, cost) => {
     const slash = ref.indexOf("/");
-    expect(costFor({}, ref.slice(slash + 1), undefined, ref.slice(0, slash))).toEqual(cost);
+    expect(await costFor({}, ref.slice(slash + 1), undefined, ref.slice(0, slash))).toEqual(cost);
   });
 });
 
@@ -744,20 +797,20 @@ describe("inline v2 pricing", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-v2-pricing-"));
     MODELS_JSON_STATE.costCache.clear();
     pricing = { ...known, input: 0, output: 0, source: "models.dev" };
-    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot").mockReturnValue(
-      createPluginMetadataSnapshotFixture({
-        plugins: ["fixture", "other"].map((provider) => ({
-          id: provider,
-          providers: [provider],
-          modelCatalog: {
-            providers: {
-              [provider]: { models: [{ id: "native/model", cost: { input: 9, output: 18 } }] },
-            },
+    const metadata = createPluginMetadataSnapshotFixture({
+      plugins: ["fixture", "other"].map((provider) => ({
+        id: provider,
+        providers: [provider],
+        modelCatalog: {
+          providers: {
+            [provider]: { models: [{ id: "native/model", cost: { input: 9, output: 18 } }] },
           },
-          modelPricing: { providers: { [provider]: { external: true } } },
-        })),
-      }),
-    );
+        },
+        modelPricing: { providers: { [provider]: { external: true } } },
+      })),
+    });
+    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot").mockReturnValue(metadata);
+    vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshotAsync").mockResolvedValue(metadata);
     useCatalog(() =>
       storedCatalog({
         schemaVersion: 2,
@@ -789,14 +842,16 @@ describe("inline v2 pricing", () => {
     pricing = price;
     await prepareRemoteModelCatalogStartupSnapshot();
     const config = {};
-    const context = resolveModelPricingContext(config);
+    const context = await prepareModelPricingContext(config);
     expect(resolveModelPricing(context, "fixture/native/model")).toEqual(expected);
     expect(resolveModelPricing(context, "other/native/model")).toEqual({ input: 7, output: 14 });
     expect(getRemoteModelCatalogProviderOverlay(config, "fixture")).toMatchObject({
       defaultModel: "native/model",
       models: [{ id: "native/model" }],
     });
-    expect(resolveModelCostConfig({ config, provider: "fixture", model: "native/model" })).toEqual(
+    expect(
+      await resolveModelCostConfig({ config, provider: "fixture", model: "native/model" }),
+    ).toEqual(
       expected
         ? { input: expected.input, output: expected.output ?? 0, cacheRead: 0, cacheWrite: 0 }
         : undefined,
@@ -806,12 +861,15 @@ describe("inline v2 pricing", () => {
   it("does not let known zero bypass disabled external pricing", async () => {
     await prepareRemoteModelCatalogStartupSnapshot();
     const config: OpenClawConfig = {};
-    const snapshot = pluginMetadata.resolvePluginMetadataSnapshot({ config, env: process.env });
+    const snapshot = await pluginMetadata.resolvePluginMetadataSnapshotAsync({
+      config,
+      env: process.env,
+    });
     for (const plugin of snapshot.manifestRegistry.plugins) {
       if (plugin.id === "fixture") {
         plugin.modelPricing = { providers: { fixture: { external: false } } };
       }
     }
-    expect(costFor(config, "native/model", undefined, "fixture")).toBeUndefined();
+    expect(await costFor(config, "native/model", undefined, "fixture")).toBeUndefined();
   });
 });

@@ -10,7 +10,7 @@
       "hasSubcommands": true
     }
   ],
-  "enabledByDefault": true,
+  "enabledByDefault": false,
   "commandAliases": [{ "name": "zoommeetings" }],
   "activation": {
     "onStartup": true,

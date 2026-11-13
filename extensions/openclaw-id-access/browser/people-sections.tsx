@@ -111,7 +111,7 @@ function RolePicker(props: {
   return <div class="ocid-access__role-picker" ref={(element) => (container = element)} />;
 }
 
-/** Invite one person with a role ceiling (operator at most); shows the link once. */
+/** Invite one person with an exact role; shows the link once. */
 export function InviteForm(props: {
   motion: PeopleMotion;
   components: ControlUiHost["components"];

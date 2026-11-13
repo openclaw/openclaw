@@ -2,7 +2,10 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import * as modelsConfig from "../../models-config-state.js";
 import { makeEmbeddedRunnerAttempt as makeAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import type { NormalizedUsage } from "../../usage.js";
+import { mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { CUT_OFF_SUMMARY_NOTICE_TEXT } from "./incomplete-turn-resolution.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
@@ -111,6 +114,25 @@ function finalizationInput(
 
 describe("prepareTerminalWithSettledTurnFinalization", () => {
   afterEach(() => vi.useRealTimers());
+
+  it.each<{ name: string; usage: NormalizedUsage; expected?: number }>([
+    {
+      name: "recorded zero",
+      usage: { input: 100, cost: { total: 0, totalOrigin: "provider-billed" } },
+      expected: 0,
+    },
+    { name: "final unknown", usage: { input: 100, costStatus: "unavailable" } },
+  ])("settles $name before optional pricing", async ({ usage, expected }) => {
+    using source = vi.spyOn(modelsConfig, "captureModelsJsonCostSource");
+    const input = finalizationInput(settledAttempt(false), {
+      resolveReplyDelivery: async () => "delivered",
+    });
+    mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, usage);
+    const result = await finalize(input);
+    expect(result.prepared.agentMeta.costUsd).toBe(expected);
+    expect(source).not.toHaveBeenCalled();
+    expect(backendMocks.finalize).not.toHaveBeenCalled();
+  });
 
   it.each(["delivered", "pending", "missing"] as const)(
     "requests settled context only when source delivery is missing (%s)",
