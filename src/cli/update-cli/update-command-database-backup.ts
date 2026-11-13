@@ -118,6 +118,15 @@ export async function captureUpdateDatabases(params: {
   params.assertCurrent();
   const source = await readUpdateCandidateSource(env, execution.legacyConfigPlan);
   params.assertCurrent();
+  // Activation replaced the install. A state reader started earlier would lazy-import
+  // chunks the new build renamed, failing the ownership check that authorizes restore.
+  const [{ captureRetainedNativeWorkerSource }, { retireIdleOpenClawStateReadWorkers }] =
+    await Promise.all([
+      import("../../infra/worker-native-lifecycle.js"),
+      import("../../state/openclaw-state-read-worker.js"),
+    ]);
+  await retireIdleOpenClawStateReadWorkers(captureRetainedNativeWorkerSource());
+  params.assertCurrent();
   const ownership = await acquireUpdateCaptureOwnership(env);
   const maintenance = ownership.maintenance;
   let unavailable = ownership.unavailable;
