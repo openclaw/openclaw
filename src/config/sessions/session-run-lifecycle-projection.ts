@@ -455,7 +455,7 @@ export function projectSessionLifecyclePatch(
     entry.goal?.status === "active" &&
     entry.goal.updatedAt <= endedAt
   ) {
-    // Commit a definitive failure or Stop with its goal pause and frozen timer.
+    // Commit a definitive failure or interruption with its goal pause and frozen timer.
     // Restart, supersession, and yielded work retain their continuation custody.
     // A delayed terminal must not undo a newer resume or replacement goal.
     patch.goal = buildUpdatedSessionGoalStatus(
@@ -463,7 +463,7 @@ export function projectSessionLifecyclePatch(
       {
         status: "paused",
         note: stopped
-          ? "Paused after Stop. Resume to continue."
+          ? "Paused after an interruption. Resume to continue."
           : `Paused after an error. Resume to continue. ${patch.lastRunError ?? (patch.status === "timeout" ? "Run timed out." : "Run failed.")}`,
       },
       endedAt,
