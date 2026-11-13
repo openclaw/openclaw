@@ -367,14 +367,15 @@ export async function captureUpdateActivationSchemas(params: {
   const previousSchemaVersions = parsePackageOpenClawSchemaVersions(
     await tryReadJson<unknown>(path.join(params.root, "package.json")),
   );
-  const schemaVersions = params.candidateSchemaVersions
-    ? await readUpdateStateSchemaVersions({
-        stateDir: resolveStateDir(params.env),
-        config: params.config,
-        env: params.env,
-        timeoutMs: params.timeoutMs,
-      })
-    : undefined;
+  // Post-activation rollback compares against this baseline; without it every
+  // failure after activation is reported as unverified state and left installed.
+  // This release's state and agent stores are SQLite, even with PostgreSQL Workboard.
+  const schemaVersions = await readUpdateStateSchemaVersions({
+    stateDir: resolveStateDir(params.env),
+    config: params.config,
+    env: params.env,
+    timeoutMs: params.timeoutMs,
+  });
   const { run, candidateSchemaVersions, gatewayRestartCompletion } = params;
   if (
     run?.completionOwner === "gateway-restart" &&
