@@ -158,7 +158,12 @@ actor CameraCaptureService {
                 withExtendedLifetime(delegate) {}
                 return recordedURL
             })
-        try await Self.exportToMP4(inputURL: recordedURL, outputURL: outputURL)
+        do {
+            try await Self.exportToMP4(inputURL: recordedURL, outputURL: outputURL)
+        } catch {
+            try? FileManager().removeItem(at: outputURL)
+            throw error
+        }
         return (path: outputURL.path, durationMs: durationMs, hasAudio: includeAudio)
     }
 
