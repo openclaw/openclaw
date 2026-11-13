@@ -11,12 +11,16 @@ import {
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import { prepareLocalSandboxWorkspace } from "../../agents/sandbox/local-workspace.js";
 import { initializeGitFixture } from "../../agents/worktrees/git-fixture.test-support.js";
+import * as registryRead from "../../agents/worktrees/registry-read.js";
 import { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import * as actorStorage from "../../config/sessions/session-actor-storage-binding.js";
+import * as entryFacts from "../../config/sessions/session-entry-read-facts.js";
 import * as fsSafe from "../../infra/fs-safe.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { pairOperatorDeviceFixture } from "../paired-device.test-support.js";
@@ -138,13 +142,87 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
             cfg.session?.store ?? state.statePath("agents", "main", "sessions", "sessions.json"),
         };
         await replaceSessionEntry(session, entry);
-        const prepared = await prepareLocalSandboxWorkspace({
-          cfg,
-          agentId: "main",
-          sessionKey,
-          workspaceDir: worktree.path,
-          sandbox: resolveSandboxConfigForAgent(cfg, "main"),
-        });
+        const registryReadSpy = vi.spyOn(registryRead, "readRegistryWorktree");
+        const entryReadSpy = vi.spyOn(entryFacts, "readSessionEntryWithRetainedFacts");
+        const actorReadSpy = vi.spyOn(actorStorage, "readCapturedSessionActorEntry");
+        let prepared: Awaited<ReturnType<typeof prepareLocalSandboxWorkspace>>;
+        try {
+          prepared = await prepareLocalSandboxWorkspace({
+            cfg,
+            agentId: "main",
+            sessionKey,
+            workspaceDir: worktree.path,
+            sandbox: resolveSandboxConfigForAgent(cfg, "main"),
+          });
+        } catch (error) {
+          try {
+            if (
+              error instanceof Error &&
+              error.message === "Local sandbox managed workspace owner changed"
+            ) {
+              // Inspect only calls already made by this preparation; never reread the database.
+              const reads = entryReadSpy.mock.calls.flatMap(([, scope], index) =>
+                scope.sessionKey === sessionKey ? [entryReadSpy.mock.settledResults[index]] : [],
+              );
+              const actorReads = actorReadSpy.mock.calls.flatMap(([, key], index) =>
+                key === sessionKey ? [actorReadSpy.mock.results[index]] : [],
+              );
+              const read = reads.length === 1 && actorReads.length === 0 ? reads[0] : undefined;
+              const actorRead =
+                actorReads.length === 1 && reads.length === 0 ? actorReads[0] : undefined;
+              const observed =
+                read?.type === "fulfilled" && read.value.ok
+                  ? read.value.value
+                  : actorRead?.type === "return"
+                    ? actorRead.value
+                    : undefined;
+              const records = registryReadSpy.mock.calls.flatMap(([, id], index) =>
+                observed?.worktree?.id === id ? [registryReadSpy.mock.settledResults[index]] : [],
+              );
+              const record = records.length === 1 ? records[0] : undefined;
+              const selected = record?.type === "fulfilled" ? record.value : undefined;
+              console.error(
+                "WORKSPACE_PREPARATION_FAILURE " +
+                  JSON.stringify({
+                    entryReads: reads.length,
+                    actorReads: actorReads.length,
+                    registryReads: registryReadSpy.mock.calls.length,
+                    matchingRegistryReads: records.length,
+                    source:
+                      read?.type === "fulfilled" && read.value.ok
+                        ? "file"
+                        : actorRead?.type === "return"
+                          ? "actor"
+                          : "unobserved-or-ambiguous",
+                    originalEntry: observed ? observed.sessionId === entry.sessionId : null,
+                    originalSelection: observed?.worktree
+                      ? observed.worktree.id === worktree.id
+                      : null,
+                    missingWorktree: record?.type === "fulfilled" ? !selected : null,
+                    removedWorktree: selected ? selected.removedAt !== undefined : null,
+                    wrongOwnerKind: selected ? selected.ownerKind !== "session" : null,
+                    wrongOwnerKey: selected ? selected.ownerId !== sessionKey : null,
+                    wrongRepository:
+                      selected && observed?.worktree
+                        ? selected.repoRoot !== observed.worktree.repoRoot
+                        : null,
+                    wrongBranch:
+                      selected && observed?.worktree
+                        ? selected.branch !== observed.worktree.branch
+                        : null,
+                    outsideWorkspace: selected ? !isPathInside(selected.path, worktree.path) : null,
+                  }),
+              );
+            }
+          } catch {
+            // Failure-only diagnostics must not replace the original preparation error.
+          }
+          throw error;
+        } finally {
+          actorReadSpy.mockRestore();
+          entryReadSpy.mockRestore();
+          registryReadSpy.mockRestore();
+        }
         if (!prepared) {
           throw new Error("Expected a local sandbox projection");
         }
