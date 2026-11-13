@@ -51,13 +51,15 @@ export function BrowserToolbar(
     () =>
       nativeTab()?.url || props.controller.view?.metrics?.url || props.controller.view?.url || "",
   );
-  // Take-over covers browsers this Gateway hosts; node-routed and native app tabs have no fence.
+  // Take-over covers browsers this Gateway hosts, as the Gateway confirmed for this route;
+  // node-routed and native app tabs have no fence.
   const canTakeControl = createMemo(
     () =>
-      !nativeTab() &&
-      Boolean(props.controller.activeTargetId) &&
-      props.controller.operations.route?.target !== "node" &&
-      !props.controller.host.dashboardTarget?.sessionScoped,
+      props.controller.controlling ||
+      (!nativeTab() &&
+        Boolean(props.controller.activeTargetId) &&
+        props.controller.controlAvailable &&
+        !props.controller.host.dashboardTarget?.sessionScoped),
   );
   const addressEdited = createMemo(
     () =>

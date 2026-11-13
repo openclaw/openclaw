@@ -17,6 +17,7 @@ import {
   requestBrowserOperatorControl,
   startBrowser,
 } from "./browser-client.ts";
+import { createBrowserPanelControl } from "./browser-panel-control.ts";
 import { createBrowserPanelDownload, type BrowserPanelDownload } from "./browser-panel-download.ts";
 import { BrowserPanelInputOwner } from "./browser-panel-input-owner.ts";
 import { createBrowserPanelNative, type BrowserPanelNative } from "./browser-panel-native-owner.ts";
@@ -37,8 +38,6 @@ import {
 } from "./browser-url.ts";
 
 registerBrowserEnglish();
-
-const CONTROL_CHECK_INTERVAL_MS = 30_000;
 
 export type { BrowserPanelHost } from "./browser-panel-operation-ownership.ts";
 
@@ -63,37 +62,11 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
     inspectPointer: null,
     evaluateUnavailable: false,
     controlling: false,
+    controlAvailable: false,
     urlDraft: "",
     pendingNewTab: false,
     urlDraftEditing: false,
     addressInput: undefined,
-  };
-  // The Gateway releases control after idle input or from another window; keep the button true.
-  // Scoped to the route rather than the view epoch, which navigation and tab switches renew.
-  let controlWatch = 0;
-  const watchControl = (): void => {
-    const watch = ++controlWatch;
-    const routeKey = browserRouteKey(operations.route);
-    const current = () =>
-      watch === controlWatch && panel.controlling && browserRouteKey(operations.route) === routeKey;
-    const check = async () => {
-      const client = current() ? operations.captureClient() : null;
-      if (client) {
-        try {
-          const control = await requestBrowserOperatorControl(client, "read");
-          if (current() && !control.byYou) {
-            panel.setState("controlling", false);
-            panel.setState("noticeText", t("browser.controlReleased"));
-          }
-        } catch {
-          // A transient read failure keeps the current state; the next check retries.
-        }
-      }
-      if (current()) {
-        setTimeout(() => void check(), CONTROL_CHECK_INTERVAL_MS);
-      }
-    };
-    setTimeout(() => void check(), CONTROL_CHECK_INTERVAL_MS);
   };
   const panel = {
     ...initialState,
@@ -201,8 +174,7 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       panel.setState("pendingNewTab", false);
       // Re-probe per connection: another gateway may have evaluate enabled.
       panel.setState("evaluateUnavailable", false);
-      // The Gateway releases control when the holding connection or route goes away.
-      panel.setState("controlling", false);
+      control.reset();
     },
 
     reportError(error: unknown, retry: (() => Promise<unknown>) | null = null): void {
@@ -250,6 +222,9 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         }
         panel.setState("running", snapshot.running);
         panel.setState("canAutoResizeViewport", snapshot.canAutoResizeViewport);
+        if (active) {
+          control.probe(client);
+        }
         panel.setState(
           "tabs",
           native.mergeRemoteTabs(operations.retainTabSnapshot(client, snapshot.tabs)),
@@ -606,10 +581,10 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       const take = !panel.controlling;
       panel.setState("noticeText", null);
       void panel.runAction(async (client) => {
-        const control = await requestBrowserOperatorControl(client, take ? "take" : "release");
-        panel.setState("controlling", control.byYou);
-        if (control.byYou) {
-          watchControl();
+        const status = await requestBrowserOperatorControl(client, take ? "take" : "release");
+        panel.setState("controlling", status.byYou);
+        if (status.byYou) {
+          control.watch();
         }
       }, false);
     },
@@ -755,6 +730,7 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       }
     },
   };
+  const control = createBrowserPanelControl(panel);
   const download = createBrowserPanelDownload(panel, notify);
   const input = new BrowserPanelInputOwner(panel);
   const stream = new BrowserPanelStream(panel);

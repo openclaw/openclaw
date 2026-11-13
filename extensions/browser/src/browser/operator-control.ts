@@ -110,7 +110,11 @@ export function readBrowserOperatorActivity(
   };
 }
 
-type BrowserOperatorControlStatus = { controlled: boolean; byYou: boolean };
+/**
+ * `available` is false when the request carries no Control UI connection, for example when the
+ * Gateway forwards it to a browser node; the panel offers Take control only where it is true.
+ */
+type BrowserOperatorControlStatus = { available: boolean; controlled: boolean; byYou: boolean };
 
 export function readBrowserOperatorControl(
   state: BrowserServerState,
@@ -119,6 +123,7 @@ export function readBrowserOperatorControl(
 ): BrowserOperatorControlStatus {
   const controller = controls.get(state)?.get(browserKey(profile))?.controller;
   return {
+    available: connId !== undefined,
     controlled: controller !== undefined,
     byYou: controller !== undefined && controller.connId === connId,
   };

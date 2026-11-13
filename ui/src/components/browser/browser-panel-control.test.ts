@@ -20,8 +20,8 @@ describe("BrowserPanel take control", () => {
     const { controller } = panelScenario("stable-tab", FIRST_URL, {
       "/control": async (request) =>
         request.method === "GET"
-          ? { controlled: held, byYou: held }
-          : { controlled: true, byYou: true },
+          ? { available: true, controlled: held, byYou: held }
+          : { available: true, controlled: true, byYou: true },
       "/navigate": async (request) => {
         url = String(request.body?.url);
         return { ok: true };
@@ -44,5 +44,26 @@ describe("BrowserPanel take control", () => {
     expect(controller.noticeText).toBe(
       "Control was released after 5 minutes without input, or from another window. The agent can use this browser again.",
     );
+  });
+
+  it.each([
+    [false, "default routing resolves to a browser node"],
+    [true, "the browser is on the Gateway host"],
+  ])("offers Take control only when the Gateway confirms it (%s: %s)", async (available) => {
+    stubScreenshotMedia();
+    // No preferred tab: the panel has no route of its own and follows default routing.
+    const { controller } = panelScenario(undefined, undefined, {
+      "/tabs": async () => ({ running: true, tabs: [makeTab("stable-tab", FIRST_URL, "Page")] }),
+      "/control": async () => ({ available, controlled: false, byYou: false }),
+      "/screenshot": async () => ({ path: "/fresh.png", targetId: "raw-stable", url: FIRST_URL }),
+      "/act": async () => metrics(FIRST_URL),
+    });
+    expect(controller.operations.route).toBeUndefined();
+
+    await controller.refreshAll();
+    await vi.waitFor(() => expect(controller.activeTargetId).toBe("stable-tab"));
+    await Promise.resolve();
+
+    expect(controller.controlAvailable).toBe(available);
   });
 });

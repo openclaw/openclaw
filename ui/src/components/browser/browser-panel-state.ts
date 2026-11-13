@@ -21,6 +21,8 @@ export type BrowserPanelState = {
   evaluateUnavailable: boolean;
   /** This panel's connection holds operator control; other browser input is paused. */
   controlling: boolean;
+  /** The Gateway confirmed this route reaches a browser the panel can take control of. */
+  controlAvailable: boolean;
   urlDraft: string;
   pendingNewTab: boolean;
   urlDraftEditing: boolean;

@@ -49,7 +49,10 @@ describe("browser operator control", () => {
 
     await expect(
       dispatcher.dispatch({ method: "POST", path: "/control", requester: operator.requester }),
-    ).resolves.toEqual({ status: 200, body: { controlled: true, byYou: true } });
+    ).resolves.toEqual({
+      status: 200,
+      body: { available: true, controlled: true, byYou: true },
+    });
 
     for (const [path, body] of [
       ["/act", { kind: "press", key: "Enter" }],
@@ -62,7 +65,7 @@ describe("browser operator control", () => {
     }
     await expect(dispatcher.dispatch({ method: "GET", path: "/control" })).resolves.toEqual({
       status: 200,
-      body: { controlled: true, byYou: false },
+      body: { available: false, controlled: true, byYou: false },
     });
     const own = await dispatcher.dispatch({
       method: "POST",
@@ -82,7 +85,7 @@ describe("browser operator control", () => {
     expect(resumed.status).toBe(400);
     await expect(dispatcher.dispatch({ method: "GET", path: "/control" })).resolves.toEqual({
       status: 200,
-      body: { controlled: false, byYou: false },
+      body: { available: false, controlled: false, byYou: false },
     });
   });
 
@@ -164,12 +167,17 @@ describe("browser operator control", () => {
     expect(elsewhere.status).toBe(400);
   });
 
-  it("only a Control UI connection can take control", async () => {
+  it("only a Control UI connection can take control, and the status says which", async () => {
     const dispatcher = createDispatcher("http://127.0.0.1:9");
     const taken = await dispatcher.dispatch({ method: "POST", path: "/control" });
     expect(taken.status).toBe(400);
+    // A node-routed panel request reaches the routes without a Control UI connection.
     await expect(dispatcher.dispatch({ method: "GET", path: "/control" })).resolves.toMatchObject({
-      body: { controlled: false },
+      body: { available: false, controlled: false },
     });
+    const operator = operatorConnection("control-ui");
+    await expect(
+      dispatcher.dispatch({ method: "GET", path: "/control", requester: operator.requester }),
+    ).resolves.toMatchObject({ body: { available: true, controlled: false } });
   });
 });
