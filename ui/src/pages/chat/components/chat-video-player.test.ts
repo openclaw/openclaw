@@ -74,6 +74,32 @@ it("starts metadata loading only when the video card reaches the viewport", asyn
   expect(source(recovered)).toBe("https://example.com/recovered.mp4");
 });
 
+it.each(["native", "transcode"] as const)(
+  "starts activated %s playback before loadeddata",
+  async (playback) => {
+    vi.useFakeTimers();
+    stubManualIntersectionObserver(() => {});
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 202 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const player = await open("activated", { autoplay: true, playback });
+    const video = media(player)!;
+    expect(video.preload).toBe("auto");
+    if (playback === "transcode") {
+      expect(play).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await player.updateComplete;
+    }
+    expect(play).toHaveBeenCalledOnce();
+    video.dispatchEvent(new Event("loadeddata"));
+    await player.updateComplete;
+    expect(play).toHaveBeenCalledOnce();
+  },
+);
+
 it("keeps a loaded preview through rebuffering and applies a renewed ticket on resume", async () => {
   const player = await open("clip", { preview: true, src: "/media/clip.mp4?mediaTicket=A" });
   const video = media(player)!;

@@ -466,7 +466,6 @@
 .chat-video-preview {
   width: 400px;
   max-width: 100%;
-  aspect-ratio: 16 / 9;
   overflow: hidden;
   background: var(--bg-muted);
 }
@@ -481,6 +480,10 @@
 
 .chat-video-preview__content {
   min-width: 0;
+}
+
+.chat-video-preview__content--poster {
+  aspect-ratio: 16 / 9;
 }
 
 .chat-video-preview__play {
@@ -507,7 +510,7 @@
 }
 
 /* A failed poster retains its tile without squeezing the existing card actions. */
-.chat-message-images--gallery .chat-video-preview {
+.chat-message-images--gallery .chat-video-preview:not(.chat-video-preview--active) {
   .chat-assistant-attachment-card {
     height: 100%;
     overflow: auto;
@@ -653,6 +656,17 @@
 .chat-group.user .chat-message-images--gallery > .chat-image-frame--compact {
   height: auto;
   align-self: start;
+}
+
+.chat-group.user .chat-message-images--gallery > .chat-video-preview--active {
+  grid-column: 1 / -1;
+  width: min(400px, 100%);
+  height: auto;
+  aspect-ratio: auto;
+}
+
+.chat-video-preview .chat-assistant-video-frame video {
+  max-height: 360px;
 }
 
 .chat-assistant-attachments {

@@ -38,7 +38,13 @@ without known dimensions keep a 3:2 frame while displayed, with the full image
 fitted inside it. Previously learned dimensions size the next preview without
 moving the surrounding messages when the image decodes.
 
-Opening a transcript image or video shows a shared viewer for supported media in
+Uploaded videos show a thumbnail or a compact Play card in chat. Choose **Play**
+to load the player in place; scrolling past a video does not prepare or convert
+it for playback. The player’s expand action opens the larger media viewer and
+pauses inline playback. Leaving the conversation releases the player. If your
+browser blocks automatic playback after conversion, use the player’s Play control.
+
+Opening a transcript image or expanding a video shows a shared viewer for supported media in
 the loaded thread, including inline Markdown images, your own attachments, and
 earlier response turns.
 When more than one item is available, use the visible previous/next buttons,
