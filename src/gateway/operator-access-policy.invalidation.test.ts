@@ -96,7 +96,9 @@ it("checks each person's original grant once through deep lineage and again befo
     expect(grants.get("alice")!.signal.aborted).toBe(false);
     expect(grants.get("bob")!.signal.aborted).toBe(false);
   } finally {
-    for (const admission of admissions.toReversed()) admission.close();
+    for (const admission of admissions.toReversed()) {
+      admission.close();
+    }
     await instance.dispose();
     rollbackStagedPluginRegistry(previous);
   }
