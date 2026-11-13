@@ -83,7 +83,12 @@ export function resolveCronCreateScheduleFromArgs(
       "Choose exactly one schedule: --at, --every, --cron, --on-exit, or --stream-command",
     );
   }
-  return expectDefined(resolveDirectSchedule(normalized), "created cron schedule");
+  // A positional that reaches the at fallback was never passed as --at; name it in the error.
+  const positionalAt = positionalSchedule && normalized.at ? positionalSchedule : undefined;
+  return expectDefined(
+    resolveDirectSchedule(normalized, { positionalAt }),
+    "created cron schedule",
+  );
 }
 
 /** Resolve a cron edit request, allowing at most one direct schedule replacement. */
@@ -258,7 +263,7 @@ function countChosenSchedules(options: NormalizedScheduleOptions): number {
 
 function resolveDirectSchedule(
   options: NormalizedScheduleOptions,
-  behavior: { deferStreamMetadataValidation?: boolean } = {},
+  behavior: { deferStreamMetadataValidation?: boolean; positionalAt?: string } = {},
 ): CronSchedule | undefined {
   if (options.onExitCwd && !options.onExitCommand) {
     throw new CronCliError("--on-exit-cwd requires --on-exit.");
@@ -275,7 +280,11 @@ function resolveDirectSchedule(
   if (options.at) {
     const atIso = parseAt(options.at, options.tz);
     if (!atIso) {
-      throw new CronCliError("Invalid --at. Use an ISO timestamp or a duration like 20m.");
+      throw new CronCliError(
+        behavior.positionalAt
+          ? `"${behavior.positionalAt}" is not a schedule. Use a duration like 20m, an ISO timestamp, "every 10m", or a cron expression like "0 9 * * *". To name the job, pass the schedule with --at, --every, or --cron.`
+          : "Invalid --at. Use an ISO timestamp or a duration like 20m.",
+      );
     }
     return { kind: "at", at: atIso };
   }

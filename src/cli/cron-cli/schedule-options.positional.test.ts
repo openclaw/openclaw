@@ -44,6 +44,21 @@ describe("resolveCronCreateScheduleFromArgs positional schedule disambiguation",
     ).toEqual({ kind: "at", at: "2027-01-01T00:00:00.000Z" });
   });
 
+  it.each(["nightly-report", "tomorrow at 9am"])(
+    "names the positional %j instead of an --at flag that was never passed",
+    (input) => {
+      const run = () => resolveCronCreateScheduleFromArgs({ positionalSchedule: input });
+      expect(run).toThrow(`"${input}" is not a schedule.`);
+      expect(run).not.toThrow(/Invalid --at/u);
+    },
+  );
+
+  it("keeps the --at wording when --at itself is invalid", () => {
+    expect(() => resolveCronCreateScheduleFromArgs({ at: "tomorrow at 9am" })).toThrow(
+      "Invalid --at. Use an ISO timestamp or a duration like 20m.",
+    );
+  });
+
   it("reports an invalid --tz before validating the expression", () => {
     expect(() => resolveCronCreateScheduleFromArgs({ cron: "0 9 * * *", tz: "Not/AZone" })).toThrow(
       /Invalid --tz/,
