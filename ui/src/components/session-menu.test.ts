@@ -226,6 +226,34 @@ describe("session menu", () => {
     await waitForFast(() => expect(menuItemLabels(menu)).not.toContain("Assign to…"));
   });
 
+  it.each(["NFC", "NFD"] as const)(
+    "filters owner names typed in the other %s Unicode form",
+    async (form) => {
+      const equivalent = (text: string) => text.normalize(form === "NFC" ? "NFD" : "NFC");
+      const name = "José".normalize(form);
+      const profiles = sessionOwnerProfiles(name, "Bob");
+      const { context } = createSessionOwnerMenuHarness(() => profiles);
+      const menu = await mountMenu({ context });
+      await waitForOwners(menu, ["Me", "Research", "Bob", name]);
+      const assignee = await openSubmenu(menu, "Assign to…");
+      const toggle = assignee.querySelector<HTMLButtonElement>("[data-search-toggle]");
+      if (toggle) {
+        toggle.click();
+        await waitForFast(() => expect(assignee.querySelector("[data-search]")).toBeTruthy());
+      }
+      const search = assignee.querySelector<HTMLInputElement>("[data-search]")!;
+      search.value = equivalent(name);
+      search.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      await waitForFast(() => expect(menuItemLabels(assignee).toSorted()).toEqual([name]));
+      search.value = equivalent("Bob");
+      search.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      await waitForFast(() => expect(menuItemLabels(assignee).toSorted()).toEqual(["Bob"]));
+      search.value = "nomatch";
+      search.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      await waitForFast(() => expect(menuItemLabels(assignee).toSorted()).toEqual([]));
+    },
+  );
+
   it.each([
     [{}, "toggle-archived", { kind: "toggle-archived" }],
     [{ cloudWorkerStopAllowed: true }, "stop-cloud-worker", { kind: "stop-cloud-worker" }],
