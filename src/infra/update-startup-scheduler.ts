@@ -13,6 +13,7 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { isTruthyEnvValue } from "./env.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import { isGatewayExternallySupervised } from "./gateway-supervision.js";
+import { isConstrainedProcessLowOnMemory } from "./host-memory.js";
 import type { UpdateCheckLifecycle } from "./update-check-lifecycle.js";
 import type { resolveStartupInstallStatus } from "./update-install-status.js";
 import { runGatewayUpdateCheck, resolveCheckIntervalMs } from "./update-startup.js";
@@ -100,9 +101,8 @@ export function createGatewayUpdateCheck(params: {
       lifecycle.signal.addEventListener("abort", () => stopConfigListener?.(), { once: true });
       lifecycle.schedule("update.check", check);
       lifecycle.schedule("update.remote-model-catalog", async () => {
-        const memoryLimit = process.constrainedMemory();
         // Leave scarce cgroup memory to requests before allocating a new catalog generation.
-        if (memoryLimit > 0 && process.availableMemory() <= memoryLimit * 0.2) {
+        if (isConstrainedProcessLowOnMemory()) {
           return 60_000;
         }
         let nextCheckInMs = REMOTE_MODEL_CATALOG_TTL_MS;
