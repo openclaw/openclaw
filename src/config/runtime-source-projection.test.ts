@@ -10,6 +10,7 @@ import {
   setConfigResolutionFacts,
 } from "./resolution-facts.js";
 import {
+  clearRuntimeConfigSnapshot,
   createRuntimeConfigReader,
   hashRuntimeConfigValue,
   resetConfigRuntimeState,
@@ -97,6 +98,43 @@ describe("captured runtime config source", () => {
     expect(captureRuntimeConfig(captured)).toBe(captured);
     original.gateway.port = 19002;
     expect(captured.gateway?.port).toBe(19001);
+  });
+
+  it("retains live ownership across publication without changing captured payloads", () => {
+    const initial: OpenClawConfig = { gateway: { port: 19001 } };
+    setRuntimeConfigSnapshot(initial);
+    const captured = captureRuntimeConfig(initial);
+    const replacement: OpenClawConfig = { gateway: { port: 19002 } };
+    setRuntimeConfigSnapshot(replacement);
+    const read = createRuntimeConfigReader(captured);
+    expect(read()).toBe(replacement);
+    clearRuntimeConfigSnapshot();
+    // Preserve the existing reader's no-runtime fallback, not a new authority grant.
+    expect(read()).toBe(captured);
+    const reloaded: OpenClawConfig = { gateway: { port: 19003 } };
+    setRuntimeConfigSnapshot(reloaded);
+    expect(read()).toBe(reloaded);
+    expect(captured).toEqual(initial);
+  });
+
+  it("keeps authored projection pinned while a late runtime reader follows publication", () => {
+    const source: OpenClawConfig = { gateway: { port: 19001 } };
+    const runtime: OpenClawConfig = { gateway: { port: 19001, mode: "local" } };
+    setRuntimeConfigSnapshot(runtime, source);
+    const captured = captureRuntimeConfig(runtime);
+    const authored = projectConfigOntoRuntimeSourceSnapshot(captured);
+    const replacement: OpenClawConfig = { gateway: { port: 19002, mode: "local" } };
+    setRuntimeConfigSnapshot(replacement, { gateway: { port: 19002 } });
+
+    const readRuntime = createRuntimeConfigReader(captured);
+    const readAuthored = createRuntimeConfigReader(authored);
+    expect(readRuntime()).toBe(replacement);
+    expect(readAuthored()).toBe(authored);
+    expect(projectConfigOntoRuntimeSourceSnapshot(captured)).toBe(authored);
+    expect(captured).toEqual({ gateway: { port: 19001, mode: "local" } });
+    expect(authored).toEqual({ gateway: { port: 19001 } });
+    expect(Object.isFrozen(captured.gateway)).toBe(true);
+    expect(Object.isFrozen(authored.gateway)).toBe(true);
   });
 
   it("keeps a scoped capture pinned when its mutable origin later matches the process source", () => {

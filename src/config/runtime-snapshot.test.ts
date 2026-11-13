@@ -693,7 +693,7 @@ describe("prepared runtime snapshots", () => {
       emits: true,
     },
     {
-      name: "invalidates a distinct object matching values edited in place on the published one",
+      name: "invalidates in-place value edits",
       next: (published: OpenClawConfig) => {
         published.gateway = { ...published.gateway, port: 19001 };
         return withTokenFacts({ gateway: { ...tokenConfig().gateway, port: 19001 } }, [
@@ -703,7 +703,7 @@ describe("prepared runtime snapshots", () => {
       emits: true,
     },
     {
-      name: "invalidates a distinct object matching provenance changed in place on the published one",
+      name: "invalidates in-place provenance edits",
       next: (published: OpenClawConfig) => {
         setConfigResolutionFacts(published, createConfigResolutionFacts([]));
         return withTokenFacts(tokenConfig(), []);

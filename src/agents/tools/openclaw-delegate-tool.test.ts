@@ -4,6 +4,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -302,6 +303,43 @@ it.each([true, undefined])(
         return { reply: "Approval required." };
       });
       await tool.execute("revoked-grant", { message: "Change logging." });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  },
+);
+
+it.each(["before publication", "after publication", "foreign scope"] as const)(
+  "rechecks captured delegation authority constructed %s",
+  async (construction) => {
+    const config = { tools: { openclaw: { autoApproveChanges: true } } };
+    setRuntimeConfigSnapshot(config);
+    try {
+      const captured = captureRuntimeConfig(construction === "foreign scope" ? {} : config);
+      const construct = () => delegate({ config: captured });
+      const early = construction === "before publication" ? construct() : undefined;
+      setRuntimeConfigSnapshot({ ...config, logging: { level: "debug" } });
+      const tool = early ?? construct();
+      callGateway.mockImplementation(async () => {
+        const caller = getGatewayToolCallerIdentity();
+        const assertCurrent = caller?.assertAutoApproveChangesCurrent;
+        expect(assertCurrent).toBeTypeOf("function");
+        if (construction === "foreign scope") {
+          // An unrelated active grant must not replace this explicit scoped config.
+          expect(caller?.fullPermission).toBe(false);
+          expect(assertCurrent).toThrow("effective authority");
+        } else {
+          expect(caller?.fullPermission).toBe(true);
+          expect(assertCurrent).not.toThrow();
+        }
+        setRuntimeConfigSnapshot({ tools: { openclaw: { autoApproveChanges: false } } });
+        expect(assertCurrent).toThrow(
+          construction === "foreign scope" ? "effective authority" : "require human approval",
+        );
+        return { reply: "Approval required." };
+      });
+      await tool.execute("captured-revoked-grant", { message: "Change logging." });
+      expect(callGateway).toHaveBeenCalledOnce();
     } finally {
       clearRuntimeConfigSnapshot();
     }
