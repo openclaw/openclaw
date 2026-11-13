@@ -36,6 +36,11 @@ const voices = await api.runtime.tts.listVoices({
 Notes:
 
 - `textToSpeech` returns the normal core TTS output payload for file/voice-note surfaces.
+- Failed TTS `attempts` preserve optional `status`, `errorCode`, `closeCode`, and
+  `retryAfterMs` from the thrown provider error. Numeric fields are range-checked;
+  codes are limited to 128 letters, digits, underscores, periods, colons, or hyphens.
+  These fields do not copy response bodies or headers, parse error messages, or
+  merge nested causes. Codes are provider-defined, not a guarantee that retry is safe.
 - Uses core `tts` configuration and provider selection.
 - Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
 - `listVoices` is optional per provider. Use it for vendor-owned voice pickers or setup flows.
