@@ -86,6 +86,10 @@ function reportSessionPrefix(
           `sent the original bytes sessionId=${sessionId}`,
       );
     }
+  } else if (report.kind === "toolsHeld") {
+    log.debug(
+      `[prompt-cache] turn built tools outside the session's sent tool set (${report.added.join(", ")}); kept the sent set sessionId=${sessionId}`,
+    );
   } else if (report.kind === "rebuild") {
     log.debug(
       `[prompt-cache] session prefix rebuilt (${report.reason}${report.index === undefined ? "" : ` at ${report.index}`}) sessionId=${sessionId}`,

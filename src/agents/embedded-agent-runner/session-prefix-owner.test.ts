@@ -88,6 +88,20 @@ describe("admitSessionPrefix", () => {
     expect(admitSessionPrefix("s", model, context(retry)).context.messages).toEqual(retry);
   });
 
+  it("holds the series tool set when a later turn builds more tools", () => {
+    admitSessionPrefix("s", model, context([user("a", 1)], [tool("x")])).commit();
+    const wider = admitSessionPrefix(
+      "s",
+      model,
+      context(
+        [user("a", 1), assistant([{ type: "text", text: "b" }], 2), user("c", 3)],
+        [tool("x"), tool("skills_read")],
+      ),
+    );
+    expect(wider.report).toEqual({ kind: "toolsHeld", added: ["skills_read"] });
+    expect(wider.context.tools?.map(({ name }) => name)).toEqual(["x"]);
+  });
+
   it("keeps the first tool order and lets a sanctioned thinking removal through", () => {
     const thinking = assistant(
       [

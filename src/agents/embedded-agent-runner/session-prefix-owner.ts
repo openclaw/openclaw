@@ -7,9 +7,13 @@ import type { Context, Message } from "../../llm/types.js";
  * is the frozen system prompt and tools plus an append-only log. Upstream code proposes a context;
  * this owner re-sends the exact entries it already sent and appends only the entries it has not.
  *
+ * The series' tool definitions are frozen at its first request. A turn that builds more tools (a
+ * wake or handoff with a wider surface) does not extend them: the tool set must not depend on what
+ * started a turn. Tools a turn did not build stay listed; the agent refuses their calls.
+ *
  * A series starts again only when:
- * - the route, system prompt or tool set changes (`prefix`: a model or provider switch, a rebuilt
- *   system prompt, or a side request with its own prefix);
+ * - the route or system prompt changes (`prefix`: a model or provider switch, a rebuilt system
+ *   prompt after compaction, `/new` or a tool-policy change, or a side request with its own prefix);
  * - the proposed log no longer extends the sent log by entry identity (`history`: compaction,
  *   `/new`, `/reset`);
  * - a caller requested it (`declared`: a provider rejected replayed history, context-overflow
@@ -25,6 +29,7 @@ export type SessionPrefixReport =
   | { kind: "first" }
   | { kind: "extended" }
   | { kind: "absorbed"; index: number; count: number; role: Message["role"] }
+  | { kind: "toolsHeld"; added: string[] }
   | { kind: "rebuild"; reason: "prefix" | "history" | "declared"; index?: number };
 
 type RouteModel = { provider: string; api: string; id: string; baseUrl?: string };
@@ -96,8 +101,6 @@ export function admitSessionPrefix(
     model.id,
     model.baseUrl ?? "",
     context.systemPrompt ?? "",
-    // One tool set is one prefix whatever order a turn built it in; the series keeps its first order.
-    JSON.stringify((context.tools ?? []).map((tool) => encode(tool)).toSorted()),
   ].join("\u0000");
   const proposed = context.messages;
   const ids = identities(proposed);
@@ -139,6 +142,15 @@ export function admitSessionPrefix(
     }
   }
   const tools = sent?.tools ?? context.tools;
+  if (sent && report.kind !== "rebuild") {
+    const frozen = new Set((sent.tools ?? []).map((tool) => tool.name));
+    const added = (context.tools ?? [])
+      .map((tool) => tool.name)
+      .filter((name) => !frozen.has(name));
+    if (added.length > 0 && report.kind === "extended") {
+      report = { kind: "toolsHeld", added };
+    }
+  }
   // A request becomes part of the series only once the provider accepted it: a rejected or
   // aborted request wrote no cache, and its retry may legitimately differ.
   const commit = () => {

@@ -405,7 +405,7 @@ function refusePinnedTool(tool: ToolDefinition): AnyAgentTool {
 }
 
 /** The latest checkpointed pin, unless a later model change retired it. */
-function readToolSurfaceCheckpoint(entries: SessionEntry[]) {
+export function readToolSurfaceCheckpoint(entries: SessionEntry[]) {
   const markerIndex = entries.findLastIndex(
     (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
   );
