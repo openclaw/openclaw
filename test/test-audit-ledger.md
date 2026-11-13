@@ -665,6 +665,25 @@ Adjacent source review retains the existing custody in `dns-cli.test.ts`,
 `secrets-store-input.test.ts`. Their roots are registered before setup, or their
 database/FIFO owners settle before removal; no runtime claim is made for them.
 
+### Filesystem capability probe error reporting
+
+At `3ead3dcb1b3a3755197cc7aaaa2fc248b6f0298f`, the install-path symlink
+probe suppresses every setup error, and the two safe-bin case-sensitivity
+probes return successfully on unexpected filesystem errors. The repair limits
+capability exclusions to the relevant operation and expected error codes. Setup
+and cleanup errors propagate; case-sensitivity exclusions become explicit skips.
+All 24 declarations, 32 expanded cases and boundary assertions remain. No
+production or shared support changes; test code grows by 16 lines.
+
+The original suite reports 32 passes. With the repair it reports 31 passes and
+one explicit filesystem exclusion previously counted as a pass. The original
+stays green under injected allocation, symlink, cleanup and both case-probe
+errors; the repair fails on each. Expected unsupported-symlink and
+case-sensitivity controls still pass with explicit skips. All temporary
+instrumentation was restored byte for byte. Independent preservation review
+found no coverage loss. Focused checks, full local review and hosted outcomes
+are tracked in [PR #198154](https://github.com/openclaw/openclaw/pull/198154).
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
@@ -672,6 +691,7 @@ database/FIFO owners settle before removal; no runtime claim is made for them.
 - Retain the CodeMode worker-leg deadline case: its real warmed worker and interruption path are distinct from the cancellation table's typed host-error precedence. Both suites keep their active-run settlement checks; this is a source-only retention decision.
 - Repair Android runtime/model fixture custody through existing guaranteed closers; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions. Qualify Android dropdown arithmetic, IPv6 URL, empty SMS defaults and component-state mapping against their stronger keepers.
 - Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer proofs, missing CLI fixture cleanup. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.
+- `detect-binary.test.ts` retains all 11 declarations (19 cases). Its two `which` oracle catch-all blocks remain a source-only repair candidate: distinguish an expected not-found result from resolver execution failures before claiming parity.
 - Diagnostics OTel: the NodeSDK replay removal remains qualified above; content capture completion proof is recorded separately above.
 - SDK removal search was incomplete: public2,115/2,527 complete and bundled169/179 complete. No observed consumer is not proof of no external reliance. The retired target facade was private and excluded from packaging since `780bc791470`.
 - Retain duplicate Swift TLS fixtures in separate packages, renderer-discovered Blobster JSON (also production prompt inputs), process-entry helpers referenced extensionlessly, stable borrowed-reference assertions, and independent release/architecture/platform guards.
