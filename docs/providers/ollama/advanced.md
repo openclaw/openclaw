@@ -64,9 +64,14 @@ Other balance failures include guidance for checking the server or its access pe
     its usage, reasoning, and tool calls. Streaming remains enabled when unset;
     this setting does not change native Ollama `/api/chat` requests.
 
-    OpenClaw injects `options.num_ctx` by default in this mode so Ollama does
-    not silently fall back to a 4096-token context. If your proxy rejects
-    unknown `options` fields, disable it:
+    OpenClaw forwards `options.num_ctx` by default in this mode for compatible
+    proxies that accept it. Ordinary Ollama `/v1` requests ignore this field,
+    so forwarding it does not enforce a server context size. For that API,
+    [set `PARAMETER num_ctx` in a Modelfile](https://docs.ollama.com/api/openai-compatibility#setting-the-local-context-size),
+    create the model, and select that model in OpenClaw. Alternatively, use
+    native `api: "ollama"` requests, which support `options.num_ctx`.
+
+    If your proxy rejects unknown `options` fields, disable forwarding:
 
     ```json5
     {
@@ -111,10 +116,16 @@ Other balance failures include guidance for checking the server or its access pe
     already wrote. Review or remove an oversized existing pin to let
     `contextTokens` drive the request again. Use `params.num_ctx` to override
     the native request context explicitly. The
-    OpenAI-compatible adapter still injects `options.num_ctx` by default from
+    OpenAI-compatible adapter still forwards `options.num_ctx` by default from
     `params.num_ctx`, then the matching model entry's `contextTokens` or
-    `contextWindow`; disable with
-    `injectNumCtxForOpenAICompat: false` if the upstream rejects `options`.
+    `contextWindow`, for proxies that support it; ordinary Ollama `/v1` ignores
+    it. Disable forwarding with `injectNumCtxForOpenAICompat: false` if the
+    upstream rejects `options`.
+
+    OpenClaw's context metadata and client-side input budgets are separate from
+    the context allocated by the server. For `/v1`, keep `contextWindow` and
+    `contextTokens` aligned with the configured server/model context; these
+    settings do not allocate or verify the server's context size.
 
     Native model entries also accept common Ollama runtime options under
     `params`, forwarded as native `/api/chat` `options`: `num_keep`, `seed`,
