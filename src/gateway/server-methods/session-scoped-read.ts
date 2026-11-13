@@ -16,6 +16,7 @@ import { captureSessionMutationRouting } from "../session-sharing-preparation.js
 import { prepareSessionSharingRead } from "../session-sharing-target-read.js";
 import {
   createSessionListEntryFilter,
+  prepareSessionSharing,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
@@ -110,11 +111,13 @@ export async function retainSessionScopedRead(
     const currentCfg = getConfig();
     assertRoutingCurrent(currentCfg);
     const currentActor = resolveGatewayOperatorRoleActor(options.client);
-    const visible = createSessionListEntryFilter({
+    const visible = prepareSessionSharing({
       client: options.client,
       cfg: currentCfg,
-      membership: sharing?.readCurrent(currentCfg).membership,
-    });
+    }).entryFilter;
+    const isMember = Boolean(
+      profileId && sharing?.readCurrent(currentCfg).membership.has(profileId),
+    );
     if (
       (narrow &&
         (!operatorProfileId ||
@@ -131,7 +134,7 @@ export async function retainSessionScopedRead(
           isStartableMainSession({ cfg: currentCfg, client: options.client, sessionKey, agentId })
         )) ||
       !read.isCurrentAtResponse() ||
-      (read.entry && visible?.(read.legacyKey ?? read.canonicalKey, read.entry) === false)
+      (read.entry && visible?.(read.legacyKey ?? read.canonicalKey, read.entry, isMember) === false)
     ) {
       throw new SessionMutationAuthorizationChangedError(hiddenSessionNotFound(sessionKey));
     }
