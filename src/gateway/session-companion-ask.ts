@@ -13,6 +13,7 @@ import { withSessionManagerWrite } from "../agents/sessions/session-manager-writ
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { withSessionTranscriptHydrationCaller } from "../config/sessions/session-transcript-hydration-caller.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Message, ImageContent } from "../llm/types.js";
@@ -240,11 +241,8 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       import("../agents/sessions/index.js"),
       import("../agents/embedded-agent.js"),
     ]);
-    const sessionManager = await SessionManager.openAsync(
-      target,
-      undefined,
-      undefined,
-      params.signal,
+    const sessionManager = await withSessionTranscriptHydrationCaller("companion", () =>
+      SessionManager.openAsync(target, undefined, undefined, params.signal),
     );
     params.signal.throwIfAborted();
     params.assertSourceCurrent?.();

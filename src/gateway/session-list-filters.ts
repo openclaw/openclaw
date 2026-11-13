@@ -1,14 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionOwnerSessionCount,
   SessionsListParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { SessionRunStatusSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { buildGroupDisplayName } from "../config/sessions/group-display.js";
 import {
@@ -24,7 +21,10 @@ import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
 import { formatGoalSummary } from "../shared/session-goal-display.js";
 import { isSessionRunStateActive } from "../shared/session-run-state.js";
-import { normalizeSessionSearchText } from "../shared/session-search-text.js";
+import {
+  normalizeSessionSearchLiteral,
+  normalizeSessionSearchText,
+} from "../shared/session-search-text.js";
 import type { SessionActivityPulse, SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
@@ -107,6 +107,8 @@ export type SessionListFilterParams = {
     target: NonNullable<ReturnType<SessionListTargetLookup>>,
   ) => boolean;
   restrictProfileReferences?: boolean;
+  /** Includes the caller in person-link resolution even without visible session associations. */
+  viewerProfileId?: string;
   involvingActorId?: string;
   ownerFirstActorId?: string;
   projectActiveRun?: SessionListActiveRunProjector;
@@ -137,7 +139,7 @@ function resolveSessionListSearchDisplayName(
 
 function matchesSessionListSearch(fields: Array<string | undefined>, search: string): boolean {
   return fields.some(
-    (field) => typeof field === "string" && normalizeLowercaseStringOrEmpty(field).includes(search),
+    (field) => typeof field === "string" && normalizeSessionSearchLiteral(field).includes(search),
   );
 }
 
@@ -169,7 +171,7 @@ export function filterSessionEntries(
   const { cfg, opts, now, configuredAgentIds } = params;
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => (rowContext ??= params.getRowContext());
-  const search = normalizeLowercaseStringOrEmpty(opts.search);
+  const search = normalizeSessionSearchLiteral(opts.search);
   const activeMinutes =
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
       ? Math.max(1, Math.floor(opts.activeMinutes))
@@ -224,6 +226,9 @@ export function filterSessionEntries(
   const allowedProfileIds =
     opts.involvingProfileId && params.restrictProfileReferences ? new Set<string>() : undefined;
   if (allowedProfileIds) {
+    if (params.viewerProfileId) {
+      allowedProfileIds.add(resolveSessionProfileId(params.viewerProfileId, identities));
+    }
     for (const [, entry] of visibleEntries) {
       const owner = projectOwner(entry, identities, cfg, configuredAgentIds)?.actor;
       for (const person of projectPeople(entry, identities, owner)) {
@@ -307,10 +312,18 @@ export function filterSessionEntries(
             provider: entry.modelProvider,
             model: entry.model,
           });
+          // Goal search uses entry usage, not elapsed time or display-only timestamps.
+          const goal = entry.goal && resolveGatewaySessionGoal(entry, now);
+          if (goal) {
+            rawFields.push(
+              `${goal.objective} ${goal.status} ${formatGoalSummary(goal)} ${goal.lastStatusNote ?? ""}`,
+            );
+          }
           fields = {
             key: storeKey,
-            literal: rawFields.map(normalizeLowercaseStringOrEmpty),
-            titles: titles.map(normalizeSessionSearchText),
+            // Both matchers run only for nonempty queries; empty fields can never match.
+            literal: rawFields.map(normalizeSessionSearchLiteral).filter(Boolean),
+            titles: titles.map(normalizeSessionSearchText).filter(Boolean),
           };
           staticSearchFields.set(entry, fields);
         }
@@ -345,18 +358,6 @@ export function filterSessionEntries(
           ) {
             return true;
           }
-        }
-        const goal = entry.goal && resolveGatewaySessionGoal(entry, now);
-        if (
-          goal &&
-          matchesSessionListSearch(
-            [
-              `${goal.objective} ${goal.status} ${formatGoalSummary(goal)} ${goal.lastStatusNote ?? ""}`,
-            ],
-            search,
-          )
-        ) {
-          return true;
         }
         let identityMatch = identityMatches?.get(agentId);
         if (identityMatch === undefined) {
@@ -473,11 +474,8 @@ export function filterSessionEntries(
     ) {
       continue;
     }
-    if (agentFilter && storeKey !== "global") {
-      const ownerAgentId = target.storeKey ? normalizeAgentId(target.agentId) : selection.agentId;
-      if (ownerAgentId !== agentFilter) {
-        continue;
-      }
+    if (agentFilter && storeKey !== "global" && target.agentId !== agentFilter) {
+      continue;
     }
     if (selection.isPhantom) {
       continue;
@@ -535,6 +533,7 @@ export function filterSessionEntries(
     if (profileRelation?.relationship === "involving" && !relationKeys?.has(key)) {
       continue;
     }
+    // Facets and selectors describe readable sessions, not private profile activity.
     if (effectiveOwner) {
       addSessionOwnerFacetIdentity(ownerFacet, effectiveOwner);
     }
@@ -659,7 +658,7 @@ export function filterSessionEntries(
 export function projectSessionOwnerRunningCounts(
   params: SessionListFilterParams,
   selection: SessionEntrySelection,
-  candidateKeys: () => Iterable<string>,
+  activeRunCandidateKeys?: () => ReadonlySet<string> | undefined,
 ): SessionEntrySelection {
   if (!selection.ownerSessionCounts || !selection.ownerSessionProfiles) {
     return selection;
@@ -668,24 +667,47 @@ export function projectSessionOwnerRunningCounts(
     selection.ownerSessionCounts.map((count) => [count.profileId, { ...count, running: 0 }]),
   );
   const context = params.getRowContext();
-  for (const key of candidateKeys()) {
-    const profileId = selection.ownerSessionProfiles.get(key);
-    if (profileId === undefined) {
-      continue;
+  const activeRequesters = context.subagentRuns.activeRequesterSessionKeys();
+  const projected = context.projectedSubagentActivity;
+  const increment = (key: string) => {
+    const profileId = selection.ownerSessionProfiles!.get(key);
+    if (profileId !== undefined) {
+      counts.get(profileId)!.running += 1;
+    }
+  };
+  const project = (key: string) => {
+    if (!selection.ownerSessionProfiles!.has(key)) {
+      return;
     }
     const target = params.getTarget(key);
     if (!target) {
-      continue;
+      return;
     }
-    const active = params.projectActiveRun?.(key, target.entry, target.agentId);
     const storeKey = target.storeKey ?? key;
+    const active = params.projectActiveRun?.(key, target.entry, target.agentId);
     if (
       (active?.active === true && active.status !== "queued") ||
-      context.subagentRuns.countActiveDescendantRuns(storeKey) > 0 ||
-      context.projectedSubagentActivity?.has(storeKey) === true
+      activeRequesters.has(storeKey) ||
+      projected?.has(storeKey)
     ) {
-      counts.get(profileId)!.running += 1;
+      increment(key);
     }
+  };
+  if (params.opts.activeOnly) {
+    // Active-only sentinel keys are qualified by agent; the selected rows own that mapping.
+    selection.ownerSessionProfiles.forEach((_, key) => project(key));
+  } else {
+    activeRequesters.forEach(increment);
+    projected?.forEach((key) => {
+      if (!activeRequesters.has(key)) {
+        increment(key);
+      }
+    });
+    activeRunCandidateKeys?.()?.forEach((key) => {
+      if (!activeRequesters.has(key) && !projected?.has(key)) {
+        project(key);
+      }
+    });
   }
   return { ...selection, ownerSessionCounts: [...counts.values()] };
 }

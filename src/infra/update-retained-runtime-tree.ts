@@ -103,7 +103,12 @@ export async function linkUpdateCandidatePluginTrees(
         { privateRoot, candidateRoot },
       );
     } else {
-      let copy = pluginFiles.has(entry.path) || Boolean(resolveRuntimeFileRelocator(destination));
+      // Recovery objects can also live in dist. Retaining owner-private bytes
+      // must not change the source's link count or sealed recovery fingerprint.
+      let copy =
+        (entry.mode & 0o077) === 0 ||
+        pluginFiles.has(entry.path) ||
+        Boolean(resolveRuntimeFileRelocator(destination));
       if (!copy) {
         params.assertCurrent();
         try {

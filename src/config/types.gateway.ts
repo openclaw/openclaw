@@ -12,6 +12,9 @@ export type GatewayBindMode = NonNullable<GatewayConfigInput["bind"]>;
 
 export type GatewayTlsConfig = NonNullable<GatewayConfigInput["tls"]>;
 
+/** Experimental OpenClaw ID remote access settings (Labs). */
+export type GatewayOpenClawIdConfig = NonNullable<GatewayConfigInput["openclawId"]>;
+
 export type DiscoveryConfig = NonNullable<z.input<typeof OpenClawSchemaShape.discovery>>;
 export type MdnsDiscoveryConfig = NonNullable<DiscoveryConfig["mdns"]>;
 export type MdnsDiscoveryMode = NonNullable<MdnsDiscoveryConfig["mode"]>;

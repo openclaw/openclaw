@@ -10,13 +10,9 @@ import {
   resolveToolCardOutcome,
 } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
-import { formatDurationLong } from "../../../lib/format-duration.ts";
+import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
-import type { BrowserTabPreview } from "./chat-tool-cards.ts";
-import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
-import { summarizeToolCardOutcomes } from "./chat-tool-render-model.ts";
 
 type WorkGroupSummaryItem = {
   key: string;
@@ -24,16 +20,14 @@ type WorkGroupSummaryItem = {
   groups: readonly MessageGroup[];
 };
 type WorkGroupSummaryOptions = {
-  mediaReadAllowed?: boolean;
   expanded: boolean;
   onToggle: () => void;
   presentation?: "standalone" | "continuation";
-  browserTabPreviews?: readonly BrowserTabPreview[];
   bubbleMode?: boolean;
 };
 
 function prepareWorkGroupSummary(item: WorkGroupSummaryItem) {
-  const duration = formatDurationLong(item.durationMs);
+  const duration = formatDurationCompact(item.durationMs);
   const entries = item.groups.flatMap((group) =>
     group.messages.map(({ message }) => ({
       cards: extractToolCardsCached(message),
@@ -79,8 +73,8 @@ function prepareWorkGroupSummary(item: WorkGroupSummaryItem) {
   const summary = describeToolGroup(activity);
   const total = summary.total;
   const outcomes = summary.outcomes.filter(({ kind }) => kind !== "failed" && kind !== "skipped");
-  const toolOutcomes = summarizeToolCardOutcomes(cards, activity);
-  return { label, total, outcomes, cards, activity, toolOutcomes };
+  // The reply that follows owns the outcome; failures the agent recovered from stay on their rows.
+  return { label, total, outcomes };
 }
 
 function WorkGroupSummaryBody(props: {
@@ -130,27 +124,10 @@ function WorkGroupSummaryBody(props: {
             </span>
           )}
         </For>
-        <Show
-          when={props.summary.toolOutcomes.failed > 0 || props.summary.toolOutcomes.skipped > 0}
-        >
-          <span class="chat-work-group__outcomes">
-            {" · "}
-            <openclaw-chat-tool-outcome-summary style={{ display: "contents" }}>
-              <ToolOutcomeSummary cards={props.summary.cards} activity={props.summary.activity} />
-            </openclaw-chat-tool-outcome-summary>
-          </span>
-        </Show>
-        <span class="chat-tool-row__chevron" aria-hidden="true">
-          <Icon name="chevronRight" />
+        <span class="chat-inline-disclosure__chevron" aria-hidden="true">
+          <Icon name="chevronDown" />
         </span>
       </button>
-      <div class="chat-work-group__separator" aria-hidden="true" />
-      <Show when={!props.options.expanded && !props.options.bubbleMode}>
-        <BrowserTabPreviews
-          previews={props.options.browserTabPreviews}
-          mediaReadAllowed={props.options.mediaReadAllowed}
-        />
-      </Show>
     </div>
   );
 }

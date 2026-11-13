@@ -2,6 +2,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionLinkTarget } from "../../components/markdown-session-links.ts";
 import { sessionRowAttention } from "../../lib/session-attention.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import type { SessionProgressCardRuntime } from "../../lib/session-progress-runtime.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import {
   isSessionKeyAddressable,
@@ -34,32 +35,42 @@ export type ChatSubagentWait = {
   sessionCount?: number;
   /** Every child session the handoff waits on, named on the waiting line. */
   sessions: readonly ChatHandoffSession[];
+  /** Every child left is paused: nothing runs, so the line keeps no clock. */
+  pausedOnly?: true;
+  /** The parent resumed with only paused children left: a quiet note naming them. */
+  pausedNote?: true;
 };
 
 /** A child session of a handoff, as its waiting line and resume rule list it. */
 export type ChatHandoffSession = {
   key: string;
   label: string;
-  status: "attention" | "running" | "failed" | "stopped" | "done";
+  status: "attention" | "paused" | "running" | "failed" | "stopped" | "done";
   /** The child's own attention note, when it asked for the user. */
   note?: string;
 };
 
 const HANDOFF_STATUS_ORDER: readonly ChatHandoffSession["status"][] = [
   "attention",
+  "paused",
   "failed",
   "running",
   "stopped",
   "done",
 ];
 
+/** Yielded on sessions_yield and awaiting a continuation; a newer run in it is running. */
+function isPausedChild(row: GatewaySessionRow) {
+  return row.subagentRunState === "paused" && row.status !== "queued" && !isUnfinishedSubagent(row);
+}
+
 /**
  * The direct children (subagents and sessions alike) whose current run overlapped
  * a handoff from `from` until `to` (still open without one). Attention first.
  * Rows carry only a child's latest run, so a child that started again after a
  * resumed handoff is left out rather than credited with that later run.
- * "Needs your input" is the child's own declared attention; the Gateway row
- * does not distinguish a child paused for a continuation from a finished one.
+ * "Needs your input" is the child's own declared attention. A paused child
+ * still owes its task, so it stays listed however long ago it yielded.
  */
 function listHandoffSessions(
   children: readonly GatewaySessionRow[],
@@ -71,7 +82,10 @@ function listHandoffSessions(
       const started = row.startedAt ?? row.createdAt ?? 0;
       return (
         (window.to === undefined || started <= window.to) &&
-        (row.status === "queued" || isUnfinishedSubagent(row) || (row.endedAt ?? 0) >= window.from)
+        (row.status === "queued" ||
+          isUnfinishedSubagent(row) ||
+          isPausedChild(row) ||
+          (row.endedAt ?? 0) >= window.from)
       );
     })
     .toSorted(byLaunch)
@@ -83,7 +97,9 @@ function listHandoffSessions(
         status:
           row.status === "queued" || isUnfinishedSubagent(row)
             ? "running"
-            : (endedWithoutFinishing(row) ?? "done"),
+            : isPausedChild(row)
+              ? "paused"
+              : (endedWithoutFinishing(row) ?? "done"),
       };
       if (attention.kind === "agent") {
         session.status = "attention";
@@ -139,7 +155,7 @@ export function handoffSessionLinks(input: HandoffLinkInput): HandoffSessionLink
   };
 }
 
-// Resume rules also show each child's name and attention, which launch rows don't.
+// Resume rules also show each child's name, attention and pause, which launch rows don't.
 function handoffFactsKey(rows: readonly GatewaySessionRow[] | undefined): string {
   return (rows ?? [])
     .map((row) => {
@@ -148,6 +164,7 @@ function handoffFactsKey(rows: readonly GatewaySessionRow[] | undefined): string
         row.key,
         resolveSessionDisplayName(row.key, row),
         attention.kind === "agent" ? attention.note : null,
+        isPausedChild(row),
       ]);
     })
     .toSorted()
@@ -226,9 +243,17 @@ function unfinishedChildren(input: SubagentSession) {
   );
 }
 
+/**
+ * Running counts match Details' Working count: a queued child is still waiting
+ * for a concurrency slot, and dashboard children are sessions in their own right.
+ */
+function isWorkingSubagent(row: GatewaySessionRow) {
+  return row.status !== "queued" && !isDashboardSessionKey(row.key);
+}
+
 /** Header counts need child membership, not transcript handoffs or activity presentation. */
 export function countRunningSubagents(input: SubagentSession): number {
-  return unfinishedChildren(input).filter((row) => !isDashboardSessionKey(row.key)).length;
+  return unfinishedChildren(input).filter(isWorkingSubagent).length;
 }
 
 // Launch order stays stable as activity updates reorder the source roster.
@@ -276,6 +301,53 @@ export function listSubagents(input: SubagentSession): ChatSubagentActivity[] {
     });
 }
 
+/** Project the existing child query without another status owner or history read. */
+export function projectProgressCardRuntime(
+  session: GatewaySessionRow | undefined,
+  roster: SubagentRoster,
+  updatedAt: number,
+  connected?: boolean,
+): SessionProgressCardRuntime {
+  let childError: string | undefined;
+  const children =
+    session && roster.subagentSessionsHydrated && !roster.subagentSessionsPending
+      ? { running: 0, queued: 0, waiting: 0, failed: 0, stopped: 0 }
+      : undefined;
+  if (session && children) {
+    for (const row of directChildren(session, roster)) {
+      if (row.status === "queued") {
+        children.queued++;
+      } else if (isSessionRunStateActive(row)) {
+        children.running++;
+      } else if (row.hasActiveSubagentRun) {
+        children.waiting++;
+      } else if (row.endedAt !== undefined && row.endedAt >= updatedAt) {
+        // A newer authored snapshot has already had a chance to reconcile this
+        // outcome. Never carry failures from an older task into a new card.
+        const outcome = endedWithoutFinishing(row);
+        if (outcome === "failed") {
+          children.failed++;
+          childError ??= row.lastRunError
+            ? `${resolveSessionDisplayName(row.key, row)}: ${row.lastRunError}`
+            : resolveSessionDisplayName(row.key, row);
+        } else if (outcome === "stopped") {
+          children.stopped++;
+        }
+      }
+    }
+  }
+  return {
+    known: Boolean(session),
+    connected,
+    hasActiveSubagentRun:
+      session?.hasActiveSubagentRun === true ||
+      Boolean(children && children.running + children.queued + children.waiting > 0),
+    lastRunError: session?.lastRunError,
+    childError,
+    children,
+  };
+}
+
 /**
  * Everything the transcript reads from the session's subagent roster: the
  * wait and where it is placed, the running count, and the keys that tell
@@ -291,7 +363,15 @@ export function projectSubagentStatus(
   searchFiltering: boolean,
 ) {
   const session = input.selectedSession;
-  const eligible = session && !session.archived && session.hasActiveSubagentRun === true;
+  const hydrated = input.subagentSessionsHydrated && !input.subagentSessionsPending;
+  // A child paused on sessions_yield keeps the wait open without counting as
+  // running. Only the pane's complete child query can say one remains.
+  const paused =
+    hydrated && session && !session.archived
+      ? directChildren(session, input).filter(isPausedChild)
+      : [];
+  const eligible =
+    session && !session.archived && (session.hasActiveSubagentRun === true || paused.length > 0);
   // Descendant activity alone is not a parent wait: plugin-owned children can
   // belong to a session that has never executed. Every settled parent turn has
   // a lifecycle end; a partial row must not invent that boundary from transcript text.
@@ -321,10 +401,14 @@ export function projectSubagentStatus(
   // line names every child the handoff waits on.
   const children = unfinished.filter((row) => !isDashboardSessionKey(row.key));
   const running = children.length;
-  const hydrated = input.subagentSessionsHydrated && !input.subagentSessionsPending;
-  // A hydrated roster with no unfinished children ends the wait.
+  const working = children.filter(isWorkingSubagent).length;
+  // Paused children alone keep the wait. Once the parent has resumed (its latest
+  // turn is not the loaded handoff), nothing is running: they read as a note.
+  const pausedOnly = hydrated && unfinished.length === 0 && paused.length > 0;
+  const pausedNote = pausedOnly && !handoffRunId;
+  // A hydrated roster with no unfinished or paused children ends the wait.
   const wait: ChatSubagentWait | null =
-    waitStartedAt !== null && (!hydrated || unfinished.length > 0)
+    waitStartedAt !== null && (!hydrated || unfinished.length + paused.length > 0)
       ? {
           startedAt: waitStartedAt,
           ...(handoffRunId ? { runId: handoffRunId } : {}),
@@ -332,18 +416,22 @@ export function projectSubagentStatus(
           ...(hydrated && unfinished.length > running
             ? { sessionCount: unfinished.length - running }
             : {}),
+          ...(pausedOnly ? { pausedOnly } : {}),
+          ...(pausedNote ? { pausedNote } : {}),
           sessions:
             hydrated && session
-              ? listHandoffSessions(directChildren(session, input), {
-                  from: yieldedAt ?? waitStartedAt,
-                })
+              ? pausedNote
+                ? listHandoffSessions(paused, { from: 0 })
+                : listHandoffSessions(directChildren(session, input), {
+                    from: yieldedAt ?? waitStartedAt,
+                  })
               : [],
         }
       : null;
   // The line can lead to the Subagents panel only when that panel lists every
   // subagent it mentions.
   const listed =
-    (wait !== null || running > 0) &&
+    (wait !== null || working > 0) &&
     unfinished.every((row) => isDashboardSessionKey(row.key) || isSubagentsPanelSession(row));
   return {
     wait,
@@ -352,14 +440,23 @@ export function projectSubagentStatus(
       !searchFiltering && wait?.runId
         ? { startedAt: wait.startedAt, runId: wait.runId }
         : undefined,
-    running,
+    running: working,
     listed,
     links: handoffSessionLinks(input),
     // Key only the working line's facts so unrelated roster patches stay memoized.
     statusKey: JSON.stringify(
       wait
-        ? [wait.startedAt, wait.runId, wait.runningCount, wait.sessionCount, wait.sessions, listed]
-        : [running, listed],
+        ? [
+            wait.startedAt,
+            wait.runId,
+            wait.runningCount,
+            wait.sessionCount,
+            wait.sessions,
+            listed,
+            wait.pausedOnly,
+            wait.pausedNote,
+          ]
+        : [working, listed],
     ),
     // Seeded rows can already match; rows that list children wait for the pane's own query.
     rowsKey: `${input.subagentSessionsHydrated && !input.subagentSessionsPending ? "complete" : "partial"}\n${spawnedSubagentsRenderKey(input.subagentSessions)}\n${handoffFactsKey(input.subagentSessions)}`,

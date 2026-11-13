@@ -6,27 +6,53 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
+import {
+  captureAgentDatabaseIntegrityObserver,
+  type AgentDatabasePreparedIntegrity,
+} from "./agent-database-preparation-context.js";
 import type { AgentDeletionWorkerGuard } from "./agent-deletion-worker-contract.js";
 import type { AgentDatabaseRegistryChange } from "./openclaw-agent-db-contract.js";
+import { getOpenClawAgentDatabaseValidationForTransfer } from "./openclaw-agent-db-validation-cache.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 
 export function readAgentDatabaseRequestPreparation(): {
   startupJournal: boolean;
+  startupIntegrityRequired: boolean;
+  startupCancellation?: Int32Array<SharedArrayBuffer>;
   deletion?: AgentDeletionWorkerGuard;
 } {
   const attachment = takeSqliteWorkerOperationAdmissionAttachment();
   if (
     !isRecord(attachment) ||
     attachment.kind !== "agent-execution" ||
-    typeof attachment.startupJournal !== "boolean"
+    typeof attachment.startupJournal !== "boolean" ||
+    typeof attachment.startupIntegrityRequired !== "boolean"
   ) {
     throw new Error("Agent execution requires its request-local preparation facts");
   }
   return {
     startupJournal: attachment.startupJournal,
+    startupIntegrityRequired: attachment.startupIntegrityRequired,
+    // SAFETY: The private host admission owns this Gateway-lifetime cancellation cell.
+    startupCancellation: attachment.startupCancellation as
+      | Int32Array<SharedArrayBuffer>
+      | undefined,
     // SAFETY: The host sends this typed guard; its live owner compares it before SQL.
     deletion: attachment.deletion as AgentDeletionWorkerGuard | undefined,
   };
+}
+
+/** Cancellation belongs to Gateway startup, never the first caller of shared preparation. */
+export function agentDatabaseStartupInspectionSignal(cancellation: Int32Array): AbortSignal {
+  const controller = new AbortController();
+  const abort = () =>
+    controller.abort(new Error("Gateway stopped during agent database inspection"));
+  if (Atomics.load(cancellation, 0) !== 0) {
+    abort();
+  } else {
+    void Promise.resolve(Atomics.waitAsync(cancellation, 0, 0).value).then(abort);
+  }
+  return controller.signal;
 }
 
 /** Physical preparation outlives individual waits; registry notifications retain caller context. */
@@ -129,4 +155,25 @@ export function createSharedAgentDatabasePreparation(assertCurrent: () => void) 
       };
     },
   };
+}
+
+/** Native generations retain the logical owner's observer, never a request context. */
+export function captureAgentDatabasePreparedIntegrity(
+  scope: Pick<AgentDatabasePreparedIntegrity, "agentId" | "path" | "env">,
+) {
+  const observe = captureAgentDatabaseIntegrityObserver();
+  return (
+    observe &&
+    (() => {
+      const validation = getOpenClawAgentDatabaseValidationForTransfer(scope);
+      if (validation) {
+        observe({
+          ...scope,
+          identity: validation.identity,
+          birthtime: validation.birthtime,
+          integrityVerifiedAt: validation.integrityVerifiedAt,
+        });
+      }
+    })
+  );
 }

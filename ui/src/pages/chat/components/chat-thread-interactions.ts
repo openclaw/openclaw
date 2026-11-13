@@ -2,10 +2,13 @@ import type { MessageReactionSummary } from "../../../../../packages/gateway-pro
 import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
-import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button-state.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
@@ -19,15 +22,20 @@ import type {
   ChatQueueItem,
   ChatSelectionSource,
   ChatStreamSegment,
+  MessageGroup,
 } from "../../../lib/chat/chat-types.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import type { InlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 // Pane-local search, context menus, selection actions, and presentation resets.
 import type { TurnRecapWatch } from "../chat-progress.ts";
+import type { ChatToolMessageSource } from "../chat-run-presentation.ts";
 import type { SubagentRoster } from "../chat-spawned-subagent.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { ChatTranscriptMetadata } from "../chat-transcript-metadata.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
+import type { FailedMessageEditSource } from "../failed-message-edit.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation-state.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { createAsyncQuestionPresentation } from "./chat-async-question.ts";
@@ -63,9 +71,28 @@ export type ChatThreadState = Parameters<typeof createAsyncQuestionPresentation>
   search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
-    turnVideoMessages?: ReadonlyMap<
+    actions?: Pick<
+      ChatThreadProps,
+      | "onOpenSidebar"
+      | "onOpenWorkspaceFile"
+      | "onFindWorkspaceFile"
+      | "onPermissionRetry"
+      | "onOpenImage"
+      | "onAssistantAttachmentLoaded"
+      | "onOpenSessionLink"
+      | "onOpenSubagent"
+      | "onOpenSubagents"
+      | "onRetryQueuedMessage"
+      | "onSteerNow"
+      | "onRewindMessage"
+      | "onFocusComposer"
+      | "loadFullAssistantMessage"
+      | "personActivity"
+      | "displayFacts"
+    >;
+    threadMediaMessages?: ReadonlyMap<
       string,
-      readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[]
+      readonly import("./chat-thread-media-gallery.ts").ThreadMediaMessage[]
     >;
     onSetReply?: (target: MessageReplyTarget) => void;
     onOpenReply?: (replyToId: string) => void;
@@ -90,10 +117,19 @@ export type ChatThreadProps = Omit<
   | "presented"
   | "agentId"
   | "mediaPolicyKey"
-  | "getTurnVideoMessages"
+  | "getThreadMediaMessages"
   | "onOpenWorkspaceFile"
 > &
-  ChatWelcomeIdentityProps &
+  Pick<
+    ChatWelcomeIdentityProps,
+    | "currentAgentId"
+    | "agents"
+    | "assistantName"
+    | "assistantAvatar"
+    | "assistantAvatarUrl"
+    | "assistantAvatarSource"
+    | "sessionHost"
+  > &
   ChatSendStatusActions &
   SubagentRoster & {
     applicationContext?: ApplicationContext;
@@ -111,15 +147,18 @@ export type ChatThreadProps = Omit<
     transcriptVisible?: PresentationValue;
     gatewayClient?: GatewayBrowserClient | null;
     selectedSession: GatewaySessionRow | undefined;
+    modelCatalog?: ModelCatalogEntry[];
     transcriptMetadata?: ChatTranscriptMetadata;
     announceTranscript?: boolean;
     loading: boolean;
+    restoring?: boolean;
     routeLoadingSkeleton?: boolean;
     /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
     historyPagination?: ChatHistoryBoundaryProps;
     messages: unknown[];
     toolMessages: unknown[];
-    latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
+    /** Existing pane owner, forwarded into the transcript's detached render root. */
+    toolMessageSource?: ChatToolMessageSource;
     guardianNotices?: ChatGuardianNotice[];
     streamSegments: ChatStreamSegment[];
     reasoning?: import("../tool-stream-contract.ts").ChatReasoning | null;
@@ -134,12 +173,14 @@ export type ChatThreadProps = Omit<
     chatBubbleMode?: boolean;
     showThinking: boolean;
     showToolCalls: boolean;
+    inlineCommands?: InlineCommandPresentation;
     persistCommentary?: boolean;
     runWorking?: boolean;
     runFinalizing?: boolean;
     startupLabel?: string;
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
+    failedMessageEditSource?: FailedMessageEditSource;
     failureActionsRunId?: string;
     onDismissPendingInput?: (inputId: string) => void;
     waitingApproval?: boolean;
@@ -164,9 +205,9 @@ export type ChatThreadProps = Omit<
     typingOverflow?: ChatTypingOverflow;
     onOpenSidebar?: (content: SidebarContent) => void;
     onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
+    onOpenManagedArtifact?: (href: string) => boolean;
     onOpenSessionLink?: (target: SessionLinkTarget) => void;
     onNavigate?: (routeId: "cron", options: { search: string }) => void;
-    onChatScroll?: (event: Event) => void;
     onHistoryIntent?: (event: Event) => void;
     onHistorySentinelRef?: (element: HTMLElement) => void | (() => void);
     onTranscriptAnnouncementRef?: (element: HTMLElement) => void | (() => void);
@@ -179,6 +220,7 @@ export type ChatThreadProps = Omit<
     commentsDisabled?: boolean;
     onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
     onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
+    onNewSessionSelection?: (selection: ChatSelectionSource) => void;
     /** Shows one of the session's subagents. */
     onOpenSubagent?: (sessionKey: string) => void;
     /** Shows the session's subagents; absent where the pane has no list of them to show. */
@@ -196,6 +238,7 @@ type TranscriptInteractionProps = Pick<
   | "onFocusComposer"
   | "onAddToChat"
   | "onCompanionSelection"
+  | "onNewSessionSelection"
 >;
 
 const transcriptStates = new Map<string, ChatThreadState>();
@@ -445,6 +488,7 @@ export function handleTranscriptPointerUp(
     paneId: props.paneId,
     onAddToChat: props.onAddToChat,
     onAskSideChat: (selection, anchorRect) => props.onCompanionSelection?.(selection, anchorRect),
+    onAskNewSession: (selection) => props.onNewSessionSelection?.(selection),
   });
 }
 
@@ -458,6 +502,32 @@ function selectionIntersectsElement(selection: Selection | null, element: Elemen
     }
   }
   return false;
+}
+
+function rewindTranscriptMessage(
+  props: Pick<ChatThreadProps, "onRewindMessage" | "onFocusComposer">,
+  entryId: string,
+): void {
+  void Promise.resolve(props.onRewindMessage?.(entryId)).then((rewound) => {
+    if (rewound) {
+      props.onFocusComposer?.();
+    }
+  });
+}
+
+export function transcriptRewindOptions(
+  group: MessageGroup,
+  props: Pick<ChatThreadProps, "onRewindMessage" | "onFocusComposer" | "runActive" | "runWorking">,
+) {
+  const entryId =
+    group.role.toLowerCase() === "user"
+      ? persistedMessageEntryId(group.messages.at(-1)?.message)
+      : null;
+  return {
+    onRewind:
+      entryId && props.onRewindMessage ? () => rewindTranscriptMessage(props, entryId) : undefined,
+    rewindDisabled: Boolean(props.runActive || props.runWorking),
+  };
 }
 
 export function handleTranscriptContextMenu(
@@ -559,11 +629,7 @@ export function handleTranscriptContextMenu(
         // SAFETY: Menu actions bind directly to their native button.
         openChatRewindConfirmation(rewindEvent.currentTarget as HTMLButtonElement, () => {
           removeReplyContextMenu();
-          void Promise.resolve(props.onRewindMessage?.(entryId)).then((rewound) => {
-            if (rewound) {
-              props.onFocusComposer?.();
-            }
-          });
+          rewindTranscriptMessage(props, entryId);
         });
       },
     });

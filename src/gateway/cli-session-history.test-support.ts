@@ -2,9 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
-import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
+import type { CliSessionReseedReceipt } from "../config/sessions.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import type { CliHistoryIndex } from "./cli-session-history-index-policy.js";
 import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import {
   resolveClaudeCliHistorySource,
@@ -24,11 +25,13 @@ export async function readClaudeCliSessionMessagesAsync(
   return messages;
 }
 
-export function mergeImportedChatHistoryMessages(params: {
-  localMessages: unknown[];
-  importedMessages: unknown[];
-}): unknown[] {
-  const index = new CliSessionHistoryIndex();
+export function mergeImportedChatHistoryMessages(
+  params: {
+    localMessages: unknown[];
+    importedMessages: unknown[];
+  },
+  index: CliHistoryIndex = new CliSessionHistoryIndex(),
+): unknown[] {
   try {
     index.appendLocal(
       params.localMessages.map((message, position) => ({ message, seq: position + 1 })),
@@ -61,14 +64,6 @@ export function answer(
 ) {
   const meta = externalId === undefined ? undefined : cliMeta(externalId, cliSessionId);
   return { ...user("Repeated answer", timestamp, meta), role: "assistant" };
-}
-
-export function boundEntry(sessionId: string): SessionEntry {
-  return {
-    sessionId: "openclaw-session",
-    updatedAt: 1,
-    cliSessionBindings: { "claude-cli": { sessionId } },
-  };
 }
 
 export function receipt(prompt: string, sessionId = "openclaw-session"): CliSessionReseedReceipt {

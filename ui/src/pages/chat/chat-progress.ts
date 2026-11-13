@@ -6,6 +6,7 @@ import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer
 import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatGuardianNotice, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
+import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import type { CompactionStatus, RunOutputUsage } from "./tool-stream-contract.ts";
 
 registerChatMessageMetadataEnglish();
@@ -36,6 +37,8 @@ export function matchesCompactionOperation(message: unknown, status: CompactionS
   );
 }
 
+// Retain presentation timing only within the transcript cache's session window.
+// Evicted sessions reconstruct timing from available activity and observe idle anew.
 const workingProgressBySession = new Map<string, WorkingProgress>();
 const idleObservedAtBySession = new Map<string, number>();
 let anonymousWorkingProgressId = 0;
@@ -104,13 +107,17 @@ export function buildCompactionDividerItem(
 ): Extract<ChatItem, { kind: "divider" }> {
   const tokensBefore = marker.tokensBefore;
   const tokensAfter = marker.tokensAfter;
-  const tokensSaved =
+  const metric =
     typeof tokensBefore === "number" &&
     Number.isFinite(tokensBefore) &&
     typeof tokensAfter === "number" &&
     Number.isFinite(tokensAfter) &&
+    tokensAfter >= 0 &&
     tokensBefore > tokensAfter
-      ? Math.floor(tokensBefore - tokensAfter)
+      ? t("chat.compaction.savedTokensWithPercent", {
+          count: formatCompactTokenCount(Math.floor(tokensBefore - tokensAfter)),
+          percent: String(Math.round(((tokensBefore - tokensAfter) / tokensBefore) * 1_000) / 10),
+        })
       : null;
   return {
     kind: "divider",
@@ -122,13 +129,7 @@ export function buildCompactionDividerItem(
       phase === "active" ? "chat.composer.compactingContext" : "chat.composer.contextCompacted",
     ),
     compaction: phase,
-    ...(tokensSaved === null
-      ? {}
-      : {
-          metric: t("chat.compaction.savedTokens", {
-            count: formatCompactTokenCount(tokensSaved),
-          }),
-        }),
+    ...(metric === null ? {} : { metric }),
     timestamp,
   };
 }
@@ -195,7 +196,9 @@ export function resolveWorkingProgress(
     pendingSends.find((item) => item.sendState === "submitting" || item.sendState === "sending") ??
     pendingSends[0];
   const queuedRunId = queuedProgress?.sendRunId ?? queuedProgress?.pendingRunId;
-  const idleObservedAt = runId ? undefined : idleObservedAtBySession.get(sessionKey);
+  const idleObservedAt = runId
+    ? undefined
+    : getSessionCacheValue(idleObservedAtBySession, sessionKey);
   const observedSinceIdle = (at: unknown) =>
     idleObservedAt === undefined || (typeof at === "number" && at > idleObservedAt);
   const currentSegments = streamSegments.filter((segment) => observedSinceIdle(segment.ts));
@@ -248,7 +251,7 @@ export function resolveWorkingProgress(
       sessionKey,
       explicitRunId ?? `anonymous-${++anonymousWorkingProgressId}`,
     ])}`;
-  workingProgressBySession.set(sessionKey, {
+  setSessionCacheValue(workingProgressBySession, sessionKey, {
     key,
     runId: explicitRunId ?? compatibleCached?.runId ?? null,
     startedAt,
@@ -258,7 +261,7 @@ export function resolveWorkingProgress(
 
 export function clearWorkingProgress(sessionKey: string): void {
   workingProgressBySession.delete(sessionKey);
-  idleObservedAtBySession.set(sessionKey, Date.now());
+  setSessionCacheValue(idleObservedAtBySession, sessionKey, Date.now());
 }
 
 export function resetWorkingProgress(): void {
@@ -269,7 +272,7 @@ export function resetWorkingProgress(): void {
 
 export type TurnRecap = { runtimeMs: number; outputTokens: number | null };
 
-// The pane owns one watched run. Session-wide usage is a different fact and
+// The pane owns one observed or history-matched run. Session-wide usage is a different fact and
 // may still describe the previous response when the terminal row arrives.
 export type TurnRecapWatch = {
   sessionKey: string;
@@ -308,6 +311,7 @@ export function resolveTurnRecap(
     indicator?: { runId?: string; request?: TurnRequest };
     startingNewTurn?: boolean;
     activeRunId?: string | null;
+    completedRunId?: string;
     row?: Pick<GatewaySessionRow, "lastRunId" | "status" | "runtimeMs" | "endedAt">;
     usageByRun?: ReadonlyMap<string, RunOutputUsage>;
   },
@@ -319,16 +323,20 @@ export function resolveTurnRecap(
     indicator,
     startingNewTurn,
     activeRunId,
+    completedRunId,
     row,
     usageByRun,
   } = params;
   let watch = host.turnRecapWatch;
   if (
-    watch?.sessionKey !== sessionKey ||
-    watch.agentId !== agentId ||
-    watch.gatewayClient !== gatewayClient
+    watch &&
+    (watch.sessionKey !== sessionKey ||
+      watch.agentId !== agentId ||
+      watch.gatewayClient !== gatewayClient)
   ) {
-    watch = null;
+    // A switched pane can still hold the previous owner's history. Keep its
+    // watch unidentified until activity establishes ownership again.
+    watch = { sessionKey, agentId, gatewayClient, runId: null, request: null, recap: null };
   }
   if (indicator || activeRunId) {
     const runId = indicator?.runId ?? activeRunId ?? null;
@@ -344,6 +352,26 @@ export function resolveTurnRecap(
         watch.request = indicator.request ?? null;
       }
     }
+  }
+  // A fresh pane can restore timing only for the completed reply actually loaded
+  // at its tail. A session row alone cannot identify the visible conversation.
+  if (
+    !watch &&
+    !indicator &&
+    !activeRunId &&
+    !startingNewTurn &&
+    completedRunId &&
+    row?.lastRunId === completedRunId &&
+    row.status === "done"
+  ) {
+    watch = {
+      sessionKey,
+      agentId,
+      gatewayClient,
+      runId: completedRunId,
+      request: null,
+      recap: null,
+    };
   }
   host.turnRecapWatch = watch;
   if (!watch?.runId) {

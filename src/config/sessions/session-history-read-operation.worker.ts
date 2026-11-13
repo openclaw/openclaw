@@ -40,6 +40,14 @@ async function prepareHistoryRead(
   retainedDatabase?: OpenClawAgentReadOnlyDatabase,
 ): Promise<() => SessionTranscriptWorkerValues[SessionHistoryReadOperationRequest["kind"]]> {
   switch (request.kind) {
+    case "agent-tool-usage": {
+      const { readAgentToolUsageInWorker } = await import("./tool-usage-read.worker.js");
+      return () => readAgentToolUsageInWorker(request);
+    }
+    case "agent-tool-usage-import": {
+      const { readAgentToolUsageImportInWorker } = await import("./tool-usage-read.worker.js");
+      return () => readAgentToolUsageImportInWorker(request);
+    }
     case "trajectory-events": {
       const { loadSqliteTrajectoryRuntimeEventRowsSync } =
         await import("../../trajectory/runtime-store.sqlite.js");
@@ -106,6 +114,17 @@ async function prepareHistoryRead(
         { snapshot: true, admission: request.admission },
       );
       return () => ({ kind: request.kind, result: read() });
+    }
+    case "transcript-replay-groups": {
+      const { readSessionTranscriptReplayGroupsCore } =
+        await import("./session-transcript-replay.kernel.js");
+      return () =>
+        runWithSessionTranscriptReadFence(request.admission, () => ({
+          kind: request.kind,
+          result: readSessionTranscriptReplayGroupsCore(request.scope, request.selection, {
+            resolvedScope: request.resolved,
+          }),
+        }));
     }
     case "transcript-visible-delta": {
       const { readSessionTranscriptVisibleMessageDeltaCore } =
@@ -181,24 +200,6 @@ async function prepareHistoryRead(
         );
         return { kind: request.kind, facts: read() };
       };
-    }
-    case "session-harness-completion-source": {
-      const [{ assertCapturedSessionEntryReadSource }, { readHarnessCompletionSourceInDatabase }] =
-        await Promise.all([
-          import("./session-entry-read-source.js"),
-          import("./session-harness-completion-source.kernel.js"),
-        ]);
-      const read = await prepareDatabaseRead(
-        { ...request.database, env: request.env },
-        (database) => {
-          assertCapturedSessionEntryReadSource(request.source, database);
-          return runWithSessionTranscriptReadFence(request.admission, () =>
-            readHarnessCompletionSourceInDatabase(database, request.claim, request.mode),
-          );
-        },
-        () => ({ validInput: false }),
-      );
-      return () => ({ kind: request.kind, snapshot: read() });
     }
     case "session-pending-input-source": {
       const [{ assertCapturedSessionEntryReadSource }, { readPendingInputSourceInDatabase }] =
@@ -282,7 +283,7 @@ async function prepareHistoryRead(
     }
     case "context-messages": {
       const [
-        { readSessionTranscriptContextMessages },
+        { readSessionTranscriptContextMessages, readSessionTranscriptContextSeed },
         { resolveSqliteTranscriptReadScope, toDatabaseOptions },
         { resolveOpenClawAgentSqlitePath },
         { readDatabasePathIdentitySync },
@@ -305,6 +306,9 @@ async function prepareHistoryRead(
             );
           } else if (readDatabasePathIdentitySync(databasePath).key.startsWith("file:")) {
             throw new Error("Session context changed its captured database owner");
+          }
+          if (request.seed) {
+            return readSessionTranscriptContextSeed(request.target, request.seed);
           }
           return readSessionTranscriptContextMessages(
             request.target,
@@ -351,6 +355,14 @@ async function prepareHistoryRead(
         () => false,
       );
       return () => ({ kind: request.kind, present: read() });
+    }
+    case "session-pending-input-orphans": {
+      const { readOrphanedSessionPendingInputTargetsInWorker } =
+        await import("./session-pending-input-withdrawal.worker.js");
+      return () => ({
+        kind: request.kind,
+        targets: readOrphanedSessionPendingInputTargetsInWorker(request),
+      });
     }
     case "session-pending-input-receipts": {
       const { listSessionPendingInputReceipts } =

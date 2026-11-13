@@ -113,6 +113,20 @@ describe("managed plugin catalog", () => {
     mockHostedOfficialCatalog(mocks.officialCatalog, []);
   });
 
+  it.each([true, false])(
+    "reports native web UI from the selected installed manifest (%s)",
+    async (native) => {
+      const snapshot = metadataSnapshot({ enabled: false });
+      snapshot.plugins[0]!.uiCapabilities = ["page"];
+      if (native) {
+        snapshot.plugins[0]!.controlUi = { entry: "dist/browser/index.js" };
+      }
+      mocks.metadata.mockReturnValue(snapshot);
+      const result = await listLocalPlugins();
+      expect(result.plugins[0]).toMatchObject({ id: "workboard", hasNativeUi: native });
+    },
+  );
+
   describe("authored credential validation", () => {
     const secretRef = { source: "store", provider: "default", id: "TEST_PLUGIN_KEY" };
     const configured = (config?: Record<string, unknown>, enabled = true): OpenClawConfig => ({

@@ -8,18 +8,15 @@ let nextRequestId = 0;
 const createClient = useHandshakeHarness({ randomUUID: () => `talk-request-${++nextRequestId}` });
 
 async function connect() {
+  // The socket harness fakes wall time; the retry deadline also needs performance.
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
   const client = createClient({ token: "shared-auth-token" });
   const { ws, connectFrame } = await startConnect(client);
-  ws.emitMessage({
-    type: "res",
-    id: connectFrame.id,
-    ok: true,
-    payload: {
-      type: "hello-ok",
-      protocol: PROTOCOL_VERSION,
-      auth: { role: "operator", scopes: [] },
-    },
-  });
+  const auth = { role: "operator", scopes: [] };
+  const payload = { type: "hello-ok", protocol: PROTOCOL_VERSION, auth };
+  ws.emitMessage({ type: "res", id: connectFrame.id, ok: true, payload });
   await vi.advanceTimersByTimeAsync(0);
   expect(client.connected).toBe(true);
   return { client, ws };
@@ -41,10 +38,10 @@ it.each([
   await vi.advanceTimersByTimeAsync(1);
   expect(await result).toMatchObject({ code: "CLIENT_TIMEOUT" });
   expect(settled).toHaveBeenCalledOnce();
-  expect(ws.sent).toHaveLength(2);
+  expect(ws.sent.filter((raw) => JSON.parse(raw).method !== "health")).toHaveLength(2);
 });
 
-it.each(["ready", "abort", "disconnect", "stop", "timeout"] as const)(
+it.each(["ready", "clock", "abort", "disconnect", "stop", "timeout"] as const)(
   "bounds Talk catalog warming retries through %s",
   async (outcome) => {
     const { client, ws } = await connect();
@@ -55,18 +52,14 @@ it.each(["ready", "abort", "disconnect", "stop", "timeout"] as const)(
       (error: unknown) => ({ error }),
     );
     const first = JSON.parse(ws.sent.at(-1)!) as { id: string };
-    ws.emitMessage({
-      type: "res",
-      id: first.id,
-      ok: false,
-      error: {
-        code: "UNAVAILABLE",
-        message: "Talk catalog is warming",
-        retryable: true,
-        retryAfterMs: 250,
-        details: { reason: "talk-catalog-warming" },
-      },
-    });
+    const error = {
+      code: "UNAVAILABLE",
+      message: "Talk catalog is warming",
+      retryable: true,
+      retryAfterMs: 250,
+      details: { reason: "talk-catalog-warming" },
+    };
+    ws.emitMessage({ type: "res", id: first.id, ok: false, error });
     await vi.advanceTimersByTimeAsync(249);
     expect(ws.sent).toHaveLength(2);
     if (outcome === "abort" || outcome === "disconnect" || outcome === "stop") {
@@ -82,12 +75,15 @@ it.each(["ready", "abort", "disconnect", "stop", "timeout"] as const)(
       expect(ws.sent).toHaveLength(2);
       return;
     }
+    if (outcome === "clock") {
+      vi.setSystemTime(Date.now() + 120_000);
+    }
     await vi.advanceTimersByTimeAsync(1);
     expect(ws.sent).toHaveLength(3);
     const retry = JSON.parse(ws.sent.at(-1)!) as { id: string };
     expect(retry).toMatchObject({ method: "talk.catalog", params });
     expect(retry.id).not.toBe(first.id);
-    if (outcome === "ready") {
+    if (outcome !== "timeout") {
       ws.emitMessage({ type: "res", id: retry.id, ok: true, payload: { providers: [] } });
       expect(await result).toEqual({ value: { providers: [] } });
     } else {

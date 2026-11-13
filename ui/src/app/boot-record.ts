@@ -1,7 +1,7 @@
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { fnv1aUtf16 } from "../../../src/shared/fnv1a.js";
 import { notifyListeners, registerListener } from "../../../src/shared/listeners.js";
 import type { AgentsListResult } from "../api/types.ts";
-import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { SessionGroupSettings } from "../lib/sessions/custom-groups.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";

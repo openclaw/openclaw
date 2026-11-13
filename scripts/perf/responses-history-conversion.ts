@@ -6,20 +6,90 @@
  * --retained measures post-GC growth with 20 live 500-KiB images and discarded requests.
  * Add --normalize-mime to test MIME-only normalization. The snapshot counts large
  * image strings separately from small cache metadata and unrelated heap noise.
+ * For frozen transcript reuse: --messages 40 (or 150) --frozen [--hook]
+ * adds 8-KiB tool arguments/results and the production transport transform. --hook
+ * includes mutable input preparation required by the agent's payload callback.
+ * --conversion-only omits post-conversion image sanitation; default measures both.
+ * --context-usage --messages 600 measures admission followed by the managed OpenAI
+ * request builder, including the saved compaction/usage prefix. Verify identical
+ * wire/pressure hashes and 2 -> 1 conversions; compare CPU/allocation against A/A.
+ * Run at least five alternating base/candidate arms per workload and mode. Accept
+ * identical wireSha256 and consistent CPU/allocation reductions without material
+ * controlled GC regression. Timing/GC gates use untraced runs, allocation is separate.
  * Compare wireSha256 across revisions before interpreting CPU/allocated bytes per request.
+ * --histories 128 rotates independent frozen histories through the bounded shared
+ * immutability proof set. Strings are shared; message/container identities are not.
+ * --builder-module <path> selects an adjacent baseline params owner whose converter
+ * import points at the matching baseline converter (all other dependencies unchanged).
+ * Assistant fixtures carry response IDs so signed text exercises the real fallback-ID
+ * decision. Compare --messages 200/1000/2000 with and without --frozen to separate
+ * warm projection reuse from per-message conversion of mutable histories.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
+import { resolve } from "node:path";
+import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { getHeapSnapshot } from "node:v8";
-import { buildOpenAIResponsesParams } from "../../packages/ai/src/transports/openai-responses-params-internal.js";
+import { configureAiTransportHost } from "../../packages/ai/src/host.js";
+import {
+  buildOpenAIResponsesReasoningReplayMetadata,
+  captureOpenAIResponsesCompaction,
+} from "../../packages/ai/src/transports/openai-responses-compaction-replay.js";
+import { recordResponsesContextUsage } from "../../packages/ai/src/transports/openai-responses-context-usage.js";
+import { cloneResponsesInputForPayloadHook } from "../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { sanitizeResponsesImagePayload } from "../../packages/ai/src/transports/responses-image-payload-sanitizer.js";
+import { createAssistantMessageEventStream } from "../../packages/ai/src/utils/event-stream.js";
 import type { Context, Model } from "../../packages/llm-core/src/types.js";
+import { resolveProjectedRequestPressure } from "../../src/agents/embedded-agent-runner/run/preemptive-compaction.js";
+import { transformTransportMessages } from "../../src/agents/transport-message-transform.js";
+import { createOpenAIResponsesContextManagementWrapper } from "../../src/llm/providers/stream-wrappers/openai.js";
+import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../src/shared/immutable-data.js";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 
 const iterations = Number(process.argv[process.argv.indexOf("--iterations") + 1]) || 2000;
 const allocation = process.argv.includes("--allocation");
+const messageCount = Number(process.argv[process.argv.indexOf("--messages") + 1]) || undefined;
+const frozen = process.argv.includes("--frozen");
+const hook = process.argv.includes("--hook");
+const conversionOnly = process.argv.includes("--conversion-only");
+const contextUsage = process.argv.includes("--context-usage");
+const histories = Number(process.argv[process.argv.indexOf("--histories") + 1]) || 1;
+assert(Number.isSafeInteger(histories) && histories > 0 && (!contextUsage || histories === 1));
+const builderIndex = process.argv.indexOf("--builder-module");
+const {
+  buildOpenAIResponsesParams,
+}: typeof import("../../packages/ai/src/transports/openai-responses-params-internal.js") =
+  await import(
+    builderIndex < 0
+      ? "../../packages/ai/src/transports/openai-responses-params-internal.js"
+      : pathToFileURL(resolve(process.argv[builderIndex + 1]!)).href
+  );
+const initialOptions = hook ? { onPayload: () => undefined } : undefined;
+let options: Parameters<typeof buildOpenAIResponsesParams>[2] = initialOptions;
+let conversions = 0;
+let plainDataChecks = 0;
+if (messageCount !== undefined) {
+  assert(Number.isSafeInteger(messageCount) && messageCount > 0, "--messages must be positive");
+}
+if (messageCount !== undefined || frozen || contextUsage) {
+  configureAiTransportHost({
+    transformTransportMessages: (...args) => {
+      conversions += 1;
+      return transformTransportMessages(...args);
+    },
+    immutableData: {
+      freezeJsonSnapshot,
+      isDeeplyFrozenPlainData(value) {
+        plainDataChecks++;
+        return isDeeplyFrozenPlainData(value);
+      },
+    },
+  });
+}
 const model: Model = {
   id: "fixture-model",
   name: "Synthetic",
@@ -37,24 +107,30 @@ if (process.argv.includes("--retained")) {
   assert(globalThis.gc, "--retained requires --expose-gc");
   const gc = globalThis.gc;
   const mimeType = process.argv.includes("--normalize-mime") ? "image/jpeg" : "image/png";
-  const fixture = (bytes: number): Context => ({
-    messages: Array.from({ length: 20 }, (_, index) => {
-      const image = Buffer.alloc(bytes, index);
-      Buffer.from("89504e470d0a1a0a", "hex").copy(image);
-      // Model history is decoded from JSON; keep distinct flat source strings live.
-      const data: string = JSON.parse(`"${image.toString("base64")}"`);
-      return {
-        role: "user",
-        timestamp: index,
-        content: [{ type: "image", mimeType, data }],
-      };
-    }),
-  });
+  const fixture = (bytes: number): Context => {
+    const history: Context = {
+      messages: Array.from({ length: 20 }, (_, index) => {
+        const image = Buffer.alloc(bytes, index);
+        Buffer.from("89504e470d0a1a0a", "hex").copy(image);
+        // Model history is decoded from JSON; keep distinct flat source strings live.
+        const data: string = JSON.parse(`"${image.toString("base64")}"`);
+        return {
+          role: "user",
+          timestamp: index,
+          content: [{ type: "image", mimeType, data }],
+        };
+      }),
+    };
+    if (frozen) {
+      history.messages.forEach(freezeJsonSnapshot);
+    }
+    return history;
+  };
   const send = (history: Context) =>
     createHash("sha256")
       .update(
         JSON.stringify(
-          sanitizeResponsesImagePayload(buildOpenAIResponsesParams(model, history, undefined)),
+          sanitizeResponsesImagePayload(buildOpenAIResponsesParams(model, history, options)),
         ),
       )
       .digest("hex");
@@ -119,6 +195,8 @@ if (process.argv.includes("--retained")) {
   console.log(
     JSON.stringify({
       mode: "retained",
+      frozen,
+      hook,
       images: 20,
       imageBytes: 500 * 1024,
       mimeType,
@@ -131,7 +209,7 @@ if (process.argv.includes("--retained")) {
 const imageBytes = Buffer.alloc(16 * 1024, 0x61);
 Buffer.from("89504e470d0a1a0a", "hex").copy(imageBytes);
 const messages: Context["messages"] = [];
-for (let turn = 0; turn < 200; turn++) {
+for (let turn = 0; turn < Math.max(200, Math.ceil((messageCount ?? 0) / 2)); turn++) {
   messages.push({
     role: "user",
     timestamp: turn,
@@ -148,6 +226,7 @@ for (let turn = 0; turn < 200; turn++) {
     provider: model.provider,
     api: model.api,
     model: model.id,
+    responseId: `resp_${turn}`,
     timestamp: turn,
     stopReason: call ? "toolUse" : "stop",
     usage: {
@@ -175,7 +254,7 @@ for (let turn = 0; turn < 200; turn++) {
               type: "toolCall" as const,
               id: `call_${turn}|fc_${turn}`,
               name: "lookup",
-              arguments: { query: `q${turn}` },
+              arguments: { query: messageCount ? `q${turn}`.padEnd(8192, "q") : `q${turn}` },
             },
           ]
         : []),
@@ -188,22 +267,103 @@ for (let turn = 0; turn < 200; turn++) {
       toolName: "lookup",
       timestamp: turn,
       isError: false,
-      content: [{ type: "text", text: `Result ${turn}` }],
+      content: [
+        {
+          type: "text",
+          text: messageCount ? `Result ${turn}`.padEnd(8192, "r") : `Result ${turn}`,
+        },
+      ],
     });
   }
 }
+if (messageCount !== undefined) {
+  messages.length = messageCount;
+}
+if (frozen) {
+  messages.forEach(freezeJsonSnapshot);
+}
 const context: Context = { systemPrompt: "Synthetic measurement", messages };
-const request = () =>
-  sanitizeResponsesImagePayload(buildOpenAIResponsesParams(model, context, undefined));
+const identity = { sessionId: "conversion-measure", authProfileId: "synthetic-profile" };
+if (contextUsage) {
+  // Capture the real managed wrapper's options once; the loop measures its owners.
+  await createOpenAIResponsesContextManagementWrapper((_model, _context, preparedOptions) => {
+    options = preparedOptions;
+    return createAssistantMessageEventStream();
+  }, undefined)(model, context, { ...initialOptions, ...identity });
+  const assistant = messages.find((message) => message.role === "assistant");
+  assert(assistant?.role === "assistant");
+  const checkpoint = { ...assistant, content: [] };
+  captureOpenAIResponsesCompaction(
+    checkpoint,
+    { type: "compaction", encrypted_content: "synthetic-checkpoint" },
+    0,
+    model,
+    buildOpenAIResponsesReasoningReplayMetadata(model, identity),
+  );
+  messages.unshift(checkpoint);
+  const request = buildOpenAIResponsesParams(model, context, options);
+  const measured = {
+    ...assistant,
+    content: [{ type: "text" as const, text: "Completed inspection" }],
+    usage: {
+      ...assistant.usage,
+      contextUsage: { state: "available" as const, promptTokens: 100_000, totalTokens: 100_100 },
+    },
+  };
+  recordResponsesContextUsage(measured, model, identity, request, [], "transport");
+  messages.push(measured, { role: "user", content: "Continue inspection", timestamp: 999 });
+  if (frozen) {
+    messages.forEach(freezeJsonSnapshot);
+  }
+}
+let pressure: ReturnType<typeof resolveProjectedRequestPressure> | undefined;
+const contexts = Array.from({ length: histories }, (_, index) => {
+  const copy = index === 0 ? context : cloneResponsesInputForPayloadHook(context);
+  if (frozen) {
+    copy.messages.forEach(freezeJsonSnapshot);
+  }
+  return copy;
+});
+let requestIndex = 0;
+const request = () => {
+  const requestContext = contextUsage ? { ...context } : contexts[requestIndex++ % histories]!;
+  if (contextUsage) {
+    pressure = resolveProjectedRequestPressure({
+      context: requestContext,
+      contextTokenBudget: 1_000_000,
+      reserveTokens: 0,
+      replay: { model, ...identity },
+    });
+  }
+  const params = buildOpenAIResponsesParams(model, requestContext, options);
+  if (contextUsage) {
+    assert.equal(options?.onPayload?.(params, model), undefined, "Fixture hooks patch in place");
+  }
+  return conversionOnly ? params : sanitizeResponsesImagePayload(params);
+};
+globalThis.gc?.();
+const retainedBefore = process.memoryUsage();
 const first = request();
-assert.equal(first.store, false);
+assert.equal(first.store, contextUsage);
 const wire = JSON.stringify(first);
 assert.equal(JSON.stringify(request()), wire);
 const wireSha256 = createHash("sha256").update(wire).digest("hex");
-for (let i = 0; i < 50; i++) {
+const pressureSha256 = pressure
+  ? createHash("sha256").update(JSON.stringify(pressure)).digest("hex")
+  : undefined;
+const warmup = Math.max(contextUsage ? 200 : 50, histories * 2);
+for (let i = 0; i < warmup; i++) {
   request();
 }
 globalThis.gc?.();
+const retainedWarm = process.memoryUsage();
+const gcEntries: { kind: number; ms: number }[] = [];
+let started = Infinity;
+let finished = Infinity;
+const observer = new PerformanceObserver((list) =>
+  recordGcCollections(list.getEntries(), gcEntries, started, finished),
+);
+observer.observe({ entryTypes: ["gc"] });
 const inspector = new Session();
 if (allocation) {
   inspector.connect();
@@ -213,32 +373,85 @@ if (allocation) {
     includeObjectsCollectedByMinorGC: true,
   });
 }
+const hostLoadBefore = loadavg();
 const cpu = process.cpuUsage();
+const threadCpu = process.threadCpuUsage();
 const start = performance.now();
+started = start;
+conversions = 0;
+plainDataChecks = 0;
 for (let i = 0; i < iterations; i++) {
   request();
 }
-const wallMs = performance.now() - start;
+finished = performance.now();
+const wallMs = finished - start;
+const mainThreadUsed = process.threadCpuUsage(threadCpu);
 const used = process.cpuUsage(cpu);
 let sampledBytes: number | undefined;
+let sampledInspectionBytes: number | undefined;
 if (allocation) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
   const sum = (node: typeof profile.head): number =>
     node.selfSize + node.children.reduce((n, child) => n + sum(child), 0);
   sampledBytes = sum(profile.head);
+  const inspections = (node: typeof profile.head): number =>
+    node.callFrame.functionName === "inspectPlainData"
+      ? sum(node)
+      : node.children.reduce((n, child) => n + inspections(child), 0);
+  sampledInspectionBytes = inspections(profile.head);
   inspector.disconnect();
 }
+await nextTurn();
+await nextTurn();
+observer.disconnect();
+const memoryBeforeFinalGc = process.memoryUsage();
+globalThis.gc?.();
+const retainedAfter = process.memoryUsage();
 console.log(
   JSON.stringify({
     iterations,
+    warmup,
     messages: messages.length,
-    images: 4,
+    histories,
+    frozen,
+    hook,
+    conversionOnly,
+    contextUsage,
+    conversionsPerRequest: conversions / iterations,
+    plainDataChecksPerRequest: plainDataChecks / iterations,
+    pressureSha256,
+    images: messages.filter(
+      (message) =>
+        message.role === "user" &&
+        Array.isArray(message.content) &&
+        message.content.some((block) => block.type === "image"),
+    ).length,
     imageBytes: imageBytes.length,
     wireSha256,
     mode: allocation ? "allocation" : "timing",
     cpuUsPerRequest: (used.user + used.system) / iterations,
+    mainThreadCpuUsPerRequest: (mainThreadUsed.user + mainThreadUsed.system) / iterations,
+    wallUsPerRequest: (wallMs * 1000) / iterations,
     wallMs,
+    gc: {
+      count: gcEntries.length,
+      totalMs: gcEntries.reduce((sum, entry) => sum + entry.ms, 0),
+      maxMs: Math.max(0, ...gcEntries.map((entry) => entry.ms)),
+      byKind: [1, 4, 8].map((kind) => ({
+        kind,
+        count: gcEntries.filter((entry) => entry.kind === kind).length,
+        ms: gcEntries
+          .filter((entry) => entry.kind === kind)
+          .reduce((sum, entry) => sum + entry.ms, 0),
+      })),
+    },
+    retainedWarmHeapBytes: retainedWarm.heapUsed - retainedBefore.heapUsed,
+    retainedFinalHeapBytes: retainedAfter.heapUsed - retainedBefore.heapUsed,
+    memoryBeforeFinalGc,
+    hostLoadBefore,
     sampledBytesPerRequest: sampledBytes === undefined ? undefined : sampledBytes / iterations,
+    sampledInspectionBytesPerRequest:
+      sampledInspectionBytes === undefined ? undefined : sampledInspectionBytes / iterations,
     hostLoad: loadavg(),
     memory: process.memoryUsage(),
   }),

@@ -158,7 +158,7 @@ describe("config form and navigation", () => {
       [...groups[0]!.querySelectorAll(".settings-row__title")].map((node) =>
         node.textContent?.trim(),
       ),
-    ).toEqual(["Open links in Control UI browser", "Browser Enabled"]);
+    ).toEqual(["Open links in Control UI browser", "Enabled"]);
   });
 
   it("honors advanced disclosure overrides and subsection scope", () => {
@@ -442,7 +442,7 @@ describe("config form and navigation", () => {
       expect(picker.selectedOptions[0]?.textContent?.trim()).toBe("Other");
       const content = () => normalizedText(required(container, ".settings-page", HTMLElement));
       expect(content()).toContain("Group policy");
-      expect(content()).toContain("Channel Model Overrides");
+      expect(content()).toContain("Channel model overrides");
       expect(content()).not.toContain("Bot username");
       props.onSubsectionChange = (key) => {
         props.activeSubsection = key;

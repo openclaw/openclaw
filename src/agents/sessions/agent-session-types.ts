@@ -32,6 +32,7 @@ type AgentSessionCompactionOutcome =
       tokensAfter: number;
       willRetry: boolean;
       qualityDegraded?: true;
+      summaryRefused?: true;
     }
   | { status: "skipped"; reason: string }
   | { status: "failed"; reason: string }

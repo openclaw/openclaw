@@ -78,6 +78,10 @@ commands flush buffered text before their own dispatch. Channel batches preserve
 arrival order through turn admission. Stopping the monitor cancels buffered work
 and leaves unadopted durable posts available for recovery.
 
+Human posts carrying message attachment cards, such as `slack_attachment` link
+previews, follow normal sender and bot admission checks and stay separate from
+batched text. Actual `system_*` posts are ignored.
+
 ## Native slash commands
 
 Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash commands on every team the bot is a member of and receives callback POSTs on the gateway HTTP server.
@@ -267,6 +271,39 @@ Example:
 }
 ```
 
+## Posts from other bots
+
+Mattermost marks every post created by a bot account with `from_bot`. OpenClaw uses that marker to tell bot posts apart from human posts. The receiving bot's own posts are always ignored.
+
+`channels.mattermost.allowBots` controls whether posts from other bot accounts can start a turn:
+
+- `true` (default): bot posts follow the same access and mention rules as human posts.
+- `"mentions"`: in channels, a bot post must @mention this bot, match a mention pattern, or use an `onchar` prefix. Thread participation does not count, so two bots replying in the same thread cannot keep waking each other. Unmentioned bot posts are kept as channel context. Direct messages from bots are unaffected.
+- `false`: bot posts are ignored.
+
+Account values override the channel-wide value. For an individual channel, `groups.<channelId>.allowBots` overrides `groups["*"].allowBots`, then the account value.
+
+Accepted bot posts pass through [bot loop protection](/channels/bot-loop-protection). When two bots exchange more than `maxEventsPerWindow` posts in one channel within `windowSeconds`, the receiving bot ignores the other one for `cooldownSeconds`. Set `channels.mattermost.botLoopProtection`, `channels.mattermost.accounts.<id>.botLoopProtection`, or `channels.mattermost.groups.<channelId>.botLoopProtection`; values merge key by key over `groups["*"]`, the account, and `channels.defaults.botLoopProtection`. Each suppressed post is logged as `mattermost: drop bot post (bot-loop-protection channel=<id> sender=<id>)`.
+
+The default budget (20 posts in 60 seconds) stops fast loops. Agent replies often take tens of seconds, so two agents sharing a channel can stay under it. For that setup, combine `allowBots: "mentions"` with a longer window:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      allowBots: "mentions",
+      botLoopProtection: {
+        maxEventsPerWindow: 6,
+        windowSeconds: 600,
+        cooldownSeconds: 1800,
+      },
+    },
+  },
+}
+```
+
+Only Mattermost bot accounts carry the marker. An integration that posts with a regular user's access token looks like a person to OpenClaw.
+
 ## Targets for outbound delivery
 
 Use these target formats with `openclaw message send` or cron/webhooks:
@@ -280,6 +317,7 @@ Use these target formats with `openclaw message send` or cron/webhooks:
 
 Outbound sends support at most one attachment per message; split multiple files into separate sends.
 Unsupported binary attachment objects are rejected before any message is posted.
+Text sent with an attachment follows `textChunkLimit` and `streaming.chunkMode`: the first chunk is posted with the file and the rest follow as separate posts in the same thread.
 
 Set `channels.mattermost.mediaMaxMb` to limit each inbound download and outbound
 attachment in MiB. `accounts.<id>.mediaMaxMb` overrides the channel root, then

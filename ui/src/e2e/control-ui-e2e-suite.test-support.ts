@@ -63,7 +63,7 @@ type ControlUiE2eScenarioOwner = {
   controller: AbortController;
   test: ControlUiE2eScenarioContext;
 };
-type ControlUiE2eSuite = {
+export type ControlUiE2eSuite = {
   readonly artifactDir: string;
   readonly browser: Browser;
   readonly server: ControlUiE2eServer;

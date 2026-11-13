@@ -111,7 +111,8 @@ suite.define(() => {
     try {
       const gateway = await installMockGateway(page, {
         assistantName: initialName,
-        historyMessages: [],
+        historyMessages: [{ role: "assistant", content: "Ready to help with the garden." }],
+        sessions: [{ key: mainSessionKey, kind: "group", updatedAt: 1 }],
         communityInvite: false,
         methodResponses: {
           "agent.identity.get": identity(initialName, initialAvatar),
@@ -119,8 +120,8 @@ suite.define(() => {
         },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "main"));
-      const heading = page.locator(".agent-chat__welcome-identity h2");
-      const avatar = page.locator(".agent-chat__welcome-avatar");
+      const heading = page.locator(".chat-group.assistant .chat-sender-name").first();
+      const avatar = page.locator(".chat-group.assistant .chat-avatar").first();
       const avatarText = avatar.locator(".identity-avatar__text");
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await expect.poll(() => heading.textContent()).toBe(initialName);
@@ -128,7 +129,7 @@ suite.define(() => {
       await expect.poll(() => composer.getAttribute("placeholder")).toContain(initialName);
       await composer.fill(draft);
       const sessionUrl = page.url();
-      expect(await page.locator(".chat-group").count()).toBe(0);
+      expect(await page.locator(".chat-group").count()).toBe(1);
 
       const refreshes = [];
       for (const [method, response] of [
@@ -157,7 +158,7 @@ suite.define(() => {
       };
       expect(await composer.inputValue()).toBe(draft);
       expect(page.url()).toBe(sessionUrl);
-      expect(await page.locator(".chat-group").count()).toBe(0);
+      expect(await page.locator(".chat-group").count()).toBe(1);
       expect((await gateway.getRequests("chat.send")).length).toBe(0);
 
       await page.getByRole("button", { name: "Send message" }).click();
@@ -168,7 +169,7 @@ suite.define(() => {
       await gateway.emitChatFinal({ runId, text: reply });
       await page.locator(".chat-group.assistant .chat-text", { hasText: reply }).waitFor();
       const sender = (
-        await page.locator(".chat-group.assistant .chat-sender-name").first().textContent()
+        await page.locator(".chat-group.assistant .chat-sender-name").last().textContent()
       )?.trim();
       expect(page.url()).toBe(sessionUrl);
       expect((await gateway.getRequests("chat.send")).length).toBe(1);

@@ -14,9 +14,12 @@ import {
   onCleanup,
   onSettled,
 } from "solid-js";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { PortalPanelToggleDetail } from "../../components/panel-toggle-contract.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
 import { registerPortalsEnglish } from "../../i18n/locales/en-portals.ts";
@@ -99,7 +102,9 @@ function EmptyState(props: { model: PortalsModel; mobile?: boolean }) {
                   <div class="portals-empty__note">{t("portalsPage.unsupported")}</div>
                 </Show>
                 <Show when={state().error}>
-                  <div class="callout danger">{state().error}</div>
+                  <InlineAlert tone="danger" role="none">
+                    {state().error}
+                  </InlineAlert>
                 </Show>
               </>
             }
@@ -274,6 +279,7 @@ function PortalPreview(props: {
                 if (item.id === "copy") {
                   void copyToClipboard(props.portal.publicUrl).then((copied) =>
                     showToast({
+                      severity: copied ? "success" : "error",
                       message: t(
                         copied ? "portalsPage.embeddedCopied" : "portalsPage.embeddedCopyFailed",
                       ),
@@ -321,22 +327,19 @@ function PortalPreview(props: {
               <Icon name="externalLink" />
               <span class="sr-only">{t("portalsPage.openNewTab")}</span>
             </a>
-            <button
-              class="btn btn--icon btn--ghost portals-preview__close"
-              type="button"
-              title={t("portalsPage.closePortal", { title: props.portal.title })}
-              aria-label={t("portalsPage.closePortal", { title: props.portal.title })}
+            <IconButton
+              class="portals-preview__close"
+              icon="x"
+              label={t("portalsPage.closePortal", { title: props.portal.title })}
               disabled={!state().canClosePortal || props.closing === props.portal.id}
               onClick={() => props.closePortal(props.portal)}
-            >
-              <Icon name="x" />
-            </button>
+            />
           </header>
         </Show>
         <Show when={state().error}>
-          <div class="callout danger portals-preview__error" role="alert">
+          <InlineAlert tone="danger" class="portals-preview__error" role="alert">
             {state().error}
-          </div>
+          </InlineAlert>
         </Show>
         <Show when={probeRead()} fallback={<PortalProbeLoading />}>
           <Loading on={probeRead()} fallback={<PortalProbeLoading />}>
@@ -439,7 +442,9 @@ function PortalReadiness(props: {
       <Errored
         fallback={(error, reset) => (
           <section class="portals-empty" role="alert">
-            <div class="callout danger">{formatUiError(error())}</div>
+            <InlineAlert tone="danger" role="none">
+              {formatUiError(error())}
+            </InlineAlert>
             <button
               class="btn"
               type="button"
@@ -502,7 +507,7 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
     const pending = props.model.closePortal(portal);
     await Promise.resolve();
     await presentClose(view, portal.id, pending, retired).catch((error: unknown) =>
-      showToast({ message: formatUiError(error) }),
+      showToast({ severity: "error", message: formatUiError(error) }),
     );
   };
   const closing = () => presentation().closing() ?? state().closingPortalId;
@@ -540,7 +545,7 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
         <Show
           when={props.model.presentation().embedded}
           fallback={
-            <>
+            <ShellLayoutBoundary traits={{ portalsPage: true }}>
               <HubPageHeader
                 active="portals"
                 wide
@@ -581,7 +586,7 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
                   </section>
                 </Show>
               </PortalReadiness>
-            </>
+            </ShellLayoutBoundary>
           }
         >
           <div

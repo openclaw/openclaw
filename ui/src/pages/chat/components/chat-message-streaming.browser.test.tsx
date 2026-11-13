@@ -324,7 +324,9 @@ describe("streaming Markdown DOM", () => {
           table!.rows[1]!.cells[1]!.textContent = "Short";
         }
       });
-      expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(wide);
+      await expect
+        .poll(() => shell.classList.contains("markdown-table--can-scroll-right"))
+        .toBe(wide);
       expect(container.querySelector(".markdown-table__copy svg")).toBe(icon);
     }
   });

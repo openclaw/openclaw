@@ -3,6 +3,7 @@ import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { classifyGatewayStorageFailure } from "../../../infra/sqlite-error-diagnostics.js";
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import { withAgentTerminalSnapshot } from "../../agent-terminal-snapshot.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import {
   buildAssistantFailoverSignal,
@@ -310,6 +311,7 @@ export async function handleEmbeddedAssistantFailure(input: {
       fallbackConfigured: runInput.fallbackConfigured,
       failoverFailure,
       failoverReason: assistantFailoverReason,
+      errorMessage: failedAssistant?.errorMessage,
       harnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
       profileRotated,
     });
@@ -362,7 +364,10 @@ export async function handleEmbeddedAssistantFailure(input: {
         failedModel: error.model ?? modelId,
       });
     }
-    throw error;
+    throw withAgentTerminalSnapshot(
+      error,
+      !terminalInterrupted && failedAssistant ? attempt.agentTerminal : undefined,
+    );
   };
 
   if (decision.action === "rotate_profile") {

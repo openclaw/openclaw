@@ -20,12 +20,18 @@ import {
   listUserModelAccounts,
   readSelectedUserModelAccount,
 } from "./user-model-accounts.js";
+import { ensureDelegatedUserProfile } from "./user-profile-delegation.worker.js";
 import { ensureEnterpriseGitHubProfile } from "./user-profile-enterprise-github-write.worker.js";
 import {
   selectProfileAccessEntries,
   selectStoredGitHubIdentities,
   selectUserProfileRoleAuthority,
 } from "./user-profile-github-identity.js";
+import {
+  ensureOpenClawIdUserProfile,
+  linkOpenClawIdUserProfile,
+  unlinkOpenClawIdUserProfile,
+} from "./user-profile-openclaw-id.worker.js";
 import {
   createUserProfileWriteOperation,
   linkEmail,
@@ -90,6 +96,11 @@ function accountWrite<Input extends { profileId: string }, Output>(
 }
 
 const userProfileWriteOperations = {
+  "userProfiles.ensureDelegated": createUserProfileWriteOperation(
+    "userProfiles.ensureDelegated",
+    (input: Parameters<typeof ensureDelegatedUserProfile>[0], owned) =>
+      ensureDelegatedUserProfile(input, owned),
+  ),
   "userProfiles.setRole": createUserProfileWriteOperation(
     "userProfiles.setRole",
     (input: { profileId: string; role: string | null }, owned) =>
@@ -134,6 +145,23 @@ const userProfileWriteOperations = {
     "userProfiles.ensureTailscale",
     (input: Parameters<typeof ensureProfileForTailscaleIdentity>[0], owned) =>
       ensureProfileForTailscaleIdentity(input, owned),
+  ),
+  "userProfiles.ensureOpenClawId": createUserProfileWriteOperation(
+    "userProfiles.ensureOpenClawId",
+    (input: Parameters<typeof ensureOpenClawIdUserProfile>[0], owned) =>
+      ensureOpenClawIdUserProfile(input, owned),
+  ),
+  "userProfiles.linkOpenClawId": createUserProfileWriteOperation(
+    "userProfiles.linkOpenClawId",
+    (input: Parameters<typeof linkOpenClawIdUserProfile>[0], owned) =>
+      linkOpenClawIdUserProfile(input, owned),
+    (input) => input.profileId,
+  ),
+  "userProfiles.unlinkOpenClawId": createUserProfileWriteOperation(
+    "userProfiles.unlinkOpenClawId",
+    (input: Parameters<typeof unlinkOpenClawIdUserProfile>[0], owned) =>
+      unlinkOpenClawIdUserProfile(input, owned),
+    (input) => input.profileId,
   ),
   "userProfiles.syncGitHub": createUserProfileWriteOperation(
     "userProfiles.syncGitHub",

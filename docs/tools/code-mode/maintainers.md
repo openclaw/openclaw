@@ -123,3 +123,20 @@ Run these against both executors when changing the runtime:
     code-mode call.
 
 Docs-only changes to this page should still run `pnpm check:docs`.
+
+## Engine performance qualification
+
+Use the opt-in `src/agents/code-mode-engine-owner.perf.test.ts` probe for executor
+comparisons. It follows the public execution owner with deterministic external
+I/O and binds a scheduler/resource host so warm Node workers are actually reused.
+The plugin's `bench/engine-attribution.ts` separates controller initialization,
+guest computation, snapshots and restore. The investigation and measured source
+identities live beside it in `extensions/code-mode-quickjs/bench/README.md`.
+
+Alternate at least five independent processes per comparison arm. Keep source,
+runtime, effective resources, catalog size and workload fixed; report cold and
+warm separately. Worker task duration includes asynchronous waits and is not
+CPU time. Source-worker startup and between-cell RSS samples do not establish
+packaged startup or peak Gateway memory. A ShellBench claim additionally needs
+matched model, tasks, retries and trace validity, with accuracy, total calls,
+tokens and end-to-end latency measured together.

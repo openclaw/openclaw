@@ -1,6 +1,6 @@
-import { For, Show } from "solid-js";
+import { action, createMemo, createOptimistic, For, Show } from "solid-js";
 import type { CyberAccessProgram } from "../../../api/types.ts";
-import { DETAILS_SECTION_MOTION } from "../../../components/details-section-motion.ts";
+import { DETAILS_SECTION_MOTION } from "../../../components/details-section-motion-options.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { SettingsToggle } from "../../../components/solid/settings-ui.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -26,9 +26,16 @@ export type ChatAccessProgramControlProps = {
 };
 
 export function ChatAccessProgramControl(props: ChatAccessProgramControlProps) {
+  const [saving, setSaving] = createOptimistic(false);
+  const select = action(function* (...args: Parameters<ChatAccessProgramControlProps["onSelect"]>) {
+    setSaving(true);
+    yield props.onSelect(...args);
+  });
   const programs = () => (props.programs ?? []).filter((program) => program !== "standard");
   const selected = () => props.requested ?? props.effectiveAccessProgram;
-  const enabled = () => selected() !== undefined && selected() !== "standard";
+  // Streamed snapshots must not reset native activation before the change event.
+  const enabled = createMemo(() => selected() !== undefined && selected() !== "standard");
+  const disabled = createMemo(() => props.disabled);
   const unavailable = () => {
     const current = selected();
     return props.programs !== undefined &&
@@ -48,11 +55,13 @@ export function ChatAccessProgramControl(props: ChatAccessProgramControlProps) {
         }}
       >
         <div class="chat-controls__access-head">
-          <span class="chat-controls__effort-heading">{t("chat.modelControls.daybreak")}</span>
+          <span class="oc-menu-heading__label">{t("chat.modelControls.daybreak")}</span>
           <SettingsToggle
+            size="sm"
             ariaLabel={t("chat.modelControls.daybreak")}
             checked={enabled()}
-            disabled={props.disabled}
+            disabled={disabled()}
+            saving={saving()}
             onChange={(checked) => {
               if (checked) {
                 const next =
@@ -60,11 +69,11 @@ export function ChatAccessProgramControl(props: ChatAccessProgramControlProps) {
                     ? props.previous
                     : programs()[0];
                 if (next) {
-                  void props.onSelect(next, props.sessionKey);
+                  void select(next, props.sessionKey);
                 }
               } else {
                 const current = selected();
-                void props.onSelect(
+                void select(
                   "standard",
                   props.sessionKey,
                   current !== "standard" ? current : undefined,
@@ -103,10 +112,11 @@ export function ChatAccessProgramControl(props: ChatAccessProgramControlProps) {
                     class="chat-controls__access-option"
                     data-chat-access-option={program}
                     aria-pressed={selected() === program ? "true" : "false"}
-                    disabled={props.disabled}
+                    disabled={disabled()}
+                    aria-disabled={saving() ? "true" : undefined}
                     onClick={() => {
-                      if (program !== selected()) {
-                        void props.onSelect(program, props.sessionKey);
+                      if (!saving() && program !== selected()) {
+                        void select(program, props.sessionKey);
                       }
                     }}
                   >

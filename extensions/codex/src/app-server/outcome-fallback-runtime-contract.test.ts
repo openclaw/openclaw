@@ -177,7 +177,9 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
         }
         expect(reasoningMessage).toStrictEqual(
           expect.objectContaining({
-            __openclaw: expect.objectContaining({ mirrorIdentity: `${TURN_ID}:reasoning` }),
+            __openclaw: expect.objectContaining({
+              mirrorIdentity: `${TURN_ID}:reasoning:reasoning-1`,
+            }),
             api: "openai-chatgpt-responses",
             provider: "codex",
             model: contract.primaryModel,

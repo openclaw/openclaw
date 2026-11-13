@@ -285,9 +285,9 @@ it("keeps failure streaks independent by file", async () => {
 // A deleted directory reached through its open descriptor mirrors a stale mounted
 // /tmp: children fail with ENOENT while the parent path still resolves, the shape
 // on which Node's recursive mkdirSync never returns.
-it.skipIf(process.platform !== "linux")(
-  "drops records with a warning when the log directory parent is deleted but still resolvable",
-  async () => {
+it.skipIf(process.platform !== "linux").each(["explicit", "default"])(
+  "drops %s records with a warning when the log directory parent is deleted but still resolvable",
+  async (target) => {
     const deletedDir = logPathTracker.nextPath();
     fs.mkdirSync(deletedDir);
     const fd = fs.openSync(deletedDir, "r");
@@ -295,7 +295,17 @@ it.skipIf(process.platform !== "linux")(
       fs.rmdirSync(deletedDir);
       logPath = `/proc/self/fd/${fd}/openclaw/openclaw.log`;
       const stderrSpy = captureStderr();
-      logTo(logPath, "only-record-after-deletion");
+      if (target === "explicit") {
+        logTo(logPath, "only-record-after-deletion");
+      } else {
+        logPath = "openclaw-deleted-state.log";
+        fileLogTransport.enqueue({
+          ...entry(logPath, "only-record-after-deletion\n"),
+          targetPreparation: fileLogTransport.prepareTarget(logPath, true, {
+            options: { stateDir: `/proc/self/fd/${fd}/state` },
+          }),
+        });
+      }
       await fileLogTransport.flush();
 
       const warnings = warningLines(stderrSpy);
@@ -306,12 +316,22 @@ it.skipIf(process.platform !== "linux")(
   },
 );
 
-it("writes a piped append warning before process exit", () => {
+it("shares exit cleanup while flushing queued warnings and later logs", () => {
   fs.mkdirSync(logPath);
+  const exitLogPath = logPathTracker.nextPath();
   const loaderPath = fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url));
   const loggerUrl = new URL("./logger.ts", import.meta.url).href;
+  const cleanupUrl = new URL("../infra/process-exit-cleanup.ts", import.meta.url).href;
   const script = `
+      import assert from "node:assert/strict";
       import { getLogger, setLoggerOverride } from ${JSON.stringify(loggerUrl)};
+      import { registerProcessExitCleanup } from ${JSON.stringify(cleanupUrl)};
+      const exitListeners = process.listenerCount("exit");
+      registerProcessExitCleanup(() => {
+        setLoggerOverride({ level: "info", file: ${JSON.stringify(exitLogPath)} });
+        getLogger().info("exit-owner-record");
+      });
+      assert.equal(process.listenerCount("exit"), exitListeners, "adjacent exit cleanup must share logger listener");
       const writeStderr = process.stderr.write.bind(process.stderr);
       process.stderr.write = (chunk, ...args) => {
         setImmediate(() => writeStderr(chunk, ...args));
@@ -329,8 +349,9 @@ it("writes a piped append warning before process exit", () => {
   });
 
   expect(result.error).toBeUndefined();
-  expect(result.status).toBe(0);
+  expect(result.status, result.stderr).toBe(0);
   expect(result.stderr).toContain("log file append failed; records dropped");
+  expect(records(exitLogPath).map((record) => record.message)).toEqual(["exit-owner-record"]);
 });
 
 it("retries the warning after stderr rejects it", async () => {

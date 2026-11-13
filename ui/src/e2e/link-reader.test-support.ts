@@ -1,4 +1,4 @@
-import { chromium, type Page } from "playwright";
+import { chromium, type BrowserContextOptions, type Page } from "playwright";
 import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
@@ -46,12 +46,16 @@ async function openReader(page: Page, baseUrl: string, options: ReaderOptions) {
 export async function withLinkReader(
   options: ReaderOptions,
   run: (fixture: ReaderFixture) => Promise<void>,
+  contextOptions: BrowserContextOptions = {},
 ) {
   const server = await startControlUiE2eServer();
   const browser = await chromium.launch({
     executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
   });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 900 },
+    ...contextOptions,
+  });
   try {
     await run(await openReader(await context.newPage(), server.baseUrl, options));
   } finally {

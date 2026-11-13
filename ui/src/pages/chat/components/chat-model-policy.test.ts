@@ -87,7 +87,7 @@ it.each([undefined, "fixture/primary", "fixture/automatic", null])(
     expect(onModelSelect).toHaveBeenCalledWith("fixture/custom", "main", undefined);
     if (restricted) {
       expect(container.textContent).not.toContain("forbidden");
-      expect(control("policy")?.textContent).toContain("administrator");
+      expect(control("policy")?.textContent).toContain("Your admin chooses");
       const reset = control("default", "true");
       if (defaultModel) {
         expect(reset?.getAttribute("data-chat-model-option")).toBe(defaultModel);
@@ -117,7 +117,7 @@ it.each([false, true])(
     if (retired) {
       expect(container.textContent).not.toContain("forbidden");
     } else {
-      expect(container.textContent).toContain("No models are permitted by your administrator.");
+      expect(container.textContent).toContain("No models are permitted by your admin.");
       expect(control("setup")).toBeNull();
     }
   },

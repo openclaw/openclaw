@@ -10,8 +10,7 @@ import { createCommandTest, type CommandFixture } from "../helpers/command-fixtu
 import { readCiCheckoutStep, renderGitTestClock } from "./ci-checkout.test-support.js";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
 
-// Each case owns its checkout and process trees. Overlap their real timeout and
-// drain waits, but keep subprocess pressure bounded on the four-core CI runner.
+// Each case owns its checkout and process trees; bound subprocess pressure on CI.
 beforeAll(() => {
   vi.setConfig({ maxConcurrency: 2 });
   return () => vi.resetConfig();
@@ -762,17 +761,16 @@ linuxIt.for([
 ] as const)(
   "base policy stops before availability/retry on $label",
   { timeout: 55_000 },
-  async ({ result, code, ...entry }, { signal }) => {
+  async ({ label: _label, result, code, ...options }, { signal }) => {
     const report = await runBase(signal, [result], {
       baseAvailableAfter: 1,
-      realDrain: true,
-      scenario: "scenario" in entry ? entry.scenario : undefined,
-      cancelDuringCleanup: "cancelDuringCleanup" in entry,
+      realDrain: false,
+      ...options,
     });
     expectReport(report, { code }, { fetches: 1 });
     expect(report.commands.filter(({ args }) => args[0] === "rev-parse")).toHaveLength(1);
     expect(report.output).not.toContain("Resolved base commit");
-    expect(report.cancelledDuringCleanup).toBe("cancelDuringCleanup" in entry);
+    expect(report.cancelledDuringCleanup).toBe("cancelDuringCleanup" in options);
   },
 );
 
@@ -782,15 +780,14 @@ linuxIt(
     const report = await runBase(signal, ["hang", 0], {
       baseAvailableAfter: 2,
       realClock: true,
+      realDrain: false,
       readyFetchClockAdvanceSeconds: 30,
     });
-    expect(report.code, report.output).toBe(0);
+    expectReport(report, { code: 0, readyAttempts: [1, 2] });
     expect(report.output).toContain("exact fetch failed");
-    expect(report.readyAttempts).toEqual([1, 2]);
-    expect(report.output.match(/fixture fetch timeout: \d+/gu)).toEqual([
-      "fixture fetch timeout: 30",
-      "fixture fetch timeout: 30",
-    ]);
+    expect(report.output.match(/fixture fetch timeout: \d+/gu)).toEqual(
+      Array(2).fill("fixture fetch timeout: 30"),
+    );
     expect(report.fetchClockAdvancedSeconds).toBe(30);
   },
   55_000,
@@ -901,6 +898,7 @@ const sanity = (
 ) =>
   runCiGitStep({
     signal,
+    realDrain: false,
     ...options,
     workflow: "workflow-sanity",
     objects: { ...auditObjects, ...options.objects },
@@ -1134,6 +1132,22 @@ function maturityRun(
   });
 }
 
+posixIt(
+  "generated publisher batches multi-path inspection without changing published blobs",
+  async ({ signal }) => {
+    const generatedFiles = Object.fromEntries(
+      ["a", "b", "c", "d"].map((name) => [`generated/${name}.txt`, `desired-${name}\n`]),
+    );
+    const report = await publisherRun(signal, { publisher: { generatedFiles } });
+    expectReport(report, { code: 0, authHeaderPresent: false }, { pushes: 1 });
+    const publication = expectDefined(report.publication, "real generated publication");
+    expect(publication.branchHead).toBe(publication.localHead);
+    expect(publication.generatedFiles).toEqual(generatedFiles);
+    expect(report.githubSummary).toContain("Generated pull request:");
+    expect(commandArgs(report, "ls-tree")).toHaveLength(4);
+  },
+);
+
 // The shared owner fences ordinary calls; push has its own typed recovery boundary.
 posixIt.for(["cleanup-failure", "cancel"] as const)(
   "generated publisher push %s is terminal before any continuation",
@@ -1184,24 +1198,51 @@ posixIt.for(["ls-remote"])(
   },
 );
 
-posixIt.for([
-  ["overlap tree read", "^ls-tree ", 1, {}],
-  ["ancestor probe", "^merge-base ", 1, {}],
-  ["reconciliation tree read", "^ls-tree ", 5, { reconciliation: "missing" }],
-] satisfies [
-  string,
-  string,
-  number,
-  NonNullable<Parameters<typeof publisherRun>[1]>["publisher"],
-][])(
-  "generated publisher ordinary failure inside %s never becomes success",
+posixIt.for(
+  (
+    [
+      ["overlap tree read", "^ls-tree ", 1, {}],
+      ["ancestor probe", "^merge-base ", 1, {}],
+      [
+        "reconciliation tree read",
+        `^ls-tree -t -z --full-tree ${remoteMain} `,
+        2,
+        { reconciliation: "missing" },
+      ],
+    ] satisfies [
+      string,
+      string,
+      number,
+      NonNullable<Parameters<typeof publisherRun>[1]>["publisher"],
+    ][]
+  ).flatMap(([label, match, occurrence, publisher]) =>
+    ([23, "cleanup-failure", "cancel"] as const).map((code) => ({
+      label,
+      match,
+      occurrence,
+      publisher,
+      code,
+    })),
+  ),
+)(
+  "generated publisher $code inside $label never becomes success",
   { timeout: 55_000 },
-  async ([_label, match, occurrence, publisher], { signal }) => {
+  async ({ match, occurrence, publisher, code }, { signal }) => {
     const report = await publisherRun(signal, {
       publisher: { baseChangePath: null, ...publisher },
-      gitFault: { match, occurrence, code: 23 },
+      gitFault: { match, occurrence, code, output: "partial tree record\n" },
     });
-    expectReport(report, { code: 23, githubSummary: "", authHeaderPresent: false });
+    expectReport(report, {
+      code: code === "cancel" ? 143 : code === "cleanup-failure" ? 125 : code,
+      githubSummary: "",
+      authHeaderPresent: code !== 23,
+    });
+    expect(
+      report.commands.filter(({ args }) => new RegExp(match).test(args.join(" "))),
+    ).toHaveLength(occurrence);
+    if (code !== 23) {
+      expect(report.commands.at(-1)?.args.join(" ")).toMatch(new RegExp(match));
+    }
     expect(report.output).not.toMatch(
       /Generated output was merged|Deferred stale|Neutralized stale/u,
     );

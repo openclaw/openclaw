@@ -86,7 +86,7 @@ suite.define(() => {
     const dialog = page.getByRole("dialog", { name: "Switch to Demo model B?", exact: true });
     await dialog.waitFor();
     await dialog
-      .getByText("This conversation is cached for Demo model A.", { exact: false })
+      .getByText("Switching re-sends the whole conversation to Demo model B", { exact: false })
       .waitFor();
     await dialog.getByRole("checkbox", { name: "Don’t ask again", exact: true }).check();
     await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -157,7 +157,7 @@ suite.define(() => {
       ts: 3,
     });
     const noticeLine = page.locator(".chat-divider__title").filter({
-      hasText: "Model changed from openai/demo-a to openai/demo-b.",
+      hasText: "Model changed from Demo model A to Demo model B.",
     });
     await noticeLine.waitFor();
     expect(
@@ -435,7 +435,7 @@ suite.define(() => {
       });
       expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-      const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+      const stop = page.getByRole("button", { name: "Stop", exact: true });
       expect(await stop.count()).toBe(1);
       await gateway.emitChatFinal({ runId, text: "The first reply finished normally." });
       await bubble(page, "The first reply finished normally.");

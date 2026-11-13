@@ -1,5 +1,5 @@
 import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
-import { resolveEmbeddingInputFormatVersion } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { resolveEmbeddingInputFormatVersion } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import {
   decodeMemoryEmbedding,
   type MemorySource,
@@ -28,10 +28,52 @@ export type MemoryRebuildEmbeddingQuery = {
   dimensions?: number;
 };
 
-/** Read only this rebuild batch, using the published source/path index on either engine. */
+type MemoryPublishedVectorMeta = {
+  meta: { model: string; vectorDims: number };
+  serialized: string;
+};
+
+/** Bind published chunk vectors to one of the requested identities, or to none. */
+export function readMemoryPublishedVectorMeta(
+  database: EngineConnection,
+  identities: MemoryIndexProviderIdentity[],
+  dimensions?: number,
+): MemoryPublishedVectorMeta | undefined {
+  const db = getNodeSqliteKysely<{ memory_index_meta: { key: string; value: string } }>(database);
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    db.selectFrom("memory_index_meta").select("value").where("key", "=", MEMORY_INDEX_META_KEY),
+  );
+  if (!row) {
+    return undefined;
+  }
+  let meta: unknown;
+  try {
+    meta = JSON.parse(row.value);
+  } catch {
+    return undefined;
+  }
+  if (
+    !Value.Check(rebuildIdentitySchema, meta) ||
+    meta.model === "fts-only" ||
+    !identities.some(
+      (identity) =>
+        meta.provider === identity.provider &&
+        meta.model === identity.model &&
+        meta.providerKey === identity.providerKey,
+    ) ||
+    (meta.embeddingInputFormatVersion ?? 0) !== resolveEmbeddingInputFormatVersion(meta.model) ||
+    (dimensions !== undefined && dimensions !== meta.vectorDims)
+  ) {
+    return undefined;
+  }
+  return { meta, serialized: row.value };
+}
+
+/** Read only the requested batch, using the published source/path index on either engine. */
 export function loadMemoryRebuildEmbeddings(params: {
   db: EngineConnection;
-  identity: MemoryIndexProviderIdentity;
+  identities: MemoryIndexProviderIdentity[];
   query: MemoryRebuildEmbeddingQuery;
   cached: Map<string, number[]>;
 }): void {
@@ -61,32 +103,15 @@ export function loadMemoryRebuildEmbeddings(params: {
       embedding: Uint8Array;
     };
   }>(params.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    params.db,
-    db.selectFrom("memory_index_meta").select("value").where("key", "=", MEMORY_INDEX_META_KEY),
-  );
-  if (!row) {
+  const { query } = params;
+  const published = readMemoryPublishedVectorMeta(params.db, params.identities, query.dimensions);
+  if (!published) {
     return;
   }
-  let meta: unknown;
-  try {
-    meta = JSON.parse(row.value);
-  } catch {
-    return;
-  }
-  const { identity, query } = params;
-  if (
-    !Value.Check(rebuildIdentitySchema, meta) ||
-    meta.model === "fts-only" ||
-    meta.provider !== identity.provider ||
-    meta.model !== identity.model ||
-    meta.providerKey !== identity.providerKey ||
-    (meta.embeddingInputFormatVersion ?? 0) !==
-      resolveEmbeddingInputFormatVersion(identity.model) ||
-    (query.dimensions !== undefined && query.dimensions !== meta.vectorDims)
-  ) {
-    return;
-  }
+  const { meta, serialized } = published;
+  // Do not choose a vector until all published rows in the requested scope agree.
+  const vectors = new Map<string, Uint8Array>();
+  const ambiguous = new Set<string>();
   for (const source of sources.values()) {
     const hashes = [...source.hashes].filter((hash) => !params.cached.has(hash));
     for (let start = 0; start < hashes.length; start += 400) {
@@ -104,15 +129,26 @@ export function loadMemoryRebuildEmbeddings(params: {
               .selectFrom("memory_index_meta")
               .select("key")
               .where("key", "=", MEMORY_INDEX_META_KEY)
-              .where("value", "=", row.value),
+              .where("value", "=", serialized),
           ),
         );
       for (const chunk of iterateSqliteQuerySync(params.db, rows)) {
-        const embedding = decodeMemoryEmbedding(chunk.embedding);
-        if (!params.cached.has(chunk.hash) && isValidMemoryEmbedding(embedding, meta.vectorDims)) {
-          params.cached.set(chunk.hash, embedding);
+        const previous = vectors.get(chunk.hash);
+        if (previous && Buffer.compare(previous, chunk.embedding) !== 0) {
+          ambiguous.add(chunk.hash);
+        } else if (!previous) {
+          vectors.set(chunk.hash, chunk.embedding);
         }
       }
+    }
+  }
+  for (const [hash, bytes] of vectors) {
+    if (ambiguous.has(hash)) {
+      continue;
+    }
+    const embedding = decodeMemoryEmbedding(bytes);
+    if (isValidMemoryEmbedding(embedding, meta.vectorDims)) {
+      params.cached.set(hash, embedding);
     }
   }
 }

@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import { resolveAgentEntry } from "../agents/agent-scope-config.js";
 import * as configModule from "../config/config.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
+import { materializeRuntimeConfig } from "../config/materialize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -127,7 +128,9 @@ export const runtime: RuntimeEnv = {
 export function snapshot(
   hash: string | null,
   sourceConfig: OpenClawConfigWithLegacyRoster,
-  runtimeConfig: OpenClawConfig = sourceConfig,
+  runtimeConfig: OpenClawConfig = materializeRuntimeConfig(sourceConfig, {
+    manifestRegistry: { plugins: [] },
+  }),
 ): ConfigSnapshot {
   return {
     exists: hash !== null,
@@ -137,7 +140,7 @@ export function snapshot(
     parsed: structuredClone(sourceConfig),
     sourceConfigBeforeMigrations: structuredClone(sourceConfig),
     config: runtimeConfig,
-    sourceConfig: runtimeConfig,
+    sourceConfig,
     runtimeConfig,
     issues: [],
   };
@@ -180,7 +183,11 @@ export function snapshotSequence(...snapshots: Array<ConfigSnapshot | (() => Con
 }
 
 export function transformAttempt(transform: CommitTransform, current: ConfigSnapshot, attempt = 0) {
-  return transform(current.config, { previousHash: current.hash, snapshot: current, attempt });
+  return transform(current.sourceConfig, {
+    previousHash: current.hash,
+    snapshot: current,
+    attempt,
+  });
 }
 
 export function committed(

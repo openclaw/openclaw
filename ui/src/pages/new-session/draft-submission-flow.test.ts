@@ -50,6 +50,52 @@ function composerState(flow: ReturnType<typeof createDraftFixture>["flow"]) {
 }
 
 describe("DraftSubmissionFlow", () => {
+  it("formats typed submission failures before storing presentation text", async () => {
+    const error = new TypeError("Cannot read properties of undefined (reading 'map')");
+    const report = vi.spyOn(console, "error").mockImplementation(() => {});
+    onTestFinished(() => report.mockRestore());
+    const { create, flow } = createDraftFixture();
+    flow.setMessage("A synthetic task");
+    create.mockRejectedValueOnce(error);
+
+    await flow.submit();
+
+    expect(flow.error).toBe("Request failed");
+    expect(report).toHaveBeenCalledWith(
+      "[control-ui] programming error hidden from the UI:",
+      error,
+    );
+  });
+
+  it("keeps explicit Draft intent when its chooser becomes unavailable before submission", async () => {
+    const { context, create, flow } = createDraftFixture();
+    expectDefined(context.gateway.snapshot.hello, "connected hello").policy = {
+      allowedSessionVisibilities: ["shared", "draft"],
+      hasMultipleSessionSharingIdentities: false,
+    };
+    flow.setVisibility("draft");
+    flow.setMessage("Keep this private plan");
+    const attachment = registerTextPayload("private-plan");
+    flow.attachmentDraft.restore([attachment]);
+    const refusal = "session visibility is disabled: draft";
+    context.sessions.state.error = refusal;
+    create.mockResolvedValueOnce(null);
+
+    await flow.submit();
+
+    expect(create).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ visibility: "draft", message: "Keep this private plan" }),
+      backgroundCreateOptions,
+    );
+    expect(flow).toMatchObject({
+      visibility: "draft",
+      message: "Keep this private plan",
+      error: refusal,
+    });
+    expect(flow.attachmentDraft.attachments).toEqual([attachment]);
+    expect(context.navigateAndWait).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "keeps startup creation client-owned beyond four minutes (cancel=%s)",
     async (cancel) => {
@@ -104,7 +150,7 @@ describe("DraftSubmissionFlow", () => {
       }
       await vi.advanceTimersByTimeAsync(210_000);
       ready = true;
-      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(8_000);
       await submission;
       expect(writes).toBe(cancel ? 0 : 1);
       expect(new Set(frames).size).toBe(1);
@@ -181,8 +227,8 @@ describe("DraftSubmissionFlow", () => {
         expect(flow).toMatchObject({
           error:
             storage === "unavailable before create"
-              ? "Couldn't prepare session recovery. Your draft has been kept."
-              : "The session was created, but startup needs attention: placement recovery storage is unavailable",
+              ? "Couldn’t prepare session recovery. Your draft has been kept."
+              : "Couldn’t start this session. Retry setup. placement recovery storage is unavailable",
           message: "Keep my model and runtime",
         });
       }
@@ -231,6 +277,7 @@ describe("DraftSubmissionFlow", () => {
       expect(takePreparedTitle).not.toHaveBeenCalled();
       if (oversized) {
         expect(showToast).toHaveBeenCalledExactlyOnceWith({
+          severity: "error",
           message: "Too large to send: second.txt",
         });
       } else {
@@ -384,9 +431,10 @@ describe("DraftSubmissionFlow", () => {
     expect(flow.submitting).toBe(true);
 
     flow.synchronizeSubmission();
-    expect(flow.pendingMessage?.["__openclaw"].humanMentions).toEqual([
-      { profileId: "profile-original", start: 0, end: 5 },
-    ]);
+    expect(flow.pendingMessage).toBeNull();
+    expect(
+      context.chatSubmissions.readCreateMessage(originalParams!.key!)?.["__openclaw"].humanMentions,
+    ).toEqual([{ profileId: "profile-original", start: 0, end: 5 }]);
     await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2));
     expect(create.mock.calls[1]?.[0]).toEqual(originalParams);
     expect(flow.pendingPlacement.sessionKey).toBe("");
@@ -637,8 +685,13 @@ describe("DraftSubmissionFlow", () => {
       const recovery = start.mock.calls[0]![0].recovery;
       expect(recovery).toMatchObject({ message, mentions, attachments, phase: "dispatching" });
       expect(flow.pendingPlacement.capture()).toBeNull();
-      expect(flow.completedSubmission?.key).toBe(recovery.sessionKey);
-      expect(flow.pendingMessage?.content).toContainEqual({ type: "text", text: message });
+      if (background) {
+        expect(flow.completedSubmission).toBeNull();
+        expect(flow.pendingMessage).toBeNull();
+      } else {
+        expect(flow.completedSubmission?.key).toBe(recovery.sessionKey);
+        expect(flow.pendingMessage?.content).toContainEqual({ type: "text", text: message });
+      }
       expect(composerState(flow)).toEqual(["", [], []]);
       expect(flow).toMatchObject({ submitting: false, error });
       if (background) {

@@ -1,5 +1,9 @@
+import { syncBuiltinESMExports } from "node:module";
+import v8 from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it, vi } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import {
   bindSessionPendingInputSources,
@@ -7,18 +11,19 @@ import {
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
 } from "../../config/sessions/session-accessor.pending-inputs.js";
-import { withSessionState } from "./session-manager-fixtures.test-support.js";
+import { assistantText, withSessionState } from "./session-manager-fixtures.test-support.js";
+import { withSelectedTranscriptReader } from "./session-manager-reader.test-support.js";
 import { SessionManager } from "./session-manager.js";
 
 const user = (key: string) => ({
   role: "user" as const,
-  content: `Synthetic input ${key}`,
+  content: `Synthetic input ${key}`.repeat(4096),
   timestamp: 1,
   idempotencyKey: `${key}:user`,
 });
 
 it.each([false, true])(
-  "preserves pending custody and closed committed replay (collected: %s)",
+  "preserves pending custody, slim actor appends, and closed replay (collected: %s)",
   (collected) =>
     withSessionState(`pending-messages-${collected}`, async ({ scope: target, state }) => {
       const manager = await SessionManager.openAsync(target, state.workspaceDir);
@@ -32,10 +37,7 @@ it.each([false, true])(
           "Expected pending input custody",
         );
       const firstSource = await stage("first");
-      const sources = [firstSource];
-      if (collected) {
-        sources.push(await stage("second"));
-      }
+      const sources = collected ? [firstSource, await stage("second")] : [firstSource];
       const receipt = collected
         ? expectDefined(
             bindSessionPendingInputSources(sources, user("aggregate")),
@@ -88,6 +90,45 @@ it.each([false, true])(
         ).resolves.toMatchObject({ entryId: receipt.inputId, appended: false });
         expect(beforeFreshMessageCommit).not.toHaveBeenCalled();
         expect(await loadTranscriptEvents(target)).toEqual(events);
+        if (collected) {
+          const requestBytes: number[] = [];
+          const serialize = v8.serialize;
+          // Native worker clients bypass Vite mocks; observe their actual serialization too.
+          v8.serialize = (value: unknown) => {
+            const bytes = serialize(value);
+            if (
+              isRecord(value) &&
+              (value.type === "session.actor.appendTranscriptEvent" ||
+                value.type === "session.actor.appendToolResult")
+            ) {
+              requestBytes.push(bytes.byteLength);
+            }
+            return bytes;
+          };
+          syncBuiltinESMExports();
+          onTestFinished(() => {
+            v8.serialize = serialize;
+            syncBuiltinESMExports();
+          });
+
+          const fresh = vi.fn();
+          const appendReplies = async () => {
+            for (const message of [
+              assistantText("Synthetic answer"),
+              makeTextToolResult("synthetic-tool", "lookup", "Synthetic result", false, 2),
+            ]) {
+              await manager.appendMessageWithTranscriptAnchorAsync(message, {
+                beforeFreshMessageCommit: fresh,
+              });
+            }
+          };
+          const appendOwned = () => withSessionPendingInputPersistence(receipt, appendReplies);
+          await withSelectedTranscriptReader(target, appendOwned, true);
+          expect(requestBytes).toHaveLength(2);
+          expect(Math.max(...requestBytes)).toBeLessThan(8192);
+          expect(fresh).toHaveBeenCalledTimes(2);
+        }
+        expect(await loadTranscriptEvents(target)).toEqual(manager.getPersistedEntries());
       } finally {
         receipt.finish("interrupted");
         for (const source of sources) {

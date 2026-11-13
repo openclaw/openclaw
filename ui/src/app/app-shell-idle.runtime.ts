@@ -3,6 +3,7 @@ import { listen } from "../lib/reactive/listener.ts";
 import type { ShellOwner } from "./app-host.tsx";
 import type { ApplicationContext } from "./context.ts";
 import { connectControlUiFavicon } from "./control-ui-favicon-status.runtime.ts";
+import { trackForegroundActivity } from "./foreground-activity.ts";
 
 function canPreload(): boolean {
   // SAFETY: Network Information is optional and is not in TypeScript's DOM library.
@@ -180,7 +181,7 @@ export function connectShellIdle(
               "load",
               () => {
                 if (applyStyle && !styleApplied()) {
-                  // Keep Chat's style matching out of Create Claw, but its JS lazy.
+                  // Keep Chat's style matching out of Create Template, but its JS lazy.
                   // Vite adopts this loaded sheet; it must outlive the idle owner.
                   link.rel = "stylesheet";
                   link.removeAttribute("as");
@@ -196,7 +197,7 @@ export function connectShellIdle(
           }),
         );
       }
-      await Promise.all(loads);
+      await trackForegroundActivity(Promise.all(loads));
     } catch {
       // Speculation never triggers stale-chunk recovery; navigation owns failures.
       manifest = {};

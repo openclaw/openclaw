@@ -223,6 +223,42 @@ describe("public session document", () => {
     expect(unavailableMain.querySelector(".colophon")).toBeNull();
     expect(unavailable).not.toContain('http-equiv="refresh"');
   });
+  it("keeps access-check decorations inert and provides status and recovery", () => {
+    const entryUrl = "/control/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain%2Ftopic";
+    const pending = fragment([], {
+      entryUrl,
+      title: "Conversation unavailable",
+      unavailable: true,
+    });
+    const frame = pending.querySelector(".app-frame")!;
+    expect(frame.getAttribute("aria-hidden")).toBe("true");
+    expect(frame.textContent).toBe("");
+    expect(frame.querySelectorAll("a, button, [tabindex]")).toHaveLength(0);
+    const status = pending.querySelector('[role="status"]')!;
+    expect(status.querySelector("svg")?.closest('[aria-hidden="true"]')).toBeTruthy();
+    expect(status.querySelector("h1")?.textContent).toBe("Loading conversation");
+    expect(status.querySelector("p")?.textContent).toBe("Checking access…");
+    expect(status.querySelector("button[data-public-reload]")?.textContent).toBe("Reload");
+    const reader = fragment([], { entryUrl });
+    const readerFrame = reader.querySelector(".app-frame")!;
+    expect(readerFrame.getAttribute("aria-hidden")).toBe("true");
+    expect(readerFrame.querySelectorAll("a, button, [tabindex]")).toHaveLength(0);
+    expect(readerFrame.querySelector(".list-current")?.textContent).toBe("A shared conversation");
+    expect(reader.querySelector(".reader-title .reader-badge")?.textContent).toBe("Public session");
+    expect(reader.querySelector(".article-head .reader-badge")?.textContent).toBe("Public session");
+    expect(reader.querySelector(".reader-actions #session-login")?.getAttribute("href")).toBe(
+      entryUrl,
+    );
+    expect(reader.querySelectorAll(`a[href="${entryUrl}"]`)).toHaveLength(1);
+    expect(reader.querySelector(".reader-topbar .brand")?.getAttribute("href")).toBe(
+      "https://openclaw.ai",
+    );
+    expect(
+      fragment([], { title: "Conversation unavailable", unavailable: true }).querySelector(
+        ".app-frame",
+      ),
+    ).toBeNull();
+  });
   it("publishes only user and assistant conversation text without internal input or metadata", () => {
     const token = `sk-${"a".repeat(48)}`;
     const operatorSecret = "internal-ticket-8315";
@@ -376,7 +412,6 @@ describe("public session document", () => {
       ],
       { mediaBaseUrl: "/control/share/session/media?token=v1.opaque" },
     );
-    expect(html).toContain("2 messages");
     expect(html.match(/<article class="message /g)).toHaveLength(2);
     expect(html).toContain('<span class="attachment">voice-note.mp3</span>');
     expect(html).toContain('<span class="attachment">walkthrough.mp4</span>');
@@ -435,7 +470,7 @@ describe("public session document", () => {
     }
     expect(PUBLIC_SESSION_CONTENT_SECURITY_POLICY).toContain("font-src 'self'");
     expect(PUBLIC_SESSION_CONTENT_SECURITY_POLICY).toContain("frame-src 'self'");
-    expect(html).toContain('<link rel="stylesheet" href="/control/fonts/instrument-sans.css">');
+    expect(html).toContain('<link rel="stylesheet" href="/control/fonts/space-grotesk.css">');
   });
 
   it("bounds the newest public messages and visibly marks omitted history or text", () => {

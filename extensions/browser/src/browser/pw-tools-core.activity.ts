@@ -1,4 +1,4 @@
-import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateUtf16Safe, withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS, DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type {
   BrowserConsoleMessage,
@@ -21,7 +21,7 @@ export async function getPageTextViaPlaywright(opts: {
     DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   );
   const timeout = DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
-  const deadline = Date.now() + timeout;
+  const deadline = performance.now() + timeout;
   const controller = new AbortController();
   const signal = opts.signal
     ? AbortSignal.any([opts.signal, controller.signal])
@@ -43,7 +43,7 @@ export async function getPageTextViaPlaywright(opts: {
       }
     }
     // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- This action reads rendered text, not hidden DOM text.
-    return await locator.innerText({ timeout: Math.max(1, deadline - Date.now()), signal });
+    return await locator.innerText({ timeout: Math.max(1, deadline - performance.now()), signal });
   };
   const text = await withTimeout(awaitActionWithAbort(read(), signal), timeout, {
     createError: () => {
@@ -52,7 +52,7 @@ export async function getPageTextViaPlaywright(opts: {
       return error;
     },
   });
-  return { text: text.slice(0, maxChars), truncated: text.length > maxChars };
+  return { text: truncateUtf16Safe(text, maxChars), truncated: text.length > maxChars };
 }
 
 export async function getPageErrorsViaPlaywright(opts: {
@@ -77,15 +77,11 @@ export async function getNetworkRequestsViaPlaywright(opts: {
 }): Promise<{ requests: BrowserNetworkRequest[] }> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
-  const raw = [...state.requests.values()];
+  const raw = state.readNetworkRequests?.(opts.clear) ?? [];
   const filter = opts.filter?.trim();
   const requests = filter
     ? raw.filter((r) => r.url.includes(filter) || r.resourceType?.includes(filter))
     : raw;
-  if (opts.clear) {
-    state.requests.clear();
-    state.requestIds = new WeakMap();
-  }
   return { requests };
 }
 

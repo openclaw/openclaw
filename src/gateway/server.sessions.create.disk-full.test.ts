@@ -177,7 +177,6 @@ test.each(["transcript", "admission"] as const)(
       expect.objectContaining({ message: expect.objectContaining({ role: "user" }) }),
     );
     expect(loadSessionEntry(scope)).toMatchObject({ sessionId: scope.sessionId });
-    expect(loadSessionEntry(scope)?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(createGatewayActiveWorkSnapshot().counts.totalActive).toBe(0);
     expect(context.broadcast).toHaveBeenCalledWith(
       "chat",

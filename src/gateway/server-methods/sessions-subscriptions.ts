@@ -116,7 +116,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         return;
       }
       const cfg = context.getRuntimeConfig();
-      const requestedAgent = resolveRequestedSessionStoreTarget(cfg, key, params.agentId);
+      const requestedAgent = resolveRequestedSessionStoreTarget(cfg, key, params.agentId, "read");
       if (!requestedAgent.ok) {
         respond(false, undefined, requestedAgent.error);
         return;
@@ -133,6 +133,8 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
           allowMetadataChanges: true,
           requireMaterialized:
             readGatewayRequestMutationAuthority(options).sessionScope === "operator.sessions.read",
+          // Its creator observes the first turn; delivery still filters every event by visibility.
+          allowStartableMain: true,
         });
         options.sessionMutationCommitGuard?.();
         const includeApprovals = Boolean(connId) && params.includeApprovals === true;
@@ -140,6 +142,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         const rollback = connId
           ? context.subscribeSessionMessageEvents(connId, subscriptionKey, {
               ...(includeApprovals ? { includeApprovals: true } : {}),
+              ...(params.includeLiveToolOutput ? { includeLiveToolOutput: true } : {}),
               provisional: true,
               mode: params.mode,
               subscriptionId: params.subscriptionId,
@@ -265,7 +268,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         return;
       }
       const cfg = context.getRuntimeConfig();
-      const requestedAgent = resolveRequestedSessionStoreTarget(cfg, key, params.agentId);
+      const requestedAgent = resolveRequestedSessionStoreTarget(cfg, key, params.agentId, "read");
       if (!requestedAgent.ok) {
         respond(false, undefined, requestedAgent.error);
         return;

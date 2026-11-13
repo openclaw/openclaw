@@ -4,8 +4,11 @@ import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.h
 import { recordEmbeddedToolTrajectoryEvent } from "./embedded-agent-subscribe.trajectory.js";
 import { buildToolLifecycleErrorResult, prepareToolResult } from "./embedded-agent-tool-results.js";
 import type { AgentEvent } from "./runtime/index.js";
-import { markToolExecutionNotStarted, type ToolEffectReceipt } from "./tool-effect-receipt.js";
-import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
+import {
+  consumeToolExecutionNotStarted as consumeTrustedToolNoStartError,
+  markToolExecutionNotStarted,
+  type ToolEffectReceipt,
+} from "./tool-effect-receipt.js";
 
 type ToolTerminal = {
   result: unknown;
@@ -19,6 +22,7 @@ type EmbeddedToolLifecycleParams<T> = {
   toolName: string;
   toolCallId: string;
   parentToolCallId?: string;
+  toolUsageId?: string;
   args: unknown;
   replaySafe?: boolean;
   hideFromChannelProgress?: boolean;
@@ -59,7 +63,13 @@ export function createEmbeddedToolLifecycleRunner(
       };
       const readSanitizedResult = prepareToolResult(result);
       recordEmbeddedToolTrajectoryEvent(ctx, endEvent, readSanitizedResult);
-      const terminal = await prepareToolExecutionEnd(ctx, endEvent, readSanitizedResult);
+      const terminal = await prepareToolExecutionEnd(
+        ctx,
+        endEvent,
+        readSanitizedResult,
+        // Nested callers must never inherit the identity of a same-name direct tool.
+        toolParams.toolUsageId ?? null,
+      );
       const accepted = await toolParams.onTerminal?.({
         result,
         readSanitizedResult,

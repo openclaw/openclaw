@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { Check } from "typebox/value";
 import { parseDocument } from "yaml";
+import { hashMatches } from "./hash-fence.js";
 import { RECORD_MAX_BYTES } from "./limits.js";
 import { mergeRedirects, referenceIds } from "./merge.js";
 import { Envelope, type LoadedRecord } from "./model.js";
@@ -17,7 +18,7 @@ export function assertLifecycleTarget(
   if (
     !r ||
     (correcting && !r.valid) ||
-    r.hash !== input.expectedHash ||
+    !hashMatches(r.hash, input.expectedHash) ||
     r.revision !== input.expectedRevision ||
     r.lifecycle === "withdrawn" ||
     (correcting && (r.lifecycle !== "active" || r.kind === "page"))
@@ -29,11 +30,12 @@ export function assertLifecycleTarget(
   return r;
 }
 
-/** Preserve authored YAML and content; lifecycle metadata is the only original-record edit. */
+/** Preserve authored YAML and content; lifecycle metadata is the only original-record edit.
+ * `active` restores a superseded record and drops its `superseded_by`. */
 export function lifecycleRecord(
   previous: LoadedRecord,
-  lifecycle: "superseded" | "withdrawn",
-  input: WithdrawInput,
+  lifecycle: "superseded" | "withdrawn" | "active",
+  input: Pick<WithdrawInput, "reason" | "requestId">,
   actor: string,
   replacement?: string,
 ): LoadedRecord {
@@ -50,6 +52,9 @@ export function lifecycleRecord(
     },
     ...(replacement ? { superseded_by: replacement } : {}),
   };
+  if (lifecycle === "active") {
+    delete metadata.superseded_by;
+  }
   const match = /^(?:\uFEFF)?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(previous.raw)!;
   const doc = parseDocument(match[1]!);
   for (const key of [
@@ -61,6 +66,9 @@ export function lifecycleRecord(
   ]) {
     // SAFETY: record metadata is parsed frontmatter, a plain object keyed by field name.
     doc.set(key, (metadata as Record<string, unknown>)[key]);
+  }
+  if (lifecycle === "active") {
+    doc.delete("superseded_by");
   }
   const raw = `---\n${doc.toString()}---\n${previous.body}`;
   if (!Check(Envelope, metadata) || Buffer.byteLength(raw) > RECORD_MAX_BYTES) {
@@ -124,6 +132,14 @@ export function observeLifecycleGuards(db: DatabaseSync, records: LoadedRecord[]
         }),
       );
     }
+  }
+}
+/** A journaled restore is the one write that may lift a supersession guard; withdrawal guards stay. */
+export function releaseSupersessionGuards(db: DatabaseSync, ids: string[], binding: string) {
+  for (const id of ids) {
+    db.prepare(
+      "DELETE FROM lifecycle_guards_v1 WHERE binding=? AND id=? AND lifecycle='superseded'",
+    ).run(binding, id);
   }
 }
 export function applyLifecycleGuards(db: DatabaseSync, records: LoadedRecord[], binding: string) {

@@ -8,7 +8,13 @@ import type {
   SessionActorReceipt,
   SessionActorReducerOutcome,
 } from "./session-actor-contract.js";
+import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { PendingInputMutationReceipt } from "./session-pending-input-operations.types.js";
+
+export type SessionActorEntryReference = Pick<
+  SessionActorHotState,
+  "target" | "entry" | "writeToken"
+>;
 
 export type SessionActorCommittedWireOutcome<Value> = Extract<
   SessionActorOutcome<Value>,
@@ -22,17 +28,15 @@ export type SessionActorCommittedWireOutcome<Value> = Extract<
 };
 
 /** The command retains this exact preimage until native settlement completes. */
-export function projectSessionActorCommittedOutcome<Value>(
+export function projectSessionActorCommittedOutcome<
+  Value extends SessionActorPhaseResults[SessionActorPhase],
+>(
   outcome: Extract<SessionActorOutcome<Value>, { kind: "committed" }>,
-  reference: SessionActorHotState | undefined,
+  reference: SessionActorEntryReference | undefined,
 ): SessionActorCommittedWireOutcome<Value> {
   const { receipt } = outcome;
-  // Turn/initialization results can also expose the entry; preserve their graph aliases.
-  const append =
-    receipt.phase === "appendTranscriptEvent" ||
-    (receipt.phase === "appendToolResult" && receipt.transcript.append !== undefined);
+  // Initialization retains entry aliases; turn results are detached by the phase owner.
   if (
-    (!append && receipt.phase !== "patch") ||
     receipt.transcript.append?.initialEntry ||
     !reference ||
     (receipt.postimage.entry !== reference.entry && (!receipt.postimage.entry || !reference.entry))
@@ -45,13 +49,13 @@ export function projectSessionActorCommittedOutcome<Value>(
     entry && base && entry !== base
       ? {
           values: Object.entries(entry).filter(
-            ([key, value]) =>
-              !Object.hasOwn(base, key) || !isDeepStrictEqual(value, Reflect.get(base, key)),
+            ([key, field]) =>
+              !Object.hasOwn(base, key) || !isDeepStrictEqual(field, Reflect.get(base, key)),
           ),
           removed: Object.keys(base).filter((key) => !Object.hasOwn(entry, key)),
         }
       : undefined;
-  // Metadata consumers need the same full entry, not a second wire copy.
+  // Full and list publications share the canonical entry's immutable fields.
   let entryMetadataReferences: number[] | undefined;
   const entryMetadata = receipt.entryMetadata?.map((metadata, index) => {
     const key = receipt.postimage.target.sessionKey;
@@ -83,7 +87,7 @@ export function projectSessionActorCommittedOutcome<Value>(
 
 export function restoreSessionActorCommittedOutcome<Value>(
   outcome: SessionActorCommittedWireOutcome<Value>,
-  reference: SessionActorHotState | undefined,
+  reference: SessionActorEntryReference | undefined,
 ): Extract<SessionActorOutcome<Value>, { kind: "committed" }> {
   const { receipt } = outcome;
   if (receipt.entryReference !== undefined) {
@@ -105,6 +109,7 @@ export function restoreSessionActorCommittedOutcome<Value>(
       const fact = receipt.entryMetadata![index]!.facts.get(receipt.postimage.target.sessionKey);
       if (fact?.kind === "postimage") {
         fact.value.fullEntry = entry;
+        fact.value.entry = attachSessionEntrySnapshots({ ...entry! }, {}, "list");
       }
     }
     delete receipt.entryReference;

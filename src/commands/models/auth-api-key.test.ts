@@ -62,6 +62,7 @@ const save = (
     provider: "sample",
     apiKey,
     profileId,
+    agentId: "writer",
     agentDir: agentDir("writer"),
     ...options,
   });
@@ -163,6 +164,12 @@ it.each([
   ["config transform", true],
 ] as const)("checks requester authority after %s (revoked=%s)", async (stage, revoke) => {
   await seedKey("sample:manual", "synthetic-before", "writer");
+  // The same guarded config write also widens this allowlist for the saved provider.
+  const seeded = await readConfig();
+  writeConfig({
+    ...seeded,
+    agents: { ...seeded.agents, defaults: { modelPolicy: { allow: ["other/*"] } } },
+  });
   const beforeConfig = configBytes();
   const beforeProfiles = profiles();
   let callbackComplete = false;
@@ -210,7 +217,9 @@ it.each([
   } else {
     await expect(result).resolves.toMatchObject({ profileId: "sample:manual" });
     if (stage === "config transform") {
-      expect((await readConfig()).auth?.profiles?.["sample:manual"]).toMatchObject(profileConfig);
+      const saved = await readConfig();
+      expect(saved.auth?.profiles?.["sample:manual"]).toMatchObject(profileConfig);
+      expect(saved.agents?.defaults?.modelPolicy?.allow).toEqual(["other/*", "sample/*"]);
     }
   }
   expect(callbackComplete).toBe(true);
@@ -885,4 +894,48 @@ it("keeps the active OAuth connection when saving an explicit backup profile", a
   });
   expect((await readConfig()).models?.providers?.sample).toEqual(provider);
   expect(savedProfile("sample:backup")).toMatchObject({ key: "backup-key" });
+});
+
+it("models.authSetApiKey writes no binding or allowlist once the requester is revoked", async () => {
+  const config: OpenClawConfig = {
+    agents: { defaults: { modelPolicy: { allow: ["other/*"] } }, entries: { writer: {} } },
+  };
+  writeConfig(config);
+  const beforeConfig = configBytes();
+  let authorized = true;
+  const updateConfig = configWriter.updateConfig;
+  vi.spyOn(configWriter, "updateConfig").mockImplementation((mutator, ...options) =>
+    updateConfig(
+      async (...args) => {
+        const next = await mutator(...args);
+        authorized = false;
+        return next;
+      },
+      ...options,
+    ),
+  );
+  const { modelsAuthStatusHandlers } =
+    await import("../../gateway/server-methods/models-auth-status.js");
+  const respond = vi.fn();
+  const params = { provider: "sample", apiKey: "synthetic-revoked-key", agentId: "writer" };
+  await modelsAuthStatusHandlers["models.authSetApiKey"]!({
+    req: { type: "req", id: "revoked-save", method: "models.authSetApiKey", params },
+    params,
+    respond,
+    client: { connect: { scopes: ["operator.admin"] } } as never,
+    hasCurrentClientAuthority: () => authorized,
+    isWebchatConnect: () => false,
+    context: { getRuntimeConfig: () => config } as never,
+  });
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      message: expect.stringContaining("Gateway requester authority changed"),
+    }),
+  );
+  expect(configBytes()).toBe(beforeConfig);
+  expect((await readConfig()).agents?.defaults?.modelPolicy?.allow).toEqual(["other/*"]);
+  // The key committed while the requester was still authorized; only later writes are refused.
+  expect(savedProfile()).toMatchObject({ key: "synthetic-revoked-key" });
 });

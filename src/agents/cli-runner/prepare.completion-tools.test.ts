@@ -27,7 +27,6 @@ import {
   createCliRunnerPrepareFixture,
   createTestCliSessionBinding,
   createTestMcpLoopbackClientGrant,
-  createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
 import { resolveCliSessionReuse } from "../cli-session.js";
 import * as subagentSpawn from "../subagents/spawn/subagent-spawn.js";
@@ -96,10 +95,10 @@ describe("restricted CLI tool preparation", () => {
         ownerToken: "loopback-owner-token",
         nonOwnerToken: "loopback-non-owner-token",
       }),
-      createMcpLoopbackServerConfig: createTestMcpLoopbackServerConfig,
       mintMcpLoopbackClientGrant: mintGrant,
       bindMcpLoopbackClientGrantAdmission: () => true,
       revokeMcpLoopbackClientGrant: () => true,
+      revokeMintedMcpLoopbackClientGrant: () => true,
       resolveMcpLoopbackPolicyTools,
       resolveMcpLoopbackScopedTools,
       resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
@@ -512,12 +511,13 @@ describe("restricted CLI tool preparation", () => {
     expect(mintGrant).not.toHaveBeenCalled();
   });
 
-  it.each<{ managedNativeTools: string[] }>([
+  it.each<{ managedNativeTools: string[]; toolSearch?: boolean }>([
     { managedNativeTools: [] },
     { managedNativeTools: ["Agent", "Workflow"] },
+    { managedNativeTools: ["Agent"], toolSearch: false },
   ])(
     "keeps the Claude tool and system prefix across ordinary and completion turns: %j",
-    async ({ managedNativeTools }) => {
+    async ({ managedNativeTools, toolSearch }) => {
       const nativeBackend = buildAnthropicCliBackend();
       cliBackendsTesting.setDepsForTest({
         resolvePluginSetupCliBackend: () => undefined,
@@ -528,6 +528,7 @@ describe("restricted CLI tool preparation", () => {
             resolveExecutionArgs: nativeBackend.resolveExecutionArgs,
             transformSystemPrompt: nativeBackend.transformSystemPrompt,
             resolveManagedNativeTools: nativeBackend.resolveManagedNativeTools,
+            nativeToolSearch: nativeBackend.nativeToolSearch,
           },
         ],
       });
@@ -586,7 +587,7 @@ describe("restricted CLI tool preparation", () => {
         },
         config: {
           session: { store: sessionTarget.storePath },
-          tools: { allow: ["read"] },
+          tools: { allow: ["read"], ...(toolSearch === undefined ? {} : { toolSearch }) },
           plugins: {
             entries: {
               anthropic: { config: { managedNativeTools: { default: managedNativeTools } } },
@@ -611,6 +612,7 @@ describe("restricted CLI tool preparation", () => {
           expect(context.systemPrompt).toContain("cache-fixture");
           // Ultra names kept native delegation tools only when the operator selected them.
           expect(context.promptContext?.appendContext).toContain("Ultra active for this turn.");
+          expect(context.promptContext?.appendContext).not.toContain("native `ToolSearch`");
           expect(context.promptContext?.appendContext?.includes("native `Agent`")).toBe(
             managedNativeTools.includes("Agent"),
           );
@@ -626,6 +628,12 @@ describe("restricted CLI tool preparation", () => {
               useResume: completion,
               baseArgs: context.preparedBackend.backend.args ?? [],
             }) ?? [];
+          const mcpConfigPath = executionArgs[executionArgs.indexOf("--mcp-config") + 1];
+          const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath ?? "", "utf8"));
+          expect(mcpConfig.mcpServers.openclaw.alwaysLoad).toBe(toolSearch === false);
+          expect(context.preparedBackend.env?.ENABLE_TOOL_SEARCH).toBe(
+            toolSearch === false ? "false" : "true",
+          );
           turns.push({
             availability: context.params.cliToolAvailability,
             systemPrompt: context.systemPrompt,
@@ -645,9 +653,14 @@ describe("restricted CLI tool preparation", () => {
           await context.preparedBackend.cleanup?.();
         }
       }
-      expect(turns[0]?.availability).toEqual({ native: managedNativeTools, openClaw: ["read"] });
+      const discovery = toolSearch === false ? [] : ["ToolSearch"];
+      expect(turns[0]?.availability).toEqual({
+        native: managedNativeTools,
+        openClaw: ["read"],
+        ...(discovery.length ? { discovery } : {}),
+      });
       expect(turns[0]?.toolsAllow).toEqual(["read"]);
-      expect(turns[0]?.nativeTools).toBe(managedNativeTools.join(","));
+      expect(turns[0]?.nativeTools).toBe([...managedNativeTools, ...discovery].join(","));
       expect(turns[0]?.allowedTools).toBe("mcp__openclaw__read");
       // Selected tools never restore the customizations managed turns exclude.
       expect(turns[0]?.settingSources).toBe("");

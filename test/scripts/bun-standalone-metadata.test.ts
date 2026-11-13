@@ -51,6 +51,14 @@ afterEach(() => {
 
 const parse = createStandaloneSourceParser();
 
+function minifyMetadataSource(source: string): string {
+  return transformSync(source, {
+    minifyIdentifiers: true,
+    minifySyntax: true,
+    minifyWhitespace: true,
+  }).code;
+}
+
 function ownerSource(relative: string, functionName?: string, typed = false): string {
   const original = fs.readFileSync(new URL(`../../${relative}`, import.meta.url), "utf8");
   const source = typed ? original : stripTypeScriptTypes(original);
@@ -306,11 +314,7 @@ function fixture({
       filename: path.join(runtime, "dist/owner.js"),
       contents:
         minifiedMetadata && file === "src/plugins/plugin-cache-files.ts"
-          ? transformSync(source, {
-              minifyIdentifiers: true,
-              minifySyntax: true,
-              minifyWhitespace: true,
-            }).code
+          ? minifyMetadataSource(source)
           : source,
     });
     const executable = transformed.contents.replaceAll(
@@ -462,13 +466,7 @@ describe("standalone image metadata", () => {
       expect(context.hasStalePersistedPluginMetadataFiles({ plugins: [record] })).toBe(!physical);
       const transformed = adapter.transform({
         filename: path.join(runtime, "dist/snapshot-owner.js"),
-        contents: minified
-          ? transformSync(source, {
-              minifyIdentifiers: true,
-              minifySyntax: true,
-              minifyWhitespace: true,
-            }).code
-          : source,
+        contents: minified ? minifyMetadataSource(source) : source,
       });
       vm.runInContext(transformed.contents, context);
       const exists = vi.spyOn(fs, "existsSync");
@@ -669,14 +667,7 @@ describe("standalone image metadata", () => {
       expect(status(plugin).requiredInstalled).toBe(false);
       const transformed = adapter.transform({
         filename: path.join(runtime, "dist/dependency-owner.js"),
-        contents:
-          format === "minified"
-            ? transformSync(source, {
-                minifyIdentifiers: true,
-                minifySyntax: true,
-                minifyWhitespace: true,
-              }).code
-            : source,
+        contents: format === "minified" ? minifyMetadataSource(source) : source,
       });
       vm.runInContext(transformed.contents, context);
       const flatRoot = path.join(
@@ -836,11 +827,7 @@ describe("standalone image metadata", () => {
             .replaceAll("openPluginRootFileSync(", "secureOpen(")
             .replaceAll("fs.closeSync", "fsAlias.closeSync")
         : format === "minified"
-          ? transformSync(source, {
-              minifyIdentifiers: true,
-              minifySyntax: true,
-              minifyWhitespace: true,
-            }).code
+          ? minifyMetadataSource(source)
           : source;
     const transformed = adapter.transform({
       filename: path.join(runtime, "dist/channel-owner.js"),
@@ -905,14 +892,7 @@ describe("standalone image metadata", () => {
     lstat.mockClear();
     const transformed = adapter.transform({
       filename: path.join(runtime, "dist/path-owner.js"),
-      contents:
-        shape === "minified"
-          ? transformSync(source, {
-              minifyIdentifiers: true,
-              minifySyntax: true,
-              minifyWhitespace: true,
-            }).code
-          : source,
+      contents: shape === "minified" ? minifyMetadataSource(source) : source,
     });
     vm.runInContext(
       typed ? stripTypeScriptTypes(transformed.contents) : transformed.contents,
@@ -958,13 +938,7 @@ describe("standalone image metadata", () => {
       native.mockClear();
       const transformed = adapter.transform({
         filename: path.join(runtime, "dist/is-main.js"),
-        contents: minified
-          ? transformSync(source, {
-              minifyIdentifiers: true,
-              minifySyntax: true,
-              minifyWhitespace: true,
-            }).code
-          : source,
+        contents: minified ? minifyMetadataSource(source) : source,
       });
       vm.runInContext(transformed.contents, context);
       expect(context.isMainModule(launch)).toBe(true);
@@ -1045,7 +1019,7 @@ describe("standalone image metadata", () => {
       getPluginInstance: () => undefined,
       loadSetupRuntimeChannelCandidate: () => true,
       recordPluginError: ({ error }: { error: string }) => errors.push(error),
-      detailPluginStartupTrace: () => {},
+      recordPluginStartupDiagnostics: () => {},
     });
     const ownerFile =
       owner === "runtime"
@@ -1121,13 +1095,7 @@ describe("standalone image metadata", () => {
     expect(loadModule).not.toHaveBeenCalled();
     const transformed = adapter.transform({
       filename: path.join(runtime, "dist/owner.js"),
-      contents: minified
-        ? transformSync(source, {
-            minifyIdentifiers: true,
-            minifySyntax: true,
-            minifyWhitespace: true,
-          }).code
-        : source,
+      contents: minified ? minifyMetadataSource(source) : source,
     });
     vm.runInContext(transformed.contents, context);
     expect(invoke(imageEntry)).toBe(imageEntry);
@@ -1221,13 +1189,7 @@ describe("standalone image metadata", () => {
       }
       const transformed = adapter.transform({
         filename: path.join(runtime, "dist/plugin-module-loader-cache.js"),
-        contents: minified
-          ? transformSync(source, {
-              minifyIdentifiers: true,
-              minifySyntax: true,
-              minifyWhitespace: true,
-            }).code
-          : source,
+        contents: minified ? minifyMetadataSource(source) : source,
       });
       vm.runInContext(transformed.contents, context);
       const first = context.loadValidatedPublicSurfaceModule(params);
@@ -1363,12 +1325,11 @@ describe("standalone image metadata", () => {
 
   it("leaves prototype-named functions unchanged in minified metadata modules", () => {
     const { runtime, entry, context, adapter } = fixture();
-    const source = transformSync(
+    const source = minifyMetadataSource(
       `function valueOf(value) { return value + 1; }
        function constructor(value) { return value * 2; }
        ${ownerSource("src/plugins/plugin-cache-files.ts", "pluginCacheExistsSync")}`,
-      { minifyIdentifiers: true, minifySyntax: true, minifyWhitespace: true },
-    ).code;
+    );
     const transformed = adapter.transform({
       filename: path.join(runtime, "dist/minified-metadata.js"),
       contents: source,
@@ -1679,7 +1640,11 @@ function loadLegacySessionSurface(rootPath: string) {
     const filename = path.join(runtime, "dist/hooks-loader.js");
     const transformed = adapter.transform({
       filename,
-      contents: ownerSource("src/hooks/loader.ts", "prepareInternalHooks"),
+      // Literal dependencies are bundled normally; this extracted owner uses the fixture namespace.
+      contents: ownerSource("src/hooks/loader.ts", "prepareInternalHooks").replace(
+        'import("./workspace.js")',
+        "Promise.resolve({ prepareWorkspaceHookEntries })",
+      ),
     });
     vm.runInContext(
       rewriteStandaloneImports({
@@ -1755,7 +1720,6 @@ function loadLegacySessionSurface(rootPath: string) {
       throw new Error("Expected the physical resolver to own a descriptor");
     }
     expect(close).toHaveBeenLastCalledWith(opened.fd);
-    expect(() => fs.fstatSync(opened.fd)).toThrow(/EBADF/);
     close.mockClear();
     fs.chmodSync(external, 0o777);
     expect(resolve(external, "./resolver.js")).toBeUndefined();

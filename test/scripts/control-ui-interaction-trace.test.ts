@@ -70,6 +70,38 @@ it("measures only the marked renderer interval, unions nesting, and rejects miss
   ).toThrow("exactly one mark: filter:start");
 });
 
+it.each(["X", "B/E"])("counts detached Blink checkpoints once (%s)", (encoding) => {
+  const checkpoint = (ts: number, dur: number, tid = 1): ColdLoadTraceEvent[] =>
+    encoding === "X"
+      ? [{ name: "BlinkScheduler_PerformMicrotaskCheckpoint", ph: "X", ts, dur, pid: 7, tid }]
+      : [
+          { name: "BlinkScheduler_PerformMicrotaskCheckpoint", ph: "B", ts, pid: 7, tid },
+          { ph: "E", ts: ts + dur, pid: 7, tid },
+        ];
+  const marks = { start: "picker:start", end: "picker:end" };
+  const trace: ColdLoadTraceEvent[] = [
+    { name: "thread_name", ph: "M", ts: 0, pid: 7, tid: 1, args: { name: "CrRendererMain" } },
+    { name: marks.start, ph: "I", ts: 100_000, pid: 7, tid: 1 },
+    { name: "RunTask", ph: "X", ts: 120_000, dur: 60_000, pid: 7, tid: 1 },
+    ...checkpoint(130_000, 40_000),
+    ...checkpoint(190_000, 80_000),
+    ...checkpoint(100_000, 200_000, 2),
+    { name: marks.end, ph: "I", ts: 300_000, pid: 7, tid: 1 },
+  ];
+
+  expect(summarizeInteractionTrace(trace, marks)).toMatchObject({
+    taskCount: 2,
+    busyMs: 140,
+    longTasks: 2,
+    longTaskMs: 140,
+    longestTaskMs: 80,
+    longTaskIntervals: [
+      { startUs: 120_000, endUs: 180_000, durationMs: 60 },
+      { startUs: 190_000, endUs: 270_000, durationMs: 80 },
+    ],
+  });
+});
+
 it("attributes separate long tasks to their nearest mapped application callers", () => {
   const node = (
     id: number,

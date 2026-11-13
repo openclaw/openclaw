@@ -17,6 +17,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { GCProfiler } from "node:v8";
 import type { SessionActorStoredState } from "../../src/config/sessions/session-actor-hydration.types.js";
+import { summarizeGcByKind } from "../lib/gc-profile-summary.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -194,17 +195,7 @@ try {
   }
   const actual = digest();
   assert.equal(actual, expected, "Projection changed between warmup and measurement");
-  const byKind = [...new Set(statistics.map((sample) => sample.gcType))].map((kind) => {
-    const samples = statistics
-      .filter((sample) => sample.gcType === kind)
-      .map((sample) => sample.cost / 1000);
-    return {
-      kind,
-      count: samples.length,
-      totalMs: samples.reduce((sum, value) => sum + value, 0),
-      maxMs: Math.max(0, ...samples),
-    };
-  });
+  const byKind = summarizeGcByKind(statistics);
   const result = {
     node: process.version,
     owner: ownerUrl.href,

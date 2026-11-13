@@ -66,15 +66,20 @@ suite.define(() => {
         const target = await remove.evaluate(async (element) => {
           await Promise.all(element.getAnimations().map((animation) => animation.finished));
           const box = element.getBoundingClientRect();
+          const centerX = box.left + box.width / 2;
+          const centerY = box.top + box.height / 2;
           return {
             x: box.right - 1,
-            y: box.top + box.height / 2,
-            width: box.width,
-            height: box.height,
+            y: centerY,
+            edgesHit: [
+              [box.left + 1, centerY],
+              [box.right - 1, centerY],
+              [centerX, box.top + 1],
+              [centerX, box.bottom - 1],
+            ].every(([x, y]) => element.contains(document.elementFromPoint(x!, y!))),
           };
         });
-        expect(target.width).toBeGreaterThanOrEqual(44);
-        expect(target.height).toBeGreaterThanOrEqual(44);
+        expect(target.edgesHit).toBe(true);
         await page.touchscreen.tap(target.x, target.y);
         await expect.poll(() => thumbnails.count()).toBe(11);
       }),

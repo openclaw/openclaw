@@ -1,4 +1,3 @@
-// Canonical Gateway active-work waiting must report the owners that block shutdown.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/run-state.js";
 import {
@@ -35,8 +34,8 @@ afterEach(() => {
 });
 
 describe("waitForGatewayActiveWork", () => {
-  it.each([60, undefined])(
-    "waits for process-owned work within the %s ms budget",
+  it.each([60, 300, undefined])(
+    "waits for process-owned work within the %s ms budget after a wall-clock jump",
     async (timeoutMs) => {
       vi.useFakeTimers();
       const admission = tryBeginGatewayRootWorkAdmission("ws:agent");
@@ -47,6 +46,7 @@ describe("waitForGatewayActiveWork", () => {
         return result;
       });
       try {
+        vi.setSystemTime(Date.now() + 60_000);
         if (timeoutMs === undefined) {
           await vi.advanceTimersByTimeAsync(1_000);
           expect(settled).toBe(false);

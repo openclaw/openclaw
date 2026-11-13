@@ -8,7 +8,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 function readRuleBody(css: string, selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, "u"));
+  const match = css.match(new RegExp(`^${escaped}\\s*\\{([^}]*)\\}`, "mu"));
   const body = match?.[1];
   if (!body) {
     throw new Error(`missing CSS rule for ${selector}`);

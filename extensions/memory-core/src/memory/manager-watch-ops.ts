@@ -1,3 +1,4 @@
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { LocalMemoryFileWatcher } from "./local-file-watcher.js";
@@ -10,10 +11,6 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
   protected memoryWatcherReady: Promise<void> = Promise.resolve();
   private remoteWatchRetirement: Promise<void> | undefined;
   private remoteWatchCloseFailure: { error: unknown } | undefined;
-  protected get memoryWatchCapacityDegraded(): boolean {
-    return this.fileWatcher?.capacityDegraded ?? false;
-  }
-
   protected get memoryWatcherHealth() {
     return this.fileWatcher?.health();
   }
@@ -59,6 +56,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
             } else if (error !== subscription.signal.reason) {
               // Cancellation is expected; a distinct transport retirement failure
               // must survive shutdown instead of being mistaken for a joined worker.
+              materializeErrorStack(error);
               this.remoteWatchCloseFailure = { error };
             }
           },
@@ -78,19 +76,12 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
         this.markMemoryWatchDirty();
         return this.syncBackground({ reason: "watch" });
       },
-      onState: ({ health }) => {
-        if (health.length && health.every((entry) => entry.state === "ready")) {
-          this.memoryWatchUnavailable = false;
-        }
-      },
       onUnavailable: () => {
-        this.memoryWatchUnavailable = true;
         this.dirty = true;
       },
     });
     this.memoryWatcherReady = this.fileWatcher.start().catch((error: unknown) => {
       if (!this.closed) {
-        this.memoryWatchUnavailable = true;
         this.dirty = true;
         log.warn(`memory workspace watcher unavailable: ${String(error)}`);
       }
@@ -140,9 +131,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       log.warn(`memory sync failed (${failureReason}): ${String(err)}`);
     };
     try {
-      this.runInBackgroundContext(() => {
-        void this.runInBackgroundContext(() => this.syncBackground(params)).catch(failed);
-      });
+      void this.runInBackgroundContext(() => this.syncBackground(params)).catch(failed);
     } catch (err) {
       failed(err);
     }

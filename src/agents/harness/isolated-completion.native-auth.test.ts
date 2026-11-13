@@ -13,7 +13,7 @@ import {
   nativeAuthPlan,
 } from "../isolated-completion.test-support.js";
 import { apiKey, authStore, oauth, token } from "../model-catalog-fixtures.test-support.js";
-import type { PreparedAgentRuntimeAuthAttempt } from "../runtime-plan/prepare-auth.js";
+import type { PreparedAgentRuntimeAuthAttempt } from "../runtime-plan/types.js";
 
 const { createPluginMetadataSnapshot, makeRegistry } =
   await import("../../config/plugin-auto-enable.test-helpers.js");

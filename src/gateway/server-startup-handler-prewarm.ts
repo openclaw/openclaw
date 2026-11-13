@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { createHostIoPressureProbe } from "../infra/host-io-pressure.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
@@ -9,15 +9,17 @@ const GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS = 250;
 
 type GatewayHandlerPrewarmItem = {
   name: string;
+  requiresControlUi?: boolean;
   notBeforeMs?: number;
   waitForIdle?: boolean;
   load: (isCancelled: () => boolean) => Promise<unknown>;
 };
 
 function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPrewarmItem[] {
-  return [
+  const items: GatewayHandlerPrewarmItem[] = [
     {
       name: "session-history-worker",
+      requiresControlUi: true,
       // Browser loading must not defer preparation of the worker its first history read needs.
       waitForIdle: false,
       load: async (isCancelled) => {
@@ -29,6 +31,7 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
     },
     ...["chat.history", "chat.send", "sessions.list"].map((method): GatewayHandlerPrewarmItem => ({
       name: method,
+      requiresControlUi: true,
       load: async (isCancelled) => {
         const [{ coreGatewayHandlers }, { prepareGatewayRequestHandler }] = await Promise.all([
           import("./server-methods/core-handlers.js"),
@@ -75,6 +78,7 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
     },
     {
       name: "plugins",
+      requiresControlUi: true,
       load: async (isCancelled) => {
         const { listManagedPlugins } = await import("../plugins/management-service.js");
         if (!isCancelled()) {
@@ -83,6 +87,10 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
       },
     },
   ];
+  // Headless clients retain the request-time loaders without paying for browser preparation.
+  return getConfig().gateway?.controlUi?.enabled === false
+    ? items.filter((item) => !item.requiresControlUi)
+    : items;
 }
 
 export function scheduleGatewayHandlerPrewarm(params: {
@@ -153,6 +161,7 @@ export function scheduleGatewayHandlerPrewarm(params: {
   scheduleNext();
 
   return {
+    name: "handler-prewarm",
     stop: () => {
       stopped = true;
       return idleTask?.stop();
@@ -163,25 +172,33 @@ export function scheduleGatewayHandlerPrewarm(params: {
 export function scheduleGatewayPrewarm(
   params: Parameters<typeof scheduleGatewayHandlerPrewarm>[0],
 ): GatewayIdleTaskHandle[] {
+  const memoryLimit = process.constrainedMemory();
+  // Leave scarce cgroup memory to requests; every warmup has a request-time loader.
+  if (memoryLimit > 0 && process.availableMemory() <= memoryLimit * 0.2) {
+    return [];
+  }
+  const hasIoPressure = createHostIoPressureProbe();
   return [
     scheduleGatewayHandlerPrewarm(params),
     scheduleGatewayIdleTask({
       id: "startup:dependency-template-prewarm",
       scheduler: params.scheduler,
       delayMs: 0,
-      retryDelayMs: GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS,
+      retryDelayMs: 60_000,
+      repeatDelayMs: 60_000,
       isClosing: () => false,
-      isBusy: () => false,
+      isBusy: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0,
+      waitForReady: params.waitForPostReadyWork,
       run: async (signal) => {
-        await racePromiseWithAbortSignal(
-          params.waitForPostReadyWork?.() ?? Promise.resolve(),
-          signal,
-        );
-        signal.throwIfAborted();
         const { prewarmLocalWorkspaceTemplates } =
           await import("./worker-environments/local-workspace-prewarm.js");
         signal.throwIfAborted();
-        await prewarmLocalWorkspaceTemplates({ getConfig: params.getConfig, signal });
+        await prewarmLocalWorkspaceTemplates({
+          getConfig: params.getConfig,
+          signal,
+          shouldDefer: async () =>
+            getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0 || (await hasIoPressure()),
+        });
       },
       log: params.log,
       errorMessage: "post-ready sandbox dependency prewarm failed",

@@ -256,6 +256,9 @@ export function buildServiceEnvironment(
     ...(env.OPENCLAW_CONFIG_READONLY !== undefined
       ? { OPENCLAW_CONFIG_READONLY: env.OPENCLAW_CONFIG_READONLY }
       : {}),
+    ...(env.OPENCLAW_CONFIG_READONLY_NOTICE !== undefined
+      ? { OPENCLAW_CONFIG_READONLY_NOTICE: env.OPENCLAW_CONFIG_READONLY_NOTICE }
+      : {}),
     OPENCLAW_WRAPPER: wrapperPath,
     OPENCLAW_GATEWAY_PORT: String(port),
     OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,

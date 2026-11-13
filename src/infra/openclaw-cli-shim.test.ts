@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolvePreparedExecEnvironment } from "../agents/bash-tools.exec-request-preparation.js";
 import { createExecTool } from "../agents/bash-tools.js";
 import { resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
@@ -106,6 +107,52 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
       });
     }),
   );
+
+  it("renders an upgrade-stable Homebrew interpreter into the launcher", () =>
+    withTempDir("openclaw-agent-cli-shim-brew-", async (root) => {
+      const cellarNode = path.join(root, "Cellar", "node", "26.8.2", "bin", "node");
+      const stableNode = path.join(root, "opt", "node", "bin", "node");
+      for (const interpreter of [cellarNode, stableNode]) {
+        await fs.mkdir(path.dirname(interpreter), { recursive: true });
+        await fs.writeFile(interpreter, "", "utf8");
+      }
+      vi.spyOn(cliInvocation, "resolveCurrentOpenClawCliInvocation").mockReturnValue({
+        command: cellarNode,
+        args: [path.join(root, "dist", "index.js")],
+        cwd: root,
+      });
+
+      const stateDir = path.join(root, "state");
+      await withEnvAsync(
+        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_PROFILE: "" },
+        prepareGatewayAgentCliShim,
+      );
+
+      const shim = await fs.readFile(path.join(stateDir, "tmp", "agent-cli", "openclaw"), "utf8");
+      expect(shim).toContain(`exec ${quoteCliArg(stableNode)} `);
+      expect(shim).not.toContain("Cellar");
+    }));
+
+  it("keeps the resolved interpreter when no stable Homebrew path exists", () =>
+    withTempDir("openclaw-agent-cli-shim-brew-keg-", async (root) => {
+      const cellarNode = path.join(root, "Cellar", "node", "26.8.2", "bin", "node");
+      await fs.mkdir(path.dirname(cellarNode), { recursive: true });
+      await fs.writeFile(cellarNode, "", "utf8");
+      vi.spyOn(cliInvocation, "resolveCurrentOpenClawCliInvocation").mockReturnValue({
+        command: cellarNode,
+        args: [path.join(root, "dist", "index.js")],
+        cwd: root,
+      });
+
+      const stateDir = path.join(root, "state");
+      await withEnvAsync(
+        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_PROFILE: "" },
+        prepareGatewayAgentCliShim,
+      );
+
+      const shim = await fs.readFile(path.join(stateDir, "tmp", "agent-cli", "openclaw"), "utf8");
+      expect(shim).toContain(`exec ${quoteCliArg(cellarNode)} `);
+    }));
 });
 
 it.each([

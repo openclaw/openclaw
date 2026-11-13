@@ -6,6 +6,7 @@ export const PLUGIN_MODEL_CATALOG_GENERATED_BY = "openclaw-plugin-model-catalog-
 
 type PluginModelCatalogRepair = {
   contents: string;
+  inspectionIncomplete: boolean;
   removedModelCount: number;
   completedCostModelCount: number;
 };
@@ -27,17 +28,29 @@ export function repairPluginModelCatalogTransportMetadata(
   try {
     parsed = JSON.parse(contents) as unknown;
   } catch {
-    return { contents, removedModelCount: 0, completedCostModelCount: 0 };
+    return {
+      contents,
+      inspectionIncomplete: true,
+      removedModelCount: 0,
+      completedCostModelCount: 0,
+    };
   }
   if (!isGeneratedPluginModelCatalog(parsed) || !isRecord(parsed.providers)) {
-    return { contents, removedModelCount: 0, completedCostModelCount: 0 };
+    return {
+      contents,
+      inspectionIncomplete: true,
+      removedModelCount: 0,
+      completedCostModelCount: 0,
+    };
   }
 
   let removedModelCount = 0;
+  let inspectionIncomplete = false;
   let completedCostModelCount = 0;
   const providers: Record<string, unknown> = {};
   for (const [providerId, provider] of Object.entries(parsed.providers)) {
     if (!isRecord(provider) || !Array.isArray(provider.models)) {
+      inspectionIncomplete = true;
       providers[providerId] = provider;
       continue;
     }
@@ -48,6 +61,7 @@ export function repairPluginModelCatalogTransportMetadata(
     let providerChanged = false;
     for (const model of provider.models) {
       const modelRecord = asOptionalRecord(model);
+      inspectionIncomplete ||= !modelRecord;
       if (!providerApi && (!modelRecord || !hasCatalogApi(modelRecord.api))) {
         removedModelCount += 1;
         providerChanged = true;
@@ -63,11 +77,12 @@ export function repairPluginModelCatalogTransportMetadata(
     providers[providerId] = providerChanged ? { ...provider, models } : provider;
   }
   if (removedModelCount === 0 && completedCostModelCount === 0) {
-    return { contents, removedModelCount, completedCostModelCount };
+    return { contents, inspectionIncomplete, removedModelCount, completedCostModelCount };
   }
   const trailingNewline = contents.endsWith("\n") ? "\n" : "";
   return {
     contents: `${JSON.stringify({ ...parsed, providers }, null, 2)}${trailingNewline}`,
+    inspectionIncomplete,
     removedModelCount,
     completedCostModelCount,
   };

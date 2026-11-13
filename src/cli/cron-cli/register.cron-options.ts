@@ -61,17 +61,23 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     .option("--script <file|->", "Headless script payload file, or - for stdin")
     .option("--script-timeout-seconds <n>", "Script wall-clock timeout seconds")
     .option("--script-tool-budget <n>", "Maximum script tool calls")
-    .option("--command <shell>", "Command payload run as sh -lc <shell> on the Gateway")
+    .option(
+      "--command <shell>",
+      "Command payload run through the Gateway host shell (sh -lc, or cmd.exe on Windows)",
+    )
     .option("--command-argv <json>", "Command payload argv as JSON array of strings")
     .option("--command-cwd <path>", "Working directory for command payloads")
     .option(
       "--command-env <KEY=VALUE>",
-      "Environment override for command payloads (repeatable)",
+      "Environment override for command payloads (repeatable; edit replaces all stored overrides)",
       collectOption,
     )
     .option("--command-input <text>", "stdin for command payloads")
     .option("--thinking <level>", `Thinking level for agent jobs (${THINKING_LEVELS_HELP})`)
-    .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
+    .option(
+      "--model <model>",
+      "Model override for agent jobs (provider/model or alias; append @<profileId> to choose the job's account)",
+    )
     .option("--fallbacks <list>", "Fallback model list for agent jobs")
     .option(
       "--timeout-seconds <n>",

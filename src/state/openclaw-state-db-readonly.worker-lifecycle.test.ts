@@ -82,6 +82,11 @@ vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => ({
     };
   },
 }));
+vi.mock("./openclaw-state-db-readonly-reuse.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-state-db-readonly-reuse.js")>()),
+  // These borrowed handles are fakes; image sharing has its own work-count tests.
+  canReadWarmNativeSourceIndependently: () => false,
+}));
 vi.mock("../infra/sqlite-readonly-location-cleanup.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-readonly-location-cleanup.js")>()),
   // Preparation is mocked; this fixture has no private directory to retain.

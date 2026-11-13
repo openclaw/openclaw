@@ -7,21 +7,19 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   loadCronJobsStoreWithConfigJobs,
-  loadCronJobsStoreWithConfigJobsReadOnly,
   loadCronStore,
   resolveCronStorePath,
   saveCronJobsStore,
   saveCronStore,
 } from "./store.js";
 import { createStorePathFixture, expectPathMissing, makeStore } from "./store.test-support.js";
+import { withCronStore } from "./store.worker.test-support.js";
 import { cronStoreKey } from "./store/key.js";
 import type { CronStoreFile } from "./types.js";
 
@@ -47,8 +45,8 @@ describe("resolveCronStorePath", () => {
 
 describe("cron store", () => {
   it("reads an absent cron table without touching source WAL artifacts", async () => {
-    await withOpenClawTestState({ prefix: "openclaw-cron-readonly-wal-" }, async (state) => {
-      const databasePath = resolveOpenClawStateSqlitePath(state.env);
+    await withCronStore("cron-readonly-wal", async (state) => {
+      const { databasePath } = state;
       await fs.mkdir(path.dirname(databasePath), { recursive: true });
       const writer = new DatabaseSync(databasePath);
       writer.exec(
@@ -65,12 +63,7 @@ describe("cron store", () => {
         );
       const before = await hashes();
       try {
-        const loaded = await withArtifactPreservingStateReads(() =>
-          loadCronJobsStoreWithConfigJobsReadOnly(
-            path.join(state.stateDir, "cron", "jobs.json"),
-            state.env,
-          ),
-        );
+        const loaded = await state.read(true);
         expect(loaded.store).toEqual({ version: 1, jobs: [] });
         expect(await hashes()).toEqual(before);
         expect(writer.prepare("SELECT value FROM marker").all()).toEqual([{ value: "committed" }]);
@@ -363,12 +356,12 @@ describe("cron store", () => {
     const store = await makeStorePath();
     const payload = makeStore("job-queued-phase", true);
     const job = payload.jobs[0];
-    job.state = {
-      nextRunAtMs: job.createdAtMs,
+    const queuedFields = {
       startupCatchupAtMs: job.createdAtMs,
       pacedNextRunAtMs: job.createdAtMs,
       queuedAtMs: job.createdAtMs + 1,
     };
+    job.state = { nextRunAtMs: job.createdAtMs, ...queuedFields };
 
     await saveCronStore(store.storePath, payload);
 
@@ -377,16 +370,8 @@ describe("cron store", () => {
       .get(job.id) as { state_json: string };
     const queuedState = JSON.parse(queuedRow.state_json) as Record<string, unknown>;
     expect(queuedState.runningAtMs).toBeUndefined();
-    expect(queuedState).toMatchObject({
-      queuedAtMs: job.createdAtMs + 1,
-      startupCatchupAtMs: job.createdAtMs,
-      pacedNextRunAtMs: job.createdAtMs,
-    });
-    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
-      queuedAtMs: job.createdAtMs + 1,
-      startupCatchupAtMs: job.createdAtMs,
-      pacedNextRunAtMs: job.createdAtMs,
-    });
+    expect(queuedState).toMatchObject(queuedFields);
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject(queuedFields);
 
     job.state.queuedAtMs = undefined;
     job.state.runningAtMs = job.createdAtMs + 2;
@@ -462,19 +447,11 @@ describe("cron store", () => {
       noOutputTimeoutSeconds: 10,
       outputMaxBytes: 4096,
     };
+    const expected = structuredClone(payload.jobs[0].payload);
 
     await saveCronStore(store.storePath, payload);
 
-    expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toEqual({
-      kind: "command",
-      argv: ["sh", "-lc", 'printf %s "$1"', "  "],
-      cwd: "/srv/example",
-      env: { FOO: "bar" },
-      input: "stdin",
-      timeoutSeconds: 45,
-      noOutputTimeoutSeconds: 10,
-      outputMaxBytes: 4096,
-    });
+    expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toEqual(expected);
   });
 
   it("round-trips a trigger-script systemEvent tool cap through SQLite", async () => {
@@ -488,15 +465,11 @@ describe("cron store", () => {
       toolsAllow: ["read", "cron"],
       toolsAllowIsDefault: true,
     };
+    const expected = structuredClone(job.payload);
 
     await saveCronStore(store.storePath, payload);
 
-    expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toEqual({
-      kind: "systemEvent",
-      text: "changed",
-      toolsAllow: ["read", "cron"],
-      toolsAllowIsDefault: true,
-    });
+    expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toEqual(expected);
   });
 
   it("round-trips a command payload tool cap through SQLite", async () => {
@@ -510,15 +483,11 @@ describe("cron store", () => {
       toolsAllow: ["read", "cron"],
       toolsAllowIsDefault: true,
     };
+    const expected = structuredClone(job.payload);
 
     await saveCronStore(store.storePath, payload);
 
-    expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toEqual({
-      kind: "command",
-      argv: ["echo", "hi"],
-      toolsAllow: ["read", "cron"],
-      toolsAllowIsDefault: true,
-    });
+    expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toEqual(expected);
   });
 
   it("round-trips completion destinations through canonical cron job JSON", async () => {
@@ -536,21 +505,11 @@ describe("cron store", () => {
         to: "https://example.invalid/legacy-completion",
       },
     };
+    const expected = structuredClone(job.delivery);
 
     await saveCronStore(storePath, { version: 1, jobs: [job] });
 
-    expect((await loadCronStore(storePath)).jobs[0]?.delivery).toEqual({
-      mode: "announce",
-      channel: "telegram",
-      to: "telegram:chat-1",
-      threadId: "topic-9",
-      accountId: "bot-1",
-      bestEffort: true,
-      completionDestination: {
-        mode: "webhook",
-        to: "https://example.invalid/legacy-completion",
-      },
-    });
+    expect((await loadCronStore(storePath)).jobs[0]?.delivery).toEqual(expected);
   });
 
   it.each(["1737500000.123456", "007"])(

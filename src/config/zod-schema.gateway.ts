@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
@@ -5,6 +6,7 @@ import { CONTROL_UI_ENVIRONMENT_COLORS } from "../gateway/control-ui-bootstrap-c
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
+  CRON_SCOPE,
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
@@ -19,6 +21,7 @@ import {
   isValidPortalIngressDomain,
   portalIngressConflictsWithOrigin,
 } from "./gateway-portal-ingress.js";
+import { GatewayOpenClawIdConfigSchema } from "./zod-schema.gateway-openclaw-id.js";
 import {
   GatewayRemoteConfigSchema,
   ResponsesEndpointUrlFetchShape,
@@ -31,6 +34,7 @@ const OperatorScopeSchema = z.enum([
   ADMIN_SCOPE,
   READ_SCOPE,
   WRITE_SCOPE,
+  CRON_SCOPE,
   SESSION_READ_SCOPE,
   SESSION_WRITE_SCOPE,
   APPROVALS_SCOPE,
@@ -93,6 +97,8 @@ export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
       .array(z.string().trim().min(1).refine(isValidAgentId, "Invalid agent id"))
       .transform((agents) => uniqueValues(agents.map(normalizeAgentId))),
   ]),
+  /** Cloud profiles this role may explicitly dispatch its own sessions to. */
+  workerProfiles: z.array(z.string().trim().min(1)).transform(uniqueValues).optional(),
   /** Optional model ceiling for this role; defaults to the source agent's primary and fallbacks. */
   modelPolicy: z
     .strictObject({
@@ -107,7 +113,7 @@ export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
       deny: z.array(z.string().trim().min(1)).optional(),
     })
     .optional(),
-  /** Nonstandard Access requires an explicit grant, independent of model membership. */
+  /** Explicit Access ceiling; omission uses admin authority or Standard for restricted roles. */
   accessPrograms: z
     .strictObject({
       cyber: z
@@ -187,7 +193,10 @@ export const GatewayConfigSchema = z
           .optional(),
       })
       .optional(),
+    /** Experimental OpenClaw ID remote access (Labs); inert unless enabled. */
+    openclawId: GatewayOpenClawIdConfigSchema.optional(),
     github: GatewayGitHubEndpointSchema.optional(),
+    repositoryIntegration: z.string().trim().min(1).optional(),
     projects: z
       .strictObject({
         defaultRepository: z
@@ -213,10 +222,10 @@ export const GatewayConfigSchema = z
         basePath: z.string().optional(),
         experimental: z
           .strictObject({
-            /** Allow native UI from user-installed plugins (default false; bundled UI stays available). */
+            /** Advanced native UI opt-out (default true; existing false stays off, bundled UI unaffected). */
             customPlugins: z.boolean().optional(),
-            /** Show the official Claw catalog and Add flow in Control UI (default false). */
-            claws: z.boolean().optional(),
+            /** Show the official Template catalog and Add flow in Control UI (default false). */
+            templates: z.boolean().optional(),
             /** Enable experimental speech bubbles in the Control UI (default false). */
             chatBubbles: z.boolean().optional(),
             /** Optional, tool-free next-message suggestions (disabled by default). */
@@ -372,6 +381,25 @@ export const GatewayConfigSchema = z
              * trust boundary and direct Gateway access is otherwise locked down.
              */
             allowLoopback: z.boolean().optional(),
+            /** Revision-scoped delegation from OpenClaw Enterprise's private browser proxy. */
+            delegation: z
+              .strictObject({
+                credentialFile: z
+                  .string()
+                  .refine(isAbsolute, "Expected an absolute credential file path"),
+              })
+              .optional(),
+            /** Optional organization commit credit, supplied only by the authenticated proxy. */
+            gitCoauthor: z
+              .strictObject({
+                nameHeader: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u),
+                emailHeader: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u),
+                emailVerifiedHeader: z
+                  .string()
+                  .regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u)
+                  .optional(),
+              })
+              .optional(),
             /** Optional verified GitHub identity from one explicitly trusted Access OIDC provider. */
             cloudflareAccessOidc: z
               .strictObject({

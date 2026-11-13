@@ -16,6 +16,8 @@ import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
 } from "./ingress-attribution.js";
+import type { GatewayClient } from "./server-methods/types.js";
+import { handleSessionFilePreviewHttpRequest } from "./session-file-preview-http.js";
 
 function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerResponse): boolean {
   const url = URL.parse(req.url ?? "/", "http://localhost");
@@ -57,9 +59,14 @@ function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerRespons
   return true;
 }
 
-/** Dedicated listener for the sandbox proxy, never Gateway data. */
-export function createSandboxHostHttpServer(tlsOptions?: TlsOptions): HttpServer {
-  const handler = createSandboxHostHttpRequestHandler();
+type SandboxHostOptions = { clients: ReadonlySet<GatewayClient> };
+
+/** Isolated shell and explicitly granted file resources, never arbitrary Gateway data. */
+export function createSandboxHostHttpServer(
+  tlsOptions?: TlsOptions,
+  options?: SandboxHostOptions,
+): HttpServer {
+  const handler = createSandboxHostHttpRequestHandler(options);
   const listener = (req: IncomingMessage, res: ServerResponse) => {
     void handler(req, res);
   };
@@ -67,12 +74,14 @@ export function createSandboxHostHttpServer(tlsOptions?: TlsOptions): HttpServer
 }
 
 /** Shared dedicated-surface owner for listener and virtual ingress transports. */
-export function createSandboxHostHttpRequestHandler(): (
-  req: IncomingMessage,
-  res: ServerResponse,
-) => Promise<void> {
+export function createSandboxHostHttpRequestHandler(
+  options?: SandboxHostOptions,
+): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   return async (req: IncomingMessage, res: ServerResponse) => {
     assertRemoteControlUiIngressCurrent(getRemoteControlUiIngressContext(req));
+    if (options && (await handleSessionFilePreviewHttpRequest(req, res, options.clients))) {
+      return;
+    }
     if (!handleMcpAppSandboxHttpRequest(req, res)) {
       respondPlainText(res, 404, "Not Found");
     }

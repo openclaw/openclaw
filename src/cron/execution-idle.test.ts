@@ -8,7 +8,7 @@ import {
 import { onGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
-import { listActiveReplyRunSessionKeys } from "../sessions/session-controller.queries.js";
+import { listActiveSessionRunKeys } from "../sessions/session-controller.queries.js";
 import { getSessionControllerOperation } from "../sessions/session-controller.state.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
@@ -129,7 +129,7 @@ describe("idle-only execution admission", () => {
       expect(order).toEqual([]);
       expect(owners.every(({ marker }) => marker.idleAdmissionWait)).toBe(true);
       expect(hasActiveCronJobsForAgent("main")).toBe(true);
-      expect(listActiveReplyRunSessionKeys().toSorted()).toEqual(
+      expect(listActiveSessionRunKeys().toSorted()).toEqual(
         [foreground.key, ...owners.map(({ operation }) => operation.key)].toSorted(),
       );
       foreground.complete();
@@ -151,7 +151,7 @@ describe("idle-only execution admission", () => {
         `start:${second}`,
         `finish:${second}`,
       ]);
-      expect(listActiveReplyRunSessionKeys()).toEqual([]);
+      expect(listActiveSessionRunKeys()).toEqual([]);
       expect(hasActiveCronJobsForAgent("main")).toBe(false);
     } finally {
       unsubscribe();

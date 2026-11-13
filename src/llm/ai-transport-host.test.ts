@@ -147,7 +147,7 @@ it("keeps complete canonical user and tool-result images through the installed h
             imageBlock(` ${jpegData.slice(0, 80)}\n${jpegData.slice(80)} `, "image/png"),
           ],
         }),
-        ...toolExchange(toolImageContent(imageBlock(pngData.replace(/=+$/, ""), "image/jpeg"))),
+        ...toolExchange(toolImageContent(imageBlock(pngData.replace(/[=]+$/, ""), "image/jpeg"))),
       ],
     },
     { ...anthropicModel, input: ["text", "image"] },

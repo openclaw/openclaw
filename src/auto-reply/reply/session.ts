@@ -20,7 +20,6 @@ import {
   hasTerminalMainSessionTranscriptNewerThanRegistryAsync,
   resolveSessionLifecycleTimestampsAsync,
 } from "../../config/sessions/lifecycle-read.js";
-import { isRestartRecoveryTombstone } from "../../config/sessions/lifecycle.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import {
   resolveChannelResetConfig,
@@ -28,10 +27,7 @@ import {
   resolveSessionResetType,
   resolveThreadFlag,
 } from "../../config/sessions/reset.js";
-import {
-  commitReplySessionInitialization,
-  loadReplySessionInitializationSnapshot,
-} from "../../config/sessions/session-accessor.js";
+import { commitReplySessionInitialization } from "../../config/sessions/session-accessor.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -85,10 +81,7 @@ import { acknowledgeReplySessionTransition } from "../../sessions/session-contro
 import { recordSessionCreated } from "../../sessions/session-created.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
-import {
-  classifySessionStateActor,
-  registerMainSessionGroupWatch,
-} from "../../sessions/session-state-events.js";
+import { registerMainSessionGroupWatch } from "../../sessions/session-state-events.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import {
   deliveryContextFromSession,
@@ -130,16 +123,13 @@ import type {
 } from "./session-init.types.js";
 import {
   assertReplySessionInitializationAllowed,
+  loadReplySessionInitializationForAttempt,
   prepareReplySessionInitialization,
   resolveInitSessionStateAttemptContext,
-  resolveInitializationSessionReader,
   type InitSessionStateParams,
   type InitSessionStateAttemptContext,
 } from "./session-initialization-admission.js";
-import {
-  canReplaceRestartTombstoneFromParent,
-  prepareReplySessionParentFork,
-} from "./session-parent-fork-prepare.js";
+import { prepareReplySessionParentFork } from "./session-parent-fork-prepare.js";
 import {
   clearCommittedSessionResetRuntimeState,
   prepareSessionResetCleanupGuard,
@@ -365,13 +355,11 @@ async function initSessionStateAttemptLocked(
   const initializationSnapshot = await measureDiagnosticsTimelineSpan(
     "reply.session.snapshot",
     () =>
-      loadReplySessionInitializationSnapshot(
+      loadReplySessionInitializationForAttempt(
         { ...sessionTarget, relatedSessionKeys },
-        {
-          reader: resolveInitializationSessionReader(params, attemptContext),
-          includeLifecycle: true,
-          assertCurrent: () => params.signal?.throwIfAborted(),
-        },
+        params,
+        attemptContext,
+        mainSessionKey,
       ),
   );
   if (ingressTimingEnabled) {
@@ -391,29 +379,7 @@ async function initSessionStateAttemptLocked(
   });
   const entry = initializationSnapshot.currentEntry;
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
-  const parentForkSourceEntry =
-    parentSessionKey && parentSessionKey !== sessionKey
-      ? initializationSnapshot.readEntry(parentSessionKey)
-      : undefined;
-  const actorType = isSystemEvent
-    ? "system"
-    : classifySessionStateActor({ inputProvenance: ctx.InputProvenance }).actorType;
-  const restartTombstoneReset =
-    resetTriggered &&
-    isRestartRecoveryTombstone(entry) &&
-    entry?.pluginOwnerId === undefined &&
-    actorType === "human";
-  const restartTombstoneParentFork = canReplaceRestartTombstoneFromParent({
-    actorType,
-    entry,
-    hasParentForkSource: Boolean(parentForkSourceEntry?.sessionId),
-    inboundAccessAuthorized: ctx.InboundAccessAuthorized,
-    inboundEventKind: ctx.InboundEventKind,
-    nativeCommandTarget: resolveCommandTurnTargetSessionKey(ctx),
-    sessionKey,
-  });
   assertReplySessionInitializationAllowed(sessionKey, entry, {
-    allowRestartTombstoneReplacement: restartTombstoneReset || restartTombstoneParentFork,
     providerReviewAcknowledgment: params.providerReviewAcknowledgment,
   });
   // Locked model selection is coupled to the current native session id. Reject before
@@ -498,12 +464,11 @@ async function initSessionStateAttemptLocked(
     (entryFreshness?.fresh ?? false) &&
     isRecoverableTerminalSessionStatus(entry?.status);
   const freshEntry =
-    !restartTombstoneParentFork &&
-    (((lockedModelSelection || isSystemEvent) && canReuseExistingEntry) ||
-      ((((pinExpectedExistingSession || reconnectResumeRequested || softResetAllowed) &&
-        canReuseExistingEntry) ||
-        (entryFreshness?.fresh ?? false)) &&
-        !terminalMainTranscriptNewerThanRegistry));
+    ((lockedModelSelection || isSystemEvent) && canReuseExistingEntry) ||
+    ((((pinExpectedExistingSession || reconnectResumeRequested || softResetAllowed) &&
+      canReuseExistingEntry) ||
+      (entryFreshness?.fresh ?? false)) &&
+      !terminalMainTranscriptNewerThanRegistry);
   const activeReplyOperation = getSessionControllerOperation(
     sessionKey,
     captureSessionTarget({ storeScope: storePath, sessionKey, agentId }),
@@ -561,9 +526,7 @@ async function initSessionStateAttemptLocked(
   // resets still rotate the local session id that owns provider conversation state.
   let sessionId =
     baseEntry?.sessionId ??
-    (isAcpSessionKey(sessionKey) || restartTombstoneParentFork
-      ? crypto.randomUUID()
-      : (entry?.sessionId ?? crypto.randomUUID()));
+    (isAcpSessionKey(sessionKey) ? crypto.randomUUID() : (entry?.sessionId ?? crypto.randomUUID()));
   // Explicit and implicit resets preserve user selections; automatic fallback
   // overrides are filtered by resolveResetPreservedSelection.
   const preservedState: Partial<SessionEntry> | undefined = baseEntry
@@ -799,7 +762,6 @@ async function initSessionStateAttemptLocked(
               ...sessionTarget,
               alreadyForked,
               parentSessionKey,
-              requireParentForkReplacement: restartTombstoneParentFork,
               readEntry,
               sessionEntry: entryToCommit,
               warn: (message) => log.warn(message),
@@ -858,16 +820,11 @@ async function initSessionStateAttemptLocked(
     // The outer retry owns conflicts; never retry while holding the writer lane.
     throw new ReplySessionInitConflictError(sessionKey);
   }
-  if (
-    params.replyOperation?.key === sessionKey &&
-    (entry?.sessionId !== committed.sessionEntry.sessionId ||
-      entry?.lifecycleRevision !== committed.sessionEntry.lifecycleRevision)
-  ) {
-    await acknowledgeReplySessionTransition(params.replyOperation, {
-      previous: entry,
-      current: committed.sessionEntry,
-    });
-  }
+  await acknowledgeReplySessionTransition(
+    params.replyOperation,
+    { previous: entry, current: committed.sessionEntry },
+    captureSessionTarget({ storeScope: storePath, sessionKey, agentId }),
+  );
   clearCommittedSessionResetRuntimeState({
     previousSessionEntry,
     storePath,

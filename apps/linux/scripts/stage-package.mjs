@@ -22,6 +22,10 @@ export function resourceBytes(executable) {
 }
 
 export function stageInstalledPackage(installed, work, target, plan) {
+  const manifestPath = path.join(work, "manifest.json");
+  const previousManifest = fs.readFileSync(manifestPath);
+  const manifest = JSON.parse(previousManifest);
+  assert.equal(manifest.runtime?.flavor, "jit", "Packages can only be staged for the JIT desktop runtime");
   const core = path.join(installed, "node_modules/openclaw");
   assert.equal(readJson(path.join(core, "package.json")).name, "openclaw", "Expected the OpenClaw package");
   const require = createRequire(path.join(core, "package.json"));
@@ -42,9 +46,6 @@ export function stageInstalledPackage(installed, work, target, plan) {
     { recursive: true, dereference: true,
       filter: (source) => ![".bin", ".package-lock.json"].includes(path.basename(source)) });
   pruneDesktopRuntime(path.join(destination, "node_modules"));
-  const manifestPath = path.join(work, "manifest.json");
-  const previousManifest = fs.readFileSync(manifestPath);
-  const manifest = JSON.parse(previousManifest);
   let bytes = 0;
   let resourceSize = 0;
   const record = (directory) => {
@@ -71,6 +72,7 @@ export function stageInstalledPackage(installed, work, target, plan) {
     }
   };
   record(destination);
+  manifest.runtime.entry = "package/node_modules/openclaw/openclaw.mjs";
   const serialized = `${JSON.stringify(manifest, null, 2)}\n`;
   fs.writeFileSync(manifestPath, serialized);
   resourceSize += Buffer.byteLength(serialized) - previousManifest.length;
@@ -80,9 +82,8 @@ export function stageInstalledPackage(installed, work, target, plan) {
 
 export function stagePackage(root, work, target) {
   const commit = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  if (desktopRuntimeReleaseTag(root, readJson(path.join(root, "package.json")).version, commit)) {
-    return;
-  }
+  // Validate explicit release identity, while keeping every flavor self-contained.
+  desktopRuntimeReleaseTag(root, readJson(path.join(root, "package.json")).version, commit);
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tauri-package-"));
   try {
     const archive = path.join(scratch, "openclaw.tgz");

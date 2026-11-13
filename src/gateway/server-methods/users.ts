@@ -33,6 +33,13 @@ import {
   validateUsersGitHubAuthorizeCancelParams,
   validateUsersGitHubDisconnectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+  gitCoauthorOrganizationPolicy,
+  normalizeGitCoauthorOrganizationIdentity,
+  publicGitHubCoauthorEmail,
+} from "../../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
+import { resolveConfiguredGitHubHost } from "../../agents/github-host.js";
 import { resolveSystemGitHubIdentityStatus } from "../../agents/github-tool-identity.js";
 import { resolveGatewayPersonalToolParticipant } from "../../agents/tools/gateway-caller-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -46,6 +53,7 @@ import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
+import { prepareUserProfileGitHubAttribution } from "../../state/user-profile-github-identity.js";
 import { profileCatalogPath } from "../../state/user-profile-identity.read.js";
 import {
   projectUserProfileDisplay,
@@ -78,7 +86,7 @@ import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
 } from "./gateway-client-identity.js";
-import { preparePersonalGitHubActionV2 } from "./github-personal-authorization.js";
+import { preparePersonalProfileAction } from "./personal-profile-authorization.js";
 import { respondError } from "./response.js";
 import type {
   GatewayRequestHandlerOptions,
@@ -88,6 +96,7 @@ import type {
 } from "./types.js";
 import { publishUserPreferencesChanged } from "./user-preference-events.js";
 import { prepareUserBackgroundAction, usersBackgroundHandlers } from "./users-background.js";
+import { usersChannelIdentityHandlers } from "./users-channel-identity.js";
 import { prepareUserModelAccountAction } from "./users-model-account-access.js";
 import { usersPersonalFileHandlers } from "./users-personal-file.js";
 import {
@@ -235,7 +244,7 @@ async function runPersonalGitHub(
       errorShape(ErrorCodes.FORBIDDEN, error instanceof Error ? error.message : fallbackError),
     );
   try {
-    const action = await preparePersonalGitHubActionV2(options);
+    const action = await preparePersonalProfileAction(options);
     const service = options.context.githubOAuthService?.personal;
     if (!service) {
       throw new Error("GitHub connections are unavailable; retry after Gateway startup.");
@@ -374,6 +383,7 @@ export const usersHandlers: GatewayRequestHandlers = {
       }),
   ),
   ...usersPersonalFileHandlers,
+  ...usersChannelIdentityHandlers,
   ...usersBackgroundHandlers,
   "users.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
@@ -428,12 +438,40 @@ export const usersHandlers: GatewayRequestHandlers = {
         respond(false, undefined, authenticatedProfileUnavailableError(syncError));
         return;
       }
-      respond(true, { profile: profile.listItem });
+      const host = resolveConfiguredGitHubHost(options.context.getRuntimeConfig());
+      const availability = await prepareUserProfileGitHubAttribution([profileId], {
+        host,
+        githubAvailability: true,
+      });
+      profile.assertCurrent();
+      options.sessionMutationAuthorization?.assertCurrent();
+      if (
+        !availability.isCurrent() ||
+        resolveConfiguredGitHubHost(options.context.getRuntimeConfig()) !== host
+      ) {
+        respond(false, undefined, authenticatedProfileUnavailableError());
+        return;
+      }
+      const identity = availability.identities.get(profileId);
+      respond(true, {
+        profile: {
+          ...profile.listItem,
+          gitCoauthorAvailable: Boolean(identity),
+          ...(host === "github.com" && identity && "login" in identity
+            ? {
+                gitCoauthorIdentity: {
+                  name: identity.login,
+                  email: publicGitHubCoauthorEmail(identity.accountId, identity.login),
+                },
+              }
+            : {}),
+        },
+      });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }
   },
-  "users.prefs.get": async ({ client, params, respond, sessionMutationAuthorization }) => {
+  "users.prefs.get": async ({ client, context, params, respond, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateUsersPrefsGetParams, "users.prefs.get", respond)) {
       return;
     }
@@ -455,7 +493,26 @@ export const usersHandlers: GatewayRequestHandlers = {
         respond(false, undefined, authenticatedProfileUnavailableError());
         return;
       }
-      respond(true, { status: "ok", entries: preferences.entries }, undefined);
+      const entries = preferences.entries;
+      if (Object.hasOwn(entries, GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY)) {
+        const auth = context.getRuntimeConfig().gateway?.auth;
+        const policy =
+          auth?.mode === "trusted-proxy" && auth.trustedProxy?.gitCoauthor
+            ? gitCoauthorOrganizationPolicy(
+                auth.trustedProxy.userHeader,
+                auth.trustedProxy.gitCoauthor,
+              )
+            : undefined;
+        if (
+          !policy ||
+          normalizeGitCoauthorOrganizationIdentity(
+            entries[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY],
+          )?.policy !== policy
+        ) {
+          delete entries[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY];
+        }
+      }
+      respond(true, { status: "ok", entries }, undefined);
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
@@ -482,13 +539,31 @@ export const usersHandlers: GatewayRequestHandlers = {
       const backgroundAction = Object.hasOwn(params.entries, "ui.background")
         ? await prepareUserBackgroundAction(options, "operator.write")
         : undefined;
+      const compareOrganization = Object.hasOwn(
+        params.expectedEntries ?? {},
+        GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
+      );
+      const readOrganizationPolicy = () => {
+        const auth = context.getRuntimeConfig().gateway?.auth;
+        return auth?.mode === "trusted-proxy" && auth.trustedProxy?.gitCoauthor
+          ? gitCoauthorOrganizationPolicy(
+              auth.trustedProxy.userHeader,
+              auth.trustedProxy.gitCoauthor,
+            )
+          : null;
+      };
+      const organizationPolicy = compareOrganization ? readOrganizationPolicy() : undefined;
       const assertCurrent = () => {
         assertPersonal();
         options.sessionMutationAuthorization?.assertCurrent();
         backgroundAction?.assertCurrent();
+        if (compareOrganization && readOrganizationPolicy() !== organizationPolicy) {
+          throw new Error("Git co-author policy changed. Refresh Profile and try again.");
+        }
       };
       const result = await setCanonicalUserPreferences(profileId, params.entries, {
         expectedEntries: params.expectedEntries,
+        ...(compareOrganization ? { organizationPolicy } : {}),
         assertCurrent,
       });
       if (!result) {
@@ -504,7 +579,7 @@ export const usersHandlers: GatewayRequestHandlers = {
           respondError(
             respond,
             ErrorCodes.INVALID_REQUEST,
-            `users.prefs.set exceeds the ${result.error.limit}-key profile limit (current count: ${result.error.currentCount})`,
+            `users.prefs.set exceeds the ${result.error.limit}-key profile limit (current count: ${result.error.currentCount}). Remove a saved preference and try again.`,
             {
               details: {
                 code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
@@ -634,8 +709,8 @@ export const usersHandlers: GatewayRequestHandlers = {
           }
         },
         onCommitted: (canonicalProfileId) => {
-          invalidateOperatorRolePolicy(canonicalProfileId);
-          context.disconnectClientsForUserProfile?.(canonicalProfileId);
+          invalidateOperatorRolePolicy(canonicalProfileId, { roleOnly: true });
+          context.disconnectClientsForUserProfile?.(canonicalProfileId, { roleOnly: true });
         },
       });
       respond(true, { profile });

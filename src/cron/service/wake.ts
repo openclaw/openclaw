@@ -76,6 +76,7 @@ export async function enqueueCronNotification(
     agentId,
     sessionKey,
     contextKey: `cron:${job.id}:${kind}`,
+    jobId: job.id,
     ...(sessionKey ? {} : { createIfMissing: true as const }),
     ...(deliveryContext ? { deliveryContext } : {}),
   });

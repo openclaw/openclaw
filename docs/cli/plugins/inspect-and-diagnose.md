@@ -23,7 +23,11 @@ Inspect shows identity, load status, source, manifest capabilities, policy flags
 Default human inspection uses `enabled`, `disabled`, or `error` status labels,
 matching `plugins list`. It describes the metadata snapshot; it does not claim
 that a plugin module was imported. With `--runtime`, successful runtime inspection
-uses `loaded`. JSON retains the underlying registry status and separate `imported` field.
+uses `CLI status: loaded` for this CLI process's module load, not the Gateway.
+JSON labels those registrations with `inspectionScope: "cli"` and retains the
+underlying registry status and separate `imported` field. Gateway status is queried
+separately through the existing `plugins.list` RPC when a local Gateway is running.
+JSON includes that result as `gatewayRuntime`, or `null` when unavailable.
 Known-incompatible plugins remain visible with their repair guidance. Their
 diagnostics do not prevent inspection of other plugins, including with `--runtime`.
 

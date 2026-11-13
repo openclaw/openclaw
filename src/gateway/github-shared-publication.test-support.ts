@@ -3,8 +3,8 @@ import type { RepositoryGitHubPublicationRow } from "../state/github-publication
 import { repositoryRow } from "../state/github-publication.worker.test-support.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
-import type { PublicationSessionIdentity } from "./github-publication-availability.js";
 import { digestGitHubPublicationRequest } from "./github-publication-receipt.js";
+import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import { ensureGitHubPublicationStoreFixture } from "./github-publication-store.test-support.js";
 import { insertGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import {
@@ -36,6 +36,7 @@ export function insertSharedWorktreeReceipt(
     worktreeId?: string;
     branch?: string;
     repositoryFingerprint?: string;
+    requester?: typeof systemPublicationRequester;
   } = {},
 ) {
   ensureGitHubPublicationStoreFixture();
@@ -53,8 +54,8 @@ export function insertSharedWorktreeReceipt(
       requestDigest: digestGitHubPublicationRequest({ ...request, sessionId: session.sessionId }),
       sessionId: session.sessionId,
       lifecycleRevision: session.lifecycleRevision ?? null,
-      requester: systemPublicationRequester.snapshot,
-      assertCurrent: systemPublicationRequester.assertCurrent,
+      requester: (options.requester ?? systemPublicationRequester).snapshot,
+      assertCurrent: (options.requester ?? systemPublicationRequester).assertCurrent,
       now: options.createdAtMs ?? 1_000,
       worktree: {
         id: options.worktreeId ?? "worktree-1",

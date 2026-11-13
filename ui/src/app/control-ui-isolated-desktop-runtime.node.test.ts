@@ -214,7 +214,7 @@ it("prioritizes signing and route dependencies over unevaluated interaction hint
     online: modulePath("../components/app-sidebar-online.tsx"),
     catalog: modulePath("../components/mcp-app-catalog-view.tsx"),
     placement: modulePath("./session-placement-startup.runtime.ts"),
-    creator: modulePath("../pages/claws/creator-review-view.tsx"),
+    creator: modulePath("../pages/templates/creator-review-view.tsx"),
     signer: modulePath("../lib/nodes/device-signing.runtime.ts"),
     chat: modulePath("../pages/chat/route-entry.ts"),
   };

@@ -8,11 +8,13 @@ import {
   projectMemoryFlushTools,
 } from "../../agents/agent-tools.memory-flush.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
-import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback.types.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry as SessionEntry,
+} from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import {
   loadSessionEntry,
@@ -28,6 +30,8 @@ import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import {
   createMemoryRunEntryMockImplementation,
+  modelRoutingProvenance,
+  runSelectedMemoryModel,
   type EmbeddedAgentParams,
   type ModelFallbackParams,
 } from "./agent-runner-memory.test-support.js";
@@ -52,14 +56,6 @@ vi.mock("../../infra/agent-run-registry.js", async (importOriginal) => ({
   registerAgentRunContext: vi.fn(),
   clearAgentRunContext: vi.fn(),
 }));
-
-function modelRoutingProvenance(
-  requestedProvider: string,
-  requestedModel: string,
-  stage: ModelFallbackAttemptProvenance["stage"] = "initial",
-): ModelFallbackAttemptProvenance {
-  return { requestedProvider, requestedModel, stage };
-}
 
 function requireEmbeddedAgentCall(index = 0) {
   const call = runEmbeddedAgentMock.mock.calls[index]?.[0] as EmbeddedAgentParams | undefined;
@@ -98,14 +94,7 @@ describe("provider-owned memory flush", () => {
 
   beforeEach(() => {
     rootDir = tempDirs.make("openclaw-memory-tools-");
-    runWithModelFallbackMock.mockReset().mockImplementation(async ({ provider, model, run }) => ({
-      result: await run(provider, model, {
-        modelRoutingProvenance: modelRoutingProvenance(provider, model),
-      }),
-      provider,
-      model,
-      attempts: [],
-    }));
+    runWithModelFallbackMock.mockReset().mockImplementation(runSelectedMemoryModel);
     runEmbeddedAgentEntryMock.mockReset().mockImplementation(
       createMemoryRunEntryMockImplementation({
         runWithModelFallback: runWithModelFallbackMock,
@@ -163,7 +152,7 @@ describe("provider-owned memory flush", () => {
       updatedAt: Date.now(),
       totalTokens: 80_000,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       compactionCount: 1,
       sessionId: "10000000-0000-4000-8000-000000000001",
       lifecycleRevision: "incarnation-1",
@@ -315,7 +304,10 @@ describe("provider-owned memory flush", () => {
 
     const result = await runDefaultMemoryFlush(entry, {
       ...overrides,
-      cfg: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } } },
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "ro" } } },
+        tools: { sandbox: { tools: { alsoAllow: ["knowledge"] } } },
+      },
     });
 
     expect(result.outcome).toBe("completed");
@@ -432,4 +424,35 @@ describe("provider-owned memory flush", () => {
     expect((await runDefaultMemoryFlush(entry, overrides)).outcome).toBe("skipped");
     expect(loadSessionEntry(overrides)?.memoryFlush).toBeUndefined();
   });
+
+  it.each([
+    { tools: { deny: ["knowledge_save_page"] } },
+    { agents: { defaults: { sandbox: { mode: "all" as const } } } },
+  ])("does not dispatch a provider flush whose persistence tools are denied (%j)", async (cfg) => {
+    const { entry, overrides } = await createToolsFlushFixture();
+    const result = await runDefaultMemoryFlush(entry, {
+      ...overrides,
+      cfg,
+    });
+
+    expect(result.outcome).toBe("skipped");
+    expect(runEmbeddedAgentEntryMock).not.toHaveBeenCalled();
+    expect(loadSessionEntry(overrides)?.memoryFlush).toBeUndefined();
+  });
+
+  it.each([undefined, "node"])(
+    "keeps provider flushes admitted by their manifest tool profile (%s)",
+    async (messageProvider) => {
+      const { entry, overrides } = await createToolsFlushFixture();
+      overrides.followupRun.run.messageProvider = messageProvider;
+      runEmbeddedAgentMock.mockImplementationOnce(persist);
+
+      const result = await runDefaultMemoryFlush(entry, {
+        ...overrides,
+        cfg: { tools: { profile: "coding" } },
+      });
+      expect(result.outcome).toBe("completed");
+      expect(runEmbeddedAgentEntryMock).toHaveBeenCalledOnce();
+    },
+  );
 });

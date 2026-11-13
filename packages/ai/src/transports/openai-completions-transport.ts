@@ -6,7 +6,7 @@ import type {
   SimpleStreamOptions,
   StreamFn,
 } from "@openclaw/llm-core";
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import type { ChatCompletion, ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
@@ -19,7 +19,7 @@ import { resolveProviderContext } from "../provider-types.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { buildCopilotDynamicHeaders } from "../providers/github-copilot-headers.js";
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
-import { createOpenAIProviderClient } from "../providers/openai-provider-client.js";
+import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
 import { toOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
@@ -60,7 +60,6 @@ import {
 } from "./openai-transport-params.js";
 import {
   createOpenAIProviderAcceptanceHook,
-  isOpenAICompletionsThinkingEnabled,
   resolveOpenAIClientBaseUrl,
   resolvePromptCacheKey,
   withOpenAIErrorResponseHook,
@@ -73,6 +72,7 @@ import {
 } from "./provider-transport-turn-state.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
+  awaitProviderLifecycleCallback,
   createWritableTransportEventStream,
   failTransportStream,
   finalizeTransportStream,
@@ -274,13 +274,9 @@ export function streamOpenAICompletionsRequest(
     let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
     try {
       const requestContext = await resolveProviderContext(context, options);
+      const { default: OpenAI } = await import("openai");
+      const { createOpenAIProviderClient } = await import("../providers/openai-provider-client.js");
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-      const directEmitReasoning = Boolean(
-        mode === "direct" &&
-        model.reasoning &&
-        options?.reasoningEffort &&
-        isOpenAICompletionsThinkingEnabled(options.reasoningEffort),
-      );
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const policy =
         mode === "direct"
@@ -420,7 +416,10 @@ export function streamOpenAICompletionsRequest(
       const builtParams = buildOpenAICompletionsRequest(model, requestContext, options, policy);
       let params = builtParams;
       const encodeBody = prepareModelRequestBody(options);
-      const nextParams = await options?.onPayload?.(params, model);
+      const nextParams = await awaitProviderLifecycleCallback(
+        options?.onPayload ? () => options.onPayload?.(params, model) : undefined,
+        options?.signal,
+      );
       if (nextParams !== undefined) {
         params = nextParams as typeof params;
       }
@@ -443,10 +442,7 @@ export function streamOpenAICompletionsRequest(
         }
       }
       const contextOutputBudget = resolveCompletionsContextOutputBudget(builtParams, params);
-      const emitReasoning =
-        mode === "direct"
-          ? directEmitReasoning
-          : shouldEmitOpenAICompletionsReasoning(model, options);
+      const emitReasoning = shouldEmitOpenAICompletionsReasoning(model, options, mode);
       firstEventAbort = createFirstStreamEventAbortController(options?.signal);
       const requestOptions =
         mode === "direct"
@@ -542,7 +538,7 @@ export function streamOpenAICompletionsRequest(
                   bufferedBytes += chunkBytes;
                   const chunkFinishReason = chunk?.choices?.[0]?.finish_reason;
                   if (chunkFinishReason) {
-                    finishReason = chunkFinishReason;
+                    finishReason = mapOpenAIStopReason(chunkFinishReason).stopReason;
                   }
                   options?.signal?.throwIfAborted();
                 }

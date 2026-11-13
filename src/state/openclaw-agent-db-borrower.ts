@@ -5,7 +5,11 @@ import {
   assertAgentCreationClaimAccess,
   assertAgentCreationClaimAliases,
 } from "./agent-creation-claim.js";
-import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
+import {
+  AgentDatabaseAdmissionError,
+  readAgentDatabaseAdmissionRefusal,
+  readAgentDatabaseReadAdmissionRefusal,
+} from "./agent-database-admission.js";
 import {
   assertAgentDeletionCleanupAliases,
   assertAgentDeletionDatabaseCleanupAccess,
@@ -61,7 +65,14 @@ export function getOpenClawAgentDatabaseIfOpen(
   options: OpenClawAgentDatabaseOptions,
 ): OpenClawAgentDatabase | undefined {
   const agentId = normalizeAgentId(options.agentId);
-  assertAgentDatabaseAdmitted(agentId, { env: options.env });
+  // Early readers must open a read-only handle, never borrow the preparing writer.
+  const refusal = readAgentDatabaseAdmissionRefusal(agentId, options);
+  if (refusal) {
+    if (readAgentDatabaseReadAdmissionRefusal(agentId, options)) {
+      throw new AgentDatabaseAdmissionError(refusal);
+    }
+    return undefined;
+  }
   const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
   const database = cache.databases.get(pathname);
   if (!database?.db.isOpen) {
