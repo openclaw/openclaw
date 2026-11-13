@@ -1,3 +1,0 @@
-80
-# Telegram message_sending hook session-key conformance regressions over the real loopback Bot API fixture (issue #197186).
-# Exact measured net test LF growth; shared scalar unchanged.
