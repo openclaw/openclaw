@@ -44,14 +44,14 @@ export function createSessionObserverWork(params: {
   const background = (run: () => Promise<unknown>) => {
     void runInDetachedAsyncContext(() => acceptedWork.track(run)).catch(reportError);
   };
-  const getRunReader = (event: SessionObserverEvent) => {
+  const getRunState = (event: SessionObserverEvent) => {
     const sessionKey = event.sessionKey?.trim();
     const agentId = event.agentId?.trim();
     const state =
       sessionKey && agentId
         ? params.states.get(resolveSessionSubscriptionKey(sessionKey, agentId))
         : undefined;
-    return state?.runId === event.runId && state.agentId === agentId ? state.reader : undefined;
+    return state?.runId === event.runId && state.agentId === agentId ? state : undefined;
   };
   const enqueue = <T>(run: () => Promise<T>): Promise<T> => {
     if (disposal) {
@@ -86,13 +86,31 @@ export function createSessionObserverWork(params: {
     }
     const sessionKey = event.sessionKey ?? "";
     const agentId = event.agentId ?? "";
-    const reader =
-      captured ??
-      getRunReader(event) ??
-      (sessionKey && agentId
-        ? captureSessionObserverRead(params.deps, sessionKey, agentId)
-        : undefined);
+    const outputOnly =
+      !settledError &&
+      event.stream === "tool" &&
+      event.data.phase === "update" &&
+      event.data.outputOnly === true;
+    const capturedReader = outputOnly
+      ? captured
+      : (captured ??
+        getRunState(event)?.reader ??
+        (sessionKey && agentId
+          ? captureSessionObserverRead(params.deps, sessionKey, agentId)
+          : undefined));
     return enqueue(async () => {
+      // Stdout can advance an admitted observer, but cannot admit or replace one.
+      // Resolve after preceding events so a queued start can establish the state.
+      const state = outputOnly ? getRunState(event) : undefined;
+      if (outputOnly && !state) {
+        return;
+      }
+      const reader =
+        capturedReader ??
+        state?.reader ??
+        (sessionKey && agentId
+          ? captureSessionObserverRead(params.deps, sessionKey, agentId)
+          : undefined);
       const steps = params.handleEventSteps(event, settledError, reader);
       let next = steps.next();
       while (!next.done) {

@@ -1,3 +1,0 @@
-# Observe the native transition midpoint without relying on CI frame delivery;
-# retain fresh, reduced-motion, resize, and composer-position assertions.
-39

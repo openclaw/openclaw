@@ -410,6 +410,43 @@ if (endpoint === "repos/openclaw/openclaw/actions/jobs/2/logs") {
     }
   });
 
+  it("limits the 2026.11.4 RSS/CPU grant to the reviewed attempt and retains raw failures", () => {
+    const performance = child("productPerformance", {
+      runId: "43341818523",
+      runAttempt: 1,
+      status: "completed",
+      conclusion: "failure",
+      jobs: [job("Kova mock provider performance", 1)],
+    });
+    expect(
+      classifyReleaseSnapshot({ children: [performance], targetVersion: "2026.11.4" }),
+    ).toMatchObject({
+      state: "passed",
+      waivers: [{ targetVersion: "2026.11.4", runId: "43341818523", runAttempt: 1 }],
+    });
+    expect(performance).toMatchObject({ conclusion: "failure", jobs: [{ conclusion: "failure" }] });
+    expect(terminalPolicyPass(performance, "2026.11.5")).toBe(false);
+    for (const changed of [
+      { runId: "43341818524" },
+      { runId: undefined },
+      { runAttempt: 2 },
+      { runAttempt: undefined },
+      { key: "normalCi" },
+      { jobs: [] },
+      { jobs: [job("Other performance job", 1)] },
+      { jobs: [job("Kova mock provider performance", 1), job("Correctness integrity", 2)] },
+      ...["cancelled", "timed_out", "skipped"].map((conclusion) => ({
+        jobs: [job("Kova mock provider performance", 1, { conclusion })],
+      })),
+      { jobs: [job("Kova mock provider performance", 1, { status: "in_progress" })] },
+    ]) {
+      expect(terminalPolicyPass({ ...performance, ...changed }, "2026.11.4")).toBe(false);
+    }
+    for (const profile of ["stable", "full"]) {
+      expect(releaseQualificationExemptions("2026.11.4", profile)).toEqual([]);
+    }
+  });
+
   it("waives only the reviewed 2026.9.37 performance attempt and retains other blockers", () => {
     const performance = child("productPerformance", {
       runId: "42361846301",

@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 // Synthetic Git-only benchmark; run: node --import ./scripts/tsx.mjs scripts/perf/agent-git-probes.mts --scratch-parent <directory>
 // Historical blobs: add --history-blobs --commits 600 --baseline-shim <saved-shim>;
+// --pickaxe selects range-wide content search; --history-repository uses an existing complete Git fixture.
 // --aa-only/--ab-only split controls from comparisons; --warm hydrates before measurement.
 import { createHash } from "node:crypto";
 import {
@@ -29,6 +30,8 @@ const { values } = parseArgs({
     samples: { type: "string" },
     "shared-shallow": { type: "boolean" },
     "history-blobs": { type: "boolean" },
+    pickaxe: { type: "boolean" },
+    "history-repository": { type: "string" },
     "aa-only": { type: "boolean" },
     "ab-only": { type: "boolean" },
     "allocation-preload": { type: "string" },
@@ -45,7 +48,12 @@ const files = integer("files", 62_000);
 const commits = integer("commits", 20_000);
 const samples = integer("samples", 5);
 const sharedShallow = values["shared-shallow"] === true;
-const historyBlobs = values["history-blobs"] === true;
+const pickaxe = values.pickaxe === true;
+const historyBlobs = values["history-blobs"] === true || pickaxe;
+const historyRepository = values["history-repository"];
+if (historyRepository && !pickaxe) {
+  throw new Error("--history-repository requires --pickaxe");
+}
 const baselineShimPath = values["baseline-shim"] ?? "";
 if (sharedShallow && (!baselineShimPath || commits < 4010)) {
   throw new Error("--shared-shallow requires --baseline-shim and at least 4010 commits");
@@ -101,54 +109,66 @@ type Sample = {
   load: number[];
 };
 const rows: Sample[] = [];
-const origin = path.join(root, "origin.git");
+const origin = historyRepository ? path.resolve(historyRepository) : path.join(root, "origin.git");
 const template = path.join(root, "template");
 const workspace = path.join(root, "workspace");
 const bin = path.join(root, "bin");
 const baselineBin = path.join(root, "baseline-bin");
 const report = (message: string) => process.stderr.write(`${message}\n`);
 try {
-  report(`Fixture: ${files} files, ${commits} history commits; ${root}`);
+  report(
+    historyRepository
+      ? `Public-history fixture: ${historyRepository}; ${root}`
+      : `Synthetic fixture: ${files} files, ${commits} history commits; ${root}`,
+  );
   mkdirSync(bin);
   writeFileSync(path.join(bin, "git"), AGENT_GIT_SHIM, { mode: 0o755 });
   if (sharedShallow || historyBlobs) {
     mkdirSync(baselineBin);
     writeFileSync(path.join(baselineBin, "git"), readFileSync(baselineShimPath), { mode: 0o755 });
   }
-  git(root, ["init", "--bare", "--initial-branch=main", origin]);
-  git(origin, ["config", "uploadpack.allowFilter", "true"]);
-  git(origin, ["config", "uploadpack.allowAnySHA1InWant", "true"]);
   const content = "synthetic workspace content\n".padEnd(18_000, "x");
-  let input = `blob\nmark :1\ndata ${Buffer.byteLength(content)}\n${content}\ncommit refs/heads/main\ncommitter Fixture <fixture@example.invalid> 1700000000 +0000\ndata 4\nbase\n`;
-  for (let index = 0; index < files; index++) {
-    input += `M 100644 :1 files/${Math.floor(index / 1000)}/file-${index}.txt\n`;
-  }
-  input += "\n";
   let history = "";
-  for (let index = 0; index < commits; index++) {
-    history = historyBlobs ? `${history}history ${index}\n` : `history ${index}\n`;
-    const text = history;
-    input += `commit refs/heads/main\ncommitter Fixture <fixture@example.invalid> ${1700000001 + index} +0000\ndata 7\nhistory\nM 100644 inline history.txt\ndata ${text.length}\n${text}\n`;
+  if (!historyRepository) {
+    git(root, ["init", "--bare", "--initial-branch=main", origin]);
+    git(origin, ["config", "uploadpack.allowFilter", "true"]);
+    git(origin, ["config", "uploadpack.allowAnySHA1InWant", "true"]);
+    let input = `blob\nmark :1\ndata ${Buffer.byteLength(content)}\n${content}\ncommit refs/heads/main\ncommitter Fixture <fixture@example.invalid> 1700000000 +0000\ndata 4\nbase\n`;
+    for (let index = 0; index < files; index++) {
+      input += `M 100644 :1 files/${Math.floor(index / 1000)}/file-${index}.txt\n`;
+    }
+    input += "\n";
+    for (let index = 0; index < commits; index++) {
+      history = historyBlobs ? `${history}history ${index}\n` : `history ${index}\n`;
+      const text = history;
+      input += `commit refs/heads/main\ncommitter Fixture <fixture@example.invalid> ${1700000001 + index} +0000\ndata 7\nhistory\nM 100644 inline history.txt\ndata ${text.length}\n${text}\n`;
+    }
+    git(origin, ["fast-import", "--quiet"], input);
+    git(origin, ["repack", "-adq"]);
   }
-  git(origin, ["fast-import", "--quiet"], input);
-  git(origin, ["repack", "-adq"]);
   git(root, [
     "clone",
     "--filter=blob:none",
     "--no-checkout",
+    "--single-branch",
+    "--upload-pack=git -c uploadpack.allowFilter=true upload-pack",
     ...(sharedShallow ? ["--depth=10"] : []),
     pathToFileURL(origin).href,
     template,
   ]);
   const base = git(template, ["rev-parse", "HEAD"]);
   // One materialized production-sized workspace; each sample gets isolated private Git metadata.
-  git(root, ["clone", "--local", origin, workspace]);
-  const next = "new tip\n";
-  git(
-    origin,
-    ["fast-import", "--quiet"],
-    `commit refs/heads/main\ncommitter Fixture <fixture@example.invalid> 1800000000 +0000\ndata 3\nnew\nfrom ${base}\nM 100644 inline history.txt\ndata ${next.length}\n${next}\n`,
-  );
+  if (historyRepository) {
+    mkdirSync(workspace);
+  } else {
+    git(root, ["clone", "--local", origin, workspace]);
+    const next = "new tip\n";
+    git(
+      origin,
+      ["fast-import", "--quiet"],
+      `commit refs/heads/main\ncommitter Fixture <fixture@example.invalid> 1800000000 +0000\ndata 3\nnew\nfrom ${base}\nM 100644 inline history.txt\ndata ${next.length}\n${next}\n`,
+    );
+  }
   const missing = git(origin, ["rev-parse", "HEAD"]);
   const sample = (
     lane: string,
@@ -185,8 +205,7 @@ try {
         "--objects",
         "--missing=print",
         "HEAD",
-        "--",
-        "history.txt",
+        ...(pickaxe ? [] : ["--", "history.txt"]),
       ])
         .split("\n")
         .filter((line) => line.startsWith("?"))
@@ -306,20 +325,22 @@ try {
     };
     rows.push(row);
     report(
-      `${lane}: ${wallMs.toFixed(1)} ms; ${row.offeredObjects} objects; ${row.packBytes} pack bytes`,
+      `${lane}: ${wallMs.toFixed(1)} ms; ${row.cpuMs.toFixed(1)} reported CPU ms; ${row.newPacks} packs; ${row.offeredObjects} objects; ${row.packBytes} pack bytes`,
     );
     rmSync(metadata, { recursive: true });
     return row;
   };
   if (historyBlobs) {
     report(
-      "Rule: identical output and object counts; many promisor packs become one; lower wall/CPU without >20% regression. A/A controls use the baseline shim twice.",
+      "Rule: identical output and object counts; many promisor packs become bounded batches; lower wall/CPU without >20% regression. A/A controls use the baseline shim twice.",
     );
-    for (const command of ["log", "blame"]) {
+    for (const command of pickaxe ? ["pickaxe"] : ["log", "blame"]) {
       const args =
-        command === "log"
-          ? ["log", "-p", "--format=%H", "HEAD", "--", "history.txt"]
-          : ["blame", "--line-porcelain", "HEAD", "--", "history.txt"];
+        command === "pickaxe"
+          ? ["log", "--oneline", "-S", historyRepository ? "gateway" : "history 100", "HEAD"]
+          : command === "log"
+            ? ["log", "-p", "--format=%H", "HEAD", "--", "history.txt"]
+            : ["blame", "--line-porcelain", "HEAD", "--", "history.txt"];
       for (const control of values["aa-only"]
         ? [true]
         : values["ab-only"]
@@ -457,7 +478,13 @@ try {
     JSON.stringify(
       {
         gitVersion: git(root, ["--version"]),
-        mode: historyBlobs ? "history-blobs" : sharedShallow ? "shared-shallow" : "missing-commit",
+        mode: pickaxe
+          ? "pickaxe"
+          : historyBlobs
+            ? "history-blobs"
+            : sharedShallow
+              ? "shared-shallow"
+              : "missing-commit",
         warm: values.warm === true,
         allocationInstrumented: Boolean(values["allocation-preload"]),
         baselineShimSha256:
@@ -466,9 +493,16 @@ try {
             : undefined,
         shimSha256: createHash("sha256").update(AGENT_GIT_SHIM).digest("hex"),
         platform: process.platform,
-        files: files + 1,
-        workingTreeBytes: files * content.length + history.length,
-        commits: commits + 1,
+        cpuScope:
+          process.platform === "darwin"
+            ? "post-exec command CPU; pre-exec shim children excluded by Darwin time"
+            : "command tree CPU",
+        historyRepository,
+        files: historyRepository ? undefined : files + 1,
+        workingTreeBytes: historyRepository ? 0 : files * content.length + history.length,
+        commits: historyRepository
+          ? Number(git(template, ["rev-list", "--count", "HEAD"]))
+          : commits + 1,
         samples,
         summary,
         rows,

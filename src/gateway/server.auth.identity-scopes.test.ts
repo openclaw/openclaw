@@ -904,7 +904,7 @@ test("refuses a reassigned GitHub login's former profile and role while GitHub i
         await expectWriteDenied(ws, "agent:main:x");
       });
     } finally {
-      staffProfileIds.forEach(invalidateOperatorRolePolicy);
+      staffProfileIds.forEach((profileId) => invalidateOperatorRolePolicy(profileId));
     }
   });
   expect(github.requests).toEqual([

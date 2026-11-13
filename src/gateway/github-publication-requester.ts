@@ -154,6 +154,7 @@ function prepareRequesterPolicy(
     operatorRoleActor: snapshot.actor,
     scopes: [...snapshot.scopes],
   });
+  let retainedAuthority: PluginGatewayAccessAuthority | undefined;
   const assertIdentity = () => {
     if (snapshot.actor.kind !== "operator") {
       return undefined;
@@ -268,7 +269,13 @@ function prepareRequesterPolicy(
     const profile = assertPrepared(config);
     if (profile) {
       try {
-        const authority = resumeGatewayOperatorAccessGrant(profile, config, snapshot.grant);
+        const authority = resumeGatewayOperatorAccessGrant(
+          profile,
+          config,
+          snapshot.grant,
+          retainedAuthority,
+        );
+        retainedAuthority = authority;
         onPolicy?.(authority);
       } catch (error) {
         if (error instanceof GatewayOperatorAccessDeniedError) {

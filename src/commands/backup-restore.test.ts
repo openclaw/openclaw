@@ -112,13 +112,16 @@ async function writeUnextractableArchive(archivePath: string) {
 
 describe("backupRestoreCommand", () => {
   it.skipIf(process.platform === "win32")(
-    "escapes terminal controls in restore output while preserving the restored payload",
+    "escapes terminal controls and resolves symlinked parents while preserving the payload",
     async () => {
       await withState(async (state) => {
         const text = "café\u001b[31m\nforged\tend\rrow\u0007 ";
-        const archive = state.path(`${text}.tar.gz `);
+        const archive = `${state.path("link")}/../${text}.tar.gz `;
         const target = state.path(`restored-${text}`);
-        await writeArchive({ archivePath: archive });
+        await fs.mkdir(state.path("real", "sub"), { recursive: true });
+        await fs.symlink("real/sub", state.path("link"));
+        await writeUnextractableArchive(state.path(`${text}.tar.gz `));
+        await writeArchive({ archivePath: state.path("real", `${text}.tar.gz `) });
         const runtime = createTestRuntime();
         const result = await backupRestoreCommand(runtime, { archive, target });
         const report = vi.mocked(runtime.log).mock.calls.flat().join("\n");
@@ -554,10 +557,7 @@ describe("backupRestoreCommand", () => {
     await withState(async (state) => {
       const archivePath = state.path("corrupt.tar.gz");
       const targetPath = state.path("restore-target");
-      await writeArchive({
-        archivePath,
-        manifest: "{not-json}\n",
-      });
+      await writeArchive({ archivePath, manifest: "{not-json}\n" });
       await fs.mkdir(targetPath);
 
       await expect(restore(archivePath, targetPath)).rejects.toThrow(

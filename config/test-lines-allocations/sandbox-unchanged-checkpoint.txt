@@ -1,2 +1,0 @@
-241
-# Real finalization pause counts and telemetry; probe work bounds, fingerprint reuse, containment and cancellation.

@@ -250,6 +250,8 @@ export type PreparedCliRunContext = {
   contextEngine?: ContextEngine;
   deferContextEngineDisposalUntil?: (promise: Promise<void>) => void;
   contextEngineTurnPrompt?: string;
+  /** Set after bootstrap; sent as current-turn context so the system prompt stays cacheable. */
+  contextEngineSystemPromptAddition?: string;
   promptContext?: CliBackendPromptContext;
   /** Logical model input retained for policy/observation hooks when transport context is separate. */
   promptForHooks?: string;

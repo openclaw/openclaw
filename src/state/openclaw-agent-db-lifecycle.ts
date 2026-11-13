@@ -17,7 +17,10 @@ import { getGatewayShutdownCleanupSignal } from "../process/gateway-work-admissi
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { agentDatabaseBorrowers, retainAgentDatabase } from "./openclaw-agent-db-borrower.js";
-import { createAgentDatabaseHandleCloser } from "./openclaw-agent-db-close.js";
+import {
+  createAgentDatabaseHandleCloser,
+  stopAgentDatabaseWalMaintenance,
+} from "./openclaw-agent-db-close.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -298,7 +301,7 @@ export function refreshAgentDatabaseIdleTimer(database: OpenClawAgentDatabase): 
 export async function closeMaintenanceAgentDatabase(
   database: OpenClawAgentDatabase,
 ): Promise<void> {
-  await database.walMaintenance.stop();
+  await stopAgentDatabaseWalMaintenance(database);
   if (cache.databases.get(database.path) !== database) {
     return;
   }
@@ -392,7 +395,7 @@ export async function settleOpenClawAgentDatabaseWorkerClose(
   if (database) {
     try {
       // Join sidecar inspection before native close; a guarded close is not a failed owner.
-      await database.walMaintenance.stop();
+      await stopAgentDatabaseWalMaintenance(database);
       closeCachedOpenClawAgentDatabase(database);
     } catch (error) {
       errors.push(error instanceof Error ? error : new Error(String(error)));
@@ -512,7 +515,7 @@ export async function closeOpenClawAgentDatabaseByPathAsync(
     await Promise.allSettled(pending.map((owner) => owner.promise));
     const database = cache.databases.get(selection.path);
     if (database && (expectedAgentId === undefined || database.agentId === expectedAgentId)) {
-      await database.walMaintenance.stop();
+      await stopAgentDatabaseWalMaintenance(database);
     }
     return closeOpenClawAgentDatabaseByPath(selection.path, expectedAgentId);
   });

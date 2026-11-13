@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createModelRuntimeChoiceOwnerFixture } from "../agents/model-runtime-choice.test-support.js";
+import * as modelsConfig from "../agents/models-config-state.js";
 import * as preparedCatalog from "../agents/prepared-model-catalog.js";
 import {
   seedSubagentRunForReadTest,
@@ -149,6 +150,33 @@ describe("prepared status", () => {
     vi.restoreAllMocks();
     clearRuntimeConfigSnapshot();
     await state.cleanup();
+  });
+
+  it.each([
+    {
+      name: "recorded zero",
+      usage: { inputTokens: 100, estimatedCostUsd: 0 },
+      cost: "Cost: $0.0000",
+    },
+    {
+      name: "unavailable usage",
+      usage: { usageReport: { state: "unavailable" as const } },
+      cost: undefined,
+    },
+    { name: "no token usage", usage: {}, cost: undefined },
+  ])("renders $name without optional pricing preparation", async ({ usage, cost }) => {
+    using preparation = vi.spyOn(modelsConfig, "captureModelsJsonCostSource");
+    const text = await render({
+      ...selected,
+      thinkingCatalog: catalog,
+      sessionEntry: entry({ ...modelEntry(selected), ...usage }),
+    });
+    expect(preparation).not.toHaveBeenCalled();
+    if (cost) {
+      expect(text).toContain(cost);
+    } else {
+      expect(text).not.toContain("Cost:");
+    }
   });
 
   it("bounds catalog identity work per status reply and renews changed provider policies", async () => {

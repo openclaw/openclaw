@@ -153,10 +153,6 @@ it.each(["noncompact", "pull-request", "push", "selected", "changed"] as const)(
       boat.find((job) => planFiles(job).includes(preparedWorkspace)),
       "hosted owner",
     );
-    const retained = expectDefined(
-      boat.find((job) => job.checkName === original.checkName),
-      "retained owner",
-    );
     expect(boat.flatMap(planFiles).toSorted()).toEqual(hybrid.flatMap(planFiles).toSorted());
     expect(planFiles(hosted)).toEqual([preparedWorkspace]);
     expect(hosted.runner).toBe("ubuntu-24.04");
@@ -167,13 +163,25 @@ it.each(["noncompact", "pull-request", "push", "selected", "changed"] as const)(
     expect(hosted.pretestBuildMode).toBe(original.pretestBuildMode);
     expect(hosted.requiresDist).toBe(original.requiresDist);
     expect(hosted.predictedSeconds).toBeUndefined();
-    expect(retained.predictedSeconds).toBe(original.predictedSeconds);
-    expect(retained.runner).toMatch(/^boat/u);
     expect(
       boat.some(
         (job) => job.runner.startsWith("boat") && planFiles(job).includes(preparedCompanion),
       ),
     ).toBe(true);
+    if (planFiles(original).length === 1) {
+      expect(boat.some((job) => job.checkName === original.checkName)).toBe(false);
+      expect(boat).toHaveLength(hybrid.length);
+      expect(hosted.groups).toEqual(original.groups);
+      expect(hosted.timing_key).toBe(original.timing_key);
+      return;
+    }
+    const retained = expectDefined(
+      boat.find((job) => job.checkName === original.checkName),
+      "retained mixed owner",
+    );
+    expect(boat).toHaveLength(hybrid.length + 1);
+    expect(retained.predictedSeconds).toBe(original.predictedSeconds);
+    expect(retained.runner).toMatch(/^boat/u);
     const sourceGroup = original.groups?.find((group) =>
       group.includePatterns?.includes(preparedWorkspace),
     );
@@ -184,15 +192,12 @@ it.each(["noncompact", "pull-request", "push", "selected", "changed"] as const)(
     if (sourceGroup) {
       expect(hosted.groups?.[0]?.configs).toEqual(sourceGroup.configs);
     }
-    expect(extracted.timing_key).not.toBe(source.timing_key);
-    expect(parseCompactSplitTimingKey(extracted.timing_key!)).toMatchObject({
-      part: 2,
-      expectedParts: 2,
-    });
-    expect(parseCompactSplitTimingKey(remaining.timing_key!)).toMatchObject({
-      part: 1,
-      expectedParts: 2,
-    });
+    if (source.includePatterns?.length === 1) {
+      expect(extracted).toEqual(source);
+    } else {
+      expect(extracted.timing_key).not.toBe(source.timing_key);
+      expect(remaining.timing_key).not.toBe(source.timing_key);
+    }
     for (const group of original.groups ?? []) {
       if (!group.includePatterns?.includes(preparedWorkspace)) {
         expect(retained.groups).toContainEqual(group);
@@ -201,16 +206,35 @@ it.each(["noncompact", "pull-request", "push", "selected", "changed"] as const)(
   },
 );
 
-it("keeps the selected prepared workspace extraction within the existing job cap", () => {
-  const source = expectDefined(
-    createSelectedNodeTestShardBundles([preparedWorkspace, preparedCompanion], {
-      runnerBackend: "hybrid",
-    }),
-    "source owner",
-  );
+it("keeps singleton replacement and mixed workspace extraction within the existing job cap", () => {
+  const owner: NodeTestShard = {
+    checkName: "checks-node-workspace",
+    shardName: "workspace",
+    runner: "blacksmith-8vcpu-ubuntu-2404",
+    configs: ["test/vitest/vitest.infra.config.ts"],
+    includePatterns: [preparedWorkspace, preparedCompanion],
+    requiresDist: false,
+  };
+  const source = [owner];
+  const singleton = { ...owner, includePatterns: [preparedWorkspace], timing_key: "selected" };
+  const replacement = routeBoatNodeTestJobs([singleton], 1);
+  expect(replacement).toHaveLength(1);
+  expect(replacement[0]).toMatchObject({
+    includePatterns: [preparedWorkspace],
+    timing_key: "selected",
+  });
   const snapshot = JSON.stringify(source);
   expect(() => routeBoatNodeTestJobs(source, source.length)).toThrow(/exceeds.*jobs/u);
-  expect(routeBoatNodeTestJobs(source, source.length + 1)).toHaveLength(source.length + 1);
+  const routed = routeBoatNodeTestJobs(source, source.length + 1);
+  expect(routed.map((job) => job.includePatterns)).toEqual([
+    [preparedCompanion],
+    [preparedWorkspace],
+  ]);
+  const [retainedTiming, hostedTiming] = routed.map((job) =>
+    expectDefined(parseCompactSplitTimingKey(job.timing_key!), "mixed timing generation"),
+  );
+  expect(retainedTiming).toMatchObject({ part: 1, expectedParts: 2, parentShardName: "workspace" });
+  expect(hostedTiming).toEqual({ ...retainedTiming, part: 2 });
   expect(JSON.stringify(source)).toBe(snapshot);
   for (const [inherited, expected] of [
     ["1", "1"],

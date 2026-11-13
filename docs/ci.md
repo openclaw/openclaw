@@ -18,6 +18,15 @@ CI continues during Full Release Validation; the legacy release-priority variabl
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
 
+The protected dependency publisher rebuilds a new hosted Linux pnpm store before
+saving it, preserving authenticated bootstrap archives and the full dependency
+inventory. Existing exact cache hits, Blacksmith, macOS, and independent code
+warming keep their current behavior. This prevents old packages from accumulating
+through prefix restores; immutable existing entries remain until the next missing
+store key. A five-pair hosted compute replay reduced the archive from 2.24 GB to
+957 MB and median extraction plus offline installation from 31.5 to 12.2 seconds.
+This does not measure WAN transfer, PR completion time, or billed savings.
+
 Gateway server tests use the same 16-file process bound in local full-suite runs
 and CI config/include selections. This retires the shared worker before retained
 module graphs exhaust a 16 GB runner on Bun. The CI shard keeps its original file
@@ -212,11 +221,12 @@ changed Node plan defers its boundary coverage to that producer. This opt-in doe
 not enable unrelated proof-tier checks.
 
 Full and runtime-only compiled workers reserve separate live/cache slots, so
-runtime checks cannot replace a retained full generation. The protected warmer
-also supplies runtime workers to current-target Control UI E2E rows. Worker-cache
-identity ignores the compiler's heap ceiling while preserving other Node options;
-the warmer and test job keep their own memory limits. Frozen targets and browser
-extension rows retain their existing preparation.
+runtime checks cannot replace a retained full generation. Control UI E2E rows
+compile workers locally: bundled Settings preparation can change their installed
+namespace after the source-only seed was captured. Do not restore that seed
+until reuse is qualified against the prepared UI topology. Worker-cache identity
+ignores the compiler's heap ceiling while preserving other Node options; the
+warmer and test job keep their own memory limits.
 
 The protected warmer keeps its prebuild full seed for source-only Node shards and publishes the full
 generation already prepared by postbuild collection separately. Only selected
@@ -388,6 +398,8 @@ Additional checks and narrow-PR guards and dependency scans start directly after
 Changed compiler planning queries each config's complete file membership with `--listFilesOnly`, using tsrs by default and tsgo on unsupported hosts or when `OPENCLAW_TYPECHECKER=tsgo`. Type-only consumers and dependency declarations remain included; the selected compiler's bundled library directory is excluded because it describes compiler identity, not repository membership. Config expansion and shard/buildinfo validation still use tsgo's `--showConfig`. Queries run serially without opening native API snapshots. Upstream first-attempt `check-plan` jobs use the 16-class when the backend is unset, `blacksmith`, or `hybrid`, including fork PRs. Fork type stripes also use the 16-class with an unset or `blacksmith` backend; their logical GitHub profile and restore-only cache policy stay intact. Existing hybrid health admission, the explicit GitHub override, retries, and frozen routing remain in effect.
 
 When shared SDK declarations are enabled, explicitly selected core-only lint rows skip SDK restoration. Selected extension consumers restore this run's SDK; unselected legacy rows retain their existing cache restoration.
+
+Central lint also skips the SDK cache when the check planner assigns it no extension work. A retained extension tail, missing planner metadata, or a frozen or compatibility target keeps the existing restore path.
 
 The extension package boundary row has a 40-minute job budget for SDK preparation,
 all selected plugin compiles, input-receipt validation, the required negative
