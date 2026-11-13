@@ -13,8 +13,12 @@ import * as entryReader from "../../config/sessions/session-entry-read-runtime.j
 import * as managedMedia from "../../gateway/managed-image-attachments.js";
 import { deliverQueuedSessionDelivery } from "../../gateway/server-restart-sentinel.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { computeBackoffMs } from "../../infra/delivery-recovery.shared.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../../infra/outbound/delivery-queue-media-spool.js";
-import { recoverPendingSessionDeliveries } from "../../infra/session-delivery-queue-recovery.js";
+import {
+  drainPendingSessionDelivery,
+  recoverPendingSessionDeliveries,
+} from "../../infra/session-delivery-queue-recovery.js";
 import * as queue from "../../infra/session-delivery-queue-storage.js";
 import { observeSessionDeliveryPublications } from "../../infra/session-delivery-queue.test-helpers.js";
 import { cleanOldMedia } from "../../media/store.js";
@@ -296,7 +300,23 @@ it.each(["review", "automatic-retired"] as const)(
         }
       });
       try {
-        await recoverPendingSessionDeliveries({ queueContext: context, deliver, log });
+        // A queued handoff still honors its recorded retry backoff. Replay at
+        // eligibility rather than assuming SQLite work consumed that interval.
+        for (const entry of await queue.loadPendingSessionDeliveries(context)) {
+          await drainPendingSessionDelivery({
+            id: entry.id,
+            queueContext: context,
+            deliver,
+            log,
+            logLabel: "review restart proof",
+            now: () =>
+              Math.max(
+                Date.now(),
+                entry.availableAt ?? 0,
+                (entry.lastAttemptAt ?? entry.enqueuedAt) + computeBackoffMs(entry.retryCount),
+              ),
+          });
+        }
         expect(delivered).toHaveLength(2);
         expect(new Set(messages).size).toBe(2);
         expect(await queue.loadPendingSessionDeliveries(context)).toMatchObject([

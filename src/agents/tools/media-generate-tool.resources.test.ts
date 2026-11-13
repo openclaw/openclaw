@@ -1,8 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
@@ -31,6 +38,7 @@ import {
 import * as taskRuntime from "../media-generation-task-status.js";
 import { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
 import { discardPreparedPluginGeneration } from "../prepared-model-runtime.plugin-lifetime.js";
+import * as announcements from "../subagents/announce/subagent-announce-delivery.js";
 import { runWithAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { createImageGenerateTool } from "./image-generate-tool.js";
 import {
@@ -271,6 +279,90 @@ it("requires durable review custody before buying an image", async () => {
   });
 });
 
+it.each([false, true])(
+  "keeps image delivery modes distinct with review first=%s",
+  async (reviewFirst) => {
+    const fixture = createNativeFixture("image", true);
+    await fixture.withEnvironment(async () => {
+      setRuntimeConfigSnapshot(fixture.config);
+      const sessionKey = "agent:main:dashboard:delivery-identity";
+      await replaceSessionEntry(
+        {
+          agentId: "main",
+          sessionKey,
+          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        },
+        { sessionId: "delivery-identity", updatedAt: 1 },
+      );
+      const reference = path.join(fixture.dir, "reference.png");
+      fs.writeFileSync(reference, png);
+      vi.spyOn(announcements, "deliverSubagentAnnouncement").mockResolvedValue({
+        delivered: true,
+        path: "direct",
+      });
+      const completed = vi.spyOn(imageGenerationTaskLifecycle, "completeTaskRun");
+      const failed = vi.spyOn(imageGenerationTaskLifecycle, "failTaskRun");
+      const acquired = await acquirePluginRegistryForInspection({ config: fixture.config });
+      let started = 0;
+      try {
+        await withPluginRuntimeRegistryScope(acquired.registry, async () => {
+          const tool = createImageGenerateTool({
+            config: fixture.config,
+            workspaceDir: fixture.dir,
+            agentSessionKey: sessionKey,
+            requesterAgentId: "main",
+            requesterOrigin: { channel: "webchat" },
+          });
+          expect(tool).not.toBeNull();
+          const request = { prompt: "The same referenced candidate", image: reference, count: 1 };
+          const first = await tool!.execute("first-mode", {
+            ...request,
+            ...(reviewFirst ? { deliveryMode: "review" } : {}),
+          });
+          if (asRecord(first.details)?.status === "started") {
+            started++;
+          }
+          const second = await tool!.execute("second-mode", {
+            ...request,
+            ...(!reviewFirst ? { deliveryMode: "review" } : {}),
+          });
+          if (asRecord(second.details)?.status === "started") {
+            started++;
+          }
+          expect(first.details).toMatchObject({ status: "started", taskId: expect.any(String) });
+          expect(second.details).toMatchObject({ status: "started", taskId: expect.any(String) });
+          expect(asRecord(second.details)?.taskId).not.toBe(asRecord(first.details)?.taskId);
+          const review = reviewFirst ? first : second;
+          const retry = await tool!.execute("exact-review-retry", {
+            ...request,
+            deliveryMode: "review",
+          });
+          if (asRecord(retry.details)?.status === "started") {
+            started++;
+          }
+          expect(retry.details).toMatchObject({
+            duplicateGuard: true,
+            active: true,
+            task: { taskId: asRecord(review.details)?.taskId },
+          });
+          fixture.resumeProvider.resolve();
+          await vi.waitFor(() => expect(fixture.connections[0]!.generated).toBe(2));
+          expect(failed).not.toHaveBeenCalled();
+        });
+      } finally {
+        fixture.resumeProvider.resolve();
+        fixture.resumeGeneration.resolve();
+        await vi.waitFor(() =>
+          expect(completed.mock.calls.length + failed.mock.calls.length).toBe(started),
+        );
+        await acquired.release();
+        await vi.waitFor(() => expect(fixture.connections[0]!.disposals).toBe(1));
+        clearRuntimeConfigSnapshot();
+      }
+    });
+  },
+);
+
 describe.each(["image", "music", "video"] as const)(
   "prepared %s job registration resources",
   (kind) => {
@@ -398,7 +490,7 @@ describe.each(["image", "music", "video"] as const)(
         }
       });
     });
-    it.each(["request lookup", "duplicate lookup", "reference loading"] as const)(
+    it.each(["auto-selected duplicate lookup", "duplicate lookup", "reference loading"] as const)(
       "refuses generation when the prepared owner releases during %s",
       async (pause) => {
         const fixture = createNativeFixture(kind, true);
@@ -438,10 +530,7 @@ describe.each(["image", "music", "video"] as const)(
           let lookups = 0;
           vi.spyOn(taskRuntime, lookup[kind]).mockImplementation(async (ownerKey, options) => {
             const tasks = await readTasks(ownerKey, options);
-            if (
-              pause !== "reference loading" &&
-              ++lookups === (pause === "request lookup" ? 1 : 2)
-            ) {
+            if (pause !== "reference loading" && ++lookups === 1) {
               preflightPaused.resolve();
               await resumePreflight.promise;
             }
@@ -450,7 +539,8 @@ describe.each(["image", "music", "video"] as const)(
           const tool = createTool({
             config: {
               ...fixture.config,
-              agents: pause === "request lookup" ? undefined : fixture.config.agents,
+              agents:
+                pause === "auto-selected duplicate lookup" ? undefined : fixture.config.agents,
             },
             agentDir: snapshot.agentDir,
             workspaceDir: fixture.dir,
@@ -479,10 +569,12 @@ describe.each(["image", "music", "video"] as const)(
             expect(result.error).toBeInstanceOf(Error);
             expect(result.value).toBeUndefined();
             if (pause !== "reference loading") {
-              expect(reference).not.toHaveBeenCalled();
+              if (kind === "image") {
+                expect(reference).toHaveBeenCalledOnce();
+              } else {
+                expect(reference).not.toHaveBeenCalled();
+              }
               expect(createTask).not.toHaveBeenCalled();
-            }
-            if (pause === "request lookup") {
               expect(lookups).toBe(1);
             }
             expect(fixture.connections[0]!.generated).toBe(0);

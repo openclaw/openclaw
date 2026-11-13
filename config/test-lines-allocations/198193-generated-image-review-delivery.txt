@@ -1,5 +1,5 @@
-# Required #198193 review-first delivery regressions: real completion/SQLite/filesystem
-# custody, source retirement and store isolation, private native-vision inspection,
-# exact-task correction, requester aliases, incognito eligibility and write admission.
-# Net test growth is 723 lines; this covers only the excess above 400.
-323
+# Required #198193 coordinated identity/review regressions: real completion/SQLite/filesystem
+# custody, rollback/source isolation, private vision, exact-task correction and admission,
+# reference bytes/options, automatic-versus-review identity and exact retry deduplication.
+# Net test growth is 916 lines; this covers only the excess above 400.
+516
