@@ -637,6 +637,7 @@ it("releases sweep read pages for checkpoints while retaining live and concurren
   });
   expect(beginLocalWorkspaceSweepInDatabase(db)).toBe(1);
   const epoch = beginLocalWorkspaceSweepInDatabase(db);
+  assert(epoch !== null);
   expect(epoch).toBe(2);
   using reader = new DatabaseSync(databasePath, { readOnly: true });
   const checkpointBusy: number[] = [];
