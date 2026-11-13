@@ -3826,6 +3826,41 @@ server.listen(0, "127.0.0.1", () => {
     }
   });
 
+  it("activates compact hosted Linux stores while retaining legacy fallback keys", () => {
+    const setup = readWorkflow(".github/actions/setup-pnpm-store-cache/action.yml");
+    const steps = setup.runs.steps as WorkflowStep[];
+    const restore = requiredWorkflowStep(steps, "Restore pnpm store cache");
+    for (const runnerOs of ["Linux", "macOS", "Windows"] as const) {
+      for (const runnerEnvironment of ["github-hosted", "self-hosted"] as const) {
+        const context = {
+          eventName: "schedule" as const,
+          repository: "openclaw/openclaw",
+          runnerOs,
+          runnerArch: "X64" as const,
+          runnerEnvironment,
+          runAttempt: 1,
+          inputs: { "node-version": "24.x", "lockfile-path": "pnpm-lock.yaml" },
+          fileHashes: { "pnpm-lock.yaml": "lock-hash" },
+          steps: { "setup-pnpm": { outputs: { "package-manager": "pnpm@12.15.0" } } },
+        };
+        const render = (template: unknown) =>
+          String(template).replace(/\$\{\{[\s\S]*?\}\}/gu, (expression) =>
+            String(evaluateWorkflowExpression(expression, context)),
+          );
+        const legacy = `pnpm-store-v2-${runnerOs}-X64-24.x-pnpm@12.15.0-lock-hash`;
+        const key = render(restore.with?.key);
+        expect(key).toBe(
+          runnerOs === "Linux" && runnerEnvironment === "github-hosted"
+            ? `${legacy}-fresh`
+            : legacy,
+        );
+        const prefixes = render(restore.with?.["restore-keys"]).trim().split("\n").filter(Boolean);
+        expect(prefixes.some((prefix) => legacy.startsWith(prefix))).toBe(true);
+        expect(prefixes.some((prefix) => key.startsWith(prefix))).toBe(true);
+      }
+    }
+  });
+
   it("rebuilds only new hosted Linux pnpm store generations without losing bootstrap assets", () => {
     const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
     const steps = warmer.jobs.dependencies.steps as WorkflowStep[];
