@@ -542,17 +542,23 @@ describe("sessions lifecycle commands", () => {
       expect(deletes).toHaveLength(2);
       const deletedKeys = deletes.map(([, , params]) => params.key);
       expect(deletedKeys).toEqual(["agent:main:s1", "agent:main:s2"]);
-      // The session reached by the interrupt stays out of the report; the command
-      // does not claim a result for work it never started.
+      // An admitted delete keeps its receipt; the session never admitted is
+      // reported as interrupted, so the partial batch is not a full success.
+      // Mutation RPCs carry no abort signal, so a receipt is never dropped.
+      for (const call of deletes) {
+        expect(call[3]).not.toHaveProperty("signal");
+      }
       expectJson(
         expect.objectContaining({
-          ok: true,
+          ok: false,
           results: [
             expect.objectContaining({ key: "agent:main:s1", ok: true, status: "deleted" }),
             expect.objectContaining({ key: "agent:main:s2", ok: true, status: "deleted" }),
+            expect.objectContaining({ key: "agent:main:s3", ok: false, status: "interrupted" }),
           ],
         }),
       );
+      expect(runtime.exit).not.toHaveBeenCalled();
     });
 
     it("stops describing further sessions once interrupted", async () => {
@@ -573,7 +579,8 @@ describe("sessions lifecycle commands", () => {
 
       await scope.run(() => run("delete", { keys, json: true, yes: true }));
 
-      // Only s1 and s2 are described; s3 is never described, so it stays not_found.
+      // Only s1 and s2 are described; s3 is never described, so it is reported
+      // as interrupted rather than a false not_found.
       const describes = mocks.callGateway.mock.calls.filter(
         ([method]) => method === "sessions.describe",
       );
@@ -585,10 +592,11 @@ describe("sessions lifecycle commands", () => {
         expect.objectContaining({
           ok: false,
           results: expect.arrayContaining([
-            expect.objectContaining({ key: "agent:main:s3", ok: false, status: "not_found" }),
+            expect.objectContaining({ key: "agent:main:s3", ok: false, status: "interrupted" }),
           ]),
         }),
       );
+      expect(runtime.exit).not.toHaveBeenCalled();
     });
   });
 });
