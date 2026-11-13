@@ -322,20 +322,57 @@ approval never approves its skill or plugin dependencies: their existing trust
 acknowledgments and `--accept-capabilities` checks still apply independently.
 
 Each Add chooses an unused agent ID. The CLI reports that ID so you can open
-or configure the agent afterward. The Control UI opens the new agent's pending
-chat immediately. Sending becomes available when its instruction files, canonical
-conversation, and active runtime are ready, while remaining setup continues. The
-first assistant response is a normal personality/SOUL greeting, not a saved canned
-greeting or a message sent on your behalf. Later setup failure retains the exposed
-agent and conversation; completion does not replace an existing draft.
+or configure the agent afterward. The first assistant response is a normal
+personality/SOUL greeting, not a saved canned greeting or a message sent on your
+behalf. Later setup failure retains the exposed agent and conversation;
+completion does not replace an existing draft.
 
-The installer shows a card for each newly installed plugin and an automation-created
-notice as each routine is added. Paused routines stay paused until their setup
-prerequisites are ready. Actual installation failures appear in the plugin card or
-a concise automation-failed notice; continue setup in the same agent. Successful
-skill and MCP setup, absent optional files, and empty categories stay silent. There
-is no final setup receipt or second model recap. Declared package bootstrap still
-follows shared setup; MCP configuration alone does not prove a working connection.
+During a CLI Add, the installer shows a card for each newly installed plugin and
+an automation-created notice as each routine is added. Paused routines stay paused
+until their setup prerequisites are ready. Actual installation failures appear in
+the plugin card or a concise automation-failed notice; continue setup in the same
+agent. Successful skill and MCP setup, absent optional files, and empty categories
+stay silent. There is no final setup receipt or second model recap. Declared
+package bootstrap still follows shared setup; MCP configuration alone does not
+prove a working connection.
+
+### Add from the Control UI
+
+**Add** in the Control UI has no review step and no preview. It opens the new
+agent's pending chat immediately, and the Gateway creates the agent:
+
+1. It creates the agent and its chat. If the Template's agent ID is taken, the
+   new agent gets the next unused ID; an existing agent is never changed.
+2. It fetches the exact Template release shown in the catalog.
+3. It writes the Template's workspace files and its `BOOTSTRAP.md`.
+4. It copies the Template's `CLAW.md` unchanged to the workspace root, as an
+   ordinary file the agent can read. A Template whose own workspace files
+   include `CLAW.md` keeps its file.
+5. It installs the declared skills, from ClawHub or bundled in the package.
+6. It installs plugins bundled in the package.
+7. It adds the declared MCP servers.
+8. It adds `automations`, `plugins`, and `message` to the agent's tool allowlist
+   when the Template's allowlist leaves them out. A tool the Template denies
+   stays denied.
+
+The agent's first response starts after these steps finish. Sending becomes
+available then; a message you type earlier stays in the composer.
+
+This Add does not create the Template's automations. It also does not install,
+enable, download, or inspect plugins the Template references on ClawHub, so a
+plugin that is missing, disabled, blocked by policy, or at another version never
+stops it. Set those up with the agent in its chat, or from **Plugins** and
+**Automations**.
+
+If the Gateway cannot fetch the Template or write its workspace files, it removes
+the new agent and chat, and the catalog shows the error on that Template's card.
+Add it again after fixing the cause. A skill, bundled plugin, or MCP server that
+cannot be set up does not stop Add: the agent is kept without it. A skill or
+bundled plugin that carries a trust warning is not installed. An MCP server whose
+name is already configured with different settings is left unchanged.
+
+A Template release that ClawHub flagged for review still needs your confirmation.
+The catalog shows the ClawHub warning with **Add anyway** before any agent is kept.
 
 `--dry-run --json` remains available for automation or local-source inspection.
 `--agent-id` selects an unused ID. `--workspace` selects a new path for local
@@ -352,7 +389,8 @@ is `owner` for converted heartbeat jobs and `none` for declared automations.
 
 CLI Add from a local source requires exclusive offline state ownership; it refuses
 to run while a Gateway owns that state. For published ClawHub Templates, both the
-CLI and Control UI can Add through a running Gateway. Offline Add uses the same
+CLI and Control UI can Add through a running Gateway; the Control UI uses the
+[plan-free Add](#add-from-the-control-ui) above. Offline Add uses the same
 session, local agent runtime, and scheduler
 owners without starting scheduled execution. `--json` suppresses conversational
 terminal output but keeps the ordinary conversation and per-result install notices.
