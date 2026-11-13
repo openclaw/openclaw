@@ -88,6 +88,7 @@ export function createRepositoryPublicationPreparation(params: {
         },
         assertCurrent: input.assertCurrent,
         authorizeDispatch: input.assertCurrent,
+        signal: input.signal,
         prepareWorkspace: async (canPrepare) => {
           input.assertCurrent();
           if (!canPrepare()) {
@@ -172,6 +173,7 @@ export function createRepositoryPublicationPreparation(params: {
         await input.readNativeCredential?.admit?.();
         assertRefresh();
         const signal = AbortSignal.any([
+          ...(input.signal ? [input.signal] : []),
           getGatewayRestartDrainSignal(),
           AbortSignal.timeout(WORKER_ADMISSION_DEADLINE_MS),
         ]);

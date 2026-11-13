@@ -1,14 +1,20 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
 } from "../../plugins/runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   NODE_WORKSPACE_PUBLICATION_CONFLICT_CODE,
   NodeWorkerPublicationConflictError,
 } from "../../worker/node-workspace-transfer-protocol.js";
 import { registerPublicationCredentialFixture } from "../github-publication-credential.test-helpers.js";
+import {
+  createNodeRunnerStatePublisher,
+  waitForNodeRunnerAvailability,
+} from "../node-runner-inventory-runtime.js";
 import { assertRepositoryDispatchAdmission } from "../repository-dispatch.js";
 import {
   createManager,
@@ -41,9 +47,11 @@ setupWorkerEnvironmentServiceSuite();
 
 // Real publication preparation, placement persistence, recovery and admission;
 // the provider/transport and credential issuer are synthetic, with no model turn.
-it.each([false, true])(
-  "recovers publication with its invocation reader (revoked: %s)",
-  async (revoke) => {
+it.each(["allowed", "revoked", "cancelled"] as const)(
+  "recovers publication with its invocation reader (mode: %s)",
+  async (mode) => {
+    const revoke = mode === "revoked";
+    const abort = new AbortController();
     const registry = captureActivePluginRegistrySnapshot();
     onTestFinished(() => restoreActivePluginRegistrySnapshot(registry));
     const events: string[] = [];
@@ -123,6 +131,9 @@ it.each([false, true])(
         readProjection: async (...args) => {
           const projection = await placements.readProjection(...args);
           readerCurrent = !revoke;
+          if (mode === "cancelled") {
+            abort.abort(new Error("publication cancelled"));
+          }
           return projection;
         },
       },
@@ -180,11 +191,14 @@ it.each([false, true])(
       targetUrl: "https://github.com/owner/repository.git",
       targetCommit: "a".repeat(40),
       token: "synthetic-execution-credential",
+      signal: abort.signal,
       readNativeCredential,
       assertCurrent: () => {},
     });
-    if (revoke) {
-      await expect(pending).rejects.toThrow("publication dispatch reader revoked");
+    if (mode !== "allowed") {
+      await expect(pending).rejects.toThrow(
+        revoke ? "publication dispatch reader revoked" : "publication cancelled",
+      );
       expect(events).toEqual([]);
       expect(placements.get(REQUEST.sessionId)).toEqual(reclaimed);
     } else {
@@ -199,9 +213,14 @@ it.each([false, true])(
   },
 );
 
-it.each([false, true])(
-  "admits retained compute before reconnect and rechecks authority (revoked: %s)",
-  async (revoke) => {
+it.each(["allowed", "revoked", "cancelled"] as const)(
+  "admits retained compute before reconnect and rechecks authority (mode: %s)",
+  async (mode) => {
+    const revoke = mode === "revoked";
+    const abort = new AbortController();
+    const cleanup = new AbortController();
+    const entered = createDeferredCore();
+    const publisher = createNodeRunnerStatePublisher(() => undefined, new Map());
     const placements = createWorkerSessionPlacementStore({ database: testState.stateDb });
     const { attached } = createDispatchEnvironmentFixtures();
     const environment = {
@@ -282,6 +301,23 @@ it.each([false, true])(
       waitForNode: async (input) => {
         input.assertCurrent();
         events.push("reconnect");
+        if (mode === "cancelled") {
+          await waitForNodeRunnerAvailability(
+            publisher,
+            {
+              getCurrentNode: async () => {
+                entered.resolve();
+                return undefined;
+              },
+              isCurrent: () => false,
+            },
+            "offline-publication-worker",
+            {
+              assertCurrent: input.assertCurrent,
+              signal: AbortSignal.any([input.signal, cleanup.signal]),
+            },
+          );
+        }
       },
       reconcileActive: async () => {
         events.push("reconcile");
@@ -294,10 +330,38 @@ it.each([false, true])(
       targetUrl: "https://github.com/owner/repository.git",
       targetCommit: "a".repeat(40),
       token: "synthetic-token",
+      signal: abort.signal,
       readNativeCredential,
       assertCurrent,
     });
-    if (revoke) {
+    if (mode === "cancelled") {
+      let settled = false;
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      try {
+        await entered.promise;
+        await nextTurn();
+        expect(settled).toBe(false);
+        abort.abort(new Error("publication cancelled"));
+        await nextTurn();
+        expect(settled).toBe(true);
+        await expect(pending).rejects.toMatchObject({
+          name: "AbortError",
+          cause: abort.signal.reason,
+        });
+        expect(events).toEqual(["admit", "compute", "reconnect"]);
+        expect(startTunnel).toHaveBeenCalledOnce();
+      } finally {
+        cleanup.abort();
+        await pending.catch(() => {});
+      }
+    } else if (revoke) {
       await expect(pending).rejects.toThrow("request revoked");
       expect(events).toEqual(["admit", "compute"]);
       expect(startTunnel).toHaveBeenCalledOnce();
