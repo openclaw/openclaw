@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   DEFAULT_POSIX_TMP_ROOT,
   resolvePreferredOpenClawTmpDir,
 } from "../infra/tmp-openclaw-dir.js";
+import { ensureLogDirectorySync } from "./log-directory.js";
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
 
 const ROLLING_LOG_FILE_RE = /^(openclaw(?:-[a-z0-9-]+)?)-(\d{4}-\d{2}-\d{2})\.log$/u;
@@ -43,7 +45,16 @@ function resolveLogProfileSegment(): string | null {
 /** Resolves today's default rolling log path for the active CLI profile. */
 export function resolveDefaultRollingLogFile(): string {
   const date = new Date();
-  const logDir = canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : DEFAULT_POSIX_TMP_ROOT;
+  let logDir = DEFAULT_POSIX_TMP_ROOT;
+  if (canUseNodeFs()) {
+    const stateDir = resolveStateDir();
+    // First-run writers and subsequent readers must select the same preferred directory.
+    ensureLogDirectorySync(stateDir, true, 0o700);
+    logDir = resolvePreferredOpenClawTmpDir({
+      preferredDir: path.join(stateDir, "logs"),
+      tmpdir: () => path.join(stateDir, "tmp"),
+    });
+  }
   const profileSegment = resolveLogProfileSegment();
   const profileSuffix = profileSegment ? `-${profileSegment}` : "";
   return path.join(logDir, `${LOG_PREFIX}${profileSuffix}-${formatLocalDate(date)}${LOG_SUFFIX}`);

@@ -25,6 +25,7 @@ import { readParsedField } from "../utils/string-readers.js";
 import { invalidateLoggingConfigCache, readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, isLogLevelEnabled, levelToMinLevel, normalizeLogLevel } from "./levels.js";
+import { ensureLogDirectorySync } from "./log-directory.js";
 import {
   isLegacyRollingLogFilePath,
   resolveRollingLogFilePathForDate,
@@ -32,7 +33,7 @@ import {
 } from "./log-file-path.js";
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
 import { serializeFileLogRecord, type FileLogMessagePart } from "./logger-file-message.js";
-import { ensureLogDirectorySync, fileLogTransport } from "./logger-file-transport.js";
+import { fileLogTransport } from "./logger-file-transport.js";
 import { redactSecrets, redactSensitiveText } from "./redact.js";
 import { APPLIED_LOGGING_CONFIG_UNOWNED, loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";

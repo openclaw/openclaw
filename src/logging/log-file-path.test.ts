@@ -1,5 +1,7 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   isLegacyRollingLogFilePath,
   isSameRollingLogFileFamily,
@@ -52,6 +54,52 @@ describe("resolveConfiguredLogFilePath", () => {
     expect(path.basename(first).length).toBeLessThanOrEqual(255);
     expect(first).not.toBe(second);
   });
+
+  it("isolates default logs with the state directory even without a named profile", async () => {
+    await withTempDir("openclaw-log-isolation-", async (root) => {
+      vi.stubEnv("OPENCLAW_PROFILE", undefined);
+      const files: string[] = [];
+      for (const name of ["production", "test-harness"]) {
+        const stateDir = path.join(root, name);
+        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+        const file = resolveConfiguredLogFilePath();
+        expect(file.startsWith(`${stateDir}${path.sep}`)).toBe(true);
+        expect(resolveConfiguredLogFilePath()).toBe(file);
+        files.push(file);
+      }
+      expect(files[0]).not.toBe(files[1]);
+    });
+  });
+
+  it("keeps unsafe-log fallback in the selected state directory", async () => {
+    await withTempDir("openclaw-log-fallback-", async (root) => {
+      const stateDir = path.join(root, "state");
+      fs.mkdirSync(stateDir, { mode: 0o700 });
+      fs.mkdirSync(path.join(root, "foreign"));
+      fs.symlinkSync(path.join(root, "foreign"), path.join(stateDir, "logs"), "junction");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const file = resolveConfiguredLogFilePath();
+      expect(file.startsWith(`${path.join(stateDir, "tmp")}${path.sep}`)).toBe(true);
+    });
+  });
+
+  it.skipIf(process.platform !== "linux")(
+    "rejects a deleted state parent without recursive mkdir",
+    async () => {
+      await withTempDir("openclaw-log-deleted-", async (root) => {
+        const directory = path.join(root, "deleted");
+        fs.mkdirSync(directory);
+        const fd = fs.openSync(directory, "r");
+        try {
+          fs.rmdirSync(directory);
+          vi.stubEnv("OPENCLAW_STATE_DIR", `/proc/self/fd/${fd}/state`);
+          expect(() => resolveConfiguredLogFilePath()).toThrow();
+        } finally {
+          fs.closeSync(fd);
+        }
+      });
+    },
+  );
 
   it("preserves an explicit logging.file override", () => {
     vi.stubEnv("OPENCLAW_PROFILE", "dev");
