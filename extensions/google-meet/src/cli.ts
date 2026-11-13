@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { MeetingSetupCheck } from "openclaw/plugin-sdk/meeting-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { generateHexPkceVerifierChallenge } from "openclaw/plugin-sdk/provider-auth";
@@ -498,11 +499,19 @@ export function registerGoogleMeetCli(params: {
     .argument("[session-id]", "Meet session ID")
     .option("--json", "Print JSON output", false)
     .action(async (sessionId?: string) => {
-      writeStdoutJson(
-        await callGoogleMeetRuntime(context, "googlemeet.status", { sessionId }, (rt) =>
-          rt.status(sessionId),
-        ),
+      const signal = getAsyncWorkSignal();
+      const status = await callGoogleMeetRuntime(
+        context,
+        "googlemeet.status",
+        { sessionId },
+        (rt) => rt.status(sessionId),
+        undefined,
+        signal,
       );
+      if (status === undefined) {
+        return;
+      }
+      writeStdoutJson(status);
     });
 
   root
@@ -516,12 +525,18 @@ export function registerGoogleMeetCli(params: {
       if (options.since !== undefined && sinceIndex === undefined) {
         throw new Error("--since must be a non-negative safe integer");
       }
+      const signal = getAsyncWorkSignal();
       const result = await callGoogleMeetRuntime(
         context,
         "googlemeet.transcript",
         { sessionId, ...(sinceIndex === undefined ? {} : { sinceIndex }) },
         (rt) => rt.transcript(sessionId, sinceIndex === undefined ? {} : { sinceIndex }),
+        undefined,
+        signal,
       );
+      if (result === undefined) {
+        return;
+      }
       if (!result.found) {
         throw new Error("session not found");
       }
@@ -569,12 +584,18 @@ export function registerGoogleMeetCli(params: {
         writeOAuthDoctorReport(report);
         return;
       }
+      const signal = getAsyncWorkSignal();
       const status = await callGoogleMeetRuntime(
         context,
         "googlemeet.status",
         { sessionId },
         (rt) => rt.status(sessionId),
+        undefined,
+        signal,
       );
+      if (status === undefined) {
+        return;
+      }
       if (options.json) {
         writeStdoutJson(status);
         return;

@@ -302,19 +302,24 @@ export async function callGoogleMeetGateway(params: {
   method: GoogleMeetGatewayMethod;
   payload?: Record<string, unknown>;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<GoogleMeetGatewayCallResult> {
   try {
     const timeoutMs = resolveGoogleMeetGatewayTimeoutMs(params.timeoutMs);
-    return {
-      ok: true,
-      payload: await callGatewayFromCli(
-        params.method,
-        { json: true, timeout: String(timeoutMs) },
-        params.payload,
-        { progress: false },
-      ),
-    };
+    const payload = await callGatewayFromCli(
+      params.method,
+      { json: true, timeout: String(timeoutMs) },
+      params.payload,
+      { progress: false, signal: params.signal },
+    );
+    // A reply that settles after Ctrl+C or SIGTERM is dropped, not printed.
+    params.signal?.throwIfAborted();
+    return { ok: true, payload };
   } catch (err) {
+    if (params.signal?.aborted) {
+      // Ctrl+C owns the exit; never fall back to a local runtime or print a late result.
+      throw err;
+    }
     if (isGatewayUnavailableForLocalFallback(err, params.method)) {
       return { ok: false };
     }
