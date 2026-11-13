@@ -8,13 +8,7 @@ import {
   pluginStateText,
   scribeTile,
 } from "./scribe-dialog.js";
-import {
-  repairScribe,
-  runScribeNow,
-  setScribePaused,
-  startScribe,
-  turnOffScribe,
-} from "./scribes-actions.js";
+import { runScribeNow, setScribePaused, startScribe, turnOffScribe } from "./scribes-actions.js";
 import { scribeById, scribeLabel } from "./scribes-catalog.js";
 import {
   detectSources,
@@ -29,7 +23,7 @@ import {
   type ScribeStatus,
 } from "./scribes-state.js";
 import {
-  markUpdating,
+  repair,
   settleUpdates,
   update,
   updateNotice,
@@ -523,19 +517,7 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
     actions.append(
       control(
         "Repair",
-        async () => {
-          await repairScribe(host, snapshot, job, agentId);
-          // Restoring an archived conversation needs no turn; every other repair is one.
-          if (!(status === "missing" && session?.archived)) {
-            markUpdating(
-              ui,
-              job,
-              agentId,
-              () => true,
-              (current) => repairScribe(current.s.context.host, snapshot, job, agentId),
-            );
-          }
-        },
+        () => repair(ui, snapshot, job, agentId),
         status === "missing" && session?.archived
           ? `Restored ${scribeLabel(scribe)} and turned it back on.`
           : `Asked ${scribeLabel(scribe)} to repair its setup.`,

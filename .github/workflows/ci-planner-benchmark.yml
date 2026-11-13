@@ -49,12 +49,13 @@ jobs:
           node-version: "24.22.1"
           package-manager-cache: false
 
-      - name: Setup pinned pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.0.1
+      - name: Setup pnpm from packageManager
+        uses: ./harness/.github/actions/setup-pnpm-store-cache
         with:
-          package_json_file: harness/package.json
-          run_install: false
-          cache: false
+          package-manager-file: harness/package.json
+          lockfile-path: harness/pnpm-lock.yaml
+          node-version: "24.22.1"
+          cache-mode: off
 
       - name: Verify checkout and toolchain identities
         env:
@@ -63,7 +64,7 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$HARNESS_SHA"
           test "$(node --version)" = v24.22.1
-          test "$(pnpm --version)" = 12.15.0
+          test "pnpm@$(pnpm --version)" = "$(node -p 'require("./package.json").packageManager.split("+")[0]')"
           /usr/bin/time --version
 
       - name: Install from the frozen lockfile
@@ -119,12 +120,13 @@ jobs:
           node-version: "24.22.1"
           package-manager-cache: false
 
-      - name: Setup pinned pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.0.1
+      - name: Setup pnpm from packageManager
+        uses: ./harness/.github/actions/setup-pnpm-store-cache
         with:
-          package_json_file: harness/package.json
-          run_install: false
-          cache: false
+          package-manager-file: harness/package.json
+          lockfile-path: harness/pnpm-lock.yaml
+          node-version: "24.22.1"
+          cache-mode: off
 
       - name: Verify checkout and toolchain identities
         env:
@@ -134,7 +136,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$HARNESS_SHA"
           test "$(git -C ../workload rev-parse HEAD)" = 79f5aeb133830a1db60b55cff3cf7a617086aa07
           test "$(node --version)" = v24.22.1
-          test "$(pnpm --version)" = 12.15.0
+          test "pnpm@$(pnpm --version)" = "$(node -p 'require("./package.json").packageManager.split("+")[0]')"
           /usr/bin/time --version
 
       - name: Install each checkout from its own frozen lockfile

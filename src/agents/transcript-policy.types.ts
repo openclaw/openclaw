@@ -13,13 +13,12 @@ export type TranscriptPolicy = {
   repairToolUseResultPairing: boolean;
   preserveSignatures: boolean;
   appendOnlyRuntimeContext?: boolean;
-  inHistorySystemUpdates?: boolean;
   /**
-   * Keep one system prompt per session and send later prompt changes as appended deltas.
-   * The delta is an in-history system message when `inHistorySystemUpdates` allows it,
-   * otherwise a user-role note.
+   * The route accepts mid-conversation system messages. Every session pins its system prompt
+   * on every route; this only selects how later prompt deltas are carried: an in-history
+   * system message when true, otherwise a user-role note.
    */
-  pinnedSystemPrompt?: boolean;
+  inHistorySystemUpdates?: boolean;
   sanitizeThoughtSignatures?: {
     allowBase64Only?: boolean;
     includeCamelCase?: boolean;

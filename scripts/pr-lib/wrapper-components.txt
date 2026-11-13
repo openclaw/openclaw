@@ -1388,6 +1388,8 @@ src/infra/thread-disk-io.ts
 src/infra/test-runtime-env.ts
 src/infra/tls-certificate-errors.ts
 src/infra/tmp-openclaw-dir.ts
+src/infra/update-capture-paths.ts
+src/infra/update-capture-privacy-marker.ts
 src/infra/update-candidate-io.ts
 src/infra/update-candidate-state.diagnostics.ts
 src/infra/update-candidate-state.inspection.ts
