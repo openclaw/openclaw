@@ -1,9 +1,10 @@
 // File steps for the copy-and-swap state upgrade: private copy, diff, journaled
 // swap and retention. Nothing here writes a live file before the plan is durable.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 
 export type UpgradeOp = {
   /** Live path to replace, create or retire. */
@@ -64,14 +65,40 @@ export function isSqliteFile(pathname: string): boolean {
 }
 
 /** A consistent private copy that includes committed WAL frames; the source stays unwritten. */
-export function copySqliteFile(source: string, target: string): void {
-  const { DatabaseSync } = requireNodeSqlite();
-  fs.rmSync(target, { force: true });
-  const db = new DatabaseSync(source, { readOnly: true });
+export function vacuumSqliteInto(source: string, target: string): void {
+  withRecoveredSource(source, (readable) => {
+    fs.rmSync(target, { force: true });
+    const db = openNodeSqliteDatabase(readable, { readOnly: true });
+    try {
+      db.prepare("VACUUM INTO ?").run(target);
+    } finally {
+      db.close();
+    }
+  });
+}
+
+/**
+ * Read a database that a crash left with a hot rollback journal. A read-only open
+ * cannot roll it back, so the file and journal are copied and rolled back privately.
+ */
+export function withRecoveredSource<T>(pathname: string, read: (readable: string) => T): T {
   try {
-    db.prepare("VACUUM INTO ?").run(target);
-  } finally {
-    db.close();
+    return read(pathname);
+  } catch (error) {
+    const journal = `${pathname}-journal`;
+    if (!(fs.statSync(journal, { throwIfNoEntry: false })?.size ?? 0)) {
+      throw error;
+    }
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-recover-"));
+    try {
+      const copy = path.join(dir, path.basename(pathname));
+      fs.copyFileSync(pathname, copy);
+      fs.copyFileSync(journal, `${copy}-journal`);
+      openNodeSqliteDatabase(copy).close();
+      return read(copy);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 }
 
@@ -83,7 +110,12 @@ function skipEntry(name: string): boolean {
  * Copy the live tree into `shadow`. SQLite files get a consistent read-only copy,
  * other files a copy-on-write clone where the filesystem supports it.
  */
-export function copyTree(live: string, shadow: string, skip: (absolute: string) => boolean): void {
+export function copyTree(
+  live: string,
+  shadow: string,
+  skip: (absolute: string) => boolean,
+  visited = new Set<string>([fs.realpathSync(live)]),
+): void {
   fs.mkdirSync(shadow, { recursive: true, mode: 0o700 });
   for (const entry of fs.readdirSync(live, { withFileTypes: true })) {
     const source = path.join(live, entry.name);
@@ -91,13 +123,19 @@ export function copyTree(live: string, shadow: string, skip: (absolute: string) 
     if (skipEntry(entry.name) || skip(source)) {
       continue;
     }
-    if (entry.isDirectory()) {
-      copyTree(source, target, skip);
-    } else if (entry.isSymbolicLink()) {
+    // A symlink is copied as what it points to, so nothing written to the private
+    // copy can reach the live file. A dangling link stays a link.
+    const linked = entry.isSymbolicLink() ? fs.statSync(source, { throwIfNoEntry: false }) : null;
+    if (entry.isDirectory() || linked?.isDirectory()) {
+      const real = fs.realpathSync(source);
+      if (!visited.has(real)) {
+        copyTree(source, target, skip, new Set([...visited, real]));
+      }
+    } else if (entry.isSymbolicLink() && !linked) {
       fs.symlinkSync(fs.readlinkSync(source), target);
-    } else if (entry.isFile()) {
+    } else if (entry.isFile() || linked?.isFile()) {
       if (isSqliteFile(source)) {
-        copySqliteFile(source, target);
+        vacuumSqliteInto(source, target);
       } else {
         fs.copyFileSync(source, target, fs.constants.COPYFILE_FICLONE);
       }
@@ -107,12 +145,14 @@ export function copyTree(live: string, shadow: string, skip: (absolute: string) 
 }
 
 function sameContent(a: string, b: string): boolean {
-  const left = fs.lstatSync(a);
-  const right = fs.lstatSync(b);
-  if (left.isSymbolicLink() || right.isSymbolicLink()) {
-    return (
-      left.isSymbolicLink() && right.isSymbolicLink() && fs.readlinkSync(a) === fs.readlinkSync(b)
-    );
+  if (fs.lstatSync(a).isSymbolicLink() && fs.lstatSync(b).isSymbolicLink()) {
+    return fs.readlinkSync(a) === fs.readlinkSync(b);
+  }
+  // A live file symlink compares by what it points to; the copy holds that content.
+  const left = fs.statSync(a, { throwIfNoEntry: false });
+  const right = fs.statSync(b, { throwIfNoEntry: false });
+  if (!left || !right) {
+    return false;
   }
   if (left.size !== right.size) {
     return false;
@@ -166,8 +206,22 @@ export function diffTree(
 ): UpgradeOp[] {
   const liveFiles = listFiles(live, skip);
   const ops: UpgradeOp[] = [];
+  // Accepted edge case: a symlinked directory is upgraded only in the private copy;
+  // the swap leaves it alone, so the live target and its volume are never written.
+  const underLinkedDirectory = (target: string) => {
+    for (let dir = target; dir !== live && dir.startsWith(live); dir = path.dirname(dir)) {
+      if (fs.lstatSync(dir, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        return fs.statSync(dir, { throwIfNoEntry: false })?.isDirectory() === true;
+      }
+    }
+    return false;
+  };
   for (const next of listFiles(shadow, () => false)) {
     const target = path.join(live, path.relative(shadow, next));
+    if (underLinkedDirectory(target)) {
+      liveFiles.delete(target);
+      continue;
+    }
     if (!liveFiles.has(target)) {
       ops.push({ kind: "add", live: target, next });
     } else if (!sameContent(target, next)) {
@@ -176,7 +230,9 @@ export function diffTree(
     liveFiles.delete(target);
   }
   for (const target of liveFiles) {
-    ops.push({ kind: "remove", live: target });
+    if (!underLinkedDirectory(target)) {
+      ops.push({ kind: "remove", live: target });
+    }
   }
   return ops;
 }

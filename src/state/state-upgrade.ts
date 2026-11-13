@@ -14,15 +14,14 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { VERSION } from "../version.js";
-import { createAgentSwapTarget } from "./openclaw-agent-db-swap.js";
+import { buildAgentDatabaseByCopy } from "./openclaw-agent-db-swap.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { CONTENT_VERSION_KEY } from "./openclaw-state-db-schema-version.js";
 import { buildStateDatabaseByCopy } from "./openclaw-state-db-swap.js";
 import {
-  buildSqliteByCopy,
   insertSetAsideRows,
   UPGRADE_SET_ASIDE_SCOPE,
   type SetAsideRow,
@@ -42,6 +41,8 @@ import {
   readPlan,
   rewriteFilePrefix,
   rewriteSqlitePrefix,
+  vacuumSqliteInto,
+  withRecoveredSource,
   writePlan,
   type UpgradeOp,
 } from "./state-upgrade-tree.js";
@@ -100,22 +101,33 @@ function readVersion(db: DatabaseSync, kind: DatabaseTarget["kind"]): number {
 }
 
 function openReadOnly(pathname: string): DatabaseSync {
-  const { DatabaseSync } = requireNodeSqlite();
-  return new DatabaseSync(pathname, { readOnly: true });
+  return openNodeSqliteDatabase(pathname, { readOnly: true });
 }
 
 function discoverDatabases(stateDir: string): DatabaseTarget[] {
   const targets: DatabaseTarget[] = [];
+  const realStateDir = fs.realpathSync(stateDir);
   const add = (kind: DatabaseTarget["kind"], pathname: string, agentId?: string) => {
     if (!isSqliteFile(pathname)) {
       return;
     }
-    const db = openReadOnly(pathname);
-    try {
-      targets.push({ kind, agentId, path: pathname, version: readVersion(db, kind) });
-    } finally {
-      db.close();
+    // Accepted edge case: the swap cannot rename across a symlinked directory, so a
+    // database there keeps the previous upgrade path (Doctor) instead.
+    if (
+      path.relative(realStateDir, fs.realpathSync(path.dirname(pathname))) !==
+      path.relative(stateDir, path.dirname(pathname))
+    ) {
+      return;
     }
+    const version = withRecoveredSource(pathname, (readable) => {
+      const db = openReadOnly(readable);
+      try {
+        return readVersion(db, kind);
+      } finally {
+        db.close();
+      }
+    });
+    targets.push({ kind, agentId, path: pathname, version });
   };
   add("state", path.join(stateDir, "state", "openclaw.sqlite"));
   let agents: string[] = [];
@@ -201,24 +213,22 @@ function buildFallback(
   for (const target of targets) {
     const out = toShadow(target.path);
     fs.mkdirSync(path.dirname(out), { recursive: true });
-    if (target.kind === "agent") {
-      reports.push(buildSqliteByCopy(createAgentSwapTarget(target.agentId!), target.path, out));
-      continue;
-    }
-    const state = buildStateDatabaseByCopy(target.path, out, scratchDir);
-    reports.push(state.report);
-    foldInFailures.push(...state.foldInFailures);
+    const built =
+      target.kind === "agent"
+        ? buildAgentDatabaseByCopy(target.agentId!, target.path, out, scratchDir)
+        : buildStateDatabaseByCopy(target.path, out, scratchDir);
+    reports.push(built.report);
+    foldInFailures.push(...built.foldInFailures);
   }
   return { reports, foldInFailures };
 }
 
 function checkpointShadowDatabases(shadowRoot: string): void {
-  const { DatabaseSync } = requireNodeSqlite();
   for (const file of listTreeFiles(shadowRoot)) {
     if (!isSqliteFile(file)) {
       continue;
     }
-    const db = new DatabaseSync(file);
+    const db = openNodeSqliteDatabase(file);
     try {
       // A rollback-journal file needs no WAL or SHM companion, so read-only openers
       // can admit it before the first writer switches it back to WAL.
@@ -241,8 +251,7 @@ function recordDiagnostics(
   if (!fs.existsSync(shadowStatePath)) {
     return;
   }
-  const { DatabaseSync } = requireNodeSqlite();
-  const db = new DatabaseSync(shadowStatePath);
+  const db = openNodeSqliteDatabase(shadowStatePath);
   try {
     const now = Date.now();
     const insert = db.prepare(
@@ -372,8 +381,7 @@ export async function upgradeStateDirectory(params: {
       fs.copyFileSync(configPath, shadowConfig);
     }
     for (const target of outdated) {
-      const { DatabaseSync } = requireNodeSqlite();
-      const db = new DatabaseSync(toShadow(target.path));
+      const db = openNodeSqliteDatabase(toShadow(target.path));
       try {
         normalizeSqliteText(db);
       } finally {
@@ -432,6 +440,14 @@ export async function upgradeStateDirectory(params: {
       }
       fs.rmSync(shadowRoot, { recursive: true, force: true });
       const fallback = buildFallback(outdated, toShadow, workDir);
+      // The upgrade report, set-aside rows and pin live in the shared database, so a
+      // current one is copied too and swapped with them.
+      const liveState = path.join(stateDir, "state", "openclaw.sqlite");
+      if (!outdated.some((t) => t.kind === "state") && isSqliteFile(liveState)) {
+        fs.mkdirSync(path.dirname(toShadow(liveState)), { recursive: true });
+        vacuumSqliteInto(liveState, toShadow(liveState));
+        fallbackAdds.push({ kind: "replace", live: liveState, next: toShadow(liveState) });
+      }
       for (const file of keep) {
         fs.mkdirSync(path.dirname(file), { recursive: true });
         fs.renameSync(path.join(kept, path.relative(workDir, file)), file);
@@ -453,8 +469,7 @@ export async function upgradeStateDirectory(params: {
     // Paths the run wrote into the shadow point at the live tree again.
     for (const file of listTreeFiles(shadowRoot)) {
       if (isSqliteFile(file)) {
-        const { DatabaseSync } = requireNodeSqlite();
-        const db = new DatabaseSync(file);
+        const db = openNodeSqliteDatabase(file);
         try {
           rewriteSqlitePrefix(db, shadowRoot, stateDir);
           if (countSqlitePrefix(db, shadowRoot) > 0) {

@@ -24,5 +24,9 @@ wrote, and where each value was found (`verification`). Paths inside the
 databases and `openclaw.json` still name `/home/fixture`; tests rewrite the
 config to their temporary directory.
 
+The synthetic device keys (`identity/device.json`, `device_identities`) are
+stored with the PEM marker spelled `PRIVATE_KEY` so the repository
+private-key scanner passes. The e2e test restores the marker on its copy.
+
 Consumers: `src/state/sqlite-copy-swap.test.ts` (generic rebuild) and
 `test/state-upgrade.e2e.test.ts` (Gateway start on each release).

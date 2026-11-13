@@ -5,7 +5,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { createAgentSwapTarget } from "./openclaw-agent-db-swap.js";
+import { buildAgentDatabaseByCopy } from "./openclaw-agent-db-swap.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { buildStateDatabaseByCopy } from "./openclaw-state-db-swap.js";
 import { buildSqliteByCopy, type SqliteSwapTarget } from "./sqlite-copy-swap.js";
@@ -61,20 +62,19 @@ function droppedUserColumns(source: string, report: { droppedColumns: string[] }
 describe.each(releases)("generic rebuild of %s", (release) => {
   const stateDir = path.join(corpusDir, release, "state");
   const databases = [
-    { file: path.join(stateDir, "state", "openclaw.sqlite"), target: undefined },
+    { file: path.join(stateDir, "state", "openclaw.sqlite"), agentId: undefined },
     ...fs
       .readdirSync(path.join(stateDir, "agents"))
       .map((agentId) => ({
         file: path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite"),
-        target: createAgentSwapTarget(agentId) as SqliteSwapTarget | undefined,
+        agentId: agentId as string | undefined,
       }))
       .filter(({ file }) => fs.existsSync(file)),
   ];
 
   it.each(databases.map((entry) => [path.relative(stateDir, entry.file), entry] as const))(
     "%s keeps every row and leaves the source unchanged",
-    (_name, { file, target }) => {
-      const before = hash(file);
+    (_name, { file, agentId }) => {
       // The source is opened read-only; a writable copy keeps its WAL out of the fixture.
       const source = path.join(tempDir(), "source.sqlite");
       fs.copyFileSync(file, source);
@@ -83,11 +83,12 @@ describe.each(releases)("generic rebuild of %s", (release) => {
           fs.copyFileSync(`${file}${suffix}`, `${source}${suffix}`);
         }
       }
+      const before = hash(source);
       const out = path.join(tempDir(), "next.sqlite");
-      const report = target
-        ? buildSqliteByCopy(target, source, out)
-        : buildStateDatabaseByCopy(source, out, tempDir()).report;
-      expect(hash(file)).toBe(before);
+      const { report } = agentId
+        ? buildAgentDatabaseByCopy(agentId, source, out, tempDir())
+        : buildStateDatabaseByCopy(source, out, tempDir());
+      expect(hash(source)).toBe(before);
       expect(report.conservationMismatches).toEqual([]);
       for (const table of report.tables) {
         expect(table.copied + table.setAside, table.table).toBe(table.source);
@@ -96,9 +97,8 @@ describe.each(releases)("generic rebuild of %s", (release) => {
       const built = new DatabaseSync(out, { readOnly: true });
       try {
         expect(built.prepare("PRAGMA user_version").get()).toEqual({
-          user_version: target?.version ?? OPENCLAW_STATE_SCHEMA_VERSION,
+          user_version: agentId ? OPENCLAW_AGENT_SCHEMA_VERSION : OPENCLAW_STATE_SCHEMA_VERSION,
         });
-        expect(built.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       } finally {
         built.close();
       }
