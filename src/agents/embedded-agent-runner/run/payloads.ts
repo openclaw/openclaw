@@ -41,6 +41,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
+import { withAssistantReplySource } from "../../embedded-agent-reply-source.js";
 import type { EmbeddedAgentSubscribeState } from "../../embedded-agent-subscribe.handlers.types.js";
 import type { ToolResultFormat } from "../../embedded-agent-subscribe.shared-types.js";
 import { isToolAuthoredSourceReplyForAssistant } from "../../embedded-agent-tool-authored-source-reply.js";
@@ -421,17 +422,20 @@ export function buildEmbeddedRunPayloads(params: {
         ) {
           continue;
         }
-        const replyPayload = {
-          text: cleanedText,
-          ...(mediaUrls?.[0] ? { mediaUrl: mediaUrls[0] } : {}),
-          ...(mediaUrls?.length ? { mediaUrls } : {}),
-          ...(delivery.audioAsVoice ? { audioAsVoice: true } : {}),
-          ...(delivery.replyToId ? { replyToId: delivery.replyToId } : {}),
-          ...(delivery.replyToTag !== undefined ? { replyToTag: delivery.replyToTag } : {}),
-          ...(delivery.replyToCurrent !== undefined
-            ? { replyToCurrent: delivery.replyToCurrent }
-            : {}),
-        };
+        const replyPayload = withAssistantReplySource(
+          {
+            text: cleanedText,
+            ...(mediaUrls?.[0] ? { mediaUrl: mediaUrls[0] } : {}),
+            ...(mediaUrls?.length ? { mediaUrls } : {}),
+            ...(delivery.audioAsVoice ? { audioAsVoice: true } : {}),
+            ...(delivery.replyToId ? { replyToId: delivery.replyToId } : {}),
+            ...(delivery.replyToTag !== undefined ? { replyToTag: delivery.replyToTag } : {}),
+            ...(delivery.replyToCurrent !== undefined
+              ? { replyToCurrent: delivery.replyToCurrent }
+              : {}),
+          },
+          storedDelivery?.sourceMessageId,
+        );
         addReplyPayloadMediaFailures(replyPayload, mediaFailures);
         const assistantTranscriptSource =
           mediaUrls?.length || mediaFailures?.length

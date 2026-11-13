@@ -1,8 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, readlinkSync } from "node:fs";
+import fs from "node:fs/promises";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
-import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import {
+  isPidDefinitelyDead,
+  isPidDefinitelyDeadAsync,
+  parseLinuxProcessStat,
+} from "../../shared/pid-alive.js";
 import { readDarwinProcessCensus } from "../darwin-process-inspection.js";
 
 export type ProcessCommand =
@@ -60,7 +65,10 @@ function readLinuxProcessUid(pid: number): number | undefined {
   }
 }
 
-/** Only kernel absence, observed outside the owned group, confirms extinction. */
+/**
+ * For the relay's own anchor group: only kernel absence, observed outside the owned group, confirms extinction.
+ * Unlike `isProcessGroupGone`, EPERM deliberately stays "not gone" here (kernel-only proof).
+ */
 export function isOwnedProcessGroupGone(pgid: number): boolean {
   try {
     process.kill(-pgid, 0);
@@ -93,6 +101,31 @@ export function killOwnedProcessGroupMembers(): void {
   }
 }
 
+type ProcessGroupMember = {
+  pid: number;
+  ppid?: number;
+  pgid: number;
+  state: string;
+  command?: { ppid: number } & ProcessCommand;
+};
+
+function parseLinuxProcessGroupMember(pid: number, stat: string) {
+  const match = /^(\d+) \([\s\S]*\) (\S) (\d+) (-1|\d+)(?:\s|$)/.exec(stat);
+  if (!match || Number(match[1]) !== pid) {
+    throw new Error("Process group census is unavailable");
+  }
+  return { pid, ppid: Number(match[3]), pgid: Number(match[4]), state: match[2]! };
+}
+
+/** Membership and birth come from one row, immediately before a caller's signal. */
+export async function readLinuxProcessGroupMemberAsync(pid: number) {
+  const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8");
+  return {
+    ...parseLinuxProcessGroupMember(pid, stat),
+    startedAt: parseLinuxProcessStat(pid, stat)?.startedAt ?? null,
+  };
+}
+
 /** The caller supplies command inspection; group cleanup only reads native topology. */
 export function* readProcessGroupMembers(
   timeoutMs: number,
@@ -102,13 +135,7 @@ export function* readProcessGroupMembers(
       owner: "same" | "different" | "unknown",
     ) => ProcessCommand | undefined;
   },
-): Generator<{
-  pid: number;
-  ppid?: number;
-  pgid: number;
-  state: string;
-  command?: { ppid: number } & ProcessCommand;
-}> {
+): Generator<ProcessGroupMember> {
   const includeCommand = commandInspection !== undefined;
   if (process.platform === "linux") {
     const deadline = Date.now() + timeoutMs;
@@ -155,8 +182,8 @@ export function* readProcessGroupMembers(
       // comm can contain spaces, newlines and parentheses; pgrp follows PPID
       // after its final closing parenthesis (Linux procfs stat fields 1..5).
       // A task reaped during do_task_stat can retain the kernel's pgid=-1 sentinel.
-      const match = /^(\d+) \([\s\S]*\) (\S) (\d+) (-1|\d+)(?:\s|$)/.exec(stat);
-      if (!match || Number(match[1]) !== pid || Date.now() >= deadline) {
+      const member = parseLinuxProcessGroupMember(pid, stat);
+      if (Date.now() >= deadline) {
         throw new Error("Process group census is unavailable");
       }
       if (argv?.length === 0) {
@@ -178,12 +205,12 @@ export function* readProcessGroupMembers(
       }
       yield {
         pid,
-        pgid: Number(match[4]),
-        state: match[2]!,
+        pgid: member.pgid,
+        state: member.state,
         ...(argv
-          ? { command: { ppid: Number(match[3]), argv, ...(uid === undefined ? {} : { uid }) } }
+          ? { command: { ppid: member.ppid, argv, ...(uid === undefined ? {} : { uid }) } }
           : opaqueForeignOwner && uid !== undefined
-            ? { command: { ppid: Number(match[3]), argvUnavailable: true, uid } }
+            ? { command: { ppid: member.ppid, argvUnavailable: true, uid } }
             : {}),
       };
     }
@@ -254,6 +281,116 @@ export function* readProcessGroupMembers(
   }
 }
 
+// A zombie leader may retain live Linux threads; share the existing check.
+function isLiveCensusMember({ pid, state }: { pid: number; state: string }): boolean {
+  return !state.startsWith("Z") || (process.platform === "linux" && !isPidDefinitelyDead(pid));
+}
+
+/**
+ * Whether the process table is this PID namespace's. A nested PID namespace with the parent's
+ * /proc mounted still lists processes under the parent's numbers, so a pid row proves nothing;
+ * only /proc/self naming this pid does. Other platforms read a host-wide table.
+ */
+export function isOwnProcfs(): boolean {
+  if (process.platform !== "linux") {
+    return true;
+  }
+  try {
+    return readlinkSync("/proc/self") === String(process.pid);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Denied-probe fallback for groups whose members we only observe; callers reach it through
+ * `isProcessGroupGone`. A failed census, or a procfs that is not this PID namespace's, keeps the
+ * group alive. Accepted edge case: hidepid or a restricted `/proc` can still hide a member, so an
+ * otherwise empty census reads as gone.
+ */
+export function isProcessGroupGoneByCensus(pgid: number): boolean {
+  if (!isOwnProcfs()) {
+    return false;
+  }
+  try {
+    for (const member of readProcessGroupMembers(1_000)) {
+      if (member.pgid === pgid && isLiveCensusMember(member)) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Runtime group cleanup needs topology; command inspection retains its synchronous contract. */
+export async function* readLinuxProcessGroupMembersAsync(
+  timeoutMs: number,
+): AsyncGenerator<ReturnType<typeof parseLinuxProcessGroupMember>> {
+  if (process.platform !== "linux") {
+    throw new Error("Asynchronous Linux process census requires Linux");
+  }
+  const deadline = Date.now() + timeoutMs;
+  for (const name of await fs.readdir("/proc")) {
+    if (Date.now() >= deadline) {
+      throw new Error("Process group census exceeded its deadline");
+    }
+    if (!/^\d+$/.test(name)) {
+      continue;
+    }
+    const pid = Number(name);
+    let stat: string;
+    try {
+      stat = await fs.readFile(`/proc/${name}/stat`, "utf8");
+    } catch (error) {
+      // Foreign processes may disappear between enumeration and their stat read.
+      if (pid !== process.pid && ["ENOENT", "ESRCH"].includes(extractErrorCode(error) ?? "")) {
+        continue;
+      }
+      throw error;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("Process group census exceeded its deadline");
+    }
+    yield parseLinuxProcessGroupMember(pid, stat);
+  }
+  if (Date.now() >= deadline) {
+    throw new Error("Process group census exceeded its deadline");
+  }
+}
+
+export async function isOwnProcfsAsync(): Promise<boolean> {
+  if (process.platform !== "linux") {
+    return true;
+  }
+  try {
+    return (await fs.readlink("/proc/self")) === String(process.pid);
+  } catch {
+    return false;
+  }
+}
+
+/** Runtime denied-probe observation; no synchronous procfs fallback. */
+export async function isProcessGroupGoneByCensusAsync(pgid: number): Promise<boolean> {
+  if (!(await isOwnProcfsAsync())) {
+    return false;
+  }
+  try {
+    for await (const member of readLinuxProcessGroupMembersAsync(1_000)) {
+      if (
+        member.pgid === pgid &&
+        (!member.state.startsWith("Z") || !(await isPidDefinitelyDeadAsync(member.pid)))
+      ) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Advisory retirement timing only; the host owns kernel group-disappearance proof. */
 export function hasLiveOwnedProcessGroupMembers(timeoutMs = 1_000): boolean | undefined {
   let observedOwner = false;
@@ -266,11 +403,7 @@ export function hasLiveOwnedProcessGroupMembers(timeoutMs = 1_000): boolean | un
           return undefined;
         }
         observedOwner = true;
-      } else if (
-        pgid === process.pid &&
-        // A zombie leader may retain live Linux threads; share the existing check.
-        (!state.startsWith("Z") || (process.platform === "linux" && !isPidDefinitelyDead(pid)))
-      ) {
+      } else if (pgid === process.pid && isLiveCensusMember({ pid, state })) {
         return true;
       }
     }

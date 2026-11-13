@@ -70,13 +70,16 @@ it.each(["child close", "tree signal completion", "already-exited child close"])
   "keeps provider shutdown owned until %s after PID disappearance",
   async (heldFact) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    const alive = vi.spyOn(processTree, "isChildProcessTreeAlive").mockReturnValue(true);
+    let treeAlive = true;
+    vi.spyOn(processTree, "isChildProcessTreeAlive").mockImplementation(() => treeAlive);
+    vi.spyOn(processTree, "isChildProcessTreeAliveAsync").mockImplementation(async () => treeAlive);
+    vi.spyOn(processTree, "isProcessGroupGoneByKernel").mockImplementation(() => !treeAlive);
     const signaled = createDeferred();
     let completeSignal: (() => void) | undefined;
     vi.spyOn(processTree, "signalChildProcessTree").mockImplementation(
       (_child, _signal, onComplete) => {
         completeSignal = onComplete;
-        alive.mockReturnValue(false);
+        treeAlive = false;
         exit();
         if (heldFact === "child close") {
           onComplete?.();
@@ -89,7 +92,7 @@ it.each(["child close", "tree signal completion", "already-exited child close"])
 
     const lease = await readyService("settlement-fixture");
     if (heldFact === "already-exited child close") {
-      alive.mockReturnValue(false);
+      treeAlive = false;
       exit();
       signaled.resolve();
     }

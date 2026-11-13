@@ -373,10 +373,7 @@ async function runCommandWithOutputEncoding(
       // An escaped pipe holder can survive group termination; bound its final drain.
       releaseOutput ??= releaseChildProcessOutputAfterExit(nodeChild);
     }
-    const abortDeferred = terminationController.terminate();
-    if (!abortDeferred) {
-      cancelController.abort();
-    }
+    terminationController.cancel();
   };
   const armNoOutputTimer = () => {
     if (

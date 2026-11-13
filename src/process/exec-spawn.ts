@@ -12,7 +12,11 @@ import { mergeProcessEnv } from "../infra/process-env.js";
 import { assertAppContainerSpawnSupported } from "../infra/windows-appcontainer-spawn.js";
 import { getFileLockProcessStartTime, getProcessInstanceStartTime } from "../shared/pid-alive.js";
 import { sleep } from "../utils/sleep.js";
-import { isChildProcessTreeAlive } from "./child-process-tree.js";
+import {
+  isChildProcessTreeAlive,
+  isChildProcessTreeAliveAsync,
+  isProcessGroupGoneByKernel,
+} from "./child-process-tree.js";
 import type { CommandProcessCustody } from "./command-process-custody.types.js";
 import { readCommandProcessStartTime } from "./command-process-identity.js";
 import {
@@ -189,13 +193,13 @@ export async function waitForCommandProcessGroupExit(
   isOriginalProcess: () => boolean | Promise<boolean>,
 ): Promise<"exited" | "replaced" | "alive"> {
   const deadline = performance.now() + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS;
-  while (isChildProcessTreeAlive({ pid })) {
+  while (await isChildProcessTreeAliveAsync({ pid })) {
     if (!(await isOriginalProcess())) {
       return "replaced";
     }
     const remaining = deadline - performance.now();
     if (remaining <= 0) {
-      return isChildProcessTreeAlive({ pid }) ? "alive" : "exited";
+      return (await isChildProcessTreeAliveAsync({ pid })) ? "alive" : "exited";
     }
     await sleep(Math.min(25, remaining));
   }
@@ -422,16 +426,12 @@ function retainCommandProcess(
       signalOwnedGroup();
       return;
     }
-    if (!isChildProcessTreeAlive({ pid: childPid })) {
-      groupExtinct = true;
-      return;
-    }
     const verifyAndSignal = (currentStart: number | null) => {
       if (currentStart !== null && currentStart !== startedAt) {
         throw new CommandProcessCleanupError();
       }
       // A completed identity read does not retain authority over an already retired group.
-      if (!isChildProcessTreeAlive({ pid: childPid })) {
+      if (isProcessGroupGoneByKernel(childPid)) {
         groupExtinct = true;
         return;
       }
@@ -441,12 +441,20 @@ function retainCommandProcess(
       stopping = readiness
         .catch(() => null)
         .then(async () => {
+          if (!(await isChildProcessTreeAliveAsync({ pid: childPid }))) {
+            groupExtinct = true;
+            return;
+          }
           verifyAndSignal(await readCommandProcessStartTime(childPid));
         })
         .catch((error: unknown) => {
           scope.failure ??= { error };
         });
     } else {
+      if (!isChildProcessTreeAlive({ pid: childPid })) {
+        groupExtinct = true;
+        return;
+      }
       verifyAndSignal(getFileLockProcessStartTime(childPid));
     }
   };
@@ -515,33 +523,25 @@ function retainCommandProcess(
       await initialized;
       await completed;
       await stopping;
-      if (groupExtinct) {
-        settleCustody();
-        return;
-      }
       if (pid === undefined) {
         if (nativeChild instanceof BrokerChild && !nativeChild.notStarted) {
           throw new CommandProcessCleanupError();
         }
-        settleCustody();
-        return;
-      }
-      // Windows executable finalizers retain a Job until process exit. POSIX
-      // pipe closure is not extinction: observe this exact group after its stop.
-      if (process.platform === "win32") {
+      } else if (process.platform === "win32") {
+        // Windows executable finalizers retain a Job until process exit.
         if (!observedExit) {
           throw new CommandProcessCleanupError();
         }
-        settleCustody();
-        return;
-      }
-      const groupPid = pid;
-      const exit = await waitForCommandProcessGroupExit(groupPid, async () => {
-        const current = await readCommandProcessStartTime(groupPid);
-        return current === null || current === startedAt;
-      });
-      if (exit !== "exited") {
-        throw new CommandProcessCleanupError();
+      } else if (!groupExtinct) {
+        // POSIX pipe closure is not extinction: observe this exact group after its stop.
+        const groupPid = pid;
+        const exit = await waitForCommandProcessGroupExit(groupPid, async () => {
+          const current = await readCommandProcessStartTime(groupPid);
+          return current === null || current === startedAt;
+        });
+        if (exit !== "exited") {
+          throw new CommandProcessCleanupError();
+        }
       }
       settleCustody();
     },
@@ -555,7 +555,9 @@ function retainCommandProcess(
       pid === undefined && (!(nativeChild instanceof BrokerChild) || nativeChild.notStarted);
     if (
       neverStarted ||
-      (pid !== undefined && process.platform !== "win32" && !isChildProcessTreeAlive({ pid }))
+      (pid !== undefined &&
+        process.platform !== "win32" &&
+        !(await isChildProcessTreeAliveAsync({ pid })))
     ) {
       try {
         settleCustody();

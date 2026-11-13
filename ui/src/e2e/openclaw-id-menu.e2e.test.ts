@@ -44,6 +44,7 @@ suite.define(() => {
           const status: OpenClawIdStatusResult = {
             status: { state: "on", tunnel: { state: "running", relayOnline: published } },
             channel: "local_operator",
+            remoteAccessSetup: "local",
             accountSignIn: "popup",
             owner: true,
             ownerDeviceCount: 0,
@@ -196,6 +197,7 @@ suite.define(() => {
                   "openclawId.status": {
                     status: { state: "on", tunnel: { state: "running", relayOnline: true } },
                     channel: "local_operator",
+                    remoteAccessSetup: "local",
                     accountSignIn: "popup",
                     owner: true,
                     ownerDeviceCount: 2,

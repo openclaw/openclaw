@@ -2189,7 +2189,6 @@ src/shared/json-schema-defaults.ts	11
 src/shared/node-list-parse.ts	3
 src/shared/node-presence.ts	1
 src/shared/node-resolve.ts	1
-src/shared/pid-alive.ts	2
 src/shared/runtime-import.ts	1
 src/shared/store-writer-queue.ts	1
 src/shared/worker-bundle-archive.ts	1

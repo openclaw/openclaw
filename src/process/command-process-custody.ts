@@ -1,4 +1,4 @@
-import { isChildProcessTreeAlive } from "./child-process-tree.js";
+import { isChildProcessTreeAliveAsync, isProcessGroupGoneByKernel } from "./child-process-tree.js";
 import type { CommandProcessIdentity } from "./command-process-custody.types.js";
 import { readCommandProcessStartTime } from "./command-process-identity.js";
 import { waitForCommandProcessGroupExit } from "./exec-spawn.js";
@@ -21,7 +21,7 @@ export async function settleCommandProcessGroups(
         return unresolved("Process-group custody is unavailable");
       }
       try {
-        if (!isChildProcessTreeAlive(identity)) {
+        if (!(await isChildProcessTreeAliveAsync(identity))) {
           return undefined;
         }
         // An orphaned group has no leader whose start identity can authorize a signal.
@@ -31,7 +31,7 @@ export async function settleCommandProcessGroups(
         ) {
           return unresolved("Recorded process identity could not be confirmed");
         }
-        if (!isChildProcessTreeAlive(identity)) {
+        if (isProcessGroupGoneByKernel(pid)) {
           return undefined;
         }
         killProcessTree(pid, { detached: true, force: true });

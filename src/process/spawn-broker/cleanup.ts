@@ -1,19 +1,27 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
-import { getProcessInstanceStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import {
+  getProcessInstanceStartTime,
+  isPidDefinitelyDead,
+  isPidDefinitelyDeadAsync,
+} from "../../shared/pid-alive.js";
+import {
+  isDeniedProcessGroupProbe,
+  isProcessGroupGone,
+  isProcessGroupGoneAsync,
+  isProcessGroupGoneByKernel,
+} from "../child-process-tree.js";
+import { readCommandProcessStartTime } from "../command-process-identity.js";
 import { killProcessTree } from "../kill-tree.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../supervisor/cancellation-policy.js";
-import { readProcessGroupMembers } from "../supervisor/service-child-group-ownership.js";
+import {
+  isOwnProcfs,
+  isOwnProcfsAsync,
+  readProcessGroupMembers,
+  readLinuxProcessGroupMembersAsync,
+  readLinuxProcessGroupMemberAsync,
+} from "../supervisor/service-child-group-ownership.js";
 import { SpawnBrokerError } from "./protocol.js";
-
-function groupGone(pid: number): boolean {
-  try {
-    process.kill(-pid, 0);
-    return false;
-  } catch (error) {
-    return extractErrorCode(error) === "ESRCH";
-  }
-}
 
 export type BrokerChildGroupIdentity = {
   pid: number;
@@ -24,7 +32,7 @@ export type BrokerChildGroupIdentity = {
 
 /** Once the original group is absent or its leader identity changes, never signal its number again. */
 export function isBrokerChildGroupAlive(identity: BrokerChildGroupIdentity): boolean {
-  if (groupGone(identity.pid)) {
+  if (isProcessGroupGone(identity.pid)) {
     return false;
   }
   const current = getProcessInstanceStartTime(identity.pid);
@@ -47,9 +55,163 @@ export function isBrokerChildGroupAlive(identity: BrokerChildGroupIdentity): boo
   return current === null || current === identity.startedAt;
 }
 
+/**
+ * Signals group members by positive PID, for hosts that deny negative-PID kill(2). The caller
+ * reads the snapshot and owns `signaled`, which skips members already hit by this signal.
+ * Returns how many members of the group were still pending in the snapshot.
+ */
+function signalRevalidatedGroupMembers(
+  pgid: number,
+  signal: NodeJS.Signals,
+  {
+    snapshot,
+    signaled,
+  }: { snapshot: readonly { pid: number; pgid: number }[]; signaled: Map<string, NodeJS.Signals> },
+): number {
+  // Positive PIDs of a foreign procfs name unrelated processes: never signal from one.
+  if (!isOwnProcfs()) {
+    throw new SpawnBrokerError(
+      "Spawn broker cannot verify the process table belongs to its PID namespace",
+    );
+  }
+  const pending = snapshot.filter(
+    (member) =>
+      member.pid !== process.pid && member.pgid === pgid && !isPidDefinitelyDead(member.pid),
+  );
+  if (!pending.length) {
+    return 0;
+  }
+  const identities = new Map(
+    pending.map((member) => [member.pid, getProcessInstanceStartTime(member.pid)]),
+  );
+  let failure: { error: unknown } | undefined;
+  // Membership and birth are revalidated together immediately before each signal.
+  for (const member of readProcessGroupMembers(1000)) {
+    if (member.pid === process.pid || member.pgid !== pgid || !identities.has(member.pid)) {
+      continue;
+    }
+    const identity = identities.get(member.pid);
+    if (identity === null) {
+      if (!isPidDefinitelyDead(member.pid)) {
+        throw new SpawnBrokerError(
+          `Spawn broker cannot identify remaining group member pid=${member.pid}`,
+        );
+      }
+      continue;
+    }
+    if (getProcessInstanceStartTime(member.pid) !== identity) {
+      continue;
+    }
+    const key = `${member.pid}:${identity}`;
+    if (signaled.get(key) === signal) {
+      continue;
+    }
+    try {
+      process.kill(member.pid, signal);
+    } catch (error) {
+      if (extractErrorCode(error) !== "ESRCH") {
+        // A kernel group kill reaches every member it may signal: keep going, retry next tick.
+        failure ??= { error };
+        continue;
+      }
+    }
+    signaled.set(key, signal);
+  }
+  if (failure) {
+    throw failure.error;
+  }
+  return pending.length;
+}
+
+/** Host recovery transport; worker and synchronous exit cleanup retain the native adapter above. */
+async function signalRevalidatedGroupMembersAsync(
+  pgid: number,
+  currentSignal: () => NodeJS.Signals | undefined,
+  {
+    snapshot,
+    signaled,
+  }: { snapshot: readonly { pid: number; pgid: number }[]; signaled: Map<string, NodeJS.Signals> },
+): Promise<number> {
+  // Positive PIDs of a foreign procfs name unrelated processes: never signal from one.
+  if (!(await isOwnProcfsAsync())) {
+    throw new SpawnBrokerError(
+      "Spawn broker cannot verify the process table belongs to its PID namespace",
+    );
+  }
+  const identities = new Map<number, number | null>();
+  for (const member of snapshot) {
+    if (
+      member.pid !== process.pid &&
+      member.pgid === pgid &&
+      !(await isPidDefinitelyDeadAsync(member.pid))
+    ) {
+      identities.set(member.pid, await readCommandProcessStartTime(member.pid, { instance: true }));
+    }
+  }
+  if (!identities.size) {
+    return 0;
+  }
+  let failure: { error: unknown } | undefined;
+  for await (const member of readLinuxProcessGroupMembersAsync(1000)) {
+    if (member.pid === process.pid || member.pgid !== pgid || !identities.has(member.pid)) {
+      continue;
+    }
+    const identity = identities.get(member.pid);
+    if (identity === null) {
+      if (!(await isPidDefinitelyDeadAsync(member.pid))) {
+        throw new SpawnBrokerError(
+          `Spawn broker cannot identify remaining group member pid=${member.pid}`,
+        );
+      }
+      continue;
+    }
+    // One final stat read establishes membership and birth before the synchronous signal.
+    const current = await readLinuxProcessGroupMemberAsync(member.pid).catch(() => undefined);
+    const signal = currentSignal();
+    if (!signal) {
+      return identities.size;
+    }
+    if (!current || current.pgid !== pgid || current.startedAt !== identity) {
+      continue;
+    }
+    const key = `${member.pid}:${identity}`;
+    if (signaled.get(key) === signal) {
+      continue;
+    }
+    try {
+      process.kill(member.pid, signal);
+    } catch (error) {
+      if (extractErrorCode(error) !== "ESRCH") {
+        failure ??= { error };
+        continue;
+      }
+    }
+    signaled.set(key, signal);
+  }
+  if (failure) {
+    throw failure.error;
+  }
+  return identities.size;
+}
+
 function terminateRetainedBrokerChildGroup(identity: BrokerChildGroupIdentity) {
   let retired = false;
   let forced = false;
+  let signalError: unknown;
+  // Once the host denies a group signal, members are signaled one by one on every tick.
+  let denied: unknown;
+  let phase: "SIGTERM" | "SIGKILL" = "SIGTERM";
+  const signaled = new Map<string, NodeJS.Signals>();
+  const signalMembers = () => {
+    try {
+      signalRevalidatedGroupMembers(identity.pid, phase, {
+        snapshot: [...readProcessGroupMembers(1000)],
+        signaled,
+      });
+    } catch (error) {
+      signalError = error;
+    }
+  };
   const signal = (value: "SIGTERM" | "SIGKILL") => {
     if (retired) {
       return;
@@ -58,13 +220,18 @@ function terminateRetainedBrokerChildGroup(identity: BrokerChildGroupIdentity) {
       retired = true;
       return;
     }
+    phase = value;
     try {
       process.kill(-identity.pid, value);
     } catch (error) {
-      if (extractErrorCode(error) !== "ESRCH") {
+      if (isDeniedProcessGroupProbe(error, value)) {
+        denied = error;
+        signalMembers();
+      } else if (extractErrorCode(error) === "ESRCH") {
+        retired = true;
+      } else {
         throw error;
       }
-      retired = true;
     }
   };
   const force = () => {
@@ -86,9 +253,14 @@ function terminateRetainedBrokerChildGroup(identity: BrokerChildGroupIdentity) {
         if (performance.now() >= graceEndsAt) {
           force();
         }
+        if (denied && !retired) {
+          // Members can join the group after any census, so the current phase repeats.
+          signalMembers();
+        }
         if (performance.now() >= deadline) {
           throw new SpawnBrokerError(
             `Spawn broker child cleanup could not be confirmed for pid=${identity.pid}`,
+            { cause: signalError ?? denied },
           );
         }
         // This join, not an unreferenced escalation timer, owns the whole group.
@@ -117,13 +289,17 @@ export function terminateLostBrokerChild(
   const deadline = performance.now() + GRACEFUL_CANCEL_TIMEOUT_MS + 2000;
   const settled = (async () => {
     // An attached root can exit before its descendants; the tree owner's exited()
-    // keeps settlement joined to their TERM/KILL escalation.
+    // keeps settlement joined to their TERM/KILL escalation. A detached tree is one
+    // group, so the group owner decides; exited() still runs each tick so hosts with working
+    // group probes clear agent-core's force timer. Under a denied host that timer stays armed,
+    // is unref'd, and only signals the group (-pid), never a positive PID, so it is harmless.
     for (;;) {
-      if (
-        isPidDefinitelyDead(pid) &&
-        (!detached || groupGone(pid)) &&
-        (termination?.exited() ?? true)
-      ) {
+      if (detached) {
+        termination?.exited();
+        if ((await isPidDefinitelyDeadAsync(pid)) && (await isProcessGroupGoneAsync(pid))) {
+          break;
+        }
+      } else if ((await isPidDefinitelyDeadAsync(pid)) && (termination?.exited() ?? true)) {
         break;
       }
       if (performance.now() >= deadline) {
@@ -149,52 +325,9 @@ export async function drainCurrentBrokerProcessGroup(): Promise<void> {
     if (!members.some((member) => member.pid === process.pid && member.pgid === process.pid)) {
       throw new SpawnBrokerError("Spawn broker lost its private process group");
     }
-    const pending = members.filter(
-      (member) =>
-        member.pid !== process.pid &&
-        member.pgid === process.pid &&
-        !isPidDefinitelyDead(member.pid),
-    );
-    if (!pending.length) {
-      return;
-    }
     const signal = performance.now() < deadline ? "SIGTERM" : "SIGKILL";
-    const identities = new Map(
-      pending.map((member) => [member.pid, getProcessInstanceStartTime(member.pid)]),
-    );
-    // Membership and birth are revalidated together immediately before each signal.
-    for (const member of readProcessGroupMembers(1000)) {
-      if (
-        member.pid === process.pid ||
-        member.pgid !== process.pid ||
-        !identities.has(member.pid)
-      ) {
-        continue;
-      }
-      const identity = identities.get(member.pid);
-      if (identity === null) {
-        if (!isPidDefinitelyDead(member.pid)) {
-          throw new SpawnBrokerError(
-            `Spawn broker cannot identify remaining group member pid=${member.pid}`,
-          );
-        }
-        continue;
-      }
-      if (getProcessInstanceStartTime(member.pid) !== identity) {
-        continue;
-      }
-      const key = `${member.pid}:${identity}`;
-      if (signaled.get(key) === signal) {
-        continue;
-      }
-      try {
-        process.kill(member.pid, signal);
-      } catch (error) {
-        if (extractErrorCode(error) !== "ESRCH") {
-          throw error;
-        }
-      }
-      signaled.set(key, signal);
+    if (!signalRevalidatedGroupMembers(process.pid, signal, { snapshot: members, signaled })) {
+      return;
     }
     await delay(50);
   }
@@ -204,52 +337,119 @@ export async function drainCurrentBrokerProcessGroup(): Promise<void> {
 export function terminateBrokerProcessGroup(pgid: number) {
   let retired = false;
   let signalError: unknown;
+  let denied: unknown;
+  let phase: NodeJS.Signals = "SIGTERM";
+  const signaled = new Map<string, NodeJS.Signals>();
   let forceTimer: NodeJS.Timeout | undefined;
-  const signal = (value: NodeJS.Signals) => {
-    try {
-      process.kill(-pgid, value);
-    } catch (error) {
-      if (extractErrorCode(error) !== "ESRCH") {
-        signalError = error;
-      }
-    }
-  };
   const retire = () => {
     retired = true;
     clearTimeout(forceTimer);
   };
+  const signalMembers = async () => {
+    try {
+      const snapshot: { pid: number; pgid: number }[] = [];
+      for await (const member of readLinuxProcessGroupMembersAsync(1000)) {
+        snapshot.push(member);
+      }
+      await signalRevalidatedGroupMembersAsync(pgid, () => (retired ? undefined : phase), {
+        snapshot,
+        signaled,
+      });
+    } catch (error) {
+      signalError = error;
+    }
+  };
+  const signal = async (value: NodeJS.Signals) => {
+    if (retired || isProcessGroupGoneByKernel(pgid)) {
+      retire();
+      return;
+    }
+    phase = value;
+    try {
+      process.kill(-pgid, value);
+    } catch (error) {
+      if (isDeniedProcessGroupProbe(error, value)) {
+        denied = error;
+        await signalMembers();
+      } else if (extractErrorCode(error) !== "ESRCH") {
+        signalError = error;
+      }
+    }
+  };
+  // The host invokes this from process 'exit', where no asynchronous work can finish.
   const force = () => {
     if (retired) {
       return;
     }
-    if (groupGone(pgid)) {
+    if (isProcessGroupGone(pgid)) {
       retire();
       return;
     }
+    phase = "SIGKILL";
     clearTimeout(forceTimer);
-    signal("SIGKILL");
+    try {
+      process.kill(-pgid, phase);
+    } catch (error) {
+      if (isDeniedProcessGroupProbe(error, phase)) {
+        denied = error;
+        try {
+          signalRevalidatedGroupMembers(pgid, phase, {
+            snapshot: [...readProcessGroupMembers(1000)],
+            signaled,
+          });
+        } catch (memberError) {
+          signalError = memberError;
+        }
+      } else if (extractErrorCode(error) !== "ESRCH") {
+        signalError = error;
+      }
+    }
+  };
+  let forcing: Promise<void> | undefined;
+  const escalate = () => {
+    if (retired || forcing) {
+      return;
+    }
+    phase = "SIGKILL";
+    forcing = (async () => {
+      if (await isProcessGroupGoneAsync(pgid)) {
+        retire();
+      } else if (!retired) {
+        await signal("SIGKILL");
+      }
+    })().catch((error: unknown) => {
+      signalError = error;
+    });
   };
   const settled = (async () => {
-    if (groupGone(pgid)) {
-      retire();
-      return;
-    }
-    signal("SIGTERM");
-    forceTimer = setTimeout(force, GRACEFUL_CANCEL_TIMEOUT_MS);
-    const deadline = performance.now() + GRACEFUL_CANCEL_TIMEOUT_MS + 2000;
     try {
-      while (!groupGone(pgid)) {
+      if (await isProcessGroupGoneAsync(pgid)) {
+        return;
+      }
+      await signal(phase);
+      if (!retired && phase === "SIGTERM") {
+        forceTimer = setTimeout(escalate, GRACEFUL_CANCEL_TIMEOUT_MS);
+      }
+      const deadline = performance.now() + GRACEFUL_CANCEL_TIMEOUT_MS + 2000;
+      for (;;) {
+        await forcing;
+        if (retired || (await isProcessGroupGoneAsync(pgid))) {
+          break;
+        }
         if (performance.now() >= deadline) {
           throw new SpawnBrokerError(
             `Spawn broker group cleanup could not be confirmed for pgid=${pgid}`,
-            { cause: signalError },
+            { cause: signalError ?? denied },
           );
+        }
+        if (denied) {
+          await signalMembers();
         }
         await delay(50);
       }
     } finally {
-      // A disappeared process group no longer authorizes delayed numeric-PGID signals.
       retire();
+      await forcing;
     }
   })();
   return { force, settled };

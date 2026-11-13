@@ -42,7 +42,9 @@ export const waitForCommandProcessGroupExit = () => { throw new Error('unexpecte
 export const getWindowsSystem32ExePath = () => 'taskkill.exe';
 export const getFileLockProcessStartTime = () => { throw new Error('unexpected POSIX identity'); };
 export const readCommandProcessStartTime = () => { throw new Error('unexpected POSIX identity'); };
-export const isChildProcessTreeAlive = () => { throw new Error('unexpected POSIX group'); };
+export const isChildProcessTreeAliveAsync = () => { throw new Error('unexpected POSIX group'); };
+export const isProcessGroupGoneByKernel = () => { throw new Error('unexpected POSIX group'); };
+export const hasErrnoCode = () => { throw new Error('unexpected POSIX signal error'); };
 export const killProcessTree = () => { throw new Error('unexpected POSIX termination'); };
 export const scheduleAdoptedChildZombieReapAfterExit = () => { throw new Error('unexpected POSIX reaping'); };
 export const runOutsideCommandProcessScope = operation => operation();

@@ -36,8 +36,17 @@ vi.mock("./command-process-identity.js", () => ({ readCommandProcessStartTime: (
 vi.mock("./kill-tree.js", () => ({ killProcessTree: vi.fn() }));
 // mock-isolation: Synthetic process groups must not leave real reaper work in the shared test worker.
 vi.mock("./scoped-child-reaper.js", () => ({ scheduleAdoptedChildZombieReapAfterExit: vi.fn() }));
-vi.mock("./exec-termination.js", () => ({
-  createCommandTerminationController: () => ({ terminate: () => false, settle: transport.settle }),
+vi.mock("./exec-termination.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./exec-termination.js")>()),
+  createCommandTerminationController: ({
+    cancelController,
+  }: {
+    cancelController: AbortController;
+  }) => ({
+    terminate: () => false,
+    cancel: () => cancelController.abort(),
+    settle: transport.settle,
+  }),
 }));
 
 const scopes: Promise<unknown>[] = [];
@@ -376,12 +385,13 @@ it.skipIf(process.platform === "win32").each([false, true])(
       const listeners = process.listeners("SIGCHLD");
       vi.useFakeTimers();
       const disappearsAt = Date.now() + 1_000;
-      vi.spyOn(process, "kill").mockImplementation(() => {
+      vi.spyOn(process, "kill").mockImplementation((pid) => {
         if (!exits) {
           return true;
         }
         throw Object.assign(new Error("synthetic group probe"), {
-          code: Date.now() < disappearsAt ? "EPERM" : "ESRCH",
+          // The denial canary's impossible group gets the kernel's ESRCH, so EPERM stays a kernel EPERM.
+          code: pid !== -(4_194_304 + 1) && Date.now() < disappearsAt ? "EPERM" : "ESRCH",
         });
       });
       const fixture = commandFixture();

@@ -2,18 +2,85 @@ import type { ChildProcess } from "node:child_process";
 import { hasErrnoCode } from "../infra/errno.js";
 import { signalProcessTree } from "./kill-tree.js";
 import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
+import {
+  isProcessGroupGoneByCensus,
+  isProcessGroupGoneByCensusAsync,
+} from "./supervisor/service-child-group-ownership.js";
 
 export function shouldDetachChildForProcessTree(): boolean {
   return process.platform !== "win32";
+}
+
+// Linux PID_MAX_LIMIT: the kernel always answers ESRCH for a group this large.
+const LINUX_PID_MAX_LIMIT = 4_194_304;
+
+/**
+ * Linux hosts can deny negative-PID kill(2) (OpenShell's seccomp rule) with EPERM. A kernel EPERM
+ * (a member owned by another UID) proves the group has members, so the denial is only believed
+ * when a group that cannot exist is refused with EPERM too, for the same signal as the failing
+ * call (a filter can allow signal 0 and deny real signals). The kernel answers that group with
+ * ESRCH, so nothing is delivered. Not cached: the answer is per host call.
+ */
+export function isDeniedProcessGroupProbe(error: unknown, signal: NodeJS.Signals | 0 = 0): boolean {
+  if (process.platform !== "linux" || !hasErrnoCode(error, "EPERM")) {
+    return false;
+  }
+  try {
+    process.kill(-(LINUX_PID_MAX_LIMIT + 1), signal);
+    return false;
+  } catch (canary) {
+    return hasErrnoCode(canary, "EPERM");
+  }
+}
+
+/** Decides group extinction for `isChildProcessTreeAlive` and spawn-broker cleanup; other probes keep their own EPERM policies. */
+function probeProcessGroup(pgid: number): "gone" | "alive" | "denied" {
+  try {
+    process.kill(-pgid, 0);
+    return "alive";
+  } catch (error) {
+    if (hasErrnoCode(error, "ESRCH")) {
+      return "gone";
+    }
+    return isDeniedProcessGroupProbe(error) ? "denied" : "alive";
+  }
+}
+
+/** A synchronous absence guard immediately before an already-authorized effect. */
+export function isProcessGroupGoneByKernel(pgid: number): boolean {
+  return probeProcessGroup(pgid) === "gone";
+}
+
+export function isProcessGroupGone(pgid: number): boolean {
+  const probe = probeProcessGroup(pgid);
+  return probe === "gone" || (probe === "denied" && isProcessGroupGoneByCensus(pgid));
+}
+
+export async function isProcessGroupGoneAsync(pgid: number): Promise<boolean> {
+  const probe = probeProcessGroup(pgid);
+  return probe === "gone" || (probe === "denied" && (await isProcessGroupGoneByCensusAsync(pgid)));
+}
+
+export async function isChildProcessTreeAliveAsync(
+  child: Pick<ChildProcess, "pid">,
+): Promise<boolean> {
+  if (typeof child.pid !== "number" || child.pid <= 0) {
+    return false;
+  }
+  return shouldDetachChildForProcessTree()
+    ? !(await isProcessGroupGoneAsync(child.pid))
+    : isChildProcessTreeAlive(child);
 }
 
 export function isChildProcessTreeAlive(child: Pick<ChildProcess, "pid">): boolean {
   if (typeof child.pid !== "number" || child.pid <= 0) {
     return false;
   }
-  const target = shouldDetachChildForProcessTree() ? -child.pid : child.pid;
+  if (shouldDetachChildForProcessTree()) {
+    return !isProcessGroupGone(child.pid);
+  }
   try {
-    process.kill(target, 0);
+    process.kill(child.pid, 0);
     return true;
   } catch (error) {
     // Only ESRCH proves absence. Permission or probe failures must retain cleanup.
