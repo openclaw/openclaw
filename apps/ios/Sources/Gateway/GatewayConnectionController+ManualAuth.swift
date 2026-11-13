@@ -113,7 +113,10 @@ extension GatewayConnectionController {
             password: relay.password,
             sessionKey: relay.sessionKey,
             deliveryChannel: relay.deliveryChannel,
-            deliveryTo: relay.deliveryTo))
+            deliveryTo: relay.deliveryTo,
+            requiresForegroundSignIn: relay.requiresForegroundSignIn,
+            tlsFingerprintSHA256: relay.tlsFingerprintSHA256,
+            customHeaders: relay.customHeaders))
     }
 
     private static func legacyDeviceAuthMigrationGatewayID() -> String? {
@@ -195,6 +198,22 @@ extension GatewayConnectionController {
                         targetStableID: targetStableID,
                         allowManualOverride: true)
                     : nil
+            }
+
+            /// Applies one typed credential and saves it. Fields not yet bound to a gateway first
+            /// load what `defaultTarget` stores: saving writes token and password together, so an
+            /// unloaded field would erase the credential the user did not type.
+            mutating func edit(
+                _ field: WritableKeyPath<Self, String>,
+                to value: String,
+                instanceId: String,
+                defaultTarget: String?)
+            {
+                if self.targetStableID == nil, !instanceId.isEmpty, let defaultTarget {
+                    self.load(instanceId: instanceId, targetStableID: defaultTarget)
+                }
+                self[keyPath: field] = value
+                self.persist(instanceId: instanceId, targetStableID: self.targetStableID ?? defaultTarget)
             }
 
             func prepareManualConnection(instanceId: String, targetStableID: String) -> ManualAuthOverride? {

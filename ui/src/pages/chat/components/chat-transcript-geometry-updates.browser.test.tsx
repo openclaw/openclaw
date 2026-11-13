@@ -173,7 +173,7 @@ it("publishes native scroll policy and row position in one Solid update", async 
           state: new TranscriptOffsetState(),
           getScrollElement: () => viewport,
           endAnchor: new TranscriptEndAnchor(() => {}),
-          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn()),
+          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
           canFollowEnd: () => false,
           isProgrammaticScroll: () => false,
           cancelScroll: vi.fn(),
@@ -242,6 +242,81 @@ function scrollReader(viewport: HTMLElement, offset: number) {
   flush();
 }
 
+it.each([30, "estimate", "oversized"] as const)(
+  "keeps a measuring predecessor paintable without moving retained content (%s)",
+  async (size) => {
+    const messages = [
+      makeMessage("geometry-question", 1, { role: "user" }),
+      ...Array.from({ length: 260 }, (_, index) =>
+        makeMessage(`geometry-work-${index}`, index + 2, { phase: "commentary" }),
+      ),
+      makeMessage("geometry-answer", 262, { phase: "final_answer", stopReason: "stop" }),
+    ];
+    // One 120px question, three 480px fragments, then the viewport's 20px inset.
+    const offset = 120 + 3 * 480 + 20;
+    const { host, viewport, virtualizer } = await mountPane(
+      false,
+      480,
+      undefined,
+      offset,
+      messages,
+    );
+    const retained = requireElement(host, '.chat-virtual-row[data-index="4"]');
+    expect(host.querySelector('.chat-virtual-row[data-index="2"]')).toBeNull();
+    const style = document.createElement("style");
+    const estimate = virtualizer.options.estimateSize(2);
+    const height = size === "oversized" ? estimate + 2_000 : size === "estimate" ? estimate : size;
+    style.textContent = `.geometry-transcript-fixture .chat-virtual-row[data-index="2"] { height: ${height}px; }`;
+    host.append(style);
+    const before = retained.getBoundingClientRect().top;
+    const painted = vi.fn();
+    const frame = requestAnimationFrame(painted);
+    try {
+      scrollReader(viewport, offset - 1);
+      await Promise.resolve();
+      flush();
+      await Promise.resolve();
+      flush();
+      const predecessor = requireElement(host, '.chat-virtual-row[data-index="2"]');
+      const item = expectDefined(
+        virtualizer.getVirtualItems().find((row) => row.index === 2),
+        "measuring predecessor slot",
+      );
+      const sizer = requireElement(host, ".chat-virtual-sizer");
+      const expectedTop =
+        sizer.getBoundingClientRect().top + item.start - virtualizer.options.scrollMargin;
+      expect(Math.abs(predecessor.getBoundingClientRect().top - expectedTop)).toBeLessThanOrEqual(
+        1,
+      );
+      expect(predecessor.getBoundingClientRect().height).toBe(height);
+      expect(getComputedStyle(predecessor).opacity).toBe("1");
+      expect(getComputedStyle(predecessor).position).toBe("absolute");
+      expect(getComputedStyle(predecessor).clip).toBe(`rect(0px, auto, ${item.size}px, auto)`);
+      expect(predecessor.hasAttribute("inert")).toBe(true);
+      expect(requireElement(host, '.chat-virtual-row[data-index="4"]')).toBe(retained);
+      expect(painted).not.toHaveBeenCalled();
+      expect(viewport.scrollTop).toBe(offset - 1);
+      expect(Math.abs(retained.getBoundingClientRect().top - before - 1)).toBeLessThanOrEqual(1);
+      await settleLayout();
+      expect(
+        requireElement(host, '.chat-virtual-row[data-index="2"]').hasAttribute("data-prepared-row"),
+      ).toBe(false);
+    } finally {
+      cancelAnimationFrame(frame);
+    }
+  },
+);
+
+it("keeps ordinary incoming rows in normal flow", async () => {
+  const { host, viewport } = await mountPane(false, 120, undefined, 500);
+  scrollReader(viewport, 499);
+  await Promise.resolve();
+  flush();
+  expect(
+    requireElement(host, '.chat-virtual-row[data-index="2"]').hasAttribute("data-prepared-row"),
+  ).toBe(false);
+});
+
 it.each([
   { name: "interior", offset: 100, height: 1600, resize: false, expected: 100 },
   { name: "clamped", offset: 1400, height: 1600, resize: true, expected: 1200 },
@@ -258,7 +333,9 @@ it.each([
   const slot = document.body.appendChild(document.createElement("div"));
   const viewport = slot.appendChild(document.createElement("div"));
   viewport.style.cssText = "width: 600px; height: 400px; overflow: auto; overflow-anchor: none";
-  const content = viewport.appendChild(document.createElement("div"));
+  const column = viewport.appendChild(document.createElement("div"));
+  column.className = "chat-thread-content";
+  const content = column.appendChild(document.createElement("div"));
   const changed = vi.fn();
   const layout = new TranscriptLayoutOwner(changed);
   layout.connect(viewport);
@@ -445,7 +522,7 @@ it.each([120, 360, 1200])(
   },
 );
 
-it("parks retained rows without layout and restores their resized geometry and nested scroll", async () => {
+it("parks retained rows at zero size and restores their resized geometry and nested scroll", async () => {
   const prose = "A retained paragraph wraps to the current conversation width. ".repeat(20);
   const source = [prose, "```text", "wide".repeat(160), "```"].join("\n\n");
   // Only split completed runs retain DOM. The ordinary tail crosses the
@@ -492,7 +569,7 @@ it("parks retained rows without layout and restores their resized geometry and n
   await settleLayout();
   // Other fixture rows have fixed heights. This row uses its real Markdown
   // height so the narrower pane must produce a new browser measurement.
-  row.style.height = "auto";
+  row.style.setProperty("--geometry-row-height", "auto");
   await settleLayout();
   const key = expectDefined(row.dataset.virtualRowKey, "retained row key");
   const code = requireElement(row, ".code-block-viewport");
@@ -523,9 +600,9 @@ it("parks retained rows without layout and restores their resized geometry and n
     await expect.poll(() => row.hasAttribute("data-prepared-row")).toBe(true);
     await settleLayout();
     expect(row.isConnected).toBe(true);
-    // Parked DOM must create no layout box, while its cached height still
+    // Parked DOM keeps a zero-height box, while its cached height still
     // contributes to the native scroll extent after the real zero-size receipt.
-    expect(row.getClientRects()).toHaveLength(0);
+    expect(row.getBoundingClientRect().height).toBe(0);
     expect(deliveredHeights).toContain(0);
     expect(virtualizer.itemSizeCache.get(key)).toBeCloseTo(height, 1);
     expect(Math.abs(viewport.scrollHeight - extent)).toBeLessThanOrEqual(1);
@@ -533,7 +610,7 @@ it("parks retained rows without layout and restores their resized geometry and n
     host.style.width = "480px";
     session.syncViewportGeometry();
     await settleLayout();
-    expect(row.getClientRects()).toHaveLength(0);
+    expect(row.getBoundingClientRect().height).toBe(0);
     expect(virtualizer.itemSizeCache.get(key)).toBeCloseTo(height, 1);
     expect(Math.abs(viewport.scrollHeight - extent)).toBeLessThanOrEqual(1);
 
@@ -642,7 +719,10 @@ it("commits uncompensated extents while coalescing reader row updates", async ()
   expect(viewport.scrollTop).toBe(480);
 });
 
-it("defers uncompensated measurement read-back until the next frame", async () => {
+it.each([
+  { name: "uncompensated measurement", offset: 600, rowHeight: 180 },
+  { name: "fast scroll measurement", offset: 1800, rowHeight: 120 },
+])("defers $name read-back until the next frame", async ({ offset, rowHeight }) => {
   const { host, session, viewport, virtualizer } = await mountPane(false, 120, undefined, 480);
   scrollReader(viewport, 480);
   const inner = requireElement(host, ".chat-thread-inner");
@@ -653,17 +733,17 @@ it("defers uncompensated measurement read-back until the next frame", async () =
   const frame = requestAnimationFrame(paint);
   try {
     // The compositor can advance before the next native scroll event arrives.
-    viewport.scrollTop = 600;
-    row.style.height = "180px";
+    viewport.scrollTop = offset;
+    row.style.height = `${rowHeight}px`;
     const entry: ResizeObserverEntry = {
       target: row,
-      borderBoxSize: [{ inlineSize: 800, blockSize: 180 }],
-      contentBoxSize: [{ inlineSize: 800, blockSize: 180 }],
+      borderBoxSize: [{ inlineSize: 800, blockSize: rowHeight }],
+      contentBoxSize: [{ inlineSize: 800, blockSize: rowHeight }],
       devicePixelContentBoxSize: [],
       contentRect: row.getBoundingClientRect(),
     };
     virtualizer.resizeItem(6, virtualizer.options.measureElement(row, entry, virtualizer));
-    expect(virtualizer.scrollOffset).toBe(600);
+    expect(virtualizer.scrollOffset).toBe(offset);
     expect(render).not.toHaveBeenCalled();
     await Promise.resolve();
     flush();
@@ -674,46 +754,14 @@ it("defers uncompensated measurement read-back until the next frame", async () =
     });
     flush();
     expect(render).toHaveBeenCalledOnce();
-    expect(Number.parseFloat(inner.style.height)).toBe(height + 60);
-    expect(viewport.scrollTop).toBe(600);
+    expect(Number.parseFloat(inner.style.height)).toBe(height + rowHeight - 120);
+    expect(viewport.scrollTop).toBe(offset);
     const bounds = viewport.getBoundingClientRect();
     const visible = [...host.querySelectorAll<HTMLElement>(".chat-virtual-row")]
       .map((element) => element.getBoundingClientRect())
       .filter((rect) => rect.bottom > bounds.top && rect.top < bounds.bottom);
     expect(Math.min(...visible.map((rect) => rect.top))).toBeLessThanOrEqual(bounds.top);
     expect(Math.max(...visible.map((rect) => rect.bottom))).toBeGreaterThanOrEqual(bounds.bottom);
-  } finally {
-    cancelAnimationFrame(frame);
-  }
-});
-
-it("renders new viewport rows before paint when a measurement reads a fast scroll", async () => {
-  const { host, session, viewport, virtualizer } = await mountPane();
-  scrollReader(viewport, 480);
-  const row = requireElement(host, '.chat-virtual-row[data-index="6"]');
-  const render = vi.spyOn(session["renderer"], "render");
-  const paint = vi.fn();
-  const frame = requestAnimationFrame(paint);
-  try {
-    viewport.scrollTop = 1800;
-    const entry: ResizeObserverEntry = {
-      target: row,
-      borderBoxSize: [{ inlineSize: 800, blockSize: 120 }],
-      contentBoxSize: [{ inlineSize: 800, blockSize: 120 }],
-      devicePixelContentBoxSize: [],
-      contentRect: row.getBoundingClientRect(),
-    };
-    virtualizer.resizeItem(6, virtualizer.options.measureElement(row, entry, virtualizer));
-    await Promise.resolve();
-    flush();
-    expect(render).toHaveBeenCalled();
-    const bounds = viewport.getBoundingClientRect();
-    const visible = [...host.querySelectorAll<HTMLElement>(".chat-virtual-row")]
-      .map((element) => element.getBoundingClientRect())
-      .filter((rect) => rect.bottom > bounds.top && rect.top < bounds.bottom);
-    expect(Math.min(...visible.map((rect) => rect.top))).toBeLessThanOrEqual(bounds.top);
-    expect(Math.max(...visible.map((rect) => rect.bottom))).toBeGreaterThanOrEqual(bounds.bottom);
-    expect(paint).not.toHaveBeenCalled();
   } finally {
     cancelAnimationFrame(frame);
   }
@@ -818,46 +866,45 @@ it("commits rows before paint when an uncompensated extent shrink clamps the rea
   }
 });
 
-it("commits reader compensation before paint after a deferred measurement", async () => {
+it("holds deferred reader compensation without interrupting native scrolling", async () => {
   const { host, viewport, virtualizer } = await mountPane();
   // The observer's receipt can arrive after this row leaves the mounted window.
-  requireElement(host, '.chat-virtual-row[data-index="2"]').style.height = "150px";
+  // Its physical height must survive a later overscan remount.
+  const style = document.createElement("style");
+  style.textContent =
+    '.geometry-transcript-fixture .chat-virtual-row[data-index="2"] { height: 150px; }';
+  host.append(style);
   scrollReader(viewport, 480);
   expect(virtualizer.isScrolling).toBe(true);
   expect(virtualizer.scrollDirection).toBe("forward");
+  // A delayed measurement can restore preceding overscan after the movement window.
+  const now = performance.now.bind(performance);
+  vi.spyOn(performance, "now").mockImplementation(() => now() + 110);
   const inner = requireElement(host, ".chat-thread-inner");
   const height = Number.parseFloat(inner.style.height);
-  const notification = vi.spyOn(virtualizer.options, "onChange");
   const paint = vi.fn();
   const frame = requestAnimationFrame(paint);
   try {
     requireElement(host, '.chat-virtual-row[data-index="6"]').style.height = "180px";
     virtualizer.resizeItem(6, 180);
     expect(Number.parseFloat(inner.style.height)).toBe(height + 60);
-    const compensated = new Promise<void>((resolve) => {
-      viewport.addEventListener("scroll", () => resolve(), { once: true });
-    });
+    const retained = requireElement(host, '.chat-virtual-row[data-index="5"]');
+    const top = retained.getBoundingClientRect().top;
     virtualizer.resizeItem(2, 150);
     flush();
     await Promise.resolve();
     flush();
 
-    expect(notification.mock.calls).toEqual([
-      [virtualizer, false],
-      [virtualizer, true],
-    ]);
-    expect(viewport.scrollTop).toBe(510);
-    expect(Number.parseFloat(inner.style.height)).toBe(height + 90);
+    expect(viewport.scrollTop).toBe(480);
+    expect(Number.parseFloat(inner.style.height)).toBe(height + 60);
     expect(paint).not.toHaveBeenCalled();
 
-    // The later native offset receipt must preserve the compensated geometry.
-    await compensated;
-    flush();
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
+    await settleLayout();
+    expect(retained.getBoundingClientRect().top).toBe(top);
+    await expect.poll(() => [virtualizer.isScrolling, viewport.scrollTop]).toEqual([false, 510]);
     flush();
     expect(viewport.scrollTop).toBe(510);
+    expect(retained.getBoundingClientRect().top).toBe(top);
     expect(Number.parseFloat(inner.style.height)).toBe(height + 90);
   } finally {
     cancelAnimationFrame(frame);

@@ -19,8 +19,9 @@ import {
   buildGatewayReloadPlan,
   listConfigReloadRefinementPrefixes,
 } from "./config-reload-plan.js";
-import { isCustomPluginUiEnabled } from "./control-ui-plugin-policy.js";
+import { controlUiPluginPolicyKey } from "./control-ui-plugin-policy.js";
 import { GATEWAY_EVENTS } from "./events.js";
+import { startOpenClawIdPeopleEvents } from "./openclaw-id/people-events.js";
 import {
   indexPluginNodeCapabilitySurfaces,
   reconcileClientPluginNodeCapabilities,
@@ -31,7 +32,6 @@ import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
 import { clearGatewayMaintenanceHandles } from "./server-maintenance-lifecycle.js";
 import { refreshConnectedNodeSurfaceCaches } from "./server-methods/nodes.read.js";
 import { assertGatewayRuntimeSecurityConfig } from "./server-runtime-config.js";
-import { logGatewayReady } from "./server-startup-readiness.js";
 import { startGatewayTlsRenewal } from "./server-tls-renewal.js";
 import type { GatewayHttpTransport } from "./server-transport-bridge.js";
 import { startWorkerHumanPresence } from "./server/client-human-presence.js";
@@ -386,11 +386,13 @@ export async function finishGatewayStartup(params: {
       ? []
       : await startupTrace.measure("runtime.worker-pool-metrics", collectGatewayWorkerPoolMetrics)),
   ]);
-  if (getReadiness().ready) {
+  const preparedReadiness = await getReadiness.prepare();
+  if (!lifecycle.closePreludeStarted && preparedReadiness.publish().ready) {
     startupTrace.mark("ready");
-    logGatewayReady(
-      { getReadiness, log },
-      opts.updateCanary ? "candidate gateway ready; autonomous sidecars suppressed" : undefined,
+    log.info(
+      opts.updateCanary
+        ? "candidate gateway ready; autonomous sidecars suppressed"
+        : "gateway ready",
     );
   }
   finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
@@ -400,6 +402,32 @@ export async function finishGatewayStartup(params: {
   }
   postAttachRuntimeReturned = true;
   activateScheduledServicesWhenReady();
+  registerGatewayLifetimeSidecars(
+    startOpenClawIdPeopleEvents({
+      clients,
+      service: runtime.openclawIdService,
+      broadcastToConnIds,
+      log,
+    }),
+  );
+  runtime.openclawIdService.bindEffects(async () => {
+    const [{ createOpenClawIdRemovalEffects }, { createOpenClawIdMemberActivity }] =
+      await Promise.all([
+        import("./openclaw-id/removal-effects.js"),
+        import("./openclaw-id/member-activity.js"),
+      ]);
+    return {
+      ...createOpenClawIdRemovalEffects({
+        clients: () => clients.authorityClients,
+        context: () => gatewayRequestContext,
+        log,
+      }),
+      describeActivity: createOpenClawIdMemberActivity({ clients: () => clients }).describe,
+    };
+  });
+  void runtime.openclawIdService
+    .reconcileRuntimePolicy()
+    .catch((error: unknown) => log.warn(`openclaw-id: start failed: ${String(error)}`));
 
   const { startManagedGatewayConfigReloader } = await import("./server-reload-managed.js");
   const assertRuntimeSecurityConfig = (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) => {
@@ -430,7 +458,7 @@ export async function finishGatewayStartup(params: {
   if (tlsRenewal) {
     registerGatewayLifetimeSidecars(tlsRenewal);
   }
-  let appliedCustomPluginUiEnabled = isCustomPluginUiEnabled(gatewayPluginConfigAtStart);
+  let appliedPluginUiPolicy = controlUiPluginPolicyKey(gatewayPluginConfigAtStart);
   const configReloaderParams: Parameters<typeof startManagedGatewayConfigReloader>[0] = {
     scheduler: runtime.scheduler,
     onReloadEnabledChange: tlsRenewal?.setEnabled,
@@ -544,17 +572,18 @@ export async function finishGatewayStartup(params: {
       }
       const reconciled = await Promise.allSettled([
         runtime.hostDesktopService.reconcileRuntimePolicy(),
+        runtime.openclawIdService.reconcileRuntimePolicy(),
         runtime.gatewayComputerService.reconcileRuntimePolicy(),
         workerEnvironmentService?.reconcileDesktopPolicy(),
         runtime.nodeDesktopService.reconcileRuntimePolicy(),
         runtimeState.discovery?.update({ mdnsMode: nextConfig.discovery?.mdns?.mode }),
         (async () => {
-          const customPluginUiEnabled = isCustomPluginUiEnabled(nextConfig);
-          if (customPluginUiEnabled !== appliedCustomPluginUiEnabled) {
+          const nextPluginUiPolicy = controlUiPluginPolicyKey(nextConfig);
+          if (nextPluginUiPolicy !== appliedPluginUiPolicy) {
             const { listControlUiPluginCatalog } = await import("./control-ui-plugin-assets.js");
             const catalog = await listControlUiPluginCatalog();
             broadcast("plugins.controlUi.changed", { revision: catalog.revision });
-            appliedCustomPluginUiEnabled = customPluginUiEnabled;
+            appliedPluginUiPolicy = nextPluginUiPolicy;
           }
         })(),
       ]);

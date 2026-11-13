@@ -33,7 +33,8 @@ import {
 import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { ChatPaneComposerHandoff } from "./chat-pane-attachment-handoff.ts";
-import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
+import { chatSessionPresentationKey, watchPresentation } from "./chat-pane-session-presentation.ts";
+import { initializeChatPaneSettings } from "./chat-pane-startup-subscriptions.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
@@ -94,7 +95,11 @@ import type { RunOutputUsage } from "./tool-stream-contract.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 
 type ChatPageElement = {
+  inlineCommandPresentation?: import("./chat-inline-command-presentation.ts").InlineCommandPresentation;
+  inlineCommandPreparationError?: string;
+  isCurrent?: () => boolean;
   sessionKey?: string;
+  agentId?: string;
   dispatchEvent: (event: Event) => boolean;
   getBoundingClientRect?: () => DOMRect;
   transcriptLoadingChanged?: () => void;
@@ -116,6 +121,7 @@ export function createPageState(
 ): ChatPageHost {
   const settings = loadSettings();
   const initialSessionKey = page.sessionKey?.trim() || settings.sessionKey;
+  const assistantAgentId = page.agentId || context.agentSelection.state.selectedId;
   const sidebarSessionKey = canonicalUiSessionKeyForPersistence(
     { agentsList: context.agents.state.agentsList, hello: context.gateway?.snapshot.hello },
     initialSessionKey,
@@ -125,15 +131,15 @@ export function createPageState(
   const assistantIdentity = cachedChatAssistantIdentity(
     {
       sessionKey: initialSessionKey,
-      assistantAgentId: context.agentSelection.state.selectedId,
+      assistantAgentId,
       agentsList: context.agents.state.agentsList,
       hello: context.gateway.snapshot.hello,
     },
     context,
   );
-  const errors = createChatErrorState();
   const presentedFields = {
     settings,
+    inlineCommandPresentation: page.inlineCommandPresentation,
     accessPreferenceRevision: 0,
     assistantName: assistantIdentity.name,
     assistantAvatar: assistantIdentity.avatar,
@@ -152,7 +158,7 @@ export function createPageState(
     terminalAvailable: false,
     browserPanelAvailable: false,
     browserPanelUnavailableReason: "disconnected",
-    assistantAgentId: context.agentSelection.state.selectedId,
+    assistantAgentId,
     sessionKey: initialSessionKey,
     currentSessionId: undefined,
     chatLoading: false,
@@ -197,7 +203,7 @@ export function createPageState(
     sidebarContent: null,
     imageLightbox: null,
   } satisfies Partial<ChatPageHost>;
-  const state = Object.assign(errors, presentedFields, {
+  const state = Object.assign(createChatErrorState(), presentedFields, {
     uploadConfig: context.config,
     outboxRecovery: {
       gateway: context.gateway,
@@ -209,6 +215,8 @@ export function createPageState(
       return () => retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...options });
     },
     sessions: context.sessions,
+    readChatAgentsList: () =>
+      context.agents.state.client === state.client ? context.agents.state.agentsList : null,
     hasPendingInitialTurn: (sessionKey: string) =>
       context.placementStartup.hasPendingTurn(sessionKey),
     chatSubmissions: context.chatSubmissions,
@@ -245,7 +253,7 @@ export function createPageState(
     sessionsResult: null,
     sessionsResultAgentId: null,
     sessionsArchivedFilter: "active",
-    agentsSelectedId: context.agentSelection.state.selectedId,
+    agentsSelectedId: assistantAgentId,
     refreshSessionsAfterChat: new Map<string, { sessionKey: string; agentId?: string }>(),
     pendingSessionMessageReloadSessionKey: null,
     chatSubmitGuards: new Set<string>(),
@@ -300,17 +308,7 @@ export function createPageState(
   state.handleChatScroll = (event) => handleChatScroll(state, event);
   state.handleChatDraftChange = (next, mentions) => handleChatDraftChange(state, next, mentions);
   state.handleChatInputHistoryKey = (input) => handleChatInputHistoryKey(state, input);
-  state.applySettings = (patch) => {
-    const next = { ...state.settings, ...patch };
-    state.settings = patchSettings({
-      chatShowThinking: next.chatShowThinking,
-      chatShowToolCalls: next.chatShowToolCalls,
-      chatPersistCommentary: next.chatPersistCommentary,
-      chatSendShortcut: next.chatSendShortcut,
-      chatBubbleSessionKeys: next.chatBubbleSessionKeys,
-      chatBubbleDisabledSessionKeys: next.chatBubbleDisabledSessionKeys,
-    });
-  };
+  initializeChatPaneSettings(state, page);
   attachChatRealtimeActions(
     state,
     () => !chatProviderReviewRow(state)?.providerReview,
@@ -633,7 +631,8 @@ export function createPageState(
   }
   {
     const source = chatRunPresentation(state);
-    const projection = projectOwner(source, (owner) => owner.values);
+    // Tool activity also publishes run receipts; it does not change the text row.
+    const projection = projectOwner(source, (owner) => owner.values.chatStream, Object.is);
     const nonText = projectSource(source, {
       read: (owner) => owner.values,
       subscribe: (owner, notify) => owner.subscribeNonText(notify),
@@ -680,7 +679,7 @@ export function createPageState(
         ),
       subscribe: (_owner, notify) => {
         onChange = notify;
-        const stop = context.sessions.subscribe(notify);
+        const stop = watchPresentation(context.sessions, notify);
         return () => {
           onChange = undefined;
           stop();

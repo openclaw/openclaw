@@ -1,9 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { assert, expect, it } from "vitest";
+import { assert, expect, it, onTestFinished } from "vitest";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import { projectModelServiceTiers } from "../gateway/server-methods/models-list-public-projection.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { evaluate, platformRoute } from "./model-auth-availability.test-support.js";
+import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { providerConfig, snapshot as makeSnapshot } from "./model-catalog-fixtures.test-support.js";
 import { createPreparedAccountCatalogAccess } from "./prepared-model-runtime.catalog-auth.js";
 
@@ -56,6 +59,68 @@ const apiTiers = (selected: ModelAuthAvailabilityEvaluation) =>
     runtimeId: "openclaw",
     snapshot: snapshot([]),
   });
+it("reads captured account observations without traversing provider inventories across scopes", () => {
+  onTestFinished(() => resetConfigRuntimeState());
+  let modelReads = 0;
+  const config = providerConfig("openai", {
+    ...platformRoute,
+    apiKey: "synthetic-key",
+    models: Array.from({ length: 100 }, (_, index) => {
+      const model = modelDefinition(`synthetic-${index}`);
+      return {
+        ...model,
+        get name() {
+          modelReads++;
+          return model.name;
+        },
+      };
+    }),
+  });
+  setRuntimeConfigSnapshot(config, structuredClone(config));
+  const retirement = new AbortController();
+  onTestFinished(() => retirement.abort());
+  const scopes = ["priority", "default"].map((responseTier) => {
+    const owner = createPreparedAccountCatalogAccess(
+      () => true,
+      retirement.signal,
+      captureRuntimeConfig(config),
+    );
+    const selectedCredential = {
+      source: "direct",
+      provider: "openai",
+      identityKey: "direct:openai",
+    } as const;
+    const observation = {
+      modelId: "synthetic-0",
+      runtimeId: "openclaw",
+      ...platformRoute,
+      requestedTier: "ultrafast",
+      responseTier,
+    };
+    expect(owner.prepareServiceTierObserver({ selectedCredential })(observation)).toBe(true);
+    return { owner, observation, identityKey: selectedCredential.identityKey };
+  });
+  modelReads = 0;
+  for (const index of [0, 1, 0]) {
+    const scope = scopes[index]!;
+    expect(
+      scope.owner.readServiceTierObservations({
+        ...scope.observation,
+        identityKey: scope.identityKey,
+      }),
+    ).toEqual([{ requestedTier: "ultrafast", responseTier: scope.observation.responseTier }]);
+  }
+  expect(modelReads).toBe(0);
+  retirement.abort();
+  for (const scope of scopes) {
+    expect(
+      scope.owner.readServiceTierObservations({
+        ...scope.observation,
+        identityKey: scope.identityKey,
+      }),
+    ).toEqual([]);
+  }
+});
 it.each(["synthetic-provider-key", undefined])(
   "offers embedded API-key tiers for provider config %j without a profile",
   (apiKey) => {

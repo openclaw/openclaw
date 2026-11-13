@@ -321,7 +321,7 @@ function bindPersonPolicyRevocation(
   };
 }
 
-export function revokeAfterNextPrincipalRestore(revoke: () => void | Promise<void>) {
+function revokeAfterNextPrincipalRestore(revoke: () => void | Promise<void>) {
   const restore = cronSourceRuntime.restoreCronOperatorSource;
   vi.spyOn(cronSourceRuntime, "restoreCronOperatorSource").mockImplementationOnce(
     async (params) => {
@@ -379,6 +379,7 @@ function principalIngressFactory(
     assertCurrent: () => signal.throwIfAborted(),
     host: {
       signal,
+      admissionSignal: signal,
       controlUiBasePath: "",
       getRuntimeConfig: getConfig,
       getResolvedAuth: () => resolveGatewayAuthForConfig({ config: getConfig(), env: {} }),

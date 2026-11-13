@@ -12,9 +12,14 @@ vi.mock("../../lib/toast.ts", async (importOriginal) => ({
 function menuProps() {
   return {
     agentId: "alpha",
+    canCreateAgent: true,
+    canSetDefault: true,
+    canDeleteAgent: true,
     defaultLabel: "Set default",
     defaultDisabled: false,
     pinLabel: "Pin",
+    deleteDisabled: false,
+    onDelete: vi.fn(),
     showPhoneActions: false,
     createLabel: "New agent",
     createDisabled: false,
@@ -53,6 +58,39 @@ it("copies the agent ID from the page menu and confirms with a toast", async () 
   }
 });
 
+it.each([false, true, "denied"] as const)(
+  "handles selected agent deletion from the page menu (%s)",
+  async (mode) => {
+    const props = {
+      ...menuProps(),
+      showPhoneActions: mode === true,
+      deleteDisabled: mode === "denied",
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    const view = mountSolid(AgentsPageMenu, props, container);
+    try {
+      await vi.waitFor(() =>
+        expect(
+          openItems(container).some((item) => item.textContent?.trim() === t("common.delete")),
+        ).toBe(true),
+      );
+      const deletion = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+        (item) => item.textContent?.trim() === t("common.delete"),
+      );
+      expect(deletion).toBeDefined();
+      deletion!.click();
+      if (mode === "denied") {
+        expect(props.onDelete).not.toHaveBeenCalled();
+      } else {
+        await vi.waitFor(() => expect(props.onDelete).toHaveBeenCalledWith("alpha"));
+      }
+    } finally {
+      view.dispose();
+      container.remove();
+    }
+  },
+);
+
 it("leads with New agent and adds Refresh on the phone", async () => {
   const onCreate = vi.fn();
   const container = document.body.appendChild(document.createElement("div"));
@@ -75,27 +113,27 @@ it("leads with New agent and adds Refresh on the phone", async () => {
   }
 });
 
-it("keeps the recovery reason on a denied New agent", async () => {
-  const onCreate = vi.fn();
+it("hides unavailable management actions while retaining personal actions and refresh", async () => {
   const container = document.body.appendChild(document.createElement("div"));
   const view = mountSolid(
     AgentsPageMenu,
     {
       ...menuProps(),
       showPhoneActions: true,
-      createDisabled: true,
-      createDisabledReason: "Reconnect with operator.admin",
-      onCreate,
+      canCreateAgent: false,
+      canSetDefault: false,
+      canDeleteAgent: false,
     },
     container,
   );
   try {
-    await vi.waitFor(() => {
-      const first = openItems(container)[0];
-      expect(first?.textContent).toContain("Reconnect with operator.admin");
-    });
-    document.querySelector<HTMLElement>('[role="menuitem"]')!.click();
-    expect(onCreate).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(openItems(container).map((item) => item.textContent?.trim())).toEqual([
+        t("agents.copyId"),
+        "Pin",
+        "Refresh",
+      ]),
+    );
   } finally {
     view.dispose();
     container.remove();

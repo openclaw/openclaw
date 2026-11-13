@@ -386,6 +386,55 @@ export async function insertBrowserText(
   }
 }
 
+export type BrowserOperatorInput =
+  | { kind: "press"; key: string }
+  | { kind: "insertText"; text: string }
+  | { kind: "clickCoords"; x: number; y: number };
+
+/** Existing-session profiles have no operator input route; the panel acts per input there. */
+export function isBrowserOperatorInputUnsupportedError(error: unknown): boolean {
+  return (
+    error instanceof GatewayRequestError &&
+    asRecord(error.details)?.code === "OPERATOR_INPUT_UNSUPPORTED"
+  );
+}
+
+// Transport errors can echo request bodies containing pasted passwords.
+function redactOperatorInputError(error: unknown, inputs: BrowserOperatorInput[]): unknown {
+  return isBrowserOperatorInputUnsupportedError(error) ||
+    !inputs.some((input) => input.kind === "insertText")
+    ? error
+    : new Error(t("browser.errors.pasteFailed"));
+}
+
+/** Send one ordered burst of operator input; reports whether a navigation withheld the rest. */
+export async function sendBrowserOperatorInput(
+  client: BrowserRequestClient,
+  params: { targetId: string; inputs: BrowserOperatorInput[] },
+): Promise<{ sent: number; navigated: boolean; blockedByDialog: boolean }> {
+  const result = asRecord(
+    await browserRequest(client, {
+      method: "POST",
+      path: "/operator/input",
+      body: {
+        targetId: params.targetId,
+        inputs: params.inputs.map((input) =>
+          input.kind === "clickCoords"
+            ? { ...input, x: Math.max(0, Math.round(input.x)), y: Math.max(0, Math.round(input.y)) }
+            : input,
+        ),
+      },
+    }).catch((error: unknown) => {
+      throw redactOperatorInputError(error, params.inputs);
+    }),
+  );
+  return {
+    sent: typeof result?.sent === "number" ? result.sent : 0,
+    navigated: result?.navigated === true,
+    blockedByDialog: result?.blockedByDialog === true,
+  };
+}
+
 export async function resizeBrowserViewport(
   client: BrowserRequestClient,
   params: { targetId: string; width: number; height: number },

@@ -1,2 +1,0 @@
-# Complete both checkpoint fixtures with explicit refusal of unintended retained wake.
-6

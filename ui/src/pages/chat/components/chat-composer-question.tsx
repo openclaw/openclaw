@@ -1,4 +1,5 @@
 import { createEffect, createMemo, Show } from "solid-js";
+import { focusComposerInput } from "../../../lib/composer-input.ts";
 import type { ComposerQuestions } from "./chat-composer-questions.ts";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import type { QuestionPanelProps } from "./chat-question-card.ts";
@@ -52,7 +53,7 @@ export function createComposerQuestionPanel(
       // A derived disclosure can mount the input before this effect applies.
       if (!active && state.restoreComposerFocus && state.composerTextarea?.isConnected) {
         state.restoreComposerFocus = false;
-        state.composerTextarea.focus({ preventScroll: true });
+        focusComposerInput(state.composerTextarea, { preventScroll: true });
       }
     },
   );
@@ -86,7 +87,7 @@ export function createComposerQuestionPanel(
           queueMicrotask(() => {
             if (state.restoreComposerFocus && state.composerTextarea?.isConnected) {
               state.restoreComposerFocus = false;
-              state.composerTextarea.focus({ preventScroll: true });
+              focusComposerInput(state.composerTextarea, { preventScroll: true });
             }
           });
         }

@@ -171,7 +171,11 @@ Providers that capture reusable project images can declare `supportsProjectPrepa
 
 The optional `project.label` is display metadata and does not affect the project key. Local snapshots preserve the normalized `host/owner/repo` from their `origin` remote, or the project root basename when no repository label can be resolved; this label is preserved on replay. Repository projects derive the same normalized label from their admitted normalized URL when core passes the project to the provider.
 
-Providers that can retain completed setup on dedicated nodes also implement `resolvePreparationTarget(profile, machineClass?, os?)`, returning the effective machine class and platform, plus architecture when known. Providers can also return `profileKey`, a SHA-256 digest of their resolved disk and boot settings, excluding runtime artifacts and lease policy. Core uses that fingerprint for snapshot compatibility; providers that omit it retain conservative settings-based compatibility. Core combines the target facts with the project identity, setup recipe, workspace protocol, and preparation contract version. The separate ready-worker key also binds the exact commit, profile, and current runtime artifacts before allocation. When `options.project.preparation` is present, call `prepare` with `runScriptWithBudget(createScript, signal)` as well as the existing transport methods; pass the command's remaining millisecond budget to the renderer before running repository code. Honor a returned `captureRequired: true` even when an older image has the same commit and runtime, while preserving the selected image generation's capture authority. The node lease returned by `provision` must include `sharedHost: false` to attest dedicated ownership; `true` or an omitted field is rejected before prepared-workspace registration. Core preserves the supplied boolean through lease validation. Core registers the returned workspace and manifest identities after enrollment, then binds them once to the exact session. On an already enrolled provision retry, call `project.inspectPreparedWorkspace({ runScript })` to recover the existing completion facts without transferring, executing setup, or capturing. Missing or changed completion fails visibly; it cannot become a new pristine baseline.
+Providers that can retain completed setup on dedicated nodes also implement `resolvePreparationTarget(profile, machineClass?, os?)`, returning the effective machine class and platform, plus architecture when known. Providers can also return `profileKey`, a SHA-256 digest of their resolved disk and boot settings, excluding runtime artifacts and lease policy. Core uses that fingerprint for snapshot compatibility; providers that omit it retain conservative settings-based compatibility. Core combines the target facts with the project identity, setup recipe, workspace protocol, and preparation contract version. The separate ready-worker key also binds the profile and current runtime artifacts before allocation; an unbound checkout can be refreshed to a different commit. When `options.project.preparation` is present, call `prepare` with `runScriptWithBudget(createScript, signal)` as well as the existing transport methods; pass the command's remaining millisecond budget to the renderer before running repository code. Honor a returned `captureRequired: true` even when an older image has the same commit and runtime, while preserving the selected image generation's capture authority. The node lease returned by `provision` must include `sharedHost: false` to attest dedicated ownership; `true` or an omitted field is rejected before prepared-workspace registration. Core preserves the supplied boolean through lease validation. Core registers the returned workspace and manifest identities after enrollment, then binds them once to the exact session. On an already enrolled provision retry, call `project.inspectPreparedWorkspace({ runScript })` to recover the existing completion facts without transferring, executing setup, or capturing. Missing or changed completion fails visibly; it cannot become a new pristine baseline.
+
+Providers can implement `refreshPreparedProject({ leaseId, profile }, project)` to reuse an enrolled, available ready worker whose prepared commit differs from the requested commit. The `project` argument has the same contract as `options.project`: call its `prepare` callback through the existing transport and honor `signal` and live `assertCurrent()` checks before effects and after awaits. Do not allocate, capture a snapshot, or enroll again. Core matches the repository, setup recipe, profile, and runtime, rechecks repository access, and prefers an exact-commit reserve. After refresh, core publishes the new manifests through the node's prepared-workspace owner, which accepts replacement only while the workspace is available and unbound. Refresh failures retire the reserve and fall back to ordinary provisioning; cancellation and lost authority still abort. Providers without this operation retain exact-commit adoption.
+
+Refresh uses the existing project content-update rules: detected dependency installation and explicit setup scripts rerun when content changes; devcontainer `updateContent` reruns while `onCreate` outputs remain retained. A failed detected install remains best effort, just as for snapshot forks; declared setup failures reject refresh. A provider must not turn a returned `captureRequired` into snapshot capture during this operation, or treat `captureSkipped` as a new fatal error.
 
 Core supplies `options.nodeRuntimeIdentity` as a grant-free prepared fact: the node archive SHA-256, execution mode, and worker archive SHA-256 when project preparation retains that archive. Compare this identity when deciding whether captured runtime content is current; a version string is insufficient. Core checks the later runtime and enrollment descriptors against these prepared bytes and closes their grants if the identity changes.
 
@@ -331,9 +335,10 @@ route. An explicit `@profile` selection is locked; it cannot fall through to
 another account. Credentials resolve for the selected agent/profile during preparation;
 provider status makes no global V2 credential-readiness claim.
 V2 providers receive private prepared model/auth facts and a
-required `isAdmissible()` predicate. Check it immediately before physical I/O,
-including after DNS or a worker queue wait. False closes the request; do not
-swallow an authority assertion to continue inference.
+required `isAdmissible()` predicate. Check it one time, when the provider starts
+the request, and again after a worker queue wait or before a retry. False closes
+the request. A request that passed the check may finish; revocation, deselection
+and reload apply to the next request.
 
 The host retains the request until physical provider cleanup settles, even when
 cancellation or plugin reload has already revoked dispatch authority. It validates
@@ -393,9 +398,9 @@ For HTTP adapters, retain complete prepared request metadata when checking
 responses for reflected credentials. The existing
 `createProviderCredentialMatcher` helper from `openclaw/plugin-sdk/provider-http`
 can account for replacement-auth headers and prefixes, plus configured header
-names. Structural result validation cannot detect leaked credentials. Preserve
-live admission checks after DNS or queue waits, and await response/transport
-release before settling the operation.
+names. Structural result validation cannot detect leaked credentials. Check
+admission when the request starts and after a queue wait. Await
+response/transport release before settling the operation.
 
 ## Decision models (contract version 1)
 
@@ -410,7 +415,10 @@ IDs are rejected. Registration and optional `isReady()` must be local, synchrono
 and network-free. Import types from `openclaw/plugin-sdk/decisions`.
 
 Consumers call `api.runtime.decisions.evaluate(batch, { agentId?, purpose, priority?, rubricVersion,
-timeoutMs, signal })`. State and rubric entries are finite JSON. Use plain objects
+timeoutMs, signal, assertCurrent? })`. Pass `assertCurrent` when the batch carries
+data under a revocable grant: the host calls it before preparation, at every
+physical dispatch and retry, and before completion, and a throw rejects the call
+so nothing more is sent. State and rubric entries are finite JSON. Use plain objects
 and arrays; custom prototypes, serialization hooks, and getters are rejected on
 both request and response boundaries. Choices preserve
 all offered labels and probabilities; the chosen label is the provider's decision
@@ -515,13 +523,13 @@ stops future evaluations, not already-dispatched work or use of its result. The
 host supplies `context.isAdmissible()` for ongoing consumer authority, model
 selection, and provider configuration/credential generation checks; the Labs
 toggle is not part of those ongoing checks. Providers performing external I/O
-must call it synchronously immediately before sending,
-after any lazy loading, DNS, or other awaited preparation. A false result closes
+call it when the request starts, and again after a queue wait or before a retry.
+A request that passed the check may finish. A false result closes
 that evaluation; a thrown authority assertion is terminal. The host remembers
 either observation across provider cleanup, so revocation cannot become a provider
 health failure or a later successful result. Omission preserves explicit
 `decision_evaluate` calls and older-host compatibility; it is not a Labs check for
-explicit calls. TypeSafe uses its guarded transport’s final `beforeRequest` hook.
+explicit calls. The shared Decision HTTP executor makes this check for each request.
 The host still checks before provider dispatch and before returning results, but
 cannot prevent I/O in third-party providers that ignore this callback. Local ONNX
 inference retains its existing signal-controlled worker lifecycle; it does not

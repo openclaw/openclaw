@@ -29,8 +29,9 @@ import * as registry from "./registry.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { resolveRepository, resolveRepositoryPaths } from "./repository-paths.js";
+import { IDLE_GC_MS } from "./retention.js";
 import { withWorktreeSources } from "./service-preparation.js";
-import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
+import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);

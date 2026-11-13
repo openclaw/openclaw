@@ -10,6 +10,7 @@ import {
   createAdmittedRunOperatorAuthority,
   bindOperatorModelExecution,
   prepareSystemAgentRunAdmission,
+  type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import type { PreparedNativeSessionRuntime } from "../embedded-agent-runner/run/model-setup.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
@@ -22,6 +23,7 @@ import type { AgentHarness } from "./types.js";
 type ModelPolicy = ReturnType<typeof prepareOperatorModelPolicy>;
 type HarnessMode = "fresh" | "host" | "native";
 type AccessGrants = Array<"daybreak_blue" | "daybreak_red">;
+type RolePolicy = NonNullable<AdmittedRunOperatorAuthority["rolePolicy"]>;
 
 const cfg = { agents: { defaults: { model: "fixture/a" } } };
 const permittedModel = { provider: "fixture", model: "a" };
@@ -33,23 +35,26 @@ const result = makeEmbeddedRunnerAttempt({
   assistantTexts: ["done"],
 });
 
+function accessRole(cyber?: AccessGrants): RolePolicy {
+  return {
+    sessionAccessCap: "none",
+    sandboxRequired: false,
+    agents: "*",
+    ...(cyber ? { accessPrograms: { cyber } } : {}),
+  };
+}
+
 function createAuthority(
   modelPolicy: ModelPolicy | undefined,
   signal?: AbortSignal,
-  grants?: AccessGrants,
+  rolePolicy?: RolePolicy,
+  scopes = ["operator.write"],
 ) {
   const state = { modelPolicy, holds: 0, listeners: new Set<() => void>() };
   const source = createAdmittedRunOperatorAuthority({
     profileId: "model-policy-fixture",
-    scopes: ["operator.write"],
-    rolePolicy: grants
-      ? {
-          sessionAccessCap: "none",
-          sandboxRequired: false,
-          agents: "*",
-          accessPrograms: { cyber: grants },
-        }
-      : undefined,
+    scopes,
+    rolePolicy,
     signal,
     assertCurrent() {},
     get modelPolicy() {
@@ -84,9 +89,10 @@ async function createHarness(
   mode: HarnessMode,
   restricted: boolean,
   exact: boolean,
-  grants?: AccessGrants,
+  rolePolicy?: RolePolicy,
+  scopes?: string[],
 ) {
-  const authority = createAuthority(restricted ? policy : undefined, undefined, grants);
+  const authority = createAuthority(restricted ? policy : undefined, undefined, rolePolicy, scopes);
   const { source, state } = authority;
   const admission = prepareSystemAgentRunAdmission(
     cfg,
@@ -150,22 +156,35 @@ async function createHarness(
 }
 
 it("rejects saved forbidden Access before invoking a native harness", async () => {
-  const { execute, attempt, runAttempt } = await createHarness("native", false, true, []);
+  const { execute, attempt, runAttempt } = await createHarness(
+    "native",
+    false,
+    true,
+    accessRole([]),
+  );
   attempt.cyberAccessProgram = "daybreak_blue";
   await expect(execute()).rejects.toThrow("operator role cannot use this Access level");
   expect(runAttempt).not.toHaveBeenCalled();
 });
 
-it.each([false, true])(
-  "requires native enforcement for Access-only roles (exact=%s)",
-  async (exact) => {
-    const { execute, finalize, runAttempt, finalizeSettledTurn } = await createHarness(
+it.each<{ exact: boolean; scope: string; grants: AccessGrants | undefined; required: boolean }>([
+  { exact: false, scope: "operator.write", grants: [], required: true },
+  { exact: true, scope: "operator.write", grants: [], required: true },
+  { exact: false, scope: "operator.admin", grants: undefined, required: false },
+])(
+  "checks native enforcement for $scope with ceiling $grants (exact=$exact)",
+  async ({ exact, scope, grants, required }) => {
+    const { execute, finalize, runAttempt, finalizeSettledTurn, attempt } = await createHarness(
       "native",
       false,
       exact,
-      [],
+      accessRole(grants),
+      [scope],
     );
-    if (exact) {
+    if (!required) {
+      attempt.cyberAccessProgram = "daybreak_blue";
+    }
+    if (exact || !required) {
       expect((await execute()).assistantTexts).toEqual(["done"]);
       expect(runAttempt).toHaveBeenCalledOnce();
     } else {
@@ -183,7 +202,7 @@ it.each<{ grants: AccessGrants; required: boolean }>([
   { grants: ["daybreak_red"], required: true },
   { grants: ["daybreak_blue", "daybreak_red"], required: false },
 ])("retains Access-only dispatch enforcement for $grants", async ({ grants, required }) => {
-  const { source, update, state } = createAuthority(undefined, undefined, grants);
+  const { source, update, state } = createAuthority(undefined, undefined, accessRole(grants));
   const admission = prepareSystemAgentRunAdmission(
     cfg,
     "access-only",
@@ -234,7 +253,7 @@ it("keeps explicit Access independent of alias changes and revokes it with the s
     policy: { allow: ["fixture/a", "openai/gpt-daybreak-blue-latest"] },
   });
   const controller = new AbortController();
-  const authority = createAuthority(initial, controller.signal, ["daybreak_blue"]);
+  const authority = createAuthority(initial, controller.signal, accessRole(["daybreak_blue"]));
   const blue = bindOperatorModelExecution(authority.source, {
     ...permittedModel,
     cyberAccessProgram: "daybreak_blue",

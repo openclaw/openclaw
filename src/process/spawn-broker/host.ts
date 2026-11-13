@@ -7,7 +7,7 @@ import { serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
   assertChildRuntimeAvailable,
-  classifyChildRuntimeFailure,
+  prepareChildRuntimeFailure,
 } from "../../infra/child-runtime-viability.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { registerProcessExitCleanup } from "../../infra/process-exit-cleanup.js";
@@ -19,18 +19,31 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
+import { getSpawnBrokerAdmission } from "./admission.js";
 import { waitForBrokerChildCompletion } from "./child-completion.js";
-import { observeBrokerChildDiagnostics } from "./child-diagnostics.js";
+import {
+  createBrokerFailureError,
+  observeBrokerChildDiagnostics,
+  prepareBrokerFailureCause,
+} from "./child-diagnostics.js";
 import { terminateBrokerProcessGroup, terminateLostBrokerChild } from "./cleanup.js";
 import {
   createBrokerCommands,
   createBrokerCommandRequest,
+  receiveBrokerCommandResponse,
   type BrokerCommandRequest as Request,
 } from "./commands.js";
 import { BrokerFileReads } from "./file-reads.js";
-import { createBrokerReceiver, createBrokerSender } from "./ipc.js";
-import { holdPipe, restoreStdinPipe } from "./pipe.js";
-import { SpawnBrokerError, type BrokerRequest, type BrokerResponse } from "./protocol.js";
+import { BrokerIpcAdmissionError, createBrokerReceiver, createBrokerSender } from "./ipc.js";
+import {
+  childCapacityError,
+  type BrokerAdmission,
+  MAX_NATIVE_RESOURCES,
+  MAX_PENDING_SPAWNS,
+  SpawnBrokerError,
+  type BrokerRequest,
+  type BrokerResponse,
+} from "./protocol.js";
 import { createNativeResourceAuthority } from "./resource-authority.js";
 import {
   BrokerResourceClaims,
@@ -48,7 +61,6 @@ import {
 
 export type { BrokerNativeResourceLease } from "./resource-host.js";
 
-const MAX_REQUESTS = 256;
 const RESTART_DELAYS = [100, 250, 500, 1000, 2000];
 const MAX_BOOTSTRAP_BYTES = 1024;
 
@@ -69,13 +81,15 @@ export class SpawnBrokerHost {
   private consecutiveFailures = 0;
   private sequence = 0;
   private requests = new Map<number, Request>();
+  private readonly childAdmissions = new Map<number, BrokerAdmission>();
+  private readonly pendingSpawns = new Set<number>();
   private readonly fileReads = new BrokerFileReads({
     ready: () => this.ready(),
     send: (message) => this.transmit(message),
     canAdmit: () =>
       !this.resourceClaims &&
       !this.closing &&
-      this.requests.size + this.fileReads.size < MAX_REQUESTS,
+      this.pendingSpawns.size + this.fileReads.size < MAX_PENDING_SPAWNS,
   });
   private readonly cleanups = new Set<ReturnType<typeof terminateLostBrokerChild>>();
   private readonly cleanupErrors: Error[] = [];
@@ -160,7 +174,7 @@ export class SpawnBrokerHost {
       !this.resourceClaims ||
       !this.resourceAuthority ||
       this.closing ||
-      this.requests.size + this.resourceClaims.size >= MAX_REQUESTS
+      this.resourceClaims.size >= MAX_NATIVE_RESOURCES
     ) {
       throw new SpawnBrokerError("Native resource broker is unavailable or at capacity");
     }
@@ -225,11 +239,14 @@ export class SpawnBrokerHost {
     message: Extract<BrokerRequest, { type: "spawn" | "prepare-spawn" | "spawn-execa" }>,
     initiateSpawn?: SpawnInitiation,
   ): Request {
+    message.admission = getSpawnBrokerAdmission();
+    const capacityError = childCapacityError(this.childAdmissions.values(), message.admission);
     const request = createBrokerCommandRequest(message, initiateSpawn, (value, handle, initiate) =>
       this.transmit(value, handle, initiate),
     );
     const { child, result, output } = request;
     const fail = (error: Error) => {
+      request.resultSettled = true;
       result?.reject(error);
       output?.reject(error);
       child.settleFileOutput();
@@ -238,33 +255,44 @@ export class SpawnBrokerHost {
     if (
       !this.available ||
       this.closing ||
-      this.requests.size + this.fileReads.size + (this.resourceClaims?.size ?? 0) >= MAX_REQUESTS
+      this.pendingSpawns.size + this.fileReads.size >= MAX_PENDING_SPAWNS ||
+      capacityError
     ) {
       child.markNotStarted();
-      queueMicrotask(() => fail(new SpawnBrokerError("Spawn broker is unavailable")));
+      queueMicrotask(() =>
+        fail(
+          new SpawnBrokerError(
+            this.available && !this.closing
+              ? (capacityError ?? "Spawn broker startup capacity exceeded")
+              : "Spawn broker is unavailable",
+          ),
+        ),
+      );
       return request;
     }
+    this.childAdmissions.set(message.id, message.admission);
     this.requests.set(message.id, request);
+    this.pendingSpawns.add(message.id);
     this.refreshNativeReference();
     void child.waitForClose().then(() => {
       request.childClosed = true;
       this.retire(message.id, request);
     });
     void this.transmit(message).catch((error: unknown) => {
-      if (request.output) {
+      this.pendingSpawns.delete(message.id);
+      if (error instanceof BrokerIpcAdmissionError) {
+        child.markNotStarted();
+      } else if (request.output) {
         // Delivery may have opened the destination. Transport retirement joins its writer.
         if (this.process?.connected) {
           this.process.disconnect();
         }
         return;
       }
-      if (!request.nativeInitiated) {
-        if (message.type === "prepare-spawn") {
-          child.markNotStarted();
-        }
-        this.requests.delete(message.id);
-        this.refreshNativeReference();
+      if (!request.nativeInitiated && message.type === "prepare-spawn") {
+        child.markNotStarted();
       }
+      // Delivery failure is not proof that an ordinary launch never reached its peer.
       fail(new SpawnBrokerError("Spawn broker request delivery failed", { cause: error }));
     });
     return request;
@@ -272,15 +300,25 @@ export class SpawnBrokerHost {
 
   private retire(id: number, request: Request): void {
     if (request.childClosed && request.resultSettled && !request.nativeInitiated) {
+      if (request.child.notStarted || (!request.recovering && request.nativeClosed)) {
+        this.childAdmissions.delete(id);
+      } else if (!request.recovering || request.pid === undefined) {
+        return;
+      }
       this.requests.delete(id);
       this.refreshNativeReference();
     }
   }
 
-  private retainCleanup(cleanup: ReturnType<typeof terminateLostBrokerChild>): void {
+  private retainCleanup(cleanup: ReturnType<typeof terminateLostBrokerChild>, id?: number): void {
     this.cleanups.add(cleanup);
     void cleanup.settled.then(
-      () => this.cleanups.delete(cleanup),
+      () => {
+        this.cleanups.delete(cleanup);
+        if (id !== undefined) {
+          this.childAdmissions.delete(id);
+        }
+      },
       (failure: unknown) => {
         this.cleanupErrors.push(toErrorObject(failure, "Spawn broker cleanup failed"));
         this.cleanups.delete(cleanup);
@@ -328,14 +366,24 @@ export class SpawnBrokerHost {
     this.process = child;
     const exitError = observeBrokerChildDiagnostics(child);
     let closingAtFailure = false;
-    // A crash can disconnect IPC before close() joins the later native exit.
-    const brokerCompletion = (this.brokerClosed = waitForBrokerChildCompletion(child).then(() => {
+    const nativeCompletion = waitForBrokerChildCompletion(child);
+    let terminalDiagnosis: Promise<Error> | undefined;
+    const prepareTerminalDiagnosis = () =>
+      (terminalDiagnosis ??= ready ? exitError() : nativeCompletion.then(exitError));
+    let failure: Promise<void> | undefined;
+    // Native settlement stays independent of diagnosis; close joins both owners.
+    this.brokerClosed = nativeCompletion.then(async () => {
+      await failure;
       if (closingAtFailure && child.pid && (child.exitCode !== 0 || child.signalCode !== null)) {
         this.cleanupErrors.push(
-          new SpawnBrokerError("Spawn broker shutdown failed", { cause: exitError() }),
+          new SpawnBrokerError("Spawn broker shutdown failed", {
+            cause: await prepareTerminalDiagnosis().catch((error: unknown) =>
+              toErrorObject(error, "Spawn broker exit diagnosis failed"),
+            ),
+          }),
         );
       }
-    }));
+    });
     const receiver = createBrokerReceiver();
     const brokerExited = createDeferredCore();
     let ended = false;
@@ -351,12 +399,10 @@ export class SpawnBrokerHost {
       ? undefined
       : setTimeout(checkStartup, SPAWN_BROKER_STARTUP_TIMEOUT_MS);
     this.serviceStartup = checkStartup;
-    const fail = (nativeCause?: Error) => {
+    const fail = (nativeCause?: Error, exited = false) => {
       if (ended) {
         return;
       }
-      const cause =
-        classifyChildRuntimeFailure({ error: nativeCause, started: ready }) ?? nativeCause;
       closingAtFailure = this.closing;
       ended = true;
       clearTimeout(startupTimer);
@@ -370,46 +416,43 @@ export class SpawnBrokerHost {
       if (child.connected) {
         child.disconnect();
       }
-      const error = new SpawnBrokerError(
-        cause && hasErrnoCode(cause, "NODE_RUNTIME_UNAVAILABLE")
-          ? cause.message
-          : this.hasBeenReady
-            ? "Spawn broker exited; command outcome is unavailable"
-            : `Spawn broker failed before readiness: ${cause?.message ?? "channel lost"}`,
-        { cause },
-      );
       const previousReadiness = this.readiness;
       this.readiness = createDeferredCore();
       void this.readiness.promise.catch(() => {});
-      previousReadiness.reject(error);
-      this.fileReads.fail(error);
+      const requests = this.requests;
+      this.requests = new Map();
+      this.pendingSpawns.clear();
       const outputRequests: Request[] = [];
-      for (const request of this.requests.values()) {
-        if (request.pid && !request.childClosed) {
+      for (const [id, request] of requests) {
+        request.recovering = true;
+        if (request.pid && !request.nativeClosed) {
           const pid = request.pid;
           if (this.closing) {
             let cleanup: ReturnType<typeof terminateLostBrokerChild> | undefined;
-            this.retainCleanup({
-              force: () => cleanup?.force(),
-              settled: brokerExited.promise.then(async () => {
-                if (child.exitCode === 0 && child.signalCode === null) {
-                  return;
-                }
-                cleanup = terminateLostBrokerChild(pid, request.detached);
-                await cleanup.settled;
-              }),
-            });
+            this.retainCleanup(
+              {
+                force: () => cleanup?.force(),
+                settled: brokerExited.promise.then(async () => {
+                  if (child.exitCode === 0 && child.signalCode === null) {
+                    return;
+                  }
+                  cleanup = terminateLostBrokerChild(pid, request.detached);
+                  await cleanup.settled;
+                }),
+              },
+              id,
+            );
           } else {
-            this.retainCleanup(terminateLostBrokerChild(pid, request.detached));
+            this.retainCleanup(terminateLostBrokerChild(pid, request.detached), id);
           }
+        } else if (request.child.notStarted || request.nativeClosed) {
+          this.childAdmissions.delete(id);
         }
-        request.result?.reject(error);
+        // Unknown detached launches retain their reservation across broker restarts.
         if (request.output) {
           outputRequests.push(request);
         }
-        request.child.fail(error);
       }
-      this.requests.clear();
       this.refreshNativeReference();
       if (child.pid && process.platform !== "win32") {
         const pgid = child.pid;
@@ -424,35 +467,47 @@ export class SpawnBrokerHost {
           }),
         });
       }
-      // A failed transport is not a writer-close receipt. Join its native owner and
-      // retained child cleanup before callers can remove or reuse output paths.
-      if (outputRequests.length) {
-        void Promise.allSettled([
-          brokerCompletion,
-          ...[...this.cleanups].map((cleanup) => cleanup.settled),
-        ]).then(() => {
-          for (const request of outputRequests) {
-            request.output?.reject(error);
-            request.child.settleFileOutput();
-          }
-        });
-      }
-      if (
-        this.resourceClaims ||
-        this.closing ||
-        !this.hasBeenReady ||
-        hasErrnoCode(cause, "NODE_RUNTIME_UNAVAILABLE")
-      ) {
-        this.readiness.reject(error);
-        this.resourceClaims?.fail(error);
-        return;
-      }
-      const delay = RESTART_DELAYS[this.consecutiveFailures++];
-      if (delay === undefined) {
-        this.readiness.reject(error);
-        return;
-      }
-      this.restartTimer = setTimeout(() => this.start(), delay);
+      const diagnosis = exited
+        ? prepareTerminalDiagnosis()
+        : prepareChildRuntimeFailure({ error: nativeCause, started: ready });
+      failure = prepareBrokerFailureCause(diagnosis, nativeCause).then((cause) => {
+        const error = createBrokerFailureError(cause, this.hasBeenReady);
+        previousReadiness.reject(error);
+        this.fileReads.fail(error);
+        for (const request of requests.values()) {
+          request.result?.reject(error);
+          request.child.fail(error);
+        }
+        // A failed transport is not a writer-close receipt. Join its native owner and
+        // retained child cleanup before callers can remove or reuse output paths.
+        if (outputRequests.length) {
+          void Promise.allSettled([
+            nativeCompletion,
+            ...[...this.cleanups].map((cleanup) => cleanup.settled),
+          ]).then(() => {
+            for (const request of outputRequests) {
+              request.output?.reject(error);
+              request.child.settleFileOutput();
+            }
+          });
+        }
+        if (
+          this.resourceClaims ||
+          this.closing ||
+          !this.hasBeenReady ||
+          hasErrnoCode(cause, "NODE_RUNTIME_UNAVAILABLE")
+        ) {
+          this.readiness.reject(error);
+          this.resourceClaims?.fail(error);
+          return;
+        }
+        const delay = RESTART_DELAYS[this.consecutiveFailures++];
+        if (delay === undefined) {
+          this.readiness.reject(error);
+          return;
+        }
+        this.restartTimer = setTimeout(() => this.start(), delay);
+      });
     };
     const markReady = (pid: number, receivedGeneration: number) => {
       if (ended || pid !== child.pid || receivedGeneration !== generation) {
@@ -476,11 +531,7 @@ export class SpawnBrokerHost {
         closingAtFailure = this.closing;
       }
       brokerExited.resolve();
-      if (ready) {
-        fail(exitError());
-      } else {
-        void brokerCompletion.then(() => fail(exitError()));
-      }
+      fail(undefined, true);
     });
     child.once("disconnect", () => {
       if (ready) {
@@ -548,6 +599,9 @@ export class SpawnBrokerHost {
       if (this.fileReads.receive(message)) {
         return;
       }
+      if (message.type === "spawned" || message.type === "error") {
+        this.pendingSpawns.delete(message.id);
+      }
       const request = this.requests.get(message.id);
       if (!request) {
         if (handle instanceof Socket) {
@@ -592,68 +646,20 @@ export class SpawnBrokerHost {
       } else if (message.type === "owned") {
         request.pid = message.pid;
         if (request.childClosed) {
-          this.retainCleanup(terminateLostBrokerChild(message.pid, request.detached));
+          request.recovering = true;
+          this.retainCleanup(terminateLostBrokerChild(message.pid, request.detached), message.id);
           this.retire(message.id, request);
         }
-      } else if (message.type === "pipe") {
+      } else {
         try {
-          if (message.closed && message.fd === 0) {
-            const stdin = new Socket();
-            request.child.attachPipe(message.fd, stdin);
-            stdin.destroy();
-          } else if (handle instanceof Socket) {
-            if (message.fd === 0) {
-              restoreStdinPipe(handle);
-            } else {
-              holdPipe(handle);
-            }
-            request.child.attachPipe(message.fd, handle);
-          } else {
-            throw new SpawnBrokerError("Spawn broker pipe transfer failed");
-          }
+          const acknowledgement = receiveBrokerCommandResponse(request, message, handle, (value) =>
+            this.transmit(value),
+          );
+          void acknowledgement?.catch(fail);
         } catch (error) {
-          if (handle instanceof Socket) {
-            handle.destroy();
-          }
           fail(toErrorObject(error, "Spawn broker pipe setup failed"));
           return;
         }
-        // The receipt follows Node's internal handle ACK on this same IPC channel.
-        void this.transmit({ type: "pipe-received", id: message.id, fd: message.fd }).catch(fail);
-      } else if (message.type === "pipe-prefix") {
-        const pipe = request.child.stdio[message.fd];
-        if (pipe instanceof Socket && message.bytes.length > 0) {
-          pipe.unshift(message.bytes);
-        }
-      } else if (message.type === "file-output") {
-        if ("error" in message) {
-          request.output?.reject(Object.assign(new Error(message.error.message), message.error));
-        } else {
-          request.output?.resolve(message.bytes);
-        }
-        request.resultSettled = true;
-        request.child.settleFileOutput();
-        this.retire(message.id, request);
-      } else if (message.type === "execa-result") {
-        // Started commands publish their owned PID first on this ordered channel.
-        // A failed result without that admission is the worker's no-process outcome.
-        if (request.pid === undefined && message.result.failed) {
-          request.child.markNotStarted();
-        }
-        request.result?.resolve(message.result);
-        request.resultSettled = true;
-        this.retire(message.id, request);
-      } else {
-        if (message.type === "error" && message.resultUnavailable && request.output) {
-          request.output.reject(Object.assign(new Error(message.error.message), message.error));
-          request.resultSettled = true;
-          request.child.settleFileOutput();
-        }
-        if (message.type === "error" && message.resultUnavailable && request.result) {
-          request.result.reject(Object.assign(new Error(message.error.message), message.error));
-          request.resultSettled = true;
-        }
-        request.child.receive(message);
         this.retire(message.id, request);
       }
     });

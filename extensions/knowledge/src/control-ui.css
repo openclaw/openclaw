@@ -14,7 +14,6 @@
   font-size: 14px;
   line-height: 1.55;
   letter-spacing: -0.01em;
-  -webkit-font-smoothing: antialiased;
 }
 .knowledge-page *,
 .knowledge-page *::before,
@@ -788,6 +787,9 @@
   font-size: 15px;
   line-height: 1.65;
   overflow-wrap: anywhere;
+  /* Reading text keeps macOS stem darkening; app chrome inherits the body's antialiasing. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 .knowledge-page .knowledge-markdown > :first-child {
   margin-top: 0;
@@ -899,6 +901,9 @@
   display: grid;
   gap: 4px;
   min-width: 0;
+  /* Reading text keeps macOS stem darkening; app chrome inherits the body's antialiasing. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 .knowledge-page .knowledge-claim-text {
   display: block;
@@ -3554,6 +3559,38 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
 .scribe-run time {
   color: var(--muted);
   font-size: 12.5px;
+}
+.scribe-run-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.scribe-update {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.scribe-update button {
+  flex: none;
+  white-space: nowrap;
+}
+.knowledge-page .scribe-update-message {
+  max-height: 320px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.knowledge-page .scribe-update-message del,
+.knowledge-page .scribe-update-message ins {
+  display: block;
+  text-decoration: none;
+}
+.knowledge-page .scribe-diff-removed {
+  color: var(--danger, #b42318);
+}
+.knowledge-page .scribe-diff-added {
+  color: var(--ok, #067647);
 }
 .knowledge-page .scribe-empty {
   margin: 0;

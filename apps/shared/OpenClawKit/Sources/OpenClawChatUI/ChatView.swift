@@ -6,6 +6,10 @@ import AppKit
 import UIKit
 #endif
 
+extension EnvironmentValues {
+    @Entry public var openClawChatIsObscured: Bool = false
+}
+
 enum ChatReaderUserTransition: Equatable {
     case unchanged
     case added(UUID)
@@ -111,6 +115,7 @@ public struct OpenClawChatView: View {
     private let viewModel: OpenClawChatViewModel
     private let resolveComposerModel: (@MainActor () -> OpenClawChatViewModel?)?
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openClawChatIsObscured) private var isObscured
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -130,8 +135,10 @@ public struct OpenClawChatView: View {
     @State private var searchMessageID: UUID?
     @State private var isSearchPresented = false
     @State private var composerFocusRequest = 0
+    @State private var isOnScreen = false
     #if os(macOS)
     @Environment(\.openClawChatWindowCommands) private var windowCommands
+    @Environment(\.appearsActive) private var appearsActive
     #endif
     @State private var fullMessageRequest: ChatFullMessageReaderRequest?
     @State private var reactionPickerMessage: OpenClawChatMessage?
@@ -264,11 +271,20 @@ public struct OpenClawChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear {
+            self.isOnScreen = true
             self.viewModel.refreshSourceContext()
             self.viewModel.load()
         }
         .onChange(of: ObjectIdentifier(self.viewModel)) { _, _ in
             self.viewModel.refreshSourceContext()
+            self.viewModel.streamPacing.interval = self.isObscured ? 0.5 : 0.15
+            self.viewModel.setComposerPresentationActive(self.isComposerPresentationActive)
+        }
+        .onChange(of: self.isComposerPresentationActive, initial: true) { _, active in
+            self.viewModel.setComposerPresentationActive(active)
+        }
+        .onChange(of: self.isObscured, initial: true) { _, obscured in
+            self.viewModel.streamPacing.interval = obscured ? 0.5 : 0.15
         }
         .onChange(of: self.turnRecapObservation, initial: true) { _, observation in
             self.updateTurnRecap(observation)
@@ -316,9 +332,15 @@ extension OpenClawChatView {
                     .padding(.horizontal, self.usesExpandedLayout ? 0 : Layout.outerPaddingHorizontal)
             if !self.usesInlineProgressCard {
                 self.progressCard
-                    .frame(maxWidth: self.readingColumnWidth)
-                    .padding(.horizontal, self.composerHorizontalMargin)
-                    .padding(.top, Layout.stackSpacing)
+                    // The composer draws its surface this far inside its frame; share its edges.
+                        .padding(
+                            .horizontal,
+                            self.showsComposer
+                                ? OpenClawChatComposer.surfaceInset(style: self.style, chrome: self.composerChrome)
+                                : 0)
+                        .frame(maxWidth: self.readingColumnWidth)
+                        .padding(.horizontal, self.composerHorizontalMargin)
+                        .padding(.top, Layout.stackSpacing)
             }
             if self.showsComposer {
                 self.turnRecapRow
@@ -565,6 +587,8 @@ extension OpenClawChatView {
             self.viewModel.resumeFromForeground()
         }
         .onDisappear {
+            self.isOnScreen = false
+            self.viewModel.setComposerPresentationActive(false)
             self.speech?.stop()
             self.scrollCommand.cancel()
         }
@@ -810,11 +834,21 @@ extension OpenClawChatView {
                     kind: kind,
                     playback: playback)
             })
-            .frame(
-                maxWidth: .infinity,
-                alignment: isUser ? .trailing : .leading)
         let row = VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
-            bubble
+            Group {
+                #if os(iOS)
+                // Streaming revisions invalidate the transcript container. Keep completed
+                // iPhone bubbles out of that hot path unless their render inputs changed.
+                if bubble.canUseIOSRenderGate {
+                    bubble.equatable()
+                } else {
+                    bubble
+                }
+                #else
+                bubble
+                #endif
+            }
+            .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
             if msg.presentationOwnsFooter {
                 ChatMessageReactions(viewModel: self.viewModel, message: msg)
             }
@@ -864,6 +898,15 @@ extension OpenClawChatView {
         row.contextMenu { ChatDeferredContent { self.messageMenuActions(for: actionMessage) } }
     }
 
+    /// A rejected message returns to the composer only while the user can see it.
+    private var isComposerPresentationActive: Bool {
+        #if os(macOS)
+        self.isOnScreen && self.appearsActive && !self.isObscured
+        #else
+        self.isOnScreen && self.scenePhase == .active && !self.isObscured
+        #endif
+    }
+
     private func messageActionsMenu(for message: OpenClawChatMessage) -> some View {
         Menu {
             ChatDeferredContent { self.messageMenuActions(for: message) }
@@ -888,21 +931,8 @@ extension OpenClawChatView {
         self.messageSessionActions(for: message)
         self.listenMessageButton(for: message)
         if let outboxState = self.viewModel.outboxState(for: message.id) {
-            if outboxState.isFailed {
-                Button {
-                    self.viewModel.retryOutboxMessage(message.id)
-                } label: {
-                    Label("Retry Send", systemImage: "arrow.clockwise")
-                }
-            }
-            // In-flight sends may still reach canonical history; hiding them
-            // would make a real send look as though it had been cancelled.
-            if !outboxState.preventsDeletion {
-                Button(role: .destructive) {
-                    self.viewModel.deleteOutboxMessage(message.id)
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                }
+            ChatOutboxMessageActions(viewModel: self.viewModel, messageID: message.id, state: outboxState) {
+                self.composerFocusRequest += 1
             }
         }
     }
@@ -1192,7 +1222,13 @@ extension OpenClawChatView {
     }
 
     private func handleTimelineChange() {
-        guard self.hasPerformedInitialScroll else { return }
+        guard self.hasPerformedInitialScroll else {
+            // A chat's cached or live rows paint while the rest of its load (sessions, models,
+            // health) is still running. Hold them at the initial position instead of the top;
+            // the load's completion still settles it.
+            if !self.viewModel.messages.isEmpty { self.restoreInitialScrollPosition() }
+            return
+        }
         // A search result is an explicit reading position. Incoming replies
         // must not pull the reader away until they leave Find.
         guard self.searchMessageID == nil else { return }

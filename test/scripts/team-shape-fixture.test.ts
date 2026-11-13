@@ -1,7 +1,9 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { promisify } from "node:util";
 import { zstdDecompressSync } from "node:zlib";
 import { afterEach, expect, it } from "vitest";
 import {
@@ -11,6 +13,7 @@ import {
 import { validateConfigObject } from "../../src/config/validation-core.js";
 import { flushLogger, resetLogger } from "../../src/logging/logger.js";
 import { captureFullEnv } from "../../src/test-utils/env.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -25,6 +28,51 @@ function expectCounts(db: DatabaseSync, expected: Record<string, number>) {
     expect(db.prepare(`SELECT count(*) AS n FROM ${table}`).get(), table).toEqual({ n });
   }
 }
+
+it("preserves existing sessions when seeding offline replay history", async ({ signal }) => {
+  const stateDir = path.join(temporary.make("team-shape-history-"), "state");
+  const { env } = await generateTeamShapeFixture(
+    options(
+      stateDir,
+      `--sessions 3 --runs 0 --approvals 0 --cron 0 --projects 0 --transcript-mib 0 --now ${Date.now() - 40 * 86_400_000}`,
+    ),
+  );
+  const database = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
+  const inventory = () => {
+    using db = openDb(database);
+    const rows = db
+      .prepare(
+        "SELECT * FROM session_nodes WHERE current_session_id LIKE 'team-shape-session-%' ORDER BY session_key",
+      )
+      .all();
+    return {
+      count: rows.length,
+      digest: createHash("sha256").update(JSON.stringify(rows)).digest("hex"),
+    };
+  };
+  const before = inventory();
+  expect(before.count).toBe(3);
+  await promisify(execFile)(
+    resolveTestNodeExecPath(),
+    [
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/perf/transcript-broadcast-measure.ts",
+      "--state-dir",
+      stateDir,
+      ..."--entry src/entry.ts --scenario memory-soak --runs 2 --history-turns 64 --verify-history-replay --reset-every-rounds 0 --seed-history".split(
+        " ",
+      ),
+    ],
+    { env, encoding: "utf8", signal },
+  );
+  expect(inventory()).toEqual(before);
+  using db = openDb(database);
+  expectCounts(db, {
+    "session_nodes WHERE current_session_id LIKE 'memory-soak-history-%'": 3,
+    "transcript_events WHERE session_id LIKE 'memory-soak-history-%'": 2 * (64 * 4 + 3),
+  });
+});
 
 it("rejects unsafe ports and refuses to overwrite existing state", async () => {
   for (const port of ["18789", "39999", "65536", "NaN"]) {

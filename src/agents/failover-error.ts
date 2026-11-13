@@ -13,6 +13,7 @@ import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
 import { isLocalStorageOutcomeError } from "../infra/sqlite-error-diagnostics.js";
+import { SkillResourceDeliveryLimitError } from "../skills/runtime/resource-delivery-error.js";
 import { readAgentTerminalSnapshot, withAgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import { failoverReasonFromClassification } from "./failover/classification-rules.js";
 import {
@@ -34,6 +35,7 @@ import { resolveExecutionApprovalFailureMessage } from "./failover/message-patte
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
 import { renderRateLimitRetryExhaustion } from "./failover/user-copy.js";
 import {
+  AgentHarnessModelRequestPolicyError,
   AgentHarnessSessionSupersededError,
   isAgentHarnessPreflightError,
 } from "./harness/errors.js";
@@ -313,6 +315,7 @@ function hasRuntimeCoordinationFailure(err: unknown): boolean {
   }
   return collectErrorGraphCandidates(err, resolveNestedErrors).some(
     (candidate) =>
+      candidate instanceof SkillResourceDeliveryLimitError ||
       isSessionWorkStartInvalidatedError(candidate) ||
       RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)) ||
       resolveExecutionApprovalFailureMessage(readDirectErrorMessage(candidate)) !== undefined,
@@ -488,7 +491,13 @@ export function resolveFailoverClassificationFromError(
 ): FailoverClassification | null {
   // A direct preflight owns the refusal; its cause is diagnostic, not a failed
   // provider attempt that may rotate credentials or replay the turn.
-  if (isAgentHarnessPreflightError(err) || findLocalWorkerTaskFailure(err)) {
+  if (
+    isAgentHarnessPreflightError(err) ||
+    findLocalWorkerTaskFailure(err) ||
+    collectErrorGraphCandidates(err, resolveNestedErrors).some(
+      (candidate) => candidate instanceof AgentHarnessModelRequestPolicyError,
+    )
+  ) {
     return null;
   }
   // Local coordination codes such as SQLite "overloaded" are not provider signals.

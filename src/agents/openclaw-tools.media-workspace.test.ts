@@ -199,3 +199,30 @@ it("image_generate shared reference loader follows the task cwd and session boun
   expect(loaded.every(({ source }) => typeof source === "number" && source > 0)).toBe(true);
   await expectOutside(loadReferences([outsidePath]));
 });
+
+it.runIf(process.platform !== "win32")(
+  "reports a missing folder under a symlinked state dir as not found (#194406)",
+  async () => {
+    // The reporter's state dir is an alias (/data/.openclaw -> /data/stronghold-wm/...).
+    const base = tempDirs.make("openclaw-media-alias-");
+    const realState = path.join(base, "stronghold");
+    const aliasState = path.join(base, "openclaw");
+    await fs.mkdir(path.join(realState, "workspace"), { recursive: true });
+    await fs.symlink(realState, aliasState);
+    vi.stubEnv("OPENCLAW_STATE_DIR", aliasState);
+    const workspaceDir = path.join(aliasState, "workspace");
+    await fs.writeFile(path.join(workspaceDir, "photo.png"), png);
+    await fs.writeFile(path.join(base, "secret.png"), png);
+    const tool = createMediaTool("view_image", { workspaceDir });
+
+    await expectLoadedImage(tool, path.join(workspaceDir, "photo.png"));
+    const missing = tool.execute("missing", {
+      path: path.join(workspaceDir, "tmp-view", "p-1.png"),
+    });
+    await expect(missing).rejects.toThrow(/Local media file not found/);
+    await expect(missing).rejects.not.toThrow(/allowed directory/);
+    // Outside controls stay denied whether or not the target exists.
+    await expectOutside(tool.execute("outside", { path: path.join(base, "secret.png") }));
+    await expectOutside(tool.execute("outside", { path: path.join(base, "gone", "p-1.png") }));
+  },
+);

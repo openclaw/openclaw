@@ -62,10 +62,20 @@ it("makes the overview readable before extras and retains visible content throug
       expect(await panel.getByRole("heading", { name: overview.title, exact: true }).count()).toBe(
         1,
       );
+      const initialDocument = await panel.locator(".lr-document").elementHandle();
       await page.setViewportSize({ width: 390, height: 844 });
       await openChatPanels(page, "mobile");
+      await content.waitFor({ state: "visible" });
+      expect(await initialDocument!.evaluate((node) => node.isConnected)).toBe(true);
+      expect(
+        await panel
+          .locator(".lr-document")
+          .evaluate((node, original) => node === original, initialDocument),
+      ).toBe(true);
       expect(await content.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
       await page.setViewportSize({ width: 1280, height: 900 });
+      await content.waitFor({ state: "visible" });
+      expect(await initialDocument!.evaluate((node) => node.isConnected)).toBe(true);
       await button("Files 13").click();
       await gateway.waitForRequest("forge.detail", { match: { section: "files" } });
       await gateway.resolveDeferred(
@@ -88,7 +98,7 @@ it("makes the overview readable before extras and retains visible content throug
       const top = await content.evaluate((node) => node.scrollTop);
       const document = await panel.locator(".lr-document").elementHandle();
       await button("Refresh item").click();
-      await panel.getByText("Showing previous details · refreshing…", { exact: true }).waitFor();
+      await expect.poll(() => button("Refresh item").getAttribute("aria-busy")).toBe("true");
       expect(await content.evaluate((node) => node.scrollTop)).toBe(top);
       expect(await document!.evaluate((node) => node.isConnected)).toBe(true);
       await gateway.waitForRequest("forge.detail", { after: 1, match: { section: "overview" } });

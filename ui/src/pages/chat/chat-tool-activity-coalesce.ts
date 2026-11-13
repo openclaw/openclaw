@@ -348,6 +348,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       itemEnded,
       transcript,
       invocation.live?.["__openclawToolStreamDiffStat"],
+      invocation.live?.["__openclawToolStreamLiveOutput"],
       invocation.live?.["__openclawToolStreamReceivedAt"],
       (names.get(identity(owner))?.size ?? 0) > 1 ? owner.name : undefined,
     ]);
@@ -395,6 +396,9 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     if (bundle) {
       bundle.inputs.push(...inputs);
       bundle.item.message.content.push(...content);
+      if (invocation.attachments.length > 0) {
+        bundle.item.message.role = "toolResult";
+      }
       if (ownsActivity || Array.isArray(bundle.item.message.activity)) {
         bundle.item.message.activity = [
           ...readPreparedActivity(bundle.item.message),
@@ -409,7 +413,13 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       key: `${owner.source.item.key}:invocation:${identity(owner)}:${owner.name}`,
       message: {
         ...message,
-        role: invocation.call ? "assistant" : message.role,
+        // Result media stays tool-owned when the invocation moves to its call row.
+        role:
+          invocation.attachments.length > 0
+            ? "toolResult"
+            : invocation.call
+              ? "assistant"
+              : message.role,
         runId: owner.runId,
         content,
         activity: ownsActivity ? [...prepared.values()] : undefined,
@@ -419,6 +429,9 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
               __openclawToolStreamLive: true,
               __openclawToolStreamResultReceived: resultReceived,
               __openclawToolStreamItemEnded: itemEnded,
+              __openclawToolStreamLiveOutput: completed
+                ? undefined
+                : invocation.live["__openclawToolStreamLiveOutput"],
               __openclawToolStreamDiffStat: completed
                 ? undefined
                 : invocation.live["__openclawToolStreamDiffStat"],
@@ -447,21 +460,29 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     // Prose and media keep their original position as their own rows, so
     // commentary never carries a tool call: every call joins the tool rows
     // that its activity group summarizes.
-    const prose = (content: unknown[], segment: number): ProjectedItem => ({
-      ...source.item,
-      key: segment === 0 ? source.item.key : `${source.item.key}:prose:${segment}`,
-      message: {
-        ...source.message,
-        content,
-        activity: undefined,
-        toolCallId: undefined,
-        tool_call_id: undefined,
-        toolUseId: undefined,
-        tool_use_id: undefined,
-        toolName: undefined,
-        tool_name: undefined,
-      },
-    });
+    const prose = (content: unknown[], segment: number): ProjectedItem => {
+      const projected: ProjectedItem = {
+        ...source.item,
+        key: segment === 0 ? source.item.key : `${source.item.key}:prose:${segment}`,
+        message: {
+          ...source.message,
+          content,
+          activity: undefined,
+          toolCallId: undefined,
+          tool_call_id: undefined,
+          toolUseId: undefined,
+          tool_use_id: undefined,
+          toolName: undefined,
+          tool_name: undefined,
+        },
+      };
+      // Prose belongs to the same immutable source as its invocation projection.
+      memoInputs.set(projected, {
+        owner: source.originalMessage,
+        inputs: [source.originalMessage, source.originalMessage.content],
+      });
+      return projected;
+    };
     const ordered: ProjectedItem[] = [];
     let pendingProse: unknown[] = [];
     const flushProse = () => {
@@ -587,4 +608,44 @@ export function coalesceToolActivityMessages(
   }
   appendTurn(turn);
   return result;
+}
+
+/**
+ * A run that ends or hands off swaps its live tool rows for their stored
+ * copies, which arrive under other message keys. Disclosure ids stay scoped to
+ * their message, so what the reader had opened is carried across by tool call,
+ * and only where one disclosure names that call on each side.
+ */
+export function carryMovedDisclosures(
+  state: { expanded: Map<string, boolean>; explicit: ReadonlySet<string> },
+  previous: ReadonlyMap<string, string> | undefined,
+  current: ReadonlyMap<string, string>,
+  // The expansion owner records versions and explicit choices through its writer.
+  writeExpansion: (
+    values: Map<string, boolean>,
+    key: string,
+    open: boolean,
+    explicit: boolean,
+  ) => void,
+): void {
+  if (!previous) {
+    return;
+  }
+  const { expanded, explicit } = state;
+  const single = (calls: ReadonlyMap<string, string>) => {
+    const ids = new Map<string, string | null>();
+    for (const [id, call] of calls) {
+      ids.set(call, ids.has(call) ? null : id);
+    }
+    return ids;
+  };
+  const targets = single(current);
+  for (const [call, source] of single(previous)) {
+    const target = targets.get(call);
+    const open = source ? expanded.get(source) : undefined;
+    if (!source || !target || current.has(source) || explicit.has(target) || open === undefined) {
+      continue;
+    }
+    writeExpansion(expanded, target, open, explicit.has(source));
+  }
 }

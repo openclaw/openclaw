@@ -36,12 +36,14 @@ import {
   resumePublicationFixture,
   startVisitorPublicationFixture as startVisitors,
 } from "./github-publication-requester.test-support.js";
+import * as operatorAccessPolicy from "./operator-access-policy.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
+// mock-isolation: Synthetic checkpoints isolate publication from real repository and session state.
 vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
-  withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
+  withSessionRepositoryPublicationCheckpoint: (...args: unknown[]) => checkpoint(...args),
 }));
 const fixture = createRequesterPublicationFixture.bind(undefined, checkpoint);
 const later = "publication-later-alias@example.test";
@@ -79,7 +81,7 @@ installGitHubPublicationTestHarness({
 });
 
 it.each(["alias interruption", "role revocation"] as const)(
-  "uses current resumed-grant profile facts without profile SQL and checks callback %s",
+  "uses current retained-grant profile facts without profile SQL and checks callback %s",
   async (callbackChange) => {
     const f = await createRequesterPolicyFixture();
     const other = await ensureCanonicalUserProfileForEmail(recipient);
@@ -87,13 +89,6 @@ it.each(["alias interruption", "role revocation"] as const)(
     await using visitors = await startVisitors(f);
     void visitors;
     const original = await captureGuest(f);
-    const restored = await restoreGitHubPublicationRequester(
-      JSON.stringify(original.requester.snapshot),
-      original.session,
-      original.context.getCommittedRuntimeConfig,
-    );
-    onTestFinished(restored.release);
-    original.release();
     const policy = getPluginRegistryState()?.activeRegistry?.gatewayAccessPolicies.find(
       (entry) => entry.pluginId === "visitor-access",
     )?.policy;
@@ -101,7 +96,29 @@ it.each(["alias interruption", "role revocation"] as const)(
       throw new Error("Visitor policy did not register grant resumption");
     }
     const resume = policy.resume;
-    const observed = vi.spyOn(policy, "resume");
+    let interrupt: (() => void) | undefined;
+    vi.spyOn(policy, "resume").mockImplementation((context) => {
+      const authority = resume(context);
+      return (
+        authority && {
+          ...authority,
+          assertCurrent: () => {
+            authority.assertCurrent();
+            const callback = interrupt;
+            interrupt = undefined;
+            callback?.();
+          },
+        }
+      );
+    });
+    const restored = await restoreGitHubPublicationRequester(
+      JSON.stringify(original.requester.snapshot),
+      original.session,
+      original.context.getCommittedRuntimeConfig,
+    );
+    onTestFinished(restored.release);
+    original.release();
+    const observed = vi.spyOn(operatorAccessPolicy, "resumeGatewayOperatorAccessGrant");
     const native = vi.spyOn(f.database.db, "prepare");
     const assertWithoutProfileSql = () => {
       native.mockClear();
@@ -114,7 +131,7 @@ it.each(["alias interruption", "role revocation"] as const)(
     };
     invalidateOperatorRolePolicy(f.guestProfile);
     assertWithoutProfileSql();
-    expect(observed.mock.lastCall?.[0].profile).toEqual({
+    expect(observed.mock.lastCall?.[0]).toMatchObject({
       profileId: f.guestProfile,
       emails: [email, "publication-secondary@example.test"].toSorted(),
       assignedRole: null,
@@ -124,15 +141,14 @@ it.each(["alias interruption", "role revocation"] as const)(
     await setCanonicalUserProfileRole(f.guestProfile, "maintainer");
     invalidateOperatorRolePolicy(f.guestProfile);
     assertWithoutProfileSql();
-    expect(observed.mock.lastCall?.[0].profile).toEqual({
+    expect(observed.mock.lastCall?.[0]).toMatchObject({
       profileId: f.guestProfile,
       emails: [email, "publication-secondary@example.test", later].toSorted(),
       assignedRole: "maintainer",
     });
     await linkCanonicalUserProfileEmail(later, other.id);
     assertWithoutProfileSql();
-    observed.mockImplementationOnce((context) => {
-      const authority = resume(context);
+    interrupt = () => {
       if (callbackChange === "alias interruption") {
         linkEmail(email, other.id);
         linkEmail(email, f.guestProfile);
@@ -140,8 +156,7 @@ it.each(["alias interruption", "role revocation"] as const)(
         setUserProfileRole(f.guestProfile, "revoked");
         invalidateOperatorRolePolicy(f.guestProfile);
       }
-      return authority;
-    });
+    };
     expect(restored.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
   },
 );

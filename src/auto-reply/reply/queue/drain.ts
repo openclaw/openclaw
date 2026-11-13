@@ -281,6 +281,7 @@ async function executeClaim(
   let adoptionRefused = false;
   let waitForFreshKick = false;
   let pluginUnavailable = false;
+  let executionFailed = false;
   try {
     if (admissionSessionRebind && run.run.sessionId === admissionSessionRebind.from) {
       run = { ...run, admissionSessionId: admissionSessionRebind.to };
@@ -289,6 +290,7 @@ async function executeClaim(
       (source.controllerInput && followupSourceRunners.get(source.controllerInput)) ?? execute;
     await runFollowup(run);
   } catch (error) {
+    executionFailed = true;
     if (claim.retryBeforeExecution && error instanceof PluginInstanceUnavailableError) {
       pluginUnavailable = !error.replacement;
       if (error.replacement) {
@@ -297,6 +299,7 @@ async function executeClaim(
         const signal = AbortSignal.any([
           claim.abortController.signal,
           generation.signal,
+          getGatewayRestartDrainSignal(),
           ...(cancellation.signal ? [cancellation.signal] : []),
         ]);
         try {
@@ -325,10 +328,15 @@ async function executeClaim(
       error instanceof AgentDatabaseExecutionAdmissionClosedError;
     defaultRuntime.error?.("mailbox execution failed for " + queue.key + ": " + String(error));
   } finally {
-    // Only the execution producer can return an explicit pre-execution refusal.
-    // Generic throws/returns and the operation's broader preparation marker never
-    // grant or revoke replayability; the producer-local receipt is authoritative.
+    // Only a producer receipt retries within this mailbox. An escaped runner error
+    // instead abandons unadopted lifecycle-backed input for durable ingress replay.
     const preparationRefused = claim.retryBeforeExecution === true;
+    if (preparationRefused && !pluginUnavailable) {
+      // Every retry yields so failed preparation cannot starve reload or cancellation.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 250).unref?.();
+      });
+    }
     // An unavailable owner without a replacement cannot recover in this drain.
     // Preserve the preparation refusal so its source records abandonment.
     const retrySources =
@@ -377,7 +385,12 @@ async function executeClaim(
         continue;
       }
       try {
-        completeFollowupRunLifecycle(item, preparationRefused ? undefined : "consumed");
+        completeFollowupRunLifecycle(
+          item,
+          preparationRefused || (executionFailed && item.turnAdoptionLifecycle)
+            ? undefined
+            : "consumed",
+        );
       } catch (error) {
         defaultRuntime.error?.("mailbox custody settlement failed: " + String(error));
       }

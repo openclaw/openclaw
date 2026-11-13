@@ -947,7 +947,9 @@ extension OpenClawChatViewModel {
         self.syncSessionReactions()
         // An empty post-send refresh is incomplete by contract: reconciliation
         // preserves the visible transcript, so preserve its last canonical cache too.
-        if replacingCanonicalHistory || !preservingOptimisticLocalMessages || !incoming.isEmpty {
+        let isCompletePage = replacingCanonicalHistory || !preservingOptimisticLocalMessages || !incoming.isEmpty
+        self.noteLiveHistoryPage(request.id, isComplete: (isDelta || isCompletePage) && !retainsAnsweredTurn)
+        if isCompletePage {
             // The cache store writes only gateway-derived rows. It filters
             // locally retained outbox bubbles until history proves their keys.
             persistTranscriptToCache(

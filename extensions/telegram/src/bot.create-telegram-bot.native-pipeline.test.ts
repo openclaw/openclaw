@@ -26,6 +26,8 @@ import {
   apiCalls,
   groupChat,
   groupCommand,
+  deliverTelegramUpdate,
+  nextTelegramTestMessageId,
   publishTelegramTestConfig,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
 import { startTelegramCallbackQueryAnswer } from "./callback-query-answer-state.js";
@@ -756,4 +758,28 @@ describe("client-created DM topic adoption through the inbound handler", () => {
     expect(turns()).toEqual(new Map([["hello", `agent:main:main:thread:${chat.id}:600`]]));
     expect(sentThreadIds()).toEqual(new Map([["re:hello", 600]]));
   });
+});
+
+it.each([
+  ["external_reply", undefined, ["photo-1"]],
+  ["external_reply", "photo-unique", ["p2"]],
+  ["reply_to_message", "photo-unique", ["p2"]],
+] as const)("hydrates %s media unless the current photo is %s", async (field, unique, fileIds) => {
+  const bot = await configuredBot(openUnstreamed);
+  const origin = { type: "user", sender_user: from, date: messageBase.date } as const;
+  const current = unique
+    ? { photo: [{ ...photo[0], file_id: "p2", file_unique_id: unique }] }
+    : { text: "What is in this image?" };
+  const replied = { ...messageBase, message_id: nextTelegramTestMessageId(), photo, origin };
+  const message_id = nextTelegramTestMessageId();
+  await deliverTelegramUpdate(bot, {
+    update_id: message_id,
+    message: { ...messageBase, message_id, ...current, [field]: replied },
+  });
+  expect(apiPayloads("getFile")).toEqual(
+    fileIds.map((id) => expect.objectContaining({ file_id: id })),
+  );
+  const ctx = harness.replySpy.mock.calls[0]?.[0];
+  expect(ctx?.media?.filter((media) => media.path)).toHaveLength(1);
+  expect(typeof ctx?.ReplyChain?.[0]?.mediaPath).toBe(unique ? "undefined" : "string");
 });
