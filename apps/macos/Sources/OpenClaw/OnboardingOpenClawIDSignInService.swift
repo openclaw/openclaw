@@ -19,6 +19,10 @@ struct OnboardingOpenClawIDSignInEnvironment {
         OpenClawIDNodeIdentityKeychainStore(enrollmentID: $0, purpose: $1)
     }
 
+    var trustStore: (URL, UUID) -> any OpenClawIDNodeTrustStore = {
+        OpenClawIDNodeNativeTrustStore(databaseURL: $0, enrollmentID: $1, assertCurrent: {})
+    }
+
     var readKitFile: () async -> String? = { await OnboardingOpenClawIDSignInService.chooseKitFile() }
     /// Saves the device, selects it for the operator route and starts its node.
     var install: (MacOpenClawIDDevice, OpenClawIDDiscoverySession) -> Void
@@ -224,12 +228,9 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
     {
         .init(
             discoveryOrigin: configuration.discoveryOrigin,
-            deviceStore: OpenClawIDNodeNativeTrustStore(
-                databaseURL: self.databaseURL,
-                enrollmentID: device.deviceEnrollmentID,
-                assertCurrent: {}),
+            deviceStore: self.environment.trustStore(self.databaseURL, device.deviceEnrollmentID),
             nodeStore: device.nodeEnrollmentID.map {
-                OpenClawIDNodeNativeTrustStore(databaseURL: self.databaseURL, enrollmentID: $0, assertCurrent: {})
+                self.environment.trustStore(self.databaseURL, $0)
             },
             http: self.environment.discovery(configuration))
     }
@@ -305,6 +306,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         } catch {
             return try self.problem(error, claw: claw)
         }
+        try Task.checkCancellation()
         return self.finish(device, session: session, approvedWith: "Approved with your recovery kit")
     }
 

@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Synchronization
 import Testing
 @testable import OpenClawKit
 
@@ -230,6 +231,23 @@ struct OpenClawIDOwnerEnrollmentTests {
         #expect(await deviceStore.saved?.peerKey == keys.peer.peerKey)
         #expect(await nodeStore.saved?.peerKey == keys.node?.peerKey)
         #expect(await discovery.bound == [keys.device.signingKey])
+    }
+
+    @Test func `kit preflight crossing the deadline sends no root statement`() async throws {
+        let vectors = try Vectors()
+        let clock = try Mutex(vectors.now)
+        let discovery = try Discovery(vectors: vectors)
+        await discovery.onBind { clock.withLock { $0 += 120 } }
+        let client = try OpenClawIDOwnerEnrollmentClient(
+            discoveryOrigin: #require(URL(string: "https://discovery.example")), deviceStore: TrustStore(),
+            nodeStore: nil, http: discovery, now: { clock.withLock { $0 } })
+        await #expect(throws: OpenClawIDOwnerEnrollmentError.expired) {
+            try await client.approveWithRecoveryKit(
+                vectors.text("kit", "text"), session: Self.session, claw: vectors.claw,
+                keys: vectors.keys, label: "Example Mac", node: nil)
+        }
+        #expect(await discovery.bound.count == 1)
+        #expect(await discovery.rootStatements.isEmpty)
     }
 
     @Test func `a kit for another claw signs nothing`() async throws {
@@ -483,6 +501,7 @@ struct OpenClawIDOwnerEnrollmentTests {
         private let now: Int64
         private var inbox: [OpenClawIDCanonicalJSON] = []
         private var cursor = 0
+        private var bindHook: (@Sendable () -> Void)?
         private var rootHook: RootHook?
         private var enrollmentHook: EnrollmentHook?
         private(set) var rootStatements: [OpenClawIDCanonicalJSON] = []
@@ -498,6 +517,10 @@ struct OpenClawIDOwnerEnrollmentTests {
                 rawRepresentation: OpenClawIDNodeIdentity.unhex(vectors.node["gateway_seed_hex"]!.text()))
             self.keys = try vectors.keys
             self.now = try vectors.now
+        }
+
+        func onBind(_ hook: @escaping @Sendable () -> Void) {
+            self.bindHook = hook
         }
 
         func onRootStatement(_ hook: @escaping RootHook) {
@@ -561,6 +584,7 @@ struct OpenClawIDOwnerEnrollmentTests {
                     .fields(["device_pub", "peer_key", "label", "ts", "peer_key_proof"])
                 #expect(request.value(forHTTPHeaderField: "openclaw-signature") != nil)
                 try self.bound.append(body["device_pub"]!.text())
+                self.bindHook?()
                 return .init(status: 201, body: Data("{}".utf8))
             case let ("POST", path) where path.hasSuffix("/mailbox"):
                 let mail = try OpenClawIDCanonicalJSON.parse(request.httpBody ?? Data()).fields(["to", "payload"])

@@ -4901,6 +4901,7 @@
     {"path":"apps/macos/Sources/OpenClaw/OpenClawIDSettingsSection.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.6fe2dfc2fd44902a","source":"Your assistant can’t use this Mac. You can still chat and use the dashboard."},
     {"path":"apps/macos/Sources/OpenClaw/OpenClawIDSettingsSection.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.a303aad9d02911cb","source":"a Gateway token"},
     {"path":"apps/macos/Sources/OpenClaw/OpenClawIDSettingsSection.swift","kind":"ui-call","surface":"apple","id":"native.apple.ceecd9ecdac40c87","source":"Devices this Mac approved lose access too."},
+    {"path":"apps/macos/Sources/OpenClaw/OpenClawIDSettingsSection.swift","kind":"ui-call","surface":"apple","id":"native.apple.3579ba91760a8d42","source":"Open Dashboard"},
     {"path":"apps/macos/Sources/OpenClaw/OpenClawIDSettingsSection.swift","kind":"ui-call","surface":"apple","id":"native.apple.d8ff2d3cb263dd51","source":"OpenClaw ID"},
     {"path":"apps/macos/Sources/OpenClaw/OpenClawIDSettingsSection.swift","kind":"ui-call","surface":"apple","id":"native.apple.4325859b8b5d9dd0","source":"Remove \\(device) from \\(claw)?"},
     {"path":"apps/macos/Sources/OpenClaw/OpenClawIDSettingsSection.swift","kind":"ui-call","surface":"apple","id":"native.apple.39199402c7563cec","source":"Remove this Mac…"},

@@ -106,14 +106,14 @@ final class OnboardingOpenClawIDModel {
     let accountUnavailableReason: String?
     @ObservationIgnored private let service: any OnboardingOpenClawIDService
     @ObservationIgnored private let onNodeConnected: (String) -> Void
-    @ObservationIgnored private let onJoined: (String) -> Void
+    @ObservationIgnored private let onJoined: (String) throws -> Void
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var wait: Task<Void, Never>?
 
     init(
         service: any OnboardingOpenClawIDService,
         onNodeConnected: @escaping (String) -> Void = { _ in },
-        onJoined: @escaping (String) -> Void = { MacOpenClawIDJoinCompletion.finish(claw: $0) })
+        onJoined: @escaping (String) throws -> Void = { try MacOpenClawIDJoinCompletion.finish(claw: $0) })
     {
         self.service = service
         self.onNodeConnected = onNodeConnected
@@ -136,6 +136,9 @@ final class OnboardingOpenClawIDModel {
         self.wait?.cancel()
         self.wait = nil
         if case .signIn = action { self.step = .signingIn }
+        if case .retry = action, case .ownerConnected = self.step {
+            return self.run { self.step }
+        }
         return self.run { try await self.service.perform(action) }
     }
 
@@ -159,7 +162,7 @@ final class OnboardingOpenClawIDModel {
             do {
                 let step = try await operation()
                 guard !Task.isCancelled else { return }
-                self.show(step)
+                try self.show(step)
             } catch {
                 guard !Task.isCancelled else { return }
                 // Service errors can carry sensitive response bodies; do not render them verbatim.
@@ -171,11 +174,11 @@ final class OnboardingOpenClawIDModel {
         return task
     }
 
-    private func show(_ step: OnboardingOpenClawIDStep) {
+    private func show(_ step: OnboardingOpenClawIDStep) throws {
         self.step = step
         switch step {
         case let .nodeConnection(claw, true): self.onNodeConnected(claw)
-        case let .ownerConnected(claw, _, _): self.onJoined(claw)
+        case let .ownerConnected(claw, _, _): try self.onJoined(claw)
         case .ownerCompareCode: self.awaitApproval()
         default: break
         }
@@ -189,7 +192,7 @@ final class OnboardingOpenClawIDModel {
                 let step = try await self.service.perform(.checkApproval)
                 guard !Task.isCancelled else { return }
                 self.wait = nil
-                self.show(step)
+                try self.show(step)
             } catch {
                 guard !Task.isCancelled else { return }
                 self.wait = nil

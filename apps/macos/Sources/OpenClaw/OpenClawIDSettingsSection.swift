@@ -37,9 +37,14 @@ final class OpenClawIDSettingsModel {
     private(set) var error: String?
     private(set) var revision = 0
     @ObservationIgnored private let store: MacOpenClawIDDeviceStore
+    @ObservationIgnored private let completeJoin: (String) throws -> Void
 
-    init(store: MacOpenClawIDDeviceStore = .shared) {
+    init(
+        store: MacOpenClawIDDeviceStore = .shared,
+        completeJoin: @escaping (String) throws -> Void = { try MacOpenClawIDJoinCompletion.finish(claw: $0) })
+    {
         self.store = store
+        self.completeJoin = completeJoin
     }
 
     func presentation(state: AppState) -> OpenClawIDSettingsPresentation? {
@@ -70,7 +75,7 @@ final class OpenClawIDSettingsModel {
             let model = OnboardingOpenClawIDModel(
                 service: OnboardingOpenClawIDSignInService(),
                 onJoined: { [weak self] claw in
-                    MacOpenClawIDJoinCompletion.finish(claw: claw)
+                    try self?.completeJoin(claw)
                     self?.signIn = nil
                     self?.revision += 1
                 })
@@ -79,6 +84,15 @@ final class OpenClawIDSettingsModel {
         case .stopTools: self.run { try await self.stopTools() }
         case .startTools: self.run { try await self.startTools() }
         case .remove: self.run { try await self.removeDevice() }
+        }
+    }
+
+    /// Finishes a saved enrollment after a primary-connection save failure, including after restart.
+    @discardableResult
+    func retryPrimarySelection() -> Task<Void, Never>? {
+        self.run {
+            guard let device = self.store.load() else { return }
+            try self.completeJoin(device.hostname)
         }
     }
 
@@ -98,11 +112,12 @@ final class OpenClawIDSettingsModel {
         }
     }
 
-    private func run(_ operation: @escaping @MainActor () async throws -> Void) {
-        guard !self.busy else { return }
+    @discardableResult
+    private func run(_ operation: @escaping @MainActor () async throws -> Void) -> Task<Void, Never>? {
+        guard !self.busy else { return nil }
         self.busy = true
         self.error = nil
-        Task { @MainActor in
+        return Task { @MainActor in
             do {
                 try await operation()
             } catch {
@@ -249,6 +264,7 @@ struct OpenClawIDSettingsSection: View {
                             self.model.confirmation = .startTools(claw: claw, device: device)
                         }
                     }
+                    Button("Open Dashboard") { self.model.retryPrimarySelection() }.disabled(self.model.busy)
                     Spacer()
                     Button("Remove this Mac…", role: .destructive) {
                         self.model.confirmation = .remove(claw: claw, device: device)

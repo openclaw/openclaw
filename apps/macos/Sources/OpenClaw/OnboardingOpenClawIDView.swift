@@ -46,6 +46,9 @@ struct OnboardingOpenClawIDView: View {
             if self.model.busy { ProgressView("Working…") }
             if let error = self.model.error {
                 Text(error).foregroundStyle(.orange).font(.callout)
+                if case .ownerConnected = self.model.step {
+                    Button("Try again") { self.model.perform(.retry) }.disabled(self.model.busy)
+                }
             }
             Button("Close") { self.dismiss() }.keyboardShortcut(.cancelAction)
         }

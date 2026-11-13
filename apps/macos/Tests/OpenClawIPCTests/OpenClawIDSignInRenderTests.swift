@@ -67,6 +67,22 @@ struct OpenClawIDSignInRenderTests {
     }
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_RENDER_DIR"] != nil))
+    func `failed primary migration offers retry`() async throws {
+        let output = try OnboardingRenderTests.outputDirectory()
+        let step = OnboardingOpenClawIDStep.ownerConnected(
+            claw: "studio.example.test", device: "Fixture Mac", approvedWith: "Approved with your recovery kit")
+        let model = OnboardingOpenClawIDModel(service: RenderService(step: step), onJoined: { _ in
+            throw PrimaryGatewayControlError.persistenceFailed
+        })
+        await model.begin(.connect)?.value
+        try #require(model.error != nil)
+        try OnboardingRenderTests.capture(
+            OnboardingOpenClawIDView(model: model), name: "migration-save-failure", label: Self.label,
+            output: output, width: 574, dark: false)
+        model.cancel()
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_RENDER_DIR"] != nil))
     func `settings section and confirmations render`() throws {
         let output = try OnboardingRenderTests.outputDirectory()
         let claw = "studio-k7x2q.crabd.me"

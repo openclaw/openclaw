@@ -183,6 +183,7 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
             throw OpenClawIDOwnerEnrollmentError.wrongKit
         }
         try await self.discovery.bindDevice(session, device: keys.device, peer: keys.peer, label: label)
+        guard self.now() < deadline else { throw OpenClawIDOwnerEnrollmentError.expired }
         let cert = try OpenClawIDStatement.sign(
             "OwnerDeviceCert",
             body: .object([

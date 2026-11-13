@@ -1,7 +1,8 @@
+import CryptoKit
 import Foundation
-import OpenClawKit
 import Testing
 @testable import OpenClaw
+@testable import OpenClawKit
 
 @MainActor
 struct OnboardingOpenClawIDSignInTests {
@@ -144,6 +145,115 @@ struct OnboardingOpenClawIDSignInTests {
         #expect(model.step == .recoveryKitEntry(claw: "studio-fixture"))
     }
 
+    @Test func `failed join completion retries without enrolling again`() async {
+        let service = ApprovalService()
+        var attempts = 0
+        let model = OnboardingOpenClawIDModel(service: service, onJoined: { _ in
+            attempts += 1
+            if attempts == 1 { throw PrimaryGatewayControlError.persistenceFailed }
+        })
+        await model.perform(.submitRecoveryKit("fixture"))?.value
+        #expect(model.error != nil)
+        #expect(attempts == 1)
+        await model.perform(.retry)?.value
+        #expect(model.error == nil)
+        #expect(attempts == 2)
+        #expect(service.enrollments == 1)
+    }
+
+    @Test func `settings retries stored enrollment after the sign in sheet is gone`() async throws {
+        let suite = "ocid-migration-retry-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = MacOpenClawIDDeviceStore(defaults: defaults, databaseURL: Self.database())
+        let device = MacOpenClawIDDevice(
+            hostname: "studio.example.test", clawID: Discovery.studio,
+            discoveryOrigin: Self.configuration.discoveryOrigin, deviceEnrollmentID: UUID(),
+            nodeEnrollmentID: UUID(), approvedWith: .device)
+        store.save(device)
+        var joined: [String] = []
+        let model = OpenClawIDSettingsModel(store: store, completeJoin: { joined.append($0) })
+        await model.retryPrimarySelection()?.value
+        #expect(joined == [device.hostname])
+        #expect(store.load() == device)
+        #expect(model.error == nil)
+    }
+
+    @Test func `cancel after kit enrollment commit never installs the device`() async throws {
+        let http = Discovery()
+        let committed = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let trust = CommittedTrust(committed: committed.continuation, release: release.stream)
+        var environment = Self.environment(http: http)
+        environment.keyStore = { _, purpose in
+            MemoryKey(seed: Data(repeating: purpose == .device ? 1 : (purpose == .devicePeer ? 2 : 3), count: 32))
+        }
+        environment.trustStore = { _, _ in trust }
+        var installed = false
+        environment.install = { _, _ in installed = true }
+        let service = OnboardingOpenClawIDSignInService(
+            configuration: Self.configuration, databaseURL: Self.database(), nodeInvitations: Self.nodeInvitations(),
+            environment: environment)
+        _ = try await service.perform(.signIn)
+        _ = try await service.perform(.selectClaw(Discovery.studio))
+        let task = Task { try await service.perform(.submitRecoveryKit(Self.kitText())) }
+        for await _ in committed.stream {
+            break
+        }
+        task.cancel()
+        release.continuation.yield(())
+        release.continuation.finish()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(!installed)
+        #expect(await trust.commits == 2)
+    }
+
+    private actor CommittedTrust: OpenClawIDNodeTrustStore {
+        let committed: AsyncStream<Void>.Continuation
+        let release: AsyncStream<Void>
+        private(set) var commits = 0
+
+        init(committed: AsyncStream<Void>.Continuation, release: AsyncStream<Void>) {
+            self.committed = committed
+            self.release = release
+        }
+
+        func load(hostname _: String) -> OpenClawIDNodeTrustState? {
+            nil
+        }
+
+        func observe(hostname _: String, state _: OpenClawIDNodeTrustState) {}
+        func commit(_: OpenClawIDNodeTrustTarget) async {
+            self.commits += 1
+            if self.commits == 2 {
+                self.committed.yield(())
+                for await _ in self.release {
+                    break
+                }
+            }
+        }
+    }
+
+    private nonisolated static func kitText() -> String {
+        let body = Data([1]) + Data(repeating: 7, count: 16)
+        let bytes = body + Data(SHA256.hash(data: body).prefix(2))
+        let alphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+        var result = "OCK1-"
+        var buffer = 0
+        var bits = 0
+        for byte in bytes {
+            buffer = (buffer << 8) | Int(byte)
+            bits += 8
+            while bits >= 5 {
+                bits -= 5
+                result.append(alphabet[(buffer >> bits) & 31])
+            }
+            buffer &= (1 << bits) - 1
+        }
+        if bits > 0 { result.append(alphabet[(buffer << (5 - bits)) & 31]) }
+        return result
+    }
+
     // MARK: helpers
 
     private static func database() -> URL {
@@ -174,7 +284,7 @@ struct OnboardingOpenClawIDSignInTests {
     }
 
     private struct MemoryKey: OpenClawIDNodeIdentityStore {
-        let seed = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+        var seed = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
         func loadOrCreateSeed() async throws -> Data {
             self.seed
         }
@@ -188,6 +298,7 @@ struct OnboardingOpenClawIDSignInTests {
         private let claws: Data
         private(set) var bearers: [String] = []
         private(set) var mailboxPosts = 0
+        private var admitted = false
 
         init(empty: Bool = false) {
             let claws: [[String: Any]] = empty ? [] : [
@@ -217,11 +328,53 @@ struct OnboardingOpenClawIDSignInTests {
                     "expires_at": 9_999_999_999,
                 ])
             case ("GET", "/v1/claws"): return .init(status: 200, body: self.claws)
+            case ("POST", "/v1/devices"): return json([:])
+            case let ("GET", path) where path.hasSuffix("/descriptor"):
+                return try self.trustResponse(descriptor: true)
+            case let ("GET", path) where path.hasSuffix("/snapshot"):
+                return try self.trustResponse(descriptor: false)
             case let ("POST", path) where path.hasSuffix("/mailbox"):
+                self.admitted = true
                 self.mailboxPosts += 1
                 return json([:])
             default: return .init(status: 404, body: Data())
             }
+        }
+
+        private func trustResponse(descriptor: Bool) throws -> OpenClawIDNodeEnrollmentHTTPResponse {
+            let root = try OpenClawIDRecoveryKit.root(OnboardingOpenClawIDSignInTests.kitText())
+            let gateway = try OpenClawIDNodeIdentity(seed: Data(repeating: 4, count: 32))
+            let device = try OpenClawIDNodeIdentity(seed: Data(repeating: 1, count: 32))
+            let peer = try OpenClawIDNodeIdentity(seed: Data(repeating: 2, count: 32))
+            let node = try OpenClawIDNodeIdentity(seed: Data(repeating: 3, count: 32))
+            let now = Int64(Date().timeIntervalSince1970)
+            let binding = try OpenClawIDStatement.sign("ServerBinding", body: .object([
+                "claw_id": .string(Self.studio), "hostname": .string("studio-k7x2q.crabd.me"),
+                "k_srv": .string(gateway.peerKey), "k_gw": .string(gateway.signingKey),
+                "binding_seq": .integer(1), "root_epoch": .integer(1), "issued_at": .integer(now),
+            ]), signer: root)
+            let value: OpenClawIDCanonicalJSON
+            if descriptor {
+                value = .object(["descriptor": .object([
+                    "v": .integer(1), "claw_id": .string(Self.studio), "transport": .string("iroh"),
+                    "relay_url": .string("https://relay.example.test"), "root_pub": .string(root.signingKey),
+                    "binding": binding, "published_at": .integer(now),
+                ])])
+            } else {
+                let snapshot = try OpenClawIDStatement.sign("MembershipSnapshot", body: .object([
+                    "claw_id": .string(Self.studio), "seq": .integer(self.admitted ? 2 : 1),
+                    "binding_seq": .integer(1), "issued_at": .integer(now),
+                    "owner_devices": .array(self.admitted ? [.object([
+                        "device_pub": .string(device.signingKey), "caps": .array([]),
+                    ])] : []),
+                    "owner_peer_keys": .array(self.admitted ? [.string(peer.peerKey)] : []),
+                    "node_peer_keys": .array(self.admitted ? [.string(node.peerKey)] : []),
+                    "members": .array([]),
+                    "protocols": .object(["statement": .array([.integer(1)]), "descriptor": .array([.integer(1)])]),
+                ]), signer: gateway)
+                value = .object(["snapshot": snapshot])
+            }
+            return .init(status: 200, body: value.encoded)
         }
     }
 
@@ -229,6 +382,7 @@ struct OnboardingOpenClawIDSignInTests {
     @MainActor
     private final class ApprovalService: OnboardingOpenClawIDService {
         let unavailableReason: String? = nil
+        var enrollments = 0
         private var decision: CheckedContinuation<OnboardingOpenClawIDStep, Error>?
         var waiting: Bool {
             self.decision != nil
@@ -246,6 +400,9 @@ struct OnboardingOpenClawIDSignInTests {
 
         func perform(_ action: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep {
             switch action {
+            case .submitRecoveryKit:
+                self.enrollments += 1
+                return .ownerConnected(claw: "studio-fixture", device: "Fixture Mac", approvedWith: "Approved")
             case .approveFromDevice:
                 return .ownerCompareCode(
                     claw: "studio-fixture",
