@@ -1,6 +1,7 @@
 import { WebClient, type WebClientOptions } from "@slack/web-api";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { slackApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import {
   createSlackLookupClient,
   createSlackReadClient,
@@ -53,7 +54,14 @@ async function withApi(mode: number | "drop" | "stall", use: (api: Api) => Promi
       } else if (mode !== "stall") {
         const send = () => {
           response.writeHead(200, { "content-type": "application/json" });
-          response.end(JSON.stringify({ ok: true }));
+          response.end(
+            JSON.stringify({
+              ok: true,
+              ...(request.url === "/api/chat.postMessage"
+                ? { ts: "1700000000.000100", channel: "C123" }
+                : {}),
+            }),
+          );
         };
         if (mode > 0) {
           setTimeout(send, mode);
@@ -106,6 +114,68 @@ const rateLimited = (seconds: string) =>
   });
 
 describe("Slack Web API routing", () => {
+  it.each([
+    ["channel:C123", "drop"],
+    ["team:TWORKSPACE:channel:C123", "drop"],
+    ["channel:C123", 0],
+  ] as const)("posts a native approval once for %s with response %s", async (to, mode) => {
+    await withListener(mode, async ({ requests }, client, webClientOptions) => {
+      vi.stubEnv("SLACK_API_URL", webClientOptions.slackApiUrl);
+      const { transport } = slackApprovalNativeRuntime;
+      const input: Parameters<typeof transport.prepareTarget>[0] = {
+        cfg: { channels: { slack: { botToken: "listener-fixture" } } },
+        accountId: "default",
+        context: { app: { client, webClientOptions }, workspaceTeamId: "TWORKSPACE" },
+        approvalKind: "exec",
+        request: {
+          id: "approval-fixture",
+          request: { command: "echo fixture" },
+          createdAtMs: 0,
+          expiresAtMs: 60_000,
+        },
+        view: {
+          approvalKind: "exec",
+          phase: "pending",
+          approvalId: "approval-fixture",
+          title: "Exec approval",
+          commandText: "echo fixture",
+          metadata: [],
+          actions: [],
+          expiresAtMs: 60_000,
+        },
+        plannedTarget: { surface: "origin", reason: "preferred", target: { to } },
+        pendingPayload: { text: "approve fixture", blocks: [] },
+      };
+      input.pendingPayload = await slackApprovalNativeRuntime.presentation.buildPendingPayload({
+        ...input,
+        nowMs: 0,
+      });
+      const prepared = await transport.prepareTarget(input);
+      if (!prepared) {
+        throw new Error("missing approval target");
+      }
+      const delivery = transport.deliverPending({ ...input, preparedTarget: prepared.target });
+      if (mode === "drop") {
+        await expect(delivery).rejects.toMatchObject({ code: "slack_webapi_request_error" });
+      } else {
+        await expect(delivery).resolves.toMatchObject({
+          channelId: "C123",
+          messageTs: "1700000000.000100",
+        });
+      }
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        authorization: "Bearer listener-fixture",
+        method: "POST",
+        url: "/api/chat.postMessage",
+      });
+      expect(Object.fromEntries(new URLSearchParams(requests[0]?.body))).toMatchObject({
+        channel: "C123",
+        text: input.pendingPayload.text,
+      });
+    });
+  });
+
   it("keeps lost stream responses one-shot without changing listener reads", async () => {
     await withListener(
       "drop",
