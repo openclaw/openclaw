@@ -206,7 +206,7 @@ export async function prepareScratchMaintenanceTargets(
         throw new Error("Scratch cleanup deferred: session checkout bindings changed");
       }
       // This pass consumes prepared custody facts until their owners publish a change.
-      // Checking each unlink does not rescan every run or query session storage.
+      // Custody checks do not rescan every run or query session storage.
       if (runsChanged) {
         const currentRoots = new Set<string>();
         const current = runSessions();

@@ -62,6 +62,21 @@ it("expires only entries whose newest file is older than 24 hours, retaining bou
   }
 });
 
+it("retains a replacement entry when identity changes after expiry inspection", async () => {
+  const f = await fixture();
+  const directory = path.dirname(await f.file(".openclaw/tmp/expired/proof"));
+  let preparations = 0;
+  f.target.prepare = async () => {
+    if (++preparations === 2) {
+      await fs.rename(directory, path.join(f.root, "retained-original"));
+      await f.file(".openclaw/tmp/expired/fresh", 1);
+    }
+  };
+  expect(await f.run()).toMatchObject({ entriesRemoved: 0, filesRemoved: 0, deferred: 1 });
+  expect(await fs.readFile(path.join(directory, "fresh"), "utf8")).toBe("proof");
+  expect(await fs.readFile(path.join(f.root, "retained-original/proof"), "utf8")).toBe("proof");
+});
+
 it("skips live or queued custody and stops paced deletion when custody becomes live", async () => {
   const f = await fixture();
   f.target.isLive = () => true;
@@ -78,6 +93,25 @@ it("skips live or queued custody and stops paced deletion when custody becomes l
   expect(await f.run()).toMatchObject({ skippedLive: 1, filesRemoved: 128, entriesRemoved: 0 });
   expect(f.pause).toHaveBeenCalledExactlyOnceWith(100);
   expect((await fs.readdir(path.dirname(file))).length).toBe(2);
+});
+
+it("joins worker cancellation at a deletion checkpoint before releasing the checkout", async () => {
+  const f = await fixture();
+  const controller = new AbortController();
+  for (let index = 0; index < 130; index++) {
+    await f.file(`.openclaw/tmp/proof/${index}`);
+  }
+  await expect(
+    cleanScratch({
+      targets: [f.target],
+      now,
+      cursor: f.cursor,
+      signal: controller.signal,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+      pause: async () => controller.abort(),
+    }),
+  ).rejects.toMatchObject({ name: "AbortError" });
+  expect(await fs.readdir(path.join(f.root, ".openclaw/tmp/proof"))).toHaveLength(2);
 });
 
 it("refuses symlink scratch roots but expires contained links without following their targets", async () => {
