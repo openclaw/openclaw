@@ -185,6 +185,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "groupChannel",
   "space",
   "skillsSnapshot",
+  "toolUsageRankingSeed",
   "skillLibrarySelections",
   "systemPromptReport",
   "pluginDebugEntries",

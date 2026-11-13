@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { appendRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { resolveStateDir } from "../config/state-dir.js";
@@ -516,7 +515,7 @@ export const fileLogTransport = resolveGlobalSingleton(
           ? {
               defaultRoot:
                 typeof defaultRoot === "boolean"
-                  ? { options: { tmpDir: os.tmpdir(), stateDir: resolveStateDir() } }
+                  ? { options: { stateDir: resolveStateDir() } }
                   : defaultRoot,
             }
           : {}),

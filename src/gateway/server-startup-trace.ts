@@ -56,7 +56,6 @@ const STARTUP_PROGRESS_PHASES = new Set([
   "sidecars.worker-environments.publications",
   "sidecars.internal-hooks",
   "sidecars.model-runtime",
-  "sidecars.reply-runtime",
   "sidecars.chat-metadata",
   "sidecars.channels",
   "sidecars.plugin-services",

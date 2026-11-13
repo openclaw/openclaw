@@ -104,6 +104,11 @@ a new C/Q. Explicit trusted-main or protected-tooling routes remain available
 for diagnostics, main qualification, and postpublish confidence, not fresh
 candidate-owned publication evidence.
 
+When Q differs from C, the helper warns before dispatch and when reconciling the
+request. These runs cannot produce candidate-sealed child receipts, so release
+verification may fail even when the workloads succeed. Use Q=C for candidate
+qualification.
+
 ## Exact frozen-target test omissions
 
 Candidate-owned Q=C qualification rejects test omissions. The following inputs

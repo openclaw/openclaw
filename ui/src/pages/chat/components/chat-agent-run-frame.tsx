@@ -8,6 +8,7 @@ import {
   getOwner,
   lazy,
   Match,
+  merge,
   onSettled,
   runWithOwner,
   Show,
@@ -305,6 +306,11 @@ function RunFrame(props: FrameProps) {
       {(input) => {
         const part = () => input().part;
         const options = () => input().options;
+        const streamOptions = merge(() => options().streamOptions, {
+          get firstBubbleKey() {
+            return firstBubbleKey();
+          },
+        });
         const groupOptions = (group: MessageGroupData) => ({
           ...options().renderGroupOptions(group),
           firstBubbleKey: firstBubbleKey(),
@@ -333,14 +339,7 @@ function RunFrame(props: FrameProps) {
           <Switch>
             <Match when={streamPart()}>
               {(stream) => (
-                <StreamPartView
-                  part={stream()}
-                  options={{
-                    ...options().streamOptions,
-                    firstBubbleKey: firstBubbleKey(),
-                  }}
-                  presentation="standalone"
-                />
+                <StreamPartView part={stream()} options={streamOptions} presentation="standalone" />
               )}
             </Match>
             <Match when={workPart()}>

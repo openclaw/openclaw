@@ -419,8 +419,14 @@
   box-shadow: 0 1px var(--border-strong);
 }
 
-/* The transcript, excluding reserved Details space, owns spare width.
-   Only top-level assistant tables borrow it; prose and nested tables stay put. */
+/* Resolve transcript-relative lengths before inheriting into message containers. */
+@property --chat-table-outset {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+/* Only top-level assistant tables borrow spare width; prose and nested tables stay put. */
 @container chat-transcript (min-width: 900px) {
   .chat-group.assistant:has(> :is(.chat-avatar, .chat-avatar-slot)) {
     --chat-leading-table-clearance: var(--chat-avatar-column);
@@ -444,18 +450,16 @@
   }
 
   .chat-virtual-row {
-    --chat-table-outset: max(
+    --chat-table-outset: clamp(
       0px,
-      min(
-        12rem,
-        calc(
-          (
-              100cqw - var(--chat-table-reserved-space, 0px) -
-                var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-inline-inset)
-            ) /
-            2
-        )
-      )
+      calc(
+        (
+            100cqw - var(--chat-table-reserved-space, 0px) -
+              var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-inline-inset)
+          ) /
+          2
+      ),
+      12rem
     );
   }
 
@@ -470,9 +474,9 @@
   }
 
   .chat-group.assistant .chat-bubble > .chat-text > .markdown-table {
-    width: calc(100% + 2 * var(--chat-table-outset, 0px));
+    width: calc(100% + 2 * var(--chat-table-outset));
     max-width: none;
-    margin-inline: calc(-1 * var(--chat-table-outset, 0px));
+    margin-inline: calc(-1 * var(--chat-table-outset));
   }
 
   /* Keep the existing phone-landscape layout, including its touch controls. */
@@ -480,7 +484,7 @@
     .chat-group.assistant .chat-bubble > .chat-text > .markdown-table {
       width: max-content;
       min-width: 100%;
-      max-width: calc(100% + 2 * var(--chat-table-outset, 0px));
+      max-width: calc(100% + 2 * var(--chat-table-outset));
       margin-inline: 0;
       margin-bottom: 24px;
       left: 50%;

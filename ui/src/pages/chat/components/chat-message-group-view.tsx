@@ -11,6 +11,7 @@ import { readHandoffDisplay } from "../chat-sessions-yield.ts";
 import { listResumedHandoffSessions } from "../chat-subagent-wait.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
+import { isActivityMessageGroup } from "../chat-turn-presentation.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
@@ -24,7 +25,6 @@ import {
   type GroupMessage,
   type MessageGroupFrame,
   type NativeMessageGroupOptions,
-  isActivityMessageGroup,
   prepareGroupMessage,
   prepareMessageGroupFrame,
   resolveFileLinkOwnerOptions,
@@ -191,8 +191,8 @@ export function ActivityGroup(props: {
     <ChatLazyBoundary>
       <ActivityGroupContent
         {...props}
-        renderEntries={(overrides) => (
-          <For each={props.groups} keyed={(group) => group.key}>
+        renderEntries={(overrides, groups) => (
+          <For each={groups()} keyed={(group) => group.key}>
             {(group) => (
               <For each={group().messages} keyed={(item) => item.key}>
                 {(item, index) => (

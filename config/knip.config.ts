@@ -60,6 +60,7 @@ const repositoryScriptEntries = [
   "test/fixtures/beam-live-handoff-client/beam.mjs",
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-ci-lint-plan.mts!",
+  "scripts/bench-ci-planner.mts!",
   "scripts/bench-android-release-history.mts!",
   "scripts/bench-ios-release-note-overlap.mjs!",
   "scripts/bench-mobile-release-dependencies.mjs!",
@@ -899,6 +900,9 @@ const rootBundledPluginRuntimeDependencies = [
 // owning workspace, or invoke their package binaries/loaders without a static module import.
 const rootToolingAndWorkspaceDependencies = [
   "@copilotkit/aimock",
+  // Inline-command benchmarks resolve Codex from each measured checkout's
+  // extensions/codex/package.json, never from the tooling root.
+  "@openai/codex",
   // installed-terminal-dependencies.mjs loads these from the pinned npm CLI's own
   // dependency tree via createRequire(npmCli), never from the root workspace.
   "@npmcli/arborist",

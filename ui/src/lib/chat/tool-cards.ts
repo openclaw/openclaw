@@ -29,9 +29,50 @@ import { getMessageDerivations } from "./message-derivations.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
 import { readLiveDiffStat } from "./tool-call-diff.ts";
 import { readPreparedActivity } from "./tool-call-grouping.ts";
+import { readLiveToolOutput } from "./tool-live-output.ts";
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
 export type CanvasToolPreview = Extract<ToolPreview, { kind: "canvas" }>;
+export type ToolCardOutput = Pick<ToolCard, "outputText" | "liveOutput">;
+
+function readToolStreamResult(message: Record<string, unknown>) {
+  return readRecord(
+    Array.isArray(message.content)
+      ? message.content.find((item) => isToolResultContentType(readRecord(item)?.type))
+      : undefined,
+  );
+}
+
+/** Only running invocations replace output; reconciliation owns terminal results. */
+export function readLiveToolStreamOutput(
+  message: Record<string, unknown>,
+): ToolCardOutput | undefined {
+  if (
+    message["__openclawToolStreamLive"] !== true ||
+    message["__openclawToolStreamResultReceived"] === true ||
+    message["__openclawToolStreamItemEnded"] === true
+  ) {
+    return undefined;
+  }
+  const result = readToolStreamResult(message);
+  return {
+    outputText: result ? extractToolText(result) : undefined,
+    liveOutput: readLiveToolOutput(message["__openclawToolStreamLiveOutput"]),
+  };
+}
+
+/** Canonical stream messages have one invocation and at most one captured result. */
+export function readToolStreamCanvasPreview(
+  message: Record<string, unknown> | undefined,
+): CanvasToolPreview | undefined {
+  if (!message) {
+    return undefined;
+  }
+  const result = readToolStreamResult(message);
+  return result
+    ? extractToolCanvasPreview(result.details ?? message.details, extractToolText(result))
+    : undefined;
+}
 
 function resolveTranscriptMessageId(message: Record<string, unknown>): string | undefined {
   return (
@@ -186,18 +227,24 @@ export function extractToolPreview(outputText: string | undefined): CanvasToolPr
     : undefined;
 }
 
+function extractToolCanvasPreview(
+  details: unknown,
+  text: string | undefined,
+): CanvasToolPreview | undefined {
+  const preview = extractCanvasFromDetails(details);
+  return preview?.surface === "assistant_message"
+    ? { ...preview, surface: "assistant_message" }
+    : extractToolPreview(text);
+}
+
 function extractToolPresentation(
   details: unknown,
   text: string | undefined,
   browserToolName: string,
 ): Pick<ToolCard, "preview" | "browserTab"> {
-  const preview = extractCanvasFromDetails(details);
-  const canvas =
-    preview?.surface === "assistant_message"
-      ? { ...preview, surface: "assistant_message" }
-      : extractToolPreview(text);
+  const canvas = extractToolCanvasPreview(details, text);
   if (canvas) {
-    return { preview: { ...canvas, surface: "assistant_message" } };
+    return { preview: canvas };
   }
   const tab = asNullableRecord(asNullableRecord(details)?.browserTab);
   const target = readBrowserTabTarget(tab);
@@ -350,6 +397,9 @@ function extractToolCards(message: unknown): ToolCard[] {
   const content = normalizeContent(m.content);
   const messageIsError = readToolErrorFlag(m);
   const isLiveToolStream = m["__openclawToolStreamLive"] === true;
+  const liveOutput = isLiveToolStream
+    ? readLiveToolOutput(m["__openclawToolStreamLiveOutput"])
+    : undefined;
   const liveDiffStat = readLiveDiffStat(m["__openclawToolStreamDiffStat"]);
   const cards: ToolCard[] = [];
   const fallbackMatchedCards = new WeakSet<ToolCard>();
@@ -428,6 +478,7 @@ function extractToolCards(message: unknown): ToolCard[] {
             }
           : {}),
         ...(liveDiffStat ? { liveDiffStat } : {}),
+        ...(liveOutput ? { liveOutput } : {}),
       });
       continue;
     }
