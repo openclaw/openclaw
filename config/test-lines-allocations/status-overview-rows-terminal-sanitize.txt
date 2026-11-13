@@ -1,0 +1,5 @@
+40
+# Terminal-control-injection regression for status degradation rows (BUG-331):
+# Valid DegradedPlugin/SecretEgressCertificateStatus fixtures (state, diagnostic,
+# caExpiresAt, failedCertificates) require more lines than the laundered cast they
+# replace; oxfmt folds these required fields across multiple lines.
