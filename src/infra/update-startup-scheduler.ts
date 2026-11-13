@@ -100,6 +100,11 @@ export function createGatewayUpdateCheck(params: {
       lifecycle.signal.addEventListener("abort", () => stopConfigListener?.(), { once: true });
       lifecycle.schedule("update.check", check);
       lifecycle.schedule("update.remote-model-catalog", async () => {
+        const memoryLimit = process.constrainedMemory();
+        // Leave scarce cgroup memory to requests before allocating a new catalog generation.
+        if (memoryLimit > 0 && process.availableMemory() <= memoryLimit * 0.2) {
+          return 60_000;
+        }
         let nextCheckInMs = REMOTE_MODEL_CATALOG_TTL_MS;
         try {
           const result = await refreshRemoteModelCatalog({
