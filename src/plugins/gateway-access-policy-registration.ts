@@ -10,11 +10,7 @@ import type {
 } from "./gateway-access-policy.types.js";
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
-import {
-  pluginInvocationContext,
-  runOutsideReleasedPluginInvocationScope,
-  type PluginInstanceHandle,
-} from "./plugin-instance-scope.js";
+import { pluginInvocationContext, type PluginInstanceHandle } from "./plugin-instance-scope.js";
 
 const accessInstances = new WeakMap<PluginGatewayAccessAuthority, PluginInstanceHandle>();
 
@@ -28,17 +24,10 @@ export function assertBoundGatewayAccessDecision(
   if (!instance || !instance.acceptingCalls || instance.owner?.revoked) {
     return assertCurrent();
   }
-  return runOutsideReleasedPluginInvocationScope(() => {
-    const scope = pluginInvocationContext.getStore();
-    // Live scopes still admit the caller before sharing a policy decision.
-    scope?.lookup(instance);
-    assertOperatorAccessDecision(
-      decision,
-      assertCurrent,
-      scope,
-      pluginInstanceInvocation.getStore(),
-    );
-  });
+  const scope = pluginInvocationContext.getStore();
+  // enter() performs this lookup even for an active call: closed scopes must refuse.
+  scope?.lookup(instance);
+  assertOperatorAccessDecision(decision, assertCurrent, scope, pluginInstanceInvocation.getStore());
 }
 
 // Native AbortSignal composition stores internal WeakRefs. Recursively proxying
@@ -127,7 +116,7 @@ function bindAccessAuthority(
     },
     assertCurrent: () => {
       try {
-        return runOutsideReleasedPluginInvocationScope(() => instance.run(assertCurrent));
+        return instance.run(assertCurrent);
       } catch (error) {
         if (instance.disposing || instance.lifecycle.signal.aborted) {
           failureCause ??= "plugin-lifetime-retired";

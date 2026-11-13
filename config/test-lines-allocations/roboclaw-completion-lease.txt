@@ -1,6 +1,7 @@
-# Net regression growth is 827 lines: the 400-line allowance plus 427 here.
+# Net regression growth is 837 lines: the 400-line allowance plus 437 here.
 # Real fresh/follow-up Gateway completion must survive producer release without
 # extending its lease; private fixtures preserve policy and delivery decisions.
 # Distinct suspended-body, revocation, retirement, policy/Gateway identity,
 # live/cleanup custody and duplicate-terminal cases protect the authority fences.
-427
+# Ten more lines exercise source retention and current-role reads after release.
+437

@@ -120,6 +120,16 @@ it.each([
             await resume.promise;
             captured!.operatorAuthority!.assertCurrent();
             captured!.assertCurrent();
+            if (boundary === "current") {
+              const release = captured!.operatorAuthority!.retain!();
+              try {
+                expect(captured!.operatorAuthority!.readCurrentRoleFacts!()).toMatchObject({
+                  assignedRole: null,
+                });
+              } finally {
+                release();
+              }
+            }
             if (boundary === "required-policy-changed") {
               // The resume boundary, not raw retained grant assertion, owns this fence.
               resumeGatewayOperatorAccessGrant(
