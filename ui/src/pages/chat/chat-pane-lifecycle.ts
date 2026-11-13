@@ -14,6 +14,7 @@ import {
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation-event.ts";
 import { hasModalSurface } from "../../components/overlay-registry.ts";
+import { focusComposerInput } from "../../lib/composer-input.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/activity.js";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -639,10 +640,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       );
     }
     if (focusComposerChanged && this.focusComposer) {
-      const input = textarea?.closest<HTMLElement>(".agent-chat__input");
-      textarea?.focus({ preventScroll: true });
-      if (input && this.draft) {
-        this.showComposerPrefillAttention(input);
+      focusComposerInput(textarea, { preventScroll: true });
+      if (this.draft) {
+        this.showComposerPrefillAttention(textarea?.closest<HTMLElement>(".agent-chat__input"));
       }
     }
     this.retireArchivedPresentation();
