@@ -13,6 +13,7 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js"
 import {
   decodeLocalWorkspaceTree,
   localWorkspaceDigestBytes,
+  localWorkspaceDigestReference,
   prepareLocalWorkspaceSourcePathSet,
   prepareLocalWorkspaceTreePacks,
   type LocalWorkspacePreparation,
@@ -597,7 +598,8 @@ it("releases sweep read pages for checkpoints while retaining live and concurren
     prepareTreePacks(db, records);
   }
   const livePaths = prepareLocalWorkspaceSourcePathSet('["entry.txt"]');
-  const orphanPaths = prepareLocalWorkspaceSourcePathSet('["abandoned.txt"]');
+  // This digest sorts after the live path set, exercising the final unbounded range.
+  const orphanPaths = prepareLocalWorkspaceSourcePathSet('["orphan-after-retained.txt"]');
   const reusedPaths = prepareLocalWorkspaceSourcePathSet('["reused.txt"]');
   for (const paths of [livePaths, orphanPaths, reusedPaths]) {
     prepareLocalWorkspaceContentInDatabase(db, { paths });
@@ -636,12 +638,9 @@ it("releases sweep read pages for checkpoints while retaining live and concurren
   expect(beginLocalWorkspaceSweepInDatabase(db)).toBe(1);
   const epoch = beginLocalWorkspaceSweepInDatabase(db);
   expect(epoch).toBe(2);
-  const packCount = Number(
-    db.prepare("SELECT count(*) AS n FROM local_workspace_tree_packs").get()!.n,
-  );
   using reader = new DatabaseSync(databasePath, { readOnly: true });
   const checkpointBusy: number[] = [];
-  const reads = trackSqliteStatementExecutions(reader, ["packs"], (sql) => {
+  const reads = trackSqliteStatementExecutions(reader, ["packs", "epochs"], (sql) => {
     if (!/^select\b/i.test(sql) || !sql.includes('from "local_workspace_tree_packs"')) {
       return null;
     }
@@ -658,7 +657,7 @@ it("releases sweep read pages for checkpoints while retaining live and concurren
       });
       checkpointBusy.push(Number(db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()!.busy));
     }
-    return "packs";
+    return sql.includes("sweep_epoch") ? "epochs" : "packs";
   });
   const { candidates } = localWorkspaceReadOperations["localWorkspace.sweepCandidates"](
     { epoch },
@@ -666,8 +665,10 @@ it("releases sweep read pages for checkpoints while retaining live and concurren
   );
   reads.restore();
   expect(checkpointBusy).toEqual([0]);
+  // Live packs need no epoch lookup; only unreachable old packs become candidates.
+  expect(reads.rowCounts.epochs).toBeLessThanOrEqual(6);
   // Candidate paging reads each digest once; graph traversal already knows its lookup keys.
-  expect(reads.blobBytes.packs).toBe(packCount * 32);
+  expect(reads.blobBytes.packs + reads.blobBytes.epochs).toBeLessThanOrEqual(6 * 32);
   expect(candidates.packs).toHaveLength(4);
   expect(candidates.paths).toHaveLength(2);
   // A writer reusing content after discovery protects it with the current epoch.
@@ -692,4 +693,12 @@ it("releases sweep read pages for checkpoints while retaining live and concurren
   expect(() =>
     readLocalWorkspaceSourcePaths(db, localWorkspaceDigestBytes(orphanPaths.digest)),
   ).toThrow("source path set is missing");
+  // With no retained path roots, the same paging still collects expired content.
+  mutateLocalWorkspaceProjection(db, id, {
+    kind: "update",
+    revision: 1,
+    patch: { source_paths_digest: null },
+  });
+  const next = localWorkspaceReadOperations["localWorkspace.sweepCandidates"]({ epoch }, reader);
+  expect(next.candidates.paths.map(localWorkspaceDigestReference)).toEqual([livePaths.digest]);
 });
