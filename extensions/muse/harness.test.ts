@@ -9,6 +9,7 @@ import type {
   AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type * as AgentHarnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type * as ExecApprovalsRuntime from "openclaw/plugin-sdk/exec-approvals-runtime";
 import {
@@ -30,6 +31,19 @@ const writes = vi.hoisted(() => ({
   append: vi.fn(async (params: { messages: unknown[] }) => params.messages),
   publish: vi.fn(async () => undefined),
 }));
+const registeredRun = vi.hoisted(() => ({
+  handle: undefined as undefined | { ownsLiveness?: () => boolean; isStopped?: () => boolean },
+}));
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
+  const original = await importOriginal<typeof AgentHarnessRuntime>();
+  return {
+    ...original,
+    setActiveEmbeddedRun: (...args: Parameters<typeof original.setActiveEmbeddedRun>) => {
+      registeredRun.handle = args[1];
+      return original.setActiveEmbeddedRun(...args);
+    },
+  };
+});
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof TranscriptRuntime>()),
   appendSessionTranscriptMessagesByIdentity: writes.append,
@@ -402,6 +416,86 @@ describe("Muse native MSP harness", () => {
     );
     expect(terminal(result).kind).toBe("ok");
     expect(result).toMatchObject({ lastToolError, toolMetas: [{ isError: true }] });
+  });
+
+  // The host's stalled-run watchdog spares a native turn only while its handle owns liveness.
+  it.each([
+    ["bounded", 30 * 60_000],
+    ["unlimited", 2 ** 31],
+  ] as const)(
+    "owns its liveness past the stall watchdog while a %s native turn runs",
+    async (_budget, timeoutMs) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const { run } = setup();
+      const controller = new AbortController();
+      const observed: Array<boolean | undefined> = [];
+      await run({
+        prompt: "settle",
+        timeoutMs,
+        abortSignal: controller.signal,
+        onExecutionStarted: () => {
+          observed.push(registeredRun.handle?.ownsLiveness?.());
+          // Past the host's six-minute stalled-run window with the native turn still open.
+          vi.advanceTimersByTime(7 * 60_000);
+          observed.push(
+            registeredRun.handle?.ownsLiveness?.(),
+            registeredRun.handle?.isStopped?.(),
+          );
+          controller.abort();
+          observed.push(registeredRun.handle?.ownsLiveness?.());
+        },
+      });
+      expect(observed).toEqual([true, true, false, false]);
+    },
+  );
+
+  it("returns liveness on native completion before host transcript draining finishes", async () => {
+    const { run } = setup();
+    const writing = Promise.withResolvers<void>();
+    const drain = Promise.withResolvers<void>();
+    const completed = Promise.withResolvers<void>();
+    const submission = vi
+      .spyOn(Session.prototype, "sendUserTurn")
+      .mockImplementation(async function (this: Session, options) {
+        submission.mockRestore();
+        const turn = await this.sendUserTurn(options);
+        void turn.completed.then(() => completed.resolve(), completed.reject);
+        return turn;
+      });
+    writes.append.mockImplementationOnce(async ({ messages }) => {
+      writing.resolve();
+      await drain.promise;
+      return messages;
+    });
+    const finished = vi.fn();
+    const running = run({ prompt: "hello", timeoutMs: 2 ** 31 }).then((result) => {
+      finished();
+      return result;
+    });
+    try {
+      await Promise.all([writing.promise, completed.promise]);
+      expect(finished).not.toHaveBeenCalled();
+      expect(registeredRun.handle?.ownsLiveness?.()).toBe(false);
+      expect(registeredRun.handle?.isStopped?.()).toBe(true);
+    } finally {
+      drain.resolve();
+      submission.mockRestore();
+      await running;
+    }
+    expect(terminal(await running).kind).toBe("ok");
+  });
+
+  it("returns liveness to the host when the attempt fails before the turn settles", async () => {
+    const { run } = setup();
+    const result = await run({
+      prompt: "hello",
+      onExecutionStarted: () => {
+        throw new Error("callback failed");
+      },
+    });
+    expect(terminal(result).kind).toBe("failed");
+    expect(registeredRun.handle?.ownsLiveness?.()).toBe(false);
+    expect(registeredRun.handle?.isStopped?.()).toBe(true);
   });
 
   it.each(["callback", "transcript", "abort", "timeout", "approval"] as const)(
