@@ -620,6 +620,13 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
   // Stop the early proxy before selection can choose another config/state target. Its lifecycle
   // restores the underlying env snapshot so the selected target's trusted dotenv can replace it.
   await getGatewayRunRuntimeHooks().releaseManagedProxy?.();
+  if (!params.opts.reset) {
+    // Outdated state is upgraded by copy and swap before anything reads it.
+    const { upgradeStateOnGatewayStart } = await import("../../state/state-upgrade-startup.js");
+    await measureGatewayBootstrapStep("cli.bootstrap.state-upgrade", () =>
+      upgradeStateOnGatewayStart(process.env),
+    );
+  }
   const environmentSelection = selectedGatewayRunEnvironment;
   selectedGatewayRunEnvironment = undefined;
   if (!environmentSelection) {
