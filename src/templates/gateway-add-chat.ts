@@ -219,10 +219,12 @@ export async function createTemplateAgentFromChat(
     if (planned.blockers.length > 0) {
       throw new TemplateAddMutationError("plan_blocked", planned.blockers[0]!.message);
     }
-    const manifestClaimed = templateManifestWorkspaceConflictsWithPath(
-      source.manifest,
-      MANIFEST_FILE,
-    );
+    if (templateManifestWorkspaceConflictsWithPath(source.manifest, MANIFEST_FILE)) {
+      throw new TemplateAddMutationError(
+        "workspace_conflict",
+        `${MANIFEST_FILE} is reserved for the unchanged Template manifest in chat-based Add.`,
+      );
+    }
     const plan: TemplateAddPlan = {
       ...planned,
       agent: {
@@ -236,21 +238,17 @@ export async function createTemplateAgentFromChat(
         // The planner turns a legacy heartbeat declaration and its HEARTBEAT.md into an
         // automation. Creation makes none, so that retired file is not written either.
         ...planned.actions.filter((action) => action.kind !== "cronJob"),
-        ...(manifestClaimed
-          ? []
-          : [
-              {
-                kind: "workspaceFile" as const,
-                id: MANIFEST_FILE,
-                action: "write" as const,
-                target: resolve(planned.agent.workspace, MANIFEST_FILE),
-                source: planned.template.manifestPath,
-                sourceKind: "templateManifest" as const,
-                digest: source.snapshot.manifest.digest,
-                details: { expectedState: "absent" },
-                blocked: false,
-              },
-            ]),
+        {
+          kind: "workspaceFile",
+          id: MANIFEST_FILE,
+          action: "write",
+          target: resolve(planned.agent.workspace, MANIFEST_FILE),
+          source: planned.template.manifestPath,
+          sourceKind: "templateManifest",
+          digest: source.snapshot.manifest.digest,
+          details: { expectedState: "absent" },
+          blocked: false,
+        },
       ],
     };
     const options: StatelessTemplateAddOptions = {
@@ -291,13 +289,6 @@ export async function createTemplateAgentFromChat(
       throw new KeptTemplateAgentError(
         core.error ?? { code: "add_failed", message: "Template Add did not finish." },
       );
-    }
-    if (manifestClaimed) {
-      report.failures.push({
-        kind: "manifest",
-        name: MANIFEST_FILE,
-        reason: `The Template's own workspace files claim ${MANIFEST_FILE}; that file was kept and the Template manifest was not copied.`,
-      });
     }
     return options;
   };

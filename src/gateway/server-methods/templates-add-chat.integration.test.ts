@@ -32,7 +32,7 @@ const { resolveSource, greeting, skills, registry, probe, workspaceWrite } = vi.
   skills: { preflight: vi.fn(), install: vi.fn() },
   registry: { detail: vi.fn(), artifact: vi.fn(), security: vi.fn(), download: vi.fn() },
   probe: { preflight: vi.fn(), artifact: vi.fn() },
-  workspaceWrite: { fail: undefined as string | undefined },
+  workspaceWrite: { fail: undefined as string | undefined, attempt: vi.fn() },
 }));
 // mock-isolation: Registry delivery of the Template is external I/O. Admission, the
 // workspace writer, installers, config writes and session finalization stay real.
@@ -90,6 +90,7 @@ vi.mock("../../infra/fs-safe.js", async (original) => {
             return Reflect.get(target, key, receiver);
           }
           return async (...write: Parameters<typeof root.write>) => {
+            workspaceWrite.attempt(args[0], write[0]);
             if (write[0] === workspaceWrite.fail) {
               throw new Error("Fixture workspace disk write failed");
             }
@@ -484,10 +485,6 @@ it("keeps the agent and reports each dependency it could not set up", async () =
     deliver(
       await writeTemplate(gateway.root, {
         ...travelCopilot,
-        workspace: {
-          ...travelCopilot.workspace,
-          files: [{ path: "CLAW.md", source: "workspace/CLAW.md" }],
-        },
         mcpServers: {
           ...travelCopilot.mcpServers,
           search: { url: "https://mcp.example.com/search", transport: "streamable-http" },
@@ -513,7 +510,7 @@ it("keeps the agent and reports each dependency it could not set up", async () =
     expect(skills.install).not.toHaveBeenCalled();
     expect(await exists(path.join(workspace, "skills", "itinerary", "SKILL.md"))).toBe(true);
     expect(await fs.readFile(path.join(workspace, "CLAW.md"), "utf8")).toBe(
-      "The Template's own notes.\n",
+      await fs.readFile(path.join(gateway.root, "CLAW.md"), "utf8"),
     );
     const listed = await listConfiguredMcpServers();
     expect(listed.ok && listed.mcpServers.docs).toMatchObject({
@@ -522,7 +519,6 @@ it("keeps the agent and reports each dependency it could not set up", async () =
     const report = greeting.mock.calls[0]![4] as TemplateSetupReport;
     expect(report.mcpServers).toEqual(["search"]);
     expect(report.failures).toEqual([
-      { kind: "manifest", name: "CLAW.md", reason: expect.stringContaining("was not copied") },
       {
         kind: "skill",
         name: "@steipete/goplaces",
@@ -533,7 +529,7 @@ it("keeps the agent and reports each dependency it could not set up", async () =
   });
 });
 
-it.each(["fetch", "workspace"] as const)(
+it.each(["fetch", "workspace", "manifest collision"] as const)(
   "leaves no agent and no chat when the Template %s fails, and a repeated Add succeeds",
   async (failure) => {
     await withGateway(async (gateway) => {
@@ -545,9 +541,19 @@ it.each(["fetch", "workspace"] as const)(
             "ClawHub could not deliver this Template.",
           ),
         );
-      } else {
+      } else if (failure === "workspace") {
         deliver(source);
         workspaceWrite.fail = "reference/airports.md";
+      } else {
+        deliver(
+          await writeTemplate(gateway.root, {
+            ...travelCopilot,
+            workspace: {
+              ...travelCopilot.workspace,
+              files: [{ path: "CLAW.md", source: "workspace/CLAW.md" }],
+            },
+          }),
+        );
       }
       const before = gateway.config();
       const workspace = path.join(gateway.state.stateDir, "workspace-travel-copilot");
@@ -570,8 +576,13 @@ it.each(["fetch", "workspace"] as const)(
       ).toBeUndefined();
       expect(await exists(workspace)).toBe(false);
       expect(greeting).not.toHaveBeenCalled();
+      if (failure === "manifest collision") {
+        expect(workspaceWrite.attempt.mock.calls.filter(([root]) => root === workspace)).toEqual(
+          [],
+        );
+      }
 
-      deliver(source);
+      deliver(await writeTemplate(gateway.root));
       workspaceWrite.fail = undefined;
       const [retried, result] = await gateway.add(chatAdd);
       expect(retried, JSON.stringify(result)).toBe(true);

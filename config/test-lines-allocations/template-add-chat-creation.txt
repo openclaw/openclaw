@@ -3,4 +3,5 @@
 # fixture, and the Control UI suite covers the plan-free Add and its rollback.
 # Follow-up policy cases resolve effective grants across profile/allow/deny layers;
 # deferred-detail cases protect immediate chat and stale-connection non-mutation.
-200
+# The reserved CLAW.md rollback/retry case reuses the failure table and records no writes (+11 net).
+211
