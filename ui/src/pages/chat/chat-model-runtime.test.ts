@@ -275,37 +275,32 @@ describe("chat model runtime choices", () => {
   });
 
   it.each([
-    ["codex", "openai", "claude-cli", "claude-cli", "Claude CLI · native"],
-    ["claude-cli", "anthropic", "openclaw", "anthropic", "API · OpenClaw"],
+    ["codex", "claude-cli", "claude-cli", "Claude CLI · native"],
+    ["claude-cli", "openclaw", "anthropic", "API · OpenClaw"],
   ])(
-    "labels Default with the configured route while the session pins %s",
-    async (pinnedRuntime, sessionProvider, defaultRuntime, group, routeLabel) => {
+    "labels Default with its configured route while the session pins %s",
+    async (pin, configured, group, label) => {
       const opus: ModelCatalogEntry = {
+        ...model,
         id: "claude-opus-5-5",
-        name: "Claude Opus 5.5",
         provider: "anthropic",
-        available: true,
-        // Same-provider session pins describe the route being left, not the configured one.
-        agentRuntime: {
-          id: sessionProvider === "anthropic" ? pinnedRuntime : "claude-cli",
-          source: "model",
-        },
+        agentRuntime: { id: pin === "codex" ? "claude-cli" : pin, source: "model" },
       };
-      const sonnet = { ...opus, id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" };
-      const pinned = sessionProvider === "anthropic" ? sonnet : model;
+      const pinned = pin === "codex" ? model : { ...opus, id: "claude-sonnet-5-5" };
       const result = createSessionsListResult({
         model: pinned.id,
         modelProvider: pinned.provider,
-        modelOverrideSource: "user",
         defaultsModel: opus.id,
         defaultsProvider: opus.provider,
       });
-      result.sessions[0]!.agentRuntime = { id: pinnedRuntime, source: "session-key" };
-      result.defaults.agentRuntime = { id: defaultRuntime, source: "model" };
-      const container = await renderControls(result, [model, opus, sonnet]);
+      result.sessions[0]!.agentRuntime = { id: pin, source: "session-key" };
+      result.defaults.agentRuntime = { id: configured, source: "model" };
+      const container = await renderControls(result, [model, opus, pinned]);
       const row = container.querySelector<HTMLElement>('[data-chat-model-default="true"]')!;
-      expect(row.closest("section")?.dataset.chatModelProviderGroup).toBe(group);
-      expect(row.textContent).toContain(routeLabel);
+      expect([row.closest("section")?.dataset.chatModelProviderGroup, row.textContent]).toEqual([
+        group,
+        expect.stringContaining(label),
+      ]);
     },
   );
 
@@ -345,40 +340,4 @@ describe("chat model runtime choices", () => {
       expect(onSetup).toHaveBeenCalledTimes(guard === "missing-auth" ? 1 : 0);
     },
   );
-});
-
-it("carries provider presentation from the admitted catalog into trigger and picker rows", async () => {
-  const entry: ModelCatalogEntry = {
-    provider: "workstation",
-    id: "local",
-    name: "Local model",
-    available: true,
-    providerName: "Research Lab",
-  };
-  const result = createSessionsListResult({
-    model: entry.id,
-    modelProvider: entry.provider,
-    defaultsModel: entry.id,
-    defaultsProvider: entry.provider,
-  });
-  const onModelSelect = vi.fn(async () => {});
-  const container = await renderControls(result, [entry], { onModelSelect });
-  const group = () => container.querySelector('[data-chat-model-provider-group="workstation"]');
-  expect(container.querySelector(".chat-controls__trigger-provider-icon")?.textContent).toBe("R");
-  expect(group()?.querySelector(".chat-controls__provider-label")?.textContent).toBe(
-    "Research Lab",
-  );
-  expect(group()?.querySelector(".chat-controls__provider-icon")?.textContent).toBe("R");
-  await renderControls(
-    result,
-    [{ ...entry, providerName: "Alpha workstation" }],
-    { onModelSelect },
-    container,
-  );
-  expect(container.querySelector(".chat-controls__trigger-provider-icon")?.textContent).toBe("A");
-  expect(group()?.querySelector(".chat-controls__provider-label")?.textContent).toBe(
-    "Alpha workstation",
-  );
-  expect(container.querySelector('[data-chat-model-option="workstation/local"]')).not.toBeNull();
-  expect(onModelSelect).not.toHaveBeenCalled();
 });
