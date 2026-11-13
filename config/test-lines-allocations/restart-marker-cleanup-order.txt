@@ -1,0 +1,2 @@
+# Existing idle-owner regression preserves stores during drain until marker cleanup; kernel fixture follows the explicit cleanup event.
+2

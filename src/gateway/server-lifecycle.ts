@@ -15,6 +15,7 @@ import {
   getGatewayContextLifetime,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { beginGatewayShutdownCleanup } from "../process/gateway-work-admission.js";
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -401,14 +402,15 @@ export async function prepareGatewayLifecycle(params: {
       ?.modelAccountConnectService?.stop());
   // Connect, RPC, and maintenance refreshes share a Gateway owner, not a socket lifetime.
   const healthWork = new AsyncWorkScope();
+  let closeCleanupStarted = false;
   const markClosePreludeStarted = (options?: GatewayCloseOptions) => {
-    fenceSessionSuspensionWritesForGatewayShutdown();
-    if (lifecycle.closePreludeStarted) {
+    if (closeCleanupStarted) {
       return params.pluginMetadata.beginClose();
     }
+    closeCleanupStarted = true;
+    beginGatewayShutdownCleanup();
     const prelude = params.pluginMetadata.beginClose();
     const notice = resolveGatewayShutdownNotice(options);
-    lifecycle.closePreludeStarted = true;
     markGatewaySuspendExiting();
     authRateLimiter.dispose();
     browserAuthRateLimiter.dispose();
@@ -417,15 +419,7 @@ export async function prepareGatewayLifecycle(params: {
     talkClose.beginClose();
     void stopModelAccountsForClose();
     void closeAuthProfileUsage(params.sdkResourceHost);
-    runtime.scheduler.fence();
     void runtimeState.maintenance?.stopPeriodicTasks();
-    // Fence new entry now; the run-shutdown owner records recovery before
-    // canceling admitted work or withdrawing its runtime capabilities.
-    requestEntryLifetime.beginClose();
-    // Read-only observers stop at admission fencing, before retained writes lose authority.
-    // Its existing lifetime sidecar joins held reads after transports drain.
-    void runtime.resolvePluginGatewayContext()?.scopeUpgradeCoordinator?.close();
-    void mentionInbox.dispose();
     healthWork.beginClose();
     broadcast("shutdown", notice);
     connectionDependentSidecarStopOwner.beginClose();
@@ -438,7 +432,6 @@ export async function prepareGatewayLifecycle(params: {
     void runtimeState.controlUiSessionPullRequests?.stop();
     runtimeState.sessionViewerPresence?.stop();
     runtime.stopPresencePublications();
-    cronReconciliation.invalidate();
     return prelude;
   };
   let configReloaderStopPromise: Promise<void> | null = null;
@@ -528,10 +521,17 @@ export async function prepareGatewayLifecycle(params: {
   };
   const prepareClose = async (optsValue?: GatewayCloseOptions) => {
     exitAfterClose = optsValue?.exitAfterClose === true;
-    // Fence new work synchronously; snapshot and abort before joining cleanup owners.
-    const prelude = markClosePreludeStarted(optsValue);
-    // Observe cleanup failure while marker persistence owns the next await.
-    void Promise.resolve(prelude).catch(() => {});
+    // Fence admission now; database cleanup must wait for restart marker persistence.
+    fenceSessionSuspensionWritesForGatewayShutdown();
+    lifecycle.closePreludeStarted = true;
+    requestEntryLifetime.beginClose();
+    runtime.scheduler.fence();
+    // The inbox closes admission synchronously and drains its accepted work independently.
+    void mentionInbox.dispose();
+    cronReconciliation.invalidate();
+    // Read-only observers stop at admission fencing, before retained writes lose authority.
+    // Its existing lifetime sidecar joins held reads after transports drain.
+    void runtime.resolvePluginGatewayContext()?.scopeUpgradeCoordinator?.close();
     const preparation = await shutdownRuntime.prepareGatewayClose(
       {
         resolveGatewayContext: runtime.resolvePluginGatewayContext,
@@ -549,6 +549,8 @@ export async function prepareGatewayLifecycle(params: {
           });
         },
         terminateRunningSubagentsForShutdown: async () => {
+          // Persistence has settled or timed out; release marker retention before run claims.
+          void Promise.resolve(markClosePreludeStarted(optsValue)).catch(() => {});
           const { terminateLiveSubagentsForShutdown } =
             await import("../agents/subagents/registry/subagent-registry.js");
           await terminateLiveSubagentsForShutdown(runtime.resolvePluginGatewayContext);
@@ -565,7 +567,6 @@ export async function prepareGatewayLifecycle(params: {
       },
       optsValue,
     );
-    await prelude;
     await beginClosePrelude(optsValue);
     // Startup may still publish cleanup owners while received work settles.
     // Resolve their handles only when the caller reaches final teardown.
