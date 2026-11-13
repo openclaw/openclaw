@@ -535,9 +535,8 @@ export function registerCronEditCommand(cron: Command) {
             };
             if (commandEnv) {
               // Diagnostics are best effort; an unavailable snapshot must not block a patch.
-              const existing = (
-                await readExistingCronJob().catch(() => void getAsyncWorkSignal()?.throwIfAborted())
-              )?.payload;
+              const existing = (await readExistingCronJob().catch(() => undefined))?.payload;
+              getAsyncWorkSignal()?.throwIfAborted();
               const stored = existing?.kind === "command" ? Object.keys(existing.env ?? {}) : [];
               droppedEnvKeys = stored.filter((key) => !Object.hasOwn(commandEnv, key));
             }
