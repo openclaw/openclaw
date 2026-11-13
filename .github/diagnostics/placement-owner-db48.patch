@@ -1,0 +1,427 @@
+diff --git a/src/gateway/server-methods/sessions-create.visible-spawn.live.test.ts b/src/gateway/server-methods/sessions-create.visible-spawn.live.test.ts
+index 368671c73006db784ac1123dfb02ce8d4aedb3c6..d2dafddec865016e9064c6043110a8bcac53def5 100644
+--- a/src/gateway/server-methods/sessions-create.visible-spawn.live.test.ts
++++ b/src/gateway/server-methods/sessions-create.visible-spawn.live.test.ts
+@@ -31,13 +31,17 @@ async function readHistory(client: GatewayClient, sessionKey: string) {
+   return history.messages.filter(isRecord);
+ }
+ 
+-async function waitForRun(client: GatewayClient, runId: string) {
+-  const result = await client.request<{ status: string }>(
++async function waitForRun(client: GatewayClient, runId: string, phase: "parent" | "child") {
++  const result = await client.request<{ status: string; error?: string }>(
+     "agent.wait",
+     { runId, timeoutMs: RUN_TIMEOUT_MS },
+     { timeoutMs: RUN_TIMEOUT_MS + 5_000 },
+   );
+-  expect(result.status).toBe("ok");
++  const diagnostic = JSON.stringify({ phase, runId, status: result.status, error: result.error }).slice(
++    0,
++    8_000,
++  );
++  expect(result.status, diagnostic).toBe("ok");
+ }
+ 
+ describeLive("Gateway visible worktree spawn (live)", () => {
+@@ -170,7 +174,7 @@ describeLive("Gateway visible worktree spawn (live)", () => {
+           message,
+           idempotencyKey: randomUUID(),
+         });
+-        await waitForRun(client, started.runId);
++        await waitForRun(client, started.runId, "parent");
+         const parentHistory = await readHistory(client, parent.key);
+         const calls = parentHistory.flatMap((entry) =>
+           Array.isArray(entry.content)
+@@ -205,7 +209,7 @@ describeLive("Gateway visible worktree spawn (live)", () => {
+             .map((entry) => extractAssistantPhaseText(entry))
+             .join("\n"),
+         ).toContain("PARENT_CONTINUED");
+-        await waitForRun(client, details.runId);
++        await waitForRun(client, details.runId, "child");
+         const listing = await client.request<{ sessions: SessionRow[] }>("sessions.list", {
+           includeGlobal: true,
+           limit: 100,
+diff --git a/src/gateway/worker-environments/placement-dispatch-coordinator-admission.test.ts b/src/gateway/worker-environments/placement-dispatch-coordinator-admission.test.ts
+index 8d368abe00afc05bef215f2bcb1c761a39e50c48..5871522ebbbd95a3307dd9b56d850fb03431cdc9 100644
+--- a/src/gateway/worker-environments/placement-dispatch-coordinator-admission.test.ts
++++ b/src/gateway/worker-environments/placement-dispatch-coordinator-admission.test.ts
+@@ -1,5 +1,6 @@
+ import { setImmediate as setImmediatePromise } from "node:timers/promises";
+ import { describe, expect, it, vi } from "vitest";
++import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
+ import { createDeferredCore } from "../../shared/deferred.js";
+ import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
+ import {
+@@ -245,6 +246,13 @@ describe("worker placement session admission", () => {
+           await expect(waiting).resolves.toEqual(active);
+         } else {
+           await expect(waiting).rejects.toThrow();
++          if (outcome !== "abort") {
++            const display = await waiting.catch((error: unknown) =>
++              formatErrorMessageForDisplay(error),
++            );
++            expect(display).toContain('"phase":"replacement"');
++            expect(display).toContain('"pendingCount":1');
++          }
+         }
+       } finally {
+         providerSettled.resolve();
+@@ -254,6 +262,22 @@ describe("worker placement session admission", () => {
+     },
+   );
+ 
++  it("distinguishes absent setup owners without exposing placement contents", async () => {
++    const coordinated = coordinateWorkerPlacementDispatch(
++      createCoordinatorTestService({}),
++      (_request, run) => run(),
++    );
++    const waiting = coordinated.waitForInitialPlacement({
++      ...PROVISIONING_PLACEMENT,
++      sessionKey: "agent:main:private-session-key",
++    });
++    await expect(waiting).rejects.toThrow("no matching live dispatch owner");
++    const display = await waiting.catch((error: unknown) => formatErrorMessageForDisplay(error));
++    expect(display).toContain('"boundary":"worker-placement-initial-owner","phase":"initial"');
++    expect(display).toContain('"pendingCount":0,"owners":[]');
++    expect(display).not.toContain("private-session-key");
++  });
++
+   it("reports failure to start guarded recovery and honors already-cancelled input", async () => {
+     const recover = vi.fn(async () => {
+       throw new Error("gateway is stopping");
+@@ -311,6 +335,13 @@ describe("worker placement session admission", () => {
+       try {
+         if (outcome === "stale-generation") {
+           await expect(waiting).rejects.toThrow("no matching live dispatch owner");
++          const display = await waiting.catch((error: unknown) =>
++            formatErrorMessageForDisplay(error),
++          );
++          expect(display).toContain('"expected":{"state":"provisioning","generation":2');
++          expect(display).toContain('"pendingCount":1');
++          expect(display).toContain('"kind":"recovery","sameSessionKey":true,"sameAgentId":true');
++          expect(display).toContain('"current":{"state":"provisioning","generation":1');
+         }
+         finish.resolve();
+         await recovery;
+diff --git a/src/gateway/worker-environments/placement-dispatch-coordinator.ts b/src/gateway/worker-environments/placement-dispatch-coordinator.ts
+index 49a3377e8d84f5da332e27d3b2f8f76a80d9a71f..6d953eebab6b651b0cc086d1157cbd54f4b886f2 100644
+--- a/src/gateway/worker-environments/placement-dispatch-coordinator.ts
++++ b/src/gateway/worker-environments/placement-dispatch-coordinator.ts
+@@ -1,5 +1,6 @@
+ import { isDeepStrictEqual } from "node:util";
+ import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
++import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
+ import { createDeferredCore } from "../../shared/deferred.js";
+ import {
+   composePlacementAuthorization,
+@@ -314,9 +315,36 @@ export function coordinateWorkerPlacementDispatch(
+           owner.currentPlacement() ?? (owner.kind === "recovery" ? owner.request : undefined),
+           placement,
+         );
+-      const missingOwner = () =>
+-        new Error(
+-          "Worker setup has no matching live dispatch owner. Wait for recovery or explicitly retry setup.",
++      const targetFacts = (target: WorkerPlacementCancellationTarget | undefined) =>
++        target
++          ? {
++              state: target.state,
++              generation: target.generation,
++              environmentId: target.environmentId,
++              activeOwnerEpoch: target.activeOwnerEpoch,
++            }
++          : null;
++      const missingOwner = (phase: "initial" | "replacement", owners: PlacementOperation[]) =>
++        attachErrorDiagnostic(
++          new Error(
++            "Worker setup has no matching live dispatch owner. Wait for recovery or explicitly retry setup.",
++          ),
++          // Display-only facts distinguish an absent owner from a stale captured target.
++          // Never attach requests, workspace paths, profile snapshots, or message contents.
++          JSON.stringify({
++            boundary: "worker-placement-initial-owner",
++            phase,
++            expected: targetFacts(placement),
++            pendingCount: owners.length,
++            owners: owners.slice(0, 3).map((owner) => ({
++              kind: owner.kind,
++              sameSessionKey: owner.request.sessionKey === placement.sessionKey,
++              sameAgentId: owner.request.agentId === placement.agentId,
++              current: targetFacts(
++                owner.currentPlacement() ?? (owner.kind === "recovery" ? owner.request : undefined),
++              ),
++            })),
++          }),
+         );
+       const initialOwner = pending.length === 1 ? pending[0] : undefined;
+       const recover =
+@@ -324,11 +352,17 @@ export function coordinateWorkerPlacementDispatch(
+           ? () => recoverInitialPlacement(placement)
+           : undefined;
+       if (pending.length ? !initialOwner || !matchesOwner(initialOwner) : !recover) {
+-        throw missingOwner();
++        throw missingOwner("initial", pending);
+       }
+       let nextOwner = createDeferredCore<PlacementOperation | undefined>();
+-      const observe = (owner: PlacementOperation) =>
+-        nextOwner.resolve(matchesOwner(owner) ? owner : undefined);
++      let unmatchedOwner: PlacementOperation | undefined;
++      const observe = (owner: PlacementOperation) => {
++        const matches = matchesOwner(owner);
++        if (!matches) {
++          unmatchedOwner = owner;
++        }
++        nextOwner.resolve(matches ? owner : undefined);
++      };
+       const waiters = setupWaiters.get(placement.sessionId) ?? new Set();
+       waiters.add(observe);
+       setupWaiters.set(placement.sessionId, waiters);
+@@ -341,7 +375,7 @@ export function coordinateWorkerPlacementDispatch(
+         for (;;) {
+           const owner = await racePromiseWithAbortSignal(nextOwner.promise, signal);
+           if (!owner) {
+-            throw missingOwner();
++            throw missingOwner("replacement", unmatchedOwner ? [unmatchedOwner] : []);
+           }
+           nextOwner = createDeferredCore<PlacementOperation | undefined>();
+           const completed = await racePromiseWithAbortSignal(owner.operation, signal);
+diff --git a/src/infra/heartbeat-runner.live.test.ts b/src/infra/heartbeat-runner.live.test.ts
+index cde55c524d1e5bf92aa24587c5a5f77984f6f273..1782029cbd9312bdfed93e65858feca52a77a2dd 100644
+--- a/src/infra/heartbeat-runner.live.test.ts
++++ b/src/infra/heartbeat-runner.live.test.ts
+@@ -50,11 +50,12 @@ async function sendChatTurn(client: GatewayClient, sessionKey: string, message:
+     timeoutMs: 170_000,
+     message,
+   });
+-  return client.request<{ status: string }>(
++  const result = await client.request<{ status: string; error?: string }>(
+     "agent.wait",
+     { runId: started.runId, timeoutMs: TURN_TIMEOUT_MS },
+     { timeoutMs: TURN_TIMEOUT_MS + 5_000 },
+   );
++  return { ...result, runId: started.runId };
+ }
+ 
+ async function writeGateFixture(workspace: string, name: string, output: string, exitCode: number) {
+@@ -208,7 +209,13 @@ describeLive("session event wake through a live Gateway", () => {
+               : "When its later completion arrives, copy the entire output marker verbatim as your only reply, preserving every character and case. Do not call any tools for that completion.",
+           ].join("\n"),
+         );
+-        expect(response.status).toBe("ok");
++        expect(
++          response.status,
++          JSON.stringify({ runId: response.runId, status: response.status, error: response.error }).slice(
++            0,
++            8_000,
++          ),
++        ).toBe("ok");
+         expect(
+           (
+             await loadGatewaySessionEntryReadOnlyInWorker({
+@@ -268,15 +275,27 @@ describeLive("session event wake through a live Gateway", () => {
+             expect(instance.logs()).not.toContain("Async work scope is closed");
+             // Internal sessions require a result; a persisted reply alone can
+             // precede finalization or recovery and is not a settled snapshot.
+-            const described = await client!.request<{ session: { hasActiveRun: boolean } }>(
+-              "sessions.describe",
+-              { key: sessionKey },
+-            );
++            const described = await client!.request<{
++              session: {
++                hasActiveRun: boolean;
++                lastRunId?: string;
++                status?: string;
++                lastRunError?: string;
++              };
++            }>("sessions.describe", { key: sessionKey });
+             expect(described.session.hasActiveRun).toBe(false);
+             const continued = (await readMessages(config, sessionKey)).slice(
+               foregroundMessages.length,
+             );
+-            expect(continued.at(-1)).toMatchObject({
++            const diagnostic = JSON.stringify({
++              sessionKey,
++              foregroundRunId: response.runId,
++              lastRunId: described.session.lastRunId,
++              status: described.session.status,
++              error: described.session.lastRunError,
++              continuationMessageCount: continued.length,
++            }).slice(0, 8_000);
++            expect(continued.at(-1), diagnostic).toMatchObject({
+               role: "assistant",
+               provider: "openai",
+               stopReason: "stop",
+diff --git a/test/e2e/qa-lab/runtime/required-native-same-session.e2e.test.ts b/test/e2e/qa-lab/runtime/required-native-same-session.e2e.test.ts
+index b79968d7a3199c0d834512c276d655085ab50a80..3e1308528040543621ad574ba4199a9885e23326 100644
+--- a/test/e2e/qa-lab/runtime/required-native-same-session.e2e.test.ts
++++ b/test/e2e/qa-lab/runtime/required-native-same-session.e2e.test.ts
+@@ -19,6 +19,7 @@ import {
+   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+ } from "../../../../src/infra/node-commands.js";
++import { redactSensitiveText } from "../../../../src/logging/redact.js";
+ import { prepareNodeHostRuntime } from "../../../../src/node-host/runtime.js";
+ import { writeSkill } from "../../../../src/skills/test-support/e2e-test-helpers.js";
+ import { withOpenClawAgentDatabaseReadOnly } from "../../../../src/state/openclaw-agent-db-readonly.js";
+@@ -60,6 +61,8 @@ type Session = {
+   key: string;
+   sessionId: string;
+   workspaceDir?: string;
++  lastRunId?: string;
++  lastRunError?: string;
+   placement?: { state: string; workspaceResultReconciling?: boolean };
+ };
+ type Changed = { sessionKey?: string; session?: Session; phase?: string; reason?: string };
+@@ -135,7 +138,7 @@ it.skipIf(process.platform === "win32")(
+     let node: PairedNodeWorkerHost | undefined;
+     let operator: Awaited<ReturnType<typeof connectWireClient>> | undefined;
+     let beforeInvoke: Parameters<typeof createPairedNodeWorkerHost>[0]["beforeInvoke"];
+-    let onChanged: ((event: Changed) => void) | undefined;
++    let onChanged: ((event: Changed) => Promise<void>) | undefined;
+     const barriers: Array<{ resolve: () => void }> = [];
+     const turnWaits: Promise<unknown>[] = [];
+     await runQaGatewayTestFixture(
+@@ -322,7 +325,9 @@ it.skipIf(process.platform === "win32")(
+             settlement.onEvent(event);
+             if (event.event === "sessions.changed") {
+               try {
+-                onChanged?.(event.payload as Changed);
++                void onChanged?.(event.payload as Changed).catch((error: unknown) =>
++                  observationFailure.reject(error),
++                );
+               } catch (error) {
+                 observationFailure.reject(error);
+               }
+@@ -450,7 +455,7 @@ it.skipIf(process.platform === "win32")(
+             let sawClear = false;
+             let quiesced = false;
+             let resumed = false;
+-            onChanged = (event) => {
++            onChanged = async (event) => {
+               if ((event.sessionKey ?? event.session?.key) !== key) {
+                 return;
+               }
+@@ -460,18 +465,47 @@ it.skipIf(process.platform === "win32")(
+                 timing,
+                 phase: event.phase,
+                 reason: event.reason,
++                runId: event.session?.lastRunId,
++                error: event.session?.lastRunError?.slice(0, 8_000),
+                 state: placement?.state,
+                 reconciling: placement?.workspaceResultReconciling,
+               });
+               if (event.phase === "error" || event.reason === "chat.dispatch-error") {
+-                // A queued follow-up's execution run ID is known only at native HTTP entry.
+-                // Fail on its published error instead of waiting for the test timeout.
++                const runId = event.session?.lastRunId;
++                const terminal: {
++                  runId?: string;
++                  status?: string;
++                  error?: string;
++                  lookupError?: string;
++                } = { runId, error: event.session?.lastRunError?.slice(0, 8_000) };
++                if (runId) {
++                  try {
++                    // Read only this failed run without waiting for execution. The existing
++                    // RPC overhead bound also applies to this diagnostic-only lookup.
++                    const result = await operator!.request<AgentJobTerminalSnapshot>(
++                      "agent.wait",
++                      { runId, timeoutMs: 0 },
++                      { timeoutMs: 5_000 },
++                    );
++                    terminal.status = result.status;
++                    terminal.error = result.error
++                      ? redactSensitiveText(result.error).slice(0, 8_000)
++                      : terminal.error;
++                  } catch (error) {
++                    terminal.lookupError = redactSensitiveText(String(error)).slice(0, 2_000);
++                  }
++                } else {
++                  terminal.lookupError = "Failed run ID absent from session snapshot";
++                }
+                 record("required-native-dispatch-error", {
+                   creation,
+                   timing,
++                  terminal,
+                   gatewayLog: gateway.logs().slice(-24_000),
+                 });
+-                throw new Error(`${creation} ${timing} run failed before settlement`);
++                throw new Error(
++                  `${creation} ${timing} run failed before settlement: ${JSON.stringify(terminal)}`,
++                );
+               }
+               if (placement?.workspaceResultReconciling) {
+                 if (!sawPending) {
+diff --git a/test/e2e/qa-lab/runtime/sessions-send-visible-child.product-proof.e2e.test.ts b/test/e2e/qa-lab/runtime/sessions-send-visible-child.product-proof.e2e.test.ts
+index e564450135b960c5593e01d1f770ed28727829c0..f1a34923e71f4105e0d076f0aa2d41900b3d6c97 100644
+--- a/test/e2e/qa-lab/runtime/sessions-send-visible-child.product-proof.e2e.test.ts
++++ b/test/e2e/qa-lab/runtime/sessions-send-visible-child.product-proof.e2e.test.ts
+@@ -2,6 +2,7 @@
+ // direct-message turn and sends it a waited message in the next turn.
+ import { createServer, type ServerResponse } from "node:http";
+ import path from "node:path";
++import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+ import { afterEach, describe, expect, it } from "vitest";
+ import {
+@@ -340,24 +341,30 @@ describe("sessions_send to a visible spawn child", () => {
+         timeoutMs: 120_000,
+       });
+     };
+-    const waitForRun = async (receipt: ToolReceipt | undefined) => {
++    const waitForRun = async (receipt: ToolReceipt | undefined, phase: "spawn" | "send") => {
+       expect(receipt?.runId).toBeTypeOf("string");
+-      expect(
+-        await gateway.call(
+-          "agent.wait",
+-          { runId: receipt?.runId, timeoutMs: 60_000 },
+-          { timeoutMs: 65_000 },
+-        ),
+-      ).toMatchObject({ status: "ok" });
++      const result = await gateway.call(
++        "agent.wait",
++        { runId: receipt?.runId, timeoutMs: 60_000 },
++        { timeoutMs: 65_000 },
++      );
++      const terminal = asOptionalRecord(result);
++      const diagnostic = JSON.stringify({
++        phase,
++        runId: receipt?.runId,
++        status: terminal?.status,
++        error: terminal?.error,
++      }).slice(0, 8_000);
++      expect(result, diagnostic).toMatchObject({ status: "ok" });
+     };
+ 
+     await sendTurn(PROMPT_SPAWN, PARENT_READY);
+-    await waitForRun(provider.spawn);
++    await waitForRun(provider.spawn, "spawn");
+     await waitUntilIdle();
+     expect(provider.requests.filter((request) => request.kind === "child")).toHaveLength(1);
+ 
+     await sendTurn(PROMPT_SEND, PARENT_DONE);
+-    await waitForRun(provider.send);
++    await waitForRun(provider.send, "send");
+     await waitUntilIdle();
+     const childKey = provider.spawn?.childSessionKey;
+     const child = (await listSessions()).sessions.find((entry) => entry.key === childKey);
+diff --git a/ui/src/e2e/chat-wait-clock.real-gateway.e2e.test.ts b/ui/src/e2e/chat-wait-clock.real-gateway.e2e.test.ts
+index 5e6d8916a598d5a6f9ee14f12156e4dbe2b584db..4bb5a56ec671e70b7e5937d4c1056f0e1ace0776 100644
+--- a/ui/src/e2e/chat-wait-clock.real-gateway.e2e.test.ts
++++ b/ui/src/e2e/chat-wait-clock.real-gateway.e2e.test.ts
+@@ -110,6 +110,7 @@ function lifecycle(row: GatewaySessionRow) {
+     startedAt: row.startedAt,
+     endedAt: row.endedAt,
+     status: row.status,
++    lastRunError: row.lastRunError?.slice(0, 8_000),
+     hasActiveSubagentRun: row.hasActiveSubagentRun,
+   };
+ }
+@@ -119,7 +120,7 @@ function assertWaitLifecycle(parent: GatewaySessionRow, child: GatewaySessionRow
+   expect(parent.hasActiveSubagentRun).toBe(true);
+   expect(child.key).toMatch(/^agent:main:dashboard:/);
+   expect(child.startedAt).toBeGreaterThan(0);
+-  expect(child.endedAt).toBeUndefined();
++  expect(child.endedAt, JSON.stringify(lifecycle(child))).toBeUndefined();
+   expect(provider.childIsRunning()).toBe(true);
+ }
+ async function clocks(parent: Locator) {
