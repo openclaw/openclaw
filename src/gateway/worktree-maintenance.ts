@@ -81,6 +81,7 @@ export function startWorktreeMaintenance(params: {
   const inOwnerContext = AsyncLocalStorage.snapshot();
   let receipt: ManagedWorktreeGcReceipt | undefined;
   let archivePending = false;
+  let manifestSweepPending = true;
   let nextRemovalAt = 0;
   const scratchCursor: ScratchCleanupCursor = {};
   const hasIoPressure = createHostIoPressureProbe();
@@ -277,6 +278,7 @@ export function startWorktreeMaintenance(params: {
                         scratchPressure = await hasIoPressure();
                       },
                       cursor: scratchCursor,
+                      signal: scheduler.signal,
                       onProgress: (progress) => {
                         current.scratch = progress;
                       },
@@ -288,10 +290,15 @@ export function startWorktreeMaintenance(params: {
                   assertCurrent();
                   params.onError(`Scratch cleanup failed: ${String(error)}`);
                 }
+                for (const error of current.scratch?.errors ?? []) {
+                  params.onError(`Scratch cleanup deferred: ${error}`);
+                }
                 // Scratch consumes fresh commit counters; preserve their backoff for GC admission.
                 if (scratchPressure) {
                   nextRemovalAt = Math.max(nextRemovalAt, scheduler.now() + PRESSURE_BACKOFF_MS);
                 }
+                // Archives committed during scratch cleanup are included in the upcoming census.
+                archivePending = false;
                 const result = await managedWorktrees.gc({
                   ...createManagedWorktreeOwnerPolicy(config),
                   retryDeferred,
@@ -315,7 +322,16 @@ export function startWorktreeMaintenance(params: {
                   },
                 });
                 assertCurrent();
-                await sweepLocalWorkspaceManifests({ signal: scheduler.signal, assertCurrent });
+                // Archive wakes reclaim checkouts; the hourly job owns the global CAS scan.
+                if (manifestSweepPending) {
+                  manifestSweepPending = false;
+                  try {
+                    await sweepLocalWorkspaceManifests({ signal: scheduler.signal, assertCurrent });
+                  } catch (error) {
+                    manifestSweepPending = true;
+                    throw error;
+                  }
+                }
                 assertCurrent();
                 result.scratch = current.scratch;
                 Object.assign(current, result);
@@ -399,6 +415,7 @@ export function startWorktreeMaintenance(params: {
     phase: "maintenance",
     run: () => {
       if (!isGatewayWorkAdmissionClosed()) {
+        manifestSweepPending = true;
         owner.request();
       }
     },
