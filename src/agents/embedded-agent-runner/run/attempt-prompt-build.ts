@@ -361,6 +361,7 @@ type PromptContextAttempt = Pick<
   EmbeddedRunAttemptParams,
   | "config"
   | "contextTokenBudget"
+  | "model"
   | "currentInboundContext"
   | "currentInboundEventKind"
   | "internalEvents"
@@ -430,7 +431,11 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     );
   }
   const prePromptMessageCount = sessionMessages.length;
-  const contextTokenBudget = attempt.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
+  const contextTokenBudget =
+    attempt.contextTokenBudget ??
+    attempt.model?.contextWindow ??
+    attempt.model?.maxTokens ??
+    DEFAULT_CONTEXT_TOKENS;
   const promptToolResultMaxChars = resolveLiveToolResultMaxChars({
     contextWindowTokens: contextTokenBudget,
   });

@@ -17,14 +17,19 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { convertToLlm } from "../../sessions/messages.js";
 import { resetSubagentRegistryForTests } from "../../subagents/registry/subagent-registry.test-helpers.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   info: vi.fn(),
   reconcileToolResultPromptProjectionState: vi.fn(),
-  resolveLiveToolResultAggregateMaxChars: vi.fn(() => 200),
-  resolveLiveToolResultMaxChars: vi.fn(() => 100),
+  resolveLiveToolResultAggregateMaxChars: vi.fn<
+    typeof import("../tool-result-truncation.js").resolveLiveToolResultAggregateMaxChars
+  >(() => 200),
+  resolveLiveToolResultMaxChars: vi.fn<
+    typeof import("../tool-result-truncation.js").resolveLiveToolResultMaxChars
+  >(() => 100),
   truncateOversizedToolResultsInMessages: vi.fn(),
   warn: vi.fn(),
 }));
@@ -147,6 +152,66 @@ afterEach(async () => {
 
 describe("prepareEmbeddedAttemptPromptContext", () => {
   registerParityHostLifecycle();
+
+  it.each([
+    { contextTokenBudget: undefined, contextWindow: 8_192 },
+    { contextTokenBudget: 8_192, contextWindow: 200_000 },
+  ])(
+    "projects tool results for an 8k budget: %j",
+    async ({ contextTokenBudget, contextWindow }) => {
+      const actual = await vi.importActual<typeof import("../tool-result-truncation.js")>(
+        "../tool-result-truncation.js",
+      );
+      hoisted.resolveLiveToolResultMaxChars.mockImplementationOnce(
+        actual.resolveLiveToolResultMaxChars,
+      );
+      hoisted.resolveLiveToolResultAggregateMaxChars.mockImplementationOnce(
+        actual.resolveLiveToolResultAggregateMaxChars,
+      );
+      hoisted.truncateOversizedToolResultsInMessages.mockImplementationOnce(
+        actual.truncateOversizedToolResultsInMessages,
+      );
+      const originalText = "x".repeat(20_000);
+      const toolResult: AgentMessage = {
+        role: "toolResult",
+        toolCallId: "small-window-tool",
+        toolName: "read",
+        content: [{ type: "text", text: originalText }],
+        isError: false,
+        timestamp: 101,
+      };
+      const { input } = createInput({
+        attempt: createAttempt({
+          contextTokenBudget,
+          model: makeProviderModelFixture({
+            id: "small-window",
+            provider: "openai",
+            api: "openai-completions",
+            baseUrl: "",
+            contextWindow,
+          }),
+        }),
+        messages: [...messages, toolResult],
+      });
+      const result = await prepareContext(input);
+      expect(result.contextTokenBudget).toBe(8_192);
+      expect(result.promptToolResultMaxChars).toBe(9_828);
+      expect(result.promptToolResultAggregateMaxChars).toBe(39_312);
+      const projected = result.hookMessagesForCurrentPrompt.find(
+        (message) => message.role === "toolResult",
+      );
+      if (projected?.role !== "toolResult") {
+        throw new Error("Missing projected tool result");
+      }
+      const text = projected.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join("");
+      expect(text.length).toBeGreaterThan(0);
+      expect(text.length).toBeLessThanOrEqual(9_828);
+      expect(toolResult.content).toEqual([{ type: "text", text: originalText }]);
+    },
+  );
 
   it("preserves fallback context envelopes and canonical input across route switches and replay", async () => {
     const original = "Describe the attached landscape.";

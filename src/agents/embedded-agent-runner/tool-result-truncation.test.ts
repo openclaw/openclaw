@@ -20,6 +20,7 @@ import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-eve
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { prepareEmbeddedAttemptPromptContext } from "./run/attempt-prompt-build.js";
 import { buildRuntimeContextCustomMessage } from "./run/runtime-context-prompt.js";
 import {
@@ -85,6 +86,13 @@ async function prepareProjection(
     attempt: {
       config: {},
       contextTokenBudget: 128_000,
+      model: makeProviderModelFixture({
+        id: "projection-model",
+        api: "openai-responses",
+        provider: "synthetic",
+        baseUrl: "http://127.0.0.1:1",
+        contextWindow: 128_000,
+      }),
       sessionId,
       sessionKey: `agent:main:${sessionId}`,
       suppressNextUserMessagePersistence: false,
