@@ -29,7 +29,7 @@ import type { BrowserPanelMode, BrowserPanelState } from "./browser-panel-state.
 import { BrowserPanelStream } from "./browser-panel-stream.ts";
 import { BrowserPanelViewportOwner } from "./browser-panel-viewport-owner.ts";
 import { browserRouteKey, type BrowserRoute } from "./browser-target.ts";
-import { normalizeBrowserUrlDraft } from "./browser-url.ts";
+import { normalizeBrowserUrlDraft, resolveBrowserAddressInput } from "./browser-url.ts";
 
 registerBrowserEnglish();
 
@@ -599,12 +599,20 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       void panel.runAction((client) => goBrowserHistory(client, { targetId, delta }));
     },
 
-    commitUrlDraft(): void {
-      const url = normalizeBrowserUrlDraft(panel.urlDraft);
+    /**
+     * Opens the draft, or `address` when the toolbar's "Go to" option is picked.
+     * Returns false when the draft can be neither opened nor searched, so the toolbar can say so.
+     */
+    commitUrlDraft(address?: string): boolean {
+      if (!panel.urlDraft.trim()) {
+        return true;
+      }
+      const url = address ?? resolveBrowserAddressInput(panel.urlDraft);
       if (!url) {
-        return;
+        return false;
       }
       void panel.openUrl(url, { newTab: panel.pendingNewTab || panel.tabs.length === 0 });
+      return true;
     },
 
     beginNewTab(): void {

@@ -47,7 +47,9 @@ import {
   type DeliveryContext,
 } from "../../../utils/delivery-context.shared.js";
 import { captureDelegatedToolPolicyAssertion } from "../../delegated-tool-policy.js";
+import { getSessionToolUsageRanking } from "../../embedded-agent-runner/session-prompt-state.js";
 import { inheritedToolAllowPatch, inheritedToolDenyPatch } from "../../inherited-tool-deny.js";
+import { readSessionToolUsageRankingSnapshot } from "../../session-tool-usage-snapshot.js";
 import type { resolveSpawnAdmission } from "../../spawn-plan.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
 import { captureSpawnParentLineage } from "./spawn-parent-lineage.js";
@@ -164,6 +166,16 @@ export async function createInitialSubagentSession(input: {
           const parentTarget = params.parentTarget;
           // Request preparation joined participant writes and captured this complete row.
           const parentEntry = parentTarget.store[parentTarget.canonicalKey];
+          const toolUsageRankingSeed =
+            params.cfg.agents?.defaults?.experimental?.usageRankedToolIndex === true && parentEntry
+              ? (getSessionToolUsageRanking(parentEntry.sessionId) ??
+                (await readSessionToolUsageRankingSnapshot({
+                  agentId: params.requesterAgentId,
+                  sessionKey: params.requesterInternalKey,
+                  config: params.cfg,
+                  assertCurrent: () => params.assertActive?.(),
+                })))
+              : undefined;
           const assertDraftCreationAllowed = () => {
             if (
               parentEntry?.visibility === "draft" &&
@@ -321,6 +333,7 @@ export async function createInitialSubagentSession(input: {
                       }
                     : {}),
                   ...childSessionIdentity,
+                  ...(toolUsageRankingSeed ? { toolUsageRankingSeed } : {}),
                   ...resolveSessionCreationVisibility(
                     params.cfg,
                     params.childSessionKey,

@@ -44,6 +44,7 @@ suite.define(() => {
           const status: OpenClawIdStatusResult = {
             status: { state: "on", tunnel: { state: "running", relayOnline: published } },
             channel: "local_operator",
+            accountSignIn: "popup",
             owner: true,
             ownerDeviceCount: 0,
             connection: { kind: "local", accountEmail: "owner@example.test" },
@@ -133,20 +134,23 @@ suite.define(() => {
           await dialog.locator('input[type="checkbox"]').check();
           await dialog.getByRole("button", { name: "Continue", exact: true }).click();
           await gateway.waitForRequest("openclawId.authority", { match: { action: "commit" } });
-          const done = dialog.getByRole("button", { name: "Done", exact: true });
-          await done.waitFor();
+          const completion = dialog.locator("openclaw-modal-actions").getByRole("button", {
+            name: published ? "Done" : "Close",
+            exact: true,
+          });
+          await completion.waitFor();
           const glyphSizes = await dialog
             .locator("svg")
             .evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().height));
           expect.soft(glyphSizes.every((size) => size <= 32)).toBe(true);
           if (!published) {
-            await dialog
-              .getByText("Remote access is not connected yet", { exact: false })
-              .waitFor();
+            const warning = "Remote access is not connected yet. This claw will keep trying.";
+            await dialog.getByRole("button", { name: warning, exact: true }).click();
+            await dialog.getByText(warning, { exact: true }).waitFor();
           }
-          await done.scrollIntoViewIfNeeded();
+          await completion.scrollIntoViewIfNeeded();
           expect(
-            await done.evaluate((element) => {
+            await completion.evaluate((element) => {
               const box = element.getBoundingClientRect();
               return (
                 box.top >= 0 &&
@@ -157,7 +161,7 @@ suite.define(() => {
               );
             }),
           ).toBe(true);
-          await done.click();
+          await completion.click();
           await dialog.waitFor({ state: "hidden" });
         },
       );
@@ -192,6 +196,7 @@ suite.define(() => {
                   "openclawId.status": {
                     status: { state: "on", tunnel: { state: "running", relayOnline: true } },
                     channel: "local_operator",
+                    accountSignIn: "popup",
                     owner: true,
                     ownerDeviceCount: 2,
                     connection: {
