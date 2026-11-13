@@ -942,6 +942,19 @@ describeLive("quiet steering with real caller authority", () => {
         }
         await instance.stopGateway();
         recordOfflineInput("cold-post-startup-input");
+        console.error(
+          "[quiet-live] restart-settlement-warnings " +
+            JSON.stringify(
+              instance
+                .logs()
+                .split("\n")
+                .filter((line) =>
+                  /Restart resume discovery failed:|Skipped restart resume for agent|Skipped interrupted input settlement/.test(
+                    line,
+                  ),
+                ),
+            ),
+        );
         expect(after.inputReceipts).toContainEqual(
           expect.objectContaining({ runId: queued.runId, state: "pending", cancelled: true }),
         );
