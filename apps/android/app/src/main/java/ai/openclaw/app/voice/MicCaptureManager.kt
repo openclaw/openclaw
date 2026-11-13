@@ -371,7 +371,11 @@ internal class MicCaptureManager(
   }
 
   private fun start() {
-    stopRequested = false
+    synchronized(ttsPauseLock) {
+      // Reconnects must preserve the same speaker-output suppression as manual enable.
+      if (ttsPauseDepth > 0) return
+      stopRequested = false
+    }
     if (!context.hasPermission(Manifest.permission.RECORD_AUDIO)) {
       _statusText.value = nativeText("Microphone permission required")
       _micEnabled.value = false
