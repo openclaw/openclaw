@@ -7,6 +7,7 @@ import {
 import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { formatContextTokenCapacity } from "../../../lib/format.ts";
+import type { ChatContextWindowControlParams } from "./chat-context-window-control.tsx";
 
 registerModelControlsEnglish();
 
@@ -96,6 +97,8 @@ export function formatModelLabel(
 }
 
 export type ChatModelPickerOptionProps = {
+  contextWindow?: ChatContextWindowControlParams;
+  sessionKey?: string;
   disabled: boolean;
   entry: ChatModelPickerOption;
   index: number;
@@ -114,3 +117,71 @@ export type ChatModelPickerTargetOptionProps = {
   index: number;
   onSelect: (groupId: string, value: string, event: MouseEvent) => void;
 };
+
+export const modelProviderId = (option: ChatModelPickerOption) =>
+  option.provider === "claude-cli" ? "anthropic" : option.provider;
+
+export function prepareChatModelPickerPanel(params: {
+  modelOptions: ChatModelPickerOption[];
+  selectedModelValue: string;
+  selectedAgentRuntime?: string;
+  targetGroups?: readonly ChatModelPickerTargetGroup[];
+}) {
+  const defaultModelOption = params.modelOptions.find((option) => option.isDefault);
+  const activeModelOption = params.modelOptions.find((option) =>
+    isModelPickerOptionSelected(option, params.selectedModelValue, params.selectedAgentRuntime),
+  );
+  const leadingModelOption = activeModelOption ?? defaultModelOption;
+  const groupProvider = modelProviderId;
+  // Default restores inheritance; it stays ahead of ranked model choices. When a
+  // provider recommends models, they follow, and the rest collapse under "All models".
+  const recommendingProviders = new Set(
+    params.modelOptions.filter((option) => option.recommended).map(groupProvider),
+  );
+  const providerGroups = new Map<
+    string,
+    { lead: ChatModelPickerOption[]; more: ChatModelPickerOption[] }
+  >();
+  for (const option of params.modelOptions) {
+    const provider = groupProvider(option);
+    const group = providerGroups.get(provider) ?? { lead: [], more: [] };
+    if (option.isDefault) {
+      group.lead.unshift(option);
+    } else if (option === leadingModelOption) {
+      group.lead.splice(group.lead[0]?.isDefault ? 1 : 0, 0, option);
+    } else if (option.recommended || !recommendingProviders.has(provider)) {
+      group.lead.push(option);
+    } else {
+      group.more.push(option);
+    }
+    providerGroups.set(provider, group);
+  }
+  // Unranked catalogs can contain hundreds of models; browse the rest through All models.
+  for (const [provider, group] of providerGroups) {
+    if (!recommendingProviders.has(provider)) {
+      group.more = group.lead.splice(9);
+    }
+  }
+  const orderedProviderGroups = [...providerGroups];
+  const leadingProvider = leadingModelOption && groupProvider(leadingModelOption);
+  const activeProvider = activeModelOption && groupProvider(activeModelOption);
+
+  const orderedOptions = orderedProviderGroups.flatMap(([, { lead, more }]) => [...lead, ...more]);
+  const optionIndex = new Map(
+    orderedOptions.map((option, index) => [modelPickerOptionKey(option), index]),
+  );
+  const targetGroups = params.targetGroups ?? [];
+  const targetOptionCount = targetGroups.reduce((count, group) => count + group.options.length, 0);
+  const hasOptions = params.modelOptions.length > 0 || targetGroups.length > 0;
+  const hasSelectableModelOptions = params.modelOptions.some((option) => !option.disabled);
+  return {
+    orderedProviderGroups,
+    activeProvider: activeProvider ?? leadingProvider ?? orderedProviderGroups[0]?.[0],
+    orderedOptions,
+    optionIndex,
+    targetGroups,
+    targetOptionCount,
+    hasOptions,
+    hasSelectableModelOptions,
+  };
+}

@@ -160,7 +160,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     const headingKey = (id: string) => {
       const provider = normalizeChatModelProviderId(id);
       // Usage aliases are not billing identities: Claude CLI's native account
-      // and the direct Anthropic API connection own separate picker headings.
+      // and the direct Anthropic API connection own separate authentication identities.
       return provider === "claude-cli"
         ? provider
         : normalizeChatModelProviderGroupId(canonicalModelAuthProviderId(provider));

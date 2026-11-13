@@ -170,7 +170,7 @@ it.each([false, true])(
   },
 );
 
-it("groups Anthropic refs pinned to Claude CLI under Claude CLI", async () => {
+it("keeps Anthropic runtime choices under one provider tab", async () => {
   const { container } = mountPicker({
     open: true,
     modelOptions: [
@@ -181,24 +181,23 @@ it("groups Anthropic refs pinned to Claude CLI under Claude CLI", async () => {
     selectedModelValue: "anthropic/claude-opus-4-8",
     triggerModelLabel: "claude-opus-4-8",
     providerAuth: new Map<string, ModelProviderAuthLabel>([
-      ["claude-cli", { kind: "subscription", label: "Claude Max" }],
-      ["anthropic", { kind: "api", label: "API" }],
+      ["anthropic", { kind: "subscription", label: "Claude Max", detail: "you@example.com" }],
     ]),
   });
   await waitForMenu(container);
   const provider = (value: string) =>
     control(container, "option", value)?.closest("section")?.dataset.chatModelProviderGroup;
   expect([provider("anthropic/claude-opus-4-8"), provider("claude-cli/claude-haiku-5-5")]).toEqual([
-    "claude-cli",
-    "claude-cli",
+    "anthropic",
+    "anthropic",
   ]);
-  // Runtime grouping preserves the native account rather than borrowing the API sibling.
+  // Both runtimes use the Anthropic account label.
   expect(
     container.querySelector(
-      '[data-chat-model-provider-group="claude-cli"] .chat-controls__auth-meta-label',
+      '[data-chat-model-provider-group="anthropic"] .chat-controls__auth-meta-label',
     )?.textContent,
-  ).toBe("Claude Max");
-  control(container, "provider-toggle", "anthropic")!.click();
+  ).toBe("Claude Max · you@example.com");
+  expect(container.querySelectorAll("[data-chat-model-provider-toggle]")).toHaveLength(0);
   flush();
   expect(provider("anthropic/claude-sonnet-5-5")).toBe("anthropic");
 });
@@ -320,13 +319,4 @@ it("persists keyboard rail order without moving the selected provider", async ()
       .dataset.chatModelProviderToggle,
   ).toBe("second");
   localStorage.clear();
-});
-
-it("keeps unconfigured unknown provider trigger icons unchanged", () => {
-  const { container } = mountPicker({
-    modelOptions: [option("workstation", "local")],
-    selectedModelValue: "workstation/local",
-    triggerModelLabel: "Local",
-  });
-  expect(container.querySelector(".chat-controls__trigger-provider-icon")).toBeNull();
 });

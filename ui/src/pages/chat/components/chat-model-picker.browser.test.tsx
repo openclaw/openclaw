@@ -604,7 +604,7 @@ it("reveals the selected provider on open, vertical navigation and reorder", asy
   expect(document.activeElement?.getAttribute("aria-selected")).toBe("true");
 });
 
-it("keeps the account heading below the provider's model choices", async () => {
+it("opens account choices without covering model choices while closed", async () => {
   await page.viewport(1280, 900);
   const { picker, params, update, toggle, trigger } = mountPicker();
   params.accountSection = {
@@ -625,9 +625,164 @@ it("keeps the account heading below the provider's model choices", async () => {
   update();
   await toggle(async () => trigger.click());
   await vi.waitFor(() => {
-    const account = picker.querySelector<HTMLElement>("[data-chat-account-group-toggle]")!;
-    expect(account.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-      option("example/beta").getBoundingClientRect().bottom - 1,
+    const model = option("example/beta");
+    expect(model.checkVisibility()).toBe(true);
+    expect(picker.querySelector(".chat-controls__account-popover")?.matches(":popover-open")).toBe(
+      false,
     );
   });
+  await page.getByRole("button", { name: "Account", exact: true }).click();
+  expect(picker.querySelector(".chat-controls__account-popover")?.matches(":popover-open")).toBe(
+    true,
+  );
+  expect(params.onModelSelect).not.toHaveBeenCalled();
+});
+
+it("opens the selected row's context menu without selecting its model", async () => {
+  const { params, update, open, picker } = mountPicker();
+  const onContextSelect = vi.fn(async () => {});
+  params.contextWindow = {
+    options: [
+      { id: "272k", label: "272K", contextWindow: 272_000 },
+      { id: "1m", label: "1M", contextWindow: 1_000_000 },
+    ],
+    selected: "272k",
+    disabled: false,
+    onSelect: onContextSelect,
+  };
+  update();
+  await open();
+  await page.getByRole("button", { name: "Context window: 272K" }).click();
+  await expect.element(page.getByRole("menuitemradio", { name: "1M", exact: true })).toBeVisible();
+  expect(params.onModelSelect).not.toHaveBeenCalled();
+  await page.getByRole("menuitemradio", { name: "1M", exact: true }).click();
+  expect(onContextSelect).toHaveBeenCalledExactlyOnceWith("1m", "main");
+  expect(params.onModelSelect).not.toHaveBeenCalled();
+  expect(picker.open).toBe(true);
+  await page.getByRole("button", { name: "Context window: 272K" }).click();
+  await userEvent.keyboard("{Escape}");
+  await expect
+    .element(page.getByRole("button", { name: "Context window: 272K" }))
+    .toHaveAttribute("aria-expanded", "false");
+  expect(picker.open).toBe(true);
+});
+
+it("explains every OpenAI runtime in segment order with the generic detail", async () => {
+  const { params, update, open } = mountPicker();
+  params.modelOptions = [
+    modelOption("openai", "gpt-5-mini", { agentRuntimeId: "openclaw" }),
+    modelOption("openai", "gpt-5-mini", { agentRuntimeId: "codex" }),
+  ];
+  params.selectedModelValue = "openai/gpt-5-mini";
+  update();
+  await open();
+  await page.getByRole("button", { name: "Runs on", exact: true }).click();
+  const card = container.querySelector<HTMLElement>(".chat-controls__runtime-details")!;
+  expect(card.matches(":popover-open")).toBe(true);
+  expect(
+    [...container.querySelectorAll(".chat-controls__runtime-option")].map((el) => el.textContent),
+  ).toEqual(["OpenClaw", "Codex"]);
+  expect(
+    [...card.querySelectorAll(".chat-controls__runtime-details-content > div")].map((el) => [
+      el.querySelector(".chat-controls__runtime-detail-label")?.textContent,
+      el.querySelector(".chat-controls__runtime-detail-copy")?.textContent,
+    ]),
+  ).toEqual([
+    ["OpenClaw", "Runs through the OpenClaw agent runtime and the account it uses."],
+    ["Codex", "Runs through the Codex agent runtime and the account it uses."],
+  ]);
+});
+
+it.each(["rejected", "external"] as const)(
+  "keeps the authoritative runtime after a %s selection",
+  async (outcome) => {
+    const { params, update, open, picker } = mountPicker();
+    params.modelOptions = ["openclaw", "codex"].map((runtime) =>
+      modelOption("openai", "sample", {
+        agentRuntime: runtime,
+        agentRuntimeId: runtime,
+        runtimeOverride: runtime,
+      }),
+    );
+    params.selectedModelValue = "openai/sample";
+    params.selectedAgentRuntime = "openclaw";
+    params.onModelSelect = vi.fn(async () => outcome !== "rejected");
+    update();
+    await open();
+    await userEvent.click(
+      picker.querySelector<HTMLButtonElement>(
+        '.chat-controls__runtime-option[data-chat-model-runtime="codex"]',
+      )!,
+    );
+    expect(params.onModelSelect).toHaveBeenCalledWith("openai/sample", "main", "codex");
+    if (outcome === "external") {
+      params.selectedAgentRuntime = "codex";
+      update();
+      params.selectedAgentRuntime = "openclaw";
+      update();
+    }
+    await vi.waitFor(() =>
+      expect(
+        picker
+          .querySelector('.chat-controls__runtime-option[data-chat-model-runtime="openclaw"]')
+          ?.getAttribute("aria-pressed"),
+      ).toBe("true"),
+    );
+  },
+);
+
+it("keeps an unknown configured runtime distinct from explicit OpenClaw", async () => {
+  const { params, update, open, picker } = mountPicker();
+  params.modelOptions = [
+    modelOption("openai", "sample", { agentRuntime: null }),
+    ...["codex", "openclaw"].map((runtime) =>
+      modelOption("openai", "sample", {
+        agentRuntime: runtime,
+        agentRuntimeId: runtime,
+        runtimeOverride: runtime,
+      }),
+    ),
+  ];
+  params.selectedModelValue = "openai/sample";
+  params.selectedAgentRuntime = "codex";
+  update();
+  await open();
+  await userEvent.click(
+    picker.querySelector<HTMLButtonElement>(
+      '.chat-controls__runtime-option[data-chat-model-runtime="openclaw"]',
+    )!,
+  );
+  expect(params.onModelSelect).toHaveBeenLastCalledWith("openai/sample", "main", "openclaw");
+  const inherited = picker.querySelector<HTMLButtonElement>(
+    '.chat-controls__runtime-option[data-chat-model-runtime=""]',
+  )!;
+  expect(inherited.textContent).toBe("Default");
+  await userEvent.click(inherited);
+  expect(params.onModelSelect).toHaveBeenLastCalledWith("openai/sample", "main", null);
+});
+
+it("switches an inherited Default model to an available runtime with one click", async () => {
+  const { params, update, open, picker } = mountPicker();
+  params.modelOptions = [
+    modelOption("openai", "sample", {
+      isDefault: true,
+      commitValue: "",
+      agentRuntime: "openclaw",
+      agentRuntimeId: "openclaw",
+    }),
+    modelOption("openai", "sample", {
+      agentRuntime: "codex",
+      agentRuntimeId: "codex",
+      runtimeOverride: "codex",
+    }),
+  ];
+  params.selectedModelValue = "";
+  update();
+  await open();
+  const runtime = picker.querySelector<HTMLButtonElement>(
+    '.chat-controls__runtime-option[data-chat-model-runtime="codex"]',
+  )!;
+  expect(runtime.getAttribute("aria-disabled")).toBe("false");
+  await userEvent.click(runtime);
+  expect(params.onModelSelect).toHaveBeenCalledExactlyOnceWith("openai/sample", "main", "codex");
 });

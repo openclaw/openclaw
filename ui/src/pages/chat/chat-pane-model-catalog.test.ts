@@ -274,7 +274,7 @@ describe("chat pane composer controls", () => {
     const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker")!;
     expect(picker.open).toBe(true);
     await menuReady(container);
-    container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
+    container.querySelector<HTMLButtonElement>(".chat-controls__account-trigger")!.click();
     flush();
     expect(container.querySelector('[data-chat-account-option="loading"]')).not.toBeNull();
 
