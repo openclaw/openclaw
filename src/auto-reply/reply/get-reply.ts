@@ -10,18 +10,12 @@ import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
-import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import {
-  WorkspaceAliasRepointedError,
-  WorkspaceVanishedError,
-} from "../../agents/workspace-state-identity.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { resolveSessionModelOverrideSource } from "../../config/sessions/model-override-provenance.js";
-import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
@@ -36,15 +30,11 @@ import {
 } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
-import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
-import {
-  markReplyPayloadForSourceSuppressionDelivery,
-  type ReplyPayload,
-} from "../reply-payload.js";
+import type { ReplyPayload } from "../reply-payload.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { finishCommandTurn } from "./command-turn-completion.js";
@@ -91,7 +81,7 @@ import {
 import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { prepareReplySourceInput, retireUnadoptedReplySource } from "./reply-source-binding.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
-import { prepareReplyWorkspace } from "./reply-workspace.js";
+import { prepareReplyWorkspace, replyForUnavailableWorkspace } from "./reply-workspace.js";
 import { withReplySessionDiffBaseline, type ReplyDiffBaseline } from "./session-diff-baseline.js";
 import { resolveScheduledSessionModelSelection } from "./session-event-model-selection.js";
 import { resolveReplySessionInitializationOptions } from "./session-initialization-admission.js";
@@ -102,9 +92,7 @@ import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js
 import { resolveReplyStoredModelSelection } from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
 
-const stageSandboxMediaRuntimeLoader = createLazyImportLoader(
-  () => import("./stage-sandbox-media.js"),
-);
+const stageReplyMediaRuntimeLoader = createLazyImportLoader(() => import("./stage-reply-media.js"));
 const replyResolverTimingLog = createSubsystemLogger("auto-reply/reply-resolver-timing");
 
 export async function getReplyFromConfig(
@@ -168,11 +156,8 @@ async function resolveReplyFromConfig(
       finalized.CommandTargetSessionKey = explicitSteerTargetSessionKey;
     }
     const initialAgentScope = await resolverTiming.measure("reply.resolve_agent_scope", () =>
-      resolveReplyAgentScope({ cfg, ctx: finalized }),
+      resolveReplyAgentScope({ cfg, ctx: finalized, signal: opts?.abortSignal }),
     );
-    await waitForAgentDatabaseWriteAdmission(initialAgentScope.agentId, {
-      signal: opts?.abortSignal,
-    });
     assertReplyPreprocessingActive(opts?.abortSignal);
     opts?.operatorAuthority?.assertCurrent();
     opts?.internalEventExecution?.assertCurrent?.();
@@ -353,6 +338,7 @@ async function resolveReplyFromConfig(
         prepareReplyWorkspace({
           dir: workspaceDirRaw,
           ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+          deferWorkspaceBootstrap: optsWithSkillFilter?.deferWorkspaceBootstrap,
           skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
           useFastTestBootstrap,
           provisioningInput: acpWorkspaceProvisioningInput,
@@ -361,20 +347,12 @@ async function resolveReplyFromConfig(
         }),
       );
     } catch (error) {
-      if (
-        !(error instanceof WorkspaceAliasRepointedError || error instanceof WorkspaceVanishedError)
-      ) {
+      const reply = replyForUnavailableWorkspace(error);
+      if (!reply) {
         throw error;
       }
-      // Permanent failures must finish ingress even in tool-only conversations.
-      // Keep host paths in operator logs.
       typing.cleanup();
-      logVerbose(`workspace unavailable; replying with repair notice: ${error.message}`);
-      const text =
-        error instanceof WorkspaceAliasRepointedError
-          ? "⚠️ This agent's workspace state needs repair: the configured workspace path no longer matches its stored identity. Ask the gateway operator to run `openclaw doctor --fix` and confirm the move only if the same workspace moved."
-          : "⚠️ This agent's workspace is missing on the gateway host. Ask the operator to restore the workspace from backup and run `openclaw doctor`.";
-      return markReplyPayloadForSourceSuppressionDelivery({ text });
+      return reply;
     }
     const workspaceDir = preparedWorkspaceDir ?? workspace.dir;
     const workspaceContext = { cfg, agentId, agentDir, workspaceDir };
@@ -908,42 +886,17 @@ async function resolveReplyFromConfig(
     ) {
       const stagingSessionEntry =
         sessionEntryHandle?.getCurrent() ?? sessionStore?.[sessionKey] ?? sessionEntry;
-      const stagingWorkspaceDir =
-        resolveIngressWorkspaceOverrideForSessionRun({
-          spawnedBy: stagingSessionEntry.spawnedBy,
-          workspaceDir: stagingSessionEntry.spawnedWorkspaceDir,
-          cwd: stagingSessionEntry.spawnedCwd,
-        }) ?? workspaceDir;
-      // Private library selections change the sandbox isolation identity. Resolve
-      // the current selection before staging so the attachment and admitted run
-      // select the same SSH runtime, even when a prior snapshot needs refreshing.
-      const selectedSkills =
-        stagingSessionEntry.skillLibrarySelections ??
-        stagingSessionEntry.skillsSnapshot?.librarySelections;
-      const stagingSkillsSnapshot = selectedSkills?.length
-        ? (
-            await (
-              await import("../../skills/runtime/session-snapshot.js")
-            ).resolveReusableWorkspaceSkillSnapshot({
-              ...skillSnapshotScope,
-              executionWorkspaceDir:
-                stagingSessionEntry.worktree?.canonicalWorkspaceDir ?? workspaceDir,
-              existingSnapshot: stagingSessionEntry.skillsSnapshot,
-              librarySelections: selectedSkills,
-              skillFilter: preparedReplyOpts?.skillFilter,
-              skillOverrides: preparedReplyOpts?.skillOverrides,
-            })
-          ).snapshot
-        : undefined;
       const stageResult = await traceGetReplyPhase("reply.stage_media", async () =>
-        (await stageSandboxMediaRuntimeLoader.load()).stageSandboxMedia({
+        (await stageReplyMediaRuntimeLoader.load()).stageReplyMedia({
           ctx,
           sessionCtx,
           cfg,
           agentId,
           sessionKey,
-          workspaceDir: stagingWorkspaceDir,
-          skillsSnapshot: stagingSkillsSnapshot,
+          workspaceDir,
+          sessionEntry: stagingSessionEntry,
+          skillFilter: preparedReplyOpts?.skillFilter,
+          skillOverrides: preparedReplyOpts?.skillOverrides,
           abortSignal: optsWithSkillFilter?.abortSignal,
           awaitSessionDiffBaseline: resolvedOpts?.awaitSessionDiffBaseline,
         }),

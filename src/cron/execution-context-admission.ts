@@ -19,16 +19,19 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCreatorSandbox } from "../gateway/operator-role-policy.js";
 import { decodeGatewayOperatorRecoverySource } from "../gateway/operator-run-recovery-source.codec.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import { bindScheduledExecutionContext } from "./execution-context-registry.js";
 import {
   buildScheduledExecutionContext,
   classifyScheduledParent,
   resolveScheduledPrincipal,
+  resolveScheduledRequester,
   type ScheduledAdmissionFacts,
   type ScheduledExecutionContextResult,
   type ScheduledRequesterRef,
 } from "./execution-context.js";
+import { cronExecutionActor, hasTransferredCronOwner } from "./human-owner.js";
 import { type ParentResetWatch, watchParentReset } from "./parent-reset-watch.js";
 import {
   failedScheduledExecution,
@@ -56,8 +59,15 @@ function ingressFor(boundary: string | undefined): ScheduledAdmissionFacts["ingr
   return boundary === "gateway.hooks.agent" ? "webhook" : "channel-join";
 }
 
-/** A requester's owner status at admission, plus its live recheck for owner-only effects. */
-type RequesterOwnerCheck = Readonly<{ owner: boolean; assertCurrent?: () => void }>;
+/**
+ * A requester's owner status at admission, plus its live recheck for owner-only effects.
+ * `isOwner` evaluates the same rule against a config the caller reads at the effect.
+ */
+type RequesterOwnerCheck = Readonly<{
+  owner: boolean;
+  assertCurrent?: () => void;
+  isOwner?: (current: OpenClawConfig) => boolean;
+}>;
 
 const NOT_OWNER: RequesterOwnerCheck = { owner: false };
 
@@ -68,6 +78,7 @@ function ownerCheck(cfg: OpenClawConfig, isOwner: (current: OpenClawConfig) => b
   }
   return {
     owner: true,
+    isOwner,
     assertCurrent: () => {
       if (!isOwner(selectLiveRuntimeConfig(cfg))) {
         throw new Error("The requester that authorized this automation is no longer an owner.");
@@ -76,8 +87,11 @@ function ownerCheck(cfg: OpenClawConfig, isOwner: (current: OpenClawConfig) => b
   };
 }
 
-/** Owner check for requesters the occurrence can verify; operator sources are checked per run. */
-async function checkRequesterOwner(
+/**
+ * Owner check for requesters the occurrence can verify; operator sources are checked per run.
+ * Scheduler turns about a job (its repair or notices) take the same check.
+ */
+export async function checkRequesterOwner(
   cfg: OpenClawConfig,
   requester: Exclude<ScheduledRequesterRef, { kind: "operator-source" }>,
 ): Promise<RequesterOwnerCheck> {
@@ -130,7 +144,8 @@ type ScheduledParentLink = Readonly<{
 export function scheduledParentLinkOf(job: CronStoredJob): ScheduledParentLink | undefined {
   if (job.operatorSource) {
     try {
-      return decodeGatewayOperatorRecoverySource(job.operatorSource.source);
+      const source = decodeGatewayOperatorRecoverySource(job.operatorSource.source);
+      return source.kind === "gateway" ? job.sourceConversation : source;
     } catch {
       return undefined;
     }
@@ -143,6 +158,7 @@ async function readParent(parentSessionKey: string, storePath: string) {
     sessionKey: parentSessionKey,
     storePath,
     readConsistency: "latest",
+    projection: "list",
   });
   const worktreePath = entry?.worktree ? entry.spawnedCwd : undefined;
   const worktreeExists = worktreePath
@@ -221,7 +237,7 @@ export function assembleScheduledAdmissionFacts(
     agentMainSessionKey: resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId }),
     agentSandboxMode: resolveSandboxConfigForAgent(params.cfg, params.agentId).mode,
     ...((params.creatorRoleSandbox ??
-      resolveCreatorSandbox(params.cfg, { actor: params.job.createdActor })) === "required"
+      resolveCreatorSandbox(params.cfg, { actor: cronExecutionActor(params.job) })) === "required"
       ? { creatorRoleSandbox: "required" as const }
       : {}),
     ...(params.toolsAllow ? { resolvedToolsAllow: params.toolsAllow } : {}),
@@ -251,13 +267,19 @@ export async function admitScheduledOccurrence(
   let childParent: ScheduledOccurrence["childParent"];
   let parentWatch: ParentResetWatch | undefined;
   try {
+    if (params.trigger === "cron" && hasTransferredCronOwner(job) && !job.operatorSource) {
+      const requester = resolveScheduledRequester(job);
+      if (requester.kind !== "operator-source") {
+        requesterOwner = await checkRequesterOwner(params.cfg, requester);
+      }
+    }
     if (!("error" in principal) && principal.kind === "parent") {
       const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
         agentId: params.agentId,
       });
       const parent = await readParent(principal.parent.sessionKey, storePath);
       parentRow = parent.row;
-      if (principal.requester.kind !== "operator-source") {
+      if (!requesterOwner && principal.requester.kind !== "operator-source") {
         requesterOwner = await checkRequesterOwner(params.cfg, principal.requester);
       }
       const parentState = classifyScheduledParent(principal.parent, parentRow);
@@ -325,9 +347,7 @@ export async function admitScheduledOccurrence(
     return unadmittedScheduledOccurrence(error instanceof Error ? error.message : String(error));
   }
   const operatorSourceRequester =
-    !("error" in principal) &&
-    principal.kind === "parent" &&
-    principal.requester.kind === "operator-source";
+    params.trigger === "cron" && !("error" in principal) && job.operatorSource !== undefined;
   return {
     ...(pause ? { pause } : {}),
     ...(childParent ? { childParent } : {}),
@@ -346,7 +366,12 @@ export async function admitScheduledOccurrence(
             toolsAllow: run.toolsAllow,
           },
           parentRow,
-          operatorSourceRequester ? run.operatorAuthority !== undefined : requesterOwner?.owner,
+          operatorSourceRequester
+            ? run.operatorAuthority !== undefined &&
+                (job.operatorSource?.source.kind === "gateway"
+                  ? operatorScopeSatisfied("operator.admin", run.operatorAuthority.scopes)
+                  : run.operatorAuthority.openclawIdPrincipal?.kind !== "member")
+            : requesterOwner?.owner,
         );
         result = buildScheduledExecutionContext(job, facts);
       } catch (error) {

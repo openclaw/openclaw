@@ -1,17 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { realisticTranscriptText } from "../../../test/helpers/session-archive.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
 import { encodeSessionArchiveContent } from "../../config/sessions/archive-compression.js";
 import {
+  appendTranscriptMessage,
   listSessionTranscriptInstances,
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
+  rewindSessionToMessage,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
@@ -353,6 +356,51 @@ it("uses committed metadata for selected usage and families with an empty curren
   });
 });
 
+it("keeps a rewound window in its session's usage family", async () => {
+  await withUsageState(async (state) => {
+    const key = "agent:main:usage-rewind";
+    const scope = sessionScope(state, "main", key);
+    const firstId = "usage-rewind-first";
+    const timestamp = Date.now() - 60_000;
+    await upsertSessionEntryCore(scope, { sessionId: firstId, updatedAt: timestamp });
+    const target = { ...scope, sessionId: firstId };
+    await appendTranscriptMessage(target, {
+      eventId: "rewind-user",
+      message: { role: "user", content: "first prompt" },
+      now: timestamp - 1_000,
+      parentId: null,
+    });
+    await appendTranscriptMessage(target, {
+      eventId: "rewind-assistant",
+      message: usageMessage(23, timestamp),
+      now: timestamp,
+      parentId: "rewind-user",
+    });
+
+    const rewound = await rewindSessionToMessage({ ...scope, entryId: "rewind-user" });
+    assert(rewound.status === "created");
+    const currentId = rewound.entry.sessionId;
+    await warmUsage(["main"]);
+    for (const projection of [{}, { projection: "overview" }]) {
+      const result = await readUsage({
+        range: "all",
+        agentId: "main",
+        groupBy: "family",
+        ...projection,
+      });
+      expect(result.sessions).toMatchObject([
+        {
+          key,
+          currentSessionId: currentId,
+          includedSessionIds: [currentId, firstId],
+          usage: { totalTokens: 23 },
+        },
+      ]);
+      expect(result.totals.totalTokens).toBe(23);
+    }
+  });
+});
+
 it("hydrates context metadata only for emitted usage rows while aggregating every match", async () => {
   await withUsageState(async (state) => {
     const ada = ensureProfileForEmail("ada@example.test");
@@ -586,11 +634,11 @@ it.each([
   },
 );
 
-it.each(["direct owner", "compressed history", "current JSONL"])(
+it.each(["direct owner", "compressed history", "compressed bomb history", "current JSONL"])(
   "keeps family usage with %s before the current SQLite transcript exists",
   async (mode) => {
     const directOwner = mode === "direct owner";
-    const artifact = mode === "compressed history";
+    const artifact = mode.startsWith("compressed");
     const currentArtifact = mode === "current JSONL";
     await withUsageState(async (state) => {
       const config = getRuntimeConfig();
@@ -605,6 +653,19 @@ it.each(["direct owner", "compressed history", "current JSONL"])(
       const mainScope = sessionScope(state, "main", mainKey);
       const opusScope = sessionScope(state, "opus", opusKey);
       const writeArtifact = async (tokens: number) => {
+        // Real archives expand about 10x, and #190690's own fixture expands ~10,000x;
+        // both exceed its stored-plus-1-MiB refusal.
+        const padding =
+          mode === "compressed bomb history"
+            ? ["x".repeat(2 * 1024 * 1024)]
+            : artifact
+              ? Array.from({ length: 24 }, (_, index) =>
+                  realisticTranscriptText(64 * 1024, index + 1),
+                )
+              : [];
+        for (const content of padding) {
+          archiveManager.appendMessage({ role: "user", content, timestamp });
+        }
         archiveManager.appendMessage(usageMessage(tokens, timestamp));
         const content = [archiveManager.getHeader(), ...archiveManager.getEntries()]
           .map((entry) => JSON.stringify(entry))
@@ -613,6 +674,9 @@ it.each(["direct owner", "compressed history", "current JSONL"])(
           ? encodeSessionArchiveContent(content)
           : { bytes: Buffer.from(content), suffix: "" };
         expect(encoded.suffix).toBe(artifact ? ".zst" : "");
+        if (artifact) {
+          expect(Buffer.byteLength(content)).toBeGreaterThan(encoded.bytes.length + 1024 * 1024);
+        }
         const filePath = path.join(
           state.sessionsDir(),
           `${archiveManager.getSessionId()}.jsonl.reset.2026-08-01T00-00-00.000Z${encoded.suffix}`,

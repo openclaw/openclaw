@@ -5,7 +5,7 @@ import {
   resolveCompactionReplayEligibility,
   stripCompactionReplayCheckpoint,
 } from "@openclaw/ai/transports";
-import type { ModelCompatConfig } from "../../../config/types.models.js";
+import type { ModelCompatConfig } from "../../../config/zod-schema.model-compat.js";
 import type { ContextEngineInfo } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { withGuardedFetchBeforeRequest } from "../../../infra/net/fetch-request-authority.js";
@@ -301,21 +301,23 @@ export async function settleEmbeddedAttemptStream(input: {
         const { timedOutDuringCompaction } = input.readLifecycleState();
         const compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
         const cacheTtlCompat: ModelCompatConfig | undefined = attempt.model.compat;
-        await appendAttemptCacheTtlIfNeeded({
-          sessionManager,
-          timedOutDuringCompaction,
-          compactionOccurredThisAttempt,
-          config: attempt.config,
-          provider: attempt.provider,
-          modelId: attempt.modelId,
-          modelApi: attempt.model.api,
-          modelRoute: {
-            baseUrl: attempt.model.baseUrl,
-            supportsPromptCacheKey: cacheTtlCompat?.supportsPromptCacheKey,
-          },
-          isCacheTtlEligibleProvider,
-          toolResultPromptProjectionState: input.toolResultPromptProjectionState,
-        });
+        if (!attempt.inputAlreadyDelivered) {
+          await appendAttemptCacheTtlIfNeeded({
+            sessionManager,
+            timedOutDuringCompaction,
+            compactionOccurredThisAttempt,
+            config: attempt.config,
+            provider: attempt.provider,
+            modelId: attempt.modelId,
+            modelApi: attempt.model.api,
+            modelRoute: {
+              baseUrl: attempt.model.baseUrl,
+              supportsPromptCacheKey: cacheTtlCompat?.supportsPromptCacheKey,
+            },
+            isCacheTtlEligibleProvider,
+            toolResultPromptProjectionState: input.toolResultPromptProjectionState,
+          });
+        }
 
         if (timedOutDuringCompaction) {
           const removedEntries = await normalizeCompactionRecoveryTranscriptTail({
@@ -430,12 +432,6 @@ export async function prepareEmbeddedAttemptTransport(input: {
     attempt.model.api === "openai-responses"
       ? runtime.accountCatalog.prepareServiceTierObserver({ selectedCredential, credential })
       : undefined;
-  const assertAccessCurrent = await prepareEmbeddedAccessProgramGuard(attempt);
-  const assertRunCurrent = () => {
-    assertAdmittedCurrent?.();
-    input.assertCronRootCurrent?.();
-    assertAccessCurrent?.();
-  };
   // Rebuild each turn from the session's original stream base so prior-turn
   // wrappers do not pin us to stale provider/API transport behavior.
   const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({
@@ -445,15 +441,19 @@ export async function prepareEmbeddedAttemptTransport(input: {
     settingsManager: input.settingsManager,
     sessionTransport: session.agent.transport,
   });
-  if (attempt.cyberAccessProgram !== undefined && attempt.provider !== "openai") {
+  if (
+    attempt.cyberAccessProgram !== undefined &&
+    attempt.cyberAccessProgram !== "standard" &&
+    attempt.provider !== "openai"
+  ) {
     throw new Error(
-      "Explicit access programs are unsupported by this provider. Reset Access to the model default or select an OpenAI model.",
+      "Daybreak access is unsupported by this provider. Select Standard or an OpenAI model.",
     );
   }
   const streamExtraParamsOverride = {
     ...attempt.streamParams,
     fastMode: attempt.fastMode,
-    ...(attempt.cyberAccessProgram !== undefined
+    ...(attempt.provider === "openai" && attempt.cyberAccessProgram !== undefined
       ? { accessPrograms: { cyber: attempt.cyberAccessProgram } }
       : {}),
     // Memory extraction must see the original history, not a provider summary.
@@ -493,6 +493,15 @@ export async function prepareEmbeddedAttemptTransport(input: {
   const effectiveExtraParams = suppressResponsesCompaction
     ? { ...resolvedExtraParams, responsesServerCompaction: false, responsesCompactEndpoint: false }
     : resolvedExtraParams;
+  const assertAccessCurrent = await prepareEmbeddedAccessProgramGuard(
+    attempt,
+    effectiveExtraParams,
+  );
+  const assertRunCurrent = () => {
+    assertAdmittedCurrent?.();
+    input.assertCronRootCurrent?.();
+    assertAccessCurrent?.();
+  };
   const providerStreamFn = registerProviderStreamForModel({
     model: attempt.model,
     cfg: attempt.transportConfig ?? attempt.config,
@@ -527,6 +536,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     (messages) => messages,
     async ({ context, ...provider }) => {
       assertRunCurrent?.();
+      let localRoots: readonly string[] | undefined;
       const prepared = await materializeProviderContext({
         ...provider,
         context,
@@ -536,7 +546,11 @@ export async function prepareEmbeddedAttemptTransport(input: {
         workspaceOnly: input.workspaceOnly,
         localRoots: input.workspaceOnly
           ? undefined
-          : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
+          : () =>
+              (localRoots ??= getAgentScopedMediaLocalRoots(
+                attempt.config ?? {},
+                input.sessionAgentId,
+              )),
         onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
         sandbox:
           input.sandbox?.enabled && input.sandbox.fsBridge

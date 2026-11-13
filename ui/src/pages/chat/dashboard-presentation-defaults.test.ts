@@ -8,6 +8,7 @@ import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../../lib/toast.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
 import {
@@ -337,13 +338,18 @@ describe("dashboard default activation and personal layout persistence", () => {
     expect(h.state.sessionsResult?.sessions[0]?.boardPresentation).toBe("expanded");
     h.sync();
     expectPresentation(h.state.sidebarLayout, false);
-    expect((await h.header()).querySelector(defaultAction)).not.toBeNull();
+    const menu = await h.header();
+    await vi.dynamicImportSettled();
+    await waitForSolid(() => expect(menu.querySelector(defaultAction)).not.toBeNull());
     h.revisit();
     expectPresentation(h.state.sidebarLayout, true);
-    expect((await h.header()).querySelector(defaultAction)).toBeNull();
-    expect((await h.header()).querySelector(defaultStatus)?.textContent).toContain(
-      t("chat.sidePanel.currentViewIsDefault"),
-    );
+    const revisitedMenu = await h.header();
+    await waitForSolid(() => {
+      expect(revisitedMenu.querySelector(defaultAction)).toBeNull();
+      expect(revisitedMenu.querySelector(defaultStatus)?.textContent).toContain(
+        t("chat.sidePanel.currentViewIsDefault"),
+      );
+    });
     expect(h.saved()).toBeUndefined();
   });
 
@@ -595,6 +601,7 @@ describe("dashboard shared default in the native Dashboard menu", () => {
     await select(menu, "dashboard-default-status");
     expect(patch).toHaveBeenCalledTimes(1);
     expect(showToast).toHaveBeenCalledWith({
+      severity: "success",
       message: t("chat.sidePanel.defaultSaved"),
       anchor: h.pane.element,
     });
@@ -619,7 +626,9 @@ describe("dashboard shared default in the native Dashboard menu", () => {
     await operation;
     expect(h.state.chatError).toContain("Dashboard default denied");
     expect(showToast).toHaveBeenCalledWith({
-      message: t("chat.sidePanel.defaultSaveError", { error: "Dashboard default denied" }),
+      severity: "error",
+      message: t("chat.sidePanel.defaultSaveError"),
+      detail: new Error("Dashboard default denied"),
       anchor: h.pane.element,
     });
     const retry = (await h.header()).querySelector<HTMLButtonElement>(defaultAction);

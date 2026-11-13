@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
+import { defaultPayload } from "../infra/gateway-state-owner-record.js";
 import {
+  acquireGatewayStateOwner,
+  captureGatewayStateOwner,
+} from "../infra/gateway-state-owner.js";
+import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -55,6 +62,37 @@ function sql(statement: string) {
   return openOpenClawStateDatabase().db.prepare(statement);
 }
 
+it("adds deferred bootstrap custody only at the workspace writer on existing databases", async () => {
+  await seed();
+  await attest(1000, [["AGENTS.md", "a".repeat(64)]]);
+  const before = await read(dir);
+  const pathname = openOpenClawStateDatabase().path;
+  await closeOpenClawStateDatabaseAsync();
+  {
+    using legacy = new DatabaseSync(pathname);
+    legacy.exec("ALTER TABLE workspace_setup_state DROP COLUMN bootstrap_deferred");
+  }
+  // Offline replacement must acquire a new physical admission, not reuse cached schema facts.
+  fs.copyFileSync(pathname, `${pathname}.legacy`);
+  fs.renameSync(`${pathname}.legacy`, pathname);
+  const { db } = openOpenClawStateDatabase();
+  expect(
+    db
+      .prepare(
+        "SELECT name FROM pragma_table_info('workspace_setup_state') WHERE name = 'bootstrap_deferred'",
+      )
+      .get(),
+  ).toBeUndefined();
+  expect(await read(dir)).toEqual(before);
+  await mergeWorkspaceSetupState(dir, { bootstrapDeferred: true }, 2000);
+  await closeOpenClawStateDatabaseAsync();
+  expect(await read(dir)).toEqual({
+    ...before,
+    setupUpdatedAtMs: 2000,
+    setup: { ...before.setup, bootstrapDeferred: true },
+  });
+});
+
 function observeFacts() {
   const observed = new Map<string, unknown>();
   const unsubscribe = workspaceStatePublication.subscribeFacts((change) => {
@@ -106,17 +144,10 @@ it("registers alias batches once and rolls back conflicts without publishing par
     );
   register([...aliases, aliases[0]!], 1000);
   register(aliases, 2000);
-  expect(sql("SELECT COUNT(*) AS count FROM workspace_path_aliases").get()).toEqual({
-    count: 70,
-  });
+  expect(sql("SELECT COUNT(*) AS count FROM workspace_path_aliases").get()).toEqual({ count: 70 });
+  const updatedAt = sql("SELECT updated_at_ms FROM workspace_path_aliases WHERE alias_key = ?");
   for (const alias of aliases) {
-    expect(
-      sql("SELECT updated_at_ms FROM workspace_path_aliases WHERE alias_key = ?").get(
-        alias.workspaceKey,
-      ),
-    ).toEqual({
-      updated_at_ms: 1000,
-    });
+    expect(updatedAt.get(alias.workspaceKey)).toEqual({ updated_at_ms: 1000 });
   }
   const missing = Array.from({ length: 65 }, (_, index) =>
     createWorkspaceStateIdentity(testState.path(`rollback-${index}`)),
@@ -130,9 +161,7 @@ it("registers alias batches once and rolls back conflicts without publishing par
     ),
   ).toThrow("workspace path alias conflicts with canonical state");
   expect(observed.size).toBe(0);
-  expect(sql("SELECT COUNT(*) AS count FROM workspace_path_aliases").get()).toEqual({
-    count: 70,
-  });
+  expect(sql("SELECT COUNT(*) AS count FROM workspace_path_aliases").get()).toEqual({ count: 70 });
 });
 
 it("replaces complete hash sets and removes aliased setup and attestation state", async () => {
@@ -174,34 +203,41 @@ it.each([
   await expect(read(dir)).rejects.toThrow("workspace attestation hash row is invalid");
 });
 
-it("refuses retired ownership before deleting state", async () => {
+it("refuses a retired Gateway's pending deletion and lets its successor delete state", async () => {
+  const databasePath = resolveOpenClawStateSqlitePath(testState.env);
+  const payload = { ...defaultPayload(databasePath), role: "gateway" as const };
+  const owner = acquireGatewayStateOwner({ databasePath, payload });
+  onTestFinished(() => owner.release());
+  const captured = captureGatewayStateOwner(databasePath)!;
   await seed();
   await attest(1_000, [["AGENTS.md", "a".repeat(64)]]);
   const before = await read(dir);
   const filePath = path.join(dir, "AGENTS.md");
   writeWorkspaceFileCache({ filePath, content: "cached", identity: "identity" });
-  const retired = new Error("workspace owner retired");
-  const assertCurrent = () => {
-    throw retired;
-  };
-  await expect(
-    deleteWorkspaceState(prepareWorkspaceStateDeletion(dir), { assertCurrent }),
-  ).rejects.toBe(retired);
+  const pending = deleteWorkspaceState(prepareWorkspaceStateDeletion(dir), captured);
+  owner.release();
+  const successor = acquireGatewayStateOwner({ databasePath, payload });
+  onTestFinished(() => successor.release());
+  await expect(pending).rejects.toMatchObject({
+    name: "GatewayStateOwnerContentionError",
+    databasePath,
+  });
   expect(await read(dir)).toEqual(before);
   expect(readWorkspaceFileCache(filePath, "identity")).toBe("cached");
+  await deleteWorkspaceState(
+    prepareWorkspaceStateDeletion(dir),
+    captureGatewayStateOwner(databasePath)!,
+  );
+  expect((await read(dir, { readOnly: true })).setupExists).toBe(false);
+  expect(readWorkspaceFileCache(filePath, "identity")).toBeUndefined();
 });
 
 it("registers and retires aliases in the captured caller-selected state database", async () => {
   const alias = testState.path("workspace-link");
-  const env = {
-    ...process.env,
-    OPENCLAW_STATE_DIR: testState.path("custom-state"),
-  };
+  const env = { ...process.env, OPENCLAW_STATE_DIR: testState.path("custom-state") };
   fs.symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
   const identity = resolveWorkspaceStateIdentity(dir);
-  await mergeWorkspaceSetupState(dir, { bootstrapSeededAt: seededAt }, 1_000, {
-    env,
-  });
+  await mergeWorkspaceSetupState(dir, { bootstrapSeededAt: seededAt }, 1_000, { env });
 
   expect((await read(alias, { env })).identity).toStrictEqual(identity);
   fs.unlinkSync(alias);

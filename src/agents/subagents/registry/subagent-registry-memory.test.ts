@@ -15,12 +15,15 @@ import {
   getSubagentRunsForCollectorGroup,
   getSubagentSessionReadLookup,
   immutableSubagentRun,
+  immutableSubagentRunSessionList,
   restoreSubagentRunPayload,
   subagentRuns,
 } from "./subagent-registry-memory.js";
+import { createSubagentSessionListReadIndex } from "./subagent-registry-read-index.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import * as runGeneration from "./subagent-run-generation.js";
+import { bindSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import {
   isSubagentRunPayloadEvicted,
   getSubagentTerminalReplySummary,
@@ -41,6 +44,48 @@ function createRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): S
 }
 
 afterEach(() => subagentRuns.clear());
+
+it("prepares list-owner facts once per view without lending authority to display rows or old incarnations", () => {
+  const entry = createRun("shared-read-owner");
+  subagentRuns.set(entry.runId, entry);
+  const resident = subagentRuns.get(entry.runId)!;
+  const display = immutableSubagentRunSessionList(resident);
+  let identity = {};
+  const copy = vi.spyOn(runGeneration, "copySubagentRunRuntimeOwner");
+  const view = createSubagentSessionListReadIndex(
+    {
+      snapshotIdentity: () => identity,
+      runs: () => new Map([[entry.runId, display]]),
+      prepare: async () => {},
+    },
+    1,
+  );
+  const read = () => [...view.read(1).inputs.inMemoryRuns!][0]!;
+  try {
+    const first = read();
+    expect(copy).toHaveBeenCalledTimes(1);
+    expect(read()).toBe(first);
+    expect(first).not.toBe(display);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(isSameSubagentRunOwner(resident, first)).toBe(true);
+    expect(isSameSubagentRunOwner(resident, display)).toBe(false);
+
+    bindSubagentRunRuntimeKey(resident, {});
+    identity = {};
+    const next = read();
+    expect(copy).toHaveBeenCalledTimes(2);
+    expect(next).not.toBe(first);
+    expect(read()).toBe(next);
+    expect(next).toEqual(first);
+    expect(isSameSubagentRunOwner(resident, first)).toBe(false);
+    expect(isSameSubagentRunOwner(resident, next)).toBe(true);
+    expect(immutableSubagentRunSessionList(resident)).toBe(display);
+    expect(isSameSubagentRunOwner(resident, display)).toBe(false);
+  } finally {
+    view.dispose();
+    copy.mockRestore();
+  }
+});
 
 describe("completed subagent payload residency", () => {
   function completedRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {

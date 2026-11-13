@@ -9,6 +9,12 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside } from "../infra/path-guards.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { escapeRegExp } from "../shared/regexp.js";
+import { clearPluginSourceCaptureModuleCache } from "./native-module-require.js";
+import {
+  acquirePluginSource,
+  createPluginSourceValidationError,
+  markPluginSourceAcquisitionError,
+} from "./plugin-instance-error.js";
 import {
   retainLoadedPluginSourceCapture,
   retainPluginSourceCaptureInstance,
@@ -20,6 +26,11 @@ import {
 import { isPluginSourceEntry } from "./plugin-source-file.js";
 
 export type PluginDependencyResolution = { root: string; lookupDirectory: string };
+
+const readPackageManifest = (filename: string, originalSource = false) => {
+  const bytes = acquirePluginSource(() => fs.readFileSync(filename, "utf8"), originalSource);
+  return acquirePluginSource(() => JSON.parse(bytes));
+};
 
 export function createPluginDependencyResolver(lookupBoundary?: {
   root: string;
@@ -42,7 +53,7 @@ export function createPluginDependencyResolver(lookupBoundary?: {
         ) {
           const manifestFile = path.join(resolvePluginModulePackageRoot(importer), "package.json");
           const manifest = fs.existsSync(manifestFile)
-            ? asOptionalRecord(JSON.parse(fs.readFileSync(manifestFile, "utf8")))
+            ? asOptionalRecord(readPackageManifest(manifestFile, true))
             : undefined;
           // Node walks ancestor node_modules up to the filesystem root. An undeclared
           // optional lookup must not acquire unrelated ancestor code for a rehearsal.
@@ -54,7 +65,7 @@ export function createPluginDependencyResolver(lookupBoundary?: {
           }
         }
         const resolved = {
-          root: fs.realpathSync(candidate),
+          root: acquirePluginSource(() => fs.realpathSync(candidate)),
           lookupDirectory: path.dirname(nodeModules),
         };
         roots.set(key, resolved);
@@ -179,7 +190,7 @@ export function capturePluginDependencies(params: {
   const plan =
     params.plan ??
     (params.manifestFile
-      ? createPluginDependencyPlan(JSON.parse(fs.readFileSync(params.manifestFile, "utf8")))
+      ? createPluginDependencyPlan(readPackageManifest(params.manifestFile, true))
       : undefined);
   const manifest = plan?.manifest;
   const dependencies = [
@@ -206,8 +217,10 @@ export function capturePluginDependencies(params: {
       ) {
         continue;
       }
-      throw new Error(
-        `Plugin dependency ${name} is missing from ${params.root}; install its dependencies and reload.`,
+      throw markPluginSourceAcquisitionError(
+        new Error(
+          `Plugin dependency ${name} is missing from ${params.root}; install its dependencies and reload.`,
+        ),
       );
     }
     params.capture(name, dependency);
@@ -240,7 +253,7 @@ export function capturePluginPackageMetadata(
   copy(path.join(root, "package.json"), manifest);
   let data: Record<string, unknown> | undefined;
   try {
-    data = asOptionalRecord(JSON.parse(fs.readFileSync(manifest, "utf8")));
+    data = asOptionalRecord(readPackageManifest(manifest));
   } catch (error) {
     if (!(error instanceof SyntaxError)) {
       throw error;
@@ -265,8 +278,14 @@ export function capturePluginPackageMetadata(
       const prepared = resolveSource?.(filename);
       const input = prepared?.path ?? filename;
       const insideRoot = isPathInside(root, filename);
-      if (insideRoot && fs.statSync(input, { throwIfNoEntry: false })?.isFile()) {
-        const real = fs.realpathSync(input);
+      if (
+        insideRoot &&
+        acquirePluginSource(
+          () => fs.statSync(input, { throwIfNoEntry: false }),
+          !prepared,
+        )?.isFile()
+      ) {
+        const real = acquirePluginSource(() => fs.realpathSync(input), !prepared);
         if (
           !isPathInside(prepared?.boundary ?? root, real) &&
           !isRetainedReference?.(filename, real)
@@ -387,9 +406,7 @@ export function createPluginPackageMetadataCapture(params: {
   const getManifest = (metadata: string) => {
     const scope = metadataScopes.get(metadata)!;
     const manifest =
-      asOptionalRecord(scope.manifest) ??
-      asOptionalRecord(JSON.parse(fs.readFileSync(metadata, "utf8"))) ??
-      {};
+      asOptionalRecord(scope.manifest) ?? asOptionalRecord(readPackageManifest(metadata)) ?? {};
     scope.manifest = manifest;
     return manifest;
   };
@@ -400,7 +417,7 @@ export function createPluginPackageMetadataCapture(params: {
       const scope = metadataScopes.get(metadata)!;
       if (scope.manifest === undefined) {
         try {
-          scope.manifest = asOptionalRecord(JSON.parse(fs.readFileSync(metadata, "utf8"))) ?? null;
+          scope.manifest = asOptionalRecord(readPackageManifest(metadata)) ?? null;
         } catch (error) {
           if (!(error instanceof SyntaxError)) {
             throw error;
@@ -477,11 +494,14 @@ export function createPluginPackageMetadataCapture(params: {
             }
             const prepared = resolveSource?.(source);
             const input = prepared?.path ?? source;
-            const stat = fs.statSync(input, { throwIfNoEntry: false });
+            const stat = acquirePluginSource(
+              () => fs.statSync(input, { throwIfNoEntry: false }),
+              !prepared,
+            );
             if (!stat) {
               return;
             }
-            const real = fs.realpathSync(input);
+            const real = acquirePluginSource(() => fs.realpathSync(input), !prepared);
             if (
               !isPathInside(prepared?.boundary ?? boundary, real) &&
               !(stat.isFile() && isRetainedReference?.(source, real))
@@ -493,10 +513,15 @@ export function createPluginPackageMetadataCapture(params: {
                 return;
               }
               if (ancestors.has(real)) {
-                throw new Error(`Plugin source contains a directory cycle: ${source}`);
+                throw createPluginSourceValidationError(
+                  `Plugin source contains a directory cycle: ${source}`,
+                  !prepared,
+                );
               }
               ancestors.add(real);
-              for (const name of fs.readdirSync(input).filter(isPluginSourceEntry).toSorted()) {
+              for (const name of acquirePluginSource(() => fs.readdirSync(input), !prepared)
+                .filter(isPluginSourceEntry)
+                .toSorted()) {
                 visit(path.join(source, name));
               }
               ancestors.delete(real);
@@ -690,14 +715,7 @@ export function createPluginSourceCapture() {
   const beginDisposal = () => {
     disposed = true;
     // Revoke cached modules before removal yields, including compiled CJS helpers.
-    // Jiti's Windows keys use forward slashes; containment follows filesystem identity.
-    const urls = pathToFileURL(directory + path.sep).href;
-    const cache = createRequire(import.meta.url).cache;
-    for (const id of Object.keys(cache)) {
-      if (id.startsWith(urls) || (path.isAbsolute(id) && isPathInside(directory, id))) {
-        delete cache[id];
-      }
-    }
+    clearPluginSourceCaptureModuleCache(directory);
     captureFailures.clear();
   };
   return {

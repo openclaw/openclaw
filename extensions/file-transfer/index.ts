@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createLazyFileTransferNodeInvokePolicy } from "./src/shared/lazy-node-invoke-policy.js";
+import { createSharedImport } from "./src/shared/shared-import.js";
 import {
   DIR_FETCH_TOOL_DESCRIPTOR,
   DIR_LIST_TOOL_DESCRIPTOR,
@@ -31,6 +32,14 @@ function createLazyTool(
     },
   };
 }
+
+// The first turn invokes workspace.memory and workspace.skills together. When plugins load
+// from TypeScript source, two concurrent on-demand imports of this module can race: the
+// second caller can receive it before its own imports are bound. Built dist output uses
+// static chunk imports and is unaffected. Share one import; a failed import retries later.
+const loadWorkspaceCommandModule = createSharedImport(
+  () => import("./src/node-host/workspace-memory.js"),
+);
 
 const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
@@ -117,7 +126,7 @@ export default definePluginEntry({
         dangerous: true,
         duplex: true,
         handle: async (...args) => {
-          const { handleWorkspaceCommand } = await import("./src/node-host/workspace-memory.js");
+          const { handleWorkspaceCommand } = await loadWorkspaceCommandModule();
           return await handleWorkspaceCommand(api, kind, ...args);
         },
       });

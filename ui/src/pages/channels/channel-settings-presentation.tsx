@@ -156,7 +156,9 @@ export function createChannelSettingsPresentation(
       entry.dispose?.();
       entry.dispose = undefined;
       entry.update = undefined;
-      entry.node.replaceChildren(formatUiError(error, "Settings presentation could not load."));
+      entry.node.replaceChildren(
+        formatUiError(error, i18n.t("channels.config.presentationLoadFailed")),
+      );
     };
     entry.fail = fail;
     void plugins
@@ -324,17 +326,17 @@ export function createChannelSettingsPresentation(
               const props = createParkedProjection(
                 () => ({
                   ...hooks.getProps(),
-                  onConfigPatch(path: Array<string | number>, value: unknown) {
+                  onConfigPatch(id: string, path: Array<string | number>, value: unknown) {
                     current();
-                    hooks.getProps().onConfigPatch(path, value);
+                    hooks.getProps().onConfigPatch(id, path, value);
                   },
-                  onConfigSave() {
+                  onConfigSave(id: string) {
                     current();
-                    hooks.getProps().onConfigSave();
+                    hooks.getProps().onConfigSave(id);
                   },
-                  onConfigReload() {
+                  onConfigDiscard(id: string) {
                     current();
-                    hooks.getProps().onConfigReload();
+                    hooks.getProps().onConfigDiscard(id);
                   },
                   onShowAdvancedSettings(enabled: boolean) {
                     current();

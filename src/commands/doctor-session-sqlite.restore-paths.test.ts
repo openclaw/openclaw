@@ -190,7 +190,7 @@ it.skipIf(!hasPlatformRootTempAlias).each([1, 3] as const)(
         move.sourcePath.startsWith(realRootTempDir + path.sep),
       ),
     ).toBe(true);
-    const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+    const preview = await inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
     expect(preview.artifacts.some((artifact) => artifact.runs.length > 0)).toBe(true);
     if (version === 1) {
       legacy((file) => path.join(lexicalRootTempDir, path.relative(realRootTempDir, file)));

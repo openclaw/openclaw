@@ -6,7 +6,6 @@ import path from "node:path";
 import type { DiagnosticsChannel } from "undici";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
-import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
 
 const resolveToken = vi.hoisted(() => vi.fn());
 const authenticate = vi.hoisted(() => vi.fn());
@@ -147,19 +146,6 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     });
     expect(resolveToken).not.toHaveBeenCalled();
     expect(authenticate).not.toHaveBeenCalled();
-  });
-
-  it("selects fallback for authentication and discovery errors, but not unrelated failures", () => {
-    const cases: Array<[Error, boolean]> = [
-      [new Error("Copilot user response missing endpoints.api"), true],
-      [new Error("Unexpected response from GitHub Copilot user endpoint"), true],
-      [new Error("github-copilot.model-discovery: malformed JSON response"), true],
-      [new CopilotRuntimeAuthError({ reason: "timeout", timeoutMs: 30_000 }), true],
-      [new Error("Network timeout"), false],
-    ];
-    for (const [error, expected] of cases) {
-      expect(adapter.shouldContinueAutoSelection?.(error)).toBe(expected);
-    }
   });
 });
 
@@ -329,6 +315,7 @@ describe("adapter real transport", () => {
   ] as const)(
     "redacts %s HTTP %s errors (logging disabled: %s)",
     async (stage, status, disabled) => {
+      const onUsage = vi.fn();
       const marker = "UNIQUESECRET";
       const token = `${stage === "embeddings" ? "gho" : "ghu"}_AAAA${marker}XXXX111122223333`;
       const message = "upstream denied";
@@ -359,7 +346,7 @@ describe("adapter real transport", () => {
           const result = await createRemote({
             headers: { "X-Proxy-Token": "synthetic+credential:value" },
           });
-          await result.provider?.embed("hello", { inputType: "query" });
+          await result.provider?.embed("hello", { inputType: "query", onUsage });
         };
         const caught = await request().catch((error: unknown) => error);
         if (!(caught instanceof Error)) {
@@ -372,6 +359,7 @@ describe("adapter real transport", () => {
         expect(caught.message).toContain('"reflected":"***"');
         expect(caught.message).not.toContain("tail");
         expect(caught.message.length).toBeLessThan(8_300);
+        expect(onUsage).not.toHaveBeenCalled();
         await vi.waitFor(() => expect(closed).toBe(true));
         expect(server.requests).toEqual([
           { method: "GET", url: "/models" },
@@ -384,9 +372,16 @@ describe("adapter real transport", () => {
   );
 
   it.each(["profile", "custom"])(
-    "preserves %s authentication and embedding wire requests",
+    "preserves %s authentication, embedding wire requests, and per-request usage",
     async (auth) => {
+      const onUsage = vi.fn();
       const observed: Array<{ headers: IncomingMessage["headers"]; body: string }> = [];
+      const usageResponses = [
+        { prompt_tokens: 7, total_tokens: 9 },
+        { prompt_tokens: 11, total_tokens: 13 },
+        { prompt_tokens: 5, total_tokens: 5 },
+        undefined,
+      ];
       const server = await startCopilotServer({
         models: DISCOVERY_MODELS_BODY,
         observeRequest: (request, body) => {
@@ -397,12 +392,13 @@ describe("adapter real transport", () => {
           response.end(
             JSON.stringify({
               data:
-                server.requests.length === 2
-                  ? [{ index: 0, embedding: [3, 4] }]
-                  : [
+                server.requests.length === 3
+                  ? [
                       { index: 1, embedding: [0, 2] },
                       { index: 0, embedding: [3, 0] },
-                    ],
+                    ]
+                  : [{ index: 0, embedding: [3, 4] }],
+              usage: usageResponses[server.requests.length - 2],
             }),
           );
         },
@@ -447,14 +443,27 @@ describe("adapter real transport", () => {
           }),
         );
       }
-      expect(await result.provider?.embed("hello", { inputType: "query" })).toEqual([0.6, 0.8]);
-      expect(await result.provider?.embedBatch(["first", { text: "second" }])).toEqual([
-        [1, 0],
-        [0, 1],
+      expect(await result.provider?.embed("hello", { inputType: "query", onUsage })).toEqual([
+        0.6, 0.8,
       ]);
+      expect(await result.provider?.embedBatch(["first", { text: "second" }], { onUsage })).toEqual(
+        [
+          [1, 0],
+          [0, 1],
+        ],
+      );
+      expect(
+        await result.provider?.embedBatch(["first", "second"], { inputType: "query", onUsage }),
+      ).toEqual([
+        [0.6, 0.8],
+        [0.6, 0.8],
+      ]);
+      expect(await result.provider?.embedBatch([], { onUsage })).toEqual([]);
 
       expect(server.requests).toEqual([
         { method: "GET", url: `${prefix}/models` },
+        { method: "POST", url: `${prefix}/embeddings` },
+        { method: "POST", url: `${prefix}/embeddings` },
         { method: "POST", url: `${prefix}/embeddings` },
         { method: "POST", url: `${prefix}/embeddings` },
       ]);
@@ -469,13 +478,27 @@ describe("adapter real transport", () => {
         });
         expect(headers).not.toHaveProperty("x-private-header");
       }
-      expect(observed.map(({ body }) => body)).toEqual([
+      expect(observed.slice(0, 3).map(({ body }) => body)).toEqual([
         "",
         JSON.stringify({ model: "text-embedding-3-small", input: ["hello"] }),
         JSON.stringify({ model: "text-embedding-3-small", input: ["first", "second"] }),
       ]);
+      expect(observed.slice(3).map(({ body }) => body)).toEqual(
+        expect.arrayContaining([
+          JSON.stringify({ model: "text-embedding-3-small", input: ["first"] }),
+          JSON.stringify({ model: "text-embedding-3-small", input: ["second"] }),
+        ]),
+      );
       expect(resolveToken).toHaveBeenCalledTimes(auth === "custom" ? 0 : 1);
       expect(authenticate).toHaveBeenCalledTimes(auth === "custom" ? 0 : 1);
+      expect(onUsage).toHaveBeenCalledTimes(4);
+      expect(onUsage.mock.calls.slice(0, 2)).toEqual([
+        [{ promptTokens: 7, totalTokens: 9 }],
+        [{ promptTokens: 11, totalTokens: 13 }],
+      ]);
+      expect(onUsage.mock.calls.slice(2)).toEqual(
+        expect.arrayContaining([[{ promptTokens: 5, totalTokens: 5 }], [undefined]]),
+      );
     },
   );
 });

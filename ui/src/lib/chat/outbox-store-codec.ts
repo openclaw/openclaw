@@ -1,6 +1,8 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { readNonBlankString as normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readChatAppContext } from "../../../../packages/gateway-protocol/src/chat-app-context.js";
 import { normalizeQueueMode } from "../../../../src/auto-reply/reply/queue/normalize.js";
 import { readChatWorkContext } from "../../../../src/chat/work-context.js";
 import { t } from "../../i18n/index.ts";
@@ -31,7 +33,7 @@ export const MAX_STORED_QUEUE_ITEMS = 50;
 // existing input while the canonical queue drains back below 50.
 const MAX_RETAINED_QUEUE_ITEMS = MAX_STORED_SESSIONS * MAX_STORED_QUEUE_ITEMS;
 export const INTERRUPTED_SETTINGS_WAIT_ERROR =
-  "Chat settings update was interrupted. Review and retry when ready.";
+  "Couldn’t update session settings. The update was interrupted. Review the settings before trying again.";
 
 export type StoredComposerState = {
   version: 4;
@@ -67,6 +69,7 @@ export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueI
     left.text === right.text &&
     left.workContextUnavailable === right.workContextUnavailable &&
     JSON.stringify(left.workContext) === JSON.stringify(right.workContext) &&
+    stableStringify(left.appContext) === stableStringify(right.appContext) &&
     JSON.stringify(left.mentions ?? []) === JSON.stringify(right.mentions ?? []) &&
     left.sendRunId === right.sendRunId &&
     left.sendAttempts === right.sendAttempts &&
@@ -144,6 +147,10 @@ export function normalizeStoredQueueItem(entry: unknown): ChatQueueItem | null {
     if (!item.workContext) {
       item.workContextUnavailable = true;
     }
+  }
+  const appContext = readChatAppContext(entry.appContext);
+  if (appContext) {
+    item.appContext = appContext;
   }
   const mentions = readHumanMentions(text, entry.mentions);
   if (mentions) {

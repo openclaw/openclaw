@@ -15,6 +15,8 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
+const refusedFollowupText = "This message was not queued because the session queue is full.";
+
 export function registerQueuedFollowupNoticeCases(): void {
   it.each(["direct", "routed"] as const)(
     "delivers one explicit followup start notice before the pending %s reply",
@@ -89,16 +91,23 @@ export function registerQueuedFollowupNoticeCases(): void {
   );
 
   it.each([
-    {
-      reason: "collaborative-steering-disabled",
-      notice:
-        "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.",
-      fallbackDelivered: undefined,
-    },
-    { reason: "queue-cap", notice: QUEUE_CAP_REJECTION_TEXT, fallbackDelivered: true },
+    [
+      "collaborative-steering-disabled",
+      undefined,
+      false,
+      false,
+      "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.",
+      undefined,
+    ],
+    ["queue-cap", undefined, false, false, QUEUE_CAP_REJECTION_TEXT, true],
+    ["queue-cap", undefined, false, true, refusedFollowupText, true],
+    ["queue-cap", "queue-cap-new", false, false, QUEUE_CAP_REJECTION_TEXT, true],
+    ["queue-cap", "queue-cap-new", true, false, undefined, undefined],
+    ["queue-cap", "queue-cap-new", false, true, refusedFollowupText, true],
+    ["queue-cap", "queue-cap-new", true, true, refusedFollowupText, true],
   ] as const)(
-    "reports $reason without claiming queueing or cancellation",
-    async ({ reason, notice, fallbackDelivered }) => {
+    "reports %s/%s with durable=%s explicit=%s without claiming queueing",
+    async (reason, queueDisposition, durable, explicit, notice, fallbackDelivered) => {
       setNoAbort();
       diagnosticMocks.logMessageDispatchCompleted.mockClear();
       const sessionKey = `test:${reason}`;
@@ -109,22 +118,34 @@ export function registerQueuedFollowupNoticeCases(): void {
         },
       });
       const result = await dispatchReplyFromConfig({
-        ctx: buildTestCtx({ ChatType: "direct", SessionKey: sessionKey, Body: "stop" }),
+        ctx: buildTestCtx({
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Body: "stop",
+          CommandSource: explicit ? "text" : undefined,
+          CommandAuthorized: explicit,
+          CommandBody: explicit ? "/followup stop" : undefined,
+        }),
         cfg: { diagnostics: { enabled: true } },
         dispatcher,
+        replyOptions: durable
+          ? { turnAdoptionLifecycle: { onAdopted() {}, onDropped() {} } }
+          : undefined,
         replyResolver: async (_ctx, opts) => {
           const state = resolveReplyOperationRunState(opts);
           if (!state) {
             throw new Error("expected reply operation state");
           }
           state.admission = { status: "skipped", reason };
+          state.followupQueueDisposition = queueDisposition;
           return undefined;
         },
       });
       dispatcher.markComplete();
       await dispatcher.waitForIdle();
-      expect(deliveredTexts).toEqual([notice]);
+      expect(deliveredTexts).toEqual(notice === undefined ? [] : [notice]);
       expect(result.noVisibleReplyFallbackDelivered).toBe(fallbackDelivered);
+      expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
       expect(result.deferredToActiveRun).toBeUndefined();
       if (reason === "collaborative-steering-disabled") {
         expect(result.collaborativeSteeringRefused).toBe(true);
@@ -137,9 +158,15 @@ export function registerQueuedFollowupNoticeCases(): void {
 
   it.each([
     { phase: "still queued", reason: "steering-unavailable" },
-    { phase: "evicted before finalization", reason: "explicit-followup" },
+    { phase: "still queued", reason: "requester-mismatch" },
+    { phase: "still queued", reason: "collaborative-steering-disabled" },
+    { phase: "still queued", reason: "explicit-followup" },
+    { phase: "evicted before finalization", reason: "steering-unavailable" },
+    { phase: "evicted before finalization", reason: "steering-unavailable", nonDurable: true },
     { phase: "evicted during progress flush", reason: "steering-unavailable" },
-  ] as const)("reports a truthful $reason queue notice when $phase", async ({ phase, reason }) => {
+  ] as const)("keeps $reason queue feedback consistent when $phase", async (scenario) => {
+    const { phase, reason } = scenario;
+    const durable = !("nonDurable" in scenario);
     setNoAbort();
     const sessionKey = `agent:agent:queue-notice:${reason}:${phase}`;
     const queued = createDeferred();
@@ -165,6 +192,7 @@ export function registerQueuedFollowupNoticeCases(): void {
       if (!runState) {
         throw new Error("expected reply operation state");
       }
+      run.turnAdoptionLifecycle = opts?.turnAdoptionLifecycle;
       bindReplyOperationQueueDisposition(run, runState);
       expect(enqueueFollowupRun(sessionKey, run, settings, "message-id", undefined, false)).toBe(
         true,
@@ -190,6 +218,9 @@ export function registerQueuedFollowupNoticeCases(): void {
       }),
       cfg: { agents: { defaults: { verboseDefault: "on" } } },
       dispatcher,
+      replyOptions: durable
+        ? { turnAdoptionLifecycle: { onAdopted() {}, onDropped() {} } }
+        : undefined,
       replyResolver,
     });
     const evict = () => {
@@ -229,15 +260,19 @@ export function registerQueuedFollowupNoticeCases(): void {
       const result = await dispatch;
       expect(deliveredTexts).toEqual([
         ...(phase === "evicted during progress flush" ? ["💬 Preparing the queue notice"] : []),
-        phase === "still queued"
-          ? "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress."
-          : "Your queued message was dropped because the session queue is full. It hasn’t changed the work already in progress. Please send it again after the current response finishes.",
+        ...(phase === "still queued" && reason === "explicit-followup"
+          ? [
+              "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
+            ]
+          : []),
+        ...(!durable
+          ? [
+              "Your queued message was dropped because the session queue is full. It hasn’t changed the work already in progress. Please send it again after the current response finishes.",
+            ]
+          : []),
       ]);
-      if (phase === "still queued") {
-        expect(disposition).not.toHaveBeenCalled();
-      } else {
-        expect(disposition).toHaveBeenCalledExactlyOnceWith("queue-cap-old");
-      }
+      expect(disposition.mock.calls).toEqual(phase === "still queued" ? [] : [["queue-cap-old"]]);
+      expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
       // Later eviction must not erase the initial acceptance or emit the never-queued fallback.
       expect(result.deferredToActiveRun).toBe("followup");
       expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();

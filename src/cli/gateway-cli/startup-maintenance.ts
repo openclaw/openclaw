@@ -3,8 +3,8 @@ import { isInvalidConfigError } from "../../config/io.invalid-config.js";
 import { isGatewayEffectiveConfigConflictError } from "../../gateway/server-runtime-config.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import type { GatewayLockError } from "../../infra/gateway-lock.js";
+import { formatErrorMessage, readErrorName } from "../../infra/errors.js";
+import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { isTailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
@@ -14,6 +14,10 @@ import { OpenClawDatabaseSchemaPreflightError } from "../../state/openclaw-datab
 import { formatCliCommand } from "../command-format.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
+
+export function isGatewayLockError(err: unknown): err is GatewayLockError {
+  return err instanceof GatewayLockError || readErrorName(err) === "GatewayLockError";
+}
 
 export function resolveGatewayStartupFailureExitCode(err: unknown): number {
   return isInvalidConfigError(err) ||

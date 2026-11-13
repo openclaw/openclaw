@@ -63,6 +63,7 @@ function isolatedConfig(
   const copied = structuredClone(config);
   if (Object.values(resolveDatabaseFamilyEngines(copied)).includes("postgres")) {
     // Provider exports are private SQLite images, never live PostgreSQL anchors.
+    // Candidates repeat this for older drivers (projectUpdateRehearsalDatabaseConfig).
     copied.database = { engine: "sqlite" };
   }
   const projectPluginPath = (value: string) => {
@@ -286,7 +287,10 @@ export async function prepareUpdateCandidateRehearsal(params: {
     const port = await tryListenOnPort({
       port: 0,
       host: "127.0.0.1",
-      signal: params.signal ?? AbortSignal.timeout(params.timeoutMs ?? 300_000),
+      signal: AbortSignal.any([
+        AbortSignal.timeout(params.timeoutMs ?? 300_000),
+        ...(params.signal ? [params.signal] : []),
+      ]),
     });
     const serialized = JSON.stringify(
       isolatedConfig(
@@ -304,6 +308,15 @@ export async function prepareUpdateCandidateRehearsal(params: {
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
     await fs.mkdir(workspaceDir, { recursive: true, mode: 0o700 });
+    if (
+      Object.values(params.config.secrets?.providers ?? {}).some(
+        (provider) => provider.source === "exec",
+      )
+    ) {
+      snapshotWarnings.push(
+        "Update rehearsal leaves exec SecretRef providers cold; credential availability is not verified.",
+      );
+    }
     return {
       stateDir: tempDir,
       configPath,

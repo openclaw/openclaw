@@ -549,7 +549,9 @@ suite.define(() => {
               revision,
               keys: metadataKeys,
             });
-            expect(notices).toEqual(noMatches ? [expect.stringContaining("No results found")] : []);
+            expect(notices).toEqual(
+              noMatches ? [expect.stringContaining("No results match your search.")] : [],
+            );
             expect(
               await palette
                 .getByText(/Search notices|incomplete|unavailable|indexing older/i)
@@ -625,7 +627,7 @@ suite.define(() => {
           expect(absent.truncated).toBe(false);
           expect(await results.getByRole("option").count()).toBe(0);
           await emptyState
-            .getByRole("heading", { name: "No results found", exact: true })
+            .getByRole("heading", { name: "No results match your search.", exact: true })
             .waitFor();
 
           await search("copperfinch observatory", 1, "06-selected-search-result.png");

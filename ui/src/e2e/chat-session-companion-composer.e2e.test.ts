@@ -130,7 +130,7 @@ suite.define(() => {
         details: { reason: "image-input-unsupported" },
       });
       await text(
-        "This Side chat model cannot read images. Choose an image-capable model, then retry.",
+        "This side chat model can’t read images. Choose a model that supports images, then try again.",
       ).waitFor();
       expect(await text("No utility model is configured for this session.").count()).toBe(0);
       const retry = side.getByRole("button", { name: "Retry", exact: true });

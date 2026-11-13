@@ -6,7 +6,9 @@ import type {
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech";
 import {
+  buildGradiumSpeechRequestBody,
   createSpeechDirectiveParser,
+  DEFAULT_GRADIUM_VOICE_ID,
   resolveSpeechProviderApiKey,
 } from "openclaw/plugin-sdk/speech-provider";
 import {
@@ -16,7 +18,6 @@ import {
 
 const DEFAULT_GRADIUM_BASE_URL = "https://api.gradium.ai";
 const GRADIUM_API_HOSTNAME = "api.gradium.ai";
-const DEFAULT_GRADIUM_VOICE_ID = "YTpq7expH9539ERJ";
 
 const GRADIUM_VOICES = [
   { id: "YTpq7expH9539ERJ", name: "Emma" },
@@ -101,13 +102,13 @@ async function synthesizeGradium(
         "x-api-key": apiKey,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        text,
-        voice_id: voiceId,
-        only_audio: true,
-        output_format: outputFormat,
-        json_config: JSON.stringify({ padding_bonus: 0 }),
-      }),
+      body: JSON.stringify(
+        buildGradiumSpeechRequestBody({
+          text,
+          voiceId,
+          outputFormat,
+        }),
+      ),
     },
     timeoutMs,
     requireHttps: true,

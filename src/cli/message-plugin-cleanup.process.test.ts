@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForCliProcessStderrMarker } from "./cli-process-child.test-helpers.js";
@@ -13,15 +14,29 @@ it.each([
   { name: "failed JSON", fail: true, json: true, pending: false },
   { name: "failed text", fail: true, json: false, pending: false },
   { name: "stalled cleanup", fail: false, json: true, pending: true },
-])("runs owned shutdown hooks after $name output", async ({ fail, json, pending }) => {
+  { name: "forward clock step", fail: false, json: true, pending: false, clockOffset: 60_000 },
+  { name: "backward clock step", fail: false, json: true, pending: true, clockOffset: -60_000 },
+])("runs owned shutdown hooks after $name output", async (entry) => {
+  const { fail, json, pending, clockOffset = 0 } = entry;
   const root = tempDirs.make("openclaw-message-cleanup-");
   const pluginDir = path.join(root, "plugin");
+  const marker = path.join(root, "stopped.txt");
+  const clockPreload = path.join(root, "clock-step.mjs");
+  if (clockOffset) {
+    await fs.writeFile(
+      clockPreload,
+      `import fs from "node:fs";
+const wallNow = Date.now.bind(Date);
+Date.now = () => wallNow() + (fs.existsSync(${JSON.stringify(marker)}) ? ${clockOffset} : 0);
+`,
+    );
+  }
   const fixture = createCliProcessFixture(root, {
     ESBUILD_WORKER_THREADS: process.env.ESBUILD_WORKER_THREADS,
     NODE_DISABLE_COMPILE_CACHE: "1",
     NO_COLOR: "1",
+    NODE_OPTIONS: clockOffset ? `--import=${pathToFileURL(clockPreload).href}` : undefined,
   });
-  const marker = path.join(root, "stopped.txt");
   const id = "cleanup";
   const mediaUrls = ["https://example.com/first.png", "https://example.com/second.png"] as const;
   const meta = { id, label: id, selectionLabel: id, docsPath: "/channels/test", blurb: id };
@@ -98,5 +113,7 @@ export default { id: plugin.id, register(api) {
   }
   if (pending) {
     expect(result.stderr).toContain(SHUTDOWN_WARNING);
+  } else {
+    expect(result.stderr).not.toContain(SHUTDOWN_WARNING);
   }
 });

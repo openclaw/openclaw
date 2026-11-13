@@ -277,17 +277,12 @@ describe("config cli integration", () => {
   );
 
   it.each([
-    {
-      name: "empty inline batch",
-      args: ["gateway.port", "19001", "--batch-json="],
-      error: "Failed to parse --batch-json",
-    },
-    {
-      name: "whitespace batch file path",
-      args: ["gateway.port", "19001", "--batch-file", " \t"],
-      error: "--batch-file must not be empty",
-    },
-  ])("honors config set batch input selection for $name", async ({ args, error }) => {
+    [["--batch-json="], "Failed to parse --batch-json"],
+    [["--batch-file", " \t"], "--batch-file must not be empty"],
+    [["--ref-id", ""], "ref builder mode does not accept <value>"],
+    [["--provider-mode", ""], "provider builder mode does not accept <value>"],
+  ] as const)("honors config set input selection for %j", async (flags, error) => {
+    const args = ["gateway.port", "19001", ...flags];
     const raw = '{"agents":{"entries":{"main":{}}},"gateway":{"port":18789}}\n';
     await withConfig(raw, async ({ configPath }) => {
       const command = set(...args, "--dry-run", "--json");
@@ -304,6 +299,7 @@ describe("config cli integration", () => {
       expect(result.errors).toEqual([{ kind: "schema", message: expect.stringContaining(error) }]);
       expect(errors).toHaveLength(1);
       expect(errors[0]).toContain(error);
+      await reject(set(...args));
       expect(read(configPath)).toBe(raw);
     });
   });

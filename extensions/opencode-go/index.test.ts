@@ -8,6 +8,7 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -50,6 +51,20 @@ function upstreamModel(id: string, overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+function completedStream(model: Parameters<StreamFn>[0]) {
+  const stream = createAssistantMessageEventStream();
+  stream.push({
+    type: "done",
+    reason: "stop",
+    message: makeAgentAssistantMessage({
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+    }),
+  });
+  return stream;
+}
 async function captureGoWirePayload(
   thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"],
   payload: Record<string, unknown> & { model: string },
@@ -63,7 +78,7 @@ async function captureGoWirePayload(
   });
   const baseStreamFn: StreamFn = (runtimeModel, _context, options) => {
     void options?.onPayload?.(payload, runtimeModel);
-    return createAssistantMessageEventStream();
+    return completedStream(runtimeModel);
   };
   const streamFn = provider.wrapStreamFn?.({
     streamFn: baseStreamFn,
@@ -72,7 +87,8 @@ async function captureGoWirePayload(
     model,
     thinkingLevel,
   });
-  await streamFn?.(model, { messages: [] }, {});
+  const stream = await streamFn?.(model, { messages: [] }, {});
+  await expect(stream?.result()).resolves.toMatchObject({ stopReason: "stop" });
   return payload;
 }
 function createCatalogFetchGuard(upstreamModels: Record<string, unknown>, liveModelIds: string[]) {
@@ -145,6 +161,18 @@ describe("opencode-go provider plugin", () => {
     });
   }
 
+  it("keeps endpoint outages separate from authentication refusals", () => {
+    const outage = "Upstream request failed: Endpoint is unavailable.";
+    for (const [status, errorMessage, expected] of [
+      [403, outage, "server_error"],
+      [403, "Invalid API key", undefined],
+      [403, "You do not have permission to use this model", undefined],
+      [401, outage, undefined],
+    ] as const) {
+      expect(provider.classifyFailoverReason?.({ status, errorMessage })).toBe(expected);
+    }
+  });
+
   it.each(["deepseek-v4-pro", "deepseek-v4.1-flash", "kimi-k3"] as const)(
     "keeps %s thinking per invocation on one standalone completion wrapper",
     async (modelId) => {
@@ -167,7 +195,7 @@ describe("opencode-go provider plugin", () => {
           options,
         );
         await options?.onPayload?.(payload, runtimeModel);
-        return createAssistantMessageEventStream();
+        return completedStream(runtimeModel);
       };
       const wrapped = provider.wrapSimpleCompletionStreamFn?.({
         provider: "opencode-go",
@@ -180,11 +208,12 @@ describe("opencode-go provider plugin", () => {
         throw new Error("Missing standalone completion wrapper");
       }
       for (const reasoning of ["off", "max", undefined] as const) {
-        await wrapped(
+        const stream = await wrapped(
           model,
           { messages: [{ role: "user", content: "Synthetic request", timestamp: 1 }] },
           { reasoning },
         );
+        await expect(stream.result()).resolves.toMatchObject({ stopReason: "stop" });
         if (modelId === "kimi-k3") {
           expect(payload).not.toHaveProperty("thinking");
         } else {
@@ -335,12 +364,7 @@ describe("opencode-go provider plugin", () => {
         if (mode === "unrelated" || mode === "missing") {
           expect(result).toBeNull();
         } else {
-          expect(result).toMatchObject({
-            provider: {
-              apiKey,
-              models: expect.arrayContaining([expect.objectContaining({ id: "deepseek-v4-pro" })]),
-            },
-          });
+          expect(result).toMatchObject({ provider: { apiKey } });
         }
         if (mode === "unrelated") {
           expect(resolveProviderApiKey).not.toHaveBeenCalled();
@@ -392,9 +416,9 @@ describe("opencode-go provider plugin", () => {
     "identifies native Anthropic %s requests without tagging proxies",
     async (mode) => {
       const capturedHeaders: Array<NonNullable<Parameters<StreamFn>[2]>["headers"]> = [];
-      const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const baseStreamFn: StreamFn = (runtimeModel, _context, options) => {
         capturedHeaders.push(options?.headers);
-        return createAssistantMessageEventStream();
+        return completedStream(runtimeModel);
       };
       const wrap =
         mode === "stream" ? provider.wrapStreamFn : provider.wrapSimpleCompletionStreamFn;
@@ -410,12 +434,14 @@ describe("opencode-go provider plugin", () => {
         mode === "stream"
           ? "anthropic-messages"
           : "openclaw-provider-simple:opencode-go:qwen3.8-max";
-      const request = (baseUrl: string, version: string) =>
-        streamFn?.(
+      const request = async (baseUrl: string, version: string) => {
+        const stream = await streamFn?.(
           makeRuntimeModel("qwen3.8-max", { api, baseUrl }),
           { messages: [] },
           { headers: { "User-Agent": `configured-client/${version}.0`, "X-Custom": version } },
         );
+        await expect(stream?.result()).resolves.toMatchObject({ stopReason: "stop" });
+      };
       await request("https://opencode.ai/zen/go", "1");
       await request("https://proxy.example.com", "2");
       expect(capturedHeaders).toEqual([

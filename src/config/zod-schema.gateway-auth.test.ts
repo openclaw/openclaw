@@ -6,6 +6,41 @@ import { SessionSchema } from "./zod-schema.session.js";
 
 const accepts = (raw: unknown) => OpenClawSchema.safeParse(raw).success;
 
+test("accepts opt-in proxy credit headers without changing the user principal header", () => {
+  expect(
+    accepts({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-occ-identity",
+            gitCoauthor: { nameHeader: "x-credit-name", emailHeader: "x-credit-email" },
+          },
+        },
+      },
+    }),
+  ).toBe(true);
+});
+
+test.each([
+  { nameHeader: "", emailHeader: "x-email" },
+  { nameHeader: "x-name\r\ninjected", emailHeader: "x-email" },
+  { nameHeader: "x-name" },
+])("rejects invalid or incomplete proxy credit mapping %j", (gitCoauthor) => {
+  expect(
+    accepts({
+      gateway: {
+        auth: {
+          trustedProxy: {
+            userHeader: "x-user",
+            gitCoauthor,
+          },
+        },
+      },
+    }),
+  ).toBe(false);
+});
+
 function expectSchemaIssue(raw: unknown, path: string[], message?: string) {
   const result = OpenClawSchema.safeParse(raw);
   expect(result.error?.issues).toContainEqual(
@@ -57,6 +92,12 @@ const modelConfig = (modelPolicy: unknown, extraRoles = {}) => ({
   ...rolesConfig({ definitions: { guest: { ...validRole, modelPolicy }, ...extraRoles } }),
 });
 
+test("accepts a conversation-scoped automation role without operator.write", () => {
+  const scopes = ["operator.sessions.write", "operator.cron"];
+  const config = validated(rolesConfig({ definitions: { guest: { ...validRole, scopes } } }));
+  expect(config.gateway?.roles?.definitions.guest?.scopes).toEqual(scopes);
+});
+
 test.each([
   [{ octocat: "missing" }, "octocat", "must name a configured role definition"],
   [{ octo_cat: "guest" }, "octo_cat", "Invalid GitHub login"],
@@ -84,6 +125,22 @@ test("validates model source, scoped aliases, empty membership and future-family
   });
 });
 
+test("accepts only explicit nonstandard Access grants independently of model policy", () => {
+  const config = validated(
+    rolesConfig({
+      definitions: {
+        guest: {
+          ...validRole,
+          accessPrograms: { cyber: ["daybreak_red", "daybreak_blue", "daybreak_red"] },
+        },
+      },
+    }),
+  );
+  expect(config.gateway?.roles?.definitions.guest?.accessPrograms).toEqual({
+    cyber: ["daybreak_red", "daybreak_blue"],
+  });
+});
+
 test.each([
   { sourceAgent: "missing", deny: ["fixture/restricted-*"] },
   { sourceAgent: "shared", deny: ["fixture/restricted-**"] },
@@ -102,6 +159,9 @@ test.each([
 test.each([
   ["unknown session permission", { sessions: { others: "edit" } }],
   ["unknown sandbox policy", { sandbox: "optional" }],
+  ["wildcard Access grant", { accessPrograms: { cyber: ["*"] } }],
+  ["implicit standard Access grant", { accessPrograms: { cyber: ["standard"] } }],
+  ["unknown Access grant", { accessPrograms: { cyber: ["blue"] } }],
   ["unknown operator scope", { scopes: ["operator.superuser"] }],
   ["leading whitespace in an operator scope", { scopes: [" operator.read"] }],
   ["trailing whitespace in an operator scope", { scopes: ["operator.write "] }],

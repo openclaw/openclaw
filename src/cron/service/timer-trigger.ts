@@ -33,15 +33,12 @@ type TransientCronRetryDecision = {
   reason: "transient retry" | "max retries exhausted" | "permanent error" | "aborted";
 };
 
-/** Persists non-busy trigger evaluation state without touching payload-run history. */
+/** Persists trigger evaluation state without touching payload-run history. */
 export function applyTriggerEvaluationState(
   job: CronJob,
   triggerEval: CronTriggerEvalOutcome,
   evaluatedAtMs: number,
 ): void {
-  if (triggerEval.busy) {
-    return;
-  }
   job.state.lastTriggerEvalAtMs = evaluatedAtMs;
   job.state.triggerEvalCount = (job.state.triggerEvalCount ?? 0) + 1;
   if (triggerEval.stateChanged) {

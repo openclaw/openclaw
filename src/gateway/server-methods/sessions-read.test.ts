@@ -5,7 +5,6 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { AgentsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import * as runtimeMetadata from "../../agents/agent-runtime-metadata.js";
 import * as avatarRuntime from "../../agents/identity-avatar-file-runtime.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -491,6 +490,36 @@ test("sessions.search accepts an ACP allowlist owner absent from the agent roste
   expect(await listAgentIdsViaRpc()).toEqual(["main"]);
 });
 
+test("sessions history reads a configured ACP owner without an explicit agent id", async () => {
+  const agentId = "gemini";
+  const sessionKey = `agent:${agentId}:acp:history-owner`;
+  const sessionId = "session-acp-owner-history";
+  const storePath = path.join(requireStateDir(), "agents", agentId, "sessions", "sessions.json");
+  await setAgentsConfig({ entries: { main: {} } });
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  getRuntimeConfig().acp = { allowedAgents: [agentId] };
+  await replaceSessionEntry({ agentId, sessionKey, storePath }, { sessionId, updatedAt: 42 });
+  await seedLinearSessionTranscript({
+    agentId,
+    contents: ["ACP owner history needle"],
+    sessionId,
+    sessionKey,
+    storePath,
+  });
+
+  const history = await directSessionReq<{ messages: Array<{ content: unknown }> }>(
+    "chat.history",
+    { sessionKey, limit: 10 },
+  );
+  expect(history).toMatchObject({ ok: true });
+  expect(
+    history.payload?.messages.some((message) => message.content === "ACP owner history needle"),
+  ).toBe(true);
+  // The explicit roster-gated id stays rejected so redundant callers keep failing loudly.
+  const rejected = await directSessionReq("chat.history", { sessionKey, agentId, limit: 10 });
+  expect(rejected).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+});
+
 test("searches rich displayed fields before selecting a page across visible agent stores", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const config: OpenClawConfig = {
@@ -519,6 +548,8 @@ test("searches rich displayed fields before selecting a page across visible agen
       label: "Quasar label",
       category: "Nebula category",
       displayName: "Stored comet",
+      agentHarnessId: "custom-harness",
+      modelSelectionLocked: true,
       status: "done",
       goal: createSessionGoalFixture("goal-target", "Map distant galaxies", {
         tokensUsed: 12000,
@@ -532,13 +563,6 @@ test("searches rich displayed fields before selecting a page across visible agen
       createdActor: { type: "human", source: "profile", id: "restricted-owner@example.com" },
     });
     await put("work", "archived-target", { label: "Vault Orchid", archivedAt: 1 });
-    const runtime = runtimeMetadata.resolveCurrentSessionAgentRuntimeMetadata;
-    vi.spyOn(runtimeMetadata, "resolveCurrentSessionAgentRuntimeMetadata").mockImplementation(
-      (params) =>
-        params.sessionKey === "agent:work:target"
-          ? { id: "custom-harness", source: "session", fallback: "portable-mode" }
-          : runtime(params),
-    );
     for (let index = 0; index < 55; index++) {
       await put("main", `filler-${index}`, {});
     }
@@ -553,7 +577,7 @@ test("searches rich displayed fields before selecting a page across visible agen
       "Pursuing goal (12k/50k)",
       "Telescope calibrated",
       "Orchid Navigator",
-      "custom-harness (fallback portable-mode)",
+      "custom-harness",
     ]) {
       const result = await list({ search, limit: 50 });
       expect

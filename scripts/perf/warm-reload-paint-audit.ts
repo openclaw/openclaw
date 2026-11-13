@@ -42,6 +42,9 @@ const pngSignature = Buffer.from("89504e470d0a1a0a", "hex");
 export async function applyWarmReloadPaintAudit(reportPath: string, auditPath: string) {
   const directory = await realpath(path.dirname(path.resolve(reportPath)));
   const report = reportSchema.parse(JSON.parse(await readFile(reportPath, "utf8")));
+  if (report.captureMode === "timing") {
+    throw new Error("Timing captures have no pixel evidence; rerun with --visual-proofs");
+  }
   const audit = auditSchema.parse(JSON.parse(await readFile(auditPath, "utf8")));
   const observations = new Map<string, (typeof audit.observations)[number]>();
   for (const observation of audit.observations) {

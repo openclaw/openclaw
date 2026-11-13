@@ -1,12 +1,29 @@
 import "./backup-worker.test-support.js";
+import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-v26-layout.js";
-import { addPreCutoverClientCredentialTablesForTest } from "../../state/openclaw-state-schema.test-support.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
+} from "../../state/openclaw-state-schema.test-support.js";
+import { defaultPayload } from "../gateway-state-owner-record.js";
+import * as stateOwner from "../gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { LEGACY_USAGE_COST_PARTITION_SCOPE } from "../session-cost-usage-partitions.js";
+import * as liveOwner from "../sqlite-live-owner.js";
+import * as inspection from "../sqlite-readonly-inspection.js";
+import * as snapshotSource from "../sqlite-snapshot-source.js";
+import { loadAgentPortDescriptor } from "./agent-port-descriptor.js";
+import { databaseStoreLiveReadOperations } from "./database-store-live-read.worker.js";
+import { createDatabaseStoreDiagnostic } from "./diagnostic-record.js";
+import { formatDatabaseStoreDiagnostic } from "./diagnostics-format.js";
 import { inspectDatabaseStore, type DatabaseStoreInspection } from "./diagnostics.js";
 import { writePortAnchor } from "./port-backup.test-support.js";
 import type { PortDescriptor } from "./port-types.js";
@@ -39,29 +56,288 @@ function createStore(input: DatabaseStoreInspection, version: number) {
 async function inspectUnchanged(input: DatabaseStoreInspection) {
   const before = fs.readFileSync(input.path!);
   const result = await inspectDatabaseStore(input);
-  expect(fs.readFileSync(input.path!)).toEqual(before);
+  expect(fs.readFileSync(input.path!).equals(before), input.path!).toBe(true);
   return result;
 }
-async function stateStore(version: number) {
-  const input = {
-    ...fixture(),
-    family: "state" as const,
-    descriptor: await loadStatePortDescriptor(),
-  };
+async function stateStore(version: number, contentVersion = version) {
+  const input = fixture();
+  input.family = "state";
+  input.descriptor = await loadStatePortDescriptor();
   using db = openNodeSqliteDatabase(input.path!);
   for (const schema of [input.descriptor, ...(input.descriptor.fragments ?? [])]) {
     db.exec(version === 25 ? withLegacyStateHeadLayout(schema.sqlite) : schema.sqlite);
   }
   if (version === 25) {
+    restorePreTemplateStateIdentifiersForTest(db);
     addPreCutoverClientCredentialTablesForTest(db);
   }
   db.exec(`PRAGMA user_version = ${version};
     INSERT INTO schema_meta VALUES ('primary', 'global', ${version}, NULL, NULL, 1, 1);
-    INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${version}', 1)`);
+    INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${contentVersion}', 1)`);
   return input;
 }
 
+const PROBE =
+  "INSERT INTO config_machine_state VALUES ('probe', json_quote(hex(zeroblob(2097152))), 1);";
+const LIVE_WAL = `PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; ${PROBE}`;
+// Spill an uncommitted update into the database file so a killed writer leaves a hot journal.
+const HOT_JOURNAL = `PRAGMA journal_mode = DELETE; ${PROBE} PRAGMA cache_size = 2; BEGIN IMMEDIATE;
+  UPDATE config_machine_state SET value_json = json_quote(hex(randomblob(2097152))) WHERE state_key = 'probe';`;
+// A separate process owns its SQLite locks, as the Gateway does.
+async function holdSqlite(databasePath: string, sql: string) {
+  const child = spawn(
+    process.execPath,
+    [
+      "--input-type=commonjs",
+      "-e",
+      `const db = new (require("node:sqlite").DatabaseSync)(process.argv[1]);
+      db.exec(process.argv[2]); process.send("ready"); process.on("disconnect", () => db.close());`,
+      databasePath,
+      sql,
+    ],
+    { stdio: ["ignore", "ignore", "inherit", "ipc"] },
+  );
+  const exited = once(child, "exit");
+  await once(child, "message");
+  return {
+    stop: async () => {
+      if (child.connected) {
+        child.disconnect();
+      }
+      await exited;
+    },
+    crash: async () => {
+      child.kill("SIGKILL");
+      await exited;
+    },
+  };
+}
+function sourceFamily(databasePath: string) {
+  return ["", "-wal", "-journal"].map((suffix) =>
+    fs.existsSync(databasePath + suffix)
+      ? createHash("sha256")
+          .update(fs.readFileSync(databasePath + suffix))
+          .digest("hex")
+      : null,
+  );
+}
+function recordSnapshotCopies() {
+  const bytes: number[] = [];
+  const prepare = snapshotSource.prepareSqliteReadOnlyLocation;
+  vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocation").mockImplementation(async (...args) => {
+    const prepared = await prepare(...args);
+    const directory = path.dirname(prepared.location);
+    bytes.push(
+      fs
+        .readdirSync(directory)
+        .reduce((total, name) => total + fs.statSync(path.join(directory, name)).size, 0),
+    );
+    return prepared;
+  });
+  return bytes;
+}
+function ownLiveSource(databasePath: string) {
+  const owner = stateOwner.acquireGatewayStateOwner({
+    databasePath,
+    payload: { ...defaultPayload(databasePath), role: "gateway" },
+  });
+  onTestFinished(() => owner.release());
+}
+
 describe("physical store diagnostics", () => {
+  it("reads a verified live WAL source in place instead of copying it", async () => {
+    const input = await stateStore(OPENCLAW_STATE_SCHEMA_VERSION);
+    const holder = await holdSqlite(input.path!, LIVE_WAL);
+    onTestFinished(holder.stop);
+    ownLiveSource(input.path!);
+    const before = sourceFamily(input.path!);
+    const copies = recordSnapshotCopies();
+    // The same source through the private-copy path is the reference result.
+    vi.spyOn(liveOwner, "hasVerifiedLiveSqliteOwner").mockReturnValueOnce(false);
+    const copied = await inspectDatabaseStore(input);
+    const inPlace = await inspectDatabaseStore(input);
+    expect(copies).toEqual([expect.any(Number)]);
+    expect(copies[0]).toBeGreaterThan(4 * 1024 ** 2);
+    expect(inPlace).toEqual(copied);
+    expect(inPlace).toMatchObject({ observed: "sqlite", custody: "live-owner", issues: [] });
+    expect(sourceFamily(input.path!)).toEqual(before);
+  });
+
+  it("lets a live writer commit without waiting while the in-place read holds its snapshot", async () => {
+    const input = await stateStore(OPENCLAW_STATE_SCHEMA_VERSION);
+    const holder = await holdSqlite(input.path!, LIVE_WAL);
+    onTestFinished(holder.stop);
+    ownLiveSource(input.path!);
+    const tryInspect = inspection.tryInspectSqliteReadOnlyInProcess;
+    vi.spyOn(inspection, "tryInspectSqliteReadOnlyInProcess").mockImplementation((source, read) =>
+      tryInspect(source, (db) => {
+        // busy_timeout=0: any lock this open read held against the writer fails its commit.
+        execFileSync(process.execPath, [
+          "-e",
+          `const db = new (require("node:sqlite").DatabaseSync)(process.argv[1]);
+          db.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE; INSERT INTO config_machine_state VALUES ('writer', '1', 1); COMMIT;");`,
+          source,
+        ]);
+        return read(db);
+      }),
+    );
+    const diagnostic = createDatabaseStoreDiagnostic(input);
+    diagnostic.schema.expectedVersion = OPENCLAW_STATE_SCHEMA_VERSION;
+    const read = databaseStoreLiveReadOperations["databaseStore.inspectLive"](
+      { diagnostic },
+      { path: input.path!, env: process.env, assertCurrent: () => {} },
+    );
+    expect(read?.engine).toEqual({ engine: "sqlite" });
+    expect(read?.diagnostic.schema).toMatchObject({ version: OPENCLAW_STATE_SCHEMA_VERSION });
+    using db = openNodeSqliteDatabase(input.path!, { readOnly: true });
+    expect(
+      db.prepare("SELECT value_json FROM config_machine_state WHERE state_key = 'writer'").get(),
+    ).toEqual({ value_json: "1" });
+  });
+
+  it.each([
+    { name: "an unowned live WAL", sql: LIVE_WAL, owned: false, crash: false },
+    { name: "a WAL without its shared-memory index", sql: LIVE_WAL, owned: true, crash: true },
+    { name: "a hot rollback journal", sql: HOT_JOURNAL, owned: true, crash: true },
+  ])("keeps the private copy for $name", async ({ sql, owned, crash }) => {
+    const input = await stateStore(OPENCLAW_STATE_SCHEMA_VERSION);
+    const holder = await holdSqlite(input.path!, sql);
+    onTestFinished(holder.stop);
+    if (crash) {
+      await holder.crash();
+      fs.rmSync(`${input.path}-shm`, { force: true });
+    }
+    if (owned) {
+      ownLiveSource(input.path!);
+    }
+    const before = sourceFamily(input.path!);
+    // Each control keeps the live sidecar that makes an in-place read unsafe or unproven.
+    expect(before.slice(1).some(Boolean)).toBe(true);
+    const copies = recordSnapshotCopies();
+    const result = await inspectDatabaseStore(input);
+    expect(copies).toHaveLength(1);
+    expect(copies[0]).toBeGreaterThan(4 * 1024 ** 2);
+    expect(result).toMatchObject({ observed: "sqlite", issues: [] });
+    expect(sourceFamily(input.path!)).toEqual(before);
+  });
+
+  it.each(["retired cache", "index repair"])(
+    "keeps current-version %s preparation separate from schema lag",
+    async (preparation) => {
+      const input = fixture();
+      input.family = "agent";
+      input.descriptor = await loadAgentPortDescriptor();
+      {
+        using db = openNodeSqliteDatabase(input.path!);
+        db.exec(`${input.descriptor.sqlite}
+          PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
+          INSERT INTO schema_meta VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', NULL, 1, 1)`);
+        if (preparation === "retired cache") {
+          db.prepare(
+            "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, 1)",
+          ).run(LEGACY_USAGE_COST_PARTITION_SCOPE, "retired-key", "{}");
+        } else {
+          db.exec("DROP INDEX idx_agent_cache_expiry");
+        }
+        expect(input.descriptor.inspectSqliteSource!(db).migrationRequired).toBe(true);
+      }
+
+      const result = await inspectUnchanged(input);
+
+      expect(result.schema).toMatchObject({
+        version: OPENCLAW_AGENT_SCHEMA_VERSION,
+        expectedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+        pending: 0,
+      });
+      expect(result.issues.join(" ")).toContain("preparation");
+      expect(result.issues.join(" ")).not.toContain("schema migration is pending");
+      expect(result.nextSteps.join(" ")).toContain("private copy");
+      expect(result.nextSteps.join(" ")).not.toContain("doctor --fix before porting");
+      expect(formatDatabaseStoreDiagnostic(result)).toContain("pending=0");
+    },
+  );
+
+  it("does not prescribe maintenance for an uninspected lease or backup", async () => {
+    const input = fixture();
+    createStore(input, descriptor.version);
+
+    const result = await inspectUnchanged(input);
+
+    expect(result).toMatchObject({ lease: "unverifiable", backup: null, issues: [] });
+    expect(result.nextSteps).toEqual([]);
+    const output = formatDatabaseStoreDiagnostic(result);
+    expect(output).toContain("lease=unverifiable");
+    expect(output).toContain("backup=unknown");
+  });
+
+  it.each([false, true])(
+    "preserves observed custody guidance (malformed=%s)",
+    async (malformed) => {
+      const input = fixture();
+      createStore(input, descriptor.version);
+      const ownerPath = path.join(path.dirname(input.path!), "owner.json");
+      fs.writeFileSync(
+        ownerPath,
+        malformed
+          ? "{}"
+          : JSON.stringify({
+              pid: process.pid,
+              createdAt: "2026-01-01",
+              configPath: "fixture",
+              processNamespace: null,
+            }),
+      );
+      // Redirect only this diagnostic input; parsing and store inspection remain real.
+      vi.spyOn(stateOwner, "resolveGatewayStateOwnerPath").mockReturnValue(ownerPath);
+
+      const result = await inspectUnchanged(input);
+
+      expect(result.custody).toBe("unverifiable");
+      expect(result.nextSteps.join(" ")).toContain(
+        malformed ? "Check the Gateway owner" : "custody before offline maintenance",
+      );
+      expect(result.issues).toEqual(
+        malformed ? ["Physical store custody could not be verified."] : [],
+      );
+    },
+  );
+
+  it.each([false, true])("preserves observed lease guidance (malformed=%s)", async (malformed) => {
+    const input = await stateStore(OPENCLAW_STATE_SCHEMA_VERSION);
+    {
+      using db = openNodeSqliteDatabase(input.path!);
+      db.prepare(`INSERT INTO state_leases
+        (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
+        VALUES ('gateway-owner', 'global', 'recorded-generation', 1, 1, ?, 1, 1)`).run(
+        JSON.stringify(
+          malformed
+            ? {}
+            : {
+                owner: {
+                  pid: process.pid,
+                  host: "fixture-host",
+                  startedAt: null,
+                  processNamespace: null,
+                },
+                port: 19483,
+                mode: "foreground",
+                supervisor: null,
+              },
+        ),
+      );
+    }
+
+    const result = await inspectUnchanged(input);
+
+    expect(result.lease).toBe("unverifiable");
+    expect(result.nextSteps.join(" ")).toContain(
+      malformed ? "Check the Gateway owner" : "lease before offline maintenance",
+    );
+    expect(result.issues).toEqual(
+      malformed ? ["The recorded Gateway lease could not be verified."] : [],
+    );
+  });
+
   it("reports missing and damaged stores as unknown without creating or repairing them", async () => {
     const input = fixture();
     expect(await inspectDatabaseStore(input)).toMatchObject({
@@ -73,10 +349,9 @@ describe("physical store diagnostics", () => {
     });
     expect(fs.existsSync(input.path!)).toBe(false);
     fs.writeFileSync(input.path!, "not a sqlite database");
-    const damaged = await inspectDatabaseStore(input);
+    const damaged = await inspectUnchanged(input);
     expect(damaged.observed).toBe("unknown");
     expect(damaged.nextSteps.join(" ")).toContain("doctor --fix");
-    expect(fs.readFileSync(input.path!, "utf8")).toBe("not a sqlite database");
   });
 
   it("keeps inaccessible stores as warnings instead of treating them as absent", async () => {
@@ -90,21 +365,49 @@ describe("physical store diagnostics", () => {
     expect(result.nextSteps.join(" ")).toContain("permissions");
   });
 
-  it("reports the physical SQLite version and pending migration without changing its bytes", async () => {
-    const input = fixture();
-    createStore(input, 1);
-    const result = await inspectUnchanged(input);
-    expect(result).toMatchObject({
-      observed: "sqlite",
-      mismatch: false,
-      schema: { version: 1, expectedVersion: 2, pending: 1 },
-      connectivity: "local",
-      custody: "unverifiable",
-      lease: "unverifiable",
-      backup: null,
-    });
-    expect(result.nextSteps.join(" ")).toContain("doctor --fix");
-  });
+  it.each([
+    [1, "sqlite", 2, 1, "doctor --fix"],
+    [2, "postgres", 2, 0, "database port"],
+    [0, "sqlite", null, null, null],
+  ] as const)(
+    "inspects SQLite %i against %s without blocking or changing bytes",
+    async (version, effective, expectedVersion, pending, fix) => {
+      const input = fixture();
+      if (expectedVersion === null) {
+        Object.assign(input, {
+          family: "managed-update",
+          descriptor: undefined,
+          schemaVersion: null,
+        });
+      }
+      createStore(input, version);
+      input.configured = { ...input.configured, default: effective, effective };
+      const turn = vi.fn();
+      setImmediate(turn);
+      const result = await inspectUnchanged(input);
+      expect(turn).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({
+        observed: "sqlite",
+        mismatch: effective !== "sqlite",
+        schema: {
+          versioning: expectedVersion === null ? "unversioned" : "versioned",
+          version: expectedVersion === null ? null : version,
+          expectedVersion,
+          pending,
+        },
+        connectivity: "local",
+        custody: "unverifiable",
+        lease: "unverifiable",
+        backup: null,
+      });
+      if (fix) {
+        expect(result.nextSteps.join(" ")).toContain(fix);
+      } else {
+        expect(result.nextSteps).toEqual([]);
+      }
+      expect(result.nextSteps.join(" ")).not.toContain("expected schema version");
+    },
+  );
 
   it.each([
     {
@@ -132,6 +435,93 @@ describe("physical store diagnostics", () => {
     },
   );
 
+  it("admits current state content while its published header still fences an older updater", async () => {
+    const input = await stateStore(15, OPENCLAW_STATE_SCHEMA_VERSION);
+    const stateDescriptor = input.descriptor;
+    if (!stateDescriptor) {
+      throw new Error("State port descriptor is required");
+    }
+    {
+      using db = openNodeSqliteDatabase(input.path!, { readOnly: true });
+      expect(() => stateDescriptor.inspectSqliteSource!(db)).toThrow(
+        "Shared-state port requires the current schema",
+      );
+    }
+    const result = await inspectUnchanged(input);
+    expect(result.schema).toEqual({
+      versioning: "versioned",
+      version: OPENCLAW_STATE_SCHEMA_VERSION,
+      expectedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      pending: 0,
+    });
+    expect(result.issues).toEqual([]);
+  });
+
+  it("admits a current published state without a redundant content marker", async () => {
+    const input = await stateStore(OPENCLAW_STATE_SCHEMA_VERSION);
+    {
+      using db = openNodeSqliteDatabase(input.path!);
+      db.exec("DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'");
+    }
+    const result = await inspectUnchanged(input);
+    expect(result.schema).toMatchObject({ version: OPENCLAW_STATE_SCHEMA_VERSION, pending: 0 });
+    expect(result.issues).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "missing content marker",
+      sql: "DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
+      version: 15,
+    },
+    {
+      name: "malformed content marker",
+      sql: "UPDATE config_machine_state SET value_json = '{malformed' WHERE state_key = 'state.schema.contentVersion'",
+      version: 15,
+    },
+    {
+      name: "newer content marker",
+      sql: `UPDATE config_machine_state SET value_json = '${OPENCLAW_STATE_SCHEMA_VERSION + 1}' WHERE state_key = 'state.schema.contentVersion'`,
+      version: OPENCLAW_STATE_SCHEMA_VERSION + 1,
+    },
+    {
+      name: "mismatched metadata version",
+      sql: `UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`,
+      version: OPENCLAW_STATE_SCHEMA_VERSION,
+    },
+    {
+      name: "wrong state owner",
+      sql: "UPDATE schema_meta SET role = 'agent'",
+      version: OPENCLAW_STATE_SCHEMA_VERSION,
+    },
+    {
+      name: "incomplete current catalog",
+      sql: "DROP TABLE audit_events",
+      version: OPENCLAW_STATE_SCHEMA_VERSION,
+    },
+  ])("refuses state with $name without repairing its bytes", async ({ sql, version }) => {
+    const input = await stateStore(15, OPENCLAW_STATE_SCHEMA_VERSION);
+    {
+      using db = openNodeSqliteDatabase(input.path!);
+      db.exec(sql);
+    }
+    const result = await inspectUnchanged(input);
+    expect(result.schema).toEqual({
+      versioning: "versioned",
+      version,
+      expectedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      pending: Math.max(0, OPENCLAW_STATE_SCHEMA_VERSION - version),
+    });
+    expect(result.issues).toContain("The SQLite schema could not be admitted by its store owner.");
+    if (version !== OPENCLAW_STATE_SCHEMA_VERSION) {
+      expect(result.issues.join(" ")).toContain(
+        version < OPENCLAW_STATE_SCHEMA_VERSION
+          ? "Schema migrations pending"
+          : "newer than supported",
+      );
+    }
+  });
+
   it("admits retained legacy state without requiring first-use schema migrations", async () => {
     const input = await stateStore(OPENCLAW_STATE_SCHEMA_VERSION);
     {
@@ -151,31 +541,6 @@ describe("physical store diagnostics", () => {
       pending: 0,
     });
     expect(result.issues).toEqual([]);
-  });
-
-  it("distinguishes a configured PostgreSQL engine from a physical SQLite store", async () => {
-    const input = fixture();
-    createStore(input, 2);
-    input.configured = { ...input.configured, default: "postgres", effective: "postgres" };
-    const result = await inspectDatabaseStore(input);
-    expect(result).toMatchObject({ observed: "sqlite", mismatch: true, schema: { pending: 0 } });
-    expect(result.nextSteps.join(" ")).toContain("database port");
-  });
-
-  it("does not report SQLite's default user_version as a schema for unversioned journals", async () => {
-    const input = fixture();
-    input.family = "managed-update";
-    input.descriptor = undefined;
-    input.schemaVersion = null;
-    createStore(input, 0);
-    const result = await inspectDatabaseStore(input);
-    expect(result.schema).toEqual({
-      versioning: "unversioned",
-      version: null,
-      expectedVersion: null,
-      pending: null,
-    });
-    expect(result.nextSteps.join(" ")).not.toContain("expected schema version");
   });
 
   it("keeps a PostgreSQL anchor observable when its connection is missing or unreachable", async () => {

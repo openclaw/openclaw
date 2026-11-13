@@ -13,7 +13,6 @@ import {
 } from "./update-check-package-target.js";
 import {
   checkUpdateStatus,
-  compareSemverStrings,
   formatGitInstallLabel,
   resolveExtendedStablePackage,
   resolveNpmChannelTag,
@@ -102,21 +101,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
-});
-
-it.each([
-  ["2026.6.5", "2026.6.6-beta.1", -1],
-  ["2026.6.6", "2026.6.6-beta.1", 1],
-  ["2026.6.6-beta.2", "2026.6.6-beta.1", 1],
-  ["v2026.6.6", "2026.6.6", 0],
-  ["2026.6.6.beta.2", "2026.6.6-beta.1", 1],
-  ["2026.5.3", "2026.5.3-1", -1],
-  ["2026.5.3-1", "2026.5.3", 1],
-  ["2026.5.3-2", "2026.5.3-1", 1],
-  ["1.0", "1.0.0", null],
-  ["latest", "1.0.0", null],
-] as const)("compares %s against %s as %s", (a, b, expected) => {
-  expect(compareSemverStrings(a, b)).toBe(expected);
 });
 
 it.each([

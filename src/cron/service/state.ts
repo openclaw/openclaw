@@ -13,8 +13,9 @@ import {
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronAgentAvailability } from "../agent-availability.js";
-import { resolveCronJobConfigRevision } from "../config-revision.js";
+import type { CronJobConfigRevisionResult } from "../config-revision.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
+import type { resolveCronListSnapshotRows } from "../list-snapshot-revision.js";
 import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
@@ -55,6 +56,8 @@ export type { CronAddOptions } from "./job-options.types.js";
 
 /** Transient internal context delivered beside, but never projected into, a CronEvent. */
 type CronEventContext = {
+  runNotStarted?: boolean;
+  quietTrigger?: boolean;
   failureNotificationDetail?: CronFailureNotificationDetail;
 };
 
@@ -110,8 +113,11 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
-  /** Host-owned, read-only diagnostics before startup recovery can dispatch loaded jobs. */
-  describeJobLoadWarning?: (job: CronStoredJob) => string | undefined;
+  /** Best-effort host diagnostics after inventory publication, outside cron readiness and operations. */
+  describeJobLoadWarning?: (
+    job: CronStoredJob,
+    signal: AbortSignal,
+  ) => string | undefined | Promise<string | undefined>;
   /** Disallow automation jobs that run commands or scripts on the host. */
   hostExecutionDisabled?: boolean;
   resolveUserTimezone?: () => string | undefined;
@@ -205,6 +211,8 @@ export type CronServiceDeps = {
       expectedTarget?: SessionEventTarget;
       createIfMissing?: true;
       assertAcceptanceCurrent?: () => void;
+      /** The job a notice is about; its turn acts for that job's requester. */
+      jobId?: string;
     },
   ) => void | Promise<{ ok: true } | { ok: false; error: string }>;
   deferSessionEvent?: (
@@ -272,7 +280,7 @@ export type CronServiceDeps = {
     /** Consumed by the occurrence; command runs are not agent runs and mint no context. */
     occurrence: ScheduledOccurrence;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
-    job: CronJob;
+    job: CronStoredJob;
     abortSignal?: AbortSignal;
   }) => Promise<CronRunOutcome & CronRunDeliveryResult>;
   runScriptJob?: (params: {
@@ -360,7 +368,11 @@ type CronServiceDepsInternal = Omit<CronServiceDeps, "env" | "nowMs"> & {
 
 /** Dependencies consumed by job policy before its mutation is committed. */
 export type CronJobPolicyContext = {
-  deps: Pick<CronServiceDepsInternal, "cronConfig" | "nowMs" | "log" | "failureRepairTimeoutMs">;
+  deps: Pick<
+    CronServiceDepsInternal,
+    "cronConfig" | "nowMs" | "log" | "failureRepairTimeoutMs" | "defaultAgentId"
+  > &
+    Partial<Pick<CronServiceDepsInternal, "resolveDefaultAgentId">>;
   /** Resolved by the host for this exact job while its recovery transaction holds the row. */
   preparedFailureAlert?: { jobId: string; value: ResolvedFailureAlert | null };
 };
@@ -368,6 +380,10 @@ export type CronJobPolicyContext = {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
+  /** Revisions of the last published definitions, replaced with each committed snapshot. */
+  jobConfigRevisions: ReadonlyMap<string, CronJobConfigRevisionResult>;
+  /** Detached rows and their content digests survive unchanged store publications. */
+  listSnapshotRows?: ReturnType<typeof resolveCronListSnapshotRows>;
   /** Worker publications replace the source rows or advance the store revision. */
   readSnapshot?: {
     storeRevision: number;
@@ -377,11 +393,10 @@ export type CronServiceState = {
       filteredJobs: CronJob[];
       sortBy: CronJobsSortBy;
       sortDir: CronSortDir;
+      /** Frozen rows captured with this exact list revision. */
       jobs: CronJob[];
       snapshotRevision: string;
     }[];
-    /** Requested rows are detached and frozen once for this list generation. */
-    readJobs: WeakMap<CronJob, CronJob>;
     searchText: WeakMap<CronJob, string>;
   };
   /** Last known durable wake for each persisted job. Map presence distinguishes
@@ -391,10 +406,17 @@ export type CronServiceState = {
   /** Retains stopped generations while an immediate restart admits new work. */
   schedulerDrain: Promise<void>;
   stopped: boolean;
+  /** A reload's replacement owns scheduling; runs already executing here still publish results. */
+  handedOver?: boolean;
   /** Rotates synchronously on stop so an immediate restart cannot revive old work. */
   lifecycleGeneration: number;
   schedulingPaused: boolean;
   schedulerStarted: boolean;
+  /**
+   * Creation time of this cron service until its first stop; earlier missed slots are
+   * downtime catch-up. Cleared on stop so an in-process restart keeps startup deferral.
+   */
+  liveSinceMs: number | undefined;
   activeManualRunJobIds: Set<string>;
   /** Accepted manual runs until their terminal history row is written, keyed by runId. */
   queuedManualRuns: Map<string, Promise<unknown>>;
@@ -445,15 +467,17 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
   // Preserve its implicit owner unless a static or dynamic configured default exists.
   const defaultAgentId =
     deps.defaultAgentId ?? (deps.resolveDefaultAgentId ? undefined : LEGACY_IMPLICIT_AGENT_ID);
+  const nowMs = deps.nowMs ?? (() => deps.scheduler.now());
   return {
     deps: {
       ...deps,
       env: deps.env ?? process.env,
       storeKey: cronStoreKey(deps.storePath),
       defaultAgentId,
-      nowMs: deps.nowMs ?? (() => deps.scheduler.now()),
+      nowMs,
     },
     store: null,
+    jobConfigRevisions: new Map(),
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     schedulerScope: deps.scheduler.scope(),
     schedulerDrain: Promise.resolve(),
@@ -461,6 +485,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     lifecycleGeneration: 0,
     schedulingPaused: false,
     schedulerStarted: false,
+    liveSinceMs: nowMs(),
     activeManualRunJobIds: new Set<string>(),
     queuedManualRuns: new Map<string, Promise<unknown>>(),
     manualSetupTimeoutNotified: false,
@@ -492,7 +517,9 @@ export function prepareCronServiceStore(state: CronServiceState): Promise<void> 
   const context = captureOpenClawStateWorkerContext();
   if (previous) {
     state.store = null;
+    state.jobConfigRevisions = new Map();
     state.readSnapshot = undefined;
+    state.listSnapshotRows = undefined;
   }
   const promise = (async () => {
     const env = state.deps.env;
@@ -533,10 +560,13 @@ export function emit(state: CronServiceState, evt: CronEvent, context?: CronEven
 /** Publish committed membership/configuration changes independently of runtime events. */
 export function emitCronDefinitionChanges(
   state: CronServiceState,
-  previousJobs: readonly CronJob[],
+  previousJobs: readonly CronJob[] | undefined,
   nextJobs: readonly CronJob[],
+  configRevisions: ReadonlyMap<string, CronJobConfigRevisionResult>,
 ) {
-  if (!state.deps.onDefinitionChange) {
+  const previousRevisions = state.jobConfigRevisions;
+  state.jobConfigRevisions = configRevisions;
+  if (!previousJobs || !state.deps.onDefinitionChange) {
     return;
   }
   const previousById = new Map(previousJobs.map((job) => [job.id, job]));
@@ -550,12 +580,23 @@ export function emitCronDefinitionChanges(
   for (const next of nextJobs) {
     const previous = previousById.get(next.id);
     previousById.delete(next.id);
-    if (
-      previous !== next &&
-      (!previous || resolveCronJobConfigRevision(previous) !== resolveCronJobConfigRevision(next))
-    ) {
-      publish(previous, next);
+    if (previous === next) {
+      continue;
     }
+    if (previous) {
+      const previousRevision = previousRevisions.get(next.id);
+      const nextRevision = configRevisions.get(next.id);
+      if (previousRevision instanceof Error) {
+        throw previousRevision;
+      }
+      if (nextRevision instanceof Error) {
+        throw nextRevision;
+      }
+      if (previousRevision === nextRevision) {
+        continue;
+      }
+    }
+    publish(previous, next);
   }
   for (const previous of previousById.values()) {
     publish(previous, undefined);
@@ -629,6 +670,7 @@ export type CronUpdateOptions = Pick<
   | "execPolicy"
   | "streamExecApproval"
   | "streamSandbox"
+  | "streamOperatorSource"
   | "sessionEntryCurrent"
 > & {
   /** Parent incarnation recorded by `automations bind`; only fills an absent link. */

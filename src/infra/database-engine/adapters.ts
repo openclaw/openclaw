@@ -51,6 +51,7 @@ export const databaseEngineAdapters: {
           store.storeId,
           {
             reuse: store.reusePostgresConnection,
+            readOnly: store.input.readOnly,
             lockTimeoutMs: POSTGRES_LOCK_TIMEOUT_MS,
             statementTimeoutMs: POSTGRES_STATEMENT_TIMEOUT_MS,
           },
@@ -110,6 +111,7 @@ export const databaseEngineAdapters: {
               postgresFragments: migration.fromSchema.postgresFragments,
               postgresVectorDecoderVersion: migration.fromSchema.postgresVectorDecoderVersion,
               postgresVectorSearchVersion: migration.fromSchema.postgresVectorSearchVersion,
+              postgresTextSearchVersion: migration.fromSchema.postgresTextSearchVersion,
             },
             snapshot,
           );
@@ -145,6 +147,7 @@ export const databaseEngineAdapters: {
             postgresFragments: migration.schema.postgresFragments,
             postgresVectorDecoderVersion: migration.schema.postgresVectorDecoderVersion,
             postgresVectorSearchVersion: migration.schema.postgresVectorSearchVersion,
+            postgresTextSearchVersion: migration.schema.postgresTextSearchVersion,
           });
         }
       },

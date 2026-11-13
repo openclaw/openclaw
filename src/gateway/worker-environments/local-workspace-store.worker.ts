@@ -27,7 +27,7 @@ export const localWorkspaceOperations = {
     const preparation = deserialize(inflateRawSync(input.preparation)) as LocalWorkspacePreparation;
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
-        prepareLocalWorkspaceContentInDatabase(db, preparation);
+        return prepareLocalWorkspaceContentInDatabase(db, preparation);
       },
       { database: open() },
     );
@@ -53,6 +53,7 @@ export const localWorkspaceOperations = {
     input: {
       id: string;
       mutation: LocalWorkspaceMutation | Uint8Array;
+      preparationEpoch: number | undefined;
       leases: readonly OpenClawStateLeaseIdentity[];
       predicates?: readonly WorktreeRegistryPredicate[];
     },
@@ -73,7 +74,8 @@ export const localWorkspaceOperations = {
         : input.mutation;
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
-        const committed = mutateLocalWorkspaceProjection(db, input.id, mutation) ?? null;
+        const committed =
+          mutateLocalWorkspaceProjection(db, input.id, mutation, input.preparationEpoch) ?? null;
         assertOpenClawStateLeasesWorkerOwnedInTransaction(db, input.leases, "commit");
         assertWorktreeRegistryPredicates(db, input.predicates);
         deferSqliteWorkerCommitReceipt(db, committed);

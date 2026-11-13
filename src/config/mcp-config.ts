@@ -148,8 +148,10 @@ export function redactMcpServersForDisplay(
   return redactedRoot.mcp.servers;
 }
 
-export async function listConfiguredMcpServers(): Promise<ConfigMcpReadResult> {
-  return resolveConfiguredMcpServers(await readSourceConfigSnapshot());
+export async function listConfiguredMcpServers(options?: {
+  observe?: boolean;
+}): Promise<ConfigMcpReadResult> {
+  return resolveConfiguredMcpServers(await readSourceConfigSnapshot(options));
 }
 
 type McpServerMutationRequest =
@@ -250,7 +252,10 @@ async function mutateConfiguredMcpServer(
     }
   }
 
-  const validated = validateConfigObjectWithPlugins(next);
+  const validated = validateConfigObjectWithPlugins(next, {
+    semanticValidation: "strict",
+    mcpTransportBaseline: snapshot.sourceConfig,
+  });
   if (!validated.ok) {
     const issue = expectDefined(validated.issues[0], "issues entry at 0");
     return {

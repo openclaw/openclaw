@@ -5,7 +5,13 @@ import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createShellOwner } from "../app/app-host-solid.test-support.ts";
 import { i18n } from "../i18n/index.ts";
 import { profileDirectory } from "../lib/profile-directory.ts";
+import {
+  createContext,
+  createGatewayHarness,
+  createSessionsHarness,
+} from "../test-helpers/app-sidebar.ts";
 import type { ApplicationContextProvider } from "../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import {
   containers,
   mountMenu,
@@ -162,7 +168,7 @@ describe("session menu", () => {
     Object.assign(profiles[2]!, { mergedInto: "research:one" });
     const { context } = createSessionOwnerMenuHarness(() => ({ profiles }));
     const { menu, onAction, onClose } = await actionMenu({ context, currentOwner });
-    await waitForOwners(menu, ["Me", "Research", "Colleague", "zed@example.test"]);
+    await waitForOwners(menu, ["Me", "Research", "Colleague", "Person profile-"]);
     const selected = menuItem(menu, selectedLabel);
     await waitForSolid(() => expect(selected.getAttribute("role")).toBe("menuitemradio"));
     expect(selected.getAttribute("aria-checked")).toBe("true");
@@ -254,10 +260,102 @@ describe("session menu", () => {
     expect(onAction).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "adds sessions to sections through the unchanged native menu (compact=%s)",
+    async (compact) => {
+      const key = compact ? "agent:main:research" : "main";
+      const agentId = compact ? "main" : "research";
+      const gateway = createGatewayHarness(
+        createTestGatewayClient(
+          vi.fn(async (method, params) =>
+            method === "sessions.describe"
+              ? {
+                  session:
+                    params &&
+                    typeof params === "object" &&
+                    "agentId" in params &&
+                    params.agentId === agentId
+                      ? {
+                          key,
+                          agentId,
+                          sessionId: "session-123",
+                          kind: "direct",
+                          label: "Research",
+                          updatedAt: 1,
+                        }
+                      : null,
+                }
+              : sessionOwnerProfiles(),
+          ),
+        ),
+      );
+      const sessions = createSessionsHarness("main", [key]);
+      const context = createContext(gateway.gateway, sessions.sessions);
+      context.navigation.update({
+        personalSessionGroups: [{ id: "focus", label: "Focus", sessionKeys: [] }],
+      });
+      const { menu, onAction } = await actionMenu({
+        compact,
+        context,
+        session: { target: { key, agentId }, pinnable: true, category: "Engineering" },
+        actionDisabledReasons: { "move-to-group": "This action requires operator.write access." },
+      });
+      expect(menuItemLabels(menu)).toEqual([
+        "Pin session",
+        "Rename…",
+        "Mark as unread",
+        "Copy link",
+        "Open in",
+        "Move to group",
+        "Add to section",
+        "Archive session",
+        "Advanced",
+      ]);
+      expect(menuItem(menu, "Move to group").disabled).toBe(true);
+      if (compact) {
+        await selectMenuValue(menu, "compact:open-collections");
+      } else {
+        await openSubmenu(menu, "Add to section");
+      }
+      if (compact) {
+        expect(menuItemLabels(menu)).toEqual(["Back", "Focus", "New section"]);
+        expect(menuPanel(menu).querySelector('[role="menu"]')).toBeNull();
+        await selectMenuValue(menu, "compact:back");
+        expect(menuItemLabels(menu)).toContain("Move to group");
+        await selectMenuValue(menu, "compact:open-collections");
+      }
+      await selectMenuValue(menu, "personal-collection:focus");
+      await waitForFast(() =>
+        expect(context.navigation.snapshot.personalSessionGroups).toEqual([
+          { id: "focus", label: "Focus", sessionKeys: [key] },
+        ]),
+      );
+      expect(menu.session.category).toBe("Engineering");
+      expect(onAction).not.toHaveBeenCalled();
+      expect(sessions.patch).not.toHaveBeenCalled();
+      expect(sessions.groupsPut).not.toHaveBeenCalled();
+    },
+  );
+
+  it("clears the group search after compact Back and reentry", async () => {
+    const groups = Array.from({ length: 9 }, (_, i) => `Group ${i + 1}`);
+    const menu = await mountMenu({ compact: true, groups });
+    await selectMenuValue(menu, "compact:open-group");
+    const search = menu.querySelector<HTMLInputElement>("input[data-search]")!;
+    search.value = "zzz";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await settleSessionMenu(menu);
+    expect(menu.textContent).toContain("No groups match your search.");
+    await selectMenuValue(menu, "compact:back");
+    await selectMenuValue(menu, "compact:open-group");
+    expect(menu.querySelector<HTMLInputElement>("input[data-search]")!.value).toBe("");
+    expect(menuItemLabels(menu)).toContain("Group 9");
+  });
+
   it("navigates compact groups without side flyouts", async () => {
     const menu = await mountMenu({ compact: true, groups: ["Research"] });
     for (const view of ["copy", "open-in", "icon", "group"] as const) {
-      const advanced = view !== "group";
+      const advanced = view === "copy" || view === "icon";
       if (advanced) {
         await selectMenuValue(menu, "compact:open-advanced");
       }
@@ -282,6 +380,7 @@ describe("session menu", () => {
     expect(menuItemLabels(menu)).toContain(label);
     if ("selectionCount" in options) {
       expect(menuItemLabels(menu)).not.toContain("Advanced");
+      expect(menuItemLabels(menu)).not.toContain("Open in");
       expect(menuItemLabels(menu)).not.toContain("Pin session");
     }
   });
@@ -391,15 +490,14 @@ describe("session menu", () => {
     expect(onAction).not.toHaveBeenCalled();
     const submenu = await openSubmenu(menu, "Move to group");
     expect(
-      menuItem(submenu, returnsToGroups ? "Move back to Groups" : "Remove from group"),
+      menuItem(submenu, returnsToGroups ? "Move back to groups" : "Remove from group"),
     ).toBeDefined();
     const research = menuItem(submenu, "Research");
     expect(research.getAttribute("aria-checked")).toBe("true");
-    research.focus();
-    expect(press(research, "٢", { code: "Digit2" }).defaultPrevented).toBe(true);
-    await settleSessionMenu(menu);
-    expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: "Projects" });
+    expect(research.hasAttribute("aria-keyshortcuts")).toBe(false);
+    expect(submenu.querySelector("input[data-search]")).toBeNull();
     for (const [value, action] of [
+      ["move-to-group:Projects", { kind: "move-to-group", category: "Projects" }],
       ["move-to-group:", { kind: "move-to-group", category: null }],
       ["new-group", { kind: "new-group" }],
     ] as const) {
@@ -408,6 +506,42 @@ describe("session menu", () => {
       await selectMenuValue(menu, value);
       expect(onAction).toHaveBeenCalledWith(action);
     }
+  });
+
+  it("searches long group lists and starts each opening unfiltered", async () => {
+    const groups = [
+      "Research",
+      "Releases",
+      "Issues",
+      "Pull requests",
+      "PR reviews",
+      "Automation",
+      "Design",
+      "Docs",
+      "Mu\u0308nchen",
+    ];
+    const { menu, onAction } = await actionMenu({ session: { category: "Issues" }, groups });
+    const submenu = await openSubmenu(menu, "Move to group");
+    const search = submenu.querySelector<HTMLInputElement>("input[data-search]")!;
+    expect(search.getAttribute("aria-label")).toBe("Search groups");
+    const type = async (value: string) => {
+      search.value = value;
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      await settleSessionMenu(menu);
+      return menuItemLabels(submenu);
+    };
+    expect(await type("pr re")).toEqual(["PR reviews", "Remove from group", "New group"]);
+    expect(await type("zzz")).toEqual(["Remove from group", "New group"]);
+    expect(submenu.textContent).toContain("No groups match your search.");
+    expect(await type("mu\u0308nchen")).toContain("Mu\u0308nchen");
+    await type("m\u00fcnchen");
+    await selectMenuValue(menu, `move-to-group:${encodeURIComponent("Mu\u0308nchen")}`);
+    expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: "Mu\u0308nchen" });
+
+    await reopen(menu);
+    const reopened = await openSubmenu(menu, "Move to group");
+    expect(reopened.querySelector<HTMLInputElement>("input[data-search]")!.value).toBe("");
+    expect(menuItemLabels(reopened)).toEqual([...groups, "Remove from group", "New group"]);
   });
 
   it.each([
@@ -517,7 +651,7 @@ describe("session menu", () => {
       expect(menuItemLabels(menu)).not.toContain("Open PR");
     }
     if (work?.worktreePath) {
-      await openAdvanced(menu, "Open in");
+      await openSubmenu(menu, "Open in");
       await selectMenuValue(menu, "open-in:vscode");
       expect(onAction).toHaveBeenCalledWith({
         kind: "open-in",

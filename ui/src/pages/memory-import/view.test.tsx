@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createMemo } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSelectElement } from "../../components/agent-select.tsx";
-import { i18n } from "../../i18n/index.ts";
+import { i18n, t } from "../../i18n/index.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -50,6 +50,7 @@ function createProps(overrides: Partial<MemoryImportProps> = {}): MemoryImportPr
   return {
     connected: true,
     canAdmin: true,
+    actorAuth: { scopes: ["operator.admin"] },
     agents: [{ id: "research", name: "Research" }],
     selectedAgentId: "research",
     plan: createPlan(),
@@ -110,6 +111,33 @@ function findButton(container: Element, testId: string) {
 }
 
 describe("renderMemoryImport", () => {
+  it("keeps a known permission block distinct from disconnection", () => {
+    const container = renderView({
+      connected: false,
+      canAdmin: false,
+      actorAuth: { scopes: ["operator.read"] },
+    });
+    expect(container.textContent).toContain(t("memoryImport.adminRequired"));
+    expect(container.textContent).not.toContain(t("memoryImport.disconnected"));
+  });
+
+  it("asks an unknown actor to reconnect before importing", () => {
+    const container = renderView({ connected: false, canAdmin: false, actorAuth: null });
+    expect(container.textContent).toContain(t("memoryImport.disconnected"));
+    expect(container.textContent).not.toContain(t("memoryImport.adminRequired"));
+  });
+
+  it("keeps import failure summaries separate from raw diagnostics", () => {
+    const container = renderView({
+      error: "Synthetic load detail",
+      applyError: "Synthetic import detail",
+    });
+    expect(container.textContent).toContain(t("memoryImport.loadFailed"));
+    expect(container.textContent).toContain("Synthetic load detail");
+    expect(container.textContent).toContain(t("memoryImport.importFailed"));
+    expect(container.textContent).toContain("Synthetic import detail");
+  });
+
   it("renders shared skeletons while the import plan is loading", () => {
     const container = renderView({ loading: true, plan: null });
     const blocks = container.querySelectorAll(".memory-import__skeleton");
@@ -209,7 +237,7 @@ describe("renderMemoryImport", () => {
     });
 
     const buttons = [
-      ...container.querySelectorAll<HTMLButtonElement>(".exec-approval-actions button"),
+      ...container.querySelectorAll<HTMLButtonElement>("openclaw-modal-actions button"),
     ];
     expect(buttons).toMatchObject([{ disabled: true }, { disabled: true }]);
     buttons[0]?.click();
@@ -220,7 +248,7 @@ describe("renderMemoryImport", () => {
     expect(onCancelImport).not.toHaveBeenCalled();
 
     const refresh = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Refresh",
+      (button) => button.getAttribute("aria-label") === "Refresh",
     );
     expect(refresh?.disabled).toBe(true);
     for (const selector of [

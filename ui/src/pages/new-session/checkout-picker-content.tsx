@@ -1,6 +1,8 @@
 import { createMemo, createSignal, Errored, For, Loading, onSettled, type Element } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { Popover } from "../../components/solid/popover.tsx";
+import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
@@ -50,7 +52,7 @@ function WorktreeFields(props: {
       return false;
     }
     const activeIndex = activeSuggestion ? rows.indexOf(activeSuggestion) : -1;
-    if (event.key === "Enter" && !event.isComposing && activeIndex >= 0) {
+    if (event.key === "Enter" && activeIndex >= 0) {
       activeSuggestion!.click();
       return true;
     }
@@ -72,6 +74,9 @@ function WorktreeFields(props: {
     return true;
   };
   const handleFieldKeydown = (event: KeyboardEvent) => {
+    if (isComposingKeyboardEvent(event)) {
+      return;
+    }
     if (handleBranchKeydown(event)) {
       event.preventDefault();
       event.stopPropagation();
@@ -85,7 +90,6 @@ function WorktreeFields(props: {
     }
     if (
       event.key !== "Enter" ||
-      event.isComposing ||
       (!props.params.place.remoteRepository && !isWorktreeNameValid(nameInput.value))
     ) {
       return;
@@ -241,11 +245,20 @@ export function CheckoutPickerContent(props: {
   onConfirm: () => void;
 }) {
   const worktreeAvailable = () => props.params.place.worktreeAvailable();
+  const repositoryNotice = () =>
+    props.params.place.repositoryState.refreshing
+      ? t("common.refreshing")
+      : repositoryIssueText(props.params.place.repository);
   const branches = () =>
     props.params.place.repository.kind === "git" ? props.params.place.repository : null;
   return (
     <div class="new-session-page__picker-root">
-      <div class="new-session-page__menu-title">{t("newSession.checkout")}</div>
+      <MenuHeading class="new-session-page__menu-title" label={t("newSession.checkout")} />
+      {repositoryNotice() ? (
+        <div class="new-session-page__menu-note" role="status">
+          {repositoryNotice()}
+        </div>
+      ) : undefined}
       {props.params.place.remoteRepository ? undefined : (
         <RepositoryRead read={props.params.place.repositoryState.checkoutRead}>
           {() => (

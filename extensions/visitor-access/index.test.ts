@@ -33,6 +33,7 @@ import {
   namedPolicy,
   staffRole,
   visitorProfileFixture,
+  visitorGrant,
 } from "./src/visitors.test-support.js";
 
 type PluginGatewayAccessPolicy = Parameters<OpenClawPluginApi["registerGatewayAccessPolicy"]>[0];
@@ -164,9 +165,25 @@ describe("visitor-access plugin lifecycle", () => {
 
   function registerPlugin(
     contextOverrides: Partial<OpenClawPluginToolContext<2>> = {},
-    config: OpenClawConfig = gatewayConfig,
+    initialConfig: OpenClawConfig = gatewayConfig,
     githubProfiles: Parameters<typeof visitorProfileFixture>[1] = [],
   ) {
+    let config: OpenClawConfig = {
+      ...initialConfig,
+      plugins: {
+        entries: {
+          "visitor-access": {
+            enabled: true,
+            config: {
+              accountId: "test-account",
+              appId: "test-app",
+              apiToken: TOKEN,
+              ...initialConfig.plugins?.entries?.["visitor-access"]?.config,
+            },
+          },
+        },
+      },
+    };
     const tools = new Map<string, AnyAgentTool>();
     const backgroundTasks: Promise<unknown>[] = [];
     const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
@@ -181,7 +198,7 @@ describe("visitor-access plugin lifecycle", () => {
     };
     const api = createTestPluginApi({
       id: "visitor-access",
-      pluginConfig: { accountId: "test-account", appId: "test-app", apiToken: TOKEN },
+      pluginConfig: config.plugins?.entries?.["visitor-access"]?.config,
       logger,
       on,
       registerService: (service) => services.push(service),
@@ -217,6 +234,9 @@ describe("visitor-access plugin lifecycle", () => {
     };
     plugin.register(api);
     const service = services[0];
+    if (!service || service.apiVersion === 2 || service.apiVersion === 3) {
+      throw new Error("Expected service API version 1");
+    }
     assert(service, "Plugin did not register its expiry service");
     const accessPolicy = accessPolicies[0];
     assert(accessPolicy, "Plugin did not register its Gateway access policy");
@@ -246,6 +266,9 @@ describe("visitor-access plugin lifecycle", () => {
       return result;
     };
     return {
+      publishConfig(next: OpenClawConfig) {
+        config = next;
+      },
       execute,
       invite: (input: Record<string, unknown>) => execute("visitor_invite", input),
       revoke: (input: Record<string, unknown>) => execute("visitor_revoke", input),
@@ -282,6 +305,164 @@ describe("visitor-access plugin lifecycle", () => {
     vi.stubGlobal("fetch", policy.fetcher);
     return { ...registerPlugin(...args), policy };
   }
+
+  it("applies visitor limits to the running service without revoking retained grants", async () => {
+    const configured = (
+      maxVisitors: number | undefined,
+      defaultTtlDays?: number,
+    ): OpenClawConfig => ({
+      ...gatewayConfig,
+      plugins: {
+        entries: {
+          "visitor-access": {
+            enabled: true,
+            config: {
+              accountId: "test-account",
+              appId: "test-app",
+              apiToken: TOKEN,
+              maxVisitors,
+              defaultTtlDays,
+            },
+          },
+        },
+      },
+    });
+    const owner = registerWithPolicy([], {}, configured(1));
+    await owner.start();
+    await owner.settle();
+    await expectOutcome(owner.invite({ email: "first@example.test" }), "invited");
+    const authority = owner.authorize(visitorProfile(["first@example.test"]));
+    assert(authority);
+    await expect(owner.invite({ email: "second@example.test" })).resolves.toMatchObject({
+      details: { error: true },
+      content: textContaining("Visitor limit (1) reached"),
+    });
+    owner.publishConfig(configured(2, 3));
+    await expectOutcome(owner.invite({ email: "second@example.test" }), "invited");
+    expect(await owner.store.lookup("second@example.test")).toMatchObject({
+      expiresAt: START_MS + 3 * DAY_MS,
+    });
+    owner.publishConfig(configured(1));
+    expect((await owner.list()).details).toMatchObject({ grants: [expect.anything()], omitted: 1 });
+    owner.publishConfig(configured(undefined));
+    await expectOutcome(owner.invite({ email: "third@example.test" }), "invited");
+    expect(await owner.store.lookup("third@example.test")).toMatchObject({
+      expiresAt: START_MS + 14 * DAY_MS,
+    });
+    expect(authority.signal.aborted).toBe(false);
+    expect(() => authority.assertCurrent()).not.toThrow();
+  });
+
+  it.each([3, 500])(
+    "paginates the complete inventory within row and text budgets (cap %i)",
+    async (maxVisitors) => {
+      const emails = Array.from(
+        { length: 67 },
+        (_, i) => `audit-${String(i).padStart(3, "0")}@example.test`,
+      );
+      const owner = registerWithPolicy(
+        [...emails.slice(0, -1), 42, "manual@example.test"],
+        {},
+        {
+          ...gatewayConfig,
+          gateway: {
+            ...gatewayConfig.gateway,
+            auth: {
+              trustedProxy: {
+                userHeader: "cf-access-authenticated-user-email",
+                cloudflareAccessOidc: githubProvider,
+              },
+            },
+          },
+          plugins: { entries: { "visitor-access": { config: { maxVisitors } } } },
+        },
+        [{ accountId: 42, profileId: "linked-guest" }],
+      );
+      await owner.start();
+      await owner.settle();
+      owner.setProfiles([
+        { id: "linked-guest", emails: [], githubIdentity: { login: "verified-guest" } },
+      ]);
+      for (const target of [...emails.toReversed(), 42]) {
+        const grant = {
+          ...(typeof target === "string" ? visitorGrant(target) : visitorGrant(target)),
+          createdAt: START_MS - DAY_MS,
+          expiresAt: target === emails[0] ? START_MS : START_MS + DAY_MS,
+          githubLogin: "stored-handle-not-verified",
+          note: "PRIVATE INVITATION NOTE",
+          onboarding: {
+            state: "failed",
+            updatedAt: START_MS,
+            welcomeSessionKey: "agent:main:welcome-synthetic-guest",
+            error: "PRIVATE SETUP ERROR",
+          },
+        } satisfies VisitorGrant;
+        await owner.store.register(typeof target === "string" ? target : `github:${target}`, grant);
+      }
+      const seen: Array<string | number> = [];
+      let cursor: string | undefined;
+      let pages = 0;
+      let firstCursor: string | undefined;
+      do {
+        const input: { cursor?: string; limit?: number } = cursor
+          ? { cursor, ...(maxVisitors === 3 ? { limit: 2 } : {}) }
+          : {};
+        const tool = await owner.execute("visitor_list", input);
+        assert(Value.Check(visitorListDetailsSchema, tool.details), JSON.stringify(tool));
+        const details = tool.details;
+        expect(details.counts).toEqual({
+          recorded: 68,
+          inPolicy: 68,
+          unmanaged: 1,
+          missingFromPolicy: 1,
+        });
+        const targets = [...details.grants, ...details.unmanaged].map(
+          (row) => row.email ?? row.githubAccountId!,
+        );
+        expect(targets.length).toBeGreaterThan(0);
+        expect(targets.length).toBeLessThanOrEqual(input.limit ?? maxVisitors);
+        seen.push(...targets);
+        expect(details.omitted).toBe(69 - seen.length);
+        const text = tool.content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
+        expect(text.length).toBeLessThanOrEqual(12_000);
+        expect(JSON.stringify(tool)).not.toMatch(/PRIVATE|stored-handle-not-verified/);
+        for (const row of details.grants) {
+          if (row.githubAccountId === 42) {
+            expect(row).toMatchObject({ githubLogin: "verified-guest", profileId: "linked-guest" });
+          }
+        }
+        cursor = details.nextCursor ?? undefined;
+        firstCursor ??= cursor;
+        pages++;
+        expect(pages).toBeLessThanOrEqual(69);
+      } while (cursor);
+      expect(seen).toEqual([...emails, 42, "manual@example.test"]);
+      if (maxVisitors === 3) {
+        const added = visitorGrant("added@example.test");
+        await owner.store.register(added.email, added);
+        await expect(owner.execute("visitor_list", { cursor: firstCursor })).resolves.toMatchObject(
+          {
+            isError: true,
+            details: { error: true },
+            content: textContaining("Restart visitor_list without cursor"),
+          },
+        );
+        for (const input of [
+          { limit: 0 },
+          { limit: 501 },
+          { limit: 1.5 },
+          { cursor: "invalid" },
+          { unknown: true },
+        ]) {
+          await expect(owner.execute("visitor_list", input)).resolves.toMatchObject({
+            isError: true,
+            details: { error: true },
+            content: textContaining("Invalid visitor list input"),
+          });
+        }
+      }
+    },
+  );
 
   it("persists invitation metadata and a CAS session reservation across restart and renewal", async () => {
     const publicOrigin = "https://team.example.com";

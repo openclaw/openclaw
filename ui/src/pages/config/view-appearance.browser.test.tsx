@@ -1,10 +1,66 @@
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import { normalizeThemePalette } from "../../app/theme-palette.ts";
+import { i18n } from "../../i18n/index.ts";
+
+it("localizes a palette failure captured before Settings opens", async () => {
+  let failure: unknown;
+  try {
+    normalizeThemePalette("light", {}, undefined);
+  } catch (error) {
+    failure = error;
+  }
+  const original = i18n.t.bind(i18n);
+  const translate = vi
+    .spyOn(i18n, "t")
+    .mockImplementation((key, params) =>
+      key === "configView.appearance.themeImport.missingToken"
+        ? "Localized missing " + params?.token
+        : original(key, params),
+    );
+  onTestFinished(() => translate.mockRestore());
+  const { container } = renderAppearance({
+    themeCatalog: { themes: [], error: failure instanceof Error ? failure : String(failure) },
+  });
+  document.body.append(container);
+  onTestFinished(() => container.remove());
+  await vi.waitFor(() => expect(container.textContent).toContain("Localized missing background"));
+});
+
+it("localizes unnamed themes and the system typeface inside the default option", async () => {
+  const original = i18n.t.bind(i18n);
+  const translate = vi.spyOn(i18n, "t").mockImplementation((key, params) => {
+    if (key === "configView.appearance.customTheme") {
+      return "Localized unnamed theme";
+    }
+    if (key === "configView.appearance.fonts.system") {
+      return "Localized system font";
+    }
+    return original(key, params);
+  });
+  onTestFinished(() => translate.mockRestore());
+  const { container } = renderAppearance({
+    theme: "custom",
+    hasCustomTheme: true,
+    customThemeLabel: "",
+    fontUi: undefined,
+    fontChat: undefined,
+  });
+  document.body.append(container);
+  onTestFinished(() => container.remove());
+  await updatePickers(container);
+  expect(container.textContent).toContain("Localized unnamed theme");
+  const fontRow = settingsRow(container, original("configView.appearance.fonts.ui"));
+  await openPicker(required(fontRow, "openclaw-select-picker", HTMLElement) as SelectPicker);
+  expect(translate).toHaveBeenCalledWith("configView.appearance.fonts.themeFace", {
+    theme: "Localized unnamed theme",
+    face: "Localized system font",
+  });
+});
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import "../../styles.css";
 import {
   renderAppearance,
@@ -93,7 +149,9 @@ describe("config appearance preferences", () => {
     const { container } = renderAppearance({ fontUiProvenance: "profile" });
     await updatePickers(container);
     expect(
-      required(container, "#settings-font-ui", HTMLElement).closest(".settings-row")?.textContent,
+      required(container, "#settings-appearance-typography", HTMLElement).querySelector(
+        ":scope > .settings-section__scope",
+      )?.textContent,
     ).toContain("Saved to your profile");
   });
 
@@ -116,6 +174,11 @@ describe("config appearance preferences", () => {
     });
 
     const customButton = findButtonByText(container, "Import");
+    const clawPalette = required(
+      container,
+      ".settings-theme-card--claw .settings-theme-card__palette",
+      HTMLElement,
+    );
 
     expect(customButton.hasAttribute("aria-pressed")).toBe(false);
 
@@ -153,6 +216,13 @@ describe("config appearance preferences", () => {
     renderConfigInto(props, container);
     expect(pressed(container, "Light Green")).toBe("true");
     expect(pressed(container, "Claw")).toBe("false");
+    expect(
+      container.querySelector(".settings-theme-card--claw .settings-theme-card__palette"),
+    ).toBe(clawPalette);
+    expect(customButton.querySelector(".settings-theme-card__palette")).not.toBeNull();
+    props.theme = "claw";
+    renderConfigInto(props, container);
+    expect(customButton.querySelector(".settings-theme-card__icon")).not.toBeNull();
   });
 
   it("focuses its own importer through unrelated updates and retires pending focus on disposal", () => {
@@ -216,21 +286,21 @@ describe("config appearance preferences", () => {
       chatSendShortcutOverridden: true,
       chatSendShortcutProvenance: "synced",
     });
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     const themeSection = required(container, "#settings-appearance-theme", HTMLElement);
     const shortcutRow = settingsRow(container, "Send shortcut");
 
-    expect(normalizedText(themeSection)).toContain("Default: Claw");
-    expect(normalizedText(themeSection)).toContain("Default: System");
-    expect(shortcutRow.textContent).toContain("Default: Enter");
+    expect(normalizedText(container)).not.toContain("Default:");
     expect(shortcutRow.textContent).toContain(
       "Desktop only. On mobile, Enter adds a new line; use the Send button to send.",
     );
-    const shortcut = required(shortcutRow, "select", HTMLSelectElement);
-    expect(shortcut.value).toBe("enter");
-    expect(shortcut.disabled).toBe(false);
+    const enter = required(shortcutRow, 'input[value="enter"]', HTMLInputElement);
+    const modifier = required(shortcutRow, 'input[value="modifier-enter"]', HTMLInputElement);
+    expect(enter.checked).toBe(true);
+    expect(modifier.disabled).toBe(false);
     expect(props.onAppearanceChange).not.toHaveBeenCalled();
-    shortcut.value = "modifier-enter";
-    shortcut.dispatchEvent(new Event("change", { bubbles: true }));
+    modifier.click();
     expect(props.onAppearanceChange).toHaveBeenCalledExactlyOnceWith({
       chatSendShortcut: "modifier-enter",
     });
@@ -243,7 +313,7 @@ describe("config appearance preferences", () => {
     expect(props.setThemeMode).toHaveBeenCalledWith("system");
   });
 
-  it("shows the browser-local locale and its inherited default", async () => {
+  it("states the browser-local locale once for the group", async () => {
     const { container } = renderAppearance({
       localeOverride: "fr",
       localeOverridden: true,
@@ -253,9 +323,12 @@ describe("config appearance preferences", () => {
     await updatePickers(container);
     const languageRow = required(container, "#settings-language .settings-row", HTMLElement);
 
-    expect(languageRow.textContent).toContain("Default: Deutsch (German)");
-    expect(languageRow.textContent).toContain("Stored in this browser only");
-    expect(languageRow.textContent).not.toContain("Synced across your devices");
+    const scope = required(
+      container,
+      "#settings-appearance-typography > .settings-section__scope",
+      HTMLElement,
+    );
+    expect(scope.textContent).toBe("Stored in this browser only.");
     await openPicker(languageRow.querySelector("openclaw-select-picker")!);
     expect(pickerOption(languageRow, "fr")?.getAttribute("aria-selected")).toBe("true");
   });
@@ -272,14 +345,14 @@ describe("config appearance preferences", () => {
     const themeSection = required(container, "#settings-appearance-theme", HTMLElement);
     const themeDescription = required(
       themeSection,
-      ":scope > .settings-section__desc",
+      ":scope > .settings-section__scope",
       HTMLElement,
     );
     const followUpRow = settingsRow(container, "Follow-ups while the agent is working");
 
-    expect(themeDescription.textContent).toContain("Waiting to sync through the gateway");
+    expect(themeDescription.textContent).toContain("Waiting to sync.");
     expect(themeDescription.textContent).not.toContain("Synced across your devices");
-    expect(followUpRow?.textContent).toContain("Waiting to sync through the gateway");
+    expect(followUpRow?.textContent).toContain("Waiting to sync.");
     expect(followUpRow?.textContent).not.toContain("Synced across your devices");
   });
 
@@ -296,8 +369,12 @@ describe("config appearance preferences", () => {
       composerHoldToRecord: true,
     });
 
-    const shortcutSelect = required(container, "[data-settings-send-shortcut]", HTMLSelectElement);
-    expect(shortcutSelect.getAttribute("aria-label")).toBe("Send shortcut");
+    const shortcutGroup = required(
+      settingsRow(container, "Send shortcut"),
+      '[role="radiogroup"]',
+      HTMLElement,
+    );
+    expect(shortcutGroup.getAttribute("aria-label")).toBe("Send shortcut");
     const followUpSelect = required(container, "[data-settings-follow-up-mode]", HTMLSelectElement);
     expect(followUpSelect.getAttribute("aria-label")).toBe("Follow-ups while the agent is working");
     expect(followUpSelect.value).toBe("server");
@@ -316,7 +393,7 @@ describe("config appearance preferences", () => {
     for (const select of [microphoneSelect, cameraSelect]) {
       expect(select.closest(".settings-row")?.querySelector("button")).toBeNull();
     }
-    expect(container.textContent).toContain("Hold microphone button to start dictation");
+    expect(container.textContent).toContain("Hold the mic button to dictate");
 
     microphoneSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
     cameraSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
@@ -426,76 +503,26 @@ describe("config appearance preferences", () => {
     expect(props.onAppearanceChange).toHaveBeenLastCalledWith({ lobsterPetSounds: false });
   });
 
-  it("defers offscreen Lobsterdex artwork and keeps it after the first reveal", async () => {
-    const { container } = renderAppearance();
-    container.style.cssText = "position:fixed;top:0;left:0;width:390px;height:200px;overflow:auto";
+  it("opens the full Lobsterdex from its own row", () => {
+    const onOpenLobsterdex = vi.fn();
+    const { container } = renderAppearance({
+      lobsterdexHref: "/settings/lobsterdex",
+      onOpenLobsterdex,
+    });
     document.body.append(container);
     onTestFinished(() => container.remove());
-    const gallery = required(container, ".lobsterdex", HTMLElement);
-    const thumbnails = gallery.querySelectorAll(".lobsterdex__mini");
-    expect(thumbnails.length).toBeGreaterThan(0);
-    expect(gallery.querySelectorAll(".lobster-pet__svg")).toHaveLength(0);
 
-    gallery.scrollIntoView({ block: "center" });
-    await waitForSolid(() => {
-      expect(gallery.querySelectorAll(".lobster-pet__svg")).toHaveLength(thumbnails.length);
+    const openLink = required(container, "a.lobsterdex__open", HTMLAnchorElement);
+    expect(openLink.getAttribute("href")).toBe("/settings/lobsterdex");
+    expect(openLink.textContent).toContain("visited");
+    openLink.addEventListener("click", (event) => event.preventDefault(), {
+      capture: true,
+      once: true,
     });
-    const artwork = gallery.querySelector(".lobster-pet__svg");
-    container.style.top = "2000px";
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
-    expect(gallery.querySelector(".lobster-pet__svg")).toBe(artwork);
-  });
+    openLink.click();
+    expect(onOpenLobsterdex).not.toHaveBeenCalled();
 
-  it("uses rich Lobsterdex lore tooltips and opens the full collection", () => {
-    const firstSeenAt = new Date("2026-07-10T12:00:00.000Z").getTime();
-    vi.stubGlobal("localStorage", window.localStorage);
-    localStorage.setItem(
-      "openclaw.control.lobsterdex.v1",
-      JSON.stringify({
-        crimson: { firstSeenAt, name: "Ruby", shinySeenAt: firstSeenAt },
-      }),
-    );
-    const onOpenLobsterdex = vi.fn();
-    try {
-      const { container } = renderAppearance({
-        lobsterPetVisits: true,
-        lobsterPetSounds: true,
-        lobsterdexHref: "/settings/lobsterdex",
-        onOpenLobsterdex,
-      });
-
-      const seen = container.querySelector(".lobster-pet--palette-crimson");
-      const seenTooltip = seen?.closest("openclaw-tooltip");
-      expect(seen?.hasAttribute("title")).toBe(false);
-      expect(seen?.getAttribute("aria-label")).toContain("Ruby ✦");
-      expect(seenTooltip?.querySelector('[slot="content"]')?.textContent).toContain(
-        "The classic red, first in every tide pool.",
-      );
-      expect(seenTooltip?.querySelector('[slot="content"]')?.textContent).toContain(
-        new Date(firstSeenAt).toLocaleDateString(),
-      );
-
-      const unseen = container.querySelector(".lobster-pet--palette-watermelon");
-      expect(unseen?.getAttribute("aria-label")).toContain("Ripe when thumped.");
-      expect(
-        unseen?.closest("openclaw-tooltip")?.querySelector('[slot="content"]')?.textContent,
-      ).toContain("Ripe when thumped.");
-
-      const openLink = container.querySelector<HTMLAnchorElement>(".lobsterdex__open");
-      openLink?.addEventListener("click", (event) => event.preventDefault(), {
-        capture: true,
-        once: true,
-      });
-      openLink?.click();
-      expect(onOpenLobsterdex).not.toHaveBeenCalled();
-
-      openLink?.click();
-      expect(onOpenLobsterdex).toHaveBeenCalledOnce();
-    } finally {
-      localStorage.removeItem("openclaw.control.lobsterdex.v1");
-      vi.unstubAllGlobals();
-    }
+    openLink.click();
+    expect(onOpenLobsterdex).toHaveBeenCalledOnce();
   });
 });

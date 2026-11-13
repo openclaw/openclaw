@@ -1,7 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
+import * as entryStatus from "./session-accessor.sqlite-status.js";
 import { readSessionColdStorageProtection } from "./session-cold-storage-eligibility.js";
+import { readSessionAdmissionProtectionKeys } from "./session-cold-storage-selection.js";
+import * as entryCodec from "./session-entry-json.js";
 import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 
 let database: DatabaseSync;
@@ -20,7 +23,10 @@ beforeEach(() => {
   }
 });
 
-afterEach(() => database.close());
+afterEach(() => {
+  vi.restoreAllMocks();
+  database.close();
+});
 
 function addNode(id: string, metadata: Record<string, unknown> = {}, raw?: string) {
   const key = `agent:main:${id}`;
@@ -55,7 +61,7 @@ function checkpoint(sessionId: string, before = sessionId, after = sessionId) {
   return { sessionId, preCompaction: { sessionId: before }, postCompaction: { sessionId: after } };
 }
 
-it("selects live, recovering, and recent windows without preserving idle history", () => {
+it("selects live, marked, and recent windows without preserving idle history", () => {
   const idle = addNode("idle", { archivedAt: 2, pinnedAt: 3 });
   for (let i = 0; i < 1_000; i++) {
     addWindow(idle.key, `history-${i}`, cutoff - 1, i % 2 === 0 ? null : cutoff - 1);
@@ -64,7 +70,7 @@ it("selects live, recovering, and recent windows without preserving idle history
   addWindow(idle.key, "recent-transcript", cutoff - 1, cutoff);
   const live = addNode("live-history");
   addWindow(live.key, "running-history", cutoff - 1, null);
-  const protectedNode = addNode("busy", { restartRecoveryBeforeAgentReplyState: "pending" });
+  const protectedNode = addNode("busy", { resumeAfterRestart: { queuedInputIds: [] } });
   addWindow(protectedNode.key, "old-busy-history", cutoff - 1, null);
   for (const column of ["updated_at", "last_activity_at", "last_interaction_at"]) {
     addNode(column, { updatedAt: column === "updated_at" ? cutoff : 1 });
@@ -109,19 +115,6 @@ it("does not let legacy checkpoint self-references protect an idle current windo
 });
 
 it.each([
-  { restartRecoveryBeforeAgentReplyState: "admitted" },
-  { restartRecoveryBeforeAgentReplyState: "continue" },
-  { restartRecoveryDeliveryReceiptState: "terminal-pending" },
-  { mainRestartRecovery: { reservation: { id: "claim" } } },
-  { mainRestartRecovery: { foregroundClaims: [] } },
-])("protects every generation of recovery-owned nodes (%j)", (metadata) => {
-  const { key } = addNode("recovery", metadata);
-  addWindow(key, "old-recovery-window");
-  addNode("unrelated-idle");
-  expectProtection(["recovery", "old-recovery-window"]);
-});
-
-it.each([
   "not-json",
   "{}",
   '{"sessionId":"other","updatedAt":1}',
@@ -147,17 +140,71 @@ it("preserves the zero fallback for a null transcript timestamp", () => {
 });
 
 it.each([false, true])(
-  "preserves pending-input protection with consumption column=%s",
+  "protects owned queued inputs and ignores inert rows with consumption column=%s",
   (consumption) => {
+    for (const id of ["queued", "interrupted", "unowned", "consumed"]) {
+      addNode(id);
+    }
     database.exec(`CREATE TABLE session_pending_inputs (
-      session_id TEXT, state TEXT${consumption ? ", consumed_event_id TEXT" : ""}
+      session_key TEXT, session_id TEXT, state TEXT${consumption ? ", consumed_event_id TEXT" : ""}
     )`);
     database.exec(
-      "INSERT INTO session_pending_inputs (session_id,state) VALUES ('queued','queued'),('interrupted','interrupted'),('done','done')",
+      "INSERT INTO session_pending_inputs (session_key,session_id,state) VALUES ('agent:main:queued','queued','queued'),('agent:main:interrupted','interrupted','interrupted'),('agent:main:unowned','unowned','queued')",
     );
     if (consumption) {
-      database.exec("INSERT INTO session_pending_inputs VALUES ('consumed','queued','event')");
+      database.exec(
+        "INSERT INTO session_pending_inputs VALUES ('agent:main:consumed','consumed','queued','event')",
+      );
     }
-    expectProtection(["queued", "interrupted"]);
+    expectProtection(["queued"], cutoff, ["agent:main:queued"]);
   },
 );
+
+it("checks selected windows against their owners and all cross-generation references", () => {
+  const busy = addNode("marked", { resumeAfterRestart: { queuedInputIds: [] } });
+  addWindow(busy.key, "busy-history");
+  const invalid = addNode("invalid", {}, "not-json");
+  addWindow(invalid.key, "invalid-history");
+  addNode("reference-owner", { previousSessionId: "referenced-history" });
+  const idle = addNode("idle");
+  addWindow(idle.key, "referenced-history");
+  addWindow(idle.key, "idle-history");
+  addWindow(idle.key, "recent-history", cutoff);
+  const expected = ["busy-history", "invalid-history", "referenced-history", "recent-history"];
+  const selected = [...expected, "idle-history"];
+  for (let i = 0; i < 100; i++) {
+    addNode(`unrelated-${i}`);
+  }
+  const parse = vi.spyOn(entryCodec, "parseCanonicalSqliteSessionEntry");
+  const narrowed = readSessionColdStorageProtection({ db: database }, cutoff, new Set(), selected);
+  expect(selected.filter((id) => narrowed.has(id))).toEqual(expected);
+  expect(parse).toHaveBeenCalledTimes(4);
+});
+
+it("uses admitted reference facts while retaining invalid and trimmed current IDs", () => {
+  addNode("current");
+  addNode(" padded ");
+  for (let i = 0; i < 100; i++) {
+    addNode(`unrelated-${i}`);
+  }
+  database.exec("UPDATE session_nodes SET entry_valid = 1");
+  addNode("reference-owner", { previousSessionId: "historical" });
+  addNode("invalid", {}, "not-json");
+  const parse = vi.spyOn(entryStatus, "parseSessionEntryJson");
+  expect(
+    readSessionAdmissionProtectionKeys({ db: database }, [
+      "current",
+      "padded",
+      "historical",
+      "invalid",
+    ]),
+  ).toEqual(
+    new Set([
+      "agent:main:current",
+      "agent:main: padded",
+      "agent:main:reference-owner",
+      "agent:main:invalid",
+    ]),
+  );
+  expect(parse).toHaveBeenCalledTimes(2);
+});

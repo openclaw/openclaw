@@ -22,6 +22,7 @@ import {
 } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageWrites } from "./session-actor-storage-contract.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
+import { readSessionEntryInWorker as readWorkerEntry } from "./session-entry-read-runtime.js";
 import * as maintenanceRuntime from "./store-maintenance-runtime.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
@@ -128,7 +129,7 @@ async function fixture(name: string, stateDir = `/synthetic/actor-entry-adapter/
 
 describe("generic session entry APIs with actor memory storage", () => {
   it("merges concurrent fixed patches and exposes detached read-after-write results", async () => {
-    const { run, read, patch } = await fixture("fixed-patches");
+    const { run, read, patch, scope } = await fixture("fixed-patches");
     await run(async () => {
       const before = read();
       await Promise.all([
@@ -148,6 +149,15 @@ describe("generic session entry APIs with actor memory storage", () => {
       const detached = read()!;
       detached.skillsSnapshot!.prompt = "Caller edit";
       expect(read()?.skillsSnapshot?.prompt).toBe("Retained prompt");
+      await expect(readWorkerEntry({ ...scope, projection: "list" })).resolves.not.toHaveProperty(
+        "skillsSnapshot",
+      );
+      await expect(
+        readWorkerEntry({ ...scope, projection: ["skillsSnapshot"] }),
+      ).resolves.toMatchObject({ skillsSnapshot: { prompt: "Retained prompt", skills: [] } });
+      await expect(readWorkerEntry(scope)).resolves.toMatchObject({
+        skillsSnapshot: { prompt: "Retained prompt", skills: [] },
+      });
     });
   });
 

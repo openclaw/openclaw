@@ -10,6 +10,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../packages/gateway-client/src/timeouts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { bindAbortRelay, buildTimeoutAbortSignal, fetchWithTimeout } from "./fetch-timeout.js";
 
 const cleanups: Array<() => void> = [];
@@ -65,25 +66,34 @@ describe("fetch timeouts", () => {
   });
   beforeEach(() => {
     warn.mockClear();
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
   });
 
   afterEach(() => {
     cleanups.splice(0).forEach((cleanup) => cleanup());
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
-  it.each([true, false])("logs timeout aborts with context=%s (#79195)", async (context) => {
-    const { signal } = timeout({
+  it.each([true, false])("logs refreshed aborts (context=%s)", async (context) => {
+    const { signal, refresh } = timeout({
       operation: context ? "unit-test" : undefined,
       url: context
         ? "https://user:pass@example.com/v1/responses?api-key=secret#fragment"
         : undefined,
     });
-    await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(20);
+    refresh();
+    vi.setSystemTime(Date.now() + (context ? -60_000 : 60_000));
+    await vi.advanceTimersByTimeAsync(24);
+    expect(signal?.aborted).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(warn).toHaveBeenCalledTimes(1);
     expect(signal).toMatchObject({ aborted: true, reason: timeoutError });
     const record = warn.mock.calls[0]?.[1];
     expect(record).toMatchObject({ timeoutMs: 25, elapsedMs: 25 });
+    expect(record).not.toHaveProperty("timerDelayMs");
     expect(record?.operation).toBe(context ? "unit-test" : undefined);
     expect(record?.url).toBe(context ? "https://example.com/v1/responses" : undefined);
     expect(record?.consoleMessage).toBe(
@@ -92,23 +102,35 @@ describe("fetch timeouts", () => {
     expect(JSON.stringify(record)).not.toMatch(/user:pass|api-key=secret|#fragment/);
   });
 
-  it("keeps timeout aborts visible to OpenAI SSE streams instead of cleanly ending", async () => {
-    const { signal } = timeout();
-    const response = new Response(abortingBody(signal, 'data: {"ok": true}\n\n'), {
+  it("keeps timeout aborts visible to OpenAI SSE streams instead of cleanly ending", async ({
+    signal,
+  }) => {
+    const { signal: timeoutSignal } = timeout();
+    const response = new Response(abortingBody(timeoutSignal, 'data: {"ok": true}\n\n'), {
       headers: { "content-type": "text/event-stream" },
     });
-    const stream = Stream.fromSSEResponse(response, new AbortController());
+    const controller = new AbortController();
+    const stream = Stream.fromSSEResponse(response, controller);
     const iterator = stream[Symbol.asyncIterator]();
-    expect(await iterator.next()).toEqual({ done: false, value: { ok: true } });
-    const pending = iterator.next().catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(25);
-    expect(await pending).toMatchObject(timeoutError);
+    let pending: Promise<unknown> | undefined;
+    try {
+      pending = iterator.next();
+      expect(await withinTest(pending, signal)).toEqual({ done: false, value: { ok: true } });
+      pending = iterator.next().catch((error: unknown) => error);
+      await withinTest(vi.advanceTimersByTimeAsync(25), signal);
+      expect(await withinTest(pending, signal)).toMatchObject(timeoutError);
+    } finally {
+      // Abort the reader before returning the iterator, which may still be awaiting a chunk.
+      controller.abort();
+      await Promise.allSettled([pending, iterator.return?.()]);
+    }
   });
 
   it("annotates timeout logs when the timer fires late", async () => {
-    vi.setSystemTime(0);
+    let elapsedMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
     timeout({ url: "https://example.com/v1/responses" });
-    vi.setSystemTime(2_000);
+    elapsedMs = 2_025;
     await vi.advanceTimersByTimeAsync(25);
     const record = warn.mock.calls[0]![1];
     const hint = "timer delayed 2000ms, likely event-loop starvation";
@@ -135,18 +157,42 @@ describe("fetch timeouts", () => {
     expect(record.consoleMessage).toBe(`${timeoutMessage} operation=unit-test url=${expectedUrl}`);
   });
 
-  it("keeps following caller aborts while the returned body is consumed", async () => {
+  it("keeps following caller aborts while the returned body is consumed", async ({ signal }) => {
     const parent = new AbortController();
     const reason = new Error("caller stopped after headers");
-    const response = await fetchTimeout(
-      { signal: parent.signal },
-      async (_input, init) => new Response(abortingBody(init?.signal)),
-    );
-    const body = response.text();
-    await vi.advanceTimersByTimeAsync(25);
-    expect(warn).not.toHaveBeenCalled();
-    parent.abort(reason);
-    await expect(body).rejects.toBe(reason);
+    let releaseBody: (() => void) | undefined;
+    let bodySettled: Promise<unknown> | undefined;
+    try {
+      const response = await withinTest(
+        fetchTimeout({ signal: parent.signal }, async (_input, init) => {
+          const fetchSignal = init?.signal;
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                const onAbort = () => controller.error(fetchSignal?.reason);
+                releaseBody = () => {
+                  fetchSignal?.removeEventListener("abort", onAbort);
+                  controller.error(reason);
+                };
+                fetchSignal?.addEventListener("abort", onAbort, { once: true });
+              },
+            }),
+          );
+        }),
+        signal,
+      );
+      const body = response.text();
+      bodySettled = Promise.allSettled([body]);
+      await withinTest(vi.advanceTimersByTimeAsync(25), signal);
+      expect(warn).not.toHaveBeenCalled();
+      parent.abort(reason);
+      await withinTest(expect(body).rejects.toBe(reason), signal);
+    } finally {
+      parent.abort(reason);
+      // Release the fixture even when caller-abort forwarding is broken.
+      releaseBody?.();
+      await bodySettled;
+    }
   });
 
   it("clamps oversized fetch delays without aborting early", async () => {
@@ -169,17 +215,5 @@ describe("fetch timeouts", () => {
     expect(signal).toMatchObject({ aborted: true, reason });
     expect(signal?.reason).toBe(reason);
     expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("refreshes its timeout when progress is observed", async () => {
-    const { signal, refresh } = timeout();
-    await vi.advanceTimersByTimeAsync(20);
-    refresh();
-    await vi.advanceTimersByTimeAsync(24);
-    expect(signal?.aborted).toBe(false);
-    expect(warn).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(signal?.aborted).toBe(true);
-    expect(warn).toHaveBeenCalledTimes(1);
   });
 });

@@ -11,6 +11,7 @@ import {
   type SessionHeader,
 } from "../../agents/sessions/session-manager.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
 import { FsSafeError, isPathInside, root, type Root } from "../../infra/fs-safe.js";
 import type { ReplyPayload } from "../types.js";
@@ -100,12 +101,14 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
 
   // Active exports run after startup migration, so SQLite rows are canonical.
   // Do not read sessionFile here; a SQLite marker is an identifier, not a path.
-  const events = await loadTranscriptEvents({
-    agentId: sessionTarget.agentId,
-    sessionId: sessionTarget.sessionId,
-    sessionKey: sessionTarget.sessionKey,
-    storePath: sessionTarget.storePath,
-  });
+  const events = await withSessionTranscriptHydrationCaller("export", () =>
+    loadTranscriptEvents({
+      agentId: sessionTarget.agentId,
+      sessionId: sessionTarget.sessionId,
+      sessionKey: sessionTarget.sessionKey,
+      storePath: sessionTarget.storePath,
+    }),
+  );
   const fileEntries: SessionFileEntry[] = [];
   const skippedRows: SessionExportWarningSummary = { count: 0, rows: [] };
   for (const [index, event] of events.entries()) {
@@ -127,14 +130,12 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   );
   const tree = scanSessionTranscriptTree(rawEntries);
   const hasLeafControl = tree.hasLeafControl;
-  const entries = hasLeafControl
-    ? rawEntries.map((fileEntry) => {
-        const node = tree.byId.get(fileEntry.id);
-        return node && fileEntry.parentId !== node.parentId
-          ? { ...fileEntry, parentId: node.parentId }
-          : fileEntry;
-      })
-    : rawEntries;
+  const entries = rawEntries.map((fileEntry) => {
+    const node = tree.byId.get(fileEntry.id);
+    return node && fileEntry.parentId !== node.parentId
+      ? Object.assign({}, fileEntry, { parentId: node.parentId })
+      : fileEntry;
+  });
   const leafId = tree.leafId;
   const warnings = skippedRows.count > 0 ? [skippedRows] : [];
 

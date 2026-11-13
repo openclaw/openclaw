@@ -22,20 +22,24 @@ const metadata = () => ({
 });
 const provider = { baseUrl: "https://proxy.example/v1", api: "openai-completions", models: [] };
 
-it("rejects statically suppressed provider/model pairs during config validation", () => {
+it("rejects statically suppressed pairs but leaves retired ones to Doctor", () => {
   const reason = "This model is no longer exposed. Use openai/gpt-5.5.";
+  const retired = { provider: "openai", model: "retired", retirement: {} };
   const manifestRegistry = registry({
     id: "openai",
     providers: ["openai", "openai"],
-    modelCatalog: { suppressions: [{ provider: "openai", model: "gpt-5.3-codex-spark", reason }] },
+    modelCatalog: {
+      suppressions: [{ provider: "openai", model: "gpt-5.3-codex-spark", reason }, retired],
+    },
   });
+  const defaults = { model: "openai/gpt-5.3-codex-spark", decisionModel: "openai/retired" };
   const result = validate(
-    { agents: { defaults: { model: { primary: "openai/gpt-5.3-codex-spark" } } } },
+    { agents: { defaults } },
     { pluginMetadataSnapshot: { manifestRegistry } },
   );
   expect(result.ok ? undefined : result.issues).toEqual([
     {
-      path: "agents.defaults.model.primary",
+      path: "agents.defaults.model",
       message: `Unknown model: openai/gpt-5.3-codex-spark. ${reason}`,
     },
   ]);
@@ -88,6 +92,9 @@ it.each<[string, string[], Models?, string?]>([
   ],
   ["defaults", ["openai/gpt 5.5"], undefined, "agents.defaults.modelPolicy.allow.0"],
   ["runner", ["not-a-model-ref"], undefined, "agents.entries.runner.modelPolicy.allow.0"],
+  ["runner", ["openai/gpt-*", "clawrouter/anthropic/claude-*"]],
+  ["runner", ["openai/gpt *"], undefined, "agents.entries.runner.modelPolicy.allow.0"],
+  ["runner", ["*"], undefined, "agents.entries.runner.modelPolicy.allow.0"],
 ])("validates %s model policy %j", (scope, allow, models, path) => {
   const policy = { modelPolicy: { allow }, ...(models ? { models } : {}) };
   const agents =

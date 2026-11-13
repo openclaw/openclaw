@@ -1,8 +1,29 @@
 import type { Model } from "../../llm/types.js";
 import { applyLocalNoAuthHeaders, resolveExplicitProviderNoAuth } from "../model-auth-markers.js";
+import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import type { AuthStorage } from "./auth-storage.js";
 import type { ProviderRequestConfig, ResolvedRequestAuth } from "./model-registry-sources.js";
-import { resolveConfigValueOrThrow, resolveHeadersOrThrow } from "./resolve-config-value.js";
+import {
+  resolveConfigValueOrThrow,
+  resolveConfigValueUncached,
+  resolveHeadersOrThrow,
+} from "./resolve-config-value.js";
+
+/** Authored request settings apply only to their captured provider routes. */
+export function scopeModelProviderRequestConfig(
+  config: ProviderRequestConfig | undefined,
+  model: Model,
+): ProviderRequestConfig | undefined {
+  if (
+    config?.baseUrls &&
+    !config.baseUrls.some((baseUrl) =>
+      modelTransportRoutesMatch({ baseUrl }, { baseUrl: model.baseUrl }),
+    )
+  ) {
+    return undefined;
+  }
+  return config;
+}
 
 /** Resolves registry request auth after the registry has scoped the provider to this route. */
 export async function resolveModelRegistryRequestAuth(params: {
@@ -13,6 +34,9 @@ export async function resolveModelRegistryRequestAuth(params: {
 }): Promise<ResolvedRequestAuth> {
   const { model, providerConfig, authStorage } = params;
   try {
+    if (providerConfig?.auth === "native-command") {
+      return { ok: false, error: "Native command auth requires the Codex runtime." };
+    }
     const noAuth = resolveExplicitProviderNoAuth({
       provider: model.provider,
       providerConfig: { auth: providerConfig?.auth },
@@ -30,7 +54,7 @@ export async function resolveModelRegistryRequestAuth(params: {
     const apiKey =
       apiKeyFromAuthStorage ??
       (!usesAwsSdkAuth && providerConfig?.apiKey
-        ? resolveConfigValueOrThrow(
+        ? await resolveConfigValueOrThrow(
             providerConfig.apiKey,
             `API key for provider "${model.provider}"`,
           )
@@ -46,8 +70,11 @@ export async function resolveModelRegistryRequestAuth(params: {
           : headers,
         description,
       );
-    const providerHeaders = resolveHeaders(providerConfig?.headers, `provider "${model.provider}"`);
-    const modelHeaders = resolveHeaders(
+    const providerHeaders = await resolveHeaders(
+      providerConfig?.headers,
+      `provider "${model.provider}"`,
+    );
+    const modelHeaders = await resolveHeaders(
       params.modelHeaders,
       `model "${model.provider}/${model.id}"`,
     );
@@ -76,4 +103,41 @@ export async function resolveModelRegistryRequestAuth(params: {
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+/** Provider-only callers share the same native-only credential boundary as model requests. */
+export async function resolveModelRegistryProviderApiKey(params: {
+  provider: string;
+  readProviderConfig: () => ProviderRequestConfig | undefined;
+  authStorage: AuthStorage;
+}): Promise<string | undefined> {
+  if (params.readProviderConfig()?.auth === "native-command") {
+    return undefined;
+  }
+  const apiKey = await params.authStorage.getApiKey(params.provider, { includeFallback: false });
+  if (apiKey !== undefined) {
+    return apiKey;
+  }
+  const providerApiKey = params.readProviderConfig()?.apiKey;
+  return providerApiKey ? resolveConfigValueUncached(providerApiKey) : undefined;
+}
+
+/** Registry availability describes host credentials, never a native runtime's command. */
+export function hasModelRegistryConfiguredAuth(params: {
+  model: Model;
+  providerConfig: ProviderRequestConfig | undefined;
+  authStorage: AuthStorage;
+}): boolean {
+  const { model, providerConfig, authStorage } = params;
+  if (providerConfig?.auth === "native-command") {
+    return false;
+  }
+  if (providerConfig?.auth === "none") {
+    return model.api === "openai-completions";
+  }
+  return (
+    authStorage.hasAuth(model.provider) ||
+    providerConfig?.auth === "aws-sdk" ||
+    providerConfig?.apiKey !== undefined
+  );
 }

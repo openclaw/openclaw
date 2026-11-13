@@ -2,15 +2,17 @@ import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { prewarmChatSnapshot } from "./chat-snapshot-prewarm.ts";
+import * as detailsLoader from "./components/chat-details-desktop-loader.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import * as database from "./session-snapshot-database.ts";
 import {
   publishSnapshotInvalidation,
   subscribeSnapshotInvalidation,
 } from "./session-snapshot-invalidation-events.ts";
-import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.runtime.ts";
-import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
+import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import * as snapshots from "./session-snapshot-store.ts";
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
 const key = 'scope:["wss://cache.example","account-a"]\u0000agent:main:routed';
 const otherKey = 'scope:["wss://cache.example","account-a"]\u0000agent:main:other';
@@ -23,8 +25,8 @@ const stored: ChatSessionSnapshot = {
 
 async function seed() {
   const writer = new snapshots.SessionSnapshotStore();
-  writer.write(key, stored);
-  writer.write(otherKey, { ...stored, sessionId: "other-session" });
+  writeSnapshotFixture(writer, key, stored);
+  writeSnapshotFixture(writer, otherKey, { ...stored, sessionId: "other-session" });
   await writer.flush();
   return writer;
 }
@@ -41,12 +43,60 @@ beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
 });
 afterEach(async () => {
+  document.documentElement.removeAttribute("data-openclaw-warm-frame");
   vi.restoreAllMocks();
   await clearStoredChatSnapshots();
   vi.unstubAllGlobals();
 });
 
 describe("routed transcript prewarm", () => {
+  it.each(["missing", "read-error"] as const)(
+    "releases the warm frame when the transcript cache is unavailable: %s",
+    async (failure) => {
+      if (failure === "read-error") {
+        vi.spyOn(database, "readStoredChatSnapshotRecord").mockRejectedValueOnce(
+          new Error("Cache read failed"),
+        );
+      }
+      document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
+      await prewarmChatSnapshot(key);
+      expect(document.documentElement.hasAttribute("data-openclaw-warm-frame")).toBe(false);
+    },
+  );
+
+  it.each([
+    { viewport: 1000, wide: true, details: true, loads: 0 },
+    { viewport: 2200, wide: true, details: true, loads: 1 },
+    { viewport: 2200, wide: false, details: true, loads: 0 },
+    { viewport: 2200, wide: true, details: false, loads: 0 },
+  ])("prewarms wide Details only in its saved viewport: $viewport/$wide", async (scenario) => {
+    vi.stubGlobal("innerWidth", scenario.viewport);
+    const module = createDeferred<never>();
+    void module.promise.catch(() => undefined);
+    const load = vi
+      .spyOn(detailsLoader, "loadChatDetailsDesktopComposition")
+      .mockReturnValue(module.promise);
+    const writer = new snapshots.SessionSnapshotStore();
+    const snapshot = {
+      ...stored,
+      details: scenario.details
+        ? {
+            locale: "en",
+            docking: { layout: '[2200,224,false,"horizontal","main",null]', wide: scenario.wide },
+          }
+        : undefined,
+    };
+    writeSnapshotFixture(writer, key, snapshot);
+    await writer.flush();
+    await prewarmChatSnapshot(key);
+    const admission = snapshots.waitForPrewarmedChatSnapshot(key);
+    expect(Boolean(admission)).toBe(scenario.loads > 0);
+    module.reject(new Error("Stopped at the module boundary"));
+    await admission;
+    expect(load).toHaveBeenCalledTimes(scenario.loads);
+    expect(await writer.read(key)).toEqual(snapshot);
+  });
+
   it("publishes scoped invalidation before database cleanup settles", async () => {
     const scopePrefix = key.slice(0, key.indexOf("\u0000") + 1);
     const listener = vi.fn();
@@ -68,6 +118,7 @@ describe("routed transcript prewarm", () => {
     });
     const read = vi.spyOn(database, "readStoredChatSnapshotRecord");
     const open = vi.spyOn(indexedDB, "open");
+    document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
     const warming = prewarmChatSnapshot(key);
     try {
       expect(open).toHaveBeenCalledOnce();
@@ -81,6 +132,7 @@ describe("routed transcript prewarm", () => {
       releasePreparation.resolve();
       await warming;
     }
+    expect(document.documentElement.getAttribute("data-openclaw-warm-frame")).toBe("holding");
   });
 
   it("starts before consumption and reuses the matching read only once", async () => {
@@ -109,9 +161,11 @@ describe("routed transcript prewarm", () => {
     async (scope) => {
       const { open, reader } = await prewarm();
       await vi.dynamicImportSettled();
+      document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
       await (scope === "clear"
         ? clearStoredChatSnapshots()
         : publishSnapshotInvalidation(scope === "session" ? { sessionKey: key } : {}));
+      expect(document.documentElement.hasAttribute("data-openclaw-warm-frame")).toBe(false);
       expect(open).toHaveBeenCalledOnce();
       expect(await reader.read(key)).toEqual(scope === "clear" ? null : stored);
       expect(open).toHaveBeenCalledTimes(2);
@@ -143,7 +197,7 @@ describe("routed transcript prewarm", () => {
       await settled.promise;
       const latest = { ...stored, deltaCursor: "latest-cursor" };
       if (change === "write") {
-        writer.write(key, latest);
+        writeSnapshotFixture(writer, key, latest);
         await writer.flush();
       } else {
         writer.forget(key);

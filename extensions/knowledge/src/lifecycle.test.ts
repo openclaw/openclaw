@@ -63,6 +63,8 @@ const withdrawal = (r: any) => ({
   ...target(r),
   reason: "Retracted explicitly by the user",
 });
+const read = async (f: any, id: string) =>
+  (await f.service.record_detail({ id, includeMetadata: true }, f.owner)).record;
 const groupAudience = () => ({
   kind: "conversation",
   agentId: "main",
@@ -130,7 +132,8 @@ it("recent distinguishes imports from writes and rechecks dependency eligibility
   const f = await foundation(),
     claim = await f.service.create_claim(f.claim(), f.owner);
   const before = await f.service.recent({}, f.owner);
-  const record = (await f.service.record({ id: f.pages.person.id, view: "raw" }, f.owner)).record;
+  const record = (await f.service.record_detail({ id: f.pages.person.id, view: "raw" }, f.owner))
+    .record;
   const raw = record!
     .raw!.replace(record!.id, randomUUID())
     .replace("title: person", "title: Imported person");
@@ -161,8 +164,7 @@ it("correction is one logical batch preserving originals, evidence, provenance, 
     { ...draft(), title: "Second summary", dependencies: [dependent.id] },
     f.owner,
   );
-  const before = (await f.service.record({ id: original.id, includeMetadata: true }, f.owner))
-    .record;
+  const before = await read(f, original.id);
   const input = correction(f, original),
     receipt = await f.service.correct(input, f.owner);
   expect(receipt).toMatchObject({
@@ -180,8 +182,8 @@ it("correction is one logical batch preserving originals, evidence, provenance, 
       [indirect.id, false],
     ].toSorted(defaultOrder),
   );
-  const old = (await f.service.record({ id: original.id, includeMetadata: true }, f.owner)).record;
-  const fresh = (await f.service.record({ id: receipt.id, includeMetadata: true }, f.owner)).record;
+  const old = await read(f, original.id);
+  const fresh = await read(f, receipt.id);
   expect(old!.lifecycle).toBe("superseded");
   expect(old!.body).toBe(before!.body);
   expect(old!.metadata!.evidence).toStrictEqual(before!.metadata!.evidence);
@@ -192,12 +194,12 @@ it("correction is one logical batch preserving originals, evidence, provenance, 
   expect((await f.service.lookup({ query: old!.id, lifecycle: "all" }, f.owner)).total).toBe(1);
   expect((await f.service.lookup({ query: dependent.id }, f.owner)).total).toBe(0);
   expect((await f.service.lookup({ query: indirect.id }, f.owner)).total).toBe(0);
-  expect((await f.service.records({}, f.owner)).total).toBe(4);
+  expect((await f.service.records_detail({}, f.owner)).total).toBe(4);
   expect((await f.service.status({}, f.owner)).records).toBe(4);
   expect((await f.service.ontology({ name: "note" }, f.owner)).definitions![0]!.recordCount).toBe(
     0,
   );
-  expect((await f.service.records({ lifecycle: "all" }, f.owner)).total).toBe(7);
+  expect((await f.service.records_detail({ lifecycle: "all" }, f.owner)).total).toBe(7);
   expect(await f.service.correct(input, f.owner)).toStrictEqual(receipt);
   expect((await f.service.history({ id: old!.id }, f.owner)).mutations[0]!.requestId).toBe(
     input.requestId,
@@ -208,10 +210,7 @@ it("correction is one logical batch preserving originals, evidence, provenance, 
   const next = await f.service.correct(correction(f, receipt), f.owner);
   expect((await f.service.lookup({ query: receipt.id }, f.owner)).total).toBe(0);
   expect((await f.service.lookup({ query: next.id }, f.owner)).total).toBe(1);
-  expect(
-    (await f.service.record({ id: receipt.id, includeMetadata: true }, f.owner)).record!.metadata!
-      .superseded_by,
-  ).toBe(next.id);
+  expect((await read(f, receipt.id))!.metadata!.superseded_by).toBe(next.id);
   // Restore stale active bytes; durable guards survive recreation of the service and keyword projections.
   await writeFile(
     path.join(f.root, "private", old!.path),
@@ -225,8 +224,8 @@ it("correction is one logical batch preserving originals, evidence, provenance, 
   const restored = createKnowledgeService(f.api);
   expect((await restored.lookup({ query: old!.id }, f.owner)).total).toBe(0);
   expect(
-    (await restored.record({ id: old!.id, includeMetadata: true }, f.owner)).record!.metadata!
-      .superseded_by,
+    (await restored.record_detail({ id: old!.id, includeMetadata: true }, f.owner)).record!
+      .metadata!.superseded_by,
   ).toBe(receipt.id);
 });
 
@@ -256,11 +255,11 @@ for (const stage of [
     });
     await expect(publisher.correct(input, f.access(), "agent")).rejects.toThrow(/crash/);
     for (const [method, arg] of [
-      ["records", {}],
-      ["record", { id: original.id }],
+      ["records_detail", {}],
+      ["record_detail", { id: original.id }],
       ["grep", { query: "option" }],
       ["lookup", { query: original.id }],
-      ["connections", { id: f.pages.project.id }],
+      ["connections_detail", { id: f.pages.project.id }],
       ["ontology", {}],
       ["status", {}],
       ["recent", {}],
@@ -270,8 +269,10 @@ for (const stage of [
     const recovered = await createKnowledgeService(f.api).correct(input, f.owner);
     expect(recovered.state).toBe("published");
     expect(await f.service.correct(input, f.owner)).toStrictEqual(recovered);
-    expect((await f.service.records({ kind: "claim" }, f.owner)).total).toBe(1);
-    expect((await f.service.records({ kind: "claim", lifecycle: "all" }, f.owner)).total).toBe(2);
+    expect((await f.service.records_detail({ kind: "claim" }, f.owner)).total).toBe(1);
+    expect(
+      (await f.service.records_detail({ kind: "claim", lifecycle: "all" }, f.owner)).total,
+    ).toBe(2);
     const history = await f.service.history({ id: original.id }, f.owner);
     expect(history.entries.length).toBe(2);
   });
@@ -281,7 +282,7 @@ it("withdrawal durably hides pages and transitive dependents, preserves evidence
   const f = await foundation(),
     claim = await f.service.create_claim(f.claim(), f.owner),
     edge = await f.service.create_relationship(f.edge(), f.owner);
-  const original = (await f.service.record({ id: f.pages.project.id, view: "raw" }, f.owner))
+  const original = (await f.service.record_detail({ id: f.pages.project.id, view: "raw" }, f.owner))
     .record;
   const input = withdrawal(original),
     receipt = await f.service.withdraw(input, f.owner);
@@ -295,8 +296,8 @@ it("withdrawal durably hides pages and transitive dependents, preserves evidence
   for (const id of [original!.id, claim.id, edge.id]) {
     expect((await f.service.lookup({ query: id }, f.owner)).total).toBe(0);
   }
-  expect((await f.service.connections({ id: f.pages.meeting.id }, f.owner)).total).toBe(0);
-  expect((await f.service.records({}, f.owner)).total).toBe(2);
+  expect((await f.service.connections_detail({ id: f.pages.meeting.id }, f.owner)).total).toBe(0);
+  expect((await f.service.records_detail({}, f.owner)).total).toBe(2);
   await writeFile(path.join(f.root, "private", original!.path), original!.raw);
   f.store.withDatabase((db: any) => {
     for (const row of db
@@ -308,9 +309,12 @@ it("withdrawal durably hides pages and transitive dependents, preserves evidence
     }
   });
   const restored = createKnowledgeService(f.api);
-  expect((await restored.records({}, f.owner)).total).toBe(2);
+  expect((await restored.records_detail({}, f.owner)).total).toBe(2);
   expect((await restored.grep({ query: "project", lifecycle: "all" }, f.owner)).total).toBe(0);
-  const inspection = await restored.record({ id: original!.id, includeMetadata: true }, f.owner);
+  const inspection = await restored.record_detail(
+    { id: original!.id, includeMetadata: true },
+    f.owner,
+  );
   expect(inspection.record!.lifecycle).toBe("withdrawn");
   expect(inspection.record!.metadata!.lifecycle_change!.reason).toBe(input.reason);
   const evidence = await restored.attachment(
@@ -335,14 +339,11 @@ it("one relationship correction/withdrawal never affects another edge sharing en
     replacement: { kind: "relationship", ...replacement },
   };
   const corrected = await f.service.correct(correctionInput, f.owner);
-  expect((await f.service.connections({ id: f.pages.meeting.id }, f.owner)).total).toBe(2);
+  expect((await f.service.connections_detail({ id: f.pages.meeting.id }, f.owner)).total).toBe(2);
   await f.service.withdraw(withdrawal(corrected), f.owner);
-  expect((await f.service.connections({ id: f.pages.meeting.id }, f.owner)).total).toBe(1);
+  expect((await f.service.connections_detail({ id: f.pages.meeting.id }, f.owner)).total).toBe(1);
   expect((await f.service.lookup({ query: two.id }, f.owner)).total).toBe(1);
-  expect(
-    (await f.service.record({ id: one.id, includeMetadata: true }, f.owner)).record!.metadata!
-      .superseded_by,
-  ).toBe(corrected.id);
+  expect((await read(f, one.id))!.metadata!.superseded_by).toBe(corrected.id);
 });
 
 it("invalid, stale, hidden and wrong-kind corrections fail before receipt; no browser lifecycle writes", async () => {
@@ -394,7 +395,7 @@ it("changed payload replay and concurrent edits preserve conflicts and proposed 
   expect(result.state).toBe("conflict");
   expect(await readFile(file, "utf8")).toBe(before + "External author edit.");
   expect((await f.service.mutation({ requestId: input.requestId }, f.owner)).files.length).toBe(2);
-  await expect(f.service.records({}, f.owner)).rejects.toThrow(/pending|conflicted/);
+  await expect(f.service.records_detail({}, f.owner)).rejects.toThrow(/pending|conflicted/);
 });
 
 for (const stage of ["after-accept", "after-link:vault.json", "before-receipt"]) {
@@ -423,7 +424,7 @@ it("withheld derived pages can be repaired explicitly, without silently redirect
   const dependent = await f.service.save_page({ ...draft(), dependencies: [original.id] }, f.owner);
   const corrected = await f.service.correct(correction(f, original), f.owner);
   expect((await f.service.lookup({ query: dependent.id }, f.owner)).total).toBe(0);
-  const record = (await f.service.record({ id: dependent.id }, f.owner)).record;
+  const record = (await f.service.record_detail({ id: dependent.id }, f.owner)).record;
   const repaired = await f.service.save_page(
     edit(record, { body: "Repaired with inspected correction.", dependencies: [corrected.id] }),
     f.owner,
@@ -440,8 +441,8 @@ it("pre-upgrade withdrawal guards apply to records and counts even if only stale
       .prepare("INSERT INTO keyword_withdrawals_v1 VALUES (?,?)")
       .run(`${f.config.vaultId}:private`, original.id),
   );
-  expect((await f.service.records({ kind: "claim" }, f.owner)).total).toBe(0);
-  expect((await f.service.record({ id: original.id }, f.owner)).record!.lifecycle).toBe(
+  expect((await f.service.records_detail({ kind: "claim" }, f.owner)).total).toBe(0);
+  expect((await f.service.record_detail({ id: original.id }, f.owner)).record!.lifecycle).toBe(
     "withdrawn",
   );
   await expect(f.service.correct(correction(f, original), f.owner)).rejects.toThrow(/unavailable/);
@@ -451,11 +452,13 @@ it("withdrawing a superseded original dominates its correction guard without wit
   const f = await foundation(),
     original = await f.service.create_claim(f.claim(), f.owner),
     corrected = await f.service.correct(correction(f, original), f.owner);
-  const old = (await f.service.record({ id: original.id, includeMetadata: true }, f.owner)).record;
+  const old = await read(f, original.id);
   const withdrawalInput = withdrawal(old);
   const receipt = await f.service.withdraw(withdrawalInput, f.owner);
   expect(receipt.state).toBe("published");
-  expect((await f.service.record({ id: old!.id }, f.owner)).record!.lifecycle).toBe("withdrawn");
+  expect((await f.service.record_detail({ id: old!.id }, f.owner)).record!.lifecycle).toBe(
+    "withdrawn",
+  );
   expect((await f.service.lookup({ query: corrected.id }, f.owner)).total).toBe(1);
   expect((await f.service.lookup({ query: old!.id, lifecycle: "all" }, f.owner)).total).toBe(0);
 });
@@ -464,12 +467,11 @@ it("withdrawal remains possible when original evidence goes missing", async () =
   const f = await foundation(),
     original = await f.service.create_claim(f.claim(), f.owner);
   await rm(path.join(f.root, "private", f.evidence.path));
-  const record = (await f.service.record({ id: original.id, includeMetadata: true }, f.owner))
-    .record;
+  const record = await read(f, original.id);
   expect(record!.valid).toBe(false);
   const receipt = await f.service.withdraw(withdrawal(record), f.owner);
   expect(receipt.state).toBe("published");
-  const after = (await f.service.record({ id: record!.id, includeMetadata: true }, f.owner)).record;
+  const after = await read(f, record!.id);
   expect(after!.lifecycle).toBe("withdrawn");
   expect(after!.metadata!.evidence).toStrictEqual(record!.metadata!.evidence);
 });
@@ -486,10 +488,129 @@ it("lifecycle mutations preserve authored YAML comments, unknown metadata and or
       'lifecycle: active # authored lifecycle note\ncustom_context: "Keep Ω"',
     ),
   );
-  const current = (await f.service.record({ id: original.id }, f.owner)).record;
+  const current = (await f.service.record_detail({ id: original.id }, f.owner)).record;
   await f.service.correct(correction(f, current), f.owner);
   const after = await readFile(file, "utf8");
   expect(after.includes("# authored lifecycle note")).toBeTruthy();
   expect(after.includes('custom_context: "Keep Ω"')).toBeTruthy();
-  expect((await f.service.record({ id: original.id }, f.owner)).record!.body).toBe(current!.body);
+  expect((await f.service.record_detail({ id: original.id }, f.owner)).record!.body).toBe(
+    current!.body,
+  );
+});
+
+const supersede = async (f: any, by: any, superseded: any[], extra = {}) =>
+  f.service.supersede(
+    {
+      requestId: randomUUID(),
+      reason: "The outcome replaces the snapshots.",
+      by: target(await read(f, by.id)),
+      superseded: await Promise.all(superseded.map(async (r) => target(await read(f, r.id)))),
+      ...extra,
+    },
+    f.owner,
+  );
+
+it("supersede retires snapshots by an existing outcome without a copy; only undo restores them", async () => {
+  const f = await foundation();
+  const [red, green, merged] = [
+    await f.service.create_claim(f.claim({ title: "CI red" }), f.owner),
+    await f.service.create_claim(f.claim({ title: "CI green" }), f.owner),
+    await f.service.create_claim(f.claim({ title: "Merged" }), f.owner),
+  ];
+  const before = await read(f, red.id),
+    file = path.join(f.root, "private", red.path),
+    raw = await readFile(file, "utf8");
+  const receipt = await supersede(f, merged, [red, green]);
+  expect(Check(contract.operations.supersede.output, receipt)).toBeTruthy();
+  expect(receipt).toMatchObject({
+    operation: "supersede",
+    targetId: red.id,
+    replacementId: merged.id,
+    items: [{ key: "superseded", id: red.id, revision: 2 }, { id: green.id }],
+  });
+  expect(await read(f, red.id)).toMatchObject({
+    lifecycle: "superseded",
+    body: before.body,
+    metadata: {
+      superseded_by: merged.id,
+      evidence: before.metadata.evidence,
+      attribution: before.metadata.attribution,
+      lifecycle_change: { reason: "The outcome replaces the snapshots.", actor: "agent" },
+    },
+  });
+  expect((await read(f, merged.id)).revision, "the outcome is not rewritten").toBe(1);
+  expect((await f.service.history({ id: red.id }, f.owner)).entries).toHaveLength(2);
+  expect((await f.service.records_detail({ kind: "claim", lifecycle: "all" }, f.owner)).total).toBe(
+    3,
+  );
+  const claims = async (historical = false) =>
+    (
+      await f.service.connections_detail(
+        { id: f.pages.project.id, direction: "claims", historical },
+        f.owner,
+      )
+    ).total;
+  expect([await claims(), await claims(true)]).toStrictEqual([1, 3]);
+  await writeFile(file, raw);
+  expect((await read(f, red.id)).lifecycle, "durable guards beat a stale active file").toBe(
+    "superseded",
+  );
+  expect((await supersede(f, merged, [red, green], { undo: true })).operation).toBe("unsupersede");
+  const back = await read(f, red.id);
+  expect([back.lifecycle, back.metadata.superseded_by, await claims()]).toStrictEqual([
+    "active",
+    undefined,
+    3,
+  ]);
+});
+
+it("supersede rejects self, repeats, cycles, other subjects, pages, stale fences, inactive claims and correction undo", async () => {
+  const f = await foundation();
+  const make = (extra = {}) => f.service.create_claim(f.claim(extra), f.owner);
+  const [a, b, c] = [await make(), await make({ title: "B" }), await make({ title: "C" })];
+  const other = await f.service.save_page({ ...draft(), title: "Other", type: "project" }, f.owner);
+  const { entities: _unused, ...bare } = f.claim();
+  const elsewhere = await make({ entities: [other.id] }),
+    unlinked = await f.service.create_claim(bare, f.owner);
+  const rejects = (promise: Promise<unknown>, message: RegExp) =>
+    expect(promise).rejects.toThrow(message);
+  await rejects(supersede(f, a, [a]), /cannot supersede itself/);
+  await rejects(supersede(f, a, [b, b]), /listed once/);
+  await rejects(supersede(f, a, [elsewhere]), /shares no linked page/);
+  await rejects(supersede(f, a, [unlinked]), /shares no linked page/);
+  await rejects(supersede(f, f.pages.project, [b]), /not a claim/);
+  const stale = { ...target(b), expectedRevision: 9 };
+  const staleInput = { requestId: randomUUID(), reason: "x", by: target(a), superseded: [stale] };
+  await rejects(f.service.supersede(staleInput, f.owner), /Superseded claim unavailable/);
+  await supersede(f, a, [b]);
+  await rejects(supersede(f, b, [a]), /not current in this scope/);
+  await rejects(supersede(f, c, [b]), /is superseded, not active/);
+  await rejects(supersede(f, a, [c], { undo: true }), /is not superseded by/);
+  await f.service.withdraw(withdrawal(c), f.owner);
+  await rejects(supersede(f, a, [c]), /is withdrawn, not active/);
+  const corrected = await f.service.correct(correction(f, await read(f, a.id)), f.owner);
+  await rejects(supersede(f, corrected, [a], { undo: true }), /replaced by knowledge_correct/);
+});
+
+it("supersede rejects a replacement that depends on a superseded claim, directly or through a dependent", async () => {
+  const f = await foundation();
+  const red = await f.service.create_claim(f.claim({ title: "CI red" }), f.owner);
+  const deps = (id: string) => [f.pages.meeting.id, id];
+  const merged = await f.service.create_claim(
+    f.claim({ title: "Merged", dependencies: deps(red.id) }),
+    f.owner,
+  );
+  const summary = await f.service.save_page(
+    { ...draft(), title: "Run summary", dependencies: [red.id] },
+    f.owner,
+  );
+  const shipped = await f.service.create_claim(
+    f.claim({ title: "Shipped", dependencies: deps(summary.id) }),
+    f.owner,
+  );
+  for (const by of [merged, shipped]) {
+    await expect(supersede(f, by, [red])).rejects.toThrow(/would hide the replacement/);
+    expect((await f.service.lookup({ query: by.id }, f.owner)).total).toBe(1);
+  }
+  expect((await read(f, red.id)).lifecycle).toBe("active");
 });

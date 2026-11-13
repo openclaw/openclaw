@@ -29,7 +29,7 @@ describe("probeSlack", () => {
   });
 
   it("maps Slack auth metadata on success", async () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValueOnce(145);
+    vi.spyOn(performance, "now").mockReturnValueOnce(100).mockReturnValueOnce(145);
     authTestMock.mockResolvedValue({
       ok: true,
       user_id: "U123",
@@ -59,7 +59,7 @@ describe("probeSlack", () => {
   });
 
   it("warns when auth.test looks like a user token in the bot token slot", async () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValueOnce(145);
+    vi.spyOn(performance, "now").mockReturnValueOnce(100).mockReturnValueOnce(145);
     authTestMock.mockResolvedValue({
       ok: true,
       user_id: "UUSER",
@@ -117,7 +117,7 @@ describe("probeSlack", () => {
   });
 
   it("keeps optional auth metadata fields undefined when Slack omits them", async () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(200).mockReturnValueOnce(235);
+    vi.spyOn(performance, "now").mockReturnValueOnce(200).mockReturnValueOnce(235);
     authTestMock.mockResolvedValue({ ok: true });
 
     const result = await probeSlack("xoxb-test");

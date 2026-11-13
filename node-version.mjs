@@ -5,6 +5,11 @@ const NODE_RELEASE_VERSION_RE =
   /^v?((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 
 const NODE_RELEASE_FLOORS = [
+  { major: 24, minor: 16, patch: 0 },
+  { major: 26, minor: 1, patch: 0 },
+];
+// These security patches are strongly recommended, not runtime admission floors.
+const NODE_SECURITY_RELEASE_FLOORS = [
   { major: 24, minor: 22, patch: 1 },
   { major: 26, minor: 12, patch: 1 },
 ];
@@ -33,6 +38,39 @@ export function formatUnsupportedNodeVersionMessage(version) {
 
 export function formatUnsupportedNodeDiagnosticWarning(version) {
   return `Running on an unsupported Node (${version}); diagnostics may show truncated text`;
+}
+
+export function formatNodeSecurityWarning(value) {
+  const version = parseNodeReleaseVersion(value);
+  if (!version) {
+    return null;
+  }
+  const minimum = NODE_SECURITY_RELEASE_FLOORS.find((floor) => floor.major === version.major);
+  if (
+    minimum ? isNodeVersionAtLeast(version, minimum) : version.major > HIGHEST_RELEASE_FLOOR.major
+  ) {
+    return null;
+  }
+  return (
+    `Node.js ${value} is below the recommended security patch level. ` +
+    "TLS may trust certificates signed with keys compromised in the October 2026 eMudhra incident. " +
+    "Upgrade to Node 24.22.1+ on the 24.x line or Node 26.12.1+."
+  );
+}
+
+// Bundled and package-root entry points share one warning in the admitted process.
+const securityWarningPrinted = Symbol.for("openclaw.nodeSecurityWarningPrinted");
+export function emitNodeSecurityWarning(
+  value,
+  write = (message) => {
+    process.stderr.write(`${message}\n`);
+  },
+) {
+  const warning = formatNodeSecurityWarning(value);
+  if (warning && !globalThis[securityWarningPrinted]) {
+    globalThis[securityWarningPrinted] = true;
+    write(`openclaw: SECURITY WARNING: ${warning}`);
+  }
 }
 
 const ROOT_BOOLEAN_OPTIONS = ["--dev", "--no-color"];
@@ -181,7 +219,7 @@ export function isNodeVersionAtLeast(version, minimum) {
   return version.patch >= minimum.patch;
 }
 
-/** Checks release floors for compromised-key rejection and SQLite correctness. */
+/** Checks compatibility floors; recommended security patches are reported separately. */
 export function isSupportedOpenClawNodeVersion(value) {
   const version = parseNodeReleaseVersion(value);
   if (!version) {

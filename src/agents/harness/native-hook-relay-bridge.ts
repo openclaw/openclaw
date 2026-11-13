@@ -13,6 +13,10 @@ import {
   isNativeHookRelayBridgeStaleRegistrationError,
   NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR,
 } from "./native-hook-relay-client.js";
+import type {
+  ActiveNativeHookRelayRegistration,
+  NativeHookRelayBridgeRegistration,
+} from "./native-hook-relay-contexts.js";
 import { nativeHookRelayState } from "./native-hook-relay-state.js";
 import {
   deleteNativeHookRelayBridgeRecordIfOwned,
@@ -23,9 +27,7 @@ import {
   type NativeHookRelayBridgeRecord,
 } from "./native-hook-relay-store.js";
 import type {
-  ActiveNativeHookRelayRegistration,
   InvokeNativeHookRelayParams,
-  NativeHookRelayBridgeRegistration,
   NativeHookRelayProcessResponse,
   NativeHookRelayProvider,
 } from "./native-hook-relay-types.js";

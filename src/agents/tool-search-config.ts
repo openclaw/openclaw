@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolSearchConfig as AuthoredToolSearchConfig } from "../config/types.tools.js";
-import { MAX_TOOL_SEARCH_RESULTS, type ToolSearchConfig } from "./tool-search-types.js";
+import { MAX_TOOL_SEARCH_RESULTS, type ToolSearchConfig } from "./tool-search-protocol.js";
 
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 20;

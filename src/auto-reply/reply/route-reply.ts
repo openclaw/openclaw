@@ -6,12 +6,14 @@ import { createChannelReplyTransform } from "../../channels/message/reply-transf
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
+import { runAdmittingGatewayDelivery } from "../../channels/turn/admitting-gateway-delivery.js";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   isOutboundDeliveryError,
+  isPlatformMessageNotDispatchedError,
   PlatformMessageNotDispatchedError,
 } from "../../infra/outbound/deliver-types.js";
 import {
@@ -22,6 +24,8 @@ import {
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { isPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -141,7 +145,7 @@ function summarizeVisibleRouteReplyDelivery(
 /** Routes to the originating channel; shared sessions may have a different last channel. */
 export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
   const { payload, ...route } = params;
-  return await routeReplyOperation(route, { kind: "raw", payload });
+  return await routeReplyFromProducer(route, { kind: "raw", payload });
 }
 
 /** Routes a prepared reply without reinterpreting its text as delivery directives. */
@@ -149,12 +153,47 @@ export async function routePreparedReply(
   params: Omit<RouteReplyParams, "payload"> & { plan: OutboundPayloadPlan },
 ): Promise<RouteReplyResult> {
   const { plan, ...route } = params;
-  return await routeReplyOperation(route, { kind: "prepared", plan });
+  return await routeReplyFromProducer(route, { kind: "prepared", plan });
+}
+
+/**
+ * A reload can retire the turn registry that produced a reply before the reply is routed.
+ * Its borrowed channels then refuse every call, so the send belongs to the admitting Gateway.
+ */
+async function routeReplyFromProducer(
+  params: Omit<RouteReplyParams, "payload">,
+  operation: ReplyDispatchOperation,
+): Promise<RouteReplyResult> {
+  const registry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  if (!registry || !isPluginRegistryRetired(registry)) {
+    return await routeReplyOperation(params, operation);
+  }
+  const channel =
+    normalizeChannelId(params.channel) ?? normalizeOptionalLowercaseString(params.channel);
+  try {
+    return await runAdmittingGatewayDelivery(
+      { registry, cfg: params.cfg, channel: channel ?? String(params.channel) },
+      (cfg, assertGatewayCurrent) =>
+        routeReplyOperation({ ...params, cfg }, operation, assertGatewayCurrent),
+    );
+  } catch (err) {
+    // Only the Gateway handoff's own refusal is reported here; it proves nothing was sent.
+    if (!isPlatformMessageNotDispatchedError(err)) {
+      throw err;
+    }
+    return {
+      ok: false,
+      delivered: false,
+      error: `Failed to route reply to ${params.channel}: ${formatErrorMessage(err)}`,
+      cause: err,
+    };
+  }
 }
 
 async function routeReplyOperation(
   params: Omit<RouteReplyParams, "payload">,
   operation: ReplyDispatchOperation,
+  assertGatewayCurrent?: () => void,
 ): Promise<RouteReplyResult> {
   const { channel, to, accountId, threadId, cfg, abortSignal } = params;
   const suppress = (reason?: "suppressed" | "channel_transform"): RouteReplyResult => ({
@@ -186,6 +225,9 @@ async function routeReplyOperation(
   }).responsePrefix;
   const transformReplyPayload = createChannelReplyTransform({ messaging, cfg, accountId });
   const normalization = normalizeReplyPayloadOutcome(payload, {
+    preserveLeadingSourceBoundary:
+      params.replyKind === "block" &&
+      getReplyPayloadMetadata(payload)?.streamedSourceBoundary === true,
     responsePrefix,
     responsePrefixContext: params.responsePrefixContext,
     transformReplyPayload,
@@ -330,7 +372,13 @@ async function routeReplyOperation(
       session: outboundSession,
       signal: abortSignal,
       onPlatformSendDispatch: params.beforeDeliver,
-      assertDirectAdapterHandoff: params.assertCurrent,
+      assertDirectAdapterHandoff:
+        assertGatewayCurrent && params.assertCurrent
+          ? () => {
+              assertGatewayCurrent();
+              params.assertCurrent?.();
+            }
+          : (assertGatewayCurrent ?? params.assertCurrent),
       ...(params.assertCurrent ? { deliveryRetryOwner: "caller" as const } : {}),
       ...(params.deliveryIntentId
         ? {

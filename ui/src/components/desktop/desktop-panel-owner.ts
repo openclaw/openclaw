@@ -503,7 +503,7 @@ export function createDesktopPanel(
         return;
       }
       if (!target) {
-        throw new Error("Desktop render target is unavailable");
+        throw new Error(t("desktop.unavailable"));
       }
       controls.audio.connect(pending.observed, client.gatewayUrl);
       const connection = await host.desktopClientFactory().connect({

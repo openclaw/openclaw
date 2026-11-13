@@ -1,7 +1,9 @@
 /** Terminal identity rules used to reconcile live and durable assistant projections. */
 
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
-import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import { writeStableStringify } from "@openclaw/normalization-core/stable-stringify";
 import {
   hasDisplayableSessionMessage,
   readSessionMessageDisplayContent,
@@ -12,6 +14,8 @@ import {
   sameAssistantPersistenceReceipt,
   type SessionMessageIdentity,
 } from "./session-projection-message-identity.js";
+
+const contentIdentityEncoder = new TextEncoder();
 
 /** A run's selected text reply can inherit its terminal tool stop reason. */
 export function isToolUsePersistedFinalRow(message: unknown): boolean {
@@ -108,22 +112,31 @@ export function readFinalContentIdentity(message: unknown): string | null {
   const identity = readSessionMessageIdentity(message);
   const record = readRecord(terminalMessage);
   const metadata = readRecord(record?.["__openclaw"]);
+  const hash = sha256.create();
   try {
-    return `content:${stableStringify([
-      identity?.role ?? "assistant",
-      display.text,
-      display.hasNonText ? (record?.content ?? null) : null,
-      metadata?.media ?? null,
-      identity?.isImported
-        ? [
-            metadata?.importedFrom ?? null,
-            metadata?.cliSessionId ?? null,
-            metadata?.externalId ?? null,
-          ]
-        : null,
-    ])}`;
+    // Receipt lists outlive visible rows; retain a full-content digest rather
+    // than another serialized copy of every accepted terminal reply.
+    writeStableStringify(
+      [
+        identity?.role ?? "assistant",
+        display.text,
+        display.hasNonText ? (record?.content ?? null) : null,
+        metadata?.media ?? null,
+        identity?.isImported
+          ? [
+              metadata?.importedFrom ?? null,
+              metadata?.cliSessionId ?? null,
+              metadata?.externalId ?? null,
+            ]
+          : null,
+      ],
+      (chunk) => hash.update(contentIdentityEncoder.encode(chunk)),
+    );
+    return `content:sha256:${bytesToHex(hash.digest())}`;
   } catch {
     return null;
+  } finally {
+    hash.destroy();
   }
 }
 

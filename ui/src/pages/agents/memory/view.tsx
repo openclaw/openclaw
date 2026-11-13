@@ -1,24 +1,41 @@
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Match, Show, Switch } from "solid-js";
-import { HubTabs } from "../../../components/solid/hub-tabs.tsx";
+import { createMemo, createUniqueId, For, Show } from "solid-js";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
+import { Icon } from "../../../components/solid/icon.tsx";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
+import { Menu, type MenuEntry } from "../../../components/solid/menu.tsx";
+import { RefreshButton } from "../../../components/solid/refresh-button.tsx";
+import { SettingsSelect } from "../../../components/solid/settings-select.tsx";
+import {
+  SettingsEmpty,
+  SettingsGroup,
+  SettingsLoadingSkeleton,
+  SettingsRow,
+  SettingsSection,
+  SettingsSegmented,
+  SettingsStatus,
+  SettingsToggleRow,
+} from "../../../components/solid/settings-ui.tsx";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../styles/dreams.css";
-import type { DreamingEntry, DreamingViewState } from "./dreaming.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
+import type { DreamingEntry, DreamingReviewPanel, DreamingViewState } from "./dreaming.ts";
 import { DreamingScene } from "./view-scene.tsx";
-import { DiaryEmpty, DreamingAction, DreamingRead, formatCompactDateTime } from "./view-shared.tsx";
+import { DiaryEmpty, DreamingRead, formatCompactDateTime } from "./view-shared.tsx";
 import type { DreamingProps } from "./view-types.ts";
 import { ImportedInsightsContent, WikiPreviewOverlay, WikiOverviewContent } from "./view-wiki.tsx";
 
-const DREAM_ACTIONS = [
+/** One sweep runs these in order, so that is the order they read in. */
+const SWEEP_PHASES = ["light", "rem", "deep"] as const;
+
+const MAINTENANCE_ACTIONS = [
   ["dedupeDiary", "onDedupeDreamDiary", "canDedupeDreamDiary"],
   ["repairCache", "onRepairDreamingArtifacts", "canRepairDreamingArtifacts"],
   ["backfill", "onBackfillDiary", "canBackfillDiary"],
   ["reset", "onResetDiary", "canResetDiary"],
-  ["clearGrounded", "onResetGroundedShortTerm", "canResetGroundedShortTerm"],
 ] as const;
 
 function formatRange(path: string, startLine: number, endLine: number): string {
@@ -57,221 +74,77 @@ function describeWaitingEntryOrigin(entry: DreamingEntry): string {
   );
 }
 
-function AdvancedEntryList(params: {
-  titleKey: string;
-  descriptionKey: string;
-  emptyKey: string;
-  entries: DreamingEntry[];
-  meta: (entry: DreamingEntry) => string[];
-  badge?: (entry: DreamingEntry) => string | null;
-  controls?: JSX.Element;
-}) {
-  return (
-    <section class="dreams-advanced__section">
-      <div class="dreams-advanced__section-header">
-        <div class="dreams-advanced__section-copy">
-          <span class="dreams-advanced__section-title">{t(params.titleKey)}</span>
-          <p class="dreams-advanced__section-description">{t(params.descriptionKey)}</p>
-        </div>
-        <div class="dreams-advanced__section-toolbar">
-          {params.controls ?? undefined}
-          <span class="dreams-advanced__section-count">{params.entries.length}</span>
-        </div>
-      </div>
-
-      {params.entries.length === 0 ? (
-        <div class="dreams-advanced__empty">{t(params.emptyKey)}</div>
-      ) : (
-        <div class="dreams-advanced__list">
-          <For each={params.entries} keyed={(entry) => entry.key}>
-            {(entry) => {
-              const badge = () => params.badge?.(entry());
-              return (
-                <article class="dreams-advanced__item" data-entry-key={entry().key}>
-                  {badge() ? <span class="dreams-advanced__badge">{badge()}</span> : undefined}
-                  <div class="dreams-advanced__snippet">{entry().snippet}</div>
-                  <div class="dreams-advanced__source">
-                    {formatRange(entry().path, entry().startLine, entry().endLine)}
-                  </div>
-                  <div class="dreams-advanced__meta">
-                    {params
-                      .meta(entry())
-                      .filter((part) => part.length > 0)
-                      .join(" · ")}
-                  </div>
-                </article>
-              );
-            }}
-          </For>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function DreamingAdvancedSection(props: DreamingProps) {
-  const state = () => props.viewState;
+function DreamingControls(props: DreamingProps) {
   const data = () => props.readStatusData();
-  const groundedEntries = createMemo(() =>
-    data().shortTermEntries.filter((entry) => entry.groundedCount > 0),
-  );
-  const waitingEntries = createMemo(() =>
-    data().shortTermEntries.toSorted(
-      state().advancedWaitingSort === "signals"
-        ? compareWaitingEntryBySignals
-        : compareWaitingEntryByRecency,
-    ),
-  );
-  const description = () => t("dreaming.advanced.description");
-  const summary = () =>
-    [
-      `${groundedEntries().length} ${t("dreaming.advanced.summaryFromDailyLog")}`,
-      `${data().shortTermCount} ${t("dreaming.advanced.summaryWaiting")}`,
-      `${data().promotedCount} ${t("dreaming.advanced.summaryPromotedToday")}`,
-    ].join(" · ");
-
+  const description = () => {
+    if (props.header.configuredDreaming.engineOff) {
+      return t("dreaming.header.engineOff");
+    }
+    const scope = t("dreaming.toggleConfirmation.subtitle");
+    if (!props.active) {
+      return scope;
+    }
+    const parts = [
+      data().nextCycle ? `${t("dreaming.status.nextSweepPrefix")} ${data().nextCycle}` : null,
+      data().timezone,
+      data().promotedCount > 0
+        ? `${data().promotedCount} ${t("dreaming.status.promotedSuffix")}`
+        : null,
+    ].filter(Boolean);
+    return parts.join(" · ") || scope;
+  };
   return (
-    <section class="dreams-advanced">
-      <div class="dreams-advanced__header">
-        <div class="dreams-advanced__intro">
-          <span class="dreams-advanced__eyebrow">{t("dreaming.advanced.eyebrow")}</span>
-          <h2 class="dreams-advanced__title">{t("dreaming.advanced.title")}</h2>
-          {description() ? <p class="dreams-advanced__description">{description()}</p> : undefined}
-          <DreamingRead on={props.selectedAgentId}>
-            <div class="dreams-advanced__summary">{summary()}</div>
-          </DreamingRead>
+    <SettingsGroup>
+      <SettingsToggleRow
+        title={t("dreaming.header.toggle")}
+        description={
+          <span class="dreams-controls__status">
+            <DreamingRead on={props.selectedAgentId}>{description()}</DreamingRead>
+          </span>
+        }
+        checked={props.active}
+        disabled={!props.header.canUpdateConfig || props.header.configuredDreaming.engineOff}
+        saving={props.header.loading}
+        // The owner asks for confirmation first; the switch moves once the write lands.
+        onChange={(enabled) => {
+          props.onSetEnabled(enabled);
+          return false;
+        }}
+        actions={
+          <RefreshButton
+            label={t("dreaming.header.refresh")}
+            busy={props.header.refreshLoading}
+            disabled={props.header.loading || props.dreamDiaryLoading}
+            onClick={() => props.onRefresh()}
+          />
+        }
+      />
+      <div class="settings-row dreams-controls__phases-row">
+        <div class="settings-row__text">
+          <span class="settings-row__title">{t("dreaming.phase.title")}</span>
         </div>
-        <div class="dreams-advanced__actions">
-          <For each={DREAM_ACTIONS}>
-            {([label, onClick, allowed]) => (
-              <DreamingAction
-                label={t(
-                  `dreaming.scene.${label === "backfill" && props.dreamDiaryActionLoading ? "working" : label}`,
-                )}
-                disabled={
-                  !props.access[allowed] || props.modeSaving || props.dreamDiaryActionLoading
-                }
-                onClick={() => props[onClick]()}
-              />
+        <div class="settings-row__control dreams-controls__phases">
+          <For each={SWEEP_PHASES}>
+            {(phaseId) => (
+              <DreamingRead on={props.selectedAgentId}>
+                <span
+                  class={[
+                    "dreams-controls__phase",
+                    {
+                      "dreams-controls__phase--off": data().phases?.[phaseId]?.enabled === false,
+                    },
+                  ]}
+                >
+                  <SettingsStatus
+                    kind={data().phases?.[phaseId]?.enabled === true ? "ok" : "muted"}
+                    label={t(`dreaming.phase.${phaseId}`)}
+                  />
+                </span>
+              </DreamingRead>
             )}
           </For>
         </div>
       </div>
-      <Show when={props.dreamDiaryActionMessage}>
-        {(message) => (
-          <div
-            class={["callout", message().kind === "success" ? "success" : "danger"]}
-            role="status"
-          >
-            <div class="row wrap items-center gap-2">
-              <span>{message().text}</span>
-              {props.dreamDiaryActionArchivePath ? (
-                <DreamingAction
-                  label={t("dreaming.wiki.copyArchivePath")}
-                  disabled={props.dreamDiaryActionLoading}
-                  onClick={() => props.onCopyDreamingArchivePath()}
-                />
-              ) : undefined}
-            </div>
-          </div>
-        )}
-      </Show>
-
-      <DreamingRead on={props.selectedAgentId}>
-        <div class="dreams-advanced__sections">
-          <AdvancedEntryList
-            titleKey={"dreaming.advanced.stagedTitle"}
-            descriptionKey={"dreaming.advanced.stagedDescription"}
-            emptyKey={"dreaming.advanced.emptyGrounded"}
-            entries={groundedEntries()}
-            controls={
-              <DreamingAction
-                label={t("dreaming.scene.clearGrounded")}
-                disabled={
-                  !props.access.canResetGroundedShortTerm ||
-                  props.modeSaving ||
-                  props.dreamDiaryActionLoading
-                }
-                onClick={() => props.onResetGroundedShortTerm()}
-              />
-            }
-            badge={() => t("dreaming.advanced.originDailyLog")}
-            meta={(entry) => [
-              entry.groundedCount > 0
-                ? `${entry.groundedCount} ${t("dreaming.stats.grounded").toLowerCase()}`
-                : "",
-              entry.recallCount > 0 ? `${entry.recallCount} recall` : "",
-              entry.dailyCount > 0 ? `${entry.dailyCount} daily` : "",
-            ]}
-          />
-          <AdvancedEntryList
-            titleKey={"dreaming.advanced.shortTermTitle"}
-            descriptionKey={"dreaming.advanced.shortTermDescription"}
-            emptyKey={"dreaming.advanced.emptyShortTerm"}
-            entries={waitingEntries()}
-            controls={
-              <div class="dreams-advanced__sort">
-                <For
-                  each={
-                    [
-                      ["recent", "dreaming.advanced.sortRecent"],
-                      ["signals", "dreaming.advanced.sortSignals"],
-                    ] as const
-                  }
-                >
-                  {(entryValue) => {
-                    const [sort, label] = entryValue;
-                    return (
-                      <button
-                        class={[
-                          "dreams-advanced__sort-btn",
-                          state().advancedWaitingSort === sort &&
-                            "dreams-advanced__sort-btn--active",
-                        ]}
-                        onClick={() => {
-                          props.onViewStateChange((draft) => {
-                            draft.advancedWaitingSort = sort;
-                          });
-                        }}
-                      >
-                        {t(label)}
-                      </button>
-                    );
-                  }}
-                </For>
-              </div>
-            }
-            badge={describeWaitingEntryOrigin}
-            meta={(entry) => [
-              `${entry.totalSignalCount} ${t("dreaming.stats.signals").toLowerCase()}`,
-              entry.recallCount > 0 ? `${entry.recallCount} recall` : "",
-              entry.dailyCount > 0 ? `${entry.dailyCount} daily` : "",
-              entry.groundedCount > 0
-                ? `${entry.groundedCount} ${t("dreaming.stats.grounded").toLowerCase()}`
-                : "",
-              entry.phaseHitCount > 0 ? `${entry.phaseHitCount} phase hit` : "",
-            ]}
-          />
-          <AdvancedEntryList
-            titleKey={"dreaming.advanced.promotedTitle"}
-            descriptionKey={"dreaming.advanced.promotedDescription"}
-            emptyKey={"dreaming.advanced.emptyPromoted"}
-            entries={data().promotedEntries}
-            badge={describeWaitingEntryOrigin}
-            meta={(entry) => [
-              entry.promotedAt
-                ? `${t("dreaming.advanced.updatedPrefix")} ${formatCompactDateTime(entry.promotedAt)}`
-                : "",
-              entry.groundedCount > 0
-                ? `${entry.groundedCount} ${t("dreaming.stats.grounded").toLowerCase()}`
-                : "",
-              entry.totalSignalCount > 0
-                ? `${entry.totalSignalCount} ${t("dreaming.stats.signals").toLowerCase()}`
-                : "",
-            ]}
-          />
-        </div>
-      </DreamingRead>
       <DreamingRead
         read={props.readStatus}
         on={props.selectedAgentId}
@@ -280,7 +153,7 @@ function DreamingAdvancedSection(props: DreamingProps) {
       {props.statusError ? (
         <div class="dreams__controls-error">{props.statusError}</div>
       ) : undefined}
-    </section>
+    </SettingsGroup>
   );
 }
 
@@ -330,15 +203,6 @@ function parseDiaryEntries(raw: string): DiaryEntry[] {
   return entries;
 }
 
-function formatDiaryChipLabel(date: string): string {
-  const parsed = parseDateStringTimestampMs(date);
-  if (parsed === undefined) {
-    return date;
-  }
-  const value = new Date(parsed);
-  return `${value.getMonth() + 1}/${value.getDate()}`;
-}
-
 // Strip source citations like [memory/2026-04-09.md:9] and section headings,
 // flatten structured diary entries into plain paragraphs.
 function flattenDiaryBody(body: string): string[] {
@@ -366,34 +230,74 @@ function flattenDiaryBody(body: string): string[] {
   );
 }
 
-function DiaryNavigation(props: {
-  labels: string[];
+/** Turns the diary's pages: newest first, with every date a jump away. */
+function DiaryPager(props: {
+  entries: DiaryEntry[];
   selectedPage: number;
   onSelect: (index: number) => void;
 }) {
+  const selected = () => props.entries[props.selectedPage];
   return (
-    <div class="dreams-diary__daychips">
-      <For each={props.labels} keyed={false}>
-        {(label, index) => (
-          <button
-            class={[
-              "dreams-diary__day-chip",
-              { "dreams-diary__day-chip--active": index === props.selectedPage },
-            ]}
-            onClick={() => props.onSelect(index)}
-          >
-            {label()}
-          </button>
-        )}
-      </For>
+    <div class="dreams-diary__pager">
+      <Show
+        when={props.entries.length > 1}
+        fallback={
+          <Show when={selected()?.date}>
+            {(date) => <time class="dreams-diary__date">{date()}</time>}
+          </Show>
+        }
+      >
+        <SettingsSelect
+          class="dreams-diary__dates"
+          aria-label={t("dreaming.diary.title")}
+          value={String(props.selectedPage)}
+          options={props.entries.map((entry, index) => ({
+            value: String(index),
+            label: entry.date ? formatDiaryDate(entry.date) : String(props.entries.length - index),
+          }))}
+          onChange={(event) => props.onSelect(Number(event.currentTarget.value))}
+        />
+        <span class="dreams-diary__steps">
+          <IconButton
+            icon="chevronLeft"
+            label={t("dreaming.diary.older")}
+            disabled={props.selectedPage >= props.entries.length - 1}
+            onClick={() => props.onSelect(props.selectedPage + 1)}
+          />
+          <IconButton
+            icon="chevronRight"
+            label={t("dreaming.diary.newer")}
+            disabled={props.selectedPage <= 0}
+            onClick={() => props.onSelect(props.selectedPage - 1)}
+          />
+        </span>
+      </Show>
     </div>
   );
+}
+
+/** The select's room is small on a phone, and a diary date reads fine shortened. */
+function formatDiaryDate(date: string): string {
+  const parsed = parseDateStringTimestampMs(date);
+  if (parsed === undefined) {
+    return date;
+  }
+  const entry = new Date(parsed);
+  return entry.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    // Most entries are recent; the year only earns its width when it differs.
+    ...(entry.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" as const }),
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function DreamDiaryContent(props: {
   entries: DiaryEntry[];
   selectedPage: number;
   missing: boolean;
+  onSelect: (index: number) => void;
 }) {
   const selected = createMemo(() => props.entries[props.selectedPage]);
   return (
@@ -403,238 +307,377 @@ function DreamDiaryContent(props: {
         <DiaryEmpty
           message={t(props.missing ? "dreaming.diary.noDreamsYet" : "dreaming.diary.waitingTitle")}
           hint={t(props.missing ? "dreaming.diary.noDreamsHint" : "dreaming.diary.waitingHint")}
-        >
-          <Show when={props.missing}>
-            <div class="dreams-diary__empty-moon">
-              <svg viewBox="0 0 32 32" fill="none" width="32" height="32">
-                <circle
-                  cx="16"
-                  cy="16"
-                  r="14"
-                  stroke="currentColor"
-                  stroke-width="0.5"
-                  opacity="0.2"
-                />
-                <path
-                  d="M20 8a10 10 0 0 1 0 16 10 10 0 1 0 0-16z"
-                  fill="currentColor"
-                  opacity="0.08"
-                />
-              </svg>
-            </div>
-          </Show>
-        </DiaryEmpty>
+        />
       }
     >
-      {(entry) => (
-        <article class="dreams-diary__entry">
-          <div class="dreams-diary__accent" />
-          <Show when={entry().date}>
-            {(date) => <time class="dreams-diary__date">{date()}</time>}
-          </Show>
-          <div class="dreams-diary__prose">
-            <For each={flattenDiaryBody(entry().body)} keyed={false}>
-              {(para, index) => (
-                <MarkdownHtml
-                  as="p"
-                  class="dreams-diary__para"
-                  style={{ "animation-delay": `${0.3 + index * 0.15}s` }}
-                  markdown={para()}
-                />
-              )}
-            </For>
-          </div>
-        </article>
-      )}
+      <article class="dreams-diary__entry">
+        <DiaryPager
+          entries={props.entries}
+          selectedPage={props.selectedPage}
+          onSelect={props.onSelect}
+        />
+        {/* Keyed by entry so each turned page replays its reveal; the pager keeps focus. */}
+        <Show when={selected()} keyed>
+          {(entry) => (
+            <div class="dreams-diary__prose">
+              <For each={flattenDiaryBody(entry.body)} keyed={false}>
+                {(para, index) => (
+                  <MarkdownHtml
+                    as="p"
+                    class="dreams-diary__para"
+                    style={{ "animation-delay": `${0.1 + index * 0.15}s` }}
+                    markdown={para()}
+                  />
+                )}
+              </For>
+            </div>
+          )}
+        </Show>
+      </article>
     </Show>
   );
 }
 
 function DreamingDiarySection(props: DreamingProps) {
   const state = () => props.viewState;
-  const activeDiarySubTab = createMemo(() => state().activeDiarySubTab);
-  const selectedAgentId = createMemo(() => props.selectedAgentId);
-  const initialLoading = createMemo(() =>
-    activeDiarySubTab() === "dreams"
-      ? props.dreamDiaryContent === null && props.dreamDiaryLoading
-      : activeDiarySubTab() === "insights"
-        ? props.wikiImportInsights === null && props.wikiImportInsightsLoading
-        : props.wikiOverview === null && props.wikiOverviewLoading,
+  const initialLoading = createMemo(
+    () => props.dreamDiaryContent === null && props.dreamDiaryLoading,
   );
-  const content = createMemo(() => props.dreamDiaryContent);
-  const entries = createMemo(() => {
-    const current = content();
-    return typeof current === "string" ? parseDiaryEntries(current).toReversed() : [];
-  });
-  const imports = () => props.wikiImportInsights;
-  const overview = () => props.wikiOverview;
-  const labels = createMemo(() =>
-    activeDiarySubTab() === "dreams"
-      ? entries().map((entry) => formatDiaryChipLabel(entry.date))
-      : activeDiarySubTab() === "insights"
-        ? (imports()?.clusters.map((cluster) => cluster.label) ?? [])
-        : (overview()?.clusters.map((cluster) => cluster.label) ?? []),
-  );
-  const selectedPage = createMemo(() =>
-    Math.max(0, Math.min(state().diaryPage, labels().length - 1)),
-  );
-  const diary = createMemo(
-    () =>
-      ({
-        dreams: {
-          loading: props.dreamDiaryLoading,
-          refresh: props.onRefreshDiary,
-          explainer: "dreaming.wiki.dreamsExplainer",
-        },
-        insights: {
-          loading: props.wikiImportInsightsLoading,
-          refresh: props.onRefreshImports,
-          explainer: "dreaming.wiki.insightsExplainer",
-        },
-        wiki: {
-          loading: props.wikiOverviewLoading,
-          refresh: props.onRefreshWikiOverview,
-          explainer: "dreaming.wiki.wikiExplainer",
-        },
-      })[activeDiarySubTab()],
-  );
-  const memoryWikiUnavailable = () => activeDiarySubTab() !== "dreams" && !props.memoryWikiEnabled;
   return (
     <section class="dreams-diary">
-      <div class="dreams-diary__chrome">
-        <div class="dreams-diary__header">
-          <span class="dreams-diary__title">{t("dreaming.diary.title")}</span>
-          <HubTabs<DreamingViewState["activeDiarySubTab"]>
-            {...{
-              id: "dream-diary",
-              active: activeDiarySubTab(),
-              tabs: [
-                { value: "dreams", label: t("dreaming.wiki.dreamsTab") },
-                { value: "insights", label: t("dreaming.wiki.insightsTab") },
-                { value: "wiki", label: t("dreaming.wiki.wikiTab") },
-              ],
-              ariaLabel: t("dreaming.diary.title"),
-              panelId: "dream-diary-panel",
-              variant: "sub",
-              onSelect: (tab) => {
-                props.onCloseWikiPreview();
-                props.onViewStateChange((draft) => {
-                  draft.activeDiarySubTab = tab;
-                  draft.diaryPage = 0;
-                });
-              },
-            }}
-          />
-          <DreamingAction
-            label={
-              memoryWikiUnavailable()
-                ? t(props.configOpening ? "common.loading" : "dreaming.wiki.howToEnable")
-                : activeDiarySubTab() === "dreams"
-                  ? t(diary().loading ? "dreaming.diary.reloading" : "dreaming.diary.reload")
-                  : diary().loading
-                    ? "Reloading…"
-                    : "Reload"
-            }
-            disabled={
-              memoryWikiUnavailable()
-                ? props.configOpening || !props.access.canOpenConfig
-                : props.modeSaving || diary().loading
-            }
-            busy={memoryWikiUnavailable() && props.configOpening}
-            onClick={() => {
-              props.onViewStateChange((draft) => {
-                draft.diaryPage = 0;
-              });
-              if (memoryWikiUnavailable()) {
-                void props.onOpenConfig();
-              } else {
-                diary().refresh();
-              }
-            }}
-          />
-        </div>
-        <p class="dreams-diary__explainer">{t(diary().explainer)}</p>
-        <Show when={!memoryWikiUnavailable() && labels().length > 0}>
-          <DiaryNavigation
-            labels={labels()}
-            selectedPage={selectedPage()}
-            onSelect={(index) => {
-              props.onViewStateChange((draft) => {
-                draft.diaryPage = index;
-              });
-            }}
-          />
-        </Show>
-      </div>
-      <div
-        id="dream-diary-panel"
-        role="tabpanel"
-        aria-labelledby={`dream-diary-tab-${activeDiarySubTab()}`}
+      <SettingsSection title={t("dreaming.diary.title")}>
+        <DreamingRead
+          on={[props.selectedAgentId, initialLoading()]}
+          errorClass="dreams-diary__error"
+          fallback={<DiaryEmpty message={t("dreaming.diary.reloading")} />}
+        >
+          {(() => {
+            const entries = createMemo(() =>
+              parseDiaryEntries(props.readDiary() ?? "").toReversed(),
+            );
+            return (
+              <DreamDiaryContent
+                entries={entries()}
+                selectedPage={Math.max(0, Math.min(state().diaryPage, entries().length - 1))}
+                missing={props.readDiary() === null}
+                onSelect={(index) => {
+                  props.onViewStateChange((draft) => {
+                    draft.diaryPage = index;
+                  });
+                }}
+              />
+            );
+          })()}
+        </DreamingRead>
+      </SettingsSection>
+    </section>
+  );
+}
+
+function ReviewRow(props: {
+  owner: DreamingProps;
+  panel: DreamingReviewPanel;
+  title: string;
+  description: string;
+  count?: number;
+  children?: JSX.Element;
+}) {
+  const open = () => props.owner.viewState.openReviewPanel === props.panel;
+  const panelId = () => `dreams-review-${props.panel}`;
+  return (
+    <>
+      <button
+        type="button"
+        class="settings-row settings-row--nav dreams-review__row"
+        aria-expanded={open() ? "true" : "false"}
+        aria-controls={panelId()}
+        onClick={() => {
+          props.owner.onViewStateChange((draft) => {
+            draft.openReviewPanel = open() ? null : props.panel;
+          });
+        }}
       >
-        <Show
-          when={!memoryWikiUnavailable()}
-          fallback={
-            <div class="dreams-diary__empty">
-              <div class="dreams-diary__empty-text">{t("dreaming.wiki.unavailable")}</div>
-              <div class="dreams-diary__empty-hint">
-                {t("dreaming.wiki.unavailablePluginPrefix")} <code>memory-wiki</code>{" "}
-                {t("dreaming.wiki.unavailablePluginSuffix")}
+        <span class="settings-row__text">
+          <span class="settings-row__title">{props.title}</span>
+          <span class="settings-row__desc">{props.description}</span>
+        </span>
+        <span class="settings-row__control">
+          <Show when={props.count}>
+            <span class="settings-row__value">{props.count}</span>
+          </Show>
+          <span class="settings-row__chevron">
+            <Icon name="chevronRight" />
+          </span>
+        </span>
+      </button>
+      <Show when={open()}>
+        <div id={panelId()} class="dreams-review__panel">
+          {props.children}
+        </div>
+      </Show>
+    </>
+  );
+}
+
+function ReviewEntries(props: {
+  entries: DreamingEntry[];
+  emptyKey: string;
+  meta: (entry: DreamingEntry) => string[];
+}) {
+  return (
+    <Show when={props.entries.length > 0} fallback={<SettingsEmpty message={t(props.emptyKey)} />}>
+      <For each={props.entries} keyed={(entry) => entry.key}>
+        {(entry) => (
+          <article class="dreams-review__entry" data-entry-key={entry().key}>
+            <p class="dreams-review__snippet">{entry().snippet}</p>
+            <p class="dreams-review__meta">
+              <code>{formatRange(entry().path, entry().startLine, entry().endLine)}</code>
+              {props
+                .meta(entry())
+                .filter((part) => part.length > 0)
+                .map((part) => ` · ${part}`)
+                .join("")}
+            </p>
+          </article>
+        )}
+      </For>
+    </Show>
+  );
+}
+
+function MaintenanceMenu(props: DreamingProps) {
+  const id = createUniqueId();
+  const items = (): MenuEntry[] =>
+    MAINTENANCE_ACTIONS.map(([label, , allowed]) => ({
+      id: label,
+      label: t(`dreaming.scene.${label}`),
+      disabled: !props.access[allowed] || props.modeSaving || props.dreamDiaryActionLoading,
+    }));
+  return (
+    <Menu
+      id={id}
+      lazy
+      class="dreams-review__menu"
+      label={t("browser.moreActions")}
+      placement="bottom-end"
+      pointerFocus="trigger"
+      triggerClass="oc-icon-button"
+      trigger={<Icon name="moreHorizontal" />}
+      items={items()}
+      onSelect={(item) => {
+        const action = MAINTENANCE_ACTIONS.find(([label]) => label === item.id);
+        if (action) {
+          props[action[1]]();
+        }
+      }}
+    />
+  );
+}
+
+function DreamingReview(props: DreamingProps) {
+  const state = () => props.viewState;
+  const data = () => props.readStatusData();
+  const groundedEntries = createMemo(() =>
+    data().shortTermEntries.filter((entry) => entry.groundedCount > 0),
+  );
+  const waitingEntries = createMemo(() =>
+    data().shortTermEntries.toSorted(
+      state().advancedWaitingSort === "signals"
+        ? compareWaitingEntryBySignals
+        : compareWaitingEntryByRecency,
+    ),
+  );
+  return (
+    <SettingsSection
+      title={t("dreaming.advanced.eyebrow")}
+      actions={
+        <>
+          <Show when={props.dreamDiaryActionLoading}>
+            <SettingsStatus kind="running" label={t("dreaming.scene.working")} />
+          </Show>
+          <MaintenanceMenu {...props} />
+        </>
+      }
+      notice={
+        <Show when={props.dreamDiaryActionMessage}>
+          {(message) => (
+            <InlineAlert tone={message().kind === "success" ? "success" : "danger"} role="status">
+              <div class="row wrap items-center gap-2">
+                <span>{message().text}</span>
+                {props.dreamDiaryActionArchivePath ? (
+                  <button
+                    class="btn btn--subtle btn--sm"
+                    disabled={props.dreamDiaryActionLoading}
+                    onClick={() => props.onCopyDreamingArchivePath()}
+                  >
+                    {t("dreaming.wiki.copyArchivePath")}
+                  </button>
+                ) : undefined}
               </div>
-              <div class="dreams-diary__empty-hint">
-                {t("dreaming.wiki.enablePrefix")}{" "}
+            </InlineAlert>
+          )}
+        </Show>
+      }
+    >
+      <DreamingRead on={props.selectedAgentId} fallback={<SettingsLoadingSkeleton rows={3} />}>
+        <ReviewRow
+          owner={props}
+          panel="waiting"
+          title={t("dreaming.advanced.shortTermTitle")}
+          description={t("dreaming.advanced.shortTermDescription")}
+          count={data().shortTermCount}
+        >
+          <Show when={waitingEntries().length > 1}>
+            <div class="dreams-review__tools">
+              <SettingsSegmented<DreamingViewState["advancedWaitingSort"]>
+                value={state().advancedWaitingSort}
+                ariaLabel={t("dreaming.advanced.shortTermTitle")}
+                options={[
+                  { value: "recent", label: t("dreaming.advanced.sortRecent") },
+                  { value: "signals", label: t("dreaming.advanced.sortSignals") },
+                ]}
+                onChange={(sort) => {
+                  props.onViewStateChange((draft) => {
+                    draft.advancedWaitingSort = sort;
+                  });
+                }}
+              />
+            </div>
+          </Show>
+          <ReviewEntries
+            entries={waitingEntries()}
+            emptyKey="dreaming.advanced.emptyShortTerm"
+            meta={(entry) => [
+              describeWaitingEntryOrigin(entry),
+              `${entry.totalSignalCount} ${t("dreaming.stats.signals").toLowerCase()}`,
+              entry.recallCount > 0 ? `${entry.recallCount} recall` : "",
+              entry.dailyCount > 0 ? `${entry.dailyCount} daily` : "",
+              entry.groundedCount > 0
+                ? `${entry.groundedCount} ${t("dreaming.stats.grounded").toLowerCase()}`
+                : "",
+              entry.phaseHitCount > 0 ? `${entry.phaseHitCount} phase hit` : "",
+            ]}
+          />
+        </ReviewRow>
+        <ReviewRow
+          owner={props}
+          panel="promotions"
+          title={t("dreaming.advanced.promotedTitle")}
+          description={t("dreaming.advanced.promotedDescription")}
+          count={data().promotedEntries.length}
+        >
+          <ReviewEntries
+            entries={data().promotedEntries}
+            emptyKey="dreaming.advanced.emptyPromoted"
+            meta={(entry) => [
+              describeWaitingEntryOrigin(entry),
+              entry.promotedAt
+                ? `${t("dreaming.advanced.updatedPrefix")} ${formatCompactDateTime(entry.promotedAt)}`
+                : "",
+              entry.groundedCount > 0
+                ? `${entry.groundedCount} ${t("dreaming.stats.grounded").toLowerCase()}`
+                : "",
+              entry.totalSignalCount > 0
+                ? `${entry.totalSignalCount} ${t("dreaming.stats.signals").toLowerCase()}`
+                : "",
+            ]}
+          />
+        </ReviewRow>
+        <ReviewRow
+          owner={props}
+          panel="dailyLog"
+          title={t("dreaming.advanced.stagedTitle")}
+          description={t("dreaming.advanced.stagedDescription")}
+          count={groundedEntries().length}
+        >
+          <Show when={groundedEntries().length > 0}>
+            <div class="dreams-review__tools">
+              <button
+                class="btn btn--sm"
+                disabled={
+                  !props.access.canResetGroundedShortTerm ||
+                  props.modeSaving ||
+                  props.dreamDiaryActionLoading
+                }
+                onClick={() => props.onResetGroundedShortTerm()}
+              >
+                {t("dreaming.scene.clearGrounded")}
+              </button>
+            </div>
+          </Show>
+          <ReviewEntries
+            entries={groundedEntries()}
+            emptyKey="dreaming.advanced.emptyGrounded"
+            meta={(entry) => [
+              t("dreaming.advanced.originDailyLog"),
+              entry.groundedCount > 0
+                ? `${entry.groundedCount} ${t("dreaming.stats.grounded").toLowerCase()}`
+                : "",
+              entry.recallCount > 0 ? `${entry.recallCount} recall` : "",
+              entry.dailyCount > 0 ? `${entry.dailyCount} daily` : "",
+            ]}
+          />
+        </ReviewRow>
+      </DreamingRead>
+      <Show
+        when={props.memoryWikiEnabled}
+        fallback={
+          <SettingsRow
+            title={t("dreaming.wiki.unavailable")}
+            description={
+              <>
+                {t("dreaming.wiki.unavailablePluginPrefix")} <code>memory-wiki</code>{" "}
+                {t("dreaming.wiki.unavailablePluginSuffix")} {t("dreaming.wiki.enablePrefix")}{" "}
                 <code>plugins.entries.memory-wiki.enabled = true</code>
                 {t("dreaming.wiki.enableSuffix")}
-              </div>
-              <div class="dreams-diary__empty-actions">
-                <DreamingAction
-                  label={t(props.configOpening ? "common.loading" : "dreaming.wiki.openConfig")}
-                  disabled={props.configOpening || !props.access.canOpenConfig}
-                  busy={props.configOpening}
-                  onClick={() => void props.onOpenConfig()}
-                />
-              </div>
-            </div>
-          }
+              </>
+            }
+            control={
+              <button
+                class="btn btn--sm"
+                disabled={props.configOpening || !props.access.canOpenConfig}
+                aria-busy={props.configOpening ? "true" : undefined}
+                onClick={() => void props.onOpenConfig()}
+              >
+                {t(props.configOpening ? "common.loading" : "dreaming.wiki.openConfig")}
+              </button>
+            }
+          />
+        }
+      >
+        <ReviewRow
+          owner={props}
+          panel="insights"
+          title={t("dreaming.wiki.insightsTab")}
+          description={t("dreaming.wiki.insightsExplainer")}
         >
           <DreamingRead
-            on={[selectedAgentId(), activeDiarySubTab(), initialLoading()]}
+            on={[
+              props.selectedAgentId,
+              props.wikiImportInsights === null && props.wikiImportInsightsLoading,
+            ]}
             errorClass="dreams-diary__error"
-            fallback={
-              <DiaryEmpty
-                message={
-                  activeDiarySubTab() === "dreams"
-                    ? t("dreaming.diary.reloading")
-                    : activeDiarySubTab() === "insights"
-                      ? t("dreaming.wiki.loadingInsights")
-                      : t("dreaming.wiki.loadingWiki")
-                }
-              />
-            }
+            fallback={<DiaryEmpty message={t("dreaming.wiki.loadingInsights")} />}
           >
-            {activeDiarySubTab() === "dreams" ? (
-              <DreamDiaryContent
-                entries={parseDiaryEntries(props.readDiary() ?? "").toReversed()}
-                selectedPage={selectedPage()}
-                missing={props.readDiary() === null}
-              />
-            ) : activeDiarySubTab() === "insights" ? (
-              <ImportedInsightsContent
-                owner={props}
-                data={props.readImports()}
-                selectedPage={selectedPage()}
-              />
-            ) : (
-              <WikiOverviewContent
-                owner={props}
-                data={props.readOverview()}
-                selectedPage={selectedPage()}
-              />
-            )}
+            <ImportedInsightsContent owner={props} data={props.readImports()} />
           </DreamingRead>
-        </Show>
-      </div>
-      <WikiPreviewOverlay {...props} />
-    </section>
+        </ReviewRow>
+        <ReviewRow
+          owner={props}
+          panel="wiki"
+          title={t("dreaming.wiki.wikiTab")}
+          description={t("dreaming.wiki.wikiExplainer")}
+        >
+          <DreamingRead
+            on={[props.selectedAgentId, props.wikiOverview === null && props.wikiOverviewLoading]}
+            errorClass="dreams-diary__error"
+            fallback={<DiaryEmpty message={t("dreaming.wiki.loadingWiki")} />}
+          >
+            <WikiOverviewContent owner={props} data={props.readOverview()} />
+          </DreamingRead>
+        </ReviewRow>
+      </Show>
+    </SettingsSection>
   );
 }
 
@@ -642,48 +685,15 @@ registerSettingsEnglish();
 registerDreamingEnglish();
 
 export function renderDreaming(props: DreamingProps) {
-  const state = () => props.viewState;
-  const activeSubTab = () => state().activeSubTab;
-
   return (
-    <div class="dreams-page">
-      <div class="dreams__topbar">
-        <HubTabs<DreamingViewState["activeSubTab"]>
-          {...{
-            id: "dreams",
-            active: state().activeSubTab,
-            tabs: [
-              { value: "scene", label: t("dreaming.tabs.scene") },
-              { value: "diary", label: t("dreaming.tabs.diary") },
-              { value: "advanced", label: t("dreaming.tabs.advanced") },
-            ],
-            ariaLabel: t("memoryPage.tabs.dreams"),
-            panelId: "dreams-panel",
-            variant: "sub",
-            onSelect: (tab) => {
-              props.onViewStateChange((draft) => {
-                draft.activeSubTab = tab;
-              });
-            },
-          }}
-        />
+    <div class="settings-page dreams-page">
+      <div class="dreams-page__stage">
+        <DreamingScene {...props} />
+        <DreamingControls {...props} />
       </div>
-
-      <div
-        id="dreams-panel"
-        class="dreams__panel"
-        role="tabpanel"
-        aria-labelledby={`dreams-tab-${activeSubTab()}`}
-      >
-        <Switch fallback={<DreamingAdvancedSection {...props} />}>
-          <Match when={activeSubTab() === "scene"}>
-            <DreamingScene {...props} />
-          </Match>
-          <Match when={activeSubTab() === "diary"}>
-            <DreamingDiarySection {...props} />
-          </Match>
-        </Switch>
-      </div>
+      <DreamingDiarySection {...props} />
+      <DreamingReview {...props} />
+      <WikiPreviewOverlay {...props} />
     </div>
   );
 }

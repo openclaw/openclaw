@@ -45,6 +45,7 @@ suite.define(() => {
         userPrompt("Show preview.", "widget-prompt", runId, startedAt),
         {
           role: "assistant",
+          stopReason: "toolUse",
           content: [
             text("Preparing the interactive preview."),
             { type: "toolCall", id: "show-preview", name: "show_widget", arguments: {} },
@@ -85,7 +86,7 @@ suite.define(() => {
         methodResponses: { "canvas.document.view": canvasView(html) },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
 
       const widgets = page.locator(".chat-thread openclaw-canvas-widget-view");
       const outer = widgets.locator("iframe");
@@ -310,9 +311,7 @@ suite.define(() => {
           .locator(".chat-text")
           .getByText("Your counter is ready.", { exact: true });
         await finalText.waitFor();
-        await page
-          .getByRole("button", { name: "Stop generating", exact: true })
-          .waitFor({ state: "hidden" });
+        await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ state: "hidden" });
         expect(await widgets.count()).toBe(1);
         expect(await inner.locator("output").textContent()).toBe("1");
         await page.reload();

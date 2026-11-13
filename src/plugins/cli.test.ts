@@ -93,7 +93,7 @@ it("loads manifest root help without plugin code and respects enabled policy", a
   expect(mocks.load).not.toHaveBeenCalled();
 });
 
-it("preserves deduplicated manifest root help when an unrelated legacy plugin fails", async () => {
+it("preserves deduplicated manifest root help alongside a legacy plugin", async () => {
   const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
   mocks.snapshot.mockReturnValue(
     snapshot(
@@ -104,33 +104,8 @@ it("preserves deduplicated manifest root help when an unrelated legacy plugin fa
       legacyPlugin,
     ),
   );
-  mocks.load.mockRejectedValue(new Error("broken legacy CLI plugin"));
   const config: OpenClawConfig = { plugins: { entries: { "legacy-cli": { enabled: true } } } };
   await expect(getPluginCliCommandDescriptors(config)).resolves.toEqual(matrixPlugin.cliCommands);
   expect(stderr).not.toHaveBeenCalled();
-  expect(mocks.load).toHaveBeenCalledWith(
-    expect.objectContaining({ onlyPluginIds: ["legacy-cli"] }),
-  );
-});
-
-it("preserves root help for external plugins without manifest descriptors", async () => {
-  mocks.snapshot.mockReturnValue(snapshot(legacyPlugin));
-  const descriptors = [descriptor("legacy", "Legacy external command")];
-  mocks.load.mockResolvedValue({
-    cliRegistrars: [
-      {
-        pluginId: "legacy-cli",
-        register: vi.fn(),
-        parentPath: [],
-        commands: ["legacy"],
-        descriptors,
-        source: "/tmp/legacy-cli/index.js",
-      },
-    ],
-  });
-  const config: OpenClawConfig = { plugins: { entries: { "legacy-cli": { enabled: true } } } };
-  await expect(getPluginCliCommandDescriptors(config)).resolves.toEqual(descriptors);
-  expect(mocks.load).toHaveBeenCalledWith(
-    expect.objectContaining({ onlyPluginIds: ["legacy-cli"] }),
-  );
+  expect(mocks.load).not.toHaveBeenCalled();
 });

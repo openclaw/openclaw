@@ -3,9 +3,11 @@
   width: 100%;
 }
 
-.chat-session-activity__summary {
-  width: 100%;
-  font-size: calc(var(--control-ui-text-sm) + 1px);
+/* Keep the shared disclosure reset from restoring prose-sized metadata. */
+.chat-session-activity > .chat-session-activity__summary {
+  font-family: var(--font-body);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
   list-style: none;
 }
 
@@ -60,4 +62,9 @@
   margin-top: var(--space-1);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
+}
+
+.chat-session-activity__message .chat-bubble:not(.chat-bubble--tool-shell) {
+  --chat-bubble-background: var(--chat-participant-surface);
+  background: var(--chat-bubble-background);
 }

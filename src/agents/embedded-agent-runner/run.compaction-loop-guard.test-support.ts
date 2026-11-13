@@ -6,14 +6,12 @@ import type {
   getDiagnosticSessionState as GetDiagnosticSessionStateType,
   SessionState,
 } from "../../logging/diagnostic-session-state.js";
-import type {
-  ToolOutcomeObserver,
-  wrapToolWithBeforeToolCallHook as WrapToolWithBeforeToolCallHookType,
-} from "../agent-tools.before-tool-call.js";
+import type { wrapToolWithBeforeToolCallHook as WrapToolWithBeforeToolCallHookType } from "../agent-tools.before-tool-call.js";
 import type {
   recordToolCallOutcome as RecordToolCallOutcomeType,
   recordToolCall as RecordToolCallType,
 } from "../tool-loop-detection.js";
+import type { ToolOutcomeObserver } from "../tool-outcome-observation.js";
 import {
   type makeAttemptResult,
   makeCompactionSuccess,

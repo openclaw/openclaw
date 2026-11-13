@@ -29,12 +29,10 @@ import type { PluginJsonValue as SessionPluginJsonValue } from "../../plugins/ho
 import type { SessionBoardFace } from "../../shared/session-types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
-import type { MainRestartRecoveryState } from "./main-session-recovery.types.js";
 import type {
   PendingDeliveryNoticeState,
   PendingFinalDeliveryState,
 } from "./pending-final-delivery-types.js";
-import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type {
   SessionCreatedActor,
   SessionActor,
@@ -55,7 +53,7 @@ export type { SessionSystemPromptReport } from "./session-system-prompt-report.j
 export type { SessionScope } from "../types.base.js";
 export type SessionChatType = ChatType;
 export type PersistedSessionRunStatus = Exclude<SessionRunStatus, "running" | "queued">;
-export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
+export const SESSION_TOTAL_TOKENS_VERSION = 2 as const;
 
 type SessionGitHubPullRequestSource = {
   repository: string;
@@ -71,6 +69,8 @@ export type SessionGitHubPullRequestBinding = {
   number: number;
   base: SessionGitHubPullRequestSource;
   head: SessionGitHubPullRequestSource;
+  /** Verified publication before first binding; absent on already-admitted legacy bindings. */
+  origin?: "session-publication" | "external-pr";
   /** Prepared initial PR head; absence means its first import is incomplete. */
   preparedHeadCommit?: string;
 };
@@ -229,21 +229,6 @@ type SessionPluginNextTurnInjection = {
   metadata?: SessionPluginJsonValue;
 };
 
-type SubagentRecoveryState = {
-  /** Consecutive accepted automatic orphan-recovery resumes in the rapid re-wedge window. */
-  automaticAttempts?: number;
-  /** Timestamp (ms) of the latest accepted automatic orphan-recovery resume. */
-  lastAttemptAt?: number;
-  /** Registry run id that triggered the latest automatic orphan-recovery resume. */
-  lastRunId?: string;
-  /** Visible execution retained while the recovered run uses an internal transcript. */
-  sessionLifecycleRunId?: string;
-  /** Timestamp (ms) when automatic recovery was tombstoned for this session. */
-  wedgedAt?: number;
-  /** Human-readable reason automatic recovery was tombstoned. */
-  wedgedReason?: string;
-};
-
 type LaneExecutionState =
   | "active"
   | "draining"
@@ -276,13 +261,7 @@ export type {
   SessionGoalStatus,
 } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 
-export type RestartRecoveryRun = {
-  runId: string;
-  lifecycleGeneration: string;
-};
-
-type SessionEntryCore = SessionRestartRecoveryState &
-  SessionEntryProvenance &
+type SessionEntryCore = SessionEntryProvenance &
   Pick<SessionRow, "permissionMode" | "sandboxMode" | "nativeRuntimeConsent" | "sessionRoot"> & {
     /** Collaboration mode. Missing legacy values are equivalent to "shared". */
     visibility?: NonNullable<SessionRow["visibility"]>;
@@ -305,6 +284,21 @@ type SessionEntryCore = SessionRestartRecoveryState &
     pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
     /** Trusted session initialization is incomplete; all work admission stays blocked. */
     initializationPending?: true;
+    /** Ordinary Template admission owns this exact pending incarnation until verified setup. */
+    templateInitialization?: {
+      source: { packageName: string; version?: string };
+      agentConfig: import("../types.agents.js").AgentEntryConfig;
+      workspaceIdentity: string;
+      /** Verified intent recorded before instructions or config can change. */
+      preparing?: {
+        agentConfig: import("../types.agents.js").AgentEntryConfig;
+        planDigest: string;
+        sourceIntegrity: string;
+        /** Only previously absent files (digest) and directories (null). */
+        workspaceAdditions: Record<string, string | null>;
+      };
+      configured?: { planDigest: string; sourceIntegrity: string };
+    };
     /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
     pluginExtensionSlotKeys?: Record<string, Record<string, string>>;
     /** Durable one-shot prompt additions drained before the next agent turn. */
@@ -436,12 +430,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     };
     systemSent?: boolean;
     abortedLastRun?: boolean;
-    /** Interrupted run generations whose late lifecycle events must be ignored. */
-    restartRecoveryRuns?: RestartRecoveryRun[];
-    /** Keeps automatic restart recovery limited to replay-safe tools until the run terminates. */
-    restartRecoveryForceSafeTools?: true;
-    /** Durable guard state for automatic subagent orphan recovery. */
-    subagentRecovery?: SubagentRecoveryState;
     /** Quota cascade protection and state-aware failover status. */
     quotaSuspension?: QuotaSuspension;
     /** Core-owned durable goal state for this thread/session. */
@@ -590,8 +578,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
      * totalTokens as stale/unknown for context-utilization displays.
      */
     totalTokensFresh?: boolean;
-    /** Version 1 records totalTokens as the current prompt/context snapshot only. */
-    totalTokensVersion?: typeof SESSION_TOTAL_TOKENS_VERSION;
+    /** Version 2 includes the last response's completion and pending request additions. */
+    totalTokensVersion?: 1 | typeof SESSION_TOTAL_TOKENS_VERSION;
     estimatedCostUsd?: number;
     cacheRead?: number;
     cacheWrite?: number;
@@ -647,6 +635,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Last ambient room message durably appended to this transcript, keyed by channel scope. */
     ambientTranscriptWatermarks?: Record<string, AmbientTranscriptWatermark>;
     skillsSnapshot?: SessionSkillSnapshot;
+    /** Parent prompt preference persisted by spawn before the child can launch. */
+    toolUsageRankingSeed?: import("../../agents/tool-usage-ranking.js").ToolUsageRankingSnapshot;
     /** Explicit authorized immutable library pins; current speakers never replace this selection. */
     skillLibrarySelections?: import("../../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
     systemPromptReport?: SessionSystemPromptReport;
@@ -668,7 +658,32 @@ export type SessionProfileInvolvement = {
   lastMention?: { generation: string; sequence: number; timestamp: number };
 };
 
+/**
+ * The scheduled parent a cron `:run:` row's occurrence was admitted against: the
+ * parent's exact incarnation and the occurrence's owner bit.
+ */
+export type SessionScheduledMemoryParent = {
+  sessionKey: string;
+  sessionId: string;
+  /** Absent when the job's link recorded only the parent session id. */
+  lifecycleRevision?: string;
+  senderIsOwner: boolean;
+};
+
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /**
+   * Written only by cron run preparation on a child-placement `:run:` row, so a
+   * session the run spawns can resolve its memory audience through that parent.
+   */
+  scheduledMemoryParent?: SessionScheduledMemoryParent;
+  /** Atomic history-cut receipt for the exact settled local projection, cleared after adoption. */
+  localWorkspaceHandoff?: {
+    worktreeId: string;
+    fromSessionId: string;
+    toSessionId: string;
+    lifecycleRevision: string | null;
+    projectionRevision: number;
+  };
   /** Original unbound files, private to this conversation's adopted workspace. */
   priorWorkspace?: {
     worktreeId: string;
@@ -701,27 +716,29 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   };
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
-  /** Original host-admitted operator basis, owned by the exact restart source claim. */
-  restartRecoveryOperatorSource?: import("../../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
-  /** Unhanded exec completion obligations; no command arguments or output. */
-  pendingExecNotifications?: Record<
+  /** Written only by committed graceful shutdown, consumed by the next startup. */
+  resumeAfterRestart?: {
+    queuedInputIds: string[];
+    /** Original per-input limits, restored only after current source revalidation. */
+    queuedInputSources?: Record<
+      string,
+      {
+        runId: string;
+        source: import("../../gateway/operator-run-recovery-source.codec.js").QueuedOperatorRecoverySource;
+      }
+    >;
+    hadBackgroundExec?: true;
+  };
+  /**
+   * Latest authenticated source per person who sent input here, keyed by profile ID. Restored only
+   * through current device, auth, profile and role revalidation; never an executable grant.
+   */
+  operatorSources?: Record<
     string,
-    {
-      processSessionId: string;
-      sessionId: string;
-      lifecycleRevision?: string;
-      incarnation: string;
-      startedAt: number;
-      label: string;
-      policy: Pick<
-        import("../../auto-reply/reply/session-event-contract.js").SessionEventTarget,
-        "settings" | "deliver" | "deliveryContext" | "chatType"
-      > & { toolsAllow?: readonly string[][] };
-    }
+    import("../../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot
   >;
-  /** Original requester facts retained by the exact host-admitted restart source claim. */
-  restartRecoveryRequesterSource?: import("../../agents/requester-run-recovery-source.js").RestartRecoveryRequesterSource;
-  mainRestartRecovery?: MainRestartRecoveryState;
+  /** Upgrade-only cycle; remove once stable includes the restart redesign (#185730). */
+  mainRestartRecovery?: { cycleId: string };
 };
 
 export interface InternalSessionEntry extends InternalSessionEntryCore {}

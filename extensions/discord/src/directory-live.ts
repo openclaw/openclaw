@@ -7,7 +7,7 @@ import { resolveDiscordAccount } from "./accounts.js";
 import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS } from "./api.js";
 import { rememberDiscordDirectoryUser } from "./directory-cache.js";
 import { listDiscordGuildChannels, listGuilds, searchDiscordGuildMembers } from "./guilds.js";
-import { normalizeDiscordSlug } from "./monitor/allow-list.js";
+import { normalizeDiscordDisplaySlug } from "./monitor/allow-list.js";
 import { normalizeDiscordToken } from "./token.js";
 
 type DiscordDirectoryAccess = { token: string; query: string; accountId: string };
@@ -36,6 +36,7 @@ async function listDiscordDirectoryLive(
     return [];
   }
   const { token, query, accountId } = access;
+  const channelQuery = normalizeDiscordDisplaySlug(query);
   const guilds = await listGuilds(token, fetch, { timeoutMs: DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS });
   const rows: ChannelDirectoryEntry[] = [];
   const seenUserIds = new Set<string>();
@@ -52,7 +53,7 @@ async function listDiscordDirectoryLive(
         if (!name) {
           continue;
         }
-        if (query && !normalizeDiscordSlug(name).includes(normalizeDiscordSlug(query))) {
+        if (channelQuery && !normalizeDiscordDisplaySlug(name).includes(channelQuery)) {
           continue;
         }
         rows.push({

@@ -41,14 +41,16 @@ export type SessionStoreWorkerReadInput = Omit<SessionStoreWorkerReadScope, "age
 };
 
 export type SessionEntrySummaryWorkerRead = Omit<SessionStoreWorkerReadScope, "agentId"> &
-  Pick<
-    SessionEntryListWorkerInput["scope"],
-    "agentId" | "cleanupSession" | "mainSessionRecovery" | "readConsistency"
-  >;
+  Pick<SessionEntryListWorkerInput["scope"], "agentId" | "cleanupSession" | "readConsistency">;
 
 export type PreparedSessionEntryWorkerRead = {
   result: SessionExactEntriesWorkerResult;
-  database: { agentId: string; path: string; env: NodeJS.ProcessEnv };
+  database: {
+    agentId: string;
+    path: string;
+    env: NodeJS.ProcessEnv;
+    readIdentity?: DatabasePathIdentity;
+  };
   assertCurrent: () => void;
 };
 
@@ -77,7 +79,10 @@ export type SessionEntryCohortReader = {
   readonly storePaths: readonly string[];
   assertCurrent(): void;
   /** Return committed data without retaining writer admission for a consumer effect. */
-  readEntry(assertCallerCurrent: () => void): Promise<{
+  readEntry(
+    assertCallerCurrent: () => void,
+    projection?: SessionEntryReadScope["projection"],
+  ): Promise<{
     entry: InternalSessionEntry;
     source: SessionEntryCohortResult["source"];
   }>;

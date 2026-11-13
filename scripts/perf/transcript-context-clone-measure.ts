@@ -1,10 +1,9 @@
 // Owner-boundary allocation proof; run on the approved benchmark host with scripts/tsx.mjs.
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
-import { existsSync, readFileSync, writeSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { Session, type HeapProfiler } from "node:inspector/promises";
-import { registerHooks } from "node:module";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -12,7 +11,8 @@ import { parseArgs } from "node:util";
 import type { SessionActorHotState } from "../../src/config/sessions/session-actor-contract.js";
 import type { PreparedSessionTranscriptHydration } from "../../src/config/sessions/session-history-read.types.js";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -20,6 +20,12 @@ const { values } = parseArgs({
     "owner-file": { type: "string" },
     "start-file": { type: "string" },
     operations: { type: "string", default: "10000" },
+    "event-count": { type: "string", default: "64" },
+    "text-bytes": { type: "string", default: "16384" },
+    readers: { type: "string", default: "1" },
+    warmup: { type: "string", default: "32" },
+    "max-bytes": { type: "string", default: "2097152" },
+    "input-mode": { type: "string", default: "reused" },
     "interval-ms": { type: "string", default: "1" },
     mode: { type: "string", default: "exact" },
     output: { type: "string" },
@@ -36,14 +42,13 @@ assert.equal(
 );
 function markGc(phase: string, profilePath?: string) {
   if (tracing) {
-    writeSync(
-      1,
-      `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-    );
+    writeGatewayGcTraceMarker(phase, profilePath);
   }
 }
 const mode = values.mode;
 assert(mode === "exact" || mode === "window" || mode === "complete", "Invalid --mode");
+const inputMode = values["input-mode"];
+assert(inputMode === "reused" || inputMode === "fresh", "Invalid --input-mode");
 const operations = parseStrictIntegerOption({
   raw: values.operations,
   label: "--operations",
@@ -63,22 +68,10 @@ const ownerUrl = new URL(
 const sourceUrl = values["owner-file"]
   ? pathToFileURL(path.resolve(values["owner-file"]))
   : ownerUrl;
-let ownerLoaded = false;
-if (values["owner-file"]) {
-  registerHooks({
-    load(url, context, nextLoad) {
-      if (url === ownerUrl.href) {
-        ownerLoaded = true;
-        const loaded = nextLoad(sourceUrl.href, context);
-        return { format: loaded.format, source: loaded.source, shortCircuit: true };
-      }
-      return nextLoad(url, context);
-    },
-  });
-}
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl.href, values["owner-file"]);
 const { seedSessionActorTranscriptContext: seed, readSessionActorTranscriptContext: read } =
   await import("../../src/config/sessions/session-actor-transcript-replica.js");
-assert(!values["owner-file"] || ownerLoaded, "Requested owner replacement was not loaded");
+assert(!values["owner-file"] || wasOwnerReplaced(), "Requested owner replacement was not loaded");
 if (tracing) {
   assert(global.gc, "Trace identification requires --expose-gc");
   markGc("identify-start");
@@ -86,9 +79,39 @@ if (tracing) {
   markGc("identify-stop");
 }
 type Bounded = Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>;
-const eventCount = 64;
-const textBytes = 16 * 1024;
-const limits = { maxBytes: 2 * 1024 ** 2, maxEvents: eventCount };
+const eventCount = parseStrictIntegerOption({
+  raw: values["event-count"],
+  label: "--event-count",
+  min: 1,
+  fallback: 64,
+});
+const textBytes = parseStrictIntegerOption({
+  raw: values["text-bytes"],
+  label: "--text-bytes",
+  min: 1,
+  fallback: 16384,
+});
+const readers = parseStrictIntegerOption({
+  raw: values.readers,
+  label: "--readers",
+  min: 1,
+  fallback: 1,
+});
+const warmup = parseStrictIntegerOption({
+  raw: values.warmup,
+  label: "--warmup",
+  min: 0,
+  fallback: 32,
+});
+const limits = {
+  maxBytes: parseStrictIntegerOption({
+    raw: values["max-bytes"],
+    label: "--max-bytes",
+    min: 1,
+    fallback: 2097152,
+  }),
+  maxEvents: eventCount,
+};
 const version = { generation: "synthetic-generation", rawSeq: eventCount, updatedAt: 1 };
 const hot: SessionActorHotState = {
   target: {
@@ -195,7 +218,19 @@ function mutateMessage(snapshot: Bounded["snapshot"]) {
   assert(Array.isArray(content));
   const block: unknown = content[0];
   assert(block && typeof block === "object");
-  Reflect.set(block, "text", "caller mutation");
+  Object.assign(block, { text: "caller mutation" });
+}
+// Baseline readers detach writable views; immutable readers must reject the same writes.
+let mutationAttempts = 0;
+let rejectedMutations = 0;
+function attemptMutation(mutate: () => void): void {
+  mutationAttempts++;
+  try {
+    mutate();
+  } catch (error) {
+    assert(error instanceof TypeError, "Mutation failed for a reason other than immutability");
+    rejectedMutations++;
+  }
 }
 // Check ownership before capture, including mutable maps, arrays, and nested message payloads.
 const proof = fixture();
@@ -203,21 +238,30 @@ const proofRetained = seed(undefined, hot, proof, limits);
 requireMode(proofRetained);
 assert.deepEqual(requireRead(proofRetained).snapshot, proof.snapshot);
 const golden = json(requireRead(proofRetained));
-mutateMessage(proof.snapshot);
-proof.snapshot.events.length = 0;
-proof.snapshot.parents.clear();
+attemptMutation(() => mutateMessage(proof.snapshot));
+attemptMutation(() => {
+  proof.snapshot.events.length = 0;
+});
+attemptMutation(() => proof.snapshot.parents.clear());
 assert.equal(json(requireRead(proofRetained)), golden, "Seeding leaked the caller's containers");
 const detached = requireRead(proofRetained);
-mutateMessage(detached.snapshot);
-detached.snapshot.parents.clear();
-detached.snapshot.events.splice(0, 1);
+attemptMutation(() => mutateMessage(detached.snapshot));
+attemptMutation(() => detached.snapshot.parents.clear());
+attemptMutation(() => {
+  detached.snapshot.events.splice(0, 1);
+});
 assert.equal(json(requireRead(proofRetained)), golden, "Reading leaked the retained context");
 const prepared = fixture();
 let latest = requireRead(seed(undefined, hot, prepared, limits));
 const operation = () => {
-  latest = requireRead(seed(undefined, hot, prepared, limits));
+  // Fresh mode includes transport materialization and producer freezing on every seed.
+  const input = inputMode === "fresh" ? structuredClone(prepared) : prepared;
+  const retained = seed(undefined, hot, input, limits);
+  for (let reader = 0; reader < readers; reader++) {
+    latest = requireRead(retained);
+  }
 };
-for (let index = 0; index < 32; index++) {
+for (let index = 0; index < warmup; index++) {
   operation();
 }
 console.log("PHASE warmed");
@@ -244,7 +288,14 @@ function functionAllocation(root: HeapProfiler.SamplingHeapProfileNode, function
   const sampledBytes = visit(root);
   return {
     matchedFrameNodes,
-    ...(matchedFrameNodes ? { sampledBytes, bytesPerCall: sampledBytes / operations } : {}),
+    ...(matchedFrameNodes
+      ? {
+          sampledBytes,
+          bytesPerCall:
+            sampledBytes /
+            (operations * (functionName === "readSessionActorTranscriptContext" ? readers : 1)),
+        }
+      : {}),
   };
 }
 const inspector = values.allocations ? new Session() : undefined;
@@ -293,22 +344,26 @@ try {
     : undefined;
   const result = {
     scope:
-      "Synthetic owner seed/read pairs; no Gateway, turn latency, or live allocation-share claim",
+      "Synthetic actor seed with synchronous readers; excludes Gateway, hydration contention, and SDK views",
     sourceSha256: hash("sha256", readFileSync(sourceUrl), "hex"),
-    ownerReplacement: ownerLoaded,
+    ownerReplacement: wasOwnerReplaced(),
     mode,
+    inputMode,
     operations,
     seedCalls: operations,
-    readCalls: operations,
-    warmupOperations: 32,
+    readCalls: operations * readers,
+    warmupOperations: warmup,
     fixture: {
       eventCount,
       textBytes,
+      readers,
+      maxBytes: limits.maxBytes,
       serializedBytes: prepared.snapshot.serializedBytes,
-      reusedPreparedSnapshot: true,
+      reusedPreparedSnapshot: inputMode === "reused",
     },
     intervalMs,
     goldenSha256: hash("sha256", golden, "hex"),
+    ownershipProof: { mutationAttempts, rejectedMutations },
     timingGateEligible: !values.allocations && !tracing,
     latency: {
       count: operations,
@@ -334,7 +389,7 @@ try {
       : {
           allocation: {
             ...allocation,
-            bytesPerSeedReadPair: allocation.sampledBytes / operations,
+            bytesPerSeedReadGroup: allocation.sampledBytes / operations,
             samplingInterval: 32768,
             includesCollectedObjects: true,
           },

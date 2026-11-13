@@ -24,6 +24,7 @@ import {
 import {
   assertReceiptOwner,
   captureCheckpoint,
+  type RepositoryDiskPublicationSource,
   prepareReceiptOwner,
   resolveReceiptOwner,
 } from "./github-repository-publication-workspace.js";
@@ -34,12 +35,12 @@ import type {
 } from "./worker-environments/placement-store.js";
 import { SessionWorkspaceReservationBusyError } from "./worker-environments/placement-workspace-reservation.kernel.js";
 
-export async function settleDeniedRepositoryGitHubPublication(params: {
+export async function observeRepositoryGitHubPublication(params: {
   execution: RepositoryGitHubPublicationExecutionAsync;
   assertCustody: () => void;
-  error: GitHubPublicationRequesterUnavailableError;
-}): Promise<SessionGitHubPublicationResult> {
-  const { execution, assertCustody, error } = params;
+  beforeRetry?: boolean;
+}): Promise<SessionGitHubPublicationResult | undefined> {
+  const { execution, assertCustody } = params;
   assertCustody();
   if (!execution.ownsExecution()) {
     throw new GitHubPublicationRecoveryPendingError(
@@ -106,6 +107,7 @@ export async function settleDeniedRepositoryGitHubPublication(params: {
         parentCommit: row.previous_head_commit ?? row.source_head_commit,
         marker: `<!-- openclaw-publication:${row.request_id} -->`,
         knownPullRequestUrls,
+        beforeRetry: params.beforeRetry,
         refreshIdentity,
         assertCurrent,
         // Older writers could overwrite a prior PR phase with a ref observation.
@@ -126,25 +128,34 @@ export async function settleDeniedRepositoryGitHubPublication(params: {
       );
     }
     if (url) {
-      return projectGitHubPublicationResult(
-        await execution.complete({
-          requestId: row.request_id,
-          status: "published",
-          url,
-          repository: row.repository,
-          branch: row.branch,
-          headCommit: row.head_commit,
-        }),
-      );
+      return {
+        requestId: row.request_id,
+        status: "published",
+        url,
+        repository: row.repository,
+        branch: row.branch,
+        headCommit: row.head_commit,
+      };
     }
   }
+  return undefined;
+}
+
+export async function settleDeniedRepositoryGitHubPublication(params: {
+  execution: RepositoryGitHubPublicationExecutionAsync;
+  assertCustody: () => void;
+  error: GitHubPublicationRequesterUnavailableError;
+}): Promise<SessionGitHubPublicationResult> {
+  const observed = await observeRepositoryGitHubPublication(params);
   return projectGitHubPublicationResult(
-    await execution.complete({
-      requestId: row.request_id,
-      status: "failed",
-      ...error.failure,
-      message: error.message,
-    }),
+    await params.execution.complete(
+      observed ?? {
+        requestId: params.execution.row.request_id,
+        status: "failed",
+        ...params.error.failure,
+        message: params.error.message,
+      },
+    ),
   );
 }
 
@@ -152,6 +163,7 @@ export function createRepositoryGitHubPublicationRecovery(params: {
   placements: WorkerSessionPlacementStore;
   recovery?: GitHubPublicationRecoveryBackoff;
   getCommittedRuntimeConfig: () => OpenClawConfig;
+  disk?: RepositoryDiskPublicationSource;
   isExecuting: (requestId: string) => boolean;
   assertCurrent: () => void;
   execute: (
@@ -173,12 +185,13 @@ export function createRepositoryGitHubPublicationRecovery(params: {
         ownerProfileId: null,
         pending: true,
       });
-      for (const row of pending.filter(
+      const selected = pending.filter(
         (candidate) =>
           !candidate.checkpoint_ref &&
           (candidate.claim_id === null ||
             matchesRepositoryGitHubPublicationClaim(candidate, claim)),
-      )) {
+      );
+      for (const row of selected) {
         try {
           await placements.prepareWorkspaceResultClaim(claim);
           const requester = await restoreGitHubPublicationRequester(
@@ -223,6 +236,10 @@ export function createRepositoryGitHubPublicationRecovery(params: {
                 );
               },
               authority,
+              params.disk && {
+                ...params.disk,
+                captureRequestIds: selected.map((entry) => entry.request_id),
+              },
             );
           } finally {
             requester.release();

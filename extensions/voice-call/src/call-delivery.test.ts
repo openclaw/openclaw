@@ -88,11 +88,12 @@ describe("requester call delivery", () => {
     speaker: "bot" | "user",
     text: string,
     id = text,
+    timestamp = Date.now(),
   ) {
     await manager.processEvent({
       id,
       callId: call.callId,
-      timestamp: Date.now(),
+      timestamp,
       transcript: text,
       ...(speaker === "bot"
         ? { type: "call.assistant-speech" as const }
@@ -170,7 +171,7 @@ describe("requester call delivery", () => {
     },
   );
 
-  it("batches only final speech from both sides and flushes before the report", async () => {
+  it("batches final speech in timestamp order and flushes before the report", async () => {
     const { manager, call, delivery, messages } = await setupLive();
     await manager.processEvent({
       id: "partial",
@@ -180,23 +181,20 @@ describe("requester call delivery", () => {
       transcript: "partial",
       isFinal: false,
     });
-    await speech(manager, call, "user", "Hello");
-    await speech(manager, call, "bot", "Can you visit Friday?");
+    const startedAt = Date.now();
+    await speech(manager, call, "bot", "Can you visit Friday?", "reply", startedAt + 20);
+    await speech(manager, call, "user", "Hello", "caller", startedAt + 10);
     expect(messages).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1000);
     // The batch position is persisted before sending, so the send follows a store write.
     await vi.waitFor(() => expect(messages).toHaveLength(1));
-    const text = messages[0]?.text;
-    expect(text).toContain("Callee: Hello");
-    expect(text).toContain("Assistant: Can you visit Friday?");
-    expect(text).not.toContain("partial");
+    expect(messages[0]?.text.split("\n").slice(1).join("\n")).toBe(
+      "Callee: Hello\nAssistant: Can you visit Friday?",
+    );
     await speech(manager, call, "user", "Friday at 09:00");
     await finish(manager, call, delivery);
-    expect(messages.map((message) => message.idempotencyKey.includes(":live:"))).toEqual([
-      true,
-      true,
-      false,
-    ]);
+    const live = messages.map((message) => message.idempotencyKey.includes(":live:"));
+    expect(live).toEqual([true, true, false]);
     expect(messages[1]?.text).toContain("Friday at 09:00");
   });
 

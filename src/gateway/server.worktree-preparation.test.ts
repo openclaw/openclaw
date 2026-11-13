@@ -2,20 +2,43 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  nextEventLoopTurn,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
 import * as worktreeGit from "../agents/worktrees/git.js";
 import { requireGit } from "../agents/worktrees/git.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import bootstrapExtraFilesHook from "../hooks/bundled/bootstrap-extra-files/handler.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import * as backoff from "../infra/backoff.js";
-import { withProjectCheckoutLifecycle } from "../projects/project-checkout.js";
-import { registerProjectRegistry } from "../projects/project-registry.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  ProjectCheckoutBusyError,
+  withProjectCheckoutLifecycle,
+} from "../projects/project-checkout.js";
+import {
+  registerProjectRegistry,
+  selectStoredProjectRegistry,
+} from "../projects/project-registry.js";
+import * as writerQueue from "../shared/store-writer-queue.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createRequestGate } from "./server-methods.request-gate.test-support.js";
+import { commitPreparedSessionWorkspace } from "./session-lifecycle-preparation.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 
 async function initializeWorkspace(workspace: string) {
@@ -135,6 +158,7 @@ it.each([
           url: "https://github.com/example/project/pull/7",
           host: "github.com",
           number: 7,
+          origin: "external-pr" as const,
           base: {
             repository: "example/project",
             repositoryId: 1,
@@ -317,3 +341,175 @@ it("shares source waiting through preparation and final binding without charging
     }
   });
 });
+
+async function prepareBinding(state: OpenClawTestState, shared: boolean) {
+  await initializeWorkspace(state.workspaceDir);
+  const project = await registerProjectRegistry({ path: state.workspaceDir });
+  const cfg: OpenClawConfig = {
+    agents: { defaults: { workspace: state.workspaceDir } },
+    worktreeAcceleration: false,
+  };
+  setRuntimeConfigSnapshot(cfg);
+  const target = {
+    agentId: "main",
+    sessionKey: "agent:main:final-bind",
+    storePath: shared
+      ? path.join(state.sessionsDir(), "sessions.sqlite")
+      : resolveSessionStorePathCore(undefined, { agentId: "main" }),
+  };
+  const entry = { sessionId: "final-bind", updatedAt: 1 };
+  await replaceSessionEntry(target, entry);
+  const caller = new AbortController();
+  const source = new AbortController();
+  const selection = await selectStoredProjectRegistry(project.id, { signal: source.signal });
+  assert(selection);
+  const prepared = await prepareSessionWorktree({
+    cfg,
+    target: {
+      ...target,
+      key: target.sessionKey,
+      entry,
+      projectId: project.id,
+      sandboxRequired: true,
+    },
+    workspace: state.workspaceDir,
+    baseRef: "HEAD",
+    runSetupScript: false,
+    signal: caller.signal,
+    commitGuard: () => caller.signal.throwIfAborted(),
+    withSource: selection.withCurrent,
+    withRollback: selection.withRollback,
+  });
+  assert(prepared.ok && prepared.value.withCommit, "Expected source-owned workspace preparation");
+  const bind = () =>
+    commitPreparedSessionWorkspace({
+      prepared: prepared.value,
+      target,
+      signal: caller.signal,
+      assertCurrent: () => caller.signal.throwIfAborted(),
+      assertEntry: (current) => expect(current.sessionId).toBe(entry.sessionId),
+      missingSessionMessage: "Session disappeared before binding",
+    });
+  const databasePath = shared
+    ? target.storePath
+    : resolveOpenClawAgentSqlitePath({ agentId: target.agentId, env: state.env });
+  return { target, databasePath, prepared: prepared.value, caller, source, bind };
+}
+
+it.for([
+  { cancellation: "caller", shared: false },
+  { cancellation: "source", shared: true },
+] as const)(
+  "cancels final workspace binding on $cancellation loss before its writer releases",
+  async ({ cancellation, shared }, { signal }) => {
+    await withOpenClawTestState({ label: "worktree-bind-cancellation" }, async (state) => {
+      const fixture = await prepareBinding(state, shared);
+      const held = createRequestGate();
+      const writer = runOpenClawAgentWriteAdmission(
+        { agentId: fixture.target.agentId, path: fixture.databasePath },
+        held.pause,
+      );
+      const queued = createDeferred<{ result: Promise<unknown> }>();
+      const withCommit = fixture.prepared.withCommit!;
+      fixture.prepared.withCommit = (bind) =>
+        withCommit((...args) => {
+          const result = bind(...args);
+          queued.resolve({
+            result: result.then(
+              () => "unexpectedly bound",
+              (error: unknown) => error,
+            ),
+          });
+          return result;
+        });
+      let binding: Promise<unknown> | undefined;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(held.entered, writer, "Writer never entered"),
+          signal,
+        );
+        binding = fixture.bind().catch((error: unknown) => error);
+        const admission = await withinTest(
+          awaitGateBeforeSettlement(queued.promise, binding, "Bind never reached the writer"),
+          signal,
+        );
+        fixture[cancellation].abort(new Error("Workspace preparation cancelled"));
+        // Cancel the queued write first; ownership reconciliation still settles after release.
+        const error = await Promise.race([
+          admission.result,
+          nextEventLoopTurn().then(() => "cancelled write is still queued"),
+        ]);
+        expect(error).toBeInstanceOf(Error);
+        expect(String(error)).toContain("Workspace preparation cancelled");
+      } finally {
+        held.release();
+        await Promise.allSettled([writer, binding]);
+        expect(loadSessionEntry(fixture.target)?.worktree).toBeUndefined();
+      }
+    });
+  },
+);
+
+it.for([false, true])(
+  "settles a started workspace binding before releasing source custody (cancel=%s)",
+  async (cancel, { signal }) => {
+    await withOpenClawTestState({ label: "worktree-bind-settlement" }, async (state) => {
+      const fixture = await prepareBinding(state, false);
+      const effect = createRequestGate();
+      const enqueue = writerQueue.runQueuedStoreWrite;
+      let gated = false;
+      const observation = vi
+        .spyOn(writerQueue, "runQueuedStoreWrite")
+        .mockImplementation(<T>(params: Parameters<typeof enqueue<T>>[0]) => {
+          if (
+            gated ||
+            params.storePath !== fixture.databasePath ||
+            params.label !== "agent database write admission"
+          ) {
+            return enqueue(params);
+          }
+          gated = true;
+          return enqueue({
+            ...params,
+            fn: async () => {
+              const result = await params.fn();
+              await effect.pause();
+              return result;
+            },
+          });
+        });
+      let settled = false;
+      const binding = fixture
+        .bind()
+        .then(
+          (entry) => ({ entry }),
+          (error: unknown) => ({ error }),
+        )
+        .finally(() => {
+          settled = true;
+        });
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(effect.entered, binding, "Binding never committed"),
+          signal,
+        );
+        expect(loadSessionEntry(fixture.target)?.worktree?.id).toBe(fixture.prepared.worktree?.id);
+        if (cancel) {
+          fixture.caller.abort(new Error("Cancelled after binding committed"));
+        }
+        await expect(
+          withProjectCheckoutLifecycle(state.workspaceDir, { waitMs: 0 }, async () => {}),
+        ).rejects.toBeInstanceOf(ProjectCheckoutBusyError);
+        expect(settled).toBe(false);
+      } finally {
+        effect.release();
+        const outcome = await binding;
+        observation.mockRestore();
+        if (!cancel) {
+          expect(outcome).toHaveProperty("entry.worktree.id", fixture.prepared.worktree?.id);
+        }
+        expect(loadSessionEntry(fixture.target)?.worktree?.id).toBe(fixture.prepared.worktree?.id);
+      }
+    });
+  },
+);

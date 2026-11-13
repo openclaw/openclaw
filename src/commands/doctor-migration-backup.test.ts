@@ -112,7 +112,7 @@ describe("Doctor full migration backups", () => {
     expect(listBackups(fixture.shared)).toHaveLength(1);
     expect(listBackups(fixture.agent)).toHaveLength(1);
     expect(readPreservedValue(listBackups(fixture.agent)[0]!)).toBe("agent before migration");
-    const preview = inspectSessionSqliteRecovery({ cfg: {}, env: fixture.env });
+    const preview = await inspectSessionSqliteRecovery({ cfg: {}, env: fixture.env });
     expect(preview.artifacts).toHaveLength(2);
     for (const database of [fixture.shared, fixture.agent]) {
       expect(preview.artifacts).toContainEqual(protectedArchive(listBackups(database)[0]!));
@@ -243,7 +243,7 @@ describe("Doctor table-scoped migration backup selection", () => {
   beforeEach(() => {
     // Synthetic scopes isolate selection; full-backup cases retain the real resolver.
     vi.spyOn(schemaScope, "resolveSchemaMigrationBackupTables").mockReturnValue(declaredTables);
-    vi.spyOn(stateFastPath, "needsOpenClawStateDatabaseSchemaRepair").mockReturnValue(false);
+    vi.spyOn(stateFastPath, "needsOpenClawStateDatabaseSchemaRepair").mockResolvedValue(false);
     fixture = createFixture(seedDatabase, true);
   });
 
@@ -434,7 +434,7 @@ describe("Doctor table-scoped migration backup selection", () => {
       declaredTables,
     );
     expectFullBackup(fixture.shared);
-    const recovery = inspectSessionSqliteRecovery({ cfg: {}, env: fixture.env });
+    const recovery = await inspectSessionSqliteRecovery({ cfg: {}, env: fixture.env });
     expect(recovery.artifacts).toContainEqual(protectedArchive(archive));
 
     {

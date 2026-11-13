@@ -94,6 +94,8 @@ export async function downloadGeneratedMusicAsset(params: {
   index?: number;
   maxBytes?: number;
   validateBinaryResponse?: boolean;
+  /** Zero disables the binary reader's idle timeout without changing the total deadline. */
+  chunkTimeoutMs?: number;
   includeSourceUrl?: boolean;
   fetchResponse?: (params: {
     deadline: ProviderOperationDeadline;
@@ -134,6 +136,7 @@ export async function downloadGeneratedMusicAsset(params: {
     const maxBytes = params.maxBytes ?? maxBytesForKind("audio");
     const readOptions = {
       maxBytes,
+      chunkTimeoutMs: params.chunkTimeoutMs,
       timeoutMs,
       onTimeout: ({ timeoutMs: bodyTimeoutMs }: { timeoutMs: number }) =>
         new Error(

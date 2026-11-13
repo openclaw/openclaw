@@ -1,3 +1,4 @@
+import { readFile } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -9,15 +10,18 @@ import {
   requireGitCommandOutput,
 } from "../../infra/git-exec.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { pathEntryExists } from "../../infra/path-existence.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   CommandProcessCleanupError,
   readCommandProcessFailure,
 } from "../../process/exec-result.js";
-import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import { resolveGlobalMap, resolveGlobalSet } from "../../shared/global-singleton.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { startWorktreeWait } from "./allocation.js";
+import { fetchRemoteDefault } from "./base-fetch.js";
+import type { ResolvedWorktreeBase } from "./base-ref.types.js";
 import { estimateWorktreeGitBytes } from "./capacity.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
@@ -26,16 +30,6 @@ import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 import type { CreateManagedWorktreeParams, WorktreeWaitBudget } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
-
-type ResolvedWorktreeBase = {
-  commit: string;
-  gitOperand: string;
-  recordRef: string;
-  noOrigin?: true;
-  fetchSucceeded?: boolean;
-  warning?: string;
-  preparationKey?: string;
-};
 
 type RemoteDefaultAttempt = {
   pending: Promise<ResolvedWorktreeBase & { branch?: string }>;
@@ -55,6 +49,16 @@ const remoteDefaults = resolveGlobalMap<string, RemoteDefaultPreparation>(
   Symbol.for("openclaw.worktreeRemoteDefaults"),
 );
 const BASE_FRESHNESS_MS = 30_000;
+const baseObservers = resolveGlobalSet<(repoRoot: string, commit: string) => void>(
+  Symbol.for("openclaw.worktreeBaseObservers"),
+  "shared-state",
+);
+
+/** Background work may retire an obsolete base; accepted foreground requests keep theirs. */
+export function observeWorktreeBase(observer: (repoRoot: string, commit: string) => void) {
+  baseObservers.add(observer);
+  return { [Symbol.dispose]: () => baseObservers.delete(observer) };
+}
 
 export class InvalidWorktreeBaseRefError extends Error {
   constructor(options?: ErrorOptions) {
@@ -254,7 +258,7 @@ export async function withWorktreeBasePreparation<T>(
           ownsAttempt = true;
           const started: RemoteDefaultAttempt = {
             pending: timeWorktreePreparationPhase("baseRefresh", () =>
-              prepareDefaultBase(repository.repoRoot, options),
+              prepareDefaultBase(repository, options),
             ).then(async (base) => {
               // Immutable commits share hydration across refreshes while the Git worker lives.
               const preparationKey = base.commit;
@@ -269,6 +273,9 @@ export async function withWorktreeBasePreparation<T>(
               options.beforeRun();
               if (base.fetchSucceeded) {
                 started.refreshedAt = Date.now();
+              }
+              for (const observer of baseObservers) {
+                observer(repository.repoRoot, base.commit);
               }
               return base;
             }),
@@ -359,117 +366,59 @@ export async function withWorktreeBasePreparation<T>(
   }
 }
 
+async function hasOriginDestination(
+  { repoRoot, commonDir }: { repoRoot: string; commonDir: string },
+  options: NonNullable<Parameters<typeof runGit>[2]>,
+): Promise<boolean> {
+  // Options such as inherited origin.prune enumerate a remote without giving it a destination.
+  // Presence preserves explicit empty URLs and helper configuration for Git's existing errors.
+  const configured = await runGit(
+    repoRoot,
+    ["config", "--name-only", "--get-regexp", "^remote\\.origin\\.(url|pushurl|vcs)$"],
+    options,
+  );
+  if (configured.cleanup === "uncertain") {
+    throw new CommandProcessCleanupError();
+  }
+  if (configured.termination !== "exit" || configured.code !== 1) {
+    requireGitCommandOutput("git config origin destination", configured);
+    return true;
+  }
+  const destination = await runGit(repoRoot, ["ls-remote", "--get-url", "origin"], options);
+  if (destination.cleanup === "uncertain") {
+    throw new CommandProcessCleanupError();
+  }
+  const resolved = requireGitCommandOutput("git ls-remote --get-url origin", destination);
+  // This command performs no network access. Git still owns legacy records and URL rewrites.
+  if (resolved !== "origin\n" && resolved !== "origin\r\n") {
+    return true;
+  }
+  // Git also accepts a relative path named origin. Keep existing or malformed legacy
+  // destinations on the remote path even when Git resolves their operand to origin.
+  for (const target of [
+    path.join(repoRoot, "origin"),
+    path.join(commonDir, "remotes", "origin"),
+    path.join(commonDir, "branches", "origin"),
+  ]) {
+    if (await pathEntryExists(target)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function prepareDefaultBase(
-  repoRoot: string,
+  repository: { repoRoot: string; commonDir: string },
   options: NonNullable<Parameters<typeof runGit>[2]>,
 ): Promise<ResolvedWorktreeBase & { branch?: string }> {
+  const { repoRoot } = repository;
   const remotes = await requireGit(repoRoot, ["remote"], options);
-  if (remotes.split("\n").includes("origin")) {
+  if (remotes.split("\n").includes("origin") && (await hasOriginDestination(repository, options))) {
     return await fetchRemoteDefault(repoRoot, options);
   }
   const primary = (await listGitWorktrees(repoRoot, options))[0]?.path ?? repoRoot;
   const commit = await requireGit(primary, ["rev-parse", "--verify", "HEAD^{commit}"], options);
   return { commit, gitOperand: commit, recordRef: "HEAD", noOrigin: true };
-}
-
-async function fetchRemoteDefault(
-  repoRoot: string,
-  options: NonNullable<Parameters<typeof runGit>[2]>,
-): Promise<ResolvedWorktreeBase & { branch: string }> {
-  const cached = await runGit(
-    repoRoot,
-    ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
-    options,
-  );
-  if (cached.cleanup === "uncertain") {
-    throw new CommandProcessCleanupError();
-  }
-  const advertised = await runGit(repoRoot, ["ls-remote", "--symref", "origin", "HEAD"], {
-    ...options,
-    timeoutMs: 30_000,
-  });
-  if (advertised.cleanup === "uncertain") {
-    throw new CommandProcessCleanupError();
-  }
-  if (options.signal?.aborted) {
-    requireGitCommandOutput("git ls-remote origin HEAD", advertised);
-    options.signal.throwIfAborted();
-  }
-  const advertisedOk = advertised.termination === "exit" && advertised.code === 0;
-  const advertisedBranch = advertisedOk
-    ? /^ref: refs\/heads\/(.+)\tHEAD\r?$/mu.exec(advertised.stdout)?.[1]
-    : undefined;
-  const cachedBranch =
-    cached.termination === "exit" && cached.code === 0
-      ? /^refs\/remotes\/origin\/(.+)$/u.exec(cached.stdout.trim())?.[1]
-      : undefined;
-  let branch = advertisedBranch ?? cachedBranch;
-  const warnings: string[] = [];
-  if (!advertisedOk) {
-    warnings.push(commandError("git ls-remote origin HEAD", advertised).message);
-  } else if (!advertisedBranch) {
-    warnings.push("origin did not advertise a default branch; using its cached default.");
-  }
-  if (!branch || branch === "HEAD") {
-    throw new Error(
-      `Remote default branch is unavailable. Repair origin or choose an explicit worktree base ref. ${redactSensitiveText(warnings.join("\n"))}`,
-    );
-  }
-  let remoteRef = `refs/remotes/origin/${branch}`;
-  const fetched = await runGit(
-    repoRoot,
-    [
-      "fetch",
-      "--no-auto-maintenance",
-      "--no-recurse-submodules",
-      "--no-tags",
-      "origin",
-      `+refs/heads/${branch}:${remoteRef}`,
-    ],
-    { ...options, timeoutMs: 60_000 },
-  );
-  if (fetched.cleanup === "uncertain") {
-    throw new CommandProcessCleanupError();
-  }
-  if (options.signal?.aborted) {
-    requireGitCommandOutput("git fetch origin default branch", fetched);
-    options.signal.throwIfAborted();
-  }
-  const fetchSucceeded = fetched.termination === "exit" && fetched.code === 0;
-  if (!fetchSucceeded) {
-    warnings.push(commandError("git fetch origin default branch", fetched).message);
-    branch = cachedBranch ?? branch;
-    remoteRef = `refs/remotes/origin/${branch}`;
-  }
-  const verified = await runGit(
-    repoRoot,
-    ["rev-parse", "--verify", `${remoteRef}^{commit}`],
-    options,
-  );
-  if (verified.cleanup === "uncertain") {
-    throw new CommandProcessCleanupError();
-  }
-  if (options.signal?.aborted) {
-    requireGitCommandOutput("git rev-parse remote default", verified);
-    options.signal.throwIfAborted();
-  }
-  if (verified.termination !== "exit" || verified.code !== 0) {
-    throw new Error(
-      `Remote default ${remoteRef} is unavailable. Repair origin or choose an explicit worktree base ref. ${redactSensitiveText(warnings.join("\n"))}`,
-    );
-  }
-  const commit = requireGitCommandOutput("git rev-parse remote default", verified).trim();
-  if (fetchSucceeded && advertisedBranch && cachedBranch !== branch) {
-    await requireGit(repoRoot, ["symbolic-ref", "refs/remotes/origin/HEAD", remoteRef], options);
-  }
-  return {
-    branch,
-    commit,
-    gitOperand: remoteRef,
-    recordRef: `origin/${branch}`,
-    fetchSucceeded,
-    ...(warnings.length ? { warning: redactSensitiveText(warnings.join("\n")) } : {}),
-  };
 }
 
 class LocalDefaultBusyError extends Error {}
@@ -492,8 +441,17 @@ async function assertWorktreeGitOperationsIdle(
     if (primary.some((name) => ["rebase-merge", "rebase-apply", "BISECT_LOG"].includes(name))) {
       throw busy();
     }
-    const read = async (directory: string, name: string) =>
-      await fs.readFile(path.join(directory, name), "utf8").catch(ignoreMissingPath);
+    // Expected-missing reservations otherwise pay fs/promises' rejection and async stack capture.
+    const read = (directory: string, name: string) =>
+      new Promise<string | undefined>((resolve, reject) => {
+        readFile(path.join(directory, name), "utf8", (error, contents) => {
+          if (error && error.code !== "ENOENT") {
+            reject(error);
+          } else {
+            resolve(error ? undefined : contents);
+          }
+        });
+      });
     // Rebase exec can reattach HEAD; reservations cannot be inferred from detached status.
     // Read only reservation files, with bounded I/O and no per-worktree directory listing.
     const checked = await runTasksWithConcurrency({
@@ -658,11 +616,13 @@ export async function logWorktreeBase(
       },
     ),
   );
-  const ageDays = Math.max(0, (context.now / 1000 - committedAt) / 86_400);
-  const stale = ageDays > 7;
+  // Epoch-zero roots (including empty workspaces) do not carry a meaningful creation date.
+  const ageDays =
+    committedAt === 0 ? undefined : Math.max(0, (context.now / 1000 - committedAt) / 86_400);
+  const stale = ageDays !== undefined && ageDays > 7;
   const label = base.noOrigin ? "local HEAD (no origin remote)" : base.recordRef;
   const staleHint = `; base is older than 7 days. Check ${base.noOrigin ? "local HEAD" : "origin"} before starting work.`;
-  const message = `worktree base ${label} at ${commit} (commit age ${ageDays.toFixed(1)} days; fetch ${base.fetchSucceeded === undefined ? "not requested" : base.fetchSucceeded ? "succeeded" : "failed"})${base.warning ? `: ${base.warning}` : ""}${stale ? staleHint : ""}`;
+  const message = `worktree base ${label} at ${commit} (commit age ${ageDays === undefined ? "unspecified" : `${ageDays.toFixed(1)} days`}; fetch ${base.fetchSucceeded === undefined ? "not requested" : base.fetchSucceeded ? "succeeded" : "failed"})${base.warning ? `: ${base.warning}` : ""}${stale ? staleHint : ""}`;
   const metadata = {
     worktreePath: context.worktreePath,
     ownerId: context.ownerId,

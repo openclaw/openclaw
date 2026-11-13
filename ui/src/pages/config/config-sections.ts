@@ -101,9 +101,20 @@ function omitLeafPath(schema: JsonSchema, segments: readonly string[]): JsonSche
 }
 
 // Prefix is the mounted section path, or empty for a whole-config schema.
-export function omitCuratedOwnedConfigLeaves(schema: JsonSchema, prefix = ""): JsonSchema {
+export function omitCuratedOwnedConfigLeaves(
+  schema: JsonSchema,
+  prefix = "",
+  openclawIdEnabled = false,
+): JsonSchema {
   let next = schema;
-  for (const path of CURATED_SETTINGS_OWNED_LEAF_PATHS) {
+  const paths = openclawIdEnabled
+    ? CURATED_SETTINGS_OWNED_LEAF_PATHS
+    : [
+        ...CURATED_SETTINGS_OWNED_LEAF_PATHS,
+        "gateway.openclawId",
+        "plugins.entries.openclaw-id-access",
+      ];
+  for (const path of paths) {
     const relative = prefix
       ? path.startsWith(`${prefix}.`)
         ? path.slice(prefix.length + 1)
@@ -114,4 +125,12 @@ export function omitCuratedOwnedConfigLeaves(schema: JsonSchema, prefix = ""): J
     }
   }
   return next;
+}
+
+/**
+ * Removes curated-page leaves from the raw editor schema. The config page has
+ * already removed the OpenClaw ID keys while its Labs switch is off.
+ */
+export function omitEditorOwnedConfigLeaves(schema: JsonSchema): JsonSchema {
+  return omitCuratedOwnedConfigLeaves(schema, "", true);
 }

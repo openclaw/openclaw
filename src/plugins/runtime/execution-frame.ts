@@ -18,7 +18,6 @@ export const PluginRuntimeExecutionFrame: {
     gatewayScope: PluginRuntimeGatewayRequestScope | undefined,
     generationRegistry: PluginRegistry | undefined,
     invocation?: PluginExecutionScopes["invocation"],
-    inputRecoveryContext?: PluginExecutionScopes["inputRecoveryContext"],
   ): PluginRuntimeExecutionFrame;
   readonly prototype: PluginRuntimeExecutionFrame;
 } = resolveGlobalSingleton(
@@ -30,13 +29,16 @@ export const PluginRuntimeExecutionFrame: {
         readonly gatewayScope: PluginRuntimeGatewayRequestScope | undefined,
         readonly generationRegistry: PluginRegistry | undefined,
         invocation = scopes.invocation,
-        inputRecoveryContext = scopes.inputRecoveryContext,
       ) {
-        super(scopes, invocation, inputRecoveryContext);
+        super(scopes, invocation);
       }
 
       override get runtimePluginId(): string | undefined {
         return this.gatewayScope?.pluginId;
+      }
+
+      override get canUseInteractiveStateReadCapacity(): boolean {
+        return this.gatewayScope?.canUseInteractiveStateReadCapacity?.() === true;
       }
 
       override withScopes(scopes: PluginExecutionScopes): RuntimeFrame {

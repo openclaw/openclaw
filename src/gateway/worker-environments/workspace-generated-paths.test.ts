@@ -42,8 +42,18 @@ async function makeWorkspace(files: Record<string, string>) {
   return { ...fixture, manifestPath, readLocal, capture };
 }
 const cacheRoots = [
-  ".openclaw/tmp",
+  ".npm/_cacache",
+  ".npm/_logs",
+  ".cache/pip",
+  ".cache/uv",
+  ".pnpm-store",
+  ".bun/install/cache",
+  ".cargo/registry",
+  ".cargo/git",
+  ".gradle/caches",
   ".local/share/pnpm/store",
+  "artifacts/task-environment/local/share/pnpm/store",
+  ...["tmp", ".pnpm-store", "tools"].map((name) => `.openclaw/${name}`),
   ".cache/openclaw/bun",
   ".cache/ms-playwright",
   ".cache/bun-transpiler",
@@ -69,6 +79,9 @@ const userFiles = {
   ".openclaw/project.json": "project data\n",
   ".cache/openclaw/notes.md": "user notes\n",
   ".cache/user-data.json": "user data\n",
+  ".npm/npmrc": "user configuration\n",
+  ".cargo/config.toml": "user configuration\n",
+  ".gradle/gradle.properties": "user configuration\n",
   ...Object.fromEntries(
     cacheRoots.flatMap((root) => [
       [`${root}-notes`, "user notes\n"],
@@ -111,6 +124,30 @@ it("excludes only generated runtime roots from capture and transfer", async () =
       expect(await fs.readFile(path.join(target, name), "utf8")).toBe(content);
     }
   }
+});
+
+it("excludes nested Git metadata from local and remote capture without hiding similarly named source files", async () => {
+  const retained = {
+    "source.txt": "source edit\n",
+    ".gitignore": "user ignore rules\n",
+    "cache/.git-notes": "user notes\n",
+    "cache/.gitmodules": "user submodule definitions\n",
+    [`${stagedRoot}/.gitignore`]: STAGED_INPUT_GITIGNORE,
+  };
+  const { workspace, capture } = await makeWorkspace({
+    ...retained,
+    ".git": "checkout metadata\n",
+    "cache/sdists/.git": "gitdir: elsewhere\n",
+    "fixtures/repository/.git/config": "nested repository metadata\n",
+    [`${stagedRoot}/repository/.git`]: "admitted metadata\n",
+  });
+  const { local, files } = await capture();
+  for (const entries of [local.manifest.entries, files]) {
+    expect(entries.map((entry) => entry.path).toSorted()).toEqual(Object.keys(retained).toSorted());
+  }
+  await expect(
+    fs.readFile(path.join(workspace, "fixtures/repository/.git/config"), "utf8"),
+  ).resolves.toBe("nested repository metadata\n");
 });
 
 it("omits cache-only ancestry from remote capture while retaining empty directories", async () => {
@@ -195,7 +232,7 @@ it("compares workspace inventories without allocating path-segment arrays", () =
   } finally {
     split.mockRestore();
   }
-  expect([...prepared.changed]).toEqual(["src/components/file.ts"]);
+  expect(prepared.preflight.changedPaths).toEqual(["src/components/file.ts"]);
   expect(prepared.preflight.currentNodes.map(([entryPath]) => entryPath)).toEqual([
     "src/components/file.ts",
     "src",
@@ -207,6 +244,7 @@ it("compares workspace inventories without allocating path-segment arrays", () =
 it("matches derived names and suffixes only at exact segment boundaries", () => {
   const attachment = "openclaw-inbound-12345678-1234-4234-8234-123456789abc";
   for (const segment of [
+    ".git",
     "__pycache__",
     ".pytest_cache",
     ".mypy_cache",
@@ -326,4 +364,36 @@ it("retains plain-workspace inputs when staging has created Git metadata", async
   const manifest = await fixture.readManifest(captured.stdout.trim());
   expect(manifest.baseCommit).toBeNull();
   expect(manifest.entries.map((entry) => entry.path)).toContain(input);
+});
+
+it("retains ignored result artifacts without enrolling other ignored project files", async () => {
+  const fixture = await makeWorkspace({ "source.txt": "base\n", "dist/tracked.txt": "base\n" });
+  const base = await initializeScriptGitWorkspace(fixture.workspace, ".");
+  await writeWorkspaceFiles(fixture.workspace, {
+    ".gitignore": "dist/\n.cache/\n.artifacts/\nnotes/\n",
+  });
+  const initial = await fixture.runManifest([base, "eligible"]);
+  expect(initial.code, initial.stderr).toBe(0);
+  await writeWorkspaceFiles(fixture.workspace, {
+    "source.txt": "edit\n",
+    "dist/tracked.txt": "tracked edit\n",
+    "dist/worker/sqlite-store.worker.mjs": "generated\n",
+    ".cache/openclaw-bun/runtime": "cached runtime\n",
+    "new.txt": "new source\n",
+    ".artifacts/proof/screenshot.png": "saved screenshot\n",
+    "notes/report.txt": "saved report\n",
+    ".cache/user-data.json": "saved data\n",
+  });
+  const result = await fixture.runManifest([base, "all", initial.stdout.trim().slice(7)]);
+  expect(result.code, result.stderr).toBe(0);
+  const manifest = await fixture.readManifest(result.stdout.trim());
+  expect(
+    manifest.entries.filter((entry) => entry.type === "file").map((entry) => entry.path),
+  ).toEqual([
+    ".artifacts/proof/screenshot.png",
+    ".gitignore",
+    "dist/tracked.txt",
+    "new.txt",
+    "source.txt",
+  ]);
 });

@@ -5,7 +5,7 @@ import { runSqliteIntegrityOperationSync } from "../infra/sqlite-integrity.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import {
   hasUpdateDoctorMigrationCapture,
-  runUpdateSqliteMigration,
+  runUpdateSqliteMigrationAsync,
 } from "../infra/update-doctor-migration-attribution.js";
 import { createUpdateDoctorDatabaseWriteCapture } from "../infra/update-doctor-result.js";
 import { agentEngineInput, openAgentEngineStore } from "../state/openclaw-agent-db-engine.js";
@@ -15,21 +15,43 @@ import {
   ensureOpenClawAgentSchema,
 } from "../state/openclaw-agent-db-schema.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
+import { repairDoctorStateSchemaAsync } from "../state/openclaw-state-db-repair.js";
 import {
-  openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchema,
+  openOpenClawStateDatabaseForDoctor,
+  prepareOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { completeDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 
+/** Backups precede both callers; agent lease acquisition must not do shared repair. */
+async function prepareSharedStateForAgentMaintenance(
+  params: Parameters<typeof prepareDoctorDatabaseMigrations>[0],
+  changes: string[],
+) {
+  if (isStatePostgres()) {
+    return;
+  }
+  const prepared = await prepareOpenClawStateDatabaseSchema(
+    { env: params.env, integrityCheck: params.check ?? "quick" },
+    "doctor-preparation",
+  );
+  if (prepared.warnings.length > 0) {
+    throw new Error(prepared.warnings.join("\n"), { cause: prepared.failure });
+  }
+  changes.push(...prepared.changes);
+  await openOpenClawStateDatabaseForDoctor({ env: params.env });
+}
+
 async function prepareUpdateAgentAdditiveSchemas(
   params: Parameters<typeof prepareDoctorDatabaseMigrations>[0],
+  changes: string[],
 ) {
   const targets = params.agentDatabaseTargets;
   if (!hasUpdateDoctorMigrationCapture() || agentEngineInput() || !targets?.length) {
     return;
   }
+  await prepareSharedStateForAgentMaintenance(params, changes);
   await withAgentDatabaseMaintenanceLease(
     { env: params.env, processBound: true },
     async (lease) => {
@@ -37,9 +59,10 @@ async function prepareUpdateAgentAdditiveSchemas(
         lease.assertOwned();
         const database = openNodeSqliteDatabase(target.path);
         try {
-          runUpdateSqliteMigration(database, target.path, () =>
-            ensureOpenClawAgentSchema(database, target.agentId, target.path),
-          );
+          await runUpdateSqliteMigrationAsync(database, target.path, () => {
+            lease.assertOwned();
+            return ensureOpenClawAgentSchema(database, target.agentId, target.path);
+          });
         } finally {
           database.close();
         }
@@ -55,7 +78,7 @@ export async function prepareDoctorDatabaseMigrations(
   const result = await backupDoctorMigrationDatabases({ ...params, versionMigrationsOnly: true });
   const migrations = result.versionMigrations;
   if (!migrations?.length) {
-    await prepareUpdateAgentAdditiveSchemas(params);
+    await prepareUpdateAgentAdditiveSchemas(params, result.changes);
     return result;
   }
   const capture = result.postgresGenerations
@@ -78,29 +101,35 @@ export async function prepareDoctorDatabaseMigrations(
   // Finish state-only scoped migrations before that broader maintenance begins.
   for (const migration of migrations.filter((entry) => entry.kind === "state")) {
     if (isStatePostgres()) {
-      runMigration(() =>
-        withEngineStoreAdmission(() =>
-          openOpenClawStateDatabase({ path: migration.path, env: params.env }),
-        ),
+      await runMigration(() =>
+        openOpenClawStateDatabaseForDoctor({
+          path: migration.path,
+          env: params.env,
+          clientCredentialMigrationFromVersion: migration.foundVersion,
+        }),
       );
       result.changes.push(
         `Upgraded PostgreSQL state schema: v${migration.foundVersion} -> v${migration.supportedVersion}.`,
       );
       continue;
     }
-    const migrated = repairOpenClawStateDatabaseSchema({
-      path: migration.path,
-      env: params.env,
-      versionMigrationOnly: true,
-      integrityCheck: params.check ?? "quick",
-    });
+    const migrated = await repairDoctorStateSchemaAsync(
+      {
+        path: migration.path,
+        env: params.env,
+        integrityCheck: params.check ?? "quick",
+      },
+      "version",
+    );
     if (migrated.warnings.length > 0) {
-      throw new Error(migrated.warnings.join("\n"));
+      throw new Error(migrated.warnings.join("\n"), { cause: migrated.failure });
     }
     result.changes.push(...migrated.changes);
   }
   const agentMigrations = migrations.filter((entry) => entry.kind === "agent");
   if (agentMigrations.length > 0) {
+    // Version publication can leave earlier additive repairs pending.
+    await prepareSharedStateForAgentMaintenance(params, result.changes);
     await withAgentDatabaseMaintenanceLease(
       {
         env: params.env,
@@ -127,8 +156,9 @@ export async function prepareDoctorDatabaseMigrations(
               );
             } else {
               // Version-only preparation has no asynchronous integrity steps.
-              runUpdateSqliteMigration(database, target.path, () =>
-                runSqliteIntegrityOperationSync(
+              await runUpdateSqliteMigrationAsync(database, target.path, () => {
+                lease.assertOwned();
+                return runSqliteIntegrityOperationSync(
                   ensureOpenClawAgentDatabaseSchemaSteps(database, {
                     agentId: target.agentId,
                     path: target.path,
@@ -137,8 +167,8 @@ export async function prepareDoctorDatabaseMigrations(
                     integrityCheck: params.check ?? "quick",
                     onMigrationWarning: (warning) => result.warnings.push(warning),
                   }),
-                ),
-              );
+                );
+              });
             }
           } finally {
             database.close();
@@ -161,6 +191,6 @@ export async function prepareDoctorDatabaseMigrations(
   }
   // Scoped version backups settle before ordinary schema repair changes siblings.
   // Finish these writes before session readers enter; admission needs no exclusion.
-  await prepareUpdateAgentAdditiveSchemas(params);
+  await prepareUpdateAgentAdditiveSchemas(params, result.changes);
   return result;
 }

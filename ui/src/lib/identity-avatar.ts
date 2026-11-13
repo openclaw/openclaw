@@ -3,9 +3,9 @@ import {
   canonicalizeControlUiUserAvatarPath,
   parseControlUiResourcePath,
 } from "../../../src/gateway/control-ui-resource-routes.js";
+import { fnv1aUtf16 } from "../../../src/shared/fnv1a.js";
 import { configuredUiDevGateway, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { formatSenderLabel, type SenderIdentity } from "./chat/sender-label.ts";
-import { fnv1aUtf16 } from "./fnv1a.ts";
 import { takeGraphemes } from "./graphemes.ts";
 import { readAvatarGatewayContext } from "./identity-avatar-context.ts";
 

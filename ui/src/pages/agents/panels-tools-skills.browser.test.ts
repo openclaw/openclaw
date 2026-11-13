@@ -1,9 +1,6 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import type { ToolsCatalogResult, ToolsEffectiveResult } from "../../api/types.ts";
-import {
-  availableIdentity,
-  createIdentityFixture,
-} from "../../features/github-connections/github-identity-harness.test-support.ts";
+import { availableIdentity } from "../../features/github-connections/github-identity-harness.test-support.ts";
 import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
@@ -13,7 +10,11 @@ import { mountSolid as mountConnected } from "../../test-helpers/mount-solid.ts"
 import { cleanupSolid } from "../../test-helpers/solid-cleanup.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createBaseParams, createReadToolCatalog } from "./panels-tools-skills.test-support.ts";
+import {
+  createBaseParams,
+  createReadToolCatalog,
+  openToolGroups,
+} from "./panels-tools-skills.test-support.ts";
 import { AgentTools } from "./panels-tools-skills.tsx";
 
 installBrowserHistoryIsolation();
@@ -23,7 +24,9 @@ function mountTools(
   overrides: Parameters<typeof createBaseParams>[0] = {},
   container?: HTMLElement,
 ) {
-  return mountSolid(AgentTools, createBaseParams(overrides), container);
+  const view = mountSolid(AgentTools, createBaseParams(overrides), container);
+  openToolGroups(view.container);
+  return view;
 }
 
 const text = (element: Element | null | undefined) => element?.textContent?.trim();
@@ -105,18 +108,6 @@ function pluginCatalog(optional: boolean): ToolsCatalogResult {
   };
 }
 
-function agentIdentity(client: Parameters<typeof createIdentityFixture>[0]) {
-  const { identity, sync } = createIdentityFixture(
-    client,
-    {
-      runExternalMutation: async () => ({ ok: false, reason: "unavailable", error: "not used" }),
-    },
-    { scope: "agent" },
-  );
-  sync();
-  return identity;
-}
-
 async function settleGitHubIdentity(container: HTMLElement) {
   if (!container.isConnected) {
     mountConnected(() => container);
@@ -140,7 +131,50 @@ const toolPreview: ToolsEffectiveResult = {
   notices: [{ id: "mcp-not-yet-listed", severity: "info", message: "Discovery is incomplete." }],
 };
 
+const toolFact = (root: Element | null | undefined, label: string) =>
+  Array.from(root?.querySelectorAll(".agent-tool-details .settings-kv dt") ?? [])
+    .find((term) => term.textContent?.trim() === label)
+    ?.nextElementSibling?.textContent?.trim();
+
 describe("agents tools panel (browser)", () => {
+  it.each([false, true])(
+    "does not invent configured facts while config is absent (loading: %s)",
+    (configLoading) => {
+      const { container } = mountTools({ configForm: null, configLoading, effective: toolPreview });
+      expect(container.querySelector(".agent-tools-buttons")).toBeNull();
+      expect(container.querySelector(".agent-tools-group")).toBeNull();
+      expect(
+        [...container.querySelectorAll(".settings-kv dt")].map((term) => text(term)),
+      ).not.toContain("Tool profile");
+      expect(container.querySelector(".agent-tools-runtime-chip")?.textContent).toContain("read");
+    },
+  );
+
+  it("does not present retained config as readable after access is lost", () => {
+    const { container } = mountTools({
+      canReadConfig: false,
+      configForm: {},
+      effective: toolPreview,
+    });
+    expect(container.querySelector(".agent-tools-buttons")).toBeNull();
+    expect(container.querySelector(".agent-tools-group")).toBeNull();
+    expect(container.querySelector(".settings-kv")).toBeNull();
+    expect(container.querySelector(".agent-tools-runtime-chip")?.textContent).toContain("read");
+  });
+
+  it("retains accepted default configuration facts without read-only editor controls", () => {
+    const { container } = mountTools({ configForm: {}, canUpdateConfig: false });
+    const facts = container.querySelector(".settings-kv");
+    expect(facts?.textContent).toContain("full");
+    expect(facts?.textContent).toContain("Default");
+    expect(container.querySelector(".agent-tools-group")).not.toBeNull();
+    expect(container.querySelector(".agent-tools-buttons")).toBeNull();
+    expect(container.querySelector("input.settings-toggle__input")).toBeNull();
+    expect(
+      [...container.querySelectorAll("button")].some((control) => text(control) === "Enable all"),
+    ).toBe(false);
+  });
+
   it("updates preset and catalog labels when the mounted panel changes language", async () => {
     const restoreI18n = captureI18nStateForTesting();
     try {
@@ -172,7 +206,7 @@ describe("agents tools panel (browser)", () => {
     {
       name: "another agent",
       overrides: { runtimeSessionMatchesSelectedAgent: false, effective: toolPreview },
-      status: "Other Agent",
+      status: "Other agent",
     },
   ])("does not treat a $name preview as zero tools or denied access", ({ overrides, status }) => {
     const container = document.createElement("div");
@@ -194,6 +228,7 @@ describe("agents tools panel (browser)", () => {
       };
     }
     mountSolid(AgentTools, params, container);
+    openToolGroups(container);
 
     expect(container.querySelectorAll(".settings-kv dd")[3]?.textContent?.trim()).toBe(status);
     expect(container.querySelector(".agent-tools-runtime-chip")).toBeNull();
@@ -201,15 +236,14 @@ describe("agents tools panel (browser)", () => {
     const row = container.querySelector("#agent-tool-exec");
     expect(row?.textContent).not.toContain("Old profile exclusion");
     expect(row?.querySelector(".agent-tool-policy")).toBeNull();
-    expect(row?.querySelectorAll(".agent-tool-summary__fact dd")[1]?.textContent?.trim()).toBe(
-      status,
-    );
+    expect(toolFact(row, "Tool preview")).toBe(status);
   });
 
   it("distinguishes missing preview entries from disabled tools and an empty result", () => {
     const container = document.createElement("div");
     const params = createBaseParams({ effective: toolPreview });
     const view = mountSolid(AgentTools, params, container);
+    openToolGroups(container);
 
     expect(content(container, ".agent-tools-notices .callout.info")).toBe(
       "Discovery is incomplete.",
@@ -217,29 +251,23 @@ describe("agents tools panel (browser)", () => {
 
     const included = container.querySelector("#agent-tool-read");
     const absent = container.querySelector("#agent-tool-exec");
-    expect(included?.querySelectorAll(".agent-tool-summary__fact dd")[1]?.textContent?.trim()).toBe(
-      "Included in preview",
-    );
-    expect(included?.textContent).toContain("Listed in preview via Built-In.");
-    expect(absent?.querySelectorAll(".agent-tool-summary__fact dd")[1]?.textContent?.trim()).toBe(
-      "Not listed",
-    );
+    expect(toolFact(included, "Tool preview")).toBe("Listed in preview via Built-in.");
+    expect(included?.textContent).toContain("Listed in preview via Built-in.");
+    expect(toolFact(absent, "Tool preview")).toBe("Not listed");
     expect(absent?.querySelector<HTMLInputElement>("input.settings-toggle__input")?.checked).toBe(
       true,
     );
-    expect(container.querySelector(".agent-tools-group__counts")?.textContent).toContain(
-      "1 Listed Tool",
+    expect(container.querySelector(".agent-tools-group__counts")?.textContent).toMatch(
+      /^\d+\/\d+$/,
     );
 
-    view.update({
-      ...params,
-      effective: {
-        ...toolPreview,
-        groups: [{ id: "core", label: "Built-in tools", source: "core", tools: [] }],
-      },
-    });
+    const emptyPreview: ToolsEffectiveResult = {
+      ...toolPreview,
+      groups: [{ id: "core", label: "Built-in tools", source: "core", tools: [] }],
+    };
+    view.update({ ...params, effective: emptyPreview, effectivePreview: emptyPreview });
     expect(container.querySelectorAll(".settings-kv dd")[3]?.textContent?.trim()).toBe("0");
-    expect(container.textContent).toContain("No tools are listed in this preview.");
+    expect(container.textContent).toContain("No tools in this preview.");
     expect(container.querySelector(".agent-tools-runtime-chip")).toBeNull();
   });
 
@@ -285,8 +313,8 @@ describe("agents tools panel (browser)", () => {
     expect(container.textContent).toContain(
       "Based on saved session settings and discovered tools.",
     );
-    expect(container.textContent).toContain("additional tools may become available");
-    expect(container.textContent).toContain("unsaved edits are not included");
+    expect(container.textContent).toContain("more tools may become available");
+    expect(container.textContent).toContain("unsaved edits aren’t included");
     expect(texts(container, ".agent-tools-runtime-chip .mono")).toEqual([
       "Message Actions",
       "Probe Tool",
@@ -298,12 +326,10 @@ describe("agents tools panel (browser)", () => {
     expect(texts(container, ".agent-tools-group__title > .settings-row__value")).toEqual([
       "Plugin: voice-call",
     ]);
-    expect(
-      texts(container, "#agent-tool-tts .agent-tool-summary__badges .settings-row__value"),
-    ).toEqual(["Built-In"]);
-    expect(
-      texts(container, "#agent-tool-voice_call .agent-tool-summary__badges .settings-row__value"),
-    ).toEqual(["Plugin: voice-call", "Optional"]);
+    expect(toolFact(container.querySelector("#agent-tool-tts"), "Source")).toBe("Built-in");
+    expect(toolFact(container.querySelector("#agent-tool-voice_call"), "Source")).toBe(
+      "Plugin: voice-call · Optional",
+    );
   });
 
   it.each([false, true])(
@@ -344,77 +370,34 @@ describe("agents tools panel (browser)", () => {
       assert(section, "Missing GitHub identity section");
       expect(section.textContent).toContain(inherited ? "@system-user" : "@octocat");
       expect(content(section, ".settings-status")).toBe("Verified");
-      const authorRow = Array.from(section.querySelectorAll(".settings-row")).find((row) =>
-        row.querySelector(".settings-row__title")?.textContent?.includes("Git Author"),
+      const details = section.querySelector<HTMLButtonElement>(
+        'button[aria-label="Account details"]',
       );
-      expect(authorRow?.querySelector(".settings-row__value")?.textContent?.trim()).toBe(
-        inherited ? "System Author · system@example.com" : "Not set",
-      );
+      assert(details, "Missing account details button");
+      details.click();
+      await waitForSolid(() => {
+        const authorRow = Array.from(section.querySelectorAll(".settings-row")).find((row) =>
+          row.querySelector(".settings-row__title")?.textContent?.includes("Git author in use"),
+        );
+        expect(authorRow?.querySelector(".settings-row__value")?.textContent?.trim()).toBe(
+          inherited ? "System Author · system@example.com" : "Not set",
+        );
+      });
       if (inherited) {
-        expect(section.textContent).toContain("Managed GitHub authorization");
+        expect(section.textContent).toContain("GitHub sign-in");
         expect(section.textContent).toContain("repo, workflow");
-        expect(section.textContent).toContain("System GitHub");
+        expect(section.textContent).toContain("Uses the shared agent account");
       }
+      // Accounts are set in Profile; this panel only reads the agent's account.
       expect(section.querySelector(".settings-secret input")).toBeNull();
-      expect(section.textContent).toContain("Manage connections in Profile");
+      expect(section.textContent).not.toContain("Continue with GitHub");
+      expect(section.textContent).not.toContain("Use a PAT instead");
+      expect(section.textContent).toContain("Manage accounts in Profile");
       expect(section.textContent).not.toMatch(
         /system-detected|github-api|OS account running the Gateway|Advanced: agent GitHub override/,
       );
     },
   );
-
-  it("renders only the pinned device link and one-time code while authorization is active", async () => {
-    const container = document.createElement("div");
-    const client = {
-      request: vi.fn(async () => ({
-        requestId: "github-device-11111111111111111111111111111111",
-        userCode: "ABCD-1234",
-        verificationUri: "https://github.com/login/device",
-        expiresInMs: 900_000,
-        pollAfterMs: 60_000,
-      })),
-    } as never;
-    const githubIdentity = agentIdentity(client);
-    await githubIdentity.startAuthorization();
-
-    mountSolid(AgentTools, createBaseParams({ githubIdentity }), container);
-    await settleGitHubIdentity(container);
-
-    expect(container.textContent).toContain("ABCD-1234");
-    const link = container.querySelector<HTMLAnchorElement>(
-      'a[href="https://github.com/login/device"]',
-    );
-    expect(link?.textContent?.trim()).toBe("Open github.com/login/device");
-    expect(link?.target).toBe("_blank");
-    expect(link?.rel.split(/\s+/)).toEqual(expect.arrayContaining(["noopener", "noreferrer"]));
-    expect(container.querySelector(".settings-secret input")).toBeNull();
-    expect(container.textContent).not.toContain("github-device-11111111111111111111111111111111");
-    githubIdentity.dispose();
-  });
-
-  it("keeps PAT fields hidden until the explicit fallback is selected", async () => {
-    const container = document.createElement("div");
-    const client = { request: vi.fn() } as never;
-    const githubIdentity = agentIdentity(client);
-
-    const view = mountSolid(AgentTools, createBaseParams({ githubIdentity }), container);
-    await settleGitHubIdentity(container);
-    expect(container.querySelector(".settings-secret input")).toBeNull();
-    expect(container.textContent).toContain("Use a PAT instead");
-
-    githubIdentity.showPatFallback();
-    await settleGitHubIdentity(container);
-    expect(container.querySelector(".settings-secret input")).not.toBeNull();
-    expect(container.textContent).not.toContain("Continue with GitHub");
-
-    view.update(
-      createBaseParams({
-        githubIdentity: githubIdentityViewFixture({ ...githubIdentity.read(), busy: true }),
-      }),
-    );
-    await settleGitHubIdentity(container);
-    expect(button(container, "Cancel").disabled).toBe(true);
-  });
 
   it("edits fallback tool access without selecting Full and can return to Inherit", async () => {
     const onOverridesChange = vi.fn();
@@ -427,7 +410,7 @@ describe("agents tools panel (browser)", () => {
     await Promise.resolve();
 
     expect(container.textContent).toContain(
-      "Full selects tools; it does not grant Full Access execution permissions.",
+      "“Full” includes all tools, but doesn’t grant command permissions.",
     );
     const toggle = toolSwitch(container, "openclaw");
     expect(toggle.checked).toBe(false);
@@ -446,10 +429,7 @@ describe("agents tools panel (browser)", () => {
     const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
     tool!.open = true;
 
-    const source = Array.from(container.querySelectorAll(".agent-tool-detail")).find(
-      (detail) => content(detail, ".label") === "Source",
-    );
-    expect(text(source?.lastElementChild)).toBe("Plugin: voice-call");
+    expect(toolFact(tool, "Source")).toBe("Plugin: voice-call");
   });
 
   it.each([
@@ -458,27 +438,26 @@ describe("agents tools panel (browser)", () => {
   ] as const)("opens a live tool chip with $behavior scrolling", async ({ reduced, behavior }) => {
     const container = document.createElement("div");
     document.body.append(container);
-    mountTools({ catalog: createReadToolCatalog(), effective: toolPreview }, container);
+    mountSolid(
+      AgentTools,
+      createBaseParams({ catalog: createReadToolCatalog(), effective: toolPreview }),
+      container,
+    );
     await Promise.resolve();
 
     const group = container.querySelector<HTMLDetailsElement>(".agent-tools-group");
-    const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
+    expect(container.querySelector(".agent-tool-card")).toBeNull();
     const chip = container.querySelector<HTMLAnchorElement>(
       '.agent-tools-runtime-chip[href="#agent-tool-read"]',
     );
 
     expect(chip?.getAttribute("href")).toBe("#agent-tool-read");
-    assert(group && tool && chip, "Missing agent tool runtime chip");
+    assert(group && chip, "Missing agent tool runtime chip");
 
     expect(group.open).toBe(false);
-    expect(tool.open).toBe(false);
-
-    const summary = tool.querySelector<HTMLElement>("summary");
-    assert(summary, "Missing agent tool summary");
-    expect(toolSwitch(container, "read").closest(".agent-tool-summary")).toBe(summary);
-    const scrollIntoView = vi.fn();
-    tool.scrollIntoView = scrollIntoView;
-    const focus = vi.spyOn(summary, "focus");
+    const scrollIntoView = vi
+      .spyOn(HTMLElement.prototype, "scrollIntoView")
+      .mockImplementation(() => {});
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: reduced }));
     const previousUrl = window.location.href;
     const replaceState = vi.spyOn(window.history, "replaceState").mockImplementation(() => {});
@@ -488,20 +467,29 @@ describe("agents tools panel (browser)", () => {
         requestAnimationFrame(resolve);
       });
 
+      const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card")!;
+      const summary = tool.querySelector<HTMLElement>("summary")!;
       expect(group.open).toBe(true);
       expect(tool.open).toBe(true);
+      expect(toolSwitch(container, "read").closest(".agent-tool-summary")).toBe(summary);
+      expect(document.activeElement).toBe(summary);
       const requestedUrl = replaceState.mock.calls[0]?.[2];
       expect(requestedUrl).toBeInstanceOf(URL);
       expect((requestedUrl as URL).hash).toBe("#agent-tool-read");
       expect(window.location.href).toBe(previousUrl);
       expect(scrollIntoView).toHaveBeenCalledWith({ block: "center", behavior });
-      expect(focus).toHaveBeenCalledOnce();
+      expect(scrollIntoView.mock.contexts[0]).toBe(tool);
       group.open = false;
       group.dispatchEvent(new Event("toggle"));
       expect(tool.open).toBe(false);
+      await waitForSolid(() => expect(container.querySelector(".agent-tool-card")).toBeNull());
+      group.querySelector<HTMLElement>(":scope > summary")!.click();
+      await waitForSolid(() =>
+        expect(container.querySelector<HTMLDetailsElement>(".agent-tool-card")?.open).toBe(false),
+      );
     } finally {
       vi.unstubAllGlobals();
-      focus.mockRestore();
+      scrollIntoView.mockRestore();
       replaceState.mockRestore();
       container.remove();
     }
@@ -567,7 +555,7 @@ describe("agents tools panel (browser)", () => {
       toggle.checked = testCase.enabled;
       toggle.dispatchEvent(new Event("change", { bubbles: true }));
     } else {
-      button(container, testCase.enabled ? "Enable All" : "Disable All").click();
+      button(container, testCase.enabled ? "Enable all" : "Disable all").click();
     }
 
     expect(onOverridesChange).toHaveBeenCalledExactlyOnceWith(
@@ -616,7 +604,7 @@ describe("agents tools panel (browser)", () => {
       { allow: ["group:fs"], deny: ["write"] },
       { read: true, write: false, apply_patch: true },
     ],
-  ] as const)("renders policy-controlled switches: %s", async (_name, tools, expected) => {
+  ] as const)("renders configured tool policy: %s", async (_name, tools, expected) => {
     const { container } = mountTools({
       configForm: {
         agents: { entries: { main: { tools } } },
@@ -627,11 +615,45 @@ describe("agents tools panel (browser)", () => {
 
     expect(
       Object.fromEntries(
-        Array.from(container.querySelectorAll(".agent-tool-card"), (card) => [
-          content(card, ".agent-tool-title"),
-          card.querySelector<HTMLInputElement>("input.settings-toggle__input")?.checked,
-        ]),
+        Array.from(container.querySelectorAll(".agent-tool-card"), (card) => {
+          const toggle = card.querySelector<HTMLInputElement>("input.settings-toggle__input");
+          expect(Boolean(toggle)).toBe(!("allow" in tools));
+          expect(toolFact(card, "Agent setting")).toBeDefined();
+          return [
+            content(card, ".agent-tool-title"),
+            toggle ? toggle.checked : toolFact(card, "Agent setting")?.startsWith("Enabled by "),
+          ];
+        }),
       ),
     ).toEqual(expected);
+  });
+
+  it("keeps tools in name order when a toggle or the preview changes", async () => {
+    const params = createBaseParams({ catalog: policyCatalog(["zeta", "alpha", "mid"]) });
+    const view = mountSolid(AgentTools, params);
+    openToolGroups(view.container);
+    const names = () => texts(view.container, ".agent-tool-title");
+    const alphaSwitch = () =>
+      view.container.querySelector<HTMLInputElement>(
+        "#agent-tool-alpha input.settings-toggle__input",
+      );
+    expect(names()).toEqual(["alpha", "mid", "zeta"]);
+    expect(alphaSwitch()?.checked).toBe(true);
+
+    const preview: ToolsEffectiveResult = {
+      ...toolPreview,
+      groups: [{ ...toolPreview.groups[0]!, tools: [previewTool("zeta")] }],
+    };
+    view.update({
+      ...params,
+      configForm: {
+        agents: { entries: { main: { tools: { profile: "full", deny: ["alpha"] } } } },
+      },
+      effective: preview,
+      effectivePreview: preview,
+    });
+
+    await waitForSolid(() => expect(alphaSwitch()?.checked).toBe(false));
+    expect(names()).toEqual(["alpha", "mid", "zeta"]);
   });
 });
