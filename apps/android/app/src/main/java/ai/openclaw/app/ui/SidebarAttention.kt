@@ -40,6 +40,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -147,10 +148,12 @@ internal fun SidebarAttentionIndicator(
   val hovered by interactions.collectIsHoveredAsState()
   val focused by interactions.collectIsFocusedAsState()
   val popupOffset = with(LocalDensity.current) { 32.dp.roundToPx() }
+
   // Background requests and summary updates do not replace the request being read.
   val identity = attention.disclosureIdentity
   var opened by remember(identity) { mutableStateOf(false) }
   var dismissed by remember(identity, hovered, focused) { mutableStateOf(false) }
+  val showingDetails = !dismissed && (opened || hovered || focused)
   Box {
     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
       IconButton(
@@ -160,20 +163,26 @@ internal fun SidebarAttentionIndicator(
         },
         interactionSource = interactions,
         modifier =
-          Modifier.size(28.dp).semantics { contentDescription = attention.label }.testTag("sidebar-attention-${attention.first.kind.name.lowercase()}").onPreviewKeyEvent {
-            if (it.key == Key.Escape) {
-              opened = false
-              dismissed = true
-              true
-            } else {
-              false
-            }
-          },
+          Modifier
+            .size(28.dp)
+            .semantics {
+              contentDescription = attention.label
+              stateDescription = if (showingDetails) nativeString("Expanded") else nativeString("Collapsed")
+            }.testTag("sidebar-attention-${attention.first.kind.name.lowercase()}")
+            .onPreviewKeyEvent {
+              if (it.key == Key.Escape) {
+                opened = false
+                dismissed = true
+                true
+              } else {
+                false
+              }
+            },
       ) {
         Icon(if (attention.first.kind == SidebarAttentionKind.Question) Icons.AutoMirrored.Outlined.HelpOutline else Icons.Outlined.Shield, contentDescription = null, tint = ClawTheme.colors.primary, modifier = Modifier.size(17.dp))
       }
     }
-    if (!dismissed && (opened || hovered || focused)) {
+    if (showingDetails) {
       AppPopup(alignment = Alignment.TopEnd, offset = IntOffset(0, popupOffset), onDismissRequest = {
         opened = false
         dismissed = true

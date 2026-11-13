@@ -130,6 +130,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -2336,7 +2337,13 @@ private fun PermissionSetupScreen(
           PermissionRow(row = row, requestPermission = permissionState.requestPermission, enabled = !permissionState.requesting)
         }
         item {
-          TextButton(onClick = { showAdditional = !showAdditional }, modifier = Modifier.fillMaxWidth()) {
+          TextButton(
+            onClick = { showAdditional = !showAdditional },
+            modifier =
+              Modifier.fillMaxWidth().semantics {
+                stateDescription = if (showAdditional) nativeString("Expanded") else nativeString("Collapsed")
+              },
+          ) {
             Text(if (showAdditional) nativeString("Hide additional features") else nativeString("Additional features"))
           }
         }

@@ -83,6 +83,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
@@ -109,6 +111,7 @@ internal fun SessionsScreen(
   val keyboardController = LocalSoftwareKeyboardController.current
   var filter by rememberSaveable { mutableStateOf(SessionFilter.Recent) }
   var compactLayout by rememberSaveable { mutableStateOf(false) }
+  val layoutDescription = if (compactLayout) nativeString("Layout: Compact") else nativeString("Layout: Detailed")
   var recentFirst by rememberSaveable { mutableStateOf(true) }
   var sessionStatusNowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
   var collapsedSessionKeys by
@@ -316,7 +319,7 @@ internal fun SessionsScreen(
           }
           Surface(
             onClick = { compactLayout = !compactLayout },
-            modifier = Modifier.size(ClawTheme.spacing.touchTarget),
+            modifier = Modifier.size(ClawTheme.spacing.touchTarget).semantics { stateDescription = layoutDescription },
             shape = RoundedCornerShape(7.dp),
             color = Color.Transparent,
             contentColor = ClawTheme.colors.text,
@@ -330,7 +333,7 @@ internal fun SessionsScreen(
       }
 
       item {
-        Text(text = if (compactLayout) nativeString("Layout: Compact") else nativeString("Layout: Detailed"), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
+        Text(text = layoutDescription, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
       }
 
       if (visibleSessions.isEmpty()) {
