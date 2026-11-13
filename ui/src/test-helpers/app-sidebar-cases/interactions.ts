@@ -81,7 +81,7 @@ describe("AppSidebar multi-select", () => {
     rowLink(sidebar, "agent:main:a").dispatchEvent(optionClick);
     await select("b", { altKey: true });
     expect(optionClick.defaultPrevented).toBe(true);
-    expect(selectedRowKeys(sidebar)).toEqual(["agent:main:a", "agent:main:b"]);
+    expect(selectedRowKeys(sidebar)).toEqual(["agent:main:b", "agent:main:a"]);
 
     await select("b", { altKey: true });
     expect(selectedRowKeys(sidebar)).toEqual(["agent:main:a"]);
@@ -97,7 +97,7 @@ describe("AppSidebar multi-select", () => {
     click(rowLink(sidebar, "agent:main:a"), { altKey: true });
     await select("c", { shiftKey: true });
 
-    expect(selectedRowKeys(sidebar)).toEqual(["agent:main:a", "agent:main:b", "agent:main:c"]);
+    expect(selectedRowKeys(sidebar)).toEqual(["agent:main:c", "agent:main:b", "agent:main:a"]);
   });
 
   it("disables batch archive when method metadata is missing", async () => {

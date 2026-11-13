@@ -10,7 +10,12 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { prepareWorktreePromptFiles } from "./checkout-inputs.js";
-import { materializeManagedWorktree, prepareClonedWorktreeIndex } from "./checkout-materialize.js";
+import {
+  cloneManagedWorktreeTemplate,
+  estimateTemplateCloneBytes,
+  materializeManagedWorktree,
+  prepareClonedWorktreeIndex,
+} from "./checkout-materialize.js";
 import { resolveWorktreeCheckoutKey } from "./checkout-policy-key.js";
 import { takeWarmWorktree } from "./checkout-pool.js";
 import type { WorktreeSourceProfile } from "./checkout-profiles.js";
@@ -94,33 +99,6 @@ function checkoutGitOptions(options: CheckoutOptions, cloneBytes?: number): GitC
   };
 }
 
-async function estimateTemplateCloneBytes(
-  template: NonNullable<Awaited<ReturnType<typeof prepareTemplate>>>,
-): Promise<number | undefined> {
-  const index = await fs.open(template.sourceIndex, "r");
-  try {
-    const header = Buffer.alloc(12);
-    const { bytesRead } = await index.read(header, 0, header.length, 0);
-    const { size } = await index.stat();
-    const version = header.readUInt32BE(4);
-    const entries = header.readUInt32BE(8);
-    // Git already validated the template. Unsupported or incomplete index headers
-    // cannot justify reduced admission; retain the full checkout allowance.
-    if (
-      bytesRead !== 12 ||
-      header.toString("ascii", 0, 4) !== "DIRC" ||
-      version < 2 ||
-      version > 4 ||
-      entries > Math.floor((size - 12) / 62)
-    ) {
-      return undefined;
-    }
-    return template.backend.estimateCloneBytes(entries, size);
-  } finally {
-    await index.close();
-  }
-}
-
 async function prepareTemplate(options: CheckoutOptions) {
   const backend = await detectWorktreeFilesystemBackend(path.dirname(options.destination), options);
   if (!backend) {
@@ -168,6 +146,29 @@ async function prepareTemplate(options: CheckoutOptions) {
           }
         }
       }
+      const registerTemplate = async (
+        destination: string,
+        base: string,
+        templateOptions: WorktreeFilesystemOptions,
+      ) => {
+        await git.require(
+          options.repoRoot,
+          ["worktree", "add", "--detach", "--no-checkout", "--", destination, base],
+          checkoutGitOptions({ ...options, ...templateOptions }),
+        );
+        if (
+          (await resolveWorktreeCheckoutKey({
+            ...options,
+            ...templateOptions,
+            destination,
+            commit,
+            git,
+            gitOptions: gitOptions(templateOptions),
+          })) !== contentKey
+        ) {
+          throw new Error("Template and target checkout configurations differ");
+        }
+      };
       const record = await prepareWorktreeTemplate({
         env: options.env,
         now: options.now,
@@ -214,7 +215,7 @@ async function prepareTemplate(options: CheckoutOptions) {
             heads[0] === `# branch.oid ${existing.sourceCommit}`
           );
         },
-        refresh: async (existing, templateOptions) => {
+        refresh: async (existing, preparing, templateOptions) => {
           // Attribute changes can transform unchanged blobs; rebuild those trees.
           const attributes = await git.run(
             existing.path,
@@ -242,20 +243,17 @@ async function prepareTemplate(options: CheckoutOptions) {
           ) {
             return false;
           }
-          const materialized = await materializeManagedWorktree(
+          await registerTemplate(preparing.path, existing.sourceCommit, templateOptions);
+          await cloneManagedWorktreeTemplate(
             {
-              destination: existing.path,
-              commit,
-              preparedGit: git,
-              executionTimeoutMs: options.checkoutBudget?.timeoutMs,
+              source: existing,
+              target: preparing,
+              backend,
+              git,
+              checkoutBudget: options.checkoutBudget,
             },
+            templateOptions,
             checkoutGitOptions({ ...options, ...templateOptions }),
-          );
-          requireGitCommandOutput("git read-tree", materialized);
-          await git.require(
-            existing.path,
-            ["update-ref", "--no-deref", "HEAD", commit, existing.sourceCommit],
-            gitOptions(templateOptions),
           );
           return true;
         },
@@ -263,23 +261,7 @@ async function prepareTemplate(options: CheckoutOptions) {
           await options.requireSpace();
           setWorktreePreparationTemplate("cold", { reason: "template-create" });
           await backend.createTemplate(preparing.path, templateOptions);
-          await git.require(
-            options.repoRoot,
-            ["worktree", "add", "--detach", "--no-checkout", "--", preparing.path, commit],
-            checkoutGitOptions({ ...options, ...templateOptions }),
-          );
-          if (
-            (await resolveWorktreeCheckoutKey({
-              ...options,
-              ...templateOptions,
-              destination: preparing.path,
-              commit,
-              git,
-              gitOptions: gitOptions({ ...options, ...templateOptions }),
-            })) !== contentKey
-          ) {
-            throw new Error("Template and target checkout configurations differ");
-          }
+          await registerTemplate(preparing.path, commit, templateOptions);
           setWorktreePreparationTemplate("cold", { reason: "template-checkout" });
           const materialized = await materializeManagedWorktree(
             {

@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { MessageInjectionClosedError } from "../../../auto-reply/reply/message-injection-authority.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
@@ -28,6 +29,7 @@ import {
 } from "../../run-termination.js";
 import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
+import { readPreparedProviderRequest } from "../provider-prompt-state.js";
 import {
   getEmbeddedRunAttachment,
   isCurrentEmbeddedRunAttachment,
@@ -35,7 +37,6 @@ import {
 } from "../run-state.js";
 import {
   detachActiveEmbeddedRun,
-  type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
   attachActiveEmbeddedRun,
 } from "../runs.js";
@@ -54,7 +55,10 @@ import {
   withEmbeddedAttemptSteeringAdmission,
   type EmbeddedAttemptSteeringAdmission,
 } from "./attempt-steering-admission.js";
-import type { PrepareEmbeddedAttemptStreamInput } from "./attempt-stream-prepare.types.js";
+import type {
+  PrepareEmbeddedAttemptStreamInput,
+  AttemptStreamQueueHandle,
+} from "./attempt-stream-prepare.types.js";
 import { createSubscribedToolSearchExecutor } from "./attempt-tool-search-executor.js";
 import {
   createEmbeddedAttemptDeferredLifecycleOwner,
@@ -66,11 +70,6 @@ import {
   resolveReportedModelRef,
 } from "./helpers.js";
 import { resolveProviderRefusal } from "./provider-refusal.js";
-
-type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
-  kind: "embedded";
-  cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
-};
 
 export function prepareEmbeddedAttemptStream(input: PrepareEmbeddedAttemptStreamInput) {
   return withEmbeddedAttemptSteeringAdmission(
@@ -347,6 +346,8 @@ function prepareStream(
     codeModeExecToolNames: agentSession.codeModeExecToolNames,
     sourceReplyCapableToolNames: agentSession.sourceReplyCapableToolNames,
     sideEffectToolOwners: agentSession.sideEffectToolOwners,
+    toolUsageRecorder: attempt.toolUsageRecorder,
+    toolUsageIdsByName: agentSession.toolUsageIdsByName,
     trustedLocalMediaToolNames: agentSession.trustedLocalMediaToolNames,
     session: activeSession,
     onModelUsage: input.onModelUsage,
@@ -491,7 +492,7 @@ function prepareStream(
     toolAuthorityPreparation,
     assertCurrent: () => {
       if (!composeInjectionGuard(assertCurrent)()) {
-        throw new Error("active session is finalizing");
+        throw new MessageInjectionClosedError();
       }
     },
   });
@@ -506,7 +507,7 @@ function prepareStream(
   ) => {
     const canInjectMessage = composeInjectionGuard(assertCurrent);
     if (!canInjectMessage()) {
-      throw new Error("active session is finalizing");
+      throw new MessageInjectionClosedError();
     }
     activeQueueAdmissions++;
     try {
@@ -581,7 +582,7 @@ function prepareStream(
       claimPendingUserInputAnswer(text, options, preparation.assertCurrent, kind, preparation),
     cancelPendingUserInputAsync: (resolvedBy, preparation, kind) =>
       cancelPendingUserInput(resolvedBy, preparation.assertCurrent, kind, preparation),
-  } satisfies NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]>;
+  } satisfies NonNullable<AttemptStreamQueueHandle["messageInjectionV2"]>;
   const canApplyPermissionMode = () =>
     admission.accepting && !input.runAbortController.signal.aborted && isCurrentRegistration();
   const applyPermissionMode = input.applyPermissionMode;
@@ -625,18 +626,15 @@ function prepareStream(
       }
       return {
         model: attempt.model,
+        promptCacheKey: attempt.promptCacheKey,
         systemPrompt: activeSession.systemPrompt,
-        tools: activeSession.agent.state.tools.map(({ name, description, parameters, async }) => ({
-          name,
-          description,
-          parameters,
-          ...(async === false ? { async } : {}),
-        })),
+        tools: activeSession.agent.state.tools,
         messages: activeSession.messages,
         projectMessages: input.projectSessionForkMessages,
         sessionVersion: activeSession.sessionManager.getHeader()?.version,
         boundary: input.readSessionForkBoundary?.(),
         blockImages: activeSession.settingsManager.getBlockImages(),
+        preparedRequest: readPreparedProviderRequest(attempt.runId),
       };
     },
     isAborted: () => input.getRunState().aborted,

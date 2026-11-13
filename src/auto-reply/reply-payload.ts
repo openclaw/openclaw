@@ -521,7 +521,8 @@ export function copyReplyPayloadMetadata<T extends object>(source: object, paylo
 
 export function retainSilentFinalPayloads(payloads: readonly ReplyPayload[]): ReplyPayload[] {
   return payloads.flatMap((payload) => {
-    if (payload.isError) {
+    // Silence belongs to the last input; an earlier steered input keeps its answer.
+    if (payload.isError || getReplyPayloadMetadata(payload)?.precedingInputAnswer) {
       return [payload];
     }
     const nonTextPayload = { ...payload, text: undefined };

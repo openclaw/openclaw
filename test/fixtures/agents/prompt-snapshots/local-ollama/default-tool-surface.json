@@ -66,7 +66,7 @@
     },
     {
       "name": "tool_describe",
-      "description": "Load the full schema and metadata, including complete server instructions, for one tool id or name. Use this when the input is not already clear or when discovery returned instructionsHint.",
+      "description": "Load the full input schema and metadata, including complete server instructions, for one tool id or name. Use this when the input is not already clear or when discovery returned instructionsHint.",
       "parameters": {
         "type": "object",
         "required": [
@@ -76,6 +76,10 @@
           "id": {
             "type": "string",
             "description": "Tool search result id or tool name."
+          },
+          "includeRarelyNeededOutputSchema": {
+            "type": "boolean",
+            "description": "Rarely needed; leave unset. Adds the tool's full output schema, which can cost tens of thousands of characters of context. A call's result already shows its shape. Set true only when you must know the result shape before calling, for example to plan code over the result."
           }
         }
       }
@@ -136,5 +140,5 @@
       }
     }
   ],
-  "toolSchemaDirectoryPrompt": "Available deferred-schema tools:\n- sessions_list (core): No description.\n\nPolicy-approved MCP and client tools may also be discoverable through search.\nUse tool_search for a compact input signature or tool_describe for a full schema. Deferred names are not directly callable. Call dispatch_action with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly."
+  "toolSchemaDirectoryPrompt": "Available deferred-schema tools:\n- sessions_list (core): No description.\n\nDeferred MCP tools are listed in the tool_search description. Policy-approved client tools may also be discoverable through search.\nUse tool_search for a compact input signature or tool_describe for a full schema. Deferred names are not directly callable. Call dispatch_action with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly."
 }

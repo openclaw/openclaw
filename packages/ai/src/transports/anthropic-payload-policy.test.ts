@@ -41,7 +41,7 @@ it("normalizes each live system revision and cache policy once without sharing e
             ? [{ type: "text", text: `${prefix}\nDynamic` }]
             : [
                 { type: "text", text: prefix, cache_control },
-                { type: "text", text: "Dynamic" },
+                { type: "text", text: "\nDynamic" },
               ];
         const { params } = await buildAnthropicRequest(
           anthropicModel,

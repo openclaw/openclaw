@@ -26,6 +26,7 @@ import { collectAgentInternalEventMedia } from "./internal-events.js";
 import type { McpConnectAction } from "./mcp-connect-action.js";
 import type { McpAppChannelView } from "./mcp-ui-resource.js";
 import type { ReplyDeliveryState } from "./reply-completion.js";
+import { ToolActivityPresentation } from "./tool-activity-presentation.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 
 /** Per-tool metadata tracked between tool start/update/end events. */
@@ -106,6 +107,7 @@ export class EmbeddedAgentSubscribeState {
   acceptedSessionSpawns: AcceptedSessionSpawn[] = [];
   toolMetaById = new Map<string, ToolCallSummary>();
   toolSummaryById = new Set<string>();
+  toolActivityPresentation = new ToolActivityPresentation();
   declare execLiveUpdateStateById?: Map<
     string,
     { lastEmittedAtMs: number; itemMetadata: ExecLiveItemMetadata }

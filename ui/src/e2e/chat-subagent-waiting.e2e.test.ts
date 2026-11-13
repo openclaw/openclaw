@@ -19,10 +19,10 @@ import { sessionsListResponse } from "./session-management.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Chat waiting on subagents" });
 
 suite.define(() => {
-  it("updates compact Details from observers without reading child histories", async () => {
+  it("shows native subagents in compact Details without reading child histories", async () => {
     const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactParent
-      ? createControlUiE2eArtifactDir("subagent-details-observer", artifactParent)
+      ? createControlUiE2eArtifactDir("subagent-details-native", artifactParent)
       : undefined;
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1000, height: 900 } },
@@ -58,6 +58,7 @@ suite.define(() => {
               key: "agent:main:dependency-" + index,
               sessionId: "dependency-" + index,
               kind: "direct",
+              classification: "subagent",
               label,
               status: "running",
               hasActiveRun: true,
@@ -94,9 +95,12 @@ suite.define(() => {
         if ((await summary.getAttribute("aria-expanded")) !== "true") {
           await summary.click();
         }
-        const activity = group.locator(".chat-subagent-activity");
-        const rows = activity.locator(".chat-subagent-activity__row");
-        await expect.poll(() => rows.count()).toBe(3);
+        const activity = group.locator(".chat-details-subagents");
+        const rows = activity.locator("button[data-subagent-session-key]");
+        await expect.poll(() => rows.count()).toBe(4);
+        for (const label of titles) {
+          await rows.getByText(label, { exact: true }).waitFor();
+        }
         const capture = async (name: string) => {
           if (!artifactDir) {
             return;
@@ -107,32 +111,6 @@ suite.define(() => {
           await writeFile(path.join(artifactDir, name), frame.png);
         };
         await capture("initial-wide.png");
-        // The lazy fallback has inert rows until live observation is mounted.
-        await activity.locator("button.chat-subagent-activity__row").first().waitFor();
-        const emit = (text: string, runId = "child-run-0", revision = 1) =>
-          gateway.emitGatewayEvent("session.observer", {
-            sessionKey: children[0]!.key,
-            sessionId: children[0]!.sessionId,
-            agentId: "main",
-            runId,
-            revision,
-            updatedAt: now + revision,
-            health: "on-track",
-            headline: text,
-          });
-        await emit("Verifying the Android dependency graph.");
-        await rows
-          .first()
-          .getByText("Verifying the Android dependency graph.", { exact: true })
-          .waitFor();
-        await emit("This is from an obsolete run.", "old-run");
-        expect(await rows.first().textContent()).not.toContain("obsolete");
-        await emit("Checking CocoaPods and Gradle compatibility.", "child-run-0", 2);
-        await rows
-          .first()
-          .getByText("Checking CocoaPods and Gradle compatibility.", { exact: true })
-          .waitFor();
-        await capture("live-wide.png");
         expect(await activity.locator(".chat-reading-indicator").count()).toBe(0);
         expect(await pane.locator(".chat-thread .chat-subagent-activity").count()).toBe(0);
         await closeChatDetails(pane);

@@ -18,7 +18,7 @@ import { TemplateArtwork } from "../pages/agents-home/template-artwork.tsx";
 import { searchTemplates } from "../pages/agents-home/templates-catalog-client.ts";
 import { Popover } from "./solid/popover.tsx";
 import type { TemplateReference, TemplateReferenceSource } from "./template-reference-surface.tsx";
-import "../styles/template-reference.css";
+import "../styles/templates-catalog.css";
 
 registerEnglishCatalog(registerTemplatesEnglish);
 const TemplateDialog = lazy(() => import("../pages/agents-home/templates-catalog-dialog.tsx"), {

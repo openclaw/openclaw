@@ -57,6 +57,7 @@ import {
   formatErrorMessage,
   readErrorCauses,
 } from "../../infra/errors.js";
+import { isProviderRefusalNoticeText } from "../../shared/assistant-error-format.js";
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
@@ -470,11 +471,13 @@ export async function resolveTerminalAgentRunFailurePayload(params: {
     terminalError.message.startsWith(MISSING_REPLY_NOTICE_TEXT);
   const suppressMissingReplyNotice =
     missingReplyNotice && !shouldDeliverMissingReplyNotice(params.run);
+  // A canonical provider refusal is the run's own failure notice, not generic copy.
   const ownedFailureNotice = params.result.payloads?.find(
     (payload) =>
       payload.isError === true &&
-      payload.isStatusNotice === true &&
-      getReplyPayloadMetadata(payload)?.assistantTranscriptOwned === true,
+      ((payload.isStatusNotice === true &&
+        getReplyPayloadMetadata(payload)?.assistantTranscriptOwned === true) ||
+        isProviderRefusalNoticeText(payload.text ?? "")),
   );
   if (ownedFailureNotice) {
     params.result.payloads = params.result.payloads?.filter(

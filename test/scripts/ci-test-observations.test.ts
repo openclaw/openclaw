@@ -307,13 +307,13 @@ describe("CI observation export", () => {
         configuration: {},
         env: { OPENCLAW_VITEST_OBSERVATION_DIR: directory },
       });
-      for (const line of receipts({ interrupted: true })) {
+      const events = receipts({ interrupted: true }).map((line) => {
         const match = /\[vitest:(\w+)\] (.*)/u.exec(line)!;
-        capture!.record(match[1]!, JSON.parse(match[2]!));
-      }
-      expect(
-        JSON.parse(readFileSync(path.join(directory, "observations.json"), "utf8")),
-      ).toMatchObject({
+        return { kind: match[1]!, value: JSON.parse(match[2]!) };
+      });
+      events.forEach(({ kind, value }) => capture!.record(kind, value));
+      const snapshot = readFileSync(path.join(directory, "observations.json"), "utf8");
+      expect(JSON.parse(snapshot)).toMatchObject({
         observations: {
           invocations: [
             {
@@ -330,7 +330,8 @@ describe("CI observation export", () => {
         configuration: {},
         env: { OPENCLAW_VITEST_OBSERVATION_DIR: directory },
       });
-      expect(() => unavailable!.record("run", {})).not.toThrow();
+      expect(() => unavailable!.record(events[0]!.kind, events[0]!.value)).not.toThrow();
+      expect(readFileSync(path.join(directory, "observations.json"), "utf8")).toBe(snapshot);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

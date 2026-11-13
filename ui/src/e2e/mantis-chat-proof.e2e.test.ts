@@ -92,7 +92,7 @@ suite.define(() => {
       });
       const params = sendRequest.params as { idempotencyKey?: string };
 
-      await page.getByText("saved 875.3k tokens", { exact: true }).waitFor();
+      await page.getByText("saved 875.3k tokens (97.3%)", { exact: true }).waitFor();
       await page.locator(".chat-working-indicator").waitFor();
       const workingLabel = page.locator(".chat-working-indicator__status > span:first-child");
       expect(await workingLabel.textContent()).toBe("Working…");

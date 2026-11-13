@@ -311,25 +311,14 @@ export async function validateTemplateProject(
   if (!template.ok) {
     return { ok: false, root, diagnostics: template.diagnostics };
   }
-  const excludedSource = [
-    ...(template.snapshot.openClawProfile
-      ? [
-          {
-            path: template.snapshot.openClawProfile.sourcePath,
-            diagnosticPath: "$.metadata.openclaw.config",
-          },
-        ]
-      : []),
-    ...template.snapshot.workspaceSources.map((source) => ({
-      path: source.sourcePath,
-      diagnosticPath: "$.workspace",
-    })),
-  ].find((source) => isExcludedProjectSource(source.path));
+  const excludedSource = template.snapshot.workspaceSources.find((source) =>
+    isExcludedProjectSource(source.sourcePath),
+  );
   if (excludedSource) {
     return failure(
       "project_excluded_source",
-      excludedSource.diagnosticPath,
-      `Selected project source ${JSON.stringify(excludedSource.path)} cannot come from .git or node_modules.`,
+      "$.workspace",
+      `Selected project source ${JSON.stringify(excludedSource.sourcePath)} cannot come from .git or node_modules.`,
     );
   }
   const reservedPackageSource = template.snapshot.workspaceSources.find(
@@ -380,8 +369,10 @@ export async function validateTemplateProject(
     "CLAW.md",
     ...(license ? ["LICENSE"] : []),
     ...(template.packageBootstrap ? ["BOOTSTRAP.md"] : []),
-    ...(template.snapshot.openClawProfile ? [template.snapshot.openClawProfile.sourcePath] : []),
     ...template.snapshot.workspaceSources.map((source) => source.sourcePath),
+    ...(template.snapshot.bundledSources ?? []).flatMap((source) =>
+      source.snapshot.files.map((file) => `${source.path}/${file.path}`),
+    ),
   ];
   const portableSelectedPaths = new Map<string, string>();
   for (const path of selectedPathList) {

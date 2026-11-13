@@ -1412,6 +1412,112 @@
   }
 }
 
+/* Command rows keep their own layout without changing the other completion menus. */
+.slash-menu--commands {
+  --slash-menu-row-gap: 10px;
+  --skeleton-animation: none;
+
+  .slash-menu__scroll {
+    scrollbar-width: none;
+  }
+
+  .oc-menu-heading {
+    min-height: 26px;
+    padding-inline: 10px;
+  }
+
+  .oc-menu-heading__label {
+    font-size: var(--control-ui-text-sm);
+    font-weight: var(--control-ui-font-weight-semibold);
+    line-height: 1.55;
+    letter-spacing: normal;
+    text-transform: none;
+  }
+
+  .slash-menu-item {
+    display: flex;
+    gap: var(--slash-menu-row-gap);
+    min-height: 36px;
+    padding: 0 10px;
+    font-family: var(--font-body);
+    font-size: calc(13px * var(--control-ui-text-scale));
+    line-height: 1.3;
+    white-space: nowrap;
+  }
+
+  .slash-menu-copy {
+    display: contents;
+  }
+
+  .slash-menu-icon {
+    flex: none;
+  }
+
+  .slash-menu-icon .session-css-icon {
+    width: 15px;
+    height: 15px;
+  }
+
+  .slash-menu-name {
+    flex: 0 0 auto;
+    min-width: 0;
+    max-width: 70%;
+    font-size: inherit;
+  }
+
+  .slash-menu-desc {
+    flex: 1 1 0;
+    font-size: inherit;
+    text-align: start;
+  }
+
+  .slash-menu-trail {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    padding-left: 8px;
+  }
+
+  .slash-menu-value {
+    color: var(--muted);
+  }
+
+  .slash-menu-item--current {
+    background: var(--surface-hover);
+  }
+
+  .slash-menu-chevron {
+    width: 14px;
+    height: 14px;
+    color: color-mix(in oklab, var(--muted) 70%, var(--chat-composer-surface));
+  }
+
+  [aria-busy="true"] .slash-menu-trail {
+    visibility: hidden;
+  }
+
+  .slash-menu-icon .skeleton {
+    border-radius: 5px;
+  }
+
+  .slash-menu-name .skeleton,
+  .slash-menu-desc .skeleton {
+    border-radius: 6px;
+  }
+}
+
+.slash-menu--args .slash-menu-name {
+  max-width: none;
+}
+
+@media (max-width: 640px) {
+  .slash-menu--commands {
+    --slash-menu-row-gap: 8px;
+  }
+}
+
 .chat-attachments-preview {
   /* Ease across most of a thumbnail and clear the frame before clipping, so a
      partially visible image does not read as a hard vertical border. */
@@ -1439,33 +1545,37 @@
   overscroll-behavior-inline: contain;
   scrollbar-width: none;
 
-  .chat-selection-annotations__chip.chat-attachment-thumb {
-    height: 56px;
-    min-width: 0;
-    max-width: min(216px, 100%);
-  }
+  .chat-comment-preview {
+    .chat-selection-annotations__chip.chat-attachment-thumb {
+      --chat-attachment-radius: calc(var(--radius-md) * var(--openclaw-corner-radius-scale));
 
-  .chat-selection-annotations__chip .chat-attachment-file {
-    gap: 10px;
-    padding: 7px 13px 7px 7px;
-  }
+      height: 30px;
+      max-width: min(216px, 100%);
+    }
 
-  .chat-attachment-preview-icon {
-    display: grid;
-    place-items: center;
-    flex: 0 0 40px;
-    width: 40px;
-    height: 40px;
-    border-radius: max(0px, calc(var(--chat-attachment-radius) - 8px));
-    corner-shape: inherit;
-    background: transparent;
-    color: var(--muted);
-  }
+    .chat-attachment-file {
+      gap: 6px;
+      padding: 6px 8px;
+    }
 
-  .chat-attachment-preview-icon svg {
-    width: 16px;
-    height: 16px;
-    stroke-width: 1.75px;
+    .chat-attachment-preview-icon {
+      display: grid;
+      place-items: center;
+      flex: 0 0 16px;
+      width: 16px;
+      height: 16px;
+      color: var(--muted);
+    }
+
+    .chat-attachment-preview-icon svg {
+      stroke-width: 1.75px;
+    }
+
+    .chat-comment-count-gap {
+      display: inline-block;
+      width: 4px;
+      font-size: 0;
+    }
   }
 
   &[data-disabled="true"] {
@@ -1991,12 +2101,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   gap: var(--chat-composer-chip-gap, 6px);
   width: 100%;
   height: var(--chat-composer-chip-height, 30px);
-  min-height: var(--chat-composer-chip-height, 30px);
   /* Symmetric on purpose: this trigger carries a label and an optional leading
      icon, never a trailing one, so the old 6px trailing inset was unmatched
      asymmetry that made the chip look narrower on its right than its siblings. */
-  padding-block: 0;
-  padding-inline: var(--chat-composer-chip-padding-inline, 8px);
+  padding: 0 var(--chat-composer-chip-padding-inline, 8px);
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -2011,7 +2119,12 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .agent-chat__input .chat-controls__inline-select-trigger {
+  /* The chip fills the action row's box (see --chat-composer-chip-height) and
+     paints its pill one step inside it, on the same 30px tier as the primary
+     action's painted disc. */
+  border-block: 1px solid transparent;
   border-radius: var(--radius-full);
+  background-clip: padding-box;
 }
 
 .agent-chat__composer-lead .chat-controls__permission-trigger {
@@ -2115,7 +2228,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .chat-controls__model-menu {
   box-shadow: none;
   min-height: 0;
-  width: min(340px, calc(100vw - 24px));
+  width: min(440px, calc(100vw - 24px));
   max-height: min(400px, var(--auto-size-available-height, calc(100vh - 96px)));
 }
 
@@ -2163,11 +2276,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   grid-column: 1 / -1;
   gap: 8px;
   padding: 8px;
-}
-
-.chat-controls__permission-option > .oc-menu-item__icon,
-.chat-controls__permission-option > .oc-menu-item__details {
-  align-self: flex-start;
 }
 
 .chat-controls__permission-option > .oc-menu-item__check {
@@ -2587,7 +2695,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   contain-intrinsic-block-size: auto 0px;
   justify-content: flex-start;
   /* Grid-item min-width:auto would size the provider group's track to the
-     row's full content width (long name + meta), overflowing the 340px menu. */
+     row's full content width (long name + meta), overflowing the menu. */
   min-width: 0;
 }
 
@@ -2682,7 +2790,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   align-items: center;
   gap: 0;
   /* Flex min-width:auto would let a long model name + badges push the row
-     wider than the 340px menu and hand the popover a horizontal scrollbar. */
+     wider than the menu and hand the popover a horizontal scrollbar. */
   min-width: 0;
   color: var(--text);
   font-size: 13px;

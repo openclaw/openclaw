@@ -1,2 +1,0 @@
-# Preserve deep immutability across startup and updated remote catalog publication.
-11

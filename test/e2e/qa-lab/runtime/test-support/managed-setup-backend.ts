@@ -381,7 +381,7 @@ export async function startManagedSetupBackend(options: {
         throw new Error("Managed setup fixture requires its engine-enforced 2h lease");
       }
       if (command === "--version") {
-        output("0.82.0\n");
+        output("0.83.0\n");
       } else if (command === "warmup") {
         const leaseId = required("--lease-id");
         receipt.leaseId = leaseId;

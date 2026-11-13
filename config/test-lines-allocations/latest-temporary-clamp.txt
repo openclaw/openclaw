@@ -1,4 +1,0 @@
-# Latest must survive a temporary native end clamp until the issued target arrives.
-# Two regression cases cover observer setup before and after a target is issued.
-# The 64 added test lines consume 32 existing slack lines plus this exact remainder.
-32

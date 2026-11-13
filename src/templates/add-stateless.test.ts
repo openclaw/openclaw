@@ -1,23 +1,18 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmod, cp, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
-import * as mcpMutation from "../agents/mcp-config-mutation.js";
-import * as mcpConfig from "../config/mcp-config.js";
+import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
-import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+  readSessionEntryRow,
+  writeSessionEntry,
+} from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isCronWithinActiveHours } from "../cron/active-hours.js";
-import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
-import { normalizeCronJobCreate } from "../cron/normalize.js";
-import { CronService } from "../cron/service.js";
-import { createNoopLogger } from "../cron/service.test-harness.js";
+import { prepareWorkspaceSkillEntries } from "../skills/loading/workspace-skill-loader.js";
 import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -28,73 +23,32 @@ import {
   beginAgentDeletionJournal,
   readAgentDeletionJournal,
 } from "../test-utils/agent-deletion-journal.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { workspaceIdentity } from "./add-checkpoint.js";
 import {
   applyTemplateAddPlanStateless,
   type StatelessTemplateAddOptions,
 } from "./add-stateless.js";
+import * as bootstrapInstall from "./bootstrap.js";
 import * as cronInstall from "./cron.js";
-import type { TemplateCronGateway } from "./cron.js";
 import { buildGatewayTemplateAddPlan } from "./gateway-add-plan.js";
-import { projectTemplateAddScheduledJobs } from "./gateway-disclosure.js";
-import { buildTemplateAddPlan } from "./lifecycle.js";
-import {
-  TEMPLATE_MCP_REF_SCHEMA_VERSION,
-  type PersistedTemplateMcpServerRef,
-} from "./mcp-records.js";
+import { projectTemplateAddPlan } from "./gateway-plan-projection.js";
+import { bindTemplateSkillWarningConsent } from "./gateway-skill-consent.js";
 import * as mcpInstall from "./mcp.js";
 import * as packageInstall from "./packages.js";
-import type { PersistedTemplatePackageRef } from "./provenance.js";
+import { buildTemplateProject, extractBuiltTemplateArtifact } from "./project-build.js";
 import { readTemplateManifestFile } from "./reader.js";
-import { parseTemplateOpenClawProfile } from "./schema.js";
 import type { TemplateReadResult } from "./types.js";
 import * as workspaceFiles from "./workspace.js";
+
+type TemplateConfiguredAgentCheckpoint = Parameters<
+  NonNullable<StatelessTemplateAddOptions["onAgentConfigured"]>
+>[0];
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => clearRuntimeConfigSnapshot());
 afterEach(() => vi.unstubAllEnvs());
 afterEach(() => vi.restoreAllMocks());
 afterEach(() => closeOpenClawAgentDatabasesForTest());
-
-function createTemplateCronAdapter(cron: CronService) {
-  return {
-    add: async (input, options) => {
-      const normalized = normalizeCronJobCreate(input);
-      if (!normalized) {
-        throw new Error("invalid cron input");
-      }
-      return await cron.add(normalized, { commitGuard: options?.commitGuard });
-    },
-    list: async () => ({ jobs: await cron.list({ includeDisabled: true }) }),
-    get: async (id) => {
-      const job = await cron.readJob(id);
-      return job && { ...job, configRevision: resolveCronJobConfigRevision(job) };
-    },
-    writeScratch: async (id, content, commitGuard) => {
-      const result = await cron.writeScratch(id, { content, expectedRevision: 0, commitGuard });
-      if (!result.ok) {
-        throw new Error("scratch changed before import");
-      }
-    },
-    enable: async (id, expectedConfigRevision, commitGuard) => {
-      await cron.updateWithPrecondition(
-        id,
-        { enabled: true },
-        (job) => {
-          if (resolveCronJobConfigRevision(job) !== expectedConfigRevision) {
-            throw new Error("automation changed before enable");
-          }
-        },
-        { commitGuard },
-      );
-    },
-    remove: async (id, options) => await cron.remove(id, options),
-  } satisfies TemplateCronGateway;
-}
 
 describe("stateless Template Add", () => {
   let stateDir: string;
@@ -149,6 +103,188 @@ describe("stateless Template Add", () => {
     });
   };
 
+  it("builds a declared skill folder and discovers its exact supporting bytes after Add", async () => {
+    const root = path.join(stateDir, "source");
+    const skill = path.join(root, "bundles", "incident-guide");
+    await mkdir(path.join(skill, "references"), { recursive: true });
+    await writeFile(
+      path.join(skill, "SKILL.md"),
+      "---\nname: incident-guide\ndescription: Use the incident checklist.\n---\nRead references/checklist.txt before drafting.\n",
+    );
+    const supporting = Buffer.from([0, 255, 17, 128]);
+    await writeFile(path.join(skill, "references", "checklist.txt"), supporting);
+    await mkdir(path.join(root, "undeclared"));
+    await writeFile(
+      path.join(root, "undeclared", "SKILL.md"),
+      "---\nname: undeclared\ndescription: Never install me.\n---\n",
+    );
+    await writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        name: "incident-template",
+        version: "1.0.0",
+        openclaw: { template: "CLAW.md" },
+      }),
+    );
+    await writeFile(
+      path.join(root, "CLAW.md"),
+      "---\nschemaVersion: 1\nagent: { id: incident-agent }\nskills:\n  - path: bundles/incident-guide\n---\nHelp triage incidents.\n",
+    );
+    const built = await buildTemplateProject(root, path.join(stateDir, "template.tgz"));
+    expect(built.files).toEqual([
+      "CLAW.md",
+      "bundles/incident-guide/SKILL.md",
+      "bundles/incident-guide/references/checklist.txt",
+      "package.json",
+    ]);
+    await using artifact = await extractBuiltTemplateArtifact(built.artifact);
+    const read = await readTemplateManifestFile(artifact.packageRoot);
+    assert(read.ok, JSON.stringify(read.diagnostics));
+    source = read;
+    const plan = await buildPlan();
+    expect(plan.blockers).toEqual([]);
+    const result = await apply(plan);
+    expect(result.status, JSON.stringify(result.error)).toBe("complete");
+    expect(
+      await readFile(
+        path.join(plan.agent.workspace, "skills", "incident-guide", "references", "checklist.txt"),
+      ),
+    ).toEqual(supporting);
+    const loaded = await prepareWorkspaceSkillEntries(plan.agent.workspace, {
+      config,
+      workspaceOnly: true,
+      watch: false,
+    });
+    expect(loaded.entries.map((entry) => entry.skill.name)).toEqual(["incident-guide"]);
+    expect(result.packages).toContainEqual(
+      expect.objectContaining({
+        source: "bundled",
+        path: "bundles/incident-guide",
+        name: "incident-guide",
+      }),
+    );
+    expect(result.packages[0]).not.toHaveProperty("ref");
+    expect(result.packages[0]).not.toHaveProperty("version");
+  });
+
+  it("reviews and approves a bundled skill through the native install policy without registry provenance", async () => {
+    const root = path.join(stateDir, "source");
+    const skill = path.join(root, "bundles", "checked");
+    await mkdir(skill, { recursive: true });
+    await writeFile(
+      path.join(skill, "SKILL.md"),
+      "---\nname: checked\ndescription: Follow checked instructions.\n---\nRead the checklist.\n",
+    );
+    await writeFile(
+      path.join(root, "CLAW.md"),
+      "---\nschemaVersion: 1\nagent: { id: checked-agent }\nskills: [{ path: bundles/checked }]\n---\nUse checked instructions.\n",
+    );
+    const policy = path.join(stateDir, "policy.cjs");
+    const requests = path.join(stateDir, "requests.jsonl");
+    await writeFile(
+      policy,
+      `#!${process.execPath}\nconst fs = require("node:fs"); let input = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => { fs.appendFileSync(${JSON.stringify(requests)}, input + "\\n"); process.stdout.write(JSON.stringify({ protocolVersion: 1, decision: "warn", reason: "Review this packaged skill before installation." })); });\n`,
+    );
+    await chmod(policy, 0o700);
+    const policyConfig: OpenClawConfig = {
+      ...config,
+      security: {
+        installPolicy: {
+          enabled: true,
+          exec: { source: "exec", command: policy, trustedDirs: [stateDir] },
+        },
+      },
+    };
+    const read = await readTemplateManifestFile(root);
+    assert(read.ok, JSON.stringify(read.diagnostics));
+    source = read;
+    const plan = await buildGatewayTemplateAddPlan(source, {
+      config: policyConfig,
+      sourceMcpServers: {},
+    });
+    expect(plan.blockers).toEqual([]);
+    const projection = projectTemplateAddPlan(plan, root, [], policyConfig);
+    expect(projection.blockers).toEqual([]);
+    const review = projection.skillReviews[0];
+    assert(review && "path" in review);
+    expect(review).toMatchObject({ source: "bundled", path: "bundles/checked", name: "checked" });
+    expect(review).not.toHaveProperty("ref");
+    expect(review).not.toHaveProperty("version");
+    expect(() =>
+      bindTemplateSkillWarningConsent(projection.skillReviews, undefined, () => {}),
+    ).toThrow("acknowledge");
+    const acknowledgement = {
+      actionId: review.actionId,
+      source: "bundled" as const,
+      path: review.path,
+      digest: review.digest,
+      reviewToken: review.reviewToken,
+      acknowledgeRiskWarning: true as const,
+    };
+    expect(() =>
+      bindTemplateSkillWarningConsent(
+        projection.skillReviews,
+        [{ ...acknowledgement, digest: `sha256:${"f".repeat(64)}` }],
+        () => {},
+      ),
+    ).toThrow("changed");
+    const skillConsent = bindTemplateSkillWarningConsent(
+      projection.skillReviews,
+      [acknowledgement],
+      () => {},
+    );
+    const result = await apply(plan, { config: policyConfig, skillConsent });
+    expect(result.status, JSON.stringify(result.error)).toBe("complete");
+    const loaded = await prepareWorkspaceSkillEntries(plan.agent.workspace, {
+      config: policyConfig,
+      workspaceOnly: true,
+      watch: false,
+    });
+    expect(loaded.entries.map((entry) => entry.skill.name)).toEqual(["checked"]);
+    const nativeRequests = (await readFile(requests, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(nativeRequests.length).toBeGreaterThanOrEqual(3);
+    for (const request of nativeRequests) {
+      expect(request).toMatchObject({
+        targetType: "skill",
+        source: { kind: "local-path", authority: "third-party", mutable: false, network: false },
+        origin: { type: "path", spec: "bundles/checked" },
+      });
+    }
+  });
+
+  it.each(["bytes", "membership"])(
+    "refuses a bundled skill whose %s changed after Add review",
+    async (change) => {
+      const root = path.join(stateDir, "source");
+      const skill = path.join(root, "bundles", "checked");
+      await mkdir(skill, { recursive: true });
+      await writeFile(
+        path.join(skill, "SKILL.md"),
+        "---\nname: checked\ndescription: Follow the checked instructions.\n---\nRead the checklist.\n",
+      );
+      await writeFile(
+        path.join(root, "CLAW.md"),
+        "---\nschemaVersion: 1\nagent: { id: checked-agent }\nskills: [{ path: bundles/checked }]\n---\nUse checked instructions.\n",
+      );
+      const read = await readTemplateManifestFile(root);
+      assert(read.ok, JSON.stringify(read.diagnostics));
+      source = read;
+      const plan = await buildPlan();
+      expect(plan.blockers).toEqual([]);
+      await writeFile(
+        path.join(skill, change === "membership" ? "added.txt" : "SKILL.md"),
+        "changed after review",
+      );
+      const result = await apply(plan);
+      expect(result.status).toBe("partial");
+      expect(config.agents.entries).not.toHaveProperty("checked-agent");
+      expect(existsSync(path.join(plan.agent.workspace, "skills", "checked"))).toBe(false);
+    },
+  );
+
   it("reuses a deleted agent ID without leaving its database fenced", async () => {
     const agentId = source.manifest.agent.id;
     const deletion = beginDeletion("prior-deletion");
@@ -161,8 +297,21 @@ describe("stateless Template Add", () => {
     ).toThrow(`agent ${agentId} is deleted`);
 
     const plan = await buildPlan();
-    const result = await apply(plan);
+    const prepareAgentSession = vi.fn(async () => {
+      expect(isAgentDeletionBlocked(agentId)).toBe(false);
+      runOpenClawAgentWriteTransaction(
+        (database) =>
+          writeSessionEntry(database, `agent:${agentId}:main`, {
+            sessionId: "prepared-chat-after-readd",
+            updatedAt: Date.now(),
+          }),
+        { agentId, env: process.env },
+      );
+      return async () => {};
+    });
+    const result = await apply(plan, { prepareAgentSession, getCurrentConfig: () => config });
 
+    expect(prepareAgentSession).toHaveBeenCalledOnce();
     expect(result.status).toBe("complete");
     expect(readAgentDeletionJournal(agentId, {}, "runtime")).toBeUndefined();
     expect(isAgentDeletionBlocked(agentId)).toBe(false);
@@ -195,13 +344,345 @@ describe("stateless Template Add", () => {
     expect(readAgentDeletionJournal(agentId, {}, "runtime")?.cleanupCompleted).toBe(false);
   });
 
+  it("makes the instructed agent and its canonical chat ready before deferrable setup", async () => {
+    const plan = await buildPlan();
+    plan.actions.push({
+      kind: "package",
+      action: "install",
+      blocked: false,
+      id: "notes",
+      target: "notes",
+      details: { kind: "plugin" },
+    });
+    const order: string[] = [];
+    vi.spyOn(bootstrapInstall, "seedTemplatePackageBootstrap").mockImplementation(async () => {
+      order.push("bootstrap");
+      return undefined;
+    });
+    const greetingStarted = createDeferred();
+    const greetingFinished = createDeferred();
+    const routines = vi
+      .spyOn(cronInstall, "installTemplateCronJobsStateless")
+      .mockResolvedValue([]);
+    const packages = vi
+      .spyOn(packageInstall, "installTemplatePackages")
+      .mockImplementation(async () => {
+        order.push("packages");
+        expect(order).toContain("agent-ready");
+        return [];
+      });
+    const mcp = vi
+      .spyOn(mcpInstall, "installTemplateMcpServersStateless")
+      .mockImplementation(async () => {
+        order.push("mcp");
+      });
+    const installation = apply(plan, {
+      getCurrentConfig: () => config,
+      prepareAgentSession: async () => {
+        expect(readFileSync(path.join(plan.agent.workspace, "SOUL.md"), "utf8")).toBe(
+          "Workspace agent instructions.\n",
+        );
+        order.push("session");
+        return async () => {
+          throw new Error("exposed chat must not be deleted");
+        };
+      },
+      waitForAgentRuntime: async () => {
+        expect(config.agents.entries).toHaveProperty(plan.agent.finalId);
+        order.push("runtime");
+        return "applied";
+      },
+      onAgentReady: async (agent) => {
+        expect(agent).toEqual({
+          agentId: "workspace-agent",
+          sessionKey: "agent:workspace-agent:main",
+        });
+        order.push("agent-ready");
+        greetingStarted.resolve();
+        await greetingFinished.promise;
+        order.push("greeting-visible");
+      },
+    });
+    try {
+      await awaitGateBeforeSettlement(
+        greetingStarted.promise,
+        installation,
+        "Template Add finished before the normal greeting started",
+      );
+      expect(packages).not.toHaveBeenCalled();
+      expect(mcp).not.toHaveBeenCalled();
+      expect(routines).not.toHaveBeenCalled();
+    } finally {
+      greetingFinished.resolve();
+    }
+    const result = await installation;
+    expect(result.status).toBe("complete");
+    expect(order).toEqual([
+      "session",
+      "runtime",
+      "agent-ready",
+      "greeting-visible",
+      "packages",
+      "mcp",
+      "bootstrap",
+    ]);
+    expect(routines).toHaveBeenCalledOnce();
+  });
+
+  it("retains an adopted agent and its chat when later setup fails", async () => {
+    const plan = await buildPlan();
+    const rollbackChat = vi.fn(async () => {});
+    const result = await apply(plan, {
+      getCurrentConfig: () => config,
+      prepareAgentSession: async () => rollbackChat,
+      waitForAgentRuntime: async () => {
+        runOpenClawAgentWriteTransaction(
+          (database) =>
+            writeSessionEntry(database, "agent:workspace-agent:main", {
+              sessionId: "chat-after-runtime-publication",
+              updatedAt: Date.now(),
+            }),
+          { agentId: plan.agent.finalId, env: process.env },
+        );
+        return "applied";
+      },
+      onAgentReady: async () => {
+        throw new Error("setup policy changed");
+      },
+    });
+    expect(rollbackChat).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      status: "partial",
+      configCommitted: true,
+      workspaceCreated: true,
+      agentRetained: true,
+      error: { code: "add_failed", message: expect.stringContaining("setup policy changed") },
+    });
+    expect(config.agents.entries).toHaveProperty(plan.agent.finalId);
+    expect(existsSync(plan.agent.workspace)).toBe(true);
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (database) => readSessionEntryRow(database, "agent:workspace-agent:main")?.entry.sessionId,
+        { agentId: plan.agent.finalId, env: process.env },
+      ),
+    ).toBe("chat-after-runtime-publication");
+  });
+
+  it.each([
+    "unchanged",
+    "source-root",
+    "workspace",
+    "config",
+    "source",
+    "consent",
+    "plan",
+    "phase-only",
+  ] as const)(
+    "retries configured initialization without rewriting its agent or chat (%s)",
+    async (change) => {
+      if (change === "source-root") {
+        const root = path.join(stateDir, "source");
+        await writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({
+            name: "@test/workspace-agent-template",
+            version: "1.0.0",
+            openclaw: { template: "CLAW.md" },
+          }),
+        );
+        const loaded = await readTemplateManifestFile(root);
+        assert(loaded.ok);
+        source = {
+          ...loaded,
+          source: {
+            ...loaded.source,
+            integrityKind: "artifact",
+            integrity: `sha256:${"a".repeat(64)}`,
+          },
+        };
+      }
+      const plan = await buildPlan();
+      let checkpoint: TemplateConfiguredAgentCheckpoint | undefined;
+      const onAgentReady = vi.fn(async () => {});
+      const prepareAgentSession = vi.fn(async () => {
+        runOpenClawAgentWriteTransaction(
+          (database) =>
+            writeSessionEntry(database, "agent:workspace-agent:main", {
+              sessionId: "pending-configured-chat",
+              updatedAt: Date.now(),
+            }),
+          { agentId: plan.agent.finalId, env: process.env },
+        );
+        return async () => {
+          throw new Error("Retained chat must not be deleted");
+        };
+      });
+      let policyConfig = config;
+      const failed = await apply(plan, {
+        getCurrentConfig: () => policyConfig,
+        prepareEffect: async () => {
+          policyConfig = config;
+        },
+        prepareAgentSession,
+        onAgentConfigured: async (value) => {
+          checkpoint = value;
+          expect(value.planDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
+          expect(value.sourceIntegrity).toMatch(/^sha256:[a-f0-9]{64}$/);
+        },
+        waitForAgentRuntime: async () => {
+          throw new Error("runtime unavailable");
+        },
+        onAgentReady,
+      });
+      expect(failed).toMatchObject({
+        status: "partial",
+        agentRetained: true,
+        configCommitted: true,
+        error: { message: expect.stringContaining("runtime unavailable") },
+      });
+      assert(checkpoint);
+      expect(onAgentReady).not.toHaveBeenCalled();
+      if (change === "workspace") {
+        await writeFile(path.join(plan.agent.workspace, "SOUL.md"), "User-edited instructions.");
+      } else if (change === "config") {
+        config = {
+          ...config,
+          agents: {
+            entries: { ...config.agents.entries, [plan.agent.finalId]: { name: "Changed" } },
+          },
+        };
+      } else if (change === "source") {
+        await writeFile(path.join(stateDir, "source", "SOUL.md"), "Changed after consent.");
+      } else if (change === "plan") {
+        plan.actions[0]!.reason = "Changed plan despite unchanged claimed integrity";
+      } else if (change === "source-root") {
+        const oldRoot = plan.template.packageRoot;
+        const newRoot = path.join(stateDir, "retry-source");
+        await cp(oldRoot, newRoot, { recursive: true });
+        plan.template.packageRoot = newRoot;
+        plan.template.manifestPath = path.join(newRoot, "CLAW.md");
+        for (const action of plan.actions) {
+          if (action.source) {
+            action.source = path.join(newRoot, path.relative(oldRoot, action.source));
+          }
+        }
+        plan.planIntegrity = "newly-reviewed-integrity-at-new-source-root";
+      }
+      const writeWorkspace = vi.spyOn(workspaceFiles, "createTemplateWorkspaceFiles");
+      const commit = vi.fn(commitConfig);
+      const runtimeStarted = createDeferred();
+      const runtimeReady = createDeferred();
+      const waitForAgentRuntime = vi.fn(async () => {
+        runtimeStarted.resolve();
+        await runtimeReady.promise;
+        return "applied" as const;
+      });
+      const retry = apply(plan, {
+        consentPlanIntegrity: change === "consent" ? "changed" : plan.planIntegrity,
+        getCurrentConfig: () => config,
+        commitConfig: commit,
+        prepareAgentSession,
+        admittedAgent: {
+          ...checkpoint,
+          ...(change === "phase-only" ? { planDigest: undefined, sourceIntegrity: undefined } : {}),
+          phase: "configured",
+          assertCurrent: async () => {},
+        },
+        waitForAgentRuntime,
+        onAgentReady,
+      }).catch((error: unknown) => ({ error }));
+      const succeeds = change === "unchanged" || change === "source-root";
+      if (succeeds) {
+        try {
+          await awaitGateBeforeSettlement(
+            runtimeStarted.promise,
+            retry,
+            "Configured retry settled before runtime readiness",
+          );
+          expect(onAgentReady).not.toHaveBeenCalled();
+          expect(await workspaceIdentity(plan.agent.workspace)).toBe(checkpoint.workspaceIdentity);
+        } finally {
+          runtimeReady.resolve();
+        }
+      }
+      const retried = await retry;
+      expect(writeWorkspace).not.toHaveBeenCalled();
+      expect(commit).not.toHaveBeenCalled();
+      expect(prepareAgentSession).toHaveBeenCalledOnce();
+      if (succeeds) {
+        expect(retried).toMatchObject({ status: "complete", agentRetained: true });
+        expect(waitForAgentRuntime).toHaveBeenCalledOnce();
+        expect(onAgentReady).toHaveBeenCalledOnce();
+      } else {
+        expect(retried.error).toBeDefined();
+        expect(waitForAgentRuntime).not.toHaveBeenCalled();
+        expect(onAgentReady).not.toHaveBeenCalled();
+      }
+      expect(
+        runOpenClawAgentWriteTransaction(
+          (database) =>
+            readSessionEntryRow(database, "agent:workspace-agent:main")?.entry.sessionId,
+          { agentId: plan.agent.finalId, env: process.env },
+        ),
+      ).toBe("pending-configured-chat");
+    },
+  );
+
+  it("keeps a failed configured checkpoint pending without starting runtime or greeting", async () => {
+    const plan = await buildPlan();
+    const waitForAgentRuntime = vi.fn(async () => "applied" as const);
+    const onAgentReady = vi.fn(async () => {});
+    const rollbackChat = vi.fn(async () => {});
+    let checkpoint: TemplateConfiguredAgentCheckpoint | undefined;
+    const result = await apply(plan, {
+      prepareAgentSession: async () => rollbackChat,
+      getCurrentConfig: () => config,
+      onAgentConfigured: async (value) => {
+        checkpoint = value;
+        throw new Error("checkpoint acknowledgement lost");
+      },
+      waitForAgentRuntime,
+      onAgentReady,
+    });
+    expect(result).toMatchObject({
+      status: "partial",
+      agentRetained: true,
+      configCommitted: true,
+      error: { message: expect.stringContaining("checkpoint acknowledgement lost") },
+    });
+    expect(rollbackChat).not.toHaveBeenCalled();
+    expect(config.agents.entries).toHaveProperty(plan.agent.finalId);
+    expect(await readFile(path.join(plan.agent.workspace, "SOUL.md"), "utf8")).toBe(
+      "Workspace agent instructions.\n",
+    );
+    expect(waitForAgentRuntime).not.toHaveBeenCalled();
+    expect(onAgentReady).not.toHaveBeenCalled();
+    assert(checkpoint);
+    const retry = await apply(plan, {
+      getCurrentConfig: () => config,
+      admittedAgent: {
+        config: checkpoint.config,
+        workspaceIdentity: await workspaceIdentity(plan.agent.workspace),
+        phase: "admitted",
+        assertCurrent: async () => {},
+      },
+      waitForAgentRuntime,
+      onAgentReady,
+    });
+    expect(retry).toMatchObject({ status: "partial", agentRetained: true });
+    expect(waitForAgentRuntime).not.toHaveBeenCalled();
+    expect(onAgentReady).not.toHaveBeenCalled();
+  });
+
   it("adds numbered ordinary agents without an install record", async () => {
-    const add = async () => apply(await buildPlan());
+    const onSetupEvent = vi.fn();
+    const add = async () => apply(await buildPlan(), { onSetupEvent });
 
     const first = await add();
     const second = await add();
 
     expect(first.status).toBe("complete");
+    expect(onSetupEvent).not.toHaveBeenCalled();
     expect(first).not.toHaveProperty("installRecord");
     expect(second).toMatchObject({
       status: "complete",
@@ -216,8 +697,13 @@ describe("stateless Template Add", () => {
   });
 
   it.each(["workspace failure", "lost config acknowledgement"] as const)(
-    "rolls back the new agent and workspace after %s",
+    "rolls back the new agent and reseeds bootstrap on retry after %s",
     async (failure) => {
+      const bootstrap = "Run these first-time agent instructions.\n";
+      writeFileSync(path.join(stateDir, "source", "BOOTSTRAP.md"), bootstrap);
+      const reread = await readTemplateManifestFile(path.join(stateDir, "source", "CLAW.md"));
+      assert(reread.ok);
+      source = reread;
       const plan = await buildPlan();
       let writes = 0;
       const message =
@@ -251,6 +737,14 @@ describe("stateless Template Add", () => {
         failure === "workspace failure" ? [] : ["main"],
       );
       expect(existsSync(plan.agent.workspace)).toBe(false);
+
+      const retryPlan = await buildPlan();
+      expect(retryPlan.agent.workspace).toBe(plan.agent.workspace);
+      const retried = await apply(retryPlan);
+      expect(retried.status).toBe("complete");
+      expect(await readFile(path.join(retryPlan.agent.workspace, "BOOTSTRAP.md"), "utf8")).toBe(
+        bootstrap,
+      );
     },
   );
 
@@ -273,323 +767,32 @@ describe("stateless Template Add", () => {
     expect(existsSync(path.join(plan.agent.workspace, "USER.md"))).toBe(true);
   });
 
-  const configured = { command: "npx", args: ["example-mcp"] };
-  const configSnapshot = {
-    path: "/fixture/openclaw.json",
-    config: {},
-    authoredConfig: {},
-    runtimeConfig: {},
-    sourceConfigBeforeMigrations: {},
-    mcpServers: {},
-  };
-  const mcpRef = (
-    name: string,
-    origin: PersistedTemplateMcpServerRef["origin"],
-  ): PersistedTemplateMcpServerRef => ({
-    schemaVersion: TEMPLATE_MCP_REF_SCHEMA_VERSION,
-    agentId: "new-agent",
-    name,
-    configDigest: mcpInstall.digestTemplateMcpServer(configured),
-    relationship: origin === "template-introduced" ? "managed" : "referenced",
-    origin,
-    independentOwner: true,
-    status: "complete",
-    createdAtMs: 1,
-    updatedAtMs: 1,
+  it("does not touch shared requirements when agent publication fails", async () => {
+    const plan = await buildPlan();
+    plan.actions.push({
+      kind: "package",
+      id: "notes",
+      action: "install",
+      target: "notes",
+      details: { kind: "plugin" },
+      blocked: false,
+    });
+    const packages = vi.spyOn(packageInstall, "installTemplatePackages");
+    const mcp = vi.spyOn(mcpInstall, "installTemplateMcpServersStateless");
+    const result = await apply(plan, {
+      commitConfig: async () => {
+        throw new Error("publish failed");
+      },
+      getCurrentConfig: () => ({ agents: { entries: {} } }),
+    });
+    expect(result).toMatchObject({
+      status: "partial",
+      error: { code: "add_failed", message: "publish failed" },
+      packages: [],
+      mcpServers: [],
+    });
+    expect(packages).not.toHaveBeenCalled();
+    expect(mcp).not.toHaveBeenCalled();
+    expect(existsSync(plan.agent.workspace)).toBe(false);
   });
-
-  it.each([false, true])(
-    "cleans unchanged shared requirements after publish failure (MCP changed=%s)",
-    async (changed) => {
-      const plan = await buildPlan();
-      plan.actions.push(
-        {
-          kind: "package",
-          id: "@owner/new-plugin",
-          action: "install",
-          target: "plugins",
-          details: { kind: "plugin" },
-          blocked: false,
-        },
-        {
-          kind: "mcpServer",
-          id: "new-server",
-          action: "configure",
-          target: "mcp.servers.new-server",
-          blocked: false,
-        },
-      );
-      const packageRef = (origin: PersistedTemplatePackageRef["origin"]) =>
-        ({ kind: "plugin", origin, status: "complete" }) as PersistedTemplatePackageRef;
-      const introducedPackage = packageRef("template-introduced");
-      const reusedPackage = packageRef("pre-existing");
-      const introducedMcp = mcpRef("new-server", "template-introduced");
-      const reusedMcp = mcpRef("existing-server", "pre-existing");
-      vi.spyOn(packageInstall, "rollbackStatelessTemplatePackages").mockImplementation(
-        async (refs) => {
-          refs[0]!.status = "rolled_back";
-          return [];
-        },
-      );
-      const unsetMcpServer = vi.spyOn(mcpMutation, "unsetConfiguredMcpServer");
-      unsetMcpServer.mockResolvedValue({ ...configSnapshot, ok: true, removed: true });
-      vi.spyOn(mcpConfig, "listConfiguredMcpServers").mockResolvedValue({
-        ...configSnapshot,
-        ok: true,
-        mcpServers: { "new-server": changed ? { command: "different-command" } : configured },
-      });
-      vi.spyOn(packageInstall, "installTemplatePackages").mockResolvedValueOnce([
-        introducedPackage,
-        reusedPackage,
-      ]);
-      vi.spyOn(mcpInstall, "installTemplateMcpServersStateless").mockImplementationOnce(
-        async (_plan, { refs }) => {
-          refs.push(introducedMcp, reusedMcp);
-        },
-      );
-
-      const result = await apply(plan, {
-        commitConfig: async () => {
-          throw new Error("publish failed");
-        },
-        getCurrentConfig: () => ({ agents: { entries: {} } }),
-      });
-
-      expect(result.error).toMatchObject({
-        code: "add_failed",
-        message: changed
-          ? "publish failed Shared plugins or MCP servers already added were kept; remove them separately if unused."
-          : "publish failed",
-      });
-      expect(result.packages.map((ref) => ref.status)).toEqual(["rolled_back", "complete"]);
-      expect(result.mcpServers).toEqual(changed ? [introducedMcp, reusedMcp] : [reusedMcp]);
-      if (changed) {
-        expect(unsetMcpServer).not.toHaveBeenCalled();
-      } else {
-        expect(unsetMcpServer).toHaveBeenCalledWith(
-          expect.objectContaining({ name: "new-server", expectedServer: configured }),
-        );
-      }
-      expect(existsSync(plan.agent.workspace)).toBe(false);
-    },
-  );
 });
-
-const checklist = "# Checklist\nCheck active incidents.\n";
-const baseConfig = (): OpenClawConfig => ({
-  agents: { entries: { main: {} } },
-  plugins: { enabled: false },
-});
-async function portableSource(fixture: OpenClawTestState) {
-  const packageRoot = fixture.statePath("package");
-  await mkdir(packageRoot, { recursive: true });
-  await writeFile(
-    path.join(packageRoot, "CLAW.md"),
-    `---\n${JSON.stringify({
-      schemaVersion: 1,
-      agent: { id: "portable", name: "Portable" },
-      workspace: { bootstrapFiles: { "HEARTBEAT.md": { source: "HEARTBEAT.md" } } },
-    })}\n---\n`,
-  );
-  await writeFile(
-    path.join(packageRoot, "HEARTBEAT.md"),
-    `${checklist}tasks:\n- name: Summary\n  interval: 15m\n  prompt: Prepare a summary.\n`,
-  );
-  const source = await readTemplateManifestFile(path.join(packageRoot, "CLAW.md"));
-  assert(source.ok, JSON.stringify(source.diagnostics));
-  return source;
-}
-
-it.each([
-  { every: "5m", changed: "none" },
-  { every: "0m", changed: "none" },
-  { every: "5m", changed: "source" },
-  { every: "5m", changed: "definition" },
-  { every: "5m", changed: "scratch" },
-  { every: "5m", changed: "rollback-definition" },
-  { every: "5m", changed: "rollback-scratch" },
-  { every: "5m", changed: "missing-scratch-adapter" },
-])(
-  "adds portable heartbeat $every with consent and scratch guarded ($changed)",
-  async ({ every, changed }) => {
-    const rollback = changed.startsWith("rollback-");
-    const scratchChanged = changed.endsWith("scratch");
-    const definitionChanged = changed.endsWith("definition");
-    await withOpenClawTestState({ label: "template-portable-add" }, async (fixture) => {
-      const source = await portableSource(fixture);
-      let config = baseConfig();
-      setRuntimeConfigSnapshot(config);
-      const makePlan = () =>
-        buildTemplateAddPlan({
-          manifest: source.manifest,
-          source: source.source,
-          openClawProfile: { schemaVersion: 1, agent: { heartbeat: { every } } },
-          context: { config, workspace: fixture.statePath("added-workspace") },
-        });
-      const plan = await makePlan();
-      expect((await makePlan()).planIntegrity).toBe(plan.planIntegrity);
-      expect(plan.agent.config).not.toHaveProperty("heartbeat");
-      expect(projectTemplateAddScheduledJobs(plan).jobs.map((job) => job.proposed)).toEqual([
-        expect.objectContaining({
-          schedule: { everyMs: every === "0m" ? 1_800_000 : 300_000 },
-          delivery: "owner",
-          session: "main",
-        }),
-        expect.objectContaining({
-          schedule: { everyMs: 900_000 },
-          delivery: "owner",
-          message: "Prepare a summary.",
-        }),
-      ]);
-      if (changed === "source") {
-        await writeFile(fixture.statePath("package", "HEARTBEAT.md"), "Changed after consent.\n");
-      }
-      const run = vi.fn(async () => ({ status: "ok" as const }));
-      const cron = new CronService({
-        storePath: fixture.statePath("cron", "jobs.json"),
-        scheduler: createTestGatewayScheduler(),
-        cronEnabled: true,
-        defaultAgentId: "main",
-        log: createNoopLogger(),
-        enqueueSystemEvent: vi.fn(),
-        runSessionEvent: run,
-        runIsolatedAgentJob: run,
-      });
-      await cron.start();
-      const gateway = createTemplateCronAdapter(cron);
-      try {
-        const result = await applyTemplateAddPlanStateless(plan, {
-          config,
-          consentPlanIntegrity: plan.planIntegrity,
-          getCurrentConfig: () => config,
-          commitConfig: async (transform) => {
-            config = transform(config);
-            setRuntimeConfigSnapshot(config);
-          },
-          cronGateway: {
-            ...gateway,
-            add: async (input, options) => {
-              if (rollback && input.name === "Summary") {
-                const [existing] = await cron.list({ includeDisabled: true });
-                if (scratchChanged) {
-                  const edited = await cron.writeScratch(existing!.id, {
-                    content: "Operator checklist",
-                    expectedRevision: 1,
-                  });
-                  expect(edited.ok).toBe(true);
-                } else {
-                  await cron.update(existing!.id, { name: "Operator edit" });
-                }
-                throw new Error("Second automation could not be added");
-              }
-              return gateway.add(input, options);
-            },
-            writeScratch:
-              changed === "missing-scratch-adapter"
-                ? undefined
-                : async (id, content, commitGuard) => {
-                    expect((await cron.readJob(id))?.enabled).toBe(false);
-                    expect(await cron.run(id, "due")).toMatchObject({ ran: false });
-                    expect(run).not.toHaveBeenCalled();
-                    if (changed === "scratch") {
-                      await cron.writeScratch(id, {
-                        content: "Operator checklist",
-                        expectedRevision: 0,
-                      });
-                    }
-                    await gateway.writeScratch(id, content, commitGuard);
-                    if (changed === "definition") {
-                      await cron.update(id, { name: "Operator edit" });
-                    }
-                  },
-            enable: async (id, revision, commitGuard) => {
-              expect((await cron.readScratch(id)).scratch?.content).toBe(checklist);
-              await gateway.enable(id, revision, commitGuard);
-            },
-          },
-        });
-        const jobs = await cron.list({ includeDisabled: true });
-        if (changed === "source" || changed === "missing-scratch-adapter") {
-          expect(result).toMatchObject({ status: "partial", configCommitted: false });
-          expect(result.error?.message).toContain(
-            changed === "source"
-              ? "changed after consent"
-              : "requires the gateway-owned cron.scratch.set API",
-          );
-          expect(jobs).toEqual([]);
-          expect(config.agents?.entries).not.toHaveProperty("portable");
-          return;
-        }
-        if (definitionChanged || scratchChanged) {
-          expect(result).toMatchObject({
-            status: "partial",
-            configCommitted: true,
-            error: { code: "cron_scratch_import_incomplete" },
-          });
-          expect(result.error?.message).toContain("Inspect their scratch and enabled state");
-          expect(jobs).toHaveLength(1);
-          expect(jobs[0]).toMatchObject({
-            enabled: rollback,
-            ...(definitionChanged ? { name: "Operator edit" } : {}),
-          });
-          expect((await cron.readScratch(jobs[0]!.id)).scratch?.content).toBe(
-            scratchChanged ? "Operator checklist" : checklist,
-          );
-          expect(config.agents?.entries).toHaveProperty("portable");
-          expect(run).not.toHaveBeenCalled();
-          return;
-        }
-        expect(result.status, result.error?.message).toBe("complete");
-        expect(jobs).toHaveLength(2);
-        expect(jobs.every((job) => job.enabled === (every !== "0m"))).toBe(true);
-        expect(jobs.find((job) => job.name === "Summary")?.payload).toMatchObject({
-          kind: "agentTurn",
-          message: "Prepare a summary.",
-        });
-        const monitor = jobs.find((job) => job.name !== "Summary")!;
-        expect((await cron.readScratch(monitor.id)).scratch?.content).toBe(checklist);
-      } finally {
-        cron.stop();
-        await cron.waitForIdle();
-      }
-    });
-  },
-);
-
-const overnight = { start: "22:00", end: "06:00", timezone: "UTC" };
-it.each([
-  ["start only", { start: "22:00" }, undefined, [true, true]],
-  ["end only", { end: "06:00" }, undefined, [true, true]],
-  ["complete overnight window", { ...overnight }, overnight, [false, true]],
-] as const)(
-  "preserves portable active-hours admission for %s",
-  async (_name, activeHours, expectedHours, allowed) => {
-    await withOpenClawTestState({ label: "template-portable-active-hours" }, async (fixture) => {
-      const source = await portableSource(fixture);
-      const profile = parseTemplateOpenClawProfile({
-        schemaVersion: 1,
-        agent: { heartbeat: { every: "5m", activeHours } },
-      });
-      assert(profile.ok, JSON.stringify(profile.diagnostics));
-      const plan = await buildTemplateAddPlan({
-        manifest: source.manifest,
-        source: source.source,
-        openClawProfile: profile.profile,
-        context: {
-          config: baseConfig(),
-          workspace: fixture.statePath("added-workspace"),
-        },
-      });
-      const jobs = plan.actions.flatMap((action) => (action.automation ? [action.automation] : []));
-      expect(jobs).toHaveLength(2);
-      for (const job of jobs) {
-        expect(job.activeHours).toEqual(expectedHours);
-        expect(
-          [Date.UTC(2026, 0, 1, 12), Date.UTC(2026, 0, 1, 23)].map((nowMs) =>
-            isCronWithinActiveHours(job.activeHours, nowMs, "UTC"),
-          ),
-        ).toEqual(allowed);
-      }
-    });
-  },
-);

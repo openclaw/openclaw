@@ -4,12 +4,14 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
   recordCommandProcessFailure,
 } from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
+import { resolveSessionRunError } from "../sessions/session-run-error-format.js";
 import {
   cloneProjectCheckout,
   ProjectCloneError,
@@ -66,6 +68,45 @@ function uncertainFailure() {
     cleanup: "uncertain",
   });
 }
+
+it("links an unmatched real Git failure to its retained process diagnostics", async () => {
+  const root = dirs.make("openclaw-clone-diagnostic-");
+  const file = path.join(root, "gateway.log");
+  setLoggerOverride({ level: "warn", consoleLevel: "silent", file });
+  try {
+    // Invalid inherited Git configuration fails before any network access.
+    const error = await capture(
+      cloneProjectCheckout(
+        { url: projectUrl, target: path.join(root, "checkout") },
+        { env: { GIT_CONFIG_COUNT: "invalid" } },
+      ),
+    );
+    expect(error).toBeInstanceOf(ProjectCloneError);
+    if (!(error instanceof ProjectCloneError)) {
+      throw error;
+    }
+    expect(error).toMatchObject({
+      failure: "clone_failed",
+      message: expect.stringMatching(/Diagnostic ID: [a-f0-9-]{36}/u),
+    });
+    await flushLogger();
+    const records = await fs.readFile(file, "utf8");
+    expect(records).toContain("GIT_CONFIG_COUNT");
+    expect(records).toContain("exitCode");
+    expect(error.message).not.toContain("GIT_CONFIG_COUNT");
+    const diagnosticId = /Diagnostic ID: ([a-f0-9-]{36})/u.exec(error.message)?.[1];
+    expect(diagnosticId).toBeDefined();
+    expect(records).toContain(diagnosticId);
+    expect(resolveSessionRunError({ error: String(error) }, "failed")).toContain(
+      `Diagnostic ID: ${diagnosticId}`,
+    );
+    await expectMissing(path.join(root, "checkout"));
+  } finally {
+    await flushLogger();
+    setLoggerOverride(null);
+    resetLogger();
+  }
+});
 
 it("preserves an existing checkout when its target cannot be inspected", async () => {
   const target = dirs.make("openclaw-clone-target-");
@@ -169,6 +210,9 @@ it.each(["probe", "fetch", "repair", "uncertain", "auth"] as const)(
       }
       if (phase === "uncertain") {
         throw failure;
+      }
+      if (argv.includes("config")) {
+        return { ...successfulGit, code: 1 };
       }
       if (phase === "auth") {
         return { ...failedClone, stderr: "Authentication failed" };

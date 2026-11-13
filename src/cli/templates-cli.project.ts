@@ -4,6 +4,7 @@ import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-co
 import { readConfigFileSnapshot } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
+import { createTemplateDraft } from "../templates/draft.js";
 import { buildTemplateAddPlan } from "../templates/lifecycle.js";
 import {
   TEMPLATE_BUILD_RESULT_SCHEMA_VERSION,
@@ -27,10 +28,12 @@ import type {
   TemplatesBuildOptions,
   TemplatesCreateOptions,
   TemplatesDevOptions,
+  TemplatesDraftOptions,
   TemplatesValidateOptions,
 } from "./templates-cli.js";
 
 const TEMPLATE_DEV_RESULT_SCHEMA_VERSION = "openclaw.templateDev.v1" as const;
+const TEMPLATE_DRAFT_RESULT_SCHEMA_VERSION = "openclaw.templateDraft.v1" as const;
 
 function reportProjectError(
   error: unknown,
@@ -38,7 +41,8 @@ function reportProjectError(
   schemaVersion:
     | typeof TEMPLATE_PROJECT_RESULT_SCHEMA_VERSION
     | typeof TEMPLATE_BUILD_RESULT_SCHEMA_VERSION
-    | typeof TEMPLATE_DEV_RESULT_SCHEMA_VERSION,
+    | typeof TEMPLATE_DEV_RESULT_SCHEMA_VERSION
+    | typeof TEMPLATE_DRAFT_RESULT_SCHEMA_VERSION,
   json: boolean | undefined,
 ): void {
   const code = error instanceof TemplateProjectError ? error.code : fallbackCode;
@@ -83,6 +87,32 @@ export async function runTemplatesCreateCommand(
   }
 }
 
+export async function runTemplatesDraftCommand(
+  workspaceDir: string,
+  opts: TemplatesDraftOptions,
+): Promise<void> {
+  try {
+    const draft = await createTemplateDraft(workspaceDir);
+    if (opts.json) {
+      writeRuntimeJson(runtime, {
+        schemaVersion: TEMPLATE_DRAFT_RESULT_SCHEMA_VERSION,
+        stability: TEMPLATE_OUTPUT_STABILITY,
+        ok: true,
+        ...draft,
+      });
+    } else {
+      runtime.log(`Prepared private Template draft: ${sanitizeTerminalText(draft.path)}`);
+    }
+  } catch (error) {
+    reportProjectError(
+      error,
+      "draft_create_failed",
+      TEMPLATE_DRAFT_RESULT_SCHEMA_VERSION,
+      opts.json,
+    );
+  }
+}
+
 export async function runTemplatesValidateCommand(
   projectPath: string,
   opts: TemplatesValidateOptions,
@@ -106,9 +136,6 @@ export async function runTemplatesValidateCommand(
       root: result.root,
       source: result.template.source,
       manifest: result.template.manifest,
-      ...(result.template.openClawProfile
-        ? { openClawProfile: result.template.openClawProfile }
-        : {}),
       excludedPaths: result.excludedPaths,
       diagnostics: result.diagnostics,
     });
@@ -186,7 +213,7 @@ export async function runTemplatesDevCommand(
       manifest: result.manifest,
       templateMarkdownBody: result.templateMarkdownBody,
       packageBootstrap: result.packageBootstrap,
-      openClawProfile: result.openClawProfile,
+      bundledSources: result.snapshot.bundledSources,
       source: {
         ...result.source,
         integrityKind: "artifact",

@@ -1,5 +1,6 @@
 import { sql, type Expression, type RawBuilder } from "kysely";
 import {
+  jsonNativeFieldsValid,
   jsonPathValue,
   jsonRemovePaths,
   jsonValid,
@@ -575,15 +576,16 @@ export function transcriptPredicateSql<K extends keyof TranscriptPredicateFields
     THEN ${stored} ELSE ${derived} END`;
 }
 
+/** NULL when native fields cannot decode the row; callers recheck those rows in JavaScript. */
 export function transcriptEventRunIdSql(
   database: EngineConnection,
   alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<string | null> {
-  return jsonPathValue(
-    database,
-    transcriptEventNavigationSql(database, alias),
-    sql.lit("$.message.__openclaw.runId"),
-  );
+  const navigation = transcriptEventNavigationSql(database, alias);
+  return /* kysely-allow-raw: CASE fences native decoding of escapes JSONB rejects. */ sql<
+    string | null
+  >`CASE WHEN ${jsonNativeFieldsValid(database, navigation)}
+    THEN ${jsonPathValue(database, navigation, sql.lit("$.message.__openclaw.runId"))} END`;
 }
 
 function storedProjectionSql(

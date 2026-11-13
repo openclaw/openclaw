@@ -626,6 +626,7 @@ describe("exportTrajectoryBundle", () => {
 
   it("redacts broad secret patterns from every exported bundle file", async () => {
     const { tmpDir, sessionTarget, outputDir } = exportPaths();
+    const promptBody = "retained context ".repeat(4_000);
     const rawSecrets = [
       "sk-exported-session-secret",
       "ghp_123456789012345678901234",
@@ -683,7 +684,7 @@ describe("exportTrajectoryBundle", () => {
       [
         "context.compiled",
         {
-          systemPrompt: `system includes ${rawSecrets[1]}`,
+          systemPrompt: `system prompt for ${path.join(tmpDir, "instructions.md")}\n${promptBody}${rawSecrets[1]} prompt-tail-marker`,
           tools: [{ name: "danger", description: `tool mentions ${rawSecrets[2]}` }],
         },
       ],
@@ -721,6 +722,10 @@ describe("exportTrajectoryBundle", () => {
       .map((file) => fs.readFileSync(path.join(outputDir, file), "utf8"))
       .join("\n");
     expect(exportedBundleText).toContain("keep-visible-marker");
+    for (const file of ["events.jsonl", "prompts.json", "system-prompt.txt"]) {
+      expect(readText(outputDir, file)).toContain(promptBody);
+      expect(readText(outputDir, file)).toContain("prompt-tail-marker");
+    }
     for (const secret of rawSecrets) {
       expect(exportedBundleText).not.toContain(secret);
     }

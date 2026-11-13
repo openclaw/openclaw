@@ -1,8 +1,7 @@
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
-import "../pages/chat/components/browser-tab-card.css";
-import { BrowserTabCardHost } from "../pages/chat/components/browser-tab-card.tsx";
+import { t } from "../lib/reactive/i18n.ts";
 import { renderComposerMenuOption as ComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
@@ -433,6 +432,11 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         // This matrix checks final colors; animation behavior has its own cases.
         host.style.setProperty("--control-ui-transition-fast", "0s");
         const { page, userEvent } = await import("vitest/browser");
+        const hover = async (element: HTMLElement) => {
+          // These fixtures are static: skip stability frames, but prove the pointer hit.
+          await page.elementLocator(element).hover({ force: true });
+          expect(element.matches(":hover"), element.textContent ?? "hover target").toBe(true);
+        };
         const style = document.head.appendChild(document.createElement("style"));
         onTestFinished(() => style.remove());
         style.textContent =
@@ -447,7 +451,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
           token === "transparent" ? transparent : colorSwatch(`var(${token})`);
 
         // Exercise the state owner with real CSS and browser input. The component
-        // scenarios below separately prove Menu and BrowserTabCard composition.
+        // scenarios below separately prove Menu composition.
         const states = [
           {
             name: "neutral",
@@ -507,7 +511,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         ]) {
           const canonical = className.includes("oc-menu-item");
           for (const { name: state, menu, plain } of states) {
-            await page.elementLocator(park).hover();
+            await hover(park);
             park.focus();
             const item = host.appendChild(document.createElement("button"));
             item.className = className;
@@ -537,14 +541,14 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
             const label = `${className}: ${state}`;
             expect(getComputedStyle(item).backgroundColor, `${label} resting`).toBe(color(resting));
             expect(getComputedStyle(item).opacity, `${label} opacity`).toBe(opacity);
-            await page.elementLocator(item).hover();
+            await hover(item);
             await expect
               .poll(() => getComputedStyle(item).backgroundColor, {
                 message: `${label} hover`,
               })
               .toBe(color(interactive));
             if (!item.disabled) {
-              await page.elementLocator(park).hover();
+              await hover(park);
               await userEvent.keyboard("{Tab}");
               item.focus();
               expect(item.matches(":focus-visible"), `${label} keyboard focus`).toBe(true);
@@ -560,55 +564,6 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         }
       },
     );
-
-    it("matches session menu geometry and theme inside browser cards", async () => {
-      const view = mountSolid(() => (
-        <BrowserTabCardHost
-          preview={{
-            kind: "browser-tab",
-            target: "host",
-            profile: "managed",
-            targetId: "tab-1",
-            url: "https://example.test/page",
-            title: "Example page",
-          }}
-        />
-      ));
-      flush();
-      const card = query(view.container, "openclaw-browser-tab-card");
-      // Hold the entry presentation like a stalled WebKit timeline on a loaded runner:
-      // the geometry, theme, and hover checks must not wait for it to settle.
-      card.style.setProperty("--oc-overlay-show-duration", "3600s");
-      const menu = await openAdmittedMenu(card, ".more");
-      const entry = menu.getAnimations();
-      expect(entry.length).toBeGreaterThan(0);
-      entry.forEach((animation) => animation.pause());
-      const item = query(card, '[value="copy-url"]');
-      mountMenu(
-        {
-          id: "browser-card-reference",
-          label: "Reference menu",
-          class: "session-menu",
-          items: [{ id: "reference", label: "Reference action", class: "session-menu__item" }],
-        },
-        host,
-      );
-      const referenceMenu = query(host, ".oc-menu");
-      const referenceItem = query(host, '[data-value="reference"]');
-      for (const property of ["background-color", "border-radius", "padding", "box-shadow"]) {
-        expect(getComputedStyle(menu).getPropertyValue(property)).toBe(
-          getComputedStyle(referenceMenu).getPropertyValue(property),
-        );
-      }
-      for (const property of ["min-height", "padding", "font-size", "color"]) {
-        expect(getComputedStyle(item).getPropertyValue(property)).toBe(
-          getComputedStyle(referenceItem).getPropertyValue(property),
-        );
-      }
-      await hoverBackground(item, colorSwatch("var(--surface-hover)"));
-      entry.forEach((animation) => animation.finish());
-      await expect.poll(() => menu.dataset.phase).toBe("open");
-    });
 
     it("uses platform hover for slash suggestions", async () => {
       mountSolid(
@@ -666,22 +621,6 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
   });
 });
 
-/** Wait for open authority without waiting for the deliberately held entry animation. */
-async function openAdmittedMenu(host: HTMLElement, selector: string) {
-  const { page } = await import("vitest/browser");
-  const trigger = query(host, selector);
-  await page.elementLocator(trigger).click();
-  const menu = query(host, ".oc-menu");
-  await expect
-    .poll(() => ({
-      expanded: trigger.getAttribute("aria-expanded"),
-      shown: menu.matches(":popover-open"),
-      interactive: !menu.inert && ["opening", "open"].includes(menu.dataset.phase ?? ""),
-    }))
-    .toEqual({ expanded: "true", shown: true, interactive: true });
-  return menu;
-}
-
 describe.skipIf(!hasPopoverApi)("sidebar intrinsic rows", () => {
   it("keeps multiline labels inside their highlight in a capped scrolling menu", async () => {
     await import("../styles/sidebar-menus.css");
@@ -728,6 +667,7 @@ describe.skipIf(!hasPopoverApi)("sidebar intrinsic rows", () => {
             status: { state: "on" },
             link: { linked: false },
             channel: "local_operator",
+            accountSignIn: "popup",
             owner: true,
             connection: { kind: "local" },
             services: {
@@ -751,7 +691,9 @@ describe.skipIf(!hasPopoverApi)("sidebar intrinsic rows", () => {
       await userEvent.keyboard("{ArrowUp}");
       if (key === "disabled") {
         expect(button.disabled).toBe(true);
-        expect(button.title).not.toBe("");
+        await expect
+          .element(page.elementLocator(button))
+          .toHaveAccessibleDescription(t("openclawId.signInUnconfigured"));
         expect(document.activeElement).not.toBe(button);
         button.click();
         expect(selected).not.toHaveBeenCalled();

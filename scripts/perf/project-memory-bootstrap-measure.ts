@@ -29,7 +29,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
-import type { MemoryProviderHandle } from "../../src/plugins/memory-provider-types.js";
+import type { MemoryProviderHandle } from "../../src/plugins/memory-provider-runtime-types.js";
 import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({

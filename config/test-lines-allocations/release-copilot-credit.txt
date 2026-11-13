@@ -1,2 +1,0 @@
-10
-# Extend the existing eligibility and real CLI generated-credit regression for Copilot without dropping human credit.

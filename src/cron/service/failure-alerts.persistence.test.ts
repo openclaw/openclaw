@@ -58,11 +58,11 @@ function alertFixture(
       startedAt,
       endedAt: startedAt + 10,
     });
-  const quiet = (startedAt = nowMs(), endedAt = startedAt, busy?: true) =>
+  const quiet = (startedAt = nowMs(), endedAt = startedAt) =>
     applyTriggerNoFireResultAndDrainNotifications(state, job, {
       startedAt,
       endedAt,
-      triggerEval: { fired: false, stateChanged: false, ...(busy === undefined ? {} : { busy }) },
+      triggerEval: { fired: false, stateChanged: false },
     });
   const persist = () => saveCronStore(store.storePath, { version: 1, jobs: [job] });
   const durable = async () => (await loadCronStore(store.storePath)).jobs[0]?.state;
@@ -236,24 +236,6 @@ it("persists an incident and suppresses repeats after a service reload past cool
   await finalize("error", "first failure", currentJob, now, reloadedState);
   expect(send).toHaveBeenCalledOnce();
   expect((await durable())?.failureAlertIncident).toBeDefined();
-});
-
-it("keeps a trigger incident unresolved while its quiet evaluation is busy", async () => {
-  const now = Date.parse("2026-08-01T15:00:00Z");
-  const { job, outcome, quiet, send } = alertFixture(() => now);
-  await outcome({
-    status: "error",
-    error: "plugin reload failed",
-    failureNotificationDetail: {
-      kind: "script-failure",
-      source: "trigger",
-      code: "plugin_reload_failed",
-    },
-  });
-  await quiet(now + 1_000, now + 1_001, true);
-  // Recovery is silent; only the original failure alert is ever sent.
-  expect(send).toHaveBeenCalledOnce();
-  expect(job.state.failureAlertIncident).toBeDefined();
 });
 
 it.each([1, 3])(

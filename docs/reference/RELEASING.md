@@ -28,7 +28,11 @@ the regular stable channel. Its GitHub release is not marked Latest. A monthly
 line retires when `main` advances into the next month. Maintain only one
 extended-stable line: the trailing completed month relative to `main`'s version;
 older `.33+` lines are retired. Publishing a retired line requires an explicit
-maintainer decision; never bypass the release guards.
+maintainer decision; never bypass the release guards. The shared publisher records
+that decision with `retired_line_publication_reason` in its human-approved
+`npm-release` receipt, scoped to the exact release tag, source, channel, and
+parent attempt. Empty or historical ordinary approvals do not authorize a
+retired-line publication; all source, validation, and live-authority gates remain.
 
 ## Version naming
 
@@ -163,6 +167,28 @@ ClawHub proof. GitHub, Docker, and platform activation may continue, but the
 full release remains incomplete until independent ClawHub recovery verifies the
 original artifacts. Deferral does not authorize repacking or replacing them.
 
+### Explicit beta plugin authentication deferrals
+
+For an original all-package core beta publication with prepared qualification,
+the existing `prepared_plugins` JSON input accepts an optional operator-reviewed
+`corePluginDeferrals` array. An object containing only this array preserves normal
+publication; when artifact descriptors are present, retain the original `npm` and
+`clawhub` descriptors unchanged. Each entry names
+`packageName`, `version`, `sourceSha`, `reason`, and the original GitHub Actions
+job URL in `evidence`. Reasons are `npm-eneedauth` or
+`npm-trusted-publisher-exchange-http-404`; the latter describes a verified
+trusted-publisher token exchange failure, not an arbitrary registry 404. The
+human-approved parent receipt binds the declaration to the exact release source
+and tooling run. It is not available for stable or selected-package publication.
+
+The complete original roster and qualified artifacts remain verified, including
+the deferred packages. Every nondeferred package must be public before core npm
+publication. Final readback retains each original failure and explicit deferred
+disposition; it does not invent a successful publication. If a deferred version
+has since become public, normal registry integrity and selector checks apply.
+Deferred packages still require separately authorized recovery using their
+original qualified bytes.
+
 ### Watch publication
 
 After the stable orchestrator has dispatched publication, keep its read-only
@@ -272,11 +298,15 @@ and remain recoverable. New publish qualification requires admitted Q=C.
 
 Evidence reuse preserves both the original producer identity and the current
 consumer identity, inputs, coverage, and artifact provenance. It cannot relabel
-an old run as candidate-owned. Reconciliation is read-only; explicit resume is
-limited to a candidate request before any qualification-ref mutation or FRV
-dispatch. An uncertain write never authorizes another dispatch. All publication
-gates, stable soak, blocking performance, environment approvals, and exact-byte
-checks remain unchanged.
+an old run as candidate-owned. Reconciliation is read-only. Before the first FRV
+workflow POST, explicit resume may continue an admitted candidate request whose
+qualification ref is still intended, or reuse its existing uncertain ref after
+verifying the exact Q commit and a complete empty workflow inventory. Recovery
+revalidates admission and signer authority, then verifies the exact ref again
+before recording the first workflow attempt. An attempted or uncertain workflow
+POST remains observation-only and never authorizes another dispatch. All
+publication gates, stable soak, blocking performance, environment approvals, and
+exact-byte checks remain unchanged.
 
 Local contract tests can prove input binding, refusal, and recovery behavior.
 They do not prove hosted workflow admission, environment access, OIDC, signing,
@@ -284,6 +314,13 @@ or publication. Report hosted evidence and untested deployment prerequisites
 separately; a local green check is not a hosted release receipt.
 
 ## Packages and apps can become available at different times
+
+Selected official npm plugins publish successfully before core npm. ClawHub
+registry publication starts at its existing dispatch point and runs independently
+thereafter. ClawHub planning, authorization, dispatch, publication, verification,
+and recovery never block core npm, GitHub release finalization, main closeout,
+or the release retrospective PR. Pending or failed ClawHub work remains visible
+with its own owner and follow-up; a core release does not claim it is complete.
 
 A published Gateway release does not mean every native app is ready. Signing and publishing the apps can
 finish separately from npm, Docker, and the GitHub release.

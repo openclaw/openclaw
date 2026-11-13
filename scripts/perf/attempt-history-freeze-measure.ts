@@ -7,9 +7,9 @@
  * attempt-history-prepare module with unchanged dependencies. Run two A/A pairs
  * then five alternating A/B pairs. Accept identical bytes and immutability, zero
  * admitted-prefix walks, lower CPU/allocation beyond controls, and no material
- * p95 or GC regression. --restored --iterations 128 measures each private writable
- * initial-context clone once; cloning stays outside measurement. Ordinary persistent
- * startup uses these private views; admitted identities model detached retries and
+ * p95 or GC regression. --restored --iterations 128 measures each projected
+ * initial context once; projection stays outside measurement. Persistent startup
+ * shares these frozen payloads; admitted identities also model detached retries and
  * live replies retained for finalization. The entry-point regression exercises real
  * in-memory append/read admission. This is owner cost, not Gateway latency or DB scale.
  */
@@ -23,7 +23,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { createToolResultPromptProjectionState } from "../../src/agents/embedded-agent-runner/session-prompt-state.js";
 import type { AgentMessage } from "../../src/agents/runtime/index.js";
-import { cloneSessionModelContextEntries } from "../../src/agents/sessions/session-manager-codec.js";
+import { projectSessionModelContextEntries } from "../../src/agents/sessions/session-manager-codec.js";
 import { SessionManager } from "../../src/agents/sessions/session-manager.js";
 import { SettingsManager } from "../../src/agents/sessions/settings-manager.js";
 import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json-normalize.js";
@@ -154,7 +154,7 @@ function restorePrivateViews() {
   }
   assert(iterations <= histories, "Restored measurement visits each private view once");
   for (const fixture of fixtures) {
-    const entries = cloneSessionModelContextEntries(
+    const entries = projectSessionModelContextEntries(
       fixture.retained.map((message, index) => ({
         type: "message",
         id: String(index),
@@ -166,11 +166,7 @@ function restorePrivateViews() {
     fixture.retained = entries.flatMap((entry) =>
       entry.type === "message" ? [entry.message] : [],
     );
-    assert(
-      fixture.retained.every(
-        (message) => !Object.isFrozen(message) && !isOwnedTranscriptPayload(message),
-      ),
-    );
+    assert(fixture.retained.every((message) => Object.isFrozen(message)));
   }
 }
 restorePrivateViews();
