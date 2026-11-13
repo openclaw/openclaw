@@ -31,7 +31,6 @@ jobs:
         - after
     env:
       VARIANT: ${{ matrix.variant }}
-      PRIVATE_PROOF: ${{ runner.temp }}/lease-proof-${{ matrix.variant }}
       SAFE_PROOF: .artifacts/lease-proof
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -45,6 +44,7 @@ jobs:
         TARGET_SHA: ${{ inputs.target_ref }}
         INPUT_WORKFLOW: ${{ inputs.workflow_ref }}
         WORKFLOW_SHA: ${{ github.workflow_sha }}
+        PRIVATE_PROOF: ${{ runner.temp }}/lease-proof-${{ matrix.variant }}
       run: 'set -euo pipefail
 
         [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
@@ -116,6 +116,8 @@ jobs:
         \ >> \"$SAFE_PROOF/actual.patch\" || test \"$?\" -eq 1\nif [ \"$VARIANT\" = before ]; then\n expected=4d6a7ff37309cbfb10848a98ac404f4858813dc232915a039f0c9d5bcc3f231f\n\
         else\n expected=6101ac24f3804ecffe179dd56f9531fe2c91678bbbc7191fc38198ac624b1486\nfi\npython3 \"$PRIVATE_PROOF/hash-source.py\"\
         \ \"$VARIANT\" \"$expected\"\n"
+      env:
+        PRIVATE_PROOF: ${{ runner.temp }}/lease-proof-${{ matrix.variant }}
     - name: Require exact baseline failure or repaired whole-file success
       shell: bash
       run: "set -euo pipefail\ntests=(src/agents/prepared-model-runtime.lease-scope.test.ts)\nif [ \"$VARIANT\"\
@@ -124,6 +126,8 @@ jobs:
         \ +e\nnode scripts/test-projects.mts \"${tests[@]}\" -- --maxWorkers=1 --reporter=default --reporter=json\
         \ --outputFile=\"$PRIVATE_PROOF/tests.json\" > \"$PRIVATE_PROOF/tests.log\" 2>&1\ncode=$?\nset -e\nprintf\
         \ '%s\n' \"$code\" > \"$PRIVATE_PROOF/test-exit.txt\"\npython3 \"$PRIVATE_PROOF/reduce.py\"\n"
+      env:
+        PRIVATE_PROOF: ${{ runner.temp }}/lease-proof-${{ matrix.variant }}
     - name: Targeted static proof
       if: matrix.variant == 'after'
       run: "set -euo pipefail\nprintf 'result=not-completed\nowner=scripts/check-changed.mjs\n' > \"$SAFE_PROOF/static.txt\"\
@@ -131,6 +135,8 @@ jobs:
         \ > \"$PRIVATE_PROOF/static.log\" 2>&1\ncode=$?\nset -e\nif [ \"$code\" -eq 0 ]; then\n result=passed\n\
         else\n result=failed\nfi\nprintf 'result=%s\nowner=scripts/check-changed.mjs\ncommand_exit=%s\n' \"$result\"\
         \ \"$code\" > \"$SAFE_PROOF/static.txt\"\nexit \"$code\"\n"
+      env:
+        PRIVATE_PROOF: ${{ runner.temp }}/lease-proof-${{ matrix.variant }}
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       if: always()
       with:
