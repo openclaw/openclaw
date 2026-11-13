@@ -534,7 +534,7 @@ describe("Control UI build chunking", () => {
       ],
       [
         chat,
-        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { people } from ${JSON.stringify(peopleCopy)}; import { patch } from ${JSON.stringify(mutations)}; export { version } from ${JSON.stringify(inlineView)}; export { owner } from ${JSON.stringify(creatorPublication)}; export { facts } from ${JSON.stringify(coreToolFacts)}; export { parked } from ${JSON.stringify(markdownBlockPresentation)}; export { skeleton } from ${JSON.stringify(skeleton)}; export { poll } from ${JSON.stringify(visiblePoll)}; export { card } from ${JSON.stringify(permissionCard)}; export { row as process } from ${JSON.stringify(processRow)}; export { renderRun, renderPreview } from ${JSON.stringify(runFrame)}; export { format } from ${JSON.stringify(reactiveFormat)}; export { denied } from ${JSON.stringify(permissionError)}; export class Chat { label = patch(action(label + people)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
+        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { people } from ${JSON.stringify(peopleCopy)}; import { patch } from ${JSON.stringify(mutations)}; export { version } from ${JSON.stringify(inlineView)}; export { owner } from ${JSON.stringify(creatorPublication)}; export { facts } from ${JSON.stringify(coreToolFacts)}; export { parked } from ${JSON.stringify(markdownBlockPresentation)}; export { skeleton } from ${JSON.stringify(skeleton)}; export { poll } from ${JSON.stringify(visiblePoll)}; export const card = () => import(${JSON.stringify(permissionCard)}); export { row as process } from ${JSON.stringify(processRow)}; export { renderRun, renderPreview } from ${JSON.stringify(runFrame)}; export { format } from ${JSON.stringify(reactiveFormat)}; export { denied } from ${JSON.stringify(permissionError)}; export class Chat { label = patch(action(label + people)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
       ],
       [
         newSession,
@@ -814,8 +814,11 @@ describe("Control UI build chunking", () => {
     const previewChunk = chunkFor(sourcePreviewView);
     expect(staticImports(chatChunk.fileName)).not.toContain(previewChunk.fileName);
     expect(runChunk.dynamicImports).toContain(previewChunk.fileName);
-    const visibleChunk = chunkFor(permissionCard);
-    expect([permissionLabels, processRow].every((id) => id in visibleChunk.modules)).toBe(true);
+    const permissionChunk = chunkFor(permissionCard);
+    expect(permissionLabels in permissionChunk.modules).toBe(true);
+    expect(staticImports(chatChunk.fileName)).not.toContain(permissionChunk.fileName);
+    expect(chatChunk.dynamicImports).toContain(permissionChunk.fileName);
+    const visibleChunk = chunkFor(processRow);
     expect(staticImports(chatChunk.fileName)).toContain(visibleChunk.fileName);
     expect(staticImports(visibleChunk.fileName)).not.toContain(runChunk.fileName);
     const pluginChunk = chunkFor(pluginLoader);

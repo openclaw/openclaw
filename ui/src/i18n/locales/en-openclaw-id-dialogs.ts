@@ -1,7 +1,7 @@
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
-// Strings of the OpenClaw ID dialogs (Make reachable, Your devices). They load
+// Strings of the OpenClaw ID dialogs (Make reachable, Your devices, device sign-in). They load
 // with the dialogs, not with the sidebar, and merge into the openclawId namespace.
 const enOpenClawIdDialogs = {
   openclawId: {
@@ -109,6 +109,10 @@ const enOpenClawIdDialogs = {
       "Follow-up setup failed. Run {command} to check remote access. Do not move to new keys again.",
     regenExpiry: "End this browser's owner access after (days)",
     regenExpiryHint: "Leave empty for no expiry.",
+    deviceSignInTitle: "Sign in with OpenClaw ID",
+    deviceSignInBody: "Open OpenClaw ID, sign in, and confirm this code:",
+    deviceSignInOpen: "Open OpenClaw ID",
+    deviceSignInWaiting: "Waiting for you to confirm…",
   },
 } satisfies TranslationMap;
 

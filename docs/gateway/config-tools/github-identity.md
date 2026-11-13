@@ -46,6 +46,23 @@ GitHub CLI identity is native by default. When `tools.github` is omitted, local 
 
 Gateway GitHub reads and Publish PR account options reuse successful `gh auth token --hostname github.com` reads for up to 60 seconds, matching the credential-verification cache. Host `gh auth login`, `logout`, or `switch` changes can therefore take up to 60 seconds to appear on those read surfaces. Concurrent reads share one native lookup. OAuth shutdown, profile replacement or rotation, and disconnect clear the native-token cache. Environment tokens, managed profile credentials, caller permissions, and session access are still checked live; publication obtains its own live native credential. Failed token reads and anonymous-access absence proofs are not cached.
 
+The Gateway also samples secret-free native configuration facts in its GitHub
+lifecycle, without GitHub API verification or per-turn credential discovery. Only
+authoritative absence narrows built-in OpenClaw `github_publish` listings to
+credential-free readiness and original-request receipt observation;
+`github_identity_status` and public readers remain available. Unknown discovery
+results and configured but unhealthy identities retain their authenticated action declarations; execution still checks
+current credentials and authority. Another agent’s possible delegated publisher
+also keeps the declaration unknown rather than claiming all publishing routes
+are absent. This does not cache absence for credential reads or discard accepted
+publication work. Native configuration is sampled during maintenance, normally
+every 60 seconds. Existing sessions keep their first tool listing across background
+discovery and internal wakes; new sessions, changed tool configuration, or an
+explicit tool refresh use the latest selection. Native and SDK harnesses without
+this session-owned declaration pin retain their existing GitHub action listings;
+this change does not narrow Codex creation-time tools or rotate its warm threads.
+Their execution still checks current credentials and authority.
+
 Publication credentials read from native `gh` storage retain their configured issuer
 in the child environment, even when the Gateway's ambient `GH_HOST` is unset or
 points elsewhere. Ambient Enterprise tokens still require a matching issuer.

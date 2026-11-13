@@ -3416,7 +3416,6 @@ const reviewedOperations = new Map([
       {
         tier: "W",
         operations: [
-          "resolveUserProfileGitHubAttributionInDatabase",
           "selectUserProfileRoleAuthority",
           "prepareUserProfileGitHubMerge",
           "readGitHubIdentityBinding",
@@ -3426,6 +3425,17 @@ const reviewedOperations = new Map([
         ],
         evidence:
           "Read dispatcher src/state/openclaw-state-read.worker.ts:577; mutations user-profile-writes.worker.ts:474,482 and merges :375,425. Role authority runs only through user-profiles.worker.ts:152. ensureEmail path user-profiles.worker.ts:61; private writeIdentity only from applyVerifiedGitHubIdentity; private selectGitHubProfileAlias only from readGitHubIdentityBinding and the read-worker cached-binding command (openclaw-state-read.worker.ts:520).",
+      },
+    ],
+  ],
+  [
+    "src/state/user-profile-git-attribution.read.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readUserProfileGitAttribution"],
+        evidence:
+          "Only readUserProfileGitHubCommand in user-profile-github-identity.ts calls this reader; user-profile-read.worker.ts dispatches that command in the shared-state read worker.",
       },
     ],
   ],
@@ -3662,6 +3672,7 @@ const workerModules = new Set([
   "src/infra/push-apns-store-transaction.ts", // APNs worker cleanup and pairing worker clearApnsNodeIds only.
   "src/infra/push-apns-store.ts", // SQL read kernels are called only by the APNs worker dispatcher.
   "src/infra/session-cost-usage-worker.ts",
+  "src/infra/session-cost-usage-worker-refresh.ts", // Usage worker and worker-report callers run only under session-transcript.worker.ts.
   "src/infra/update-candidate-exec-approvals.ts", // Approval projections run in the update-candidate-state worker.
   "src/infra/update-candidate-plugins.ts", // Plugin inventory and copying run in the update-candidate-state worker.
   "src/infra/update-database-restore-source.ts", // Sole caller: update-candidate-state.worker database-restore-preparation; private output, parent retains native exclusions.

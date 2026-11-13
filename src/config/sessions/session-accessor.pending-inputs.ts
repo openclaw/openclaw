@@ -54,17 +54,20 @@ import {
   type SessionPendingInputAuthority,
 } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
-import { finishPendingInputSources } from "./session-pending-input-live-owner.js";
+import {
+  bindPendingInputMentionInvitation,
+  finishPendingInputSources,
+} from "./session-pending-input-live-owner.js";
 import type { PendingInputCustodyGrant } from "./session-pending-input-operations.types.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import type { SessionPendingInputReceipt } from "./session-pending-input-receipt.types.js";
-import { readPendingInputSource } from "./session-pending-input-source.js";
 import { preparePendingInputStore, type PendingInputScope } from "./session-pending-input-store.js";
 import {
   isFinalInputCompletion,
   isSessionPendingInputRetiredByUser,
   parseSessionPendingInputMessage,
 } from "./session-pending-input-value.js";
+import type { PreparedSessionMentionInvitation } from "./session-sharing-authority.types.js";
 import {
   runWithSessionSourceScope,
   type SessionSourceAssertion,
@@ -78,6 +81,14 @@ export type { SessionPendingInput, SessionPendingInputPage, SessionPendingInputR
 
 const receiptOwners = new WeakMap<SessionPendingInputReceipt, SessionPendingInputOwner>();
 const withdrawnOwners = new WeakSet<SessionPendingInputOwner>();
+
+/** Bind authority to the private accepted bytes, never a mutable receipt or imported transcript. */
+export function bindSessionPendingInputMentionInvitation(
+  receipt: SessionPendingInputReceipt,
+  prepare: (message: PersistedUserTurnMessage) => PreparedSessionMentionInvitation | undefined,
+): void {
+  bindPendingInputMentionInvitation(receiptOwners.get(receipt), prepare);
+}
 
 /** The private accepted bytes survive mutable receipt projections and replay preparation. */
 export function readSessionPendingInputRequesterOrigin(
@@ -194,6 +205,7 @@ export function bindSessionPendingInputSources(
     ...first,
     // Source owners release their admission closures when settlement completes.
     assertCurrent: assertSessionPendingInputLifetimeCurrent.bind(undefined, first),
+    assertMentionInvitationCurrent: undefined,
     authority: undefined,
     requesterOrigin: undefined,
     inputId: aggregateInputId,
@@ -700,39 +712,4 @@ export async function prepareSessionPendingInputDedupeRecovery(
   );
 }
 
-/** Read one admitted source for explicit retry comparison; this never authorizes replay. */
-export function readSessionSubmittedInput(
-  scope: PendingInputScope,
-  idempotencyKey: string,
-  options: { includeSource: true },
-): Promise<
-  | { message: PersistedUserTurnMessage; source: "pending" | "transcript"; messageSeq?: number }
-  | undefined
->;
-export function readSessionSubmittedInput(
-  scope: PendingInputScope,
-  idempotencyKey: string,
-): Promise<PersistedUserTurnMessage | undefined>;
-export async function readSessionSubmittedInput(
-  scope: PendingInputScope,
-  idempotencyKey: string,
-  options?: { includeSource: true },
-) {
-  const source = await readPendingInputSource(scope, idempotencyKey, false);
-  if (!source?.snapshot.current) {
-    return undefined;
-  }
-  source.assertCurrent();
-  const { pending, committed, committedMessageSeq } = source.snapshot;
-  const message = pending ? parseSessionPendingInputMessage(pending.message_json) : committed;
-  if (!message || readMessageIdempotencyKey(message) !== idempotencyKey) {
-    return undefined;
-  }
-  return options?.includeSource
-    ? {
-        message,
-        source: pending ? ("pending" as const) : ("transcript" as const),
-        ...(committedMessageSeq !== undefined ? { messageSeq: committedMessageSeq } : {}),
-      }
-    : message;
-}
+export { readSessionSubmittedInput } from "./session-pending-input-source.js";

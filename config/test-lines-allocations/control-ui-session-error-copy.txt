@@ -1,2 +1,0 @@
-# Preserve the extracted cloud-stop coverage, selected-session confirmation details, and wrapped recovery assertion.
-45

@@ -173,7 +173,7 @@ export function isGroupInviteAllowed(
   }).allowed;
 }
 
-// Inline styles can nest arbitrarily deeply in remote content. Stop rendering past
+// Inline styles and lists can nest arbitrarily deeply in remote content. Stop rendering past
 // this depth and degrade to truncated plain text rather than recursing until the
 // call stack overflows; legitimate inline markup never approaches this bound.
 const MAX_INLINE_DEPTH = 100;
@@ -212,6 +212,12 @@ function renderInlineItem(item: unknown, topLevel = false, depth = 0, omitCode =
     const linkContent = readStringField(link, "content");
     return topLevel ? linkHref : linkContent || linkHref;
   }
+  const task = asNullableRecord(record.task);
+  if (task && Array.isArray(task.content)) {
+    return depth >= MAX_INLINE_DEPTH
+      ? ""
+      : `[${task.checked === true ? "x" : " "}] ${extractInlineText(task.content, depth + 1, omitCode)}`;
+  }
   const bold = Array.isArray(record.bold) ? record.bold : undefined;
   const italics = Array.isArray(record.italics) ? record.italics : undefined;
   const strike = Array.isArray(record.strike) ? record.strike : undefined;
@@ -238,6 +244,30 @@ function renderInlineItem(item: unknown, topLevel = false, depth = 0, omitCode =
 
 function extractInlineText(items: readonly unknown[], depth: number, omitCode: boolean): string {
   return items.map((item) => renderInlineItem(item, false, depth, omitCode)).join("");
+}
+
+function renderListing(value: unknown, depth: number, omitCode: boolean): string {
+  const listing = asNullableRecord(value);
+  if (!listing) {
+    return "";
+  }
+  if (Array.isArray(listing.item)) {
+    return extractInlineText(listing.item, depth, omitCode);
+  }
+  const list = asNullableRecord(listing.list);
+  if (!list || depth >= MAX_INLINE_DEPTH) {
+    return "";
+  }
+  const contents = Array.isArray(list.contents)
+    ? extractInlineText(list.contents, depth + 1, omitCode)
+    : "";
+  const items = Array.isArray(list.items) ? list.items : [];
+  const children = items.map((item, index) => {
+    const text = renderListing(item, depth + 1, omitCode);
+    const marker = list.type === "ordered" ? `${index + 1}. ` : "- ";
+    return text ? `${marker}${text.replace(/\n/g, `\n${" ".repeat(marker.length)}`)}` : "";
+  });
+  return [contents, ...children].filter(Boolean).join("\n");
 }
 
 export function extractMessageText(content: unknown, omitCode = false): string {
@@ -279,6 +309,10 @@ export function extractMessageText(content: unknown, omitCode = false): string {
           }
           const fence = "`".repeat(fenceLength);
           return `\n${fence}${lang}\n${code}\n${fence}\n`;
+        }
+
+        if (block.listing) {
+          return renderListing(block.listing, 0, omitCode);
         }
 
         const header = asNullableRecord(block.header);

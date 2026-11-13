@@ -131,68 +131,52 @@ describe("confirmed session navigation", () => {
     }
   });
 
-  it("surfaces navigation failure after a session has already been created", async () => {
-    const { context, flow } = createDraftFixture();
-    created(context, "agent:main:dashboard:created");
-    vi.mocked(context.navigateAndWait)
-      .mockRejectedValueOnce(new Error("Chat route failed to load"))
-      .mockImplementationOnce(readyChat);
-    flow.setMessage("start this task");
-
-    await flow.submit();
-
-    expectCalls(context);
-    expect(flow).toMatchObject({ error: "Chat route failed to load", submitting: false });
-    expect(flow.pendingMessage?.content).toContainEqual({ type: "text", text: "start this task" });
-    expect(flow.completedSubmission?.key).toBe("agent:main:dashboard:created");
-
-    const readSignal = flow.attachmentDraft.reads.readSignal;
-    flow.attachmentDraft.reads.updatePending(readSignal, 1);
-    expect(flow.submitBlock()?.gate).toBe("attachment-reads");
-    expect(flow.canSubmit()).toBe(false);
-    await flow.submit();
-    expectCalls(context);
-    flow.attachmentDraft.reads.updatePending(readSignal, -1);
-
-    expect(flow.canSubmit()).toBe(true);
-    await flow.openSubmittedSession();
-
-    expectCalls(context, 2);
-    expect(flow.error).toBeNull();
-  });
-
-  it("keeps a background prompt readable while scope is pending and opens without another create", async () => {
-    const { context, flow } = createDraftFixture({
-      request: async (method) => (method === "agent.wait" ? { status: "ok", endedAt: 1 } : {}),
-    });
-    const prompt = { type: "text", text: "keep this background prompt visible" };
-    Object.assign(context.gateway.snapshot.client!, {
-      recoveryScope: "",
-      recoveryScopeReady: false,
-    });
-    delete context.gateway.snapshot.hello!.auth!.recoveryScope;
-    vi.mocked(context.sessions.createResult).mockResolvedValue({
-      key: "agent:main:dashboard:background-visible",
-      initialRun: { status: "started", runId: "background-run" },
-    });
-    flow.setMessage(prompt.text);
-    await flow.submit(undefined, true);
-    expect(flow).toMatchObject({ message: "", submitting: false });
-    expect(flow.pendingMessage?.content).toContainEqual(prompt);
-    expect(context.navigateAndWait).not.toHaveBeenCalled();
-    Object.assign(context.gateway.snapshot.client!, {
-      recoveryScope: "principal-a",
-      recoveryScopeReady: true,
-    });
-    expect(flow.pendingMessage?.content).toContainEqual(prompt);
-    vi.mocked(context.navigateAndWait).mockImplementation(readyChat);
-    await flow.openSubmittedSession();
-    expectCalls(context);
-    context.gateway.snapshot.hello!.auth!.recoveryScope = "another-account";
-    expect(flow.pendingMessage).toBeNull();
-    await flow.openSubmittedSession();
-    expect(context.navigateAndWait).toHaveBeenCalledOnce();
-  });
+  it.each([true, false])(
+    "recovers a failed foreground handoff with scope ready=%s without recreating",
+    async (scopeReady) => {
+      const { context, flow } = createDraftFixture();
+      const client = context.gateway.snapshot.client!;
+      if (!scopeReady) {
+        Object.assign(client, { recoveryScope: "", recoveryScopeReady: false });
+        delete context.gateway.snapshot.hello!.auth!.recoveryScope;
+      }
+      vi.mocked(context.sessions.createResult).mockResolvedValue({
+        key: "agent:main:dashboard:created",
+        initialRun: scopeReady ? { status: "idle" } : { status: "started", runId: "created-run" },
+      });
+      vi.mocked(context.navigateAndWait)
+        .mockRejectedValueOnce(new Error("Chat route failed to load"))
+        .mockImplementationOnce(readyChat);
+      const prompt = { type: "text", text: "start this task" };
+      flow.setMessage(prompt.text);
+      await flow.submit();
+      expectCalls(context);
+      expect(flow).toMatchObject({
+        error: "Chat route failed to load",
+        submitting: false,
+        message: "",
+      });
+      expect(flow.pendingMessage?.content).toContainEqual(prompt);
+      expect(flow.completedSubmission?.key).toBe("agent:main:dashboard:created");
+      const readSignal = flow.attachmentDraft.reads.readSignal;
+      flow.attachmentDraft.reads.updatePending(readSignal, 1);
+      expect(flow.submitBlock()?.gate).toBe("attachment-reads");
+      expect(flow.canSubmit()).toBe(false);
+      await flow.submit();
+      expectCalls(context);
+      flow.attachmentDraft.reads.updatePending(readSignal, -1);
+      Object.assign(client, { recoveryScope: "principal-a", recoveryScopeReady: true });
+      expect(flow.pendingMessage?.content).toContainEqual(prompt);
+      expect(flow.canSubmit()).toBe(true);
+      await flow.openSubmittedSession();
+      expectCalls(context, 2);
+      expect(flow.error).toBeNull();
+      context.gateway.snapshot.hello!.auth!.recoveryScope = "another-account";
+      expect(flow.pendingMessage).toBeNull();
+      await flow.openSubmittedSession();
+      expectCalls(context, 2);
+    },
+  );
 
   it.each(["handshake", "client", "flow"])(
     "retires a confirmed session handoff on %s replacement during selection",

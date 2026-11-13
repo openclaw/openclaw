@@ -1,2 +1,0 @@
-# Exact net test-line growth from PR #196131: shell top band control size/radius and sidebar owner-picker alignment regressions in the owning e2e suites.
-82

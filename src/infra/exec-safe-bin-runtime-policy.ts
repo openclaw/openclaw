@@ -94,17 +94,17 @@ export function resolveMergedSafeBinProfileFixtures(params: {
   };
 }
 
-export function resolveExecSafeBinRuntimePolicy(params: {
+export async function resolveExecSafeBinRuntimePolicy(params: {
   global?: ExecSafeBinConfigScope | null;
   local?: ExecSafeBinConfigScope | null;
   onWarning?: (message: string) => void;
-}): {
+}): Promise<{
   safeBins: Set<string>;
   safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
   trustedSafeBinDirs: ReadonlySet<string>;
   unprofiledSafeBins: string[];
   unprofiledInterpreterSafeBins: string[];
-} {
+}> {
   const safeBins = resolveSafeBins(params.local?.safeBins ?? params.global?.safeBins);
   const safeBinProfiles = resolveSafeBinProfiles(resolveMergedSafeBinProfileFixtures(params));
   const unprofiledSafeBins = Array.from(safeBins)
@@ -114,12 +114,15 @@ export function resolveExecSafeBinRuntimePolicy(params: {
     ...normalizeTrustedSafeBinDirs(params.global?.safeBinTrustedDirs),
     ...normalizeTrustedSafeBinDirs(params.local?.safeBinTrustedDirs),
   ];
-  const trustedSafeBinDirs = getTrustedSafeBinDirs({
-    extraDirs: explicitTrustedSafeBinDirs,
-    safeBins: Array.from(safeBins),
-  });
+  const trustedSafeBinDirs =
+    safeBins.size === 0
+      ? new Set<string>()
+      : await getTrustedSafeBinDirs({
+          extraDirs: explicitTrustedSafeBinDirs,
+          safeBins: Array.from(safeBins),
+        });
   if (params.onWarning) {
-    for (const hit of listWritableExplicitTrustedSafeBinDirs(explicitTrustedSafeBinDirs)) {
+    for (const hit of await listWritableExplicitTrustedSafeBinDirs(explicitTrustedSafeBinDirs)) {
       const scope = hit.worldWritable ? "world-writable" : "group-writable";
       params.onWarning(
         `exec: safeBinTrustedDirs includes ${scope} directory '${hit.dir}'; remove trust or tighten permissions (for example chmod 755).`,

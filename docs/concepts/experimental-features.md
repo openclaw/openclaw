@@ -29,7 +29,6 @@ available for user-installed browser code.
 | Cloud workers           | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud device desktop](/gateway/cloud-workers#desktop-interactive)                     |
 | Templates               | `gateway.controlUi.experimental.templates`                              | You want to explore and add official ClawHub agents from the Control UI                                                           | [Templates](/cli/templates)                                                            |
 | This computer’s desktop | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
-| Advisor                 | `plugins.entries.advisor.enabled`                                       | You want an advisor model to periodically check a conversation's agent work and give the agent one short correction               | [Advisor](#advisor)                                                                    |
 | OpenClaw ID             | `gateway.openclawId.enabled`                                            | You want to open this claw from your other devices through OpenClaw ID, without opening a port                                    | [OpenClaw ID remote access](#openclaw-id-remote-access)                                |
 | Speech bubbles          | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
 | Tool Search             | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
@@ -40,12 +39,16 @@ Open **Settings → Labs** to manage experiments that have a
 Control UI switch. Enabling or disabling a lab patches the saved Gateway
 config immediately without restarting the Gateway.
 
-Labs includes Speech bubbles, Decision assistance, Advisor, Code Mode, Tool Search for all models,
+Labs includes Speech bubbles, Decision assistance, Code Mode, Tool Search for all models,
 Templates, This computer’s desktop, OpenClaw ID remote access, and Cloud device desktop. Under the default reload mode,
 desktop availability updates in connected Control UI pages. Code Mode and Tool
 Search changes take effect for future agent runs. The Cloud device desktop lab
 controls access to existing desktop-capable workers; changing a profile’s
 `settings.desktop` affects only newly provisioned workers.
+
+<a id="advisor" />Advisor has graduated from Labs. It stays off by default;
+turn it on in **Settings → Plugins → Advisor**. See
+[Advisor](/plugins/reference/advisor).
 
 Custom plugin UI has graduated from Labs. Enabled plugins can load native UI
 by default, while an existing explicit
@@ -237,70 +240,6 @@ remain unknown, not zero. DEBUG-off avoids the extra definition serialization.
 No conversation, tool payloads, full schemas, or credentials are logged by this
 record; existing logging and trace-correlation controls apply.
 
-## Advisor
-
-Advisor is an experimental bundled plugin that is off by default. It watches
-user-directed work and steps in while the agent goes off course: repeating
-failing steps, waiting on finished work, working around a blocker it could fix,
-drifting beyond what you asked, or claiming results the tools do not show.
-
-A review forks the conversation on the session's own model and asks whether the
-agent is on track. When it is not, Advisor steers the active run with one short
-correction, which the agent sees before its next step under the run's own
-permissions. If the run already ended, the correction is dropped. When the agent
-is on track, nothing happens.
-
-Turn it on in **Settings → Agents & Tools → Labs → Advisor**. Its **Configure**
-button opens the plugin's settings page (**Settings → Plugins → Advisor**), where
-you set the options below. Or use config:
-
-```json5
-{
-  plugins: {
-    entries: {
-      advisor: {
-        enabled: true,
-        config: { everyMinutes: 20, everyToolCalls: 0 },
-      },
-    },
-  },
-}
-```
-
-- `everyMinutes` (default `20`, range `0`–`1440`): review after this many minutes
-  of work in a run, checked when a tool starts. Runs shorter than this are not
-  reviewed.
-- `everyToolCalls` (default `0`, off; range `0`–`1000`): also review after this
-  many tool calls in a conversation.
-- `reviewInstructions` (optional, up to 4,000 characters): replaces the built-in
-  definition of "off course". Changes apply to the next review.
-
-Set both triggers to `0` to turn reviews off.
-
-Behavior and limits:
-
-- Only the main agent's user-triggered runs are reviewed. Heartbeat, cron and
-  other automatic runs are not, and neither are subagent sessions: the main
-  agent sees what its subagents report, so Advisor corrects the main agent,
-  which can redirect the subagent.
-- After a correction steers a run, later reviews in that run are told what was
-  already said and stay quiet unless they find a different problem.
-- A due review waits until every running tool call has its result, so the fork
-  never sees a missing or synthetic tool outcome. A stalled call delays the
-  review rather than forcing it.
-- Each conversation has at most one review in flight. The run ending, a new user
-  message, session reset, plugin disable, or service stop cancels it.
-- Reviews use the session's model, context and credentials. The fork cannot run
-  tools or send replies. Corrections are labeled as advice the agent must check
-  before acting.
-- Advisor needs conversation access and prompt injection permission through
-  `plugins.entries.advisor.hooks`, which trusted plugins have by default.
-- Gateway info logs record review token usage (uncached input, cache reads,
-  cache writes and output) and whether a correction steered the run. When a review
-  misses the provider cache and the provider reports cache-write tokens, its
-  context appears under cache writes rather than input. Reviews do not share the conversation's prompt-cache key, so on
-  OpenAI routes some reviews miss the cache.
-
 ## OpenClaw ID remote access
 
 OpenClaw ID remote access is off by default (`gateway.openclawId.enabled`).
@@ -365,16 +304,42 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
 
 ### Sign in with OpenClaw ID
 
-Sign-in uses an OpenID Connect authorization code flow with PKCE for the public
-client `clientId`, in a popup. It works only in a Control UI opened on the
-Gateway machine (direct loopback). The Gateway builds the authorization URL and
-redeems the code, because the issuer does not serve CORS; it keeps nothing but
-the short-lived pending sign-in. The popup returns to
-`<Control UI origin>/openclaw-id/callback`, so register that redirect for the
-client (`http://127.0.0.1/openclaw-id/callback` matches any loopback port). The
-browser keeps the account and its ID token until the token expires or you sign
-out. While signed in, **Turn on remote access** gets its link code from your account
-instead of asking you to paste one.
+Sign-in uses the public client `clientId`. Where it works depends on how the
+Control UI reaches the Gateway:
+
+- **On the Gateway machine (direct loopback):** an OpenID Connect authorization
+  code flow with PKCE, in a popup. The Gateway builds the authorization URL and
+  redeems the code, because the issuer does not serve CORS; it keeps nothing but
+  the short-lived pending sign-in. The popup returns to
+  `<Control UI origin>/openclaw-id/callback`, so register that redirect for the
+  client (`http://127.0.0.1/openclaw-id/callback` matches any loopback port).
+- **Through a personal sign-in** (Tailscale Serve, Cloudflare Access or another
+  trusted proxy, an enterprise principal: any connection whose profile comes from
+  a verified identity of its own): the issuer cannot redirect to that origin, so the
+  Gateway runs a device sign-in (RFC 8628). The Control UI shows a code; you open
+  OpenClaw ID, sign in and confirm it, and the Gateway polls until you do. The
+  issuer must offer the device grant to the client.
+- Shared token or password connections, members and owner devices over the
+  OpenClaw ID tunnel, and connections without a personal profile cannot sign in.
+
+The browser keeps the account and its ID token until the token expires or you sign
+out. Signing in only proves which OpenClaw ID account the browser holds; on its own
+it grants nothing.
+
+### Link OpenClaw ID to your profile
+
+Through a personal sign-in, **Settings → Profile → Identity → OpenClaw ID → Link**
+runs the same device sign-in and records the account on your profile. Both sides are
+proven on one connection, so there is no "who are you?" picker. Owner devices of the
+claw's OpenClaw ID owner account then arrive as you (your name, sessions, personal
+instructions and My GitHub) instead of the shared owner. Their owner authority still
+comes from each device's certificate, and linking grants or removes nothing.
+
+- One profile per account: linking an account already linked to another profile, or to
+  a member's profile, is refused. Merging profiles in **Users** carries the link.
+- **Unlink** returns owner devices to the shared owner on their next connection.
+  Sessions they already created are not rewritten. While signed in on the Gateway machine, **Turn on remote access**
+  gets its link code from your account instead of asking you to paste one.
 
 ### How the tunnel reaches the Gateway
 
