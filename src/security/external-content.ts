@@ -383,7 +383,10 @@ function rememberIssuedEnvelope(id: string, wrapped: string, warning: boolean, b
     warning,
   });
   if (issuedEnvelopes.size > MAX_ISSUED_ENVELOPES) {
-    issuedEnvelopes.delete(issuedEnvelopes.keys().next().value as string);
+    const oldest = issuedEnvelopes.keys().next();
+    if (!oldest.done) {
+      issuedEnvelopes.delete(oldest.value);
+    }
   }
 }
 
@@ -400,7 +403,11 @@ function decodeLevels(value: string, depth: number): string | undefined {
   let decoded = value;
   try {
     for (let level = 0; level < depth; level += 1) {
-      decoded = JSON.parse(`"${decoded}"`) as string;
+      const parsed: unknown = JSON.parse(`"${decoded}"`);
+      if (typeof parsed !== "string") {
+        return undefined;
+      }
+      decoded = parsed;
     }
   } catch {
     return undefined;
