@@ -93,6 +93,36 @@ describe("resolveMatrixRoomId", () => {
     expect(client["setAccountData"]).not.toHaveBeenCalled();
   });
 
+  it("surfaces an unreadable m.direct account instead of reporting a missing mapping", async () => {
+    const client = makeDirectClient({
+      getAccountData: vi.fn().mockRejectedValue(new Error("M_UNKNOWN: 503 Service Unavailable")),
+      getJoinedRooms: vi.fn().mockRejectedValue(new Error("503 Service Unavailable")),
+    });
+    await expect(resolveMatrixRoomId(client, userId)).rejects.toThrow(
+      `Could not read m.direct for ${userId} from the homeserver: M_UNKNOWN: 503 Service Unavailable`,
+    );
+  });
+
+  it("surfaces an unreadable joined-room list when no mapping exists", async () => {
+    const client = makeDirectClient({
+      getAccountData: vi.fn().mockResolvedValue(undefined),
+      getJoinedRooms: vi.fn().mockRejectedValue(new Error("timeout of 30000ms exceeded")),
+    });
+    await expect(resolveMatrixRoomId(client, userId)).rejects.toThrow(
+      `Could not read joined rooms for ${userId} from the homeserver: timeout of 30000ms exceeded`,
+    );
+  });
+
+  it("does not report a missing mapping when a mapped room could not be verified", async () => {
+    const client = makeDirectClient({
+      mappedRoomIds: [roomId],
+      getJoinedRoomMembers: vi.fn().mockRejectedValue(new Error("503 Service Unavailable")),
+    });
+    await expect(resolveMatrixRoomId(client, userId)).rejects.toThrow(
+      `No direct room found for ${userId} (1 mapped room(s) could not be verified as direct)`,
+    );
+  });
+
   it("accepts nested Matrix user target prefixes", async () => {
     const client = makeDirectClient({ mappedRoomIds: [roomId], resolveRoom: vi.fn() });
     await expect(resolveMatrixRoomId(client, `matrix:user:${userId}`)).resolves.toBe(roomId);
