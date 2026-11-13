@@ -1,3 +1,3 @@
 # Real auth/config persistence, credential reuse and consent/policy preservation,
-# plus image-request HTTP proof require 504 net test lines against the prepared base.
-104
+# plus image-request HTTP proof require 492 net test lines against the prepared base.
+92

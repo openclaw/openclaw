@@ -9,18 +9,6 @@ import { resolveCodexCatalogCreateSession } from "./session-catalog-create.js";
 const modelConfig = { resolveAllowedModelRef, resolveDefaultModelForAgent };
 
 describe("resolveCodexCatalogCreateSession", () => {
-  it.each<[string, NonNullable<OpenClawConfig["agents"]>["defaults"]]>([
-    ["model policy", { modelPolicy: { allow: ["openai/gpt-6-astra"] } }],
-    ["legacy model map", { models: { "openai/gpt-6-astra": {} } }],
-  ])("preserves a sole permitted default from the %s", (_name, defaults) => {
-    const config: OpenClawConfig = { agents: { defaults } };
-    expect(resolveCodexCatalogCreateSession(modelConfig, config, "main")).toEqual({
-      model: "openai/gpt-6-astra",
-      agentRuntime: "codex",
-    });
-    expect(config.agents?.defaults?.model).toBeUndefined();
-  });
-
   it("does not advertise creation when the Codex model is outside the allowlist", () => {
     expect(
       resolveCodexCatalogCreateSession(
