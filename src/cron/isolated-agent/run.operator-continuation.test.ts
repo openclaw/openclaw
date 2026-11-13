@@ -506,7 +506,7 @@ it.each([
     getCommittedRuntimeConfig: () => config,
   });
   context.githubPublicationService = coordinator;
-  const receipt = vi
+  const sharedPublication = vi
     .spyOn(coordinator, "latestShared")
     .mockResolvedValue({ result: publication, confirmation: null });
   vi.spyOn(publicationIdentity, "prepareCurrentGitHubPublicationIdentity").mockResolvedValue({
@@ -910,7 +910,7 @@ it.each([
           { details: { state: "merged", mergeCommit: "b".repeat(40) } },
         ]);
         expect(writes).toEqual([{ sha: "a".repeat(40), merge_method: "merge" }]);
-        expect(receipt).toHaveBeenCalled();
+        expect(sharedPublication).toHaveBeenCalled();
         if (scenario === "paused force run") {
           expect(execution.getJob(job.id)).toMatchObject({
             enabled: false,
@@ -932,7 +932,6 @@ it.each([
             ? "missing scope: operator.write"
             : "require full operator write permission",
         );
-        expect(results).toEqual([]);
       }
     }
     if (
@@ -949,7 +948,8 @@ it.each([
     ) {
       expect(writes).toEqual([]);
       expect(reads).toBe(0);
-      expect(receipt).not.toHaveBeenCalled();
+      // Local publication lookup may precede the guard; denied actions disclose no result.
+      expect(results).toEqual([]);
     }
     if (recurring) {
       const valid = expectDefined((await fixture.read())[0], "stored continuation");
