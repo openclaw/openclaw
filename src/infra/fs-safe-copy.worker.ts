@@ -19,6 +19,7 @@ import type {
   ProvisionCopyDetails,
 } from "./fs-safe-copy-worker-contract.js";
 import { normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
+import { workerMutationAssertion } from "./worker-mutation-authority.js";
 
 function failure(error: unknown): FsSafeCopyReply {
   return {
@@ -75,7 +76,11 @@ if (parentPort) {
             if (!channel) {
               throw new Error("Worktree provisioning requires its live host channel");
             }
-            const decision = new Int32Array(command.decision);
+            const assertMutation = workerMutationAssertion(
+              command.decision,
+              () => channel.notify("authority"),
+              control.throwIfCancelled,
+            );
             return await control.runNativeSection<FsSafeCopyReply>(async () => {
               const { copyProvisionedPaths } =
                 await import("../agents/worktrees/provisioned-copy.js");
@@ -92,19 +97,7 @@ if (parentPort) {
                       const started = performance.now();
                       details.authorityChecks++;
                       try {
-                        control.throwIfCancelled();
-                        Atomics.store(decision, 0, 0);
-                        channel.notify("authority");
-                        while (Atomics.load(decision, 0) === 0) {
-                          // Retirement can suppress notifications. Observe its shared
-                          // cancellation fence even while this callback cannot yield.
-                          Atomics.wait(decision, 0, 0, 1_000);
-                          control.throwIfCancelled();
-                        }
-                        control.throwIfCancelled();
-                        if (Atomics.load(decision, 0) !== 1) {
-                          throw new Error("Worktree provisioning mutation authority refused");
-                        }
+                        assertMutation();
                       } finally {
                         details.authorityMs += performance.now() - started;
                       }

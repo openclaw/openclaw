@@ -1,2 +1,0 @@
-11
-# Advance the ignored-stop CLI fixture's teardown clock while owner tests retain escalation and late-output proof.

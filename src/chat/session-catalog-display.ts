@@ -154,8 +154,10 @@ export function projectCatalogItemForDisplay(
 // Match only the complete, no-warning frame emitted by the Gateway catalog copy.
 // Anchoring protects quoted/fenced examples and truncated or malformed history.
 // The optional label belongs to session-catalog-history-import, not to the frame.
+// wrapExternalContent without a warning starts with one newline; continue-path
+// imports persisted it untrimmed, so accept exactly that one LF.
 const IMPORT_FRAME =
-  /^(?<label>(?:Thinking|Tool call|Tool result|Other)\r?\n\r?\n)?<<<EXTERNAL_UNTRUSTED_CONTENT id="(?<id>[a-f0-9]{16})">>>\r?\nSource: External\r?\n---\r?\n(?<body>[\s\S]*?)\r?\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="\k<id>">>>$/u;
+  /^(?<label>(?:Thinking|Tool call|Tool result|Other)\r?\n\r?\n)?\n?<<<EXTERNAL_UNTRUSTED_CONTENT id="(?<id>[a-f0-9]{16})">>>\r?\nSource: External\r?\n---\r?\n(?<body>[\s\S]*?)\r?\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="\k<id>">>>$/u;
 
 function unwrapImportFrame(text: string): string {
   const match = IMPORT_FRAME.exec(text);

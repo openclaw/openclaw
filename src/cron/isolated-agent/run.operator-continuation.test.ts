@@ -737,9 +737,11 @@ it.each([
       clock.setTime(expectDefined(execution.getJob(job.id)?.state.nextRunAtMs, "scheduled timer"));
       const tick = onTimer(schedulerState);
       if (queuedEdit) {
+        // The due run stays queued, without a running marker, until the creating turn ends.
         await vi.waitFor(() => {
-          expect(execution.getJob(job.id)?.state.runningReceiptId).toEqual(expect.any(String));
+          expect(execution.getJob(job.id)?.state.queuedAtMs).toEqual(expect.any(Number));
         });
+        expect(execution.getJob(job.id)?.state.runningReceiptId).toBeUndefined();
         expect(entered).toBe(0);
         if (managerRename) {
           await managerUpdate({ name: "Manager-authored instructions" });

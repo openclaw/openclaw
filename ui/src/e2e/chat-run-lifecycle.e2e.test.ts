@@ -167,6 +167,112 @@ suite.define(() => {
     activePage = undefined;
   });
 
+  it("keeps completed timing unchanged after sending and reloading", async () => {
+    const page = await newPage();
+    const sessionKey = "agent:main:dashboard:stable-worked-duration";
+    const runId = "completed-report";
+    const startedAt = Date.now() - 60_000;
+    const messages = [
+      {
+        ...historyMessage("Check the release notes.", startedAt, "user"),
+        __openclaw: { id: "prompt", idempotencyKey: `${runId}:user` },
+      },
+      {
+        ...historyMessage("Release notes checked.", startedAt + 20_000, "toolResult"),
+        toolName: "read",
+        toolCallId: "read-notes",
+        __openclaw: { id: "work", runId, recordTimestampMs: startedAt + 21_000 },
+      },
+      {
+        ...historyMessage("The release notes are ready for review.", startedAt + 22_000),
+        __openclaw: { id: "reply", runId, recordTimestampMs: startedAt + 34_000 },
+      },
+    ];
+    const completedSession = {
+      key: sessionKey,
+      sessionId: `session:${sessionKey}`,
+      kind: "direct",
+      status: "done",
+      lastRunId: runId,
+      runtimeMs: 22_000,
+      updatedAt: startedAt + 34_000,
+      hasActiveRun: false,
+      activeRunIds: [],
+    };
+    const gateway = await installMockGateway(page, {
+      sessionKey,
+      sessions: [completedSession],
+      sessionInfo: completedSession,
+      historyMessages: messages,
+    });
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    const label = page.locator(".chat-work-group .chat-activity-group__label");
+    const replyBody = page.getByText("The release notes are ready for review.", { exact: true });
+    await replyBody.waitFor();
+    await label.waitFor();
+    const initial = await label.textContent();
+    const capture = async (name: string) => {
+      const frame = await takeControlUiScreenshotFrame(
+        page,
+        page.locator(".chat-thread"),
+        [label, replyBody],
+        { animations: "disabled" },
+      );
+      await writeFile(join(suite.artifactDir, name), frame.png);
+    };
+    await capture("stable-duration-initial.png");
+    const nextRunId = await sendPrompt(
+      page,
+      gateway,
+      "Keep that duration when I send another message.",
+    );
+    await stopButton(page).waitFor();
+    const nextSession = {
+      ...completedSession,
+      lastRunId: nextRunId,
+      status: "running",
+      runtimeMs: undefined,
+      hasActiveRun: true,
+      activeRunIds: [nextRunId],
+      updatedAt: Date.now(),
+    };
+    await gateway.setSessionsListResponse({ sessions: [nextSession] });
+    await gateway.emitGatewayEvent("sessions.changed", {
+      sessionKey,
+      reason: "lifecycle",
+      session: nextSession,
+    });
+    await evaluateControlUiContext(page, async (application) => {
+      await application.sessions.refresh({ agentId: "main", force: true });
+    });
+    await capture("stable-duration-next-turn.png");
+    console.log("STABLE_DURATION_PROOF", suite.artifactDir, {
+      initial,
+      afterSend: await label.textContent(),
+    });
+    expect(initial).toBe("Worked for 34s");
+    expect(await label.textContent()).toBe(initial);
+    await gateway.setMethodResponse("chat.history", {
+      ...prepareChatHistoryFixture([
+        ...messages,
+        {
+          ...historyMessage(
+            "Keep that duration when I send another message.",
+            nextSession.updatedAt,
+            "user",
+          ),
+          __openclaw: { id: "next-prompt", idempotencyKey: `${nextRunId}:user` },
+        },
+      ]),
+      sessionId: `session:${sessionKey}`,
+      sessionInfo: nextSession,
+    });
+    await page.reload();
+    await replyBody.waitFor();
+    await expect.poll(() => label.textContent()).toBe(initial);
+    await capture("stable-duration-reloaded.png");
+  });
+
   it("excludes a reply-less failed turn's idle time from the next successful turn", async () => {
     const page = await newPage();
     const sessionKey = "agent:main:dashboard:failed-turn-elapsed";
@@ -259,9 +365,9 @@ suite.define(() => {
     });
     await page.clock.setFixedTime(firstStartedAt + 994_000);
     const reply = {
-      // Creation precedes the long final request; lifecycle owns completion.
+      // Creation precedes the long final request; the saved write marks its completion.
       ...historyMessage("Success after the earlier failure.", firstStartedAt + 983_000),
-      __openclaw: { id: "successful-reply", runId },
+      __openclaw: { id: "successful-reply", runId, recordTimestampMs: firstStartedAt + 994_000 },
     };
     messages.push(reply);
     // The same canonical history must survive a full page reload, not just
@@ -650,7 +756,15 @@ suite.define(() => {
     });
 
     await page.goto(`${suite.server?.baseUrl ?? ""}chat`);
-    await page.getByText("saved 875.3k tokens", { exact: true }).waitFor();
+    await page.getByText("saved 875.3k tokens (97.3%)", { exact: true }).waitFor();
+    const frame = await takeControlUiScreenshotFrame(
+      page,
+      page.locator(".chat-thread"),
+      [page.locator(".chat-compaction")],
+      { animations: "disabled" },
+    );
+    await writeFile(join(suite.artifactDir, "compaction-savings.png"), frame.png);
+    console.log("COMPACTION_SAVINGS_PROOF", suite.artifactDir);
     await page.locator(".agent-chat__input textarea").fill("keep working");
     // Fix wall time without freezing the mock ACK and rendering timers.
     const startedAt = Date.now();

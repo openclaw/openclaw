@@ -1,2 +1,0 @@
-1
-# Copy the ratchet script import closure (#192806 added check-limits, release-context, release-version) into the guard test fixture.

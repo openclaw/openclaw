@@ -591,6 +591,24 @@ describe("subagent progress drafts", () => {
   type TestDraft = { push: Mock; retire: Mock };
   const newDraft = (): TestDraft => ({ push: vi.fn(), retire: vi.fn() });
 
+  it("keeps child labels and distinct short references without changing full identities", async () => {
+    const first = "00000000-0000-4000-8000-000000002633";
+    const second = "00000000-0000-4000-8000-00000000a4f0";
+    const spawns = await yieldCohort("parent-turn", [first, second], undefined, {
+      [first]: "Check streaming",
+    });
+    const draft = newDraft();
+    expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
+    expect(draft.push.mock.calls.map(([item]) => [item.itemId, item.title])).toEqual([
+      [first, "Check streaming …2633"],
+      [second, "Subagent …a4f0"],
+    ]);
+    expect(spawns.map((spawn) => spawn.childSessionKey)).toEqual([
+      childKey(first),
+      childKey(second),
+    ]);
+  });
+
   it("keeps progress titles whole at the 120-unit UTF-16 bound", async () => {
     const prefix = "a".repeat(119);
     const spawns = await yieldCohort("parent-turn", ["a"], undefined, { a: `${prefix}😀tail` });

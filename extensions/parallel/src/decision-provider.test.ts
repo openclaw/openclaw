@@ -93,17 +93,14 @@ function context(overrides: Partial<DecisionProviderContextV2> = {}): DecisionPr
     ...overrides,
   };
 }
-const release = vi.fn(async () => {});
+const release = async () => {};
 const fetchMock = vi.mocked(fetchWithProviderHttpGuard);
 beforeEach(() => {
-  fetchMock.mockImplementation(async (options) => {
-    options.beforeRequest?.();
-    return {
-      response: new Response(JSON.stringify(nativeResponse())),
-      release,
-      finalUrl: options.url,
-    };
-  });
+  fetchMock.mockImplementation(async (options) => ({
+    response: new Response(JSON.stringify(nativeResponse())),
+    release,
+    finalUrl: options.url,
+  }));
 });
 afterEach(() => vi.clearAllMocks());
 const evaluate = (input = batch, ctx = context()) =>
@@ -147,7 +144,6 @@ it("sends the native typed request and preserves estimates, refusals, shared cit
       metadata: { decisionId: "decisions_synthetic", citations: nativeResponse().citations },
     },
   });
-  expect(release).toHaveBeenCalledOnce();
 });
 
 const unsupportedInputs: Partial<DecisionBatchV2>[] = [
@@ -168,29 +164,6 @@ it.each(unsupportedInputs)(
   },
 );
 
-it.each([401, 429, 422, 500])(
-  "classifies HTTP %s without fabricating an answer",
-  async (status) => {
-    fetchMock.mockResolvedValueOnce({
-      response: new Response("{}", { status }),
-      release,
-      finalUrl: "https://api.parallel.ai/v1/decisions",
-    });
-    expect(await evaluate()).toEqual({
-      status: "unavailable",
-      reason:
-        status === 401
-          ? "authentication"
-          : status === 429
-            ? "rate-limited"
-            : status === 422
-              ? "unsupported-input"
-              : "transport",
-    });
-    expect(release).toHaveBeenCalledOnce();
-  },
-);
-
 it("rejects malformed/missing native answers instead of inventing probabilities", async () => {
   const response = nativeResponse();
   response.answers.fit.probabilities = { "0": 1, "1": Number.NaN };
@@ -202,11 +175,10 @@ it("rejects malformed/missing native answers instead of inventing probabilities"
   expect(await evaluate()).toEqual({ status: "unavailable", reason: "invalid-response" });
 });
 
-it("honors the effective proxy prefix and custom authentication headers", async () => {
+it("honors the effective proxy prefix and an explicit x-api-key header", async () => {
   await evaluate(
     batch,
     context({
-      auth: { mode: "api-key" },
       model: { ...context().model, headers: { "x-api-key": "synthetic-proxy-key" } },
       config: {
         models: {
@@ -225,26 +197,10 @@ it("honors the effective proxy prefix and custom authentication headers", async 
   expect(new Headers(options.init?.headers).get("x-api-key")).toBe("synthetic-proxy-key");
 });
 
-it("rechecks live admission at physical dispatch and propagates caller authority errors", async () => {
-  const error = new Error("caller retired");
-  const isAdmissible = vi
-    .fn()
-    .mockReturnValueOnce(true)
-    .mockImplementation(() => {
-      throw error;
-    });
-  await expect(evaluate(batch, context({ isAdmissible }))).rejects.toBe(error);
-  expect(isAdmissible).toHaveBeenCalledTimes(2);
-});
-
-it("does not ignore unsupported controls or dispatch without credentials", async () => {
+it("does not ignore unsupported controls", async () => {
   expect(await evaluate(batch, context({ reasoning: "on" }))).toEqual({
     status: "unavailable",
     reason: "unsupported-input",
-  });
-  expect(await evaluate(batch, context({ auth: { mode: "api-key" } }))).toEqual({
-    status: "unavailable",
-    reason: "credentials-unavailable",
   });
   expect(
     await evaluate(

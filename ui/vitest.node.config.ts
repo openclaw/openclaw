@@ -26,6 +26,7 @@ export default defineConfig({
     include: [
       "src/**/*.node.test.{ts,tsx}",
       "src/pages/chat/chat-responsive.browser.test.{ts,tsx}",
+      "src/pages/chat/chat-run-spacing.browser.test.{ts,tsx}",
       "src/pages/chat/chat-footer-layout.browser.test.{ts,tsx}",
     ],
     environment: "node",

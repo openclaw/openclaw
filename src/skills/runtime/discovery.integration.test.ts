@@ -83,6 +83,25 @@ async function waitForLiveWatch(directory: string, workspaceDir = workspace) {
     await fs.rm(marker, { force: true });
   }
 }
+function observeWatchAdmission() {
+  const admitted = Promise.withResolvers<void>();
+  const open = directoryWatch.watchDirectory;
+  const watch = vi
+    .spyOn(directoryWatch, "watchDirectory")
+    .mockImplementation((dir, listener, recursive) =>
+      open(
+        dir,
+        (event, filename) => {
+          listener(event, filename);
+          if (event === "change" && filename === undefined) {
+            admitted.resolve();
+          }
+        },
+        recursive,
+      ),
+    );
+  return { watch, ready: admitted.promise };
+}
 function trackSettlement(promise: Promise<unknown>) {
   const settled = vi.fn();
   void promise.then(settled, settled);
@@ -482,7 +501,7 @@ it("rediscovers replaced workspaces and roots that disappear and return", async 
   await write("Original");
   expect(await descriptions(request(), false)).toEqual(["Original"]);
   const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-  const watch = vi.spyOn(directoryWatch, "watchDirectory");
+  const { watch, ready } = observeWatchAdmission();
   // Register the Windows observation on an already prepared source, so this
   // exercises its handle boundary without changing worker launch semantics.
   Object.defineProperty(process, "platform", { ...platform, value: "win32" });
@@ -491,6 +510,7 @@ it("rediscovers replaced workspaces and roots that disappear and return", async 
   } finally {
     Object.defineProperty(process, "platform", platform);
   }
+  await ready;
   expect(watch).toHaveBeenCalledOnce();
   expect(watch.mock.calls[0]![0]).toBe(workspace);
   await fs.rename(workspace, path.join(temporary.make("skills-retired-"), "workspace"));
@@ -515,19 +535,23 @@ it.each([false, true])(
     input.sourcePlan.roots = [{ dir: skills, source: "openclaw-workspace", tier: "workspace" }];
     expect(await descriptions(input, false)).toEqual(missing ? [] : ["Personal"]);
     const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-    const watch = vi.spyOn(directoryWatch, "watchDirectory");
+    const { watch, ready } = observeWatchAdmission();
     Object.defineProperty(process, "platform", { ...platform, value: "win32" });
     try {
       await descriptions(input);
-      const opened = watch.mock.calls.filter(
-        (_, index) => watch.mock.results[index]?.type === "return",
+      await ready;
+      expect(watch.mock.calls.map(([directory, , recursive]) => [directory, recursive])).toEqual(
+        missing
+          ? [
+              [skills, true],
+              [path.dirname(skills), false],
+              [home, false],
+            ]
+          : [[skills, true]],
       );
-      expect(opened.map(([directory, , recursive]) => [directory, recursive])).toEqual([
-        [missing ? home : skills, !missing],
-      ]);
       if (missing) {
         await write("Created later", home, ".agents/skills/guide");
-        opened[0]![1]("rename", ".agents");
+        watch.mock.calls.at(-1)![1]("rename", ".agents");
         await completePassiveScan();
         expect(await descriptions(input)).toEqual(["Created later"]);
         expect(watch.mock.calls.at(-1)?.[0]).toBe(skills);
