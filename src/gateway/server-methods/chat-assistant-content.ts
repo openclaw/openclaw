@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getReplyPayloadMetadata,
@@ -255,9 +256,11 @@ export async function buildAssistantReplyContentFromInputs(
         }
       },
       onPrepareError: (error, cause) => {
-        // Callers only log this; the sanitized message alone hides why preparation failed.
+        // Callers only log this, so keep the whole cause; log transports redact at egress.
         params.onManagedMediaPrepareError?.(
-          cause === error ? error.message : `${error.message}: ${formatForLog(cause)}`,
+          cause === error
+            ? error.message
+            : `${error.message}: ${formatErrorMessage(cause, { includeCode: true })}`,
         );
       },
     });
