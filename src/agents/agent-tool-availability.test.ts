@@ -17,8 +17,8 @@ import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
 import { finalizeOpenClawTools } from "./openclaw-tools.finalize.js";
 import { SWARM_CODE_MODE_IDEMPOTENCY_KEY } from "./subagents/swarm/swarm-code-mode.js";
-import { filterToolsByPolicy } from "./tool-policy-match.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
+import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
   applyToolSearchCatalog as applyCatalog,
   clearToolSearchCatalog,
