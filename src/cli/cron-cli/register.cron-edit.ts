@@ -14,6 +14,7 @@ import { parseDurationMs } from "../parse-duration.js";
 import { CronCliError } from "./cron-cli-error.js";
 import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
+import { resolveDroppedCommandEnvKeys } from "./register.cron-edit-command-env.js";
 import {
   parseCronDeliveryPolicyOptions,
   registerCronMutationOptions,
@@ -533,13 +534,7 @@ export function registerCronEditCommand(cron: Command) {
               outputMaxBytes,
             };
             if (commandEnv) {
-              // Diagnostics are best effort; an unavailable snapshot must not block a patch.
-              const existing = (await readExistingCronJob().catch(() => undefined))?.payload;
-              if (existing?.kind === "command") {
-                droppedEnvKeys = Object.keys(existing.env ?? {}).filter(
-                  (key) => !Object.hasOwn(commandEnv, key),
-                );
-              }
+              droppedEnvKeys = await resolveDroppedCommandEnvKeys(readExistingCronJob, commandEnv);
             }
           } else if (payloadKind === "script") {
             payload = { kind: "script" };
