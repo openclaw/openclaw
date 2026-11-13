@@ -362,7 +362,9 @@ module.exports = {
       expect(terminalText).toBe(acpAnswer + ".\n\nComplete.");
       expect(firstStreamed).toContain(acpAnswer);
       expect(terminalText.startsWith(firstStreamed)).toBe(true);
-      expect(streamedText.get(runId)).toBe(terminalText);
+      expect(streamedText.get(runId), "paced ACP text must drain before the terminal event").toBe(
+        terminalText,
+      );
     }
     const requestCount = requests.length;
     expect(await send(sessionKey, "Remember this ACP context.", `${agentId}-first`)).toEqual({
