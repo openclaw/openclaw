@@ -26,6 +26,7 @@ import {
   type AttachmentContextBlock,
   renderMediaAttachmentDisposition,
 } from "./media-attachment-outcomes.js";
+import { formatMediaFailureSummary } from "./media-failure-reason.js";
 import { assertMediaExecutionCurrent, type MediaExecutionContext } from "./provider-execution.js";
 import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { resolveConcurrency } from "./resolve.js";
@@ -114,6 +115,7 @@ export async function applyMediaUnderstanding(params: {
         try {
           return await runCapability(request);
         } catch (err) {
+          const failureReason = formatMediaFailureSummary(err);
           if (shouldLogVerbose()) {
             logVerbose(`Media understanding task failed: ${String(err)}`);
           }
@@ -131,7 +133,14 @@ export async function applyMediaUnderstanding(params: {
               // Dropped attachments were never attempted; only selected ones failed.
               attachmentDispositions: Object.fromEntries([
                 ...selection.selected.map(
-                  ({ index }) => [index, { kind: "failed" as const }] as const,
+                  ({ index }) =>
+                    [
+                      index,
+                      {
+                        kind: "failed" as const,
+                        ...(failureReason ? { reason: failureReason } : {}),
+                      },
+                    ] as const,
                 ),
                 ...selection.droppedAttachmentIndexes.map(
                   (index) => [index, { kind: "not-selected" as const }] as const,

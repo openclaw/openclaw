@@ -4,6 +4,20 @@ import type {
 } from "../../packages/media-understanding-common/src/types.js";
 
 const MAX_SKIPPED_FILE_MARKERS = 5;
+const MAX_FAILURE_REASON_CHARS = 160;
+
+/** Keeps the marker one line and bounded even when a provider body is long. */
+function renderFailureReason(reason: string | undefined): string {
+  const trimmed = reason?.replace(/\s+/g, " ").trim();
+  if (!trimmed) {
+    return "";
+  }
+  const bounded =
+    trimmed.length <= MAX_FAILURE_REASON_CHARS
+      ? trimmed
+      : `${trimmed.slice(0, MAX_FAILURE_REASON_CHARS - 1)}…`;
+  return `: ${bounded}`;
+}
 
 // Reason-neutral because the shared overflow can mix file and media outcomes.
 function renderSkippedFileOverflowSummary(count: number): string {
@@ -28,7 +42,7 @@ export function renderMediaAttachmentDisposition(
     case "scope-denied":
       return `[${label} attachment not analyzed in this chat]`;
     case "failed":
-      return `[${label} attachment could not be analyzed]`;
+      return `[${label} attachment could not be analyzed${renderFailureReason(disposition.reason)}]`;
     default:
       return disposition satisfies never;
   }
