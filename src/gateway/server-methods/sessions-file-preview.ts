@@ -164,10 +164,14 @@ export async function respondSessionFilePreview({
   onGrantCreated();
   try {
     assertCurrent();
+    const sandboxOrigin =
+      options.client?.remoteControlUiIngress?.sandboxOrigin ??
+      options.context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
     options.respond(true, {
       status: "ready",
       html: params.html,
       omitted: omitted.size,
+      ...(sandboxOrigin ? { sandboxOrigin: new URL(sandboxOrigin).origin } : {}),
       previewId: grant.previewId,
       sandboxPath: grant.sandboxPath,
     } satisfies SessionsFilesPreviewResult);

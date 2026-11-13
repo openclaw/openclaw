@@ -34,6 +34,25 @@ Direct Gateway connections need access to both ports. The macOS app's Remote ove
 
 The sandbox origin must differ from the Control UI origin. Do not host other authenticated or sensitive content on it.
 
+OpenClaw ID tunnel connections to a linked claw use its dedicated sibling sandbox
+origin automatically: `https://sbx--<hash>.<claw-domain>`. The hash is the lowercase,
+unpadded RFC 4648 base32 encoding of the first 20 bytes of SHA-256 of the lowercase
+claw host's UTF-8 bytes. This keeps the sandbox's DNS label at 37 characters even
+for the longest claw names. The loader serves only
+`/mcp-app-sandbox?claw=<claw-label>&csp=...&cspv=1` there, verifies the claw label
+against the sandbox host, and restricts the view's CSP and framing to that
+claw's own origin. The Control UI hands the bootstrap the Gateway's trusted proxy
+shell before the ordinary App or widget handshake. This covers MCP Apps, script
+widgets, board widgets, and HTML previews; it does not require exposing the
+Gateway's sandbox port through the tunnel or setting `mcp.apps.sandboxOrigin`.
+Direct connections and tunnel connections without a linked claw retain the
+configured sandbox origin or the Gateway's sandbox port.
+
+Session-file previews with retained relative resources
+(`/__openclaw__/file-preview/`) do not use this bootstrap. They retain the existing
+sandbox-listener origin and reachability requirements; the sibling sandbox does
+not serve file-preview paths.
+
 For example, the official basic React demo can be configured as:
 
 ```json5
