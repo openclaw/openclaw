@@ -300,7 +300,10 @@ describe("Make reachable over a personal sign-in", () => {
       });
       await completeSetup();
       await click("Link your profile");
-      expect(linkOpenClawIdToProfile).toHaveBeenCalledExactlyOnceWith({ request });
+      expect(linkOpenClawIdToProfile).toHaveBeenCalledExactlyOnceWith(
+        { request },
+        expect.any(AbortSignal),
+      );
       const action = [...document.querySelectorAll("button")].find(
         (button) => button.textContent?.trim() === "Link your profile",
       );
@@ -316,6 +319,25 @@ describe("Make reachable over a personal sign-in", () => {
       expect(await done).toBe(true);
     },
   );
+
+  it("cancels a pending profile link when setup closes", async () => {
+    linkOpenClawIdToProfile.mockReturnValueOnce(new Promise(() => {}));
+    const request = gateway("sign_in_not_held");
+    signIn();
+    const done = showMakeReachableDialog({
+      client: { request } as unknown as GatewayBrowserClient,
+      loaderDomain: "claws.test",
+      signedIn,
+      linkProfile: true,
+    });
+    await completeSetup();
+    await click("Link your profile");
+    const signal = linkOpenClawIdToProfile.mock.calls[0]?.[1] as AbortSignal;
+    expect(signal.aborted).toBe(false);
+    await click("Close");
+    expect(await done).toBe(true);
+    await vi.waitFor(() => expect(signal.aborted).toBe(true));
+  });
 
   it("keeps the note and offers the link again when the sign-in fails", async () => {
     linkOpenClawIdToProfile.mockRejectedValueOnce(new Error("Sign-in timed out. Try again."));

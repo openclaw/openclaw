@@ -1,7 +1,7 @@
 // The note under Turn on remote access's steps when the admin's OpenClaw ID didn't link to
 // their profile at commit. When a fresh sign-in can fix it, it offers Link your profile, which
 // runs the same link as Settings → Profile (lib/openclaw-id/link-profile.ts).
-import { createSignal } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
@@ -38,7 +38,8 @@ export function profileNotice(outcome: string | null): ProfileNotice | null {
 
 /**
  * Shows `notice`, with Link your profile when it can link. Reports the link's outcome through
- * `onChange` while `active()`; closing the sign-in dialog first keeps the note.
+ * `onChange` while `active()`; closing the sign-in dialog first keeps the note. Once the note
+ * is gone (setup closed), a pending link opens no sign-in dialog.
  */
 export function SetupProfileNotice(props: {
   notice: ProfileNotice;
@@ -47,13 +48,15 @@ export function SetupProfileNotice(props: {
   onChange: (notice: ProfileNotice | null) => void;
 }) {
   const [linking, setLinking] = createSignal(false);
+  const gone = new AbortController();
+  onCleanup(() => gone.abort());
   const link = async () => {
     if (linking() || !props.active()) {
       return;
     }
     setLinking(true);
     try {
-      const outcome = await linkOpenClawIdToProfile(props.client);
+      const outcome = await linkOpenClawIdToProfile(props.client, gone.signal);
       if (outcome !== null && props.active()) {
         props.onChange(profileNotice(outcome));
       }
