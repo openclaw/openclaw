@@ -732,16 +732,26 @@ decisions are source-only; no runtime result or removal is claimed for them.
 
 ### Runtime FormData payload fidelity
 
-At `5dfccbb92b2ab016c8c2082968f0b87798dc13bb`, source review retains the two
-runtime-fetch declarations and four proxy-fetch declarations (six cases).
-The runtime FormData case checks the filename but not file bytes or MIME type.
-Strengthening that existing case is pending baseline and mutation proof;
-no production defect or runtime result is claimed yet.
+At `5dfccbb92b2ab016c8c2082968f0b87798dc13bb`, the runtime FormData case checks
+the filename but not file bytes or MIME type. It now checks the dispatched
+Blob's exact bytes and MIME type while retaining its filename, model-field and
+stale-header assertions. All seven declarations and ten expanded cases across
+runtime-fetch, proxy-fetch and the FormData helper remain. Test code grows by
+five lines; production and shared support code do not change.
 
-The adjacent SSRF, dispatcher-pool, guarded-body-stream, hostname and FormData
-helper suites retain 25 declarations and 52 expanded cases. They protect policy
+The baseline and clean candidate pass all ten cases. Empty-file and explicit
+generic-MIME mutations both pass the baseline but fail the repaired case at
+the corresponding assertion, with the other nine cases passing. A first
+rewrapping-only MIME control stayed green and was not counted as proof; the
+explicit control substitutes `application/octet-stream` while preserving bytes.
+All temporary production and test changes were restored byte for byte.
+Focused checks, independent preservation review, full local review and hosted
+outcomes are tracked in [PR #198305](https://github.com/openclaw/openclaw/pull/198305).
+
+The adjacent SSRF, dispatcher-pool, guarded-body-stream and hostname suites
+retain 24 declarations and 48 expanded cases. They protect policy
 and DNS boundaries, pool capacity and lifetime, stream cleanup and metadata,
-hostname normalization, and malformed FormData rejection. The request-body,
+and hostname normalization. The request-body,
 authority and release suites retain another ten declarations and 21 expanded
 cases covering wire payloads, caller authority and release ownership. These
 retention decisions are source-only; no runtime pass or removal is claimed.

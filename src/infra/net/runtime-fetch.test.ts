@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
@@ -79,7 +79,12 @@ describe("fetchWithRuntimeDispatcher", () => {
     const body = sentInit.body as unknown as RuntimeFormData;
     expect(body).toBeInstanceOf(RuntimeFormData);
     expect(body.records.find((record) => record.name === "model")?.value).toBe("gpt-4o-transcribe");
-    expect(body.records.find((record) => record.name === "file")?.filename).toBe("clip.ogg");
+    const file = body.records.find((record) => record.name === "file");
+    expect(file?.filename).toBe("clip.ogg");
+    const blob = file?.value;
+    assert.instanceOf(blob, Blob);
+    expect(blob.type).toBe("audio/ogg");
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
     const sentHeaders = new Headers(sentInit.headers);
     expect(sentHeaders.has("content-length")).toBe(false);
     expect(sentHeaders.has("content-type")).toBe(false);
