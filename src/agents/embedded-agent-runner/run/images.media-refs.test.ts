@@ -8,6 +8,7 @@ import { normalizeMediaFacts, resolveMediaFacts } from "../../../media/media-fac
 import * as utils from "../../../utils.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
+import { registerAgentWorkspaceAccess } from "../../workspace-access.js";
 import {
   detectAndLoadPromptImages,
   hasHydratableMediaImages,
@@ -248,6 +249,70 @@ describe("fact-carried image references", () => {
       sandbox: sandboxAt(sandboxRoot),
     });
     expect(result.images[0]).toMatchObject(image());
+  });
+
+  it("hydrates a sandbox-staged path when the workspace also prepares turn attachments", async () => {
+    // A file-transfer binding used to make this fact look Gateway-owned, dropping the
+    // sandbox reader while the staged copy stayed outside the media roots.
+    const sandboxRoot = tempDirs.make("openclaw-staged-with-binding-");
+    const mediaId = "telegram-photo.png";
+    await writeImage(sandboxRoot, `media/inbound/${mediaId}`);
+    const release = registerAgentWorkspaceAccess(sandboxRoot, {
+      bridge: createHostSandboxFsBridge(sandboxRoot),
+      prepareTurnAttachments: async () => undefined,
+    });
+    try {
+      const result = await loadImages({
+        prompt: "",
+        media: [
+          {
+            path: `media/inbound/${mediaId}`,
+            url: `media://inbound/${mediaId}`,
+            staged: true,
+            contentType: "image/png",
+          },
+        ],
+        workspaceDir: sandboxRoot,
+        workspaceOnly: true,
+        sandbox: sandboxAt(sandboxRoot),
+      });
+      expect(result.images[0]).toMatchObject(image());
+    } finally {
+      release();
+    }
+  });
+
+  it("keeps a Gateway remote-cache staged copy on the Gateway reader", async () => {
+    // stageSandboxMedia also marks Gateway-owned copies as staged; those live under the
+    // media directory and must keep the Gateway reader even when a sandbox is present.
+    const stateRoot = tempDirs.make("openclaw-gateway-cache-");
+    const cachedPath = path.join(stateRoot, "media", "remote-cache", "cached.png");
+    await fs.mkdir(path.dirname(cachedPath), { recursive: true });
+    await fs.writeFile(cachedPath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
+    const release = registerAgentWorkspaceAccess(stateRoot, {
+      bridge: createHostSandboxFsBridge(stateRoot),
+      prepareTurnAttachments: async () => undefined,
+    });
+    try {
+      const result = await loadImages({
+        prompt: "",
+        media: [
+          {
+            path: cachedPath,
+            url: "media://inbound/cached.png",
+            staged: true,
+            contentType: "image/png",
+          },
+        ],
+        workspaceDir: stateRoot,
+        workspaceOnly: true,
+        sandbox: sandboxAt(stateRoot),
+      });
+      expect(result.images[0]).toMatchObject(image());
+    } finally {
+      release();
+    }
   });
 
   it.each([false, true])(
