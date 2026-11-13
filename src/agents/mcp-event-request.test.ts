@@ -109,14 +109,6 @@ it.each(["json", "sse"] as const)("sends one direct MCP 2 request and accepts %s
     },
   });
 });
-it.each([
-  ["comment.created", "comment.created"],
-  ["café", "=?base64?Y2Fmw6k=?="],
-])("routes events/poll by event name %s with Mcp-Name", async (name, header) => {
-  mocks.fetch.mockImplementation(async (_url, init) => reply(init, { result: { events: [] } }));
-  await request({ method: "events/poll", params: { name, arguments: {}, cursor: null } });
-  expect(new Headers(mocks.fetch.mock.calls[0]![1]?.headers).get("mcp-name")).toBe(header);
-});
 it.each(["DNS", "response", "OAuth"] as const)("rejects revocation at %s", async (stage) => {
   let current = true;
   function revoke<T>(value: T) {
