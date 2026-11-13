@@ -7,6 +7,7 @@ import type {
   WorkspaceFilesystemReply,
 } from "../agents/workspace-filesystem.types.js";
 import type { WorktreeWorkerAuthority } from "../agents/worktrees/types.js";
+import type { ScratchTreeResult } from "./scratch-cleanup-tree.js";
 export type { CloneFileMetadata } from "@openclaw/fs-safe/copy";
 
 export type FsSafeCopyRead =
@@ -66,6 +67,7 @@ export type ProvisionCopyDetails = {
 };
 
 export type FsSafeCopyReply =
+  | ScratchTreeResult
   | { type: "captures-reclaimed"; failures: number; firstFailure?: string }
   | WorkspaceFilesystemReply
   | { type: "probe"; backend: TreeCloneBackend | undefined; nativeMode: FsSafeNativeMode }

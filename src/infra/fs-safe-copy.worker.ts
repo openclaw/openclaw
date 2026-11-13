@@ -25,6 +25,7 @@ import type {
   ProvisionCopyDetails,
 } from "./fs-safe-copy-worker-contract.js";
 import { normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
+import type { ScratchTreeRequest } from "./scratch-cleanup-tree.js";
 
 async function cloneRefsDirectory(
   source: string,
@@ -115,11 +116,33 @@ if (parentPort) {
   configureFsSafeNative(nativeConfig);
   serveWorkerTasks<
     FsSafeCopyReply,
-    FsSafeCopyRead | FsSafeProvisionCopy | WorkspaceFilesystemCommand | FsSafeStoreRemove
+    | FsSafeCopyRead
+    | FsSafeProvisionCopy
+    | WorkspaceFilesystemCommand
+    | FsSafeStoreRemove
+    | ScratchTreeRequest
   >(async (command, channel, control) => {
     let copyDetails: ProvisionCopyDetails | undefined;
     try {
       switch (command.type) {
+        case "scratch": {
+          if (!channel) {
+            throw new Error("Scratch cleanup requires its live host channel");
+          }
+          const { walkScratchTree } = await import("./scratch-cleanup-tree.js");
+          let progress: import("./scratch-cleanup-tree.js").ScratchTreeResult;
+          const checkpoint = workerMutationAssertion(
+            command.decision,
+            () => channel.notify(progress),
+            control.throwIfCancelled,
+          );
+          return await control.runNativeSection(() =>
+            walkScratchTree(command, control.throwIfCancelled, async (next) => {
+              progress = next;
+              checkpoint();
+            }),
+          );
+        }
         case "remove-store-file":
           return await control.runNativeSection<FsSafeCopyReply>(() =>
             withWorkerFsSafeNativeMode(command.nativeMode, async () => {
