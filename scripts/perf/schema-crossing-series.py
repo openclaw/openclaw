@@ -90,8 +90,9 @@ for label in sequence:
                 digest.update(json.dumps(rows, sort_keys=True,
                     default=lambda value: hashlib.sha256(value).hexdigest()).encode())
             # Include committed WAL padding bytes as well as the real session-row update.
-            for row in connection.execute("SELECT substr(payload,1,64) FROM synthetic_payload ORDER BY rowid LIMIT 128"):
-                digest.update(row[0])
+            if database.parent.parent.name.startswith("synthetic-"):
+                for row in connection.execute("SELECT substr(payload,1,64) FROM synthetic_payload ORDER BY rowid LIMIT 128"):
+                    digest.update(row[0])
             outcomes.append(dict(agent=database.parent.parent.name,
                 schema=connection.execute("PRAGMA user_version").fetchone()[0],
                 counts=counts, contentSha256=digest.hexdigest()))
