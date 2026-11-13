@@ -140,6 +140,9 @@ async function runInstalledPluginUpdate(
   const completedCanonicalUpdates = new Set<string>();
 
   for (const pluginId of targets) {
+    if (params.signal?.aborted) {
+      break;
+    }
     if (params.skipIds?.has(pluginId)) {
       recordSkippedOutcome(pluginId, `Skipping "${pluginId}" (already updated).`);
       continue;
