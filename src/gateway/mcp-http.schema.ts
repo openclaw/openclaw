@@ -3,6 +3,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { logWarn } from "../logger.js";
 import {
+  intersectPropertySchemas,
+  readSchemaTypeNames,
+} from "../shared/json-schema-conjunction.js";
+import {
   findToolInputSchemaTopLevelUnionError,
   TOOL_INPUT_SCHEMA_TOP_LEVEL_UNION_KEYWORDS,
 } from "../shared/json-schema-defaults.js";
@@ -116,128 +120,34 @@ function hasTopLevelUnion(schema: Record<string, unknown>): boolean {
   );
 }
 
-// `type` lists the JSON types a value may take, so a conjunction keeps only the
-// types both sides allow; an empty result admits nothing at all.
-function readTypeNames(value: unknown): Set<string> | undefined {
-  if (typeof value === "string") {
-    return new Set([value]);
-  }
-  if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
-    return new Set(value as string[]);
-  }
-  return undefined;
-}
-
-function intersectTypeKeyword(left: unknown, right: unknown): unknown {
-  const leftNames = readTypeNames(left);
-  const rightNames = readTypeNames(right);
-  if (!leftNames || !rightNames) {
-    return undefined;
-  }
-  const kept = [...leftNames].filter((name) => rightNames.has(name));
-  if (kept.length === 0) {
-    return undefined;
-  }
-  return kept.length === 1 ? kept[0] : kept;
-}
-
-function intersectEnumKeyword(left: unknown, right: unknown): unknown {
-  if (!Array.isArray(left) || !Array.isArray(right)) {
-    return undefined;
-  }
-  const kept = left.filter((value) =>
-    right.some((candidate) => isDeepStrictEqual(candidate, value, { skipPrototype: true })),
-  );
-  return kept.length > 0 ? kept : undefined;
-}
-
-// A `const` already pins the value, so an enum alongside it is redundant when it
-// admits that value and unsatisfiable when it does not.
-function normalizeLiteralKeywords(
-  schema: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  if (!Object.hasOwn(schema, "const") || !Array.isArray(schema.enum)) {
-    return schema;
-  }
-  const admitted = schema.enum.some((value) =>
-    isDeepStrictEqual(value, schema.const, { skipPrototype: true }),
-  );
-  if (!admitted) {
-    return undefined;
-  }
-  const { enum: _enum, ...rest } = schema;
-  return rest;
-}
-
-// Structural inequality is not proof that an intersection is unrepresentable: a
-// `true` branch admits everything, keywords only one side constrains are
-// additive, and `type`/`enum` narrow to their intersection. Returns undefined
-// only when no single flat schema can carry both constraints exactly.
-function intersectPropertySchemas(
-  left: boolean | Record<string, unknown>,
-  right: boolean | Record<string, unknown>,
-): boolean | Record<string, unknown> | undefined {
-  if (left === true) {
-    return right;
-  }
-  if (right === true) {
-    return left;
-  }
-  if (left === false || right === false) {
-    return false;
-  }
-  if (isDeepStrictEqual(left, right, { skipPrototype: true })) {
-    return left;
-  }
-  const merged: Record<string, unknown> = { ...left };
-  for (const [keyword, value] of Object.entries(right)) {
-    if (!Object.hasOwn(merged, keyword)) {
-      merged[keyword] = value;
-      continue;
-    }
-    const existing = merged[keyword];
-    if (isDeepStrictEqual(existing, value, { skipPrototype: true })) {
-      continue;
-    }
-    const narrowed =
-      keyword === "type"
-        ? intersectTypeKeyword(existing, value)
-        : keyword === "enum"
-          ? intersectEnumKeyword(existing, value)
-          : undefined;
-    if (narrowed === undefined) {
-      return undefined;
-    }
-    merged[keyword] = narrowed;
-  }
-  return normalizeLiteralKeywords(merged);
-}
-
 // Root properties, each allOf branch, and each sibling union keyword all hold at
-// once, so a key constrained on both sides of such a boundary keeps the exact
-// intersection when one object schema can express it. Only a genuinely
-// unrepresentable overlap withholds the tool. Alternatives within one keyword
-// stay on the keep-first-and-warn contract instead.
+// once, so a key constrained on both sides of such a boundary publishes the exact
+// intersection: flat when one schema states both constraints, and a nested
+// conjunction when each side needs its own evaluation scope. Alternatives within
+// one keyword stay on the keep-first-and-warn contract instead.
 function combineConjunctiveProps(
   target: Record<string, boolean | Record<string, unknown>>,
   source: Record<string, boolean | Record<string, unknown>>,
   toolName: string,
-): boolean {
+): void {
   for (const [key, schema] of Object.entries(source)) {
     if (!Object.hasOwn(target, key)) {
       target[key] = schema;
       continue;
     }
-    const intersected = intersectPropertySchemas(target[key]!, schema);
-    if (intersected === undefined) {
+    const existing = target[key]!;
+    const intersected = intersectPropertySchemas(existing, schema);
+    if (isNestedConjunction(intersected) && !isNestedConjunction(existing)) {
       warnSchemaOnce(
-        `${MCP_LOOPBACK_LOG_PREFIX}: tool "${toolName}" input schema constrains "${key}" differently across combined top-level schemas; skipping the tool instead of publishing a weakened constraint`,
+        `${MCP_LOOPBACK_LOG_PREFIX}: tool "${toolName}" constrains "${key}" on both sides of a combined top-level schema; publishing both constraints as a nested conjunction so neither is weakened`,
       );
-      return false;
     }
     target[key] = intersected;
   }
-  return true;
+}
+
+function isNestedConjunction(schema: boolean | Record<string, unknown>): boolean {
+  return isRecord(schema) && Object.hasOwn(schema, "allOf");
 }
 
 // Keywords this flattener either folds into the published object schema or that
@@ -267,7 +177,7 @@ function branchTypeAdmitsObject(value: unknown): boolean {
   if (value === undefined) {
     return true;
   }
-  const names = readTypeNames(value);
+  const names = readSchemaTypeNames(value);
   return names ? names.has("object") : false;
 }
 
@@ -378,9 +288,7 @@ function flattenTopLevelUnionSchema(
     // SAFETY: fresh null-prototype map; mergeVariantsIntoProperties validates every entry.
     const groupProps = Object.create(null) as Record<string, boolean | Record<string, unknown>>;
     const requiredSets = mergeVariantsIntoProperties(alternatives, toolName, groupProps);
-    if (!combineConjunctiveProps(mergedProps, groupProps, toolName)) {
-      return undefined;
-    }
+    combineConjunctiveProps(mergedProps, groupProps, toolName);
     for (const key of requiredSets[0] ?? []) {
       if (requiredSets.every((set) => set.has(key))) {
         required.add(key);
@@ -416,9 +324,7 @@ function flattenTopLevelUnionSchema(
     // SAFETY: fresh null-prototype map; mergeVariantsIntoProperties validates every entry.
     const branchProps = Object.create(null) as Record<string, boolean | Record<string, unknown>>;
     const requiredSets = mergeVariantsIntoProperties([branch], toolName, branchProps);
-    if (!combineConjunctiveProps(mergedProps, branchProps, toolName)) {
-      return undefined;
-    }
+    combineConjunctiveProps(mergedProps, branchProps, toolName);
     const branchClosure = readClosedConjunct(branch, "an allOf branch", Object.keys(branchProps));
     if (branchClosure) {
       closedConjuncts.push(branchClosure);
@@ -479,9 +385,9 @@ export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry
     if (hasTopLevelUnion(raw)) {
       const flattened = flattenTopLevelUnionSchema(raw, name);
       if (!flattened) {
-        // A conjunctive overlap means no single object schema can keep every
-        // constraint. Skip the tool with the warning above instead of failing
-        // the whole catalog build mid run preparation.
+        // A branch-level constraint no root object schema can carry. Skip the
+        // tool with the warning above instead of failing the whole catalog
+        // build mid run preparation.
         return [];
       }
       raw = flattened;

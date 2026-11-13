@@ -211,22 +211,112 @@ describe("buildMcpToolSchema", () => {
     );
   });
 
-  it("skips a tool whose sibling anyOf and oneOf overlap on one key", () => {
-    const entries = buildMcpToolSchema([
+  // No single flat schema states both constraints, so each conjunct keeps its own
+  // evaluation scope under the property. The tool stays available and callable;
+  // nested composition is legal in a native tool schema, only the root is not.
+  it("publishes an unflattenable sibling overlap as a nested conjunction", () => {
+    const [entry] = buildMcpToolSchema([
       {
         name: "sibling_overlap",
         description: "proof",
         parameters: {
-          anyOf: [{ type: "object", properties: { target: { type: "string" } } }],
-          oneOf: [{ type: "object", properties: { target: { type: "number" } } }],
+          anyOf: [{ type: "object", properties: { target: { type: "string", maxLength: 4 } } }],
+          oneOf: [{ type: "object", properties: { target: { type: "string", maxLength: 8 } } }],
         },
       } as never,
     ]);
 
-    expect(entries).toEqual([]);
+    expect(entry?.inputSchema).toEqual({
+      type: "object",
+      properties: {
+        target: {
+          allOf: [
+            { type: "string", maxLength: 4 },
+            { type: "string", maxLength: 8 },
+          ],
+        },
+      },
+      required: [],
+    });
     expect(logWarnMock).toHaveBeenCalledWith(
-      'mcp-loopback: tool "sibling_overlap" input schema constrains "target" differently across combined top-level schemas; skipping the tool instead of publishing a weakened constraint',
+      'mcp-loopback: tool "sibling_overlap" constrains "target" on both sides of a combined top-level schema; publishing both constraints as a nested conjunction so neither is weakened',
     );
+  });
+
+  // openclaw-1azg review 3: a property keyword is evaluated against its own
+  // schema's siblings, so copying additionalProperties into a schema that
+  // declares different properties widens what that conjunct accepts.
+  it("keeps each conjunct's evaluation scope instead of copying additionalProperties", () => {
+    const [entry] = buildMcpToolSchema([
+      {
+        name: "scoped_overlap",
+        description: "proof",
+        parameters: {
+          type: "object",
+          properties: { payload: { type: "object", properties: { x: { type: "string" } } } },
+          anyOf: [
+            {
+              type: "object",
+              properties: { payload: { type: "object", additionalProperties: false } },
+            },
+          ],
+        },
+      } as never,
+    ]);
+
+    expect(entry?.inputSchema.properties).toEqual({
+      payload: {
+        allOf: [
+          { type: "object", properties: { x: { type: "string" } } },
+          { type: "object", additionalProperties: false },
+        ],
+      },
+    });
+  });
+
+  it("intersects number and integer to the subtype instead of withholding the tool", () => {
+    const [entry] = buildMcpToolSchema([
+      {
+        name: "numeric_overlap",
+        description: "proof",
+        parameters: {
+          type: "object",
+          properties: { count: { type: "number" }, size: { type: ["number", "string"] } },
+          anyOf: [
+            {
+              type: "object",
+              properties: { count: { type: "integer" }, size: { type: ["integer", "boolean"] } },
+            },
+          ],
+        },
+      } as never,
+    ]);
+
+    expect(entry?.inputSchema.properties).toEqual({
+      count: { type: "integer" },
+      size: { type: "integer" },
+    });
+  });
+
+  it("ignores annotation differences when intersecting a root type with branch constants", () => {
+    const [entry] = buildMcpToolSchema([
+      {
+        name: "annotated_overlap",
+        description: "proof",
+        parameters: {
+          type: "object",
+          properties: { action: { type: "string", description: "Command" } },
+          anyOf: [
+            { type: "object", properties: { action: { const: "start", description: "Start" } } },
+            { type: "object", properties: { action: { const: "stop", description: "Stop" } } },
+          ],
+        },
+      } as never,
+    ]);
+
+    expect(entry?.inputSchema.properties).toEqual({
+      action: { type: "string", description: "Command", enum: ["start", "stop"] },
+    });
   });
 
   it("passes a plain object schema through unchanged", () => {
