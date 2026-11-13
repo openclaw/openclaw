@@ -55,10 +55,12 @@ vi.mock("../spawn/subagent-depth.js", () => ({
 vi.mock("../../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => ({ hasHooks: () => false }),
 }));
-vi.mock("../../../infra/outbound/bound-delivery-router.js", () => ({
+vi.mock("../../../infra/outbound/bound-delivery-router.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/outbound/bound-delivery-router.js")>()),
   resolveBoundDeliveryDestination: async () => null,
 }));
-vi.mock("../../../infra/outbound/conversation-id.js", () => ({
+vi.mock("../../../infra/outbound/conversation-id.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/outbound/conversation-id.js")>()),
   resolveConversationIdFromTargets: () => "",
 }));
 // mock-isolation: The fixture controls delivery deadlines and requester records without starting transport or session-store work.

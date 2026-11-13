@@ -2,18 +2,17 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionDeliveryState } from "./types.js";
 
 export function isCanonicalSessionDeliveryState(value: unknown): value is SessionDeliveryState {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
-  const candidate = value as Record<string, unknown>;
-  if (candidate.kind === "none" || candidate.kind === "internal") {
+  if (value.kind === "none" || value.kind === "internal") {
     return true;
   }
   return (
-    candidate.kind === "external" &&
-    Boolean(candidate.route && typeof candidate.route === "object") &&
-    Boolean(candidate.context && typeof candidate.context === "object") &&
-    Boolean(candidate.origin && typeof candidate.origin === "object")
+    value.kind === "external" &&
+    Boolean(value.route && typeof value.route === "object") &&
+    Boolean(value.context && typeof value.context === "object") &&
+    Boolean(value.origin && typeof value.origin === "object")
   );
 }
 

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasErrnoCode } from "../infra/errno.js";
 import { root as fsRoot } from "../infra/fs-safe.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -198,7 +199,7 @@ async function readOptionalUtf8File(params: {
     }
     return await fs.readFile(params.absolutePath, "utf-8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return "";
     }
     throw error;

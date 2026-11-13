@@ -438,6 +438,7 @@ src/infra/database-engine/observation.ts
 src/infra/database-engine/open.ts
 src/infra/database-engine/physical-facts-contract.ts
 src/infra/database-engine/physical-facts.ts
+src/infra/database-engine/physical-store-inspection.ts
 src/infra/database-engine/physical-store.ts
 src/infra/database-engine/policy.ts
 src/infra/database-engine/postgres-catalog.ts
@@ -1053,6 +1054,7 @@ src/infra/directory-watch-host.worker.ts
 src/infra/directory-watch-parent.worker.ts
 src/infra/disk-space.ts
 src/infra/dispatch-wrapper-resolution.ts
+src/infra/device-identity-store-options.ts
 src/infra/device-identity-store.ts
 src/infra/device-identity.ts
 src/infra/dotenv-global-core.ts
