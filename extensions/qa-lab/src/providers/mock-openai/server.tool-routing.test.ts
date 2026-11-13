@@ -79,10 +79,10 @@ it("spawns the current silent worker and consumes its receipt across prompt upda
   const promptUpdate = makeUserInput(
     "System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n## Skills\nUpdated QA skills.",
   );
-  turn.input.unshift(
-    makeUserInput("Subagent terminal reply QA check: visible."),
-    { role: "assistant", content: [{ type: "output_text", text: "Visible child completed." }] },
-  );
+  turn.input.unshift(makeUserInput("Subagent terminal reply QA check: visible."), {
+    role: "assistant",
+    content: [{ type: "output_text", text: "Visible child completed." }],
+  });
   turn.input.push(
     makeUserInput("OpenClaw runtime context:\nCurrent execution and subagent metadata."),
     promptUpdate,
