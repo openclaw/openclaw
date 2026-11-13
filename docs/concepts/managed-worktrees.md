@@ -110,11 +110,21 @@ synchronization returned successfully; it does not certify that resume succeeded
 On Btrfs, APFS, and ReFS, new private checkouts with a committed `pnpm-lock.yaml`
 can reuse installed dependencies. OpenClaw prepares the dependencies once in a
 disposable sandbox, then clones the prepared checkout for each session. After the
-Gateway is ready, it prepares the default session base for agent repositories
-with sandbox mode `all` or `non-main` in the background. Agents with sandbox mode
-`off` skip background dependency preparation; creator-role-required sandboxes
-still prepare dependencies on first use. A session arriving during preparation
-waits for the same build; later checkouts arrive with `node_modules`. Other selected commits
+Gateway is ready, it prepares the default session base for repositories whose
+sandbox templates were used by a session within the last seven days. After each pass, the
+Gateway checks again after one idle minute, fetching the current default base
+through the normal base owner. Existing sandbox template records also select
+recently used project repositories with matching sandbox policies, including
+creator-role-required sandboxes when the agent's sandbox mode is `off`.
+Background preparation does not renew foreground-use recency; unused repositories
+age out under the existing cleanup policy. Background passes
+run serially and defer for foreground work or host I/O pressure; each build keeps
+the existing disk admission and generation retention. Each pass selects the newest
+default base rather than queuing intervening commits. If the base owner publishes
+a newer commit during a build, that obsolete background build is cancelled and
+settled before another pass. A session arriving during preparation
+waits for the same build; later checkouts reuse `node_modules` and the default
+projection manifest. Other selected commits
 still run dependency installation on first use. When the frozen lockfile and Git
 attributes are unchanged, OpenClaw clones a prepared template into a separate generation,
 imports only the new Git objects, and checks out the source delta before reinstalling
