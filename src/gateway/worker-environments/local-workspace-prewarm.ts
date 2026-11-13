@@ -73,7 +73,7 @@ export async function prewarmLocalWorkspaceTemplates(params: {
             worktreeTemplateMutationKey(record.cacheKey) ===
             sandboxTemplateCacheKey(record.commonDir, record.worktreeRoot, identity.key),
         )
-        .reverse();
+        .toReversed();
       for (const candidate of candidates) {
         if (await params.shouldDefer?.()) {
           return;
