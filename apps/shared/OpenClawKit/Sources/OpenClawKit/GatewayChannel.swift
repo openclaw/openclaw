@@ -215,11 +215,17 @@ public actor GatewayChannelActor {
               identity.deviceId == deviceId
         else { throw CancellationError() }
         let gatewayID = context.options.deviceAuthGatewayID
-        let previous = DeviceAuthStore.loadToken(deviceId: deviceId, role: "operator", gatewayID: gatewayID, profile: context.options.deviceIdentityProfile)?.token
+        let previous = DeviceAuthStore.loadToken(
+            deviceId: deviceId,
+            role: "operator",
+            gatewayID: gatewayID,
+            profile: context.options.deviceIdentityProfile)?.token
         let encoded = try self.encoder.encode(params)
         let values = try self.decoder.decode([String: AnyCodable].self, from: encoded)
-        let data = try await self.request(method: "device.profile.enroll", params: values,
-                                          ifCurrentConnectionGeneration: generation)
+        let data = try await self.request(
+            method: "device.profile.enroll",
+            params: values,
+            ifCurrentConnectionGeneration: generation)
         let result = try self.decoder.decode(GatewayProfileEnrollmentResult.self, from: data)
         guard self.authBinding(ifCurrentConnectionGeneration: generation) == context.binding,
               self.socketAdmission.withLock({ $0 }) else { throw CancellationError() }
@@ -227,9 +233,15 @@ public actor GatewayChannelActor {
             guard result.deviceId == deviceId, !grant.token.isEmpty,
                   Set(grant.scopes).isSubset(of: Set(scopes)),
                   self.socketAdmission.withLock({ active in
-                      active && DeviceAuthStore.storeTokenPersisted(deviceId: deviceId, role: "operator", token: grant.token,
-                          scopes: grant.scopes, gatewayID: gatewayID, profile: context.options.deviceIdentityProfile,
-                          expectedToken: previous, onlyIfUnchanged: true)
+                      active && DeviceAuthStore.storeTokenPersisted(
+                          deviceId: deviceId,
+                          role: "operator",
+                          token: grant.token,
+                          scopes: grant.scopes,
+                          gatewayID: gatewayID,
+                          profile: context.options.deviceIdentityProfile,
+                          expectedToken: previous,
+                          onlyIfUnchanged: true)
                   })
             else { throw CancellationError() }
             try await onPersisted?()
@@ -240,12 +252,17 @@ public actor GatewayChannelActor {
             options.scopes = grant.scopes
             options.allowStoredDeviceAuth = true
             self.connectOptions = options
-            await self.transitionToDisconnected(reason: "personal profile enrolled",
-                error: Self.failure(7, "personal profile enrolled"), connectionGeneration: generation,
+            await self.transitionToDisconnected(
+                reason: "personal profile enrolled",
+                error: Self.failure(7, "personal profile enrolled"),
+                connectionGeneration: generation,
                 shouldReconnect: true)
         }
-        return try self.encoder.encode(["deviceId": AnyCodable(result.deviceId),
-            "profileId": AnyCodable(result.profileId), "reconnect": AnyCodable(result.operatorToken != nil)])
+        return try self.encoder.encode([
+            "deviceId": AnyCodable(result.deviceId),
+            "profileId": AnyCodable(result.profileId),
+            "reconnect": AnyCodable(result.operatorToken != nil),
+        ])
     }
 
     nonisolated func retireSocketAdmission() {

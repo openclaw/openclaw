@@ -95,27 +95,48 @@ struct GatewayNodeSessionDashboardAuthTests {
         let identity = DeviceIdentityStore.loadOrCreate()
         let gatewayID = "personal-native-" + UUID().uuidString
         DeviceAuthStore.storeToken(deviceId: identity.deviceId, role: "node", token: "node-stays", gatewayID: gatewayID)
-        let options = GatewayConnectOptions(role: "operator", scopes: ["operator.admin", "operator.read"],
-            scopesAreExplicit: true, caps: [], commands: [], permissions: [:], clientId: "openclaw-ios",
-            clientMode: "ui", clientDisplayName: "Personal setup test", deviceAuthGatewayID: gatewayID)
+        let options = GatewayConnectOptions(
+            role: "operator",
+            scopes: ["operator.admin", "operator.read"],
+            scopesAreExplicit: true,
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios",
+            clientMode: "ui",
+            clientDisplayName: "Personal setup test",
+            deviceAuthGatewayID: gatewayID)
         fixture.requestHandler = { role, method, params in
-            guard role == "operator", method == "device.profile.enroll", params["profileId"] as? String == "person" else { return nil }
-            return ["deviceId": identity.deviceId, "profileId": "person",
-                "operatorToken": ["token": "personal-native", "scopes": ["operator.read"]]]
+            guard role == "operator", method == "device.profile.enroll",
+                  params["profileId"] as? String == "person" else { return nil }
+            return [
+                "deviceId": identity.deviceId,
+                "profileId": "person",
+                "operatorToken": ["token": "personal-native", "scopes": ["operator.read"]],
+            ]
         }
         let gateway = GatewayNodeSession()
         do {
             try await self.connect(gateway, fixture: fixture, options: options)
             let route = try #require(await gateway.currentRoute(ifGatewayID: gatewayID))
-            let params = try JSONDecoder().decode(GatewayProfileEnrollment.self, from: Data(#"{"profileId":"person"}"#.utf8))
+            let params = try JSONDecoder().decode(
+                GatewayProfileEnrollment.self,
+                from: Data(#"{"profileId":"person"}"#.utf8))
             let result = try await gateway.enrollControlUIProfile(params, ifCurrentRoute: route)
             let receipt = try #require(JSONSerialization.jsonObject(with: result) as? [String: Any])
             #expect(receipt["profileId"] as? String == "person")
             #expect(receipt["operatorToken"] == nil)
-            #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID)?.token == "personal-native")
-            #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node", gatewayID: gatewayID)?.token == "node-stays")
-            await #expect(throws: CancellationError.self) { _ = try await gateway.enrollControlUIProfile(params, ifCurrentRoute: route) }
-        } catch { await gateway.disconnect(); throw error }
+            #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator", gatewayID: gatewayID)?
+                .token == "personal-native")
+            #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node", gatewayID: gatewayID)?
+                .token == "node-stays")
+            await #expect(throws: CancellationError.self) {
+                _ = try await gateway.enrollControlUIProfile(params, ifCurrentRoute: route)
+            }
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
         await gateway.disconnect()
     }
 

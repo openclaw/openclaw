@@ -14,8 +14,9 @@ import type {
   TaskSuggestion,
   TaskSuggestionsAcceptResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { SessionInfoDefaults } from "./tui-session-info.js";
-import type { SessionInfo, TuiSessionRow } from "./tui-types.js";
+import type { SessionInfo, TuiSessionRow, TuiOptions, TuiBoundGateway } from "./tui-types.js";
 
 export type ChatSendOptions = {
   sessionKey: string;
@@ -207,4 +208,16 @@ export type TuiBackend = {
     sessionKey: string;
     agentId?: string;
   }) => Promise<{ text: string }>;
+};
+
+export type RunTuiOptions = TuiOptions & {
+  /** Explicit owner for a global session key, which cannot carry an agent prefix itself. */
+  agentId?: string;
+  backend?: TuiBackend;
+  submitBurstWindowMs?: number;
+  onSubmitBurstCaptured?: (value: string) => void;
+  /** Exact pre-probed remote target for an in-process setup handoff. */
+  boundGateway?: TuiBoundGateway;
+  config?: OpenClawConfig;
+  title?: string;
 };

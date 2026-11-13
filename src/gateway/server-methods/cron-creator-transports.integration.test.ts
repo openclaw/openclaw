@@ -36,6 +36,7 @@ import {
   revokeMcpLoopbackClientGrant,
 } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
+import { useEmptyDeviceTokenBindings } from "../openclaw-id/device-token-binding.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
@@ -60,6 +61,8 @@ import {
   installRequesterCronAuthorityTestHooks,
   type RequesterRun,
 } from "./requester-cron-authority.test-support.js";
+
+useEmptyDeviceTokenBindings();
 
 // Attached-node inventory is unrelated to these original-caller and Cron commit boundaries.
 vi.mock("../../agents/node-exec-availability.js", () => ({

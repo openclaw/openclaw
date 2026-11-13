@@ -93,7 +93,7 @@ it.each(["runtime", "doctor"] as const)(
       using scope = new DatabaseSync(pathname);
       const database = await assertScope(
         scope,
-        `schema_meta config_machine_state github_publication_requests
+        `schema_meta config_machine_state device_pairing_paired github_publication_requests
          github_personal_publication_requests github_repository_publication_requests
          acp_replay_events skill_usage state_leases device_identities device_auth_tokens
          gateway_origin_device_tokens exec_approvals_config local_workspace_projections

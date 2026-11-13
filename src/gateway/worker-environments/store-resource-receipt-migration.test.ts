@@ -67,6 +67,7 @@ it.each(["runtime", "doctor"] as const)(
           "worker_environments",
           "session_repository_workspaces",
           "worker_workspace_pending_results",
+          "device_pairing_paired",
           "schema_meta",
           "config_machine_state",
         ],

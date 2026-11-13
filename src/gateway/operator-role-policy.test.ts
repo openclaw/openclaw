@@ -178,6 +178,7 @@ describe("operator role policy", () => {
         setDeviceTokenBindingOwner({
           lookup: () => undefined,
           devicesForPeer: () => [],
+          isOperatorBindingCurrent: () => false,
           record: async () => {},
           forget: async () => {},
           reportMismatch() {},

@@ -46,7 +46,7 @@ import {
 import { createTuiAuthChildOwner } from "./tui-auth-child.js";
 import { resolveCodexCliBin, resolveLocalAuthSpawnInvocation } from "./tui-auth-invocation.js";
 import { createTuiAutocompleteProvider } from "./tui-autocomplete.js";
-import type { TuiBackend } from "./tui-backend.js";
+import type { RunTuiOptions, TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
@@ -76,13 +76,7 @@ import {
   type TuiSubmitAction,
 } from "./tui-submit.js";
 import { createTuiTaskSuggestionController } from "./tui-task-suggestions.js";
-import type {
-  RunTuiOptions,
-  SessionScope,
-  TuiHistoryRunOutcome,
-  TuiResult,
-  TuiStateAccess,
-} from "./tui-types.js";
+import type { SessionScope, TuiHistoryRunOutcome, TuiResult, TuiStateAccess } from "./tui-types.js";
 import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.js";
 
 const OPENAI_CODEX_PROVIDER = "openai";

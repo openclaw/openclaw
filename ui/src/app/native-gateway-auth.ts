@@ -1,28 +1,13 @@
 import {
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
   gatewayCredentialScope,
-  type ConnectParams,
 } from "@openclaw/gateway-client/browser";
-import {
-  normalizeGatewayClientId,
-  normalizeGatewayClientMode,
-} from "@openclaw/gateway-protocol/client-info";
-import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../i18n/index.ts";
 import { formatConnectionError, formatConnectionErrorSummary } from "../lib/connection-error.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { generateUUID } from "../lib/uuid.ts";
-
-export type NativeGatewayAuthorization = {
-  client: ConnectParams["client"];
-  scopes: string[];
-  auth:
-    | { deviceToken: string; token?: never; password?: never }
-    | { token: string; deviceToken?: never; password?: never }
-    | { password: string; token?: never; deviceToken?: never }
-    | { deviceToken?: never; token?: never; password?: never };
-  device: NonNullable<ConnectParams["device"]>;
-};
+import type { NativeGatewayAuthorization } from "./native-gateway-authorization.ts";
 
 export type NativeGatewayConnectAuth = {
   (challenge: {
@@ -67,80 +52,6 @@ type NativeAuthHost = Window & {
   };
 };
 
-function readNativeCredential(value: unknown): NativeGatewayAuthorization["auth"] {
-  // Preserve the accepted native method. In particular, role-configured Gateways
-  // distinguish shared-owner token/password auth from device-token authentication.
-  if (!isRecord(value)) {
-    throw new Error("The app returned an invalid Gateway credential. Reconnect in the app.");
-  }
-  const keys = Object.keys(value);
-  // Ingress-authenticated sessions sign device proof without a reusable Gateway credential.
-  if (keys.length === 0) {
-    return {};
-  }
-  if (keys.length === 1) {
-    const credential = value[keys[0]!];
-    if (typeof credential === "string" && credential) {
-      switch (keys[0]) {
-        case "deviceToken":
-          return { deviceToken: credential };
-        case "token":
-          return { token: credential };
-        case "password":
-          return { password: credential };
-        default:
-          break;
-      }
-    }
-  }
-  throw new Error(t("runtimeErrors.nativeCredential"));
-}
-
-function readAuthorization(
-  value: unknown,
-  challenge: ChallengeMessage,
-): NativeGatewayAuthorization {
-  const result = isRecord(value) ? value : {};
-  const client = isRecord(result.client) ? result.client : {};
-  const device = isRecord(result.device) ? result.device : {};
-  const id = normalizeGatewayClientId(typeof client.id === "string" ? client.id : undefined);
-  const mode = normalizeGatewayClientMode(
-    typeof client.mode === "string" ? client.mode : undefined,
-  );
-  if (
-    !id ||
-    !mode ||
-    typeof client.version !== "string" ||
-    typeof client.platform !== "string" ||
-    !isStringArray(result.scopes) ||
-    typeof device.id !== "string" ||
-    typeof device.publicKey !== "string" ||
-    typeof device.signature !== "string" ||
-    device.nonce !== challenge.nonce ||
-    device.signedAt !== challenge.signedAt
-  ) {
-    throw new Error(t("runtimeErrors.nativeAuthorization"));
-  }
-  return {
-    client: {
-      id,
-      mode,
-      version: client.version,
-      platform: client.platform,
-      ...(typeof client.deviceFamily === "string" ? { deviceFamily: client.deviceFamily } : {}),
-      ...(typeof client.instanceId === "string" ? { instanceId: client.instanceId } : {}),
-    },
-    scopes: result.scopes,
-    auth: readNativeCredential(result.auth),
-    device: {
-      id: device.id,
-      publicKey: device.publicKey,
-      signature: device.signature,
-      nonce: challenge.nonce,
-      signedAt: challenge.signedAt,
-    },
-  };
-}
 /** Adapts native challenge signing; the app remains the sole credential and grant owner. */
 export function createNativeGatewayConnectAuth(
   gatewayUrl: string,
@@ -240,7 +151,10 @@ export function createNativeGatewayConnectAuth(
     signedAt,
     signal,
   }) => {
-    const { registerLocalErrorsEnglish } = await import("../i18n/locales/en-local-errors.ts");
+    const [{ registerLocalErrorsEnglish }, { readAuthorization }] = await Promise.all([
+      import("../i18n/locales/en-local-errors.ts"),
+      import("./native-gateway-authorization.ts"),
+    ]);
     // This owner publishes resolved error text after registration, not reactive catalog reads.
     registerLocalErrorsEnglish();
     if (gatewayCredentialScope(target) !== gatewayCredentialScope(gatewayUrl)) {

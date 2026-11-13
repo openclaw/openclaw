@@ -1268,6 +1268,18 @@ extension GatewayConnection {
 // MARK: - Snapshot cache and subscriptions
 
 extension GatewayConnection {
+    func enrollControlUIProfile(
+        _ params: GatewayProfileEnrollment,
+        scopes: [String],
+        ifCurrentServerLease lease: ServerLease) async throws -> Data
+    {
+        guard await self.isCurrentServerLease(lease) else { throw CancellationError() }
+        return try await lease.client.enrollControlUIProfile(
+            params,
+            scopes: scopes,
+            ifCurrentConnectionGeneration: lease.socketGeneration)
+    }
+
     func controlUiAuthBinding(ifCurrentServerLease lease: ServerLease) async throws -> GatewayAuthBinding {
         guard await self.isCurrentServerLease(lease),
               let binding = await lease.client.authBinding(ifCurrentConnectionGeneration: lease.socketGeneration),

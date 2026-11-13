@@ -16,20 +16,27 @@ const mocks = vi.hoisted(() => ({
 }));
 // mock-isolation: Keep external Gateway transport and credential writes outside the prompt/operation boundary.
 vi.mock("../gateway/call.js", () => ({ callGateway: mocks.call }));
+// mock-isolation: Pin the fixture Gateway target without discovering local credentials or endpoints.
 vi.mock("../gateway/client-bootstrap.js", () => ({
   resolveGatewayClientBootstrap: mocks.bootstrap,
 }));
+// mock-isolation: Use fixture configuration without loading user configuration or process-wide config state.
 vi.mock("../config/config.js", () => ({ loadConfig: () => ({}) }));
 // mock-isolation: Exercise the actual continuation while external readiness and child-process I/O stay fixed.
 vi.mock("./onboard-helpers.js", () => ({ probeGatewayReachable: mocks.probe }));
+// mock-isolation: Observe continuation without starting a real Gateway process.
 vi.mock("./onboard-quickstart-host.js", () => ({ runQuickstartForegroundGateway: mocks.host }));
+// mock-isolation: Supply deterministic choices without opening a real interactive terminal.
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: () => ({ select: mocks.select, note: mocks.note }),
 }));
+// mock-isolation: Do not initialize the real Gateway state database in this transport fixture.
 vi.mock("../cli/gateway-rpc.runtime.js", () => ({ prepareCliGatewayStateAccess: async () => {} }));
+// mock-isolation: Use a synthetic interactive identity without accessing device keys.
 vi.mock("../cli/interactive-device-auth.js", () => ({
   loadInteractiveOperatorDeviceIdentity: mocks.identity,
 }));
+// mock-isolation: Observe credential persistence without reading or modifying real device tokens.
 vi.mock("../infra/device-auth-store.js", () => ({
   loadDeviceAuthTokenReadOnly: mocks.load,
   loadOriginDeviceTokenReadOnly: mocks.load,

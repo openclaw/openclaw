@@ -28,7 +28,8 @@ describe.skipIf(!connection)("PostgreSQL personal operator migration", () => {
         schemaPrefix: "personal_operator_upgrade_test",
         schema: source,
       });
-      fixture.open().runTransaction(() => {
+      const original = fixture.open();
+      original.runTransaction(() => {
         original.exec(`INSERT INTO schema_meta (meta_key,role,schema_version,created_at,updated_at)
           VALUES ('primary','global',40,1,1);
           INSERT INTO device_pairing_paired (device_id,public_key,created_at_ms,approved_at_ms)

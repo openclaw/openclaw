@@ -1,5 +1,6 @@
 import {
   deviceBootstrapProfilesEqual,
+  normalizeDeviceBootstrapHandoffProfile,
   type DeviceBootstrapProfile,
 } from "../shared/device-bootstrap-profile.js";
 // Pairing approval keeps host policy live until the worker commits its authoritative rows.
@@ -157,12 +158,12 @@ export async function approveBootstrapDevicePairing(
       bootstrapProfile.roles.includes("operator") && existing?.publicKey === pending?.publicKey
         ? existing?.operatorProfileId
         : undefined;
-    const requestedProfile = {
+    const requestedProfile = normalizeDeviceBootstrapHandoffProfile({
       ...bootstrapProfile,
       ...(bootstrapProfile.operatorProfileId === undefined && inheritedPerson
         ? { operatorProfileId: inheritedPerson }
         : {}),
-    };
+    });
     const authority = await prepareDeviceBootstrapProfileAuthority(requestedProfile, { baseDir });
     if (!deviceBootstrapProfilesEqual(requestedProfile, authority.profile)) {
       throw new Error("Bootstrap person role no longer permits the issued grant");

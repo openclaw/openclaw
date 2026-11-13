@@ -84,7 +84,9 @@ final class ControlUINativeGatewayAuthHandler: NSObject, WKScriptMessageHandlerW
         }
     }
 
-    private func enroll(_ body: [String: Any], message: WKScriptMessage,
+    private func enroll(
+        _ body: [String: Any],
+        message: WKScriptMessage,
         replyHandler: @escaping @MainActor (Any?, String?) -> Void)
     {
         guard self.isAvailable(for: message), let provider, provider.isCurrent(),
@@ -92,15 +94,22 @@ final class ControlUINativeGatewayAuthHandler: NSObject, WKScriptMessageHandlerW
               !id.isEmpty, id.utf8.count <= 128, let value = body["params"],
               let data = try? JSONSerialization.data(withJSONObject: value),
               let params = try? JSONDecoder().decode(GatewayProfileEnrollment.self, from: data)
-        else { replyHandler(nil, "Native personal setup is unavailable for this document."); return }
+        else {
+            replyHandler(nil, "Native personal setup is unavailable for this document.")
+            return
+        }
         let documentID = self.document.id
         Task { @MainActor [weak self] in
             do {
                 let result = try await provider.enrollProfile(params)
                 guard let self, self.document.id == documentID, self.isAvailable(for: message)
                 else { throw CancellationError() }
-                replyHandler(["id": id, "result": try JSONSerialization.jsonObject(with: result)], nil)
-            } catch { replyHandler(["id": id, "error": "Native personal setup did not finish. Reconnect and check Profile."], nil) }
+                try replyHandler(["id": id, "result": JSONSerialization.jsonObject(with: result)], nil)
+            } catch {
+                replyHandler(
+                    ["id": id, "error": "Native personal setup did not finish. Reconnect and check Profile."],
+                    nil)
+            }
         }
     }
 

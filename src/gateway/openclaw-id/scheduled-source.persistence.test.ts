@@ -28,10 +28,13 @@ import {
   createContext,
   createOperatorClient,
 } from "../server-plugin-in-process-dispatch.test-support.js";
+import { useEmptyDeviceTokenBindings } from "./device-token-binding.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./tunnel-principal.js";
+
+useEmptyDeviceTokenBindings();
 
 it.each([
   { kind: "member", target: "isolated", reset: false, direct: false },

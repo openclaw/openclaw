@@ -79,19 +79,22 @@ final class IOSDashboardNativeGatewayAuthProvider {
         guard let generation = self.appModel?.operatorAuthorityGeneration,
               let route = await self.currentRoute(authorityGeneration: generation)
         else { throw CancellationError() }
-        return try await self.session.enrollControlUIProfile(params, ifCurrentRoute: route, onPersisted: { [weak self] in
-            guard let self else { throw CancellationError() }
-            try await self.bindEnrolledToken(authorityGeneration: generation)
-        })
+        return try await self.session.enrollControlUIProfile(
+            params,
+            ifCurrentRoute: route,
+            onPersisted: { [weak self] in
+                guard let self else { throw CancellationError() }
+                try await self.bindEnrolledToken(authorityGeneration: generation)
+            })
     }
 
     private func bindEnrolledToken(authorityGeneration: UInt64) throws {
         guard self.isCurrent(authorityGeneration: authorityGeneration),
               GatewayAccessDeviceAuthBindingStore.shared.bindGatewayIssuedToken(
-                principal: self.accessPrincipal,
-                gatewayID: self.config.nodeOptions.deviceAuthGatewayID ?? self.config.effectiveStableID,
-                role: "operator", profile: self.config.nodeOptions.deviceIdentityProfile,
-                persistedRoles: ["operator"])
+                  principal: self.accessPrincipal,
+                  gatewayID: self.config.nodeOptions.deviceAuthGatewayID ?? self.config.effectiveStableID,
+                  role: "operator", profile: self.config.nodeOptions.deviceIdentityProfile,
+                  persistedRoles: ["operator"])
         else { throw CancellationError() }
     }
 

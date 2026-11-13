@@ -15,6 +15,7 @@ import {
   cleanupSessionStateForTest,
   useSessionStoreTempDirs,
 } from "../../test-utils/session-state-cleanup.js";
+import { useEmptyDeviceTokenBindings } from "../openclaw-id/device-token-binding.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
@@ -25,6 +26,8 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
+
+useEmptyDeviceTokenBindings();
 
 const temps = useSessionStoreTempDirs(afterAll, "linked-owner-library-");
 const OWNER: OpenClawIdTunnelPrincipal = { kind: "owner", peerKey: `iroh:${"3c".repeat(32)}` };

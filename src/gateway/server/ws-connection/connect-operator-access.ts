@@ -7,9 +7,9 @@ import { prepareDeviceBootstrapProfileAuthority } from "../../../infra/device-bo
 import { resolveAuthenticatedDeviceTokenIdentity } from "../../../infra/device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../../../infra/device-pairing-store-readonly.js";
 import { getPairedDevice } from "../../../infra/device-pairing.js";
+import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import { deviceBootstrapProfilesEqual } from "../../../shared/device-bootstrap-profile.js";
 import { intersectOperatorScopes } from "../../../shared/operator-scope-compat.js";
-import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import { errorShapeFromError } from "../../error-shape.js";
 import {
   GatewayOperatorAccessDeniedError,

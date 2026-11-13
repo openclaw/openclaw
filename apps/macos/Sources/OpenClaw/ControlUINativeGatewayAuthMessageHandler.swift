@@ -46,7 +46,9 @@ final class ControlUINativeGatewayAuthMessageHandler: NSObject, WKScriptMessageH
         }
     }
 
-    private func enroll(_ body: [String: Any], message: WKScriptMessage,
+    private func enroll(
+        _ body: [String: Any],
+        message: WKScriptMessage,
         replyHandler: @escaping @MainActor (Any?, String?) -> Void)
     {
         guard Set(body.keys) == ["id", "action", "params"], let id = body["id"] as? String,
@@ -58,7 +60,10 @@ final class ControlUINativeGatewayAuthMessageHandler: NSObject, WKScriptMessageH
               let command = enrollment.response.enrollProfile,
               let value = body["params"], let data = try? JSONSerialization.data(withJSONObject: value),
               let params = try? JSONDecoder().decode(GatewayProfileEnrollment.self, from: data)
-        else { replyHandler(nil, "Native personal setup is unavailable for this document."); return }
+        else {
+            replyHandler(nil, "Native personal setup is unavailable for this document.")
+            return
+        }
         Task { @MainActor [weak owner] in
             do {
                 let result = try await command(params)
@@ -66,8 +71,12 @@ final class ControlUINativeGatewayAuthMessageHandler: NSObject, WKScriptMessageH
                       message.webView === owner.webView,
                       ControlUIDocumentHost.isTrustedLinkSource(owner.webView.url, dashboardURL: owner.currentURL)
                 else { throw CancellationError() }
-                replyHandler(["id": id, "result": try JSONSerialization.jsonObject(with: result)], nil)
-            } catch { replyHandler(["id": id, "error": "Native personal setup did not finish. Reconnect and check Profile."], nil) }
+                try replyHandler(["id": id, "result": JSONSerialization.jsonObject(with: result)], nil)
+            } catch {
+                replyHandler(
+                    ["id": id, "error": "Native personal setup did not finish. Reconnect and check Profile."],
+                    nil)
+            }
         }
     }
 }

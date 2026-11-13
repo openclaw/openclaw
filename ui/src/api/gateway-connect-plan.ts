@@ -28,10 +28,8 @@ import {
   CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
 } from "../../../src/shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
-import type {
-  NativeGatewayAuthorization,
-  NativeGatewayConnectAuth,
-} from "../app/native-gateway-auth.ts";
+import type { NativeGatewayConnectAuth } from "../app/native-gateway-auth.ts";
+import type { NativeGatewayAuthorization } from "../app/native-gateway-authorization.ts";
 import { isNativeMobileHost } from "../app/native-web-chrome.ts";
 import { i18n } from "../i18n/index.ts";
 import {

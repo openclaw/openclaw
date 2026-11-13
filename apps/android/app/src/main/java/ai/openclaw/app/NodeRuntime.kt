@@ -4823,12 +4823,16 @@ class NodeRuntime internal constructor(
         enrollProfile = { params, reply ->
           // Runtime custody outlives the page; dismissal does not abandon an accepted credential rotation.
           scope.launch {
-            val result = runCatching {
-              val currentLease = checkNotNull(lease)
-              operatorSession.enrollControlUiProfile(currentLease, params, grantedScopes) { enqueue ->
-                withCurrentCredential { enqueue(); JsonObject(emptyMap()) }
+            val result =
+              runCatching {
+                val currentLease = checkNotNull(lease)
+                operatorSession.enrollControlUiProfile(currentLease, params, grantedScopes) { enqueue ->
+                  withCurrentCredential {
+                    enqueue()
+                    JsonObject(emptyMap())
+                  }
+                }
               }
-            }
             reply(result)
           }
         },

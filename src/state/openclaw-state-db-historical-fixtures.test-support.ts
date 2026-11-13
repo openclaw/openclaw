@@ -31,6 +31,7 @@ export const V2026_7_1_2_STATE_MIGRATION_CHANGES = [
   "Replaced retained task indexes with ordered cron history indexes (v24)",
   "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
   "Introduced durable default cron partition selection (v34)",
+  "Added explicit personal operator association to paired installations (v41)",
   "Migrated shared state tables to SQLite STRICT typing (46)",
 ];
 

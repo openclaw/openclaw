@@ -96,9 +96,11 @@ extension GatewayConnection {
         }
         guard await self.isCurrentServerLease(lease), isCurrent() else { throw CancellationError() }
         return DashboardNativeGatewayAuth(json: json, isCurrent: isCurrent, enrollProfile: { params in
-            guard isCurrent(), await self.isCurrentServerLease(lease) else { throw CancellationError() }
-            return try await lease.client.enrollControlUIProfile(params, scopes: scopes,
-                ifCurrentConnectionGeneration: lease.socketGeneration)
+            guard isCurrent() else { throw CancellationError() }
+            return try await self.enrollControlUIProfile(
+                params,
+                scopes: scopes,
+                ifCurrentServerLease: lease)
         })
     }
 

@@ -81,10 +81,6 @@
   }
 }
 
-.device-pair-setup__error {
-  width: 100%;
-}
-
 .device-pair-setup__error span {
   display: block;
   margin-top: 4px;
@@ -219,10 +215,6 @@
   color: var(--text);
   overflow-wrap: anywhere;
   white-space: normal;
-}
-
-.device-pair-setup__pending {
-  width: 100%;
 }
 
 .device-pair-setup__waiting {

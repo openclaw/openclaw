@@ -320,6 +320,7 @@ class ControlUiWebViewAuthTest {
           val response =
             if (browserPort != null) {
               browserPort.postMessage(WebMessage(REQUEST))
+              shadowOf(Looper.getMainLooper()).idle()
               Json.parseToJsonElement(browserPort.receivedMessages.last()).jsonObject
             } else {
               mounted.request()
@@ -471,6 +472,7 @@ class ControlUiWebViewAuthTest {
         )
         val browserPort = message.ports!!.single() as RoboWebMessagePort
         browserPort.postMessage(WebMessage(REQUEST))
+        shadowOf(Looper.getMainLooper()).idle()
         assertEquals(1, signed)
         assertEquals(
           "accepted-native-device",
@@ -483,11 +485,13 @@ class ControlUiWebViewAuthTest {
             .jsonPrimitive.content,
         )
         browserPort.postMessage(WebMessage("""{"id":"invalid","nonce":"challenge","signedAt":1700000000123,"role":"node"}"""))
+        shadowOf(Looper.getMainLooper()).idle()
         assertTrue(Json.parseToJsonElement(browserPort.receivedMessages.last()).jsonObject.containsKey("error"))
         assertEquals(1, signed)
         // A canceled foreign navigation leaves this document usable.
         assertTrue(client.shouldOverrideUrlLoading(mounted.view, navigationRequest("https://foreign.example/")))
         browserPort.postMessage(WebMessage(REQUEST))
+        shadowOf(Looper.getMainLooper()).idle()
         assertEquals(2, signed)
         // Capture the native callback to exercise a message queued before retirement,
         // rather than relying only on the port's closed bit to drop stale requests.
@@ -627,6 +631,7 @@ class ControlUiWebViewAuthTest {
           }
         },
       )
+      shadowOf(Looper.getMainLooper()).idle()
       return response
     }
 

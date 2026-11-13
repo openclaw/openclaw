@@ -12,23 +12,30 @@ const mocks = vi.hoisted(() => ({
   log: vi.fn(),
   writeJson: vi.fn(),
 }));
+// mock-isolation: Use fixture configuration without loading user configuration or process-wide config state.
 vi.mock("../config/config.js", () => ({ loadConfig: () => ({}) }));
+// mock-isolation: Keep Gateway network transport outside this CLI enrollment fixture.
 vi.mock("../gateway/call.js", () => ({ callGateway: mocks.call }));
+// mock-isolation: Pin the fixture Gateway target without discovering local credentials or endpoints.
 vi.mock("../gateway/client-bootstrap.js", () => ({
   resolveGatewayClientBootstrap: mocks.bootstrap,
 }));
+// mock-isolation: Use synthetic device identity without creating keys on disk.
 vi.mock("../infra/device-identity-async.js", () => ({
   loadOrCreateDeviceIdentityAsync: mocks.identity,
 }));
+// mock-isolation: Observe credential persistence without reading or modifying real device tokens.
 vi.mock("../infra/device-auth-store.js", () => ({
   loadDeviceAuthTokenReadOnly: vi.fn(async () => null),
   loadOriginDeviceTokenReadOnly: vi.fn(async () => null),
   storeDeviceAuthToken: mocks.store,
   storeOriginDeviceToken: mocks.originStore,
 }));
+// mock-isolation: Capture CLI output without writing to process stdout or exiting.
 vi.mock("../runtime.js", () => ({
   defaultRuntime: { log: mocks.log, writeJson: mocks.writeJson },
 }));
+// mock-isolation: Do not initialize the real Gateway state database in this transport fixture.
 vi.mock("./gateway-rpc.runtime.js", () => ({ prepareCliGatewayStateAccess: async () => {} }));
 
 const enrollmentId = "8fb6249a-11ba-4e13-9a15-14bfb8b7571e";

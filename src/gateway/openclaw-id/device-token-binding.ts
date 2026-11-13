@@ -14,16 +14,6 @@ import {
   type OpenClawIdTunnelPrincipal,
 } from "./tunnel-principal.js";
 
-/** One recorded binding: the token of (device, role) belongs to `peerKey`. */
-export type DeviceTokenBinding = {
-  device_id: string;
-  role: string;
-  peer_key: string;
-  bound_at: number;
-  /** Verified signed-device admission, not merely the peer restriction on a credential. */
-  operator_principal?: OpenClawIdTunnelPrincipal;
-};
-
 /** A tunnel-issued device token and the device key it is bound to. */
 export type DeviceTokenRef = { deviceId: string; role: string; peerKey: string };
 

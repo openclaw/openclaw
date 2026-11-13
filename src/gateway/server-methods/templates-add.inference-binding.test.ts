@@ -14,6 +14,7 @@ import { createClawHubArchiveFactory } from "../../plugins/clawhub.test-support.
 import { ensureCanonicalGatewayOwnerProfile } from "../../state/user-profile-writes.js";
 import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { invalidateGatewayDeviceRevocation } from "../device-revocation.js";
+import { useEmptyDeviceTokenBindings } from "../openclaw-id/device-token-binding.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
@@ -26,6 +27,8 @@ import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-s
 import { platformId, withFixture } from "./cron.inference-binding.test-support.js";
 import { templatesAddHandlers } from "./templates-add.js";
 import type { GatewayClient, RespondFn } from "./types.js";
+
+useEmptyDeviceTokenBindings();
 
 const greeting = vi.hoisted(() => vi.fn(async () => {}));
 const registry = vi.hoisted(() => ({

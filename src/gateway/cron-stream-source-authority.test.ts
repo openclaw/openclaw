@@ -18,6 +18,7 @@ import { ensureCanonicalGatewayOwnerProfile } from "../state/user-profile-writes
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createCronStreamWatcherFixture, job } from "./cron-stream-watchers.test-helpers.js";
+import { useEmptyDeviceTokenBindings } from "./openclaw-id/device-token-binding.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
@@ -30,6 +31,8 @@ import {
   SharedGatewaySessionGenerationState,
   enforceSharedGatewaySessionGenerationForConfigWrite,
 } from "./server-shared-auth-generation.js";
+
+useEmptyDeviceTokenBindings();
 
 const principal = (peer: string): OpenClawIdTunnelPrincipal => ({
   kind: "owner",

@@ -29,6 +29,7 @@ vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
   loadDeviceIdentityIfPresentAsync: loadDeviceIdentityIfPresentMock,
 }));
 
+// mock-isolation: Do not initialize the real Gateway state database in this transport fixture.
 vi.mock("../cli/gateway-rpc.runtime.js", () => ({ prepareCliGatewayStateAccess: async () => {} }));
 
 const { GatewayChatClient } = await import("./gateway-chat.js");

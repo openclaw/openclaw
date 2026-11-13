@@ -31,6 +31,7 @@ function publishMembership() {
   setDeviceTokenBindingOwner({
     lookup: () => undefined,
     devicesForPeer: () => [],
+    isOperatorBindingCurrent: () => false,
     record: async () => {},
     forget: async () => {},
     reportMismatch() {},

@@ -24,6 +24,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
+import { useEmptyDeviceTokenBindings } from "./openclaw-id/device-token-binding.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
@@ -50,6 +51,8 @@ import {
   createContext,
   createOperatorClient,
 } from "./server-plugin-in-process-dispatch.test-support.js";
+
+useEmptyDeviceTokenBindings();
 
 function modelRef(model: string) {
   return { provider: "fixture", model };

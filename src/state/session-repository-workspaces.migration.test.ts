@@ -78,6 +78,7 @@ it.each(["runtime", "doctor", "absent-repository"] as const)(
           "session_repository_workspaces",
           "worker_workspace_pending_results",
           "worker_environments",
+          "device_pairing_paired",
           "schema_meta",
           "config_machine_state",
         ],

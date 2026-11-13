@@ -22,6 +22,7 @@ public struct GatewayProfileEnrollmentResult: Codable, Sendable {
         public let token: String
         public let scopes: [String]
     }
+
     public let deviceId: String
     public let profileId: String
     public let operatorToken: OperatorToken?

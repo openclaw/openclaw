@@ -7,7 +7,17 @@ import type {
   SignedStatement,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { prepareCorePluginStateReplacement } from "../../plugin-state/plugin-state-store.js";
-import type { DeviceTokenBinding } from "./device-token-binding.js";
+import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
+
+/** One recorded binding: the token of (device, role) belongs to `peerKey`. */
+export type DeviceTokenBinding = {
+  device_id: string;
+  role: string;
+  peer_key: string;
+  bound_at: number;
+  /** Verified signed-device admission, not merely the peer restriction on a credential. */
+  operator_principal?: OpenClawIdTunnelPrincipal;
+};
 
 /** The signed-in account the Gateway's verified sign-in reports. */
 export type OpenClawIdAccount = {

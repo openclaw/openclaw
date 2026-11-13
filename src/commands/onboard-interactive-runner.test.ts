@@ -18,6 +18,7 @@ vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalS
 const personal = vi.hoisted(() => vi.fn(async () => null as { profileId: string } | null));
 // mock-isolation: Exercise terminal routing without creating credentials or a Gateway.
 vi.mock("./onboard-personal.js", () => ({ offerTerminalPersonalSetup: personal }));
+// mock-isolation: Supply deterministic choices without opening a real interactive terminal.
 vi.mock("../wizard/clack-prompter.js", () => ({ createClackPrompter: () => ({}) }));
 beforeEach(() => {
   vi.clearAllMocks();

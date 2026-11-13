@@ -28,6 +28,7 @@ import {
   resolveOpenAiCompatibleAgentError,
   runOpenAiCompatibleAgentCommand,
 } from "./openai-compatible-agent-run.js";
+import { useEmptyDeviceTokenBindings } from "./openclaw-id/device-token-binding.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   setOpenClawIdTunnelPrincipalResolver,
@@ -39,6 +40,8 @@ import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
 import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 import * as sessionSharing from "./session-sharing-read.js";
+
+useEmptyDeviceTokenBindings();
 
 vi.mock("../commands/agent.js", () => ({ agentCommandFromGatewayIngress: vi.fn() }));
 

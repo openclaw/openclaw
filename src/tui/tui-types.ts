@@ -1,11 +1,9 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionProjectionState } from "../../packages/gateway-client/src/session-projection.js";
 import type { AgentSummary as GatewayAgentSummary } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { SessionGoal } from "../config/sessions/types.js";
 import type { SessionScope } from "../config/types.base.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
-import type { TuiBackend } from "./tui-backend.js";
 import type { TuiPendingSubmit } from "./tui-submit-state.js";
 
 /** Exact pre-probed Gateway target and its selection provenance for an in-process handoff. */
@@ -33,18 +31,6 @@ export type TuiOptions = {
   message?: string;
   /** Overrides timeoutMs only for the message sent automatically at startup. */
   initialMessageTimeoutMs?: number;
-};
-
-export type RunTuiOptions = TuiOptions & {
-  /** Explicit owner for a global session key, which cannot carry an agent prefix itself. */
-  agentId?: string;
-  backend?: TuiBackend;
-  submitBurstWindowMs?: number;
-  onSubmitBurstCaptured?: (value: string) => void;
-  /** Exact pre-probed remote target for an in-process setup handoff. */
-  boundGateway?: TuiBoundGateway;
-  config?: OpenClawConfig;
-  title?: string;
 };
 
 export type TuiGatewayConnectionOptions = Pick<

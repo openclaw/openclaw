@@ -1,5 +1,6 @@
 import { render } from "@solidjs/web";
 import type { GatewayBrowserClient } from "../../../../ui/src/api/gateway.ts";
+import { createApplicationConfigCapability } from "../../../../ui/src/app/config.ts";
 import type { ApplicationContext } from "../../../../ui/src/app/context.ts";
 import { ApplicationProvider } from "../../../../ui/src/lib/reactive/context.ts";
 import { createCustodianActions } from "../../../../ui/src/pages/custodian/custodian-actions.ts";
@@ -29,6 +30,7 @@ const client = {
   },
 } as GatewayBrowserClient;
 const context = {
+  config: createApplicationConfigCapability({ resourceBasePath: "/fixture/" }),
   gateway: {
     connection: { gatewayUrl: location.origin + "/fixture/" },
     snapshot: {

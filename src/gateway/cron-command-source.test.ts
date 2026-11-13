@@ -6,12 +6,15 @@ import { ensureCanonicalGatewayOwnerProfile } from "../state/user-profile-writes
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runCronCommandUnderSource } from "./cron-command-source.js";
+import { useEmptyDeviceTokenBindings } from "./openclaw-id/device-token-binding.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
 import { recoveryFixture } from "./operator-run-recovery.test-support.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
+
+useEmptyDeviceTokenBindings();
 
 const device: OpenClawIdTunnelPrincipal = {
   kind: "owner",

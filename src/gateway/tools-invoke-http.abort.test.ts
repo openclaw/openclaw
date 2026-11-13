@@ -20,6 +20,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeScopedGatewayHttpRequestOrReply as authorizeHttpRequest } from "./http-auth-utils.js";
 import type { authorizeScopedGatewayHttpRequestOrReply } from "./http-utils.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
+import { useEmptyDeviceTokenBindings } from "./openclaw-id/device-token-binding.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   setOpenClawIdTunnelPrincipalResolver,
@@ -30,6 +31,8 @@ import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
 import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 import * as sessionSharing from "./session-sharing-read.js";
+
+useEmptyDeviceTokenBindings();
 
 const lifecycle = vi.hoisted(() => ({
   authorize:
