@@ -1,86 +1,159 @@
-name: Exact-C pre-FRV gate 73bef956a886
+name: Required-native placement diagnostic (prepared only)
+
+# Scratch diagnostic only: install alongside the pinned patch, never on a candidate ref.
 on:
   workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Exact diagnostic source, not a qualification target
+        required: true
+        type: string
+        default: db48e205e03f5a0458af2cb78bcf5434fc9a70a0
+
 permissions:
   contents: read
+
 concurrency:
-  group: pre-frv-73bef956a886
+  group: required-native-placement-diagnostic-${{ github.ref }}
   cancel-in-progress: false
+
 jobs:
-  preflight:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 40
+  diagnostic:
+    name: Placement owner diagnostic (${{ matrix.lane }})
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - lane: required-native
+            config: ""
     env:
-      CI: "true"
-      TARGET_SHA: 73bef956a886abbbe6aef0c87efd5bcbfd6f8921
-      OPENCLAW_RELEASE_CONTEXT_REF: release/2026.11.4
+      PROOF_LANE: ${{ matrix.lane }}
+      TYPE_CONFIG: ${{ matrix.config }}
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      SOURCE_SHA: db48e205e03f5a0458af2cb78bcf5434fc9a70a0
+      OVERLAY_SHA256: 2d6254c9df0e7b818288e9609c30452f010983e7a998a384ca54346343496f09
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Initialize failure-safe run binding
+        shell: bash
+        env:
+          PROOF_DIR: ${{ runner.temp }}/required-native-placement-proof
+          INPUT_TARGET: ${{ inputs.target_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          printf 'PROOF_DIR=%s\n' "$PROOF_DIR" >> "$GITHUB_ENV"
+          mkdir -p "$PROOF_DIR"
+          printf 'repository=%s\nworkflow_sha=%s\nworkflow_ref=%s\nrun_id=%s\nrun_attempt=%s\nsource_sha=%s\noverlay_sha256=%s\nlane=%s\n' \
+            "$REPOSITORY" "$WORKFLOW_SHA" "$WORKFLOW_REF" "$RUN_ID" "$RUN_ATTEMPT" \
+            "$SOURCE_SHA" "$OVERLAY_SHA256" "$PROOF_LANE" > "$PROOF_DIR/binding.txt"
+          printf '%s\n' 'Diagnostic native fixture only; not release qualification. No external provider credentials.' > "$PROOF_DIR/scope.txt"
+          test "$INPUT_TARGET" = "$SOURCE_SHA"
+      - name: Checkout diagnostic harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: openclaw/openclaw
-          ref: 73bef956a886abbbe6aef0c87efd5bcbfd6f8921
-          path: candidate
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
-          fetch-depth: 1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.22.1"
-      - uses: ./candidate/.github/actions/setup-pnpm-store-cache
-        with:
-          package-manager-file: candidate/package.json
-          lockfile-path: candidate/pnpm-lock.yaml
-          node-version: "24.22.1"
-          cache-mode: off
-      - name: Verify identity and install frozen dependencies
-        working-directory: candidate
+      - name: Preserve exact harness and overlay
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/pre-frv"
-          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
-          printf '%s\n' "$TARGET_SHA" > "$RUNNER_TEMP/pre-frv/target-sha.txt"
-          printf '%s\n' '23dc860beec723ad9bab5a7458600cc2abce29a7441e98915fbdeeecc0e24ecb  package.json' '059a620ed8261d7b8f599a3e13a6c101ec5271b03002dbf48144ce25924e28ba  pnpm-lock.yaml' | sha256sum --check
-          sha256sum package.json pnpm-lock.yaml > "$RUNNER_TEMP/pre-frv/dependency-inputs.sha256"
-          pnpm install --frozen-lockfile 2>&1 | tee "$RUNNER_TEMP/pre-frv/install.log"
-          git diff --exit-code
-      - name: Exact-C locale checks and mandatory production UI build
-        working-directory: candidate
+          cp .github/workflows/retained-cli-composition-proof.yml "$PROOF_DIR/workflow.yml"
+          cp .github/diagnostics/placement-owner-db48.patch "$PROOF_DIR/overlay.patch"
+          printf '%s  %s\n' "$OVERLAY_SHA256" "$PROOF_DIR/overlay.patch" | sha256sum --check
+          sha256sum "$PROOF_DIR/workflow.yml" > "$PROOF_DIR/workflow.sha256"
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: db48e205e03f5a0458af2cb78bcf5434fc9a70a0
+          persist-credentials: false
+      - name: Apply and bind seven-file diagnostic overlay
+        id: overlay
         shell: bash
         run: |
-          set -uo pipefail
-          blocked=0
-          printf '## Exact-C pre-FRV gate\n\nTarget: %s\n\n' "$TARGET_SHA" >> "$GITHUB_STEP_SUMMARY"
-          for check in ui:i18n:check native:i18n:check; do
-            logfile="$RUNNER_TEMP/pre-frv/${check//:/-}.log"
-            pnpm "$check" 2>&1 | tee "$logfile"
-            status=${PIPESTATUS[0]}
-            printf '%s exit=%s\n' "$check" "$status" >> "$RUNNER_TEMP/pre-frv/results.txt"
-            if [[ "$status" == 0 ]]; then
-              printf -- '- %s: PASS\n' "$check" >> "$GITHUB_STEP_SUMMARY"
-            elif grep -Eq '^(control-ui-i18n drift detected\.|control-ui-i18n generated locales still contain English fallbacks\.|[^:]+: translated.json needs aggregate materialization|[^:]+: missing verified translations:|Error: native app i18n inventory drift detected\.|Error: Android generated localization drift:|Error: Apple catalog .* is stale; run native-app-i18n.ts sync --write)' "$logfile"; then
-              echo "::warning::$check reports generated-locale drift at $TARGET_SHA; strict FRV locale jobs remain required."
-              printf -- '- %s: generated-locale WARNING (exit %s; see artifact)\n' "$check" "$status" >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "::error::$check failed unexpectedly at $TARGET_SHA (exit $status)."
-              printf -- '- %s: BLOCKED (unexpected exit %s)\n' "$check" "$status" >> "$GITHUB_STEP_SUMMARY"
-              blocked=1
-            fi
-          done
-          pnpm ui:build 2>&1 | tee "$RUNNER_TEMP/pre-frv/ui-build.log"
-          status=${PIPESTATUS[0]}
-          printf 'ui:build exit=%s\n' "$status" >> "$RUNNER_TEMP/pre-frv/results.txt"
-          if [[ "$status" != 0 ]]; then
-            echo "::error::Production UI build / precompressed verification failed at $TARGET_SHA."
-            blocked=1
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          git apply --check "$PROOF_DIR/overlay.patch"
+          git apply "$PROOF_DIR/overlay.patch"
+          git diff --check
+          git -c diff.algorithm=myers -c diff.indentHeuristic=false diff --full-index --binary --no-ext-diff --no-textconv --no-color --no-renames --unified=3 --src-prefix=a/ --dst-prefix=b/ > "$PROOF_DIR/applied.patch"
+          printf '%s  %s\n' "$OVERLAY_SHA256" "$PROOF_DIR/applied.patch" | sha256sum --check
+          git diff --name-only > "$PROOF_DIR/changed-files.txt"
+          test "$(wc -l < "$PROOF_DIR/changed-files.txt")" -eq 7
+          git status --short > "$PROOF_DIR/source-status.txt"
+      - name: Setup pinned source toolchain
+        id: setup
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          semantic-checks: "true"
+          cache-mode: "off"
+      - name: Record canonical runtime versions
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version | tee "$PROOF_DIR/node.txt"
+          pnpm --version | tee "$PROOF_DIR/pnpm.txt"
+      - name: Setup canonical test Bun
+        uses: ./.github/actions/setup-test-bun
+      - name: Setup ripgrep
+        uses: ./.github/actions/setup-ripgrep
+      - name: Run exact required-native fixture through canonical build owner
+        id: native
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        shell: bash
+        env:
+          OPENCLAW_E2E_VERBOSE: "1"
+          OPENCLAW_E2E_WORKERS: "1"
+        run: |
+          set -euo pipefail
+          # Canonical E2E preparation builds the patched checkout before readers;
+          # only its successful owner may set the internal prebuilt receipt.
+          test -z "${OPENCLAW_E2E_SKIP_BUILD:-}"
+          test -z "${OPENCLAW_E2E_USE_PREBUILT_DIST:-}"
+          printf '%s\n' 'pnpm test:e2e:gateway test/e2e/qa-lab/runtime/required-native-same-session.e2e.test.ts --reporter=default --reporter=junit' > "$PROOF_DIR/command.txt"
+          pnpm test:e2e:gateway test/e2e/qa-lab/runtime/required-native-same-session.e2e.test.ts \
+            --reporter=default --reporter=junit --outputFile.junit="$PROOF_DIR/required-native.junit.xml" \
+            2>&1 | tee "$PROOF_DIR/required-native.log"
+          python3 - "$PROOF_DIR/required-native.junit.xml" <<'PYTHON'
+          import sys
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse(sys.argv[1]).getroot().iter('testcase'))
+          assert len(cases) == 1, f'Expected exact required-native case, got {len(cases)}'
+          assert not any(c.find('skipped') is not None or c.find('failure') is not None or c.find('error') is not None for c in cases)
+          assert cases[0].get('name') == 'settles required native empty workspaces and same-session follow-ups through public RPC'
+          PYTHON
+      - name: Record all outcomes even on failure
+        if: ${{ always() }}
+        shell: bash
+        env:
+          OUTCOMES: ${{ toJSON(steps) }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$PROOF_DIR"
+          printf '%s\n' "$OUTCOMES" > "$PROOF_DIR/steps.json"
+          if test -d .git; then
+            git rev-parse HEAD > "$PROOF_DIR/final-head.txt"
+            git -c diff.algorithm=myers -c diff.indentHeuristic=false diff --full-index --binary --no-ext-diff --no-textconv --no-color --no-renames --unified=3 --src-prefix=a/ --dst-prefix=b/ > "$PROOF_DIR/final.patch"
+            sha256sum "$PROOF_DIR/final.patch" > "$PROOF_DIR/final-patch.sha256"
           fi
-          printf -- '- ui:build: exit %s (production build, precompressed verification, startup/largest-asset budget report in artifact)\n' "$status" >> "$GITHUB_STEP_SUMMARY"
-          git diff --exit-code || blocked=1
-          exit "$blocked"
-      - name: Retain exact-C preflight evidence
-        if: always()
+          if test -f "$PROOF_DIR/applied.patch"; then
+            test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+            printf '%s  %s\n' "$OVERLAY_SHA256" "$PROOF_DIR/final.patch" | sha256sum --check
+          fi
+      - name: Upload exact proof including failures
+        if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: pre-frv-73bef956a886-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/pre-frv/
+          name: placement-owner-db48-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/required-native-placement-proof/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14
