@@ -294,8 +294,9 @@ export function capturePluginNativeNamespace(params: {
             ))) &&
         !(previous?.members[relative]?.boundaryChecked ?? boundaryFiles.has(member.source))
       ) {
-        linkPluginSourceFile(member.source, member.boundary, target);
-        linkedSources.add(member.source);
+        if (linkPluginSourceFile(member.source, member.boundary, target)) {
+          linkedSources.add(member.source);
+        }
       } else {
         copyPluginSourceFile(member.source, member.boundary, target);
       }

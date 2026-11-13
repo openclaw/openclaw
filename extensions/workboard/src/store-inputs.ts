@@ -7,6 +7,7 @@ import type {
   WorkboardWorkspace,
   WorkboardWorkspaceAccess,
 } from "@openclaw/workboard-contract";
+import type { WorkboardOwnerSlot } from "./persistence-types.js";
 
 type WorkboardCardInput = {
   title?: unknown;
@@ -50,7 +51,7 @@ export type WorkboardUpdateCardOptions = {
   event?: Omit<WorkboardEvent, "id" | "at">;
   eventAt?: number;
   expectedUpdatedAt?: number;
-  ownerSlot?: { ownerId: string; now: number };
+  ownerSlot?: WorkboardOwnerSlot;
   preserveProofId?: string;
   preserveNotificationId?: string;
 };

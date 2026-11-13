@@ -39,6 +39,7 @@ import {
   resolveGatewayOperatorAccessAuthority,
 } from "./operator-access-policy.js";
 import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
@@ -113,7 +114,10 @@ export function checkHttpCookieUserProfile(
   cfg: OpenClawConfig,
   profileId: string | undefined,
 ): HttpUserProfileAuthResult {
-  if (!profileId && (cfg.gateway?.roles || hasGatewayOperatorAccessPolicies(cfg))) {
+  if (
+    !profileId &&
+    (isNamedOperatorRoleEnforcementEnabled(cfg) || hasGatewayOperatorAccessPolicies(cfg))
+  ) {
     return failedHttpProfileAuthentication();
   }
   // A signed viewer still narrows session sharing when named roles are disabled.
@@ -208,7 +212,7 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
   assertCurrent();
   const options = { assertCurrent };
   const authenticatedUserId = normalizeOptionalString(params.authResult.user);
-  const rolesConfigured = Boolean(params.cfg.gateway?.roles);
+  const rolesConfigured = isNamedOperatorRoleEnforcementEnabled(params.cfg);
   const accessPoliciesConfigured = hasGatewayOperatorAccessPolicies(params.cfg);
   if (!authenticatedUserId) {
     if (

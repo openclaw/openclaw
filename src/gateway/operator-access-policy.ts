@@ -5,9 +5,11 @@ import {
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OperatorAccessDecision } from "../infra/operator-access-decision.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { assertBoundGatewayAccessDecision } from "../plugins/gateway-access-policy-registration.js";
 import type {
   GatewayAccessGrantRef,
   PluginGatewayAccessAuthority,
@@ -19,6 +21,7 @@ import { captureResidentUserProfileAccess } from "../state/user-profile-list.js"
 import type { UserProfileAccessFacts } from "../state/user-profiles.types.js";
 import type { OpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
 import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 
 export const GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE =
@@ -83,7 +86,10 @@ export function hasGatewayOperatorAccessPolicies(config: OpenClawConfig): boolea
   return (
     usesGitHubRoleAssignments(config, null) ||
     currentAccessPolicies().length > 0 ||
-    Object.values(config.gateway?.roles?.definitions ?? {}).some((role) => role.accessPolicyPlugin)
+    (isNamedOperatorRoleEnforcementEnabled(config) &&
+      Object.values(config.gateway?.roles?.definitions ?? {}).some(
+        (role) => role.accessPolicyPlugin,
+      ))
   );
 }
 
@@ -91,6 +97,7 @@ function usesGitHubRoleAssignments(config: OpenClawConfig, assignedRole: string 
   const roles = config.gateway?.roles;
   return Boolean(
     roles &&
+    isNamedOperatorRoleEnforcementEnabled(config) &&
     Object.keys(roles.assignments?.byGithubLogin ?? {}).length > 0 &&
     (!assignedRole || !Object.hasOwn(roles.definitions, assignedRole)),
   );
@@ -198,7 +205,12 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
   const invalidated = new AbortController();
   let signal = invalidated.signal;
   let denial: GatewayOperatorAccessDeniedError | undefined;
-  let authorities: { pluginId: string; authority: PluginGatewayAccessAuthority }[] = [];
+  let authorities: {
+    pluginId: string;
+    authority: PluginGatewayAccessAuthority;
+    decision?: OperatorAccessDecision;
+    assertCurrent: () => void;
+  }[] = [];
   const sourceFailure = () => {
     const source = authorities.find(({ authority }) => authority.signal.aborted);
     return source
@@ -240,7 +252,31 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
       if (authority && pluginId === requiredPlugin) {
         requiredPolicyConfirmed = true;
       }
-      return authority ? [{ pluginId, authority }] : [];
+      return authority
+        ? [
+            {
+              pluginId,
+              authority,
+              assertCurrent: () => authority.assertCurrent(),
+              // A durable grant denotes one uninterrupted source. Unclassified captures
+              // cannot share a decision; person/config/policy inputs remain independent.
+              decision: authority.grantId
+                ? {
+                    policy,
+                    config,
+                    subject: JSON.stringify([
+                      profile.profileId,
+                      profile.role,
+                      profile.emails,
+                      profile.githubAccountIds,
+                      pluginId === requiredPlugin,
+                      authority.grantId,
+                    ]),
+                  }
+                : undefined,
+            },
+          ]
+        : [];
     });
     if (!requiredPolicyConfirmed) {
       throw new GatewayOperatorAccessDeniedError("access-record-inactive");
@@ -269,9 +305,14 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
             throw invalidate("policy-set-changed");
           }
         }
-        for (const { authority, pluginId } of authorities) {
+        for (const {
+          authority,
+          pluginId,
+          decision,
+          assertCurrent: assertAuthorityCurrent,
+        } of authorities) {
           try {
-            authority.assertCurrent();
+            assertBoundGatewayAccessDecision(authority, decision, assertAuthorityCurrent);
           } catch (error) {
             if (error instanceof GatewayOperatorAccessDeniedError) {
               throw invalidate(error.accessCause);

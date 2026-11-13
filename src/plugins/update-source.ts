@@ -176,6 +176,8 @@ export type UpdateInstalledPluginsParams = {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
   packagePluginIds?: Readonly<Record<string, readonly string[]>>;
+  /** Once aborted, no further plugin update starts; this loop does not stop one in progress. */
+  signal?: AbortSignal;
 };
 
 export type UpdatablePluginInstallRecord = PluginInstallRecord & {

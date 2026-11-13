@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it } from "vitest";
 import {
   bindOperatorModelExecution,
+  createAdmittedRunOperatorAuthority,
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
@@ -53,6 +54,7 @@ it.each(["closed-scope", "policy-error"])(
       const instance = createOwnedTestInstance("lineage-policy");
       const grant = new AbortController();
       let unavailable = false;
+      let assertions = 0;
       const registry = createEmptyPluginRegistry();
       registry.plugins.push(createPluginRecord({ id: "lineage-policy" }));
       registry.gatewayAccessPolicies.push({
@@ -64,6 +66,7 @@ it.each(["closed-scope", "policy-error"])(
               signal: grant.signal,
               grantId: "lineage-grant",
               assertCurrent: () => {
+                assertions++;
                 grant.signal.throwIfAborted();
                 if (unavailable) {
                   throw new Error("synthetic policy failure");
@@ -113,6 +116,11 @@ it.each(["closed-scope", "policy-error"])(
         }
         const active = resolveAdmittedRunActiveAssertion(runs[3]!)!;
         expect(active).toBeTypeOf("function");
+        assertions = 0;
+        active();
+        expect(assertions).toBe(1);
+        active();
+        expect(assertions).toBe(2);
         const model = bindOperatorModelExecution(captured.authority, {
           provider: "fixture",
           model: "model",
@@ -144,6 +152,30 @@ it.each(["closed-scope", "policy-error"])(
         unavailable = false;
         expect(active).not.toThrow();
         expect(model.assertCurrent).not.toThrow();
+        const mixedScope = createAdmittedRunOperatorAuthority({
+          profileId: profile.id,
+          scopes: captured.authority.scopes,
+          assertCurrent: () => {
+            active();
+            inScope(active);
+          },
+        });
+        expect(mixedScope.assertCurrent).toThrow(GatewayOperatorAccessUnavailableError);
+        const closingScope = new PluginInvocationScope(registry, [instance], { retained: true });
+        const closesDuringCheck = createAdmittedRunOperatorAuthority({
+          profileId: profile.id,
+          scopes: captured.authority.scopes,
+          assertCurrent: () => {
+            active();
+            closingScope.release();
+            active();
+          },
+        });
+        expect(() => closingScope.run(closesDuringCheck.assertCurrent)).toThrow(
+          GatewayOperatorAccessUnavailableError,
+        );
+        expect(active).not.toThrow();
+        expect(captured.authority.signal?.aborted).toBe(false);
         for (const run of runs) {
           expect(getAdmittedRunDelegatedAuthority(run)).toBeDefined();
         }
