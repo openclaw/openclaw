@@ -170,6 +170,34 @@ describe("generic rebuild data rules", () => {
     expect(report.conservationMismatches).toEqual([]);
   });
 
+  it("carries the released Claw rows into Templates through the map", () => {
+    const dir = tempDir();
+    const source = path.join(dir, "claw.sqlite");
+    const db = new DatabaseSync(source);
+    db.exec(`CREATE TABLE claw_mcp_server_refs (agent_id TEXT, name TEXT, schema_version TEXT,
+      config_digest TEXT, relationship TEXT, origin TEXT, independent_owner INTEGER, status TEXT,
+      error TEXT, created_at_ms INTEGER, updated_at_ms INTEGER);
+      INSERT INTO claw_mcp_server_refs VALUES ('main', 'files', 'openclaw.clawMcpServerRef.v1', 'd', 'managed', 'claw-introduced', 0, 'installed', NULL, 1, 2);`);
+    db.close();
+    const out = path.join(dir, "next.sqlite");
+    const { report } = buildStateDatabaseByCopy(source, out, dir);
+    const built = new DatabaseSync(out, { readOnly: true });
+    try {
+      expect(
+        built.prepare("SELECT name, origin, schema_version FROM template_mcp_server_refs").all(),
+      ).toEqual([
+        {
+          name: "files",
+          origin: "template-introduced",
+          schema_version: "openclaw.templateMcpServerRef.v1",
+        },
+      ]);
+    } finally {
+      built.close();
+    }
+    expect(report.setAside).toEqual([]);
+  });
+
   it("reports a dropped or renamed user-data column without a map entry", () => {
     const sql = `CREATE TABLE t (id TEXT PRIMARY KEY, title TEXT); INSERT INTO t VALUES ('a', 'kept');`;
     const renamed = "CREATE TABLE t (id TEXT PRIMARY KEY, name TEXT) STRICT;";
