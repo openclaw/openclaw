@@ -20,7 +20,8 @@ import {
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
-import { invokeGatewayTool, type ToolsInvokeInput } from "./tools-invoke-shared.js";
+import { invokeGatewayTool } from "./tools-invoke-shared.js";
+import type { ToolsInvokeInput } from "./tools-invoke-shared.types.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 
@@ -95,6 +96,7 @@ export async function handleToolsInvokeHttpRequest(
       authenticatedUserProfile: requestAuth.authenticatedUserProfile,
       operatorRoleActor: requestAuth.operatorRoleActor,
       openclawIdPrincipal: requestAuth.openclawIdPrincipal,
+      operatorProfileEnrollment: requestAuth.operatorProfileEnrollment,
       operatorAccessAuthority,
       scopes: operatorScopes,
     });
@@ -130,6 +132,7 @@ export async function handleToolsInvokeHttpRequest(
           authenticatedUserProfile: requestAuth.authenticatedUserProfile,
           operatorRoleActor: requestAuth.operatorRoleActor,
           openclawIdPrincipal: requestAuth.openclawIdPrincipal,
+          operatorProfileEnrollment: requestAuth.operatorProfileEnrollment,
           operatorScopes,
           senderIsOwner,
           conversationReadOrigin: "direct-operator",

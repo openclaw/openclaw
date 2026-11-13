@@ -1,5 +1,7 @@
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
-import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
+import { resolveMissingRequestedScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { assertBootstrapPersonInDatabase } from "./device-bootstrap-profile.worker.js";
+import { requireDeviceBootstrapSourceInWorker } from "./device-bootstrap.worker-kernel.js";
 import type {
   RotateDeviceTokenResult,
   RevokeDeviceTokenResult,
@@ -27,6 +29,7 @@ import {
 } from "./device-pairing-token-policy.js";
 import { createDeviceAuthToken } from "./device-pairing-token-utils.js";
 import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
+import type { EngineConnection } from "./sql-connection.js";
 
 /** Record use only if the current token still authorizes the request. */
 export function verifyDeviceTokenInWorker(params: {
@@ -56,15 +59,49 @@ export function verifyDeviceTokenInWorker(params: {
 }
 
 /** Return a reusable token for a role or issue one within the approved scope baseline. */
-export function ensureDeviceTokenInWorker(params: {
-  deviceId: string;
-  role: string;
-  scopes: string[];
-  issuer?: DeviceAuthToken["issuer"];
-  approval?: DeviceAuthToken["approval"];
-  nowMs: number;
-}): DeviceAuthToken | null {
+export function ensureDeviceTokenInWorker(
+  params: {
+    deviceId: string;
+    role: string;
+    scopes: string[];
+    issuer?: DeviceAuthToken["issuer"];
+    approval?: DeviceAuthToken["approval"];
+    expectedPublicKey?: string;
+    expectedOperatorProfileId?: string;
+    bootstrapSource?: { token: string; deviceId: string; publicKey: string };
+    nowMs: number;
+  },
+  db: EngineConnection,
+): DeviceAuthToken | null {
   return updatePairedDeviceInTransaction<DeviceAuthToken | null>(params.deviceId, (paired) => {
+    if (
+      (params.expectedPublicKey !== undefined && paired?.publicKey !== params.expectedPublicKey) ||
+      (params.expectedOperatorProfileId !== undefined &&
+        paired?.operatorProfileId !== params.expectedOperatorProfileId)
+    ) {
+      return { value: null };
+    }
+    let bootstrapOperatorScopes: readonly string[] | undefined;
+    if (params.bootstrapSource) {
+      const source = requireDeviceBootstrapSourceInWorker(
+        params.bootstrapSource,
+        { deviceId: params.deviceId, publicKey: params.expectedPublicKey ?? "" },
+        params.nowMs,
+      );
+      assertBootstrapPersonInDatabase(db, source);
+      bootstrapOperatorScopes = params.role === "operator" ? source.scopes : undefined;
+      if (
+        source.operatorProfileId !== params.expectedOperatorProfileId ||
+        !source.roles.includes(params.role) ||
+        resolveMissingRequestedScope({
+          role: params.role,
+          requestedScopes: params.scopes,
+          allowedScopes: source.scopes,
+        })
+      ) {
+        return { value: null };
+      }
+    }
     requestDevicePairingMutationAdmission({ kind: "pairing-token-issuance" });
     const requestedScopes = normalizeDeviceAuthScopes(params.scopes);
     const context = resolveDeviceTokenUpdateContext({
@@ -86,8 +123,25 @@ export function ensureDeviceTokenInWorker(params: {
     ) {
       return { value: null };
     }
-    const reusable = reusablePairedDeviceToken(device, params);
-    if (reusable) {
+    const reusable = reusablePairedDeviceToken(device, {
+      ...params,
+      // A personal handoff may retrieve an existing node grant, not replace its issuer.
+      ...(role === "node" &&
+      params.bootstrapSource &&
+      params.expectedOperatorProfileId !== undefined &&
+      params.issuer === undefined
+        ? { issuer: existing?.issuer }
+        : {}),
+    });
+    if (
+      reusable &&
+      (!bootstrapOperatorScopes ||
+        roleScopesAllow({
+          role,
+          requestedScopes: reusable.scopes,
+          allowedScopes: bootstrapOperatorScopes,
+        }))
+    ) {
       return { value: reusable };
     }
     const now = params.nowMs;

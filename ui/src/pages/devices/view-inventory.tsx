@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
+import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
@@ -14,6 +15,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { workerCapacityPresentation } from "../../components/solid/worker-capacity.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
+import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { formatList, formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { macFamilyLabel } from "../../lib/mac-form-factor.ts";
@@ -29,7 +31,10 @@ import {
 } from "../../lib/nodes/inventory.ts";
 import type { InventoryRemovalRequest } from "../../lib/nodes/page-operations.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
+import { profileDirectory } from "../../lib/profile-directory.ts";
+import { useApplication } from "../../lib/reactive/context.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { CapabilityList } from "./capability-list.tsx";
 import { deviceDesktopEnvironment, DeviceEntryActions } from "./entry-actions.tsx";
 import { HostPressure, HostStats } from "./host-stats.tsx";
@@ -44,6 +49,7 @@ import {
 import type { DevicesProps } from "./view.types.ts";
 
 registerEnglishCatalog(registerDevicesEnglish);
+registerEnglishCatalog(registerProfileEnglish);
 
 function toRemovalRequest(entry: DeviceInventoryEntry): InventoryRemovalRequest {
   const removal = resolveInventoryRemoval(entry);
@@ -346,7 +352,41 @@ function InventoryEntry(props: {
             : () => props.devices.onInventoryRemove(toRemovalRequest(props.entry))
         }
       />
+      <Show
+        when={
+          props.entry.device &&
+          props.entry.roles.includes("operator") &&
+          !managedByOpenClawId() &&
+          props.devices.onDeviceEnroll
+        }
+      >
+        <div class="device-entry__actions">
+          <button
+            class="btn btn--sm"
+            disabled={!props.devices.connected || !props.devices.canAdmin}
+            onClick={() =>
+              props.devices.onDeviceEnroll?.({ id: props.entry.id, name: props.entry.name })
+            }
+          >
+            {t(
+              props.entry.device?.operatorProfileId
+                ? "devices.inventory.changePerson"
+                : "profilePage.enrollment.device",
+            )}
+          </button>
+        </div>
+      </Show>
       <dl class="device-entry__facts">
+        <Show when={props.entry.roles.includes("operator")}>
+          <DeviceFact label={t("devices.inventory.operatorPerson")}>
+            <Show
+              when={props.entry.device?.operatorProfileId}
+              fallback={t("devices.inventory.notEnrolled")}
+            >
+              {(id) => <OperatorPerson profileId={id()} />}
+            </Show>
+          </DeviceFact>
+        </Show>
         <Show when={managedByOpenClawId()}>
           <DeviceFact label={t("devices.inventory.openclawIdLabel")}>
             {t("devices.inventory.openclawIdManaged")}{" "}
@@ -454,6 +494,22 @@ function InventoryEntry(props: {
       {props.children}
     </DeviceDisclosure>
   );
+}
+
+function OperatorPerson(props: { profileId: string }) {
+  const app = useApplication();
+  const directory = profileDirectory(app.gateway);
+  const people = projectOwner(directory, (source) => source);
+  const name = () => {
+    people.read();
+    const person = directory.get(props.profileId);
+    return userProfileDisplayName(
+      person?.id ?? props.profileId,
+      person?.displayName,
+      person?.githubIdentity?.login,
+    );
+  };
+  return <span>{name()}</span>;
 }
 
 function VersionFacts(props: {

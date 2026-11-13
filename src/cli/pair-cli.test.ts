@@ -76,6 +76,20 @@ describe("openclaw pair", () => {
     });
   });
 
+  it("carries an explicit person only on the administrator's approval", async () => {
+    await run("ABCD-EFGH", "--person", "existing-person", "--yes");
+    expect(mocks.call.mock.calls.map(([, params]) => params)).toEqual([
+      { code: "ABCDEFGH" },
+      {
+        code: "ABCDEFGH",
+        requestId: "request-1",
+        decision: "approve",
+        profileId: "existing-person",
+      },
+    ]);
+    expect(output()).toContain("Person (selected)");
+  });
+
   it("rejects the request when the operator answers no", async () => {
     setTty(true);
     mocks.prompt.mockResolvedValue(false);

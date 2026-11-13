@@ -909,6 +909,7 @@ class NodeRuntime internal constructor(
     val connectAuth: ((nonce: String, signedAt: Long) -> JsonObject)? = null,
     val browserFocusAvailable: Boolean = false,
     val legacyAuth: (() -> JsonObject)? = null,
+    val enrollProfile: ((JsonObject, (Result<JsonObject>) -> Unit) -> Unit)? = null,
   )
 
   private val appContext = context.applicationContext
@@ -4818,6 +4819,18 @@ class NodeRuntime internal constructor(
           }
         },
         browserFocusAvailable = browserFocusAvailable,
+        enrollProfile = { params, reply ->
+          // Runtime custody outlives the page; dismissal does not abandon an accepted credential rotation.
+          scope.launch {
+            val result = runCatching {
+              val currentLease = checkNotNull(lease)
+              operatorSession.enrollControlUiProfile(currentLease, params, grantedScopes) { enqueue ->
+                withCurrentCredential { enqueue(); JsonObject(emptyMap()) }
+              }
+            }
+            reply(result)
+          }
+        },
         legacyAuth = {
           withCurrentCredential { credential ->
             buildJsonObject {

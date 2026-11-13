@@ -14,6 +14,7 @@ import { loadDevicePairingStateForMutation } from "./device-pairing-state.kernel
 import { persistDevicePairingStoreState } from "./device-pairing-store.js";
 import { resolveRoleTokenScopes } from "./device-pairing-token-utils.js";
 import type { PairedDevice } from "./device-pairing.types.js";
+import { assertPersonalOperatorEnrollmentProfile } from "./device-profile-enrollment.worker.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -280,6 +281,7 @@ export function decideBrowserPairRequestInWorker(
     code: string;
     requestId: string;
     decision: "approve" | "reject";
+    operatorProfileId?: string;
     callerScopes: readonly string[];
     /** Shared-auth generation browser tokens must carry, when shared auth is configured. */
     sharedGatewaySessionGeneration?: string;
@@ -314,6 +316,9 @@ export function decideBrowserPairRequestInWorker(
     );
     return { ...describeRequest(row, "rejected"), superseded: [] };
   }
+  if (input.operatorProfileId !== undefined) {
+    assertPersonalOperatorEnrollmentProfile(db, input.operatorProfileId);
+  }
   const state = loadDevicePairingStateForMutation(input.nowMs);
   if (hasReducedOperatorToken(state.pairedByDeviceId[row.device_id])) {
     return { status: "reduced" as const, deviceId: row.device_id };
@@ -347,6 +352,9 @@ export function decideBrowserPairRequestInWorker(
     filed.request.requestId,
     {
       callerScopes: [...input.callerScopes],
+      ...(input.operatorProfileId !== undefined
+        ? { operatorProfileId: input.operatorProfileId }
+        : {}),
       approvedVia: "owner",
     },
     input.nowMs,

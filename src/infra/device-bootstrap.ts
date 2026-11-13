@@ -9,6 +9,7 @@ import {
 } from "../shared/device-bootstrap-profile.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { prepareDeviceBootstrapProfileAuthority } from "./device-bootstrap-profile-authority.js";
 import type { DeviceBootstrapOperations } from "./device-bootstrap.worker-kernel.js";
 import type {
   CloudWorkerSetupMutationAdmission,
@@ -66,6 +67,7 @@ type DeviceBootstrapTokenIssueParams = {
   assertCurrent?: () => void;
   baseDir?: string;
   profile?: DeviceBootstrapProfileInput;
+  context?: import("../state/openclaw-state-worker-context.types.js").OpenClawStateWorkerContext;
   roles?: readonly string[];
   scopes?: readonly string[];
 };
@@ -83,10 +85,20 @@ async function issueDeviceBootstrapTokenRecord(
       ? normalizeDeviceBootstrapHandoffProfile(input)
       : PAIRING_SETUP_BOOTSTRAP_PROFILE;
     warnIfIssuedBootstrapScopesWereStripped({ input, profile });
-    return await executeDevicePairingMutation(
-      { type: "bootstrap.issue", input: { profile, setupId: params.setupId, nowMs: Date.now() } },
-      { baseDir: params.baseDir, assertCurrent },
+    const authority = await prepareDeviceBootstrapProfileAuthority(profile, {
+      baseDir: params.baseDir,
+      context: params.context,
+      assertCurrent,
+    });
+    const result = await executeDevicePairingMutation(
+      {
+        type: "bootstrap.issue",
+        input: { profile: authority.profile, setupId: params.setupId, nowMs: Date.now() },
+      },
+      { context: authority.context, assertCurrent: authority.assertCurrent },
     );
+    authority.assertCurrent();
+    return result;
   });
 }
 
@@ -103,10 +115,11 @@ export async function issueDeviceBootstrapToken(
  * exact credential without ever handling the bearer token. Generic bootstrap
  * handoffs stay uncorrelated: only setup codes have a presenting client.
  */
-export async function issueDevicePairSetupBootstrapToken(params: {
-  baseDir?: string;
-  profile: DeviceBootstrapProfileInput;
-}): Promise<{ token: string; expiresAtMs: number; setupId: string }> {
+export async function issueDevicePairSetupBootstrapToken(
+  params: Pick<DeviceBootstrapTokenIssueParams, "baseDir" | "context" | "assertCurrent"> & {
+    profile: DeviceBootstrapProfileInput;
+  },
+): Promise<{ token: string; expiresAtMs: number; setupId: string }> {
   const setupId = randomUUID();
   const issued = await issueDeviceBootstrapTokenRecord({ ...params, setupId });
   return { ...issued, setupId };
@@ -130,9 +143,15 @@ export async function ensureDevicePairSetupBootstrapToken(
   params: BootstrapParams<"bootstrap.ensure">,
 ): Promise<DeviceBootstrapOperations["bootstrap.ensure"]["output"]> {
   const { baseDir, ...input } = params;
-  return await runBootstrapMutation("bootstrap.ensure", (nowMs) => ({ ...input, nowMs }), {
-    baseDir,
-  });
+  const authority = await prepareDeviceBootstrapProfileAuthority(input.profile, { baseDir });
+  return await runBootstrapMutation(
+    "bootstrap.ensure",
+    (nowMs) => ({ ...input, profile: authority.profile, nowMs }),
+    {
+      context: authority.context,
+      assertCurrent: authority.assertCurrent,
+    },
+  );
 }
 
 /** Consume only while the bound device and its live handoff authority remain current. */

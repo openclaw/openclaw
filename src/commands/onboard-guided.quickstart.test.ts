@@ -177,6 +177,7 @@ describe("runGuidedOnboarding quick start", () => {
       "Help make OpenClaw better?",
       "What would you like to create?",
       "How should I set things up?",
+      "Set up your personal identity for this terminal?",
     ]);
     const selects = vi.mocked(prompter.select).mock.invocationCallOrder;
     const firstAgentPrompt = vi.mocked(prompter.text).mock.invocationCallOrder[0]!;

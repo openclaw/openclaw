@@ -54,6 +54,7 @@ import { uploadsEnabled } from "../../lib/uploads.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import { DiscordIdentity } from "./discord-identity.tsx";
 import { ModelAccounts } from "./model-accounts.tsx";
+import { PersonalEnrollment } from "./personal-enrollment.tsx";
 import { PersonalInstructions } from "./personal-instructions.tsx";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 import { ProfileHero } from "./profile-hero.tsx";
@@ -88,6 +89,7 @@ function accessSummary(scopes: readonly string[] | null) {
 
 export function ProfilePage() {
   const context = useApplication();
+  const pageConfiguration = projectApplicationConfig(context.config);
   const upgrade = projectOwner(context.scopeUpgrade, (source) =>
     source.state.phase === "hidden" ? null : source.state,
   );
@@ -259,11 +261,7 @@ export function ProfilePage() {
       {(profile) => {
         function IdentitySection() {
           const busy = () => identityBusy() ?? (props.pending ? "loading" : null);
-          const configuration = createMemo(() => {
-            const source = context.config;
-            return source ? projectApplicationConfig(source) : null;
-          });
-          const canUpload = () => configuration()?.read().uploadsEnabled !== false;
+          const canUpload = () => pageConfiguration.read().uploadsEnabled;
           const canEditIdentity = () => latest(canWrite);
           const isOwnerProfile = () => profile().id === GATEWAY_OWNER_PROFILE_ID;
           return (
@@ -602,6 +600,12 @@ export function ProfilePage() {
               </Errored>
             </Show>
           </Show>
+          <PersonalEnrollment
+            gateway={context.gateway}
+            basePath={context.basePath}
+            idManaged={pageConfiguration.read().openclawIdEnabled}
+            hidden={!hasPresentation() || initialIdentityPending()}
+          />
           <PersonalInstructions
             hidden={
               initialIdentityPending() ||

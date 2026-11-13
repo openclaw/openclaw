@@ -25,8 +25,11 @@ import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -830,6 +833,45 @@ class GatewaySessionInvokeTest {
         shutdownHarness(harness, server)
       }
     }
+
+  @Test
+  fun personalEnrollment_settlesOperatorTokenWithoutChangingNodeGrant() = runBlocking {
+    val json = testJson()
+    val connected = CompletableDeferred<Unit>()
+    val disconnected = AtomicReference("")
+    val deviceId = testDeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+    val reconnectAuth = CompletableDeferred<JsonObject?>()
+    val connects = AtomicInteger()
+    val server = startGatewayServer(json) { socket, id, method, frame ->
+      when (method) {
+        "connect" -> {
+          if (connects.incrementAndGet() > 1) reconnectAuth.complete(frame["params"]?.jsonObject?.get("auth")?.jsonObject)
+          socket.send(connectResponseFrame(id, authJson = """{"role":"operator","scopes":["operator.admin","operator.read"]}"""))
+        }
+        "device.profile.enroll" -> {
+          assertEquals("person", frame["params"]?.jsonObject?.get("profileId")?.jsonPrimitive?.content)
+          val payload = buildJsonObject {
+            put("deviceId", deviceId); put("profileId", "person")
+            put("operatorToken", buildJsonObject { put("token", "personal-operator"); put("scopes", JsonArray(listOf(JsonPrimitive("operator.read")))) })
+          }
+          socket.send(buildJsonObject { put("type", "res"); put("id", id); put("ok", true); put("payload", payload) }.toString())
+        }
+      }
+    }
+    val harness = createNodeHarness(connected, disconnected) { GatewaySession.InvokeResult.ok(null) }
+    try {
+      val gatewayId = gatewayIdForPort(server.port)
+      harness.deviceAuthStore.saveToken(gatewayId, deviceId, "node", "node-stays")
+      connectNodeSession(harness.session, server.port, role = "operator", scopes = listOf("operator.admin", "operator.read"))
+      awaitConnectedOrThrow(connected, disconnected, server)
+      val lease = checkNotNull(harness.session.captureRequestLease(gatewayId))
+      val receipt = harness.session.enrollControlUiProfile(lease, buildJsonObject { put("profileId", "person") }, listOf("operator.admin", "operator.read")) { enqueue -> enqueue() }
+      assertNull(receipt["operatorToken"])
+      assertEquals("personal-operator", harness.deviceAuthStore.loadToken(gatewayId, deviceId, "operator"))
+      assertEquals("node-stays", harness.deviceAuthStore.loadToken(gatewayId, deviceId, "node"))
+      assertEquals("personal-operator", withTimeout(TEST_TIMEOUT_MS) { reconnectAuth.await() }?.get("token")?.jsonPrimitive?.content)
+    } finally { shutdownHarness(harness, server) }
+  }
 
   @Test
   fun connect_prefersFreshBootstrapTokenOverStoredDeviceToken() =

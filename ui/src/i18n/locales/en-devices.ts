@@ -51,6 +51,10 @@ const enDevices = {
       showDetails: "Show details",
       requestedAccessLabel: "Requested access",
       approvedAccessLabel: "Approved access",
+      operatorPerson: "Person represented by operator access",
+      changePerson: "Change person",
+      notEnrolled: "Not personally enrolled; sign-in may supply an identity",
+      keepIdentity: "Keep current identity (Shared Owner if unbound)",
       desktopOpenWindow: "Open this desktop in a new window",
       desktopEnableHint:
         "Desktop sharing starts enabled on desktop devices. In the desktop app on that device, check the Desktop sharing switch under Settings. Approve any pending desktop access request here. If sharing still doesn’t work, ask an admin to check the desktop policy. The device needs Screen Sharing or an authenticated local VNC server.",
@@ -187,6 +191,21 @@ const enDevices = {
       },
     },
     pairing: {
+      representedPerson: "Person represented (optional)",
+      unboundPerson: "No person (shared / maintenance)",
+      newPerson: "New local person",
+      personName: "Name (optional)",
+      peopleUnavailable: "Existing people could not be loaded. Retry or leave this access unbound.",
+      personHint:
+        "A personal association does not grant admin access. The setup type remains the access ceiling.",
+      personRole: "Current person role: {role}. That role can further limit this device’s access.",
+      personAdmission:
+        "The new client must still finish connecting and be admitted as this person.",
+      personalDelivered: "Setup delivered — finish connecting on the new device",
+      personalPaused: "Setup issuance was interrupted.",
+      localPersonHint: "No email or external sign-in is needed for a local person.",
+      personalUncertain:
+        "Issuance may have completed. Retry explicitly with the same person choice; no new person will be created by this retry.",
       subtitle: "Connect a mobile app or another device.",
       noApp: "Don’t have the app yet?",
       getApps: "Get the apps",

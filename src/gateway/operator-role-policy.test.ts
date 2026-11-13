@@ -29,6 +29,8 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveChannelOperatorAdminAuthority } from "./channel-operator-authority.js";
+import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
 import {
   hasCurrentGatewayOperatorAccess,
   resolveGatewayOperatorAccessAuthority,
@@ -43,6 +45,7 @@ import {
   resolveOperatorRolePolicy,
   resolveOperatorRolePolicyForAssignment,
   resolveOperatorRolePolicyForProfile,
+  resolveOperatorRolePolicyForPrincipal,
 } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
@@ -157,6 +160,109 @@ function expectRole(
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
 describe("operator role policy", () => {
+  it.each(["operator", "viewer", "owner"] as const)(
+    "composes enrolled policy but preserves an unbound ID %s source through retained work",
+    (membershipRole) =>
+      inState(async () => {
+        const { profile, cfg, client, context } = roleFixture();
+        const principal =
+          membershipRole === "owner"
+            ? { kind: "owner" as const, peerKey: "iroh:" + "a".repeat(64) }
+            : {
+                kind: "member" as const,
+                peerKey: "iroh:" + "a".repeat(64),
+                accountId: "member-account",
+                role: membershipRole,
+              };
+        setOpenClawIdTunnelPrincipalLookup(() => principal);
+        setDeviceTokenBindingOwner({
+          lookup: () => undefined,
+          devicesForPeer: () => [],
+          record: async () => {},
+          forget: async () => {},
+          reportMismatch() {},
+        });
+        client.internal = { openclawIdPrincipal: principal };
+        const enrollment = {
+          deviceId: "personal-device",
+          publicKey: "approved-key",
+          createdAtMs: 1,
+          profileId: profile.id,
+        };
+        const personal = guestDefinition(cfg);
+        personal.sandbox = "required";
+        personal.scopes = ["operator.admin"];
+        personal.sessions.others = "write";
+        personal.accessPrograms = { cyber: [] };
+        personal.modelPolicy = { allow: ["fixture/allowed"] };
+        const expected = {
+          ...personal,
+          sessions: { others: membershipRole === "viewer" ? "view" : "write" },
+          scopes:
+            membershipRole === "owner"
+              ? personal.scopes
+              : membershipRole === "viewer"
+                ? ["operator.read"]
+                : [
+                    "operator.read",
+                    "operator.write",
+                    "operator.approvals",
+                    "operator.questions",
+                    "operator.talk",
+                  ],
+        };
+        try {
+          using _ = disposable(await prepareUserProfileCatalog());
+          expect(
+            resolveOperatorRolePolicyForPrincipal(
+              profile.id,
+              null,
+              cfg,
+              null,
+              principal,
+              enrollment,
+            ),
+          ).toEqual(expected);
+          const unbound =
+            membershipRole === "owner"
+              ? undefined
+              : { agents: "*", sessions: expected.sessions, scopes: expected.scopes };
+          expect(resolveOperatorRolePolicy(client, cfg)).toEqual(unbound);
+          using source = await captureSource({ client, context });
+          if (membershipRole === "owner") {
+            expect(source.authority.rolePolicy).toBeUndefined();
+          } else {
+            expect(source.authority.rolePolicy).toMatchObject({
+              agents: "*",
+              sessionAccessCap: expected.sessions.others,
+              sandboxRequired: false,
+            });
+          }
+
+          const retained = {
+            ...client,
+            internal: { ...client.internal, operatorRunAuthority: source.authority },
+          };
+          expect(resolveOperatorRolePolicy(retained, cfg)).toEqual(unbound);
+          expect(source.authority.profileId).toBe(profile.id);
+          const contradictory: GatewayClient = {
+            ...client,
+            internal: {
+              ...client.internal,
+              operatorRoleActor: { kind: "system" },
+              operatorProfileEnrollment: enrollment,
+            },
+          };
+          expect(() =>
+            authorizeGatewaySessionCreation({ client: contradictory, cfg, agentId: "other-agent" }),
+          ).toThrow("requires a person principal");
+        } finally {
+          setOpenClawIdTunnelPrincipalLookup(undefined);
+          setDeviceTokenBindingOwner(undefined);
+        }
+      }),
+  );
+
   it("resolves verified GitHub login assignments with explicit precedence and live config", () =>
     inState(async () => {
       const person = github(42, "Release-Operator");

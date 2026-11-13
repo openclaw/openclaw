@@ -22,7 +22,15 @@ export function createTokenBindingPublisher(params: {
     }
     setDeviceTokenBindingOwner({
       lookup: (deviceId, role) => owner.tokenBinding(deviceId, role),
-      record: (deviceId, role, peerKey) => owner.bindToken(deviceId, role, peerKey),
+      devicesForPeer: (peerKey, role) =>
+        owner
+          .tokensBoundTo([peerKey])
+          .filter((binding) => binding.role === role)
+          .map((binding) => binding.deviceId),
+      record: (deviceId, role, peerKey, operatorPrincipal) =>
+        owner.bindToken(deviceId, role, peerKey, operatorPrincipal),
+      isOperatorBindingCurrent: (deviceId, principal) =>
+        owner.isOperatorBindingCurrent(deviceId, principal),
       forget: (tokens) => owner.unbindTokens(tokens),
       reportMismatch: (event) =>
         params.log.warn(

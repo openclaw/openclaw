@@ -22,10 +22,7 @@ import {
   isAutomationsToolName,
 } from "../agents/tools/automations-tool-name.js";
 import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
-import {
-  normalizeConversationReadInvocationOrigin,
-  type ConversationReadInvocationOrigin,
-} from "../channels/plugins/conversation-read-origin.js";
+import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import { isMessageToolSendActionName } from "../channels/plugins/message-action-names.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
@@ -47,7 +44,6 @@ import {
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
-import type { GatewayClient } from "./server-methods/shared-types.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import {
@@ -72,6 +68,12 @@ import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 import { resolveToolsWithInvocationMcp } from "./tools-invoke-mcp.js";
+import type {
+  InvokeGatewayToolParams,
+  ToolsInvokeInput,
+  ToolsInvokeErrorType,
+  ToolsInvokeOutcome,
+} from "./tools-invoke-shared.types.js";
 import {
   areGatewayUploadsEnabled,
   assertGatewayUploadsEnabled,
@@ -99,38 +101,6 @@ function isToolUploadRequest(toolName: string, args: unknown): boolean {
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
 /** Protocol input shape accepted by gateway tool invocation surfaces. */
-export type ToolsInvokeInput = {
-  tool?: unknown;
-  name?: unknown;
-  action?: unknown;
-  args?: unknown;
-  sessionKey?: unknown;
-  agentId?: unknown;
-  idempotencyKey?: unknown;
-  dryRun?: unknown;
-};
-
-type ToolsInvokeErrorType = "invalid_request" | "not_found" | "tool_call_blocked" | "tool_error";
-
-type ToolsInvokeOutcome =
-  | {
-      ok: true;
-      status: 200;
-      toolName: string;
-      source: "core" | "plugin" | "mcp" | "channel";
-      result: unknown;
-    }
-  | {
-      ok: false;
-      status: 400 | 403 | 404 | 500;
-      toolName: string;
-      error: {
-        type: ToolsInvokeErrorType;
-        message: string;
-        requiresApproval?: boolean;
-      };
-    };
-
 function resolveSessionTarget(params: { cfg: OpenClawConfig; input: ToolsInvokeInput }) {
   const rawSessionKey = normalizeOptionalString(params.input.sessionKey) ?? "main";
   const resolved = resolveRequestedSessionAgentId(
@@ -212,29 +182,6 @@ function resolveToolSource(tool: AnyAgentTool): "core" | "plugin" | "mcp" | "cha
   }
   return "core";
 }
-
-type InvokeGatewayToolParams = {
-  cfg: OpenClawConfig;
-  input: ToolsInvokeInput;
-  messageChannel?: string;
-  accountId?: string;
-  agentTo?: string;
-  agentThreadId?: string;
-  authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
-  /** Host-minted authority from the calling connection; never derived from wire params. */
-  operatorRoleActor?: NonNullable<GatewayClient["internal"]>["operatorRoleActor"];
-  /** Original authenticated HTTP principal or the enclosing RPC scope's principal. */
-  openclawIdPrincipal?: NonNullable<GatewayClient["internal"]>["openclawIdPrincipal"];
-  operatorScopes?: readonly string[];
-  approvalReviewerDeviceId?: string;
-  senderIsOwner?: boolean;
-  clientCaps?: string[];
-  conversationReadOrigin?: ConversationReadInvocationOrigin;
-  toolCallIdPrefix: string;
-  approvalMode?: "request" | "report";
-  signal?: AbortSignal;
-  assertInvocationCurrent?: () => void;
-};
 
 async function invokeGatewayToolWithSignal(
   params: InvokeGatewayToolParams & {
@@ -327,14 +274,19 @@ async function invokeGatewayToolWithSignal(
     return failure(400, "invalid_request", sessionTarget.error.message);
   }
   const { agentId: selectedAgentId, sessionKey } = sessionTarget;
-  const authenticatedUserProfile = params.cfg.gateway?.roles
-    ? params.authenticatedUserProfile
-    : undefined;
+  const authenticatedUserProfile =
+    params.cfg.gateway?.roles ||
+    params.operatorProfileEnrollment ||
+    sourceClient?.internal?.operatorProfileEnrollment
+      ? params.authenticatedUserProfile
+      : undefined;
   // HTTP and RPC auth boundaries supply authority independently of profile attribution.
   const client = createSyntheticPluginRuntimeClient({
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     operatorRoleActor: params.operatorRoleActor,
     openclawIdPrincipal: params.openclawIdPrincipal ?? sourceClient?.internal?.openclawIdPrincipal,
+    operatorProfileEnrollment:
+      params.operatorProfileEnrollment ?? sourceClient?.internal?.operatorProfileEnrollment,
     scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [...(params.operatorScopes ?? [])],
   });
   const sessionEntry = params.preparedSession

@@ -1,0 +1,2 @@
+# Local enrollment idempotency, worker authority/persistence and RPC secret-delivery contracts.
+243

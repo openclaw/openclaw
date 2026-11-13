@@ -1,5 +1,5 @@
-// Gateway connect pairing tests protect session exemptions and durable device grant bounds.
 import fs from "node:fs/promises";
+// Gateway connect pairing tests protect session exemptions and durable device grant bounds.
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import {

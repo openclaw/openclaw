@@ -37,6 +37,7 @@ public actor GatewayChannelActor {
     private var disconnectError: Error?
     var connectWaiters: [UUID: CheckedContinuation<Void, Error>] = [:]
     private let url: URL
+    private var preferPersonalDeviceAuth = false
     private let token: String?
     private let bootstrapToken: String?
     private let password: String?
@@ -196,6 +197,55 @@ public actor GatewayChannelActor {
             token: self.token,
             password: self.password,
             httpResourceBearer: self.httpResourceBearer(ifCurrentConnectionGeneration: expectedGeneration))
+    }
+
+    /// Enroll on the exact admitted operator socket, then settle its credential before reconnecting.
+    public func enrollControlUIProfile(
+        _ params: GatewayProfileEnrollment,
+        scopes: [String],
+        ifCurrentConnectionGeneration generation: UInt64,
+        onPersisted: (@Sendable () async throws -> Void)? = nil) async throws -> Data
+    {
+        try params.validate()
+        guard let context = self.dashboardAuthContext(ifCurrentConnectionGeneration: generation),
+              context.options.role == "operator", context.options.includeDeviceIdentity,
+              context.options.allowsDeviceAuthPersistence, scopes.contains("operator.admin"),
+              let deviceId = context.binding.deviceId,
+              let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: context.options.deviceIdentityProfile),
+              identity.deviceId == deviceId
+        else { throw CancellationError() }
+        let gatewayID = context.options.deviceAuthGatewayID
+        let previous = DeviceAuthStore.loadToken(deviceId: deviceId, role: "operator", gatewayID: gatewayID, profile: context.options.deviceIdentityProfile)?.token
+        let encoded = try self.encoder.encode(params)
+        let values = try self.decoder.decode([String: AnyCodable].self, from: encoded)
+        let data = try await self.request(method: "device.profile.enroll", params: values,
+                                          ifCurrentConnectionGeneration: generation)
+        let result = try self.decoder.decode(GatewayProfileEnrollmentResult.self, from: data)
+        guard self.authBinding(ifCurrentConnectionGeneration: generation) == context.binding,
+              self.socketAdmission.withLock({ $0 }) else { throw CancellationError() }
+        if let grant = result.operatorToken {
+            guard result.deviceId == deviceId, !grant.token.isEmpty,
+                  Set(grant.scopes).isSubset(of: Set(scopes)),
+                  self.socketAdmission.withLock({ active in
+                      active && DeviceAuthStore.storeTokenPersisted(deviceId: deviceId, role: "operator", token: grant.token,
+                          scopes: grant.scopes, gatewayID: gatewayID, profile: context.options.deviceIdentityProfile,
+                          expectedToken: previous, onlyIfUnchanged: true)
+                  })
+            else { throw CancellationError() }
+            try await onPersisted?()
+            guard self.authBinding(ifCurrentConnectionGeneration: generation) == context.binding,
+                  self.socketAdmission.withLock({ $0 }) else { throw CancellationError() }
+            self.preferPersonalDeviceAuth = true
+            var options = context.options
+            options.scopes = grant.scopes
+            options.allowStoredDeviceAuth = true
+            self.connectOptions = options
+            await self.transitionToDisconnected(reason: "personal profile enrolled",
+                error: Self.failure(7, "personal profile enrolled"), connectionGeneration: generation,
+                shouldReconnect: true)
+        }
+        return try self.encoder.encode(["deviceId": AnyCodable(result.deviceId),
+            "profileId": AnyCodable(result.profileId), "reconnect": AnyCodable(result.operatorToken != nil)])
     }
 
     nonisolated func retireSocketAdmission() {
@@ -743,9 +793,9 @@ extension GatewayChannelActor {
         options: GatewayConnectOptions,
         deviceId: String?) -> SelectedConnectAuth
     {
-        let explicitToken = self.token?.trimmedNonEmpty
-        let explicitBootstrapToken = self.bootstrapToken?.trimmedNonEmpty
-        let explicitPassword = self.password?.trimmedNonEmpty
+        let explicitToken = self.preferPersonalDeviceAuth ? nil : self.token?.trimmedNonEmpty
+        let explicitBootstrapToken = self.preferPersonalDeviceAuth ? nil : self.bootstrapToken?.trimmedNonEmpty
+        let explicitPassword = self.preferPersonalDeviceAuth ? nil : self.password?.trimmedNonEmpty
         let observedEntry: DeviceAuthEntry? = if options.includeDeviceIdentity, options.allowsDeviceAuthPersistence,
                                                  let deviceId
         {

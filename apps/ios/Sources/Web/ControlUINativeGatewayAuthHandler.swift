@@ -56,6 +56,10 @@ final class ControlUINativeGatewayAuthHandler: NSObject, WKScriptMessageHandlerW
         didReceive message: WKScriptMessage,
         replyHandler: @escaping @MainActor (Any?, String?) -> Void)
     {
+        if let body = message.body as? [String: Any], body["action"] as? String == "enrollProfile" {
+            self.enroll(body, message: message, replyHandler: replyHandler)
+            return
+        }
         guard self.isAvailable(for: message),
               let provider = self.provider, provider.isCurrent(),
               let request = Request(message.body)
@@ -77,6 +81,26 @@ final class ControlUINativeGatewayAuthHandler: NSObject, WKScriptMessageHandlerW
             } catch {
                 replyHandler(["id": request.id, "error": "The native gateway connection is no longer current."], nil)
             }
+        }
+    }
+
+    private func enroll(_ body: [String: Any], message: WKScriptMessage,
+        replyHandler: @escaping @MainActor (Any?, String?) -> Void)
+    {
+        guard self.isAvailable(for: message), let provider, provider.isCurrent(),
+              Set(body.keys) == ["id", "action", "params"], let id = body["id"] as? String,
+              !id.isEmpty, id.utf8.count <= 128, let value = body["params"],
+              let data = try? JSONSerialization.data(withJSONObject: value),
+              let params = try? JSONDecoder().decode(GatewayProfileEnrollment.self, from: data)
+        else { replyHandler(nil, "Native personal setup is unavailable for this document."); return }
+        let documentID = self.document.id
+        Task { @MainActor [weak self] in
+            do {
+                let result = try await provider.enrollProfile(params)
+                guard let self, self.document.id == documentID, self.isAvailable(for: message)
+                else { throw CancellationError() }
+                replyHandler(["id": id, "result": try JSONSerialization.jsonObject(with: result)], nil)
+            } catch { replyHandler(["id": id, "error": "Native personal setup did not finish. Reconnect and check Profile."], nil) }
         }
     }
 

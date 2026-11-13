@@ -7,7 +7,10 @@ import { stringLiteralUnion } from "./string-literal-union.js";
 // Feature handlers own authorization; schemas keep request and device identities explicit.
 export const DevicePairListParamsSchema = closedObject({});
 
-export const DevicePairApproveParamsSchema = closedObject({ requestId: NonEmptyString });
+export const DevicePairApproveParamsSchema = closedObject({
+  requestId: NonEmptyString,
+  profileId: Type.Optional(NonEmptyString),
+});
 
 export const DevicePairRejectParamsSchema = closedObject({ requestId: NonEmptyString });
 
@@ -19,6 +22,27 @@ export const DevicePairRenameParamsSchema = closedObject({
   deviceId: NonEmptyString,
   label: DevicePairLabelString,
 });
+
+/** Explicit local identity selection. The enrollment key is not external identity proof. */
+export const DeviceProfileEnrollParamsSchema = closedObject({
+  deviceId: Type.Optional(NonEmptyString),
+  profileId: Type.Optional(NonEmptyString),
+  enrollmentId: Type.Optional(Type.String({ format: "uuid", maxLength: 36 })),
+  name: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+});
+
+export const DeviceProfileEnrollResultSchema = closedObject({
+  deviceId: NonEmptyString,
+  profileId: NonEmptyString,
+  operatorToken: Type.Optional(
+    closedObject({
+      token: NonEmptyString,
+      scopes: Type.Array(NonEmptyString),
+    }),
+  ),
+});
+export type DeviceProfileEnrollParams = Static<typeof DeviceProfileEnrollParamsSchema>;
+export type DeviceProfileEnrollResult = Static<typeof DeviceProfileEnrollResultSchema>;
 
 export const DeviceTokenRotateParamsSchema = closedObject({
   deviceId: NonEmptyString,
@@ -177,6 +201,9 @@ const SetupCodeQrDataUrlSchema = Type.String({
  * scopes for companion devices such as watchOS.
  */
 export const DevicePairSetupCodeParamsSchema = closedObject({
+  profileId: Type.Optional(NonEmptyString),
+  enrollmentId: Type.Optional(Type.String({ format: "uuid", maxLength: 36 })),
+  name: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
   publicUrl: Type.Optional(NonEmptyString),
   preferRemoteUrl: Type.Optional(Type.Boolean()),
   includeQr: Type.Optional(Type.Boolean()),
@@ -225,6 +252,7 @@ export const DevicePairCodeParamsSchema = closedObject({
   code: Type.String({ minLength: 8, maxLength: 16 }),
   requestId: Type.Optional(NonEmptyString),
   decision: Type.Optional(stringLiteralUnion(["approve", "reject"])),
+  profileId: Type.Optional(NonEmptyString),
 });
 
 /**

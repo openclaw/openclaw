@@ -113,6 +113,34 @@ plugins, shared transcripts, and previously generated responses can expose other
 context. Reassigning the session or changing participants does not erase
 conversation history. Do not store secrets in these files.
 
+## Optional personal setup
+
+After the first successful AI setup, the Control UI offers optional **Personal
+profile** setup. Choose **Not now** to continue; you can return through
+**Settings → Profile → Personal profile**. No email address, GitHub account, or
+external sign-in is required.
+
+An authenticated owner or admin using an approved operator device can create a
+local person with an optional name or select an existing person from the
+Gateway's authorized directory. This attaches the operator device to that
+person; it does not merge profiles, create an admin role, or change a node's
+identity. In **Settings → Devices**, open an approved operator device and choose
+**Assign a person** to use the same flow for that device.
+
+For this device, OpenClaw saves the refreshed personal device credential before
+reconnecting. Shared Gateway tokens remain separate maintenance access, not
+personal sign-in. If setup is interrupted, reconnect and check Profile before
+retrying. A retry of the same open setup reuses its enrollment ID rather than
+creating another person. Conflicts require reviewing current Profile and
+Devices state; revoked access requires a current owner or admin to review the
+device's approval.
+
+OpenClaw ID owner certificates identify owner devices separately from personal
+profiles. Manage their access, recovery, and revocation in **Access**; personal
+setup does not create a second revocation path. Existing personal connections,
+including optional Discord linking in **Profile → Identity**, remain separate
+from device approval and permissions.
+
 ## Gateway profile and GitHub credit
 
 Your authenticated Gateway profile is separate from `USER.md`. Open **Settings → Profile → Identity** to set the display name and avatar shown to other people on the Gateway. A custom OpenClaw avatar remains authoritative when a GitHub account is verified. Without an upload, profile images use the verified GitHub photo, then the existing Gravatar fallback. The avatar route returns images, not linked email addresses, and browsers make no avatar-provider requests. Person identity displays use one rule across account cards, sidebar people, chat, mentions, sharing, and owner selectors: a saved display name, then the verified GitHub login, and otherwise a shortened “Person” label instead of a raw profile UUID. This is presentation only; editing a name still reads and writes the saved value. The Profile header follows your live user identity, including names cleared from another browser, even when several agents are configured. Unidentified connections retain the default-agent preview.

@@ -40,6 +40,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.Call
 import okhttp3.EventListener
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -975,6 +976,53 @@ class GatewaySession(
         requestDetailed(conn, method, paramsJson, timeoutMs, withEnqueue).payloadOrThrow()
       }
     }
+
+  /** Enrollment is sent and settled by the captured operator socket, never a renderer token setter. */
+  internal suspend fun enrollControlUiProfile(
+    lease: RequestLease,
+    params: JsonObject,
+    grantedScopes: List<String>,
+    withEnqueue: (() -> Unit) -> Unit,
+  ): JsonObject {
+    require("operator.admin" in grantedScopes)
+    require(params.keys.all { it in setOf("deviceId", "profileId", "enrollmentId", "name") })
+    val profileId = params["profileId"].asStringOrNull()
+    val enrollmentId = params["enrollmentId"].asStringOrNull()
+    require((profileId != null) != (enrollmentId != null))
+    if (enrollmentId != null) java.util.UUID.fromString(enrollmentId)
+    require(profileId == null || params["name"] == null)
+    val conn = synchronized(lifecycleLock) {
+      checkNotNull(readyConnection(lease.endpointStableId)).also {
+        check(lease.isCurrent() && it.target.options.role == "operator")
+      }
+    }
+    val identity = identityStore.loadOrCreate()
+    val previous = deviceAuthStore.loadEntry(lease.endpointStableId, identity.deviceId, "operator")?.token
+    val response = json.parseToJsonElement(lease.request("device.profile.enroll", params.toString(), withEnqueue = withEnqueue)) as JsonObject
+    var reconnect = false
+    check(lease.commitIfCurrent {
+      val deviceId = checkNotNull(response["deviceId"].asStringOrNull())
+      val grant = response["operatorToken"] as? JsonObject
+      if (grant != null) {
+        check(deviceId == identity.deviceId && identityStore.loadOrCreate().deviceId == identity.deviceId)
+        val token = checkNotNull(grant["token"].asStringOrNull()).also { check(it.isNotBlank()) }
+        val scopes = (grant["scopes"] as? JsonArray)?.map { checkNotNull(it.asStringOrNull()) } ?: error("Missing operator scopes")
+        check(grantedScopes.containsAll(scopes))
+        check(deviceAuthStore.loadToken(lease.endpointStableId, deviceId, "operator") == previous)
+        check(deviceAuthStore.saveToken(lease.endpointStableId, deviceId, "operator", token, scopes, previous))
+        // Retire shared auth only for this operator connection; the node role is untouched.
+        desired = DesiredConnection(conn.target.endpoint, null, null, null,
+          conn.target.options.copy(scopes = scopes), conn.target.tls, null, conn.target.onReady)
+        reconnect = true
+        this.reconnect()
+      }
+    }) { "Native Gateway connection changed during personal setup" }
+    return buildJsonObject {
+      put("deviceId", response["deviceId"]!!)
+      put("profileId", checkNotNull(response["profileId"].asStringOrNull()))
+      put("reconnect", reconnect)
+    }
+  }
 
   /** Sends an RPC request and returns the structured success/error payload. */
   suspend fun requestDetailed(

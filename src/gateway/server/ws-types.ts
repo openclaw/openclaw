@@ -8,6 +8,7 @@ import type { GatewayAuthPolicy } from "../auth-policy.types.js";
 import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.types.js";
 import type { OpenClawIdTunnelPrincipal } from "../openclaw-id/tunnel-principal.js";
 import type { GatewayOperatorAccessAuthority } from "../operator-access-policy.types.js";
+import type { OperatorProfileEnrollment } from "../operator-device-profile.types.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
 import type { WorkerConnectionIdentity } from "../worker-environments/connection-identity.js";
@@ -90,6 +91,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     authenticatedOperator?: true;
     /** Exact accepted/issued operator token; null attests a tokenless ingress. */
     operatorDeviceTokenIdentity?: Readonly<PairedDeviceTokenIdentity> | null;
+    /** Exact personal-device association accepted by pairing admission, including tokenless ID. */
+    operatorProfileEnrollment?: Readonly<OperatorProfileEnrollment>;
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;
     /** Device key W of a connection relayed by the OpenClaw ID tunnel child; never from wire params. */

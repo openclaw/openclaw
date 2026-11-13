@@ -7,7 +7,9 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { enrollGatewayProfile } from "../api/gateway-profile-enrollment.ts";
 import { MockWebSocket, wsInstances } from "../api/gateway-socket.test-support.ts";
+import { PersonalEnrollmentState } from "../pages/profile/personal-enrollment-state.ts";
 import { makeUiSettings } from "../test-helpers/settings-node.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
@@ -76,7 +78,7 @@ class RecordingSocket extends MockWebSocket {
       this.connect.resolve(frame);
     }
   }
-  hello(id: string, deviceToken?: string) {
+  hello(id: string, deviceToken?: string, grantedScopes = scopes) {
     this.emitMessage({
       type: "res",
       id,
@@ -84,7 +86,7 @@ class RecordingSocket extends MockWebSocket {
       payload: {
         type: "hello-ok",
         protocol: 3,
-        auth: { role: "operator", scopes, ...(deviceToken ? { deviceToken } : {}) },
+        auth: { role: "operator", scopes: grantedScopes, ...(deviceToken ? { deviceToken } : {}) },
       },
     });
   }
@@ -243,6 +245,99 @@ describe("native authenticated Control UI", () => {
     gateway!.connect({ gatewayUrl: target });
     return currentSocket(challenge.nonce, challenge.ts);
   }
+
+  it("enrolls through the native owner and never persists the app’s grant as a browser identity", async () => {
+    const socket = connect();
+    const frame = await socket.connect.promise;
+    socket.hello(frame.id, undefined, ["operator.admin"]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(gateway!.snapshot.client!.profileEnrollment?.deviceId).toBeUndefined();
+    expect(new PersonalEnrollmentState(gateway!, () => undefined).canEnroll).toBe(true);
+    const params = { enrollmentId: "11111111-1111-4111-8111-111111111111", name: "Ada" };
+    bridge.postMessage.mockImplementation((raw) => {
+      const command = JSON.parse(raw);
+      expect(command).toMatchObject({ action: "enrollProfile", params });
+      bridge.onmessage?.({
+        data: JSON.stringify({
+          id: command.id,
+          result: { deviceId, profileId: "native-person", reconnect: true },
+        }),
+      });
+    });
+    expect(await enrollGatewayProfile(gateway!.snapshot.client!, params)).toEqual({
+      deviceId,
+      profileId: "native-person",
+      reconnect: true,
+    });
+    expect(socket.sent.map((raw) => JSON.parse(raw).method)).not.toContain("device.profile.enroll");
+    expectNoStoredCredentials(identityKey, authKey);
+  });
+
+  it("settles native self reconnect after dismissal without copying the app device identity", async () => {
+    const socket = connect();
+    const frame = await socket.connect.promise;
+    socket.hello(frame.id, undefined, ["operator.admin"]);
+    await vi.advanceTimersByTimeAsync(0);
+    const state = new PersonalEnrollmentState(gateway!, () => undefined);
+    state.profileId = "native-person";
+    const reconnect = vi.spyOn(gateway!, "connect").mockImplementation(() => undefined);
+    bridge.postMessage.mockImplementation((raw) => {
+      const command = JSON.parse(raw);
+      expect(command).toMatchObject({
+        action: "enrollProfile",
+        params: { profileId: "native-person" },
+      });
+      bridge.onmessage?.({
+        data: JSON.stringify({
+          id: command.id,
+          result: { deviceId, profileId: "native-person", reconnect: true },
+        }),
+      });
+    });
+    const operation = state.enroll();
+    state.dispose();
+    await operation;
+    expect(reconnect).toHaveBeenCalledWith({ token: "", password: "", bootstrapToken: "" });
+    expectNoStoredCredentials(identityKey, authKey);
+  });
+
+  it("retires an enrollment receipt with its native connection rather than publishing it to a replacement", async () => {
+    const socket = connect();
+    const frame = await socket.connect.promise;
+    socket.hello(frame.id);
+    await vi.advanceTimersByTimeAsync(0);
+    bridge.postMessage.mockImplementation(() => undefined);
+    const enrollment = enrollGatewayProfile(gateway!.snapshot.client!, { profileId: "person" });
+    const rejected = expect(enrollment).rejects.toThrow();
+    gateway!.stop();
+    await rejected;
+    expectNoStoredCredentials(identityKey, authKey);
+  });
+
+  it("refuses a native result containing a bearer token instead of a settled receipt", async () => {
+    const socket = connect();
+    const frame = await socket.connect.promise;
+    socket.hello(frame.id);
+    await vi.advanceTimersByTimeAsync(0);
+    bridge.postMessage.mockImplementation((raw) => {
+      const command = JSON.parse(raw);
+      bridge.onmessage?.({
+        data: JSON.stringify({
+          id: command.id,
+          result: {
+            deviceId,
+            profileId: "person",
+            reconnect: true,
+            operatorToken: { token: "not-for-the-renderer", scopes },
+          },
+        }),
+      });
+    });
+    await expect(
+      enrollGatewayProfile(gateway!.snapshot.client!, { profileId: "person" }),
+    ).rejects.toThrow("invalid personal setup result");
+    expectNoStoredCredentials(identityKey, authKey);
+  });
 
   it.each(["before challenge", "after challenge"])(
     "uses the approved native identity on older WebViews when the port arrives %s",

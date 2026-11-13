@@ -141,6 +141,7 @@ export async function handleOpenResponsesHttpRequest(
       authenticatedUserProfile: handled.requestAuth.authenticatedUserProfile,
       operatorRoleActor: handled.requestAuth.operatorRoleActor,
       openclawIdPrincipal: handled.requestAuth.openclawIdPrincipal,
+      operatorProfileEnrollment: handled.requestAuth.operatorProfileEnrollment,
     }),
     agentId,
   });

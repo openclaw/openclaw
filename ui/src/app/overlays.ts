@@ -226,7 +226,7 @@ export function createApplicationOverlays(
     }
     if (accessTransition.adminRevoked) {
       // Losing setup authority retires both the modal and any retained bearer code.
-      pairing?.close();
+      pairing?.close(true, true);
     }
     if (accessTransition.pairingChanged) {
       pairing?.pendingCount.invalidate({
@@ -242,7 +242,7 @@ export function createApplicationOverlays(
     }
     if (identityChanged || !connected) {
       approvalDecision = null;
-      pairing?.close();
+      pairing?.close(true, identityChanged);
     }
     if (connected && !operatorAccess.canReviewApprovals) {
       approvalDecision = null;
@@ -469,11 +469,13 @@ export function createApplicationOverlays(
       await publishDevicePairSetupOperation(setupOperation);
       return pairing.state.devicePairSetupOpen;
     },
-    async refreshDevicePairSetup() {
+    async refreshDevicePairSetup(person) {
       if (!pairing || disposed || !readGatewayOperatorAccess(gateway.snapshot).canAdmin) {
         return;
       }
-      await publishDevicePairSetupOperation(pairing.runtime.refreshDevicePairSetup(pairing.state));
+      await publishDevicePairSetupOperation(
+        pairing.runtime.refreshDevicePairSetup(pairing.state, person),
+      );
     },
     async setDevicePairSetupAccess(access) {
       if (!pairing || disposed || !readGatewayOperatorAccess(gateway.snapshot).canAdmin) {

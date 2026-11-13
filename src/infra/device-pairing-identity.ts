@@ -130,6 +130,9 @@ function resolvePairedDeviceTokenIdentity(
       token.createdAtMs,
       token.rotatedAtMs ?? "",
       token.revokedAtMs ?? "",
+      ...(normalizedRole === "operator" && device.operatorProfileId !== undefined
+        ? [device.operatorProfileId]
+        : []),
     ].join("\0"),
   );
   return { deviceId: device.deviceId, key };

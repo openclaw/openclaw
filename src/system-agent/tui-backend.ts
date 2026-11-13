@@ -54,6 +54,11 @@ export type SystemAgentTuiOptions = Pick<
   setupWorkspace?: string;
   /** Selected first-agent name for the proposed onboarding setup. */
   setupAgentName?: string;
+  onSetupCompleted?: (
+    gateway: import("../wizard/setup.finalize.js").GatewayServiceSetupOutcome,
+    continueTerminal: (deviceAuth: boolean) => Promise<void>,
+  ) => Promise<void>;
+  interactiveDeviceAuth?: boolean;
 };
 
 type SystemAgentHistoryMessage = ReturnType<typeof message>;
@@ -101,6 +106,7 @@ class SystemAgentTuiBackend implements TuiBackend {
     welcome: string,
     engine: SystemAgentChatEngine,
     private readonly route: SystemAgentTuiRoute,
+    private readonly setupContinuationPending?: () => boolean,
   ) {
     this.engine = engine;
     this.appendMessage(message("assistant", welcome));
@@ -111,6 +117,10 @@ class SystemAgentTuiBackend implements TuiBackend {
     if (this.inferenceFailure) {
       queueMicrotask(handler);
     }
+  }
+
+  get inferenceUnavailable(): boolean {
+    return this.inferenceFailure !== null;
   }
 
   consumeHandoff(): SystemAgentOperation | null {
@@ -320,7 +330,7 @@ class SystemAgentTuiBackend implements TuiBackend {
         // The outer loop owns interactive handoffs after the OpenClaw TUI exits.
         this.handoff = reply.handoff;
         queueMicrotask(() => this.requestExit?.());
-      } else if (reply.action === "exit") {
+      } else if (reply.action === "exit" || (reply.applied && this.setupContinuationPending?.())) {
         queueMicrotask(() => this.requestExit?.());
       }
       this.emitFinal(runId, sessionKey, reply.text);
@@ -401,72 +411,116 @@ export async function runSystemAgentTui(
   }
   // Snapshot the verified owner so an external options mutation cannot swap
   // authority between the chat shell and a later host-owned wizard handoff.
-  const boundOpts: SystemAgentTuiOptions = { ...opts, verifiedInference: binding };
+  let setupCompleted = opts.onSetupCompleted;
+  let setupGateway: import("../wizard/setup.finalize.js").GatewayServiceSetupOutcome | undefined;
+  const boundOpts: SystemAgentTuiOptions = {
+    ...opts,
+    verifiedInference: binding,
+    deps: {
+      ...opts.deps,
+      ...(opts.interactiveDeviceAuth ? { interactiveDeviceAuth: true } : {}),
+      ...(setupCompleted
+        ? {
+            onSetupApplied: (gateway) => {
+              opts.deps?.onSetupApplied?.(gateway);
+              setupGateway = gateway;
+            },
+          }
+        : {}),
+    },
+  };
+  let pendingHandoff: SystemAgentOperation | null = null;
   let nextInput: string | undefined;
   let welcomeVariant = boundOpts.welcomeVariant;
-  for (;;) {
-    const route = await requireTuiVerifiedInference(boundOpts);
-    // A returned agent request is single-use; a later wizard handoff must not
-    // replay it when OpenClaw re-enters the chat shell.
-    const initialMessage = nextInput;
-    const engine = createChatEngine(boundOpts);
-    let welcome: string;
-    if (welcomeVariant === "onboarding") {
-      // The terminal renders prose only; the typed card question is web-only.
-      welcome = (
-        await buildOnboardingWelcome({
+  const runShell = async (): Promise<void> => {
+    for (;;) {
+      let handoff = pendingHandoff;
+      pendingHandoff = null;
+      if (!handoff) {
+        const route = await requireTuiVerifiedInference(boundOpts);
+        // A returned agent request is single-use; a later wizard handoff must not
+        // replay it when OpenClaw re-enters the chat shell.
+        const initialMessage = nextInput;
+        const engine = createChatEngine(boundOpts);
+        let welcome: string;
+        if (welcomeVariant === "onboarding") {
+          // The terminal renders prose only; the typed card question is web-only.
+          welcome = (
+            await buildOnboardingWelcome({
+              engine,
+              localRecovery: true,
+              ...(boundOpts.setupWorkspace ? { workspace: boundOpts.setupWorkspace } : {}),
+              ...(boundOpts.setupAgentName ? { agentName: boundOpts.setupAgentName } : {}),
+            })
+          ).text;
+        } else {
+          welcome = formatSystemAgentStartupMessage(await loadOverviewForOperation(boundOpts.deps));
+          engine.noteAssistantMessage(welcome);
+        }
+        // The onboarding greeting applies to the first shell only; re-entry after
+        // an agent handoff uses the normal repair-oriented startup message.
+        welcomeVariant = undefined;
+        const backend = new SystemAgentTuiBackend(
+          boundOpts,
+          welcome,
           engine,
-          localRecovery: true,
-          ...(boundOpts.setupWorkspace ? { workspace: boundOpts.setupWorkspace } : {}),
-          ...(boundOpts.setupAgentName ? { agentName: boundOpts.setupAgentName } : {}),
-        })
-      ).text;
-    } else {
-      welcome = formatSystemAgentStartupMessage(await loadOverviewForOperation(boundOpts.deps));
-      engine.noteAssistantMessage(welcome);
-    }
-    // The onboarding greeting applies to the first shell only; re-entry after
-    // an agent handoff uses the normal repair-oriented startup message.
-    welcomeVariant = undefined;
-    const backend = new SystemAgentTuiBackend(boundOpts, welcome, engine, route);
-    const runTui = boundOpts.runTui ?? (await import("../tui/tui.js")).runTui;
-    try {
-      await runTui({
-        local: true,
-        session: SYSTEM_AGENT_SESSION_KEY,
-        historyLimit: SYSTEM_AGENT_HISTORY_LIMIT,
-        backend,
-        config: {},
-        title: "openclaw setup",
-        ...(initialMessage ? { message: initialMessage } : {}),
-      });
-    } finally {
-      await backend.dispose();
-    }
+          route,
+          () => setupCompleted !== undefined && setupGateway !== undefined,
+        );
+        const runTui = boundOpts.runTui ?? (await import("../tui/tui.js")).runTui;
+        try {
+          await runTui({
+            local: true,
+            session: SYSTEM_AGENT_SESSION_KEY,
+            historyLimit: SYSTEM_AGENT_HISTORY_LIMIT,
+            backend,
+            config: {},
+            title: "openclaw setup",
+            ...(initialMessage ? { message: initialMessage } : {}),
+          });
+        } finally {
+          await backend.dispose();
+        }
 
-    const handoff = backend.consumeHandoff();
-    if (!handoff) {
-      return;
+        handoff = backend.consumeHandoff();
+        if (setupCompleted && setupGateway && !backend.inferenceUnavailable) {
+          const continueSetup = setupCompleted;
+          const completedGateway = setupGateway;
+          setupCompleted = undefined;
+          setupGateway = undefined;
+          pendingHandoff = handoff;
+          // The setup TUI and engine are disposed before another terminal UI starts.
+          await continueSetup(completedGateway, async (deviceAuth) => {
+            boundOpts.deps = { ...boundOpts.deps, interactiveDeviceAuth: deviceAuth };
+            await runShell();
+          });
+          return;
+        }
+      }
+      if (!handoff) {
+        return;
+      }
+      if (handoff.kind === "model-setup") {
+        runtime.error(
+          "OpenClaw cannot replace its active inference route. Run `openclaw onboard` outside this session, then start OpenClaw again.",
+        );
+        return;
+      }
+      if (handoff.kind === "open-setup") {
+        await runSetupHandoff(handoff, boundOpts, runtime);
+        return;
+      }
+      const result = await executeSystemAgentOperation(handoff, runtime, {
+        approved: true,
+        deps: boundOpts.deps,
+      });
+      nextInput = result.nextInput;
+      if (!nextInput?.trim() && !result.returnToShell) {
+        return;
+      }
     }
-    if (handoff.kind === "model-setup") {
-      runtime.error(
-        "OpenClaw cannot replace its active inference route. Run `openclaw onboard` outside this session, then start OpenClaw again.",
-      );
-      return;
-    }
-    if (handoff.kind === "open-setup") {
-      await runSetupHandoff(handoff, boundOpts, runtime);
-      return;
-    }
-    const result = await executeSystemAgentOperation(handoff, runtime, {
-      approved: true,
-      deps: boundOpts.deps,
-    });
-    nextInput = result.nextInput;
-    if (!nextInput?.trim() && !result.returnToShell) {
-      return;
-    }
-  }
+  };
+  await runShell();
 }
 
 async function requireTuiVerifiedInference(opts: SystemAgentTuiOptions) {

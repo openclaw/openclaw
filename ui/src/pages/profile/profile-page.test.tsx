@@ -206,7 +206,7 @@ it("offers identity connection setup without profile RPCs or secret inputs for u
   ).toBe(false);
   const identity = page.querySelector("#settings-profile-identity");
   expect(identity?.textContent).toContain("This connection has no personal profile");
-  expect(identity?.textContent).toContain("Cloudflare Access, Tailscale Serve, or a trusted proxy");
+  expect(identity?.textContent).toContain("external sign-in is optional");
   expect(
     page.querySelector('a[href="https://docs.openclaw.ai/concepts/user-model"]'),
   ).not.toBeNull();

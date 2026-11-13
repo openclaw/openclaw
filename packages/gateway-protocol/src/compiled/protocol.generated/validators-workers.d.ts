@@ -48,6 +48,7 @@ export {
   isDevicePairSetupCodeParams,
   isDevicePairSetupStatusParams,
   isDevicePairRenameParams,
+  isDeviceProfileEnrollParams,
   isDeviceTokenRotateParams,
   isDeviceTokenRevokeParams,
   isExecApprovalsNodeGetParams,

@@ -18,6 +18,7 @@ openclaw qr --setup-code-only
 openclaw qr --json
 openclaw qr --remote
 openclaw qr --limited
+openclaw qr --person <profile-id>
 openclaw qr --voice-node
 openclaw qr --url wss://gateway.example/ws
 ```
@@ -40,6 +41,7 @@ The printed approval commands preserve the active profile or container context.
 - `--public-url <url>`: override the public URL used in the payload
 - `--token <token>`: override the gateway token the bootstrap flow authenticates against
 - `--password <password>`: override the gateway password the bootstrap flow authenticates against
+- `--person <profile-id>`: bind an attended local Gateway handoff to an existing personal profile. Its current role further limits operator scopes. This option is not available with `--remote` or `--voice-node`; use the target Gateway's authenticated setup surface for remote person selection.
 - `--limited`: omit administrative Gateway access from the handed-off operator token
 - `--voice-node`: issue node credentials plus only `operator.read` and `operator.talk`
 - `--setup-code-only`: print only the setup code; `--json` takes precedence and emits the JSON document instead
@@ -63,6 +65,12 @@ Plaintext LAN `ws://` setup remains available, but OpenClaw automatically uses
 the limited profile because a network observer could capture and race the bearer
 bootstrap token. Configure `wss://` or Tailscale Serve, then generate a new code
 to get full access.
+
+## Represented person
+
+Person selection is optional; omitted selection preserves existing setup behavior. A selected profile must be canonical, current, and different from Shared Owner. The authenticated `device.pair.setupCode` method accepts an existing `profileId`, or an idempotent UUID `enrollmentId` with an optional `name` for an email-less local profile. It does not infer an email login, GitHub identity, or administrator role. Node-only and unattended voice/cloud handoffs cannot represent a personal operator.
+
+The selected person stays server-side in the short-lived bootstrap grant. Scanning clients cannot change it in connect metadata. Pairing commits the association with the operator grant, including a mobile app that connects its node role first. Existing node credentials remain separate. A conflicting existing represented person requires explicit device profile enrollment, not a new QR code.
 
 ## Gateway URL resolution
 

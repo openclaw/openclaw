@@ -17,7 +17,7 @@ import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { formatDocsHelp } from "./help-format.js";
 import { promptYesNo } from "./prompt.js";
 
-type PairOpts = GatewayRpcOpts & { yes?: boolean; json?: boolean };
+type PairOpts = GatewayRpcOpts & { yes?: boolean; json?: boolean; person?: string };
 
 const PAIR_DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -47,7 +47,7 @@ function formatMinutesAgo(atMs: number): string {
   return minutes === 1 ? "1 minute ago" : `${minutes} minutes ago`;
 }
 
-function logRequest(request: DevicePairCodeResult): void {
+function logRequest(request: DevicePairCodeResult, person?: string): void {
   const rows: [string, string | undefined][] = [
     ["Code", formatBrowserPairCode(request.code)],
     ["Browser (reported)", request.userAgent],
@@ -56,7 +56,14 @@ function logRequest(request: DevicePairCodeResult): void {
     ["Browser ID", formatBrowserPairDeviceId(request.deviceId)],
     ["Requested", formatMinutesAgo(request.createdAtMs)],
   ];
-  defaultRuntime.log("A browser is asking to pair with administrator access to this Gateway.");
+  defaultRuntime.log(
+    person
+      ? "A browser is asking to pair as the selected person, bounded by that person's policy."
+      : "A browser is asking to pair with administrator access to this Gateway.",
+  );
+  if (person) {
+    defaultRuntime.log(terminalText`  Person (selected)  ${person}`);
+  }
   defaultRuntime.log("");
   for (const [label, value] of rows) {
     if (value) {
@@ -81,7 +88,7 @@ export async function runPairCommand(rawCode: string, opts: PairOpts): Promise<v
   }
   const request = await callPairCode(opts, { code });
   if (!opts.json) {
-    logRequest(request);
+    logRequest(request, opts.person);
   }
   if (!opts.yes && (opts.json || !process.stdin.isTTY)) {
     throwExpectedCliError(
@@ -94,7 +101,12 @@ export async function runPairCommand(rawCode: string, opts: PairOpts): Promise<v
     defaultRuntime.log("Declined. The browser was told it was not approved.");
     return;
   }
-  const approved = await callPairCode(opts, { code, requestId, decision: "approve" });
+  const approved = await callPairCode(opts, {
+    code,
+    requestId,
+    decision: "approve",
+    ...(opts.person ? { profileId: opts.person } : {}),
+  });
   if (opts.json) {
     defaultRuntime.writeJson({ approved: true, deviceId: approved.deviceId });
     return;
@@ -110,6 +122,7 @@ export function registerPairCli(program: Command) {
     .command("pair")
     .description("Approve a browser showing a pairing code")
     .argument("<code>", "Code shown in the browser, for example ABCD-EFGH")
+    .option("--person <id>", "Associate the browser with this existing personal profile")
     .option("--yes", "Approve without asking; details are still printed", false)
     .option("--json", "Output JSON (requires --yes)", false)
     .addHelpText("after", () => formatDocsHelp("/cli/pair"))

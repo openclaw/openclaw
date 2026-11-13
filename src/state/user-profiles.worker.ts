@@ -29,6 +29,7 @@ import {
 import { ensureOpenClawIdUserProfile } from "./user-profile-openclaw-id.worker.js";
 import {
   createUserProfileWriteOperation,
+  ensureLocalUserProfile,
   linkEmail,
   mergeProfiles,
   setAvatar,
@@ -91,6 +92,11 @@ function accountWrite<Input extends { profileId: string }, Output>(
 }
 
 const userProfileWriteOperations = {
+  "userProfiles.ensureLocal": createUserProfileWriteOperation(
+    "userProfiles.ensureLocal",
+    (input: Parameters<typeof ensureLocalUserProfile>[0], owned) =>
+      ensureLocalUserProfile(input, owned),
+  ),
   "userProfiles.setRole": createUserProfileWriteOperation(
     "userProfiles.setRole",
     (input: { profileId: string; role: string | null }, owned) =>

@@ -31,6 +31,7 @@ type QrCliOptions = {
   password?: string;
   limited?: boolean;
   voiceNode?: boolean;
+  person?: string;
 };
 
 const LIMITED_TRANSPORT_WARNING =
@@ -73,6 +74,10 @@ export function registerQrCli(program: Command) {
     .option("--public-url <url>", "Override gateway public URL used in the setup payload")
     .option("--token <token>", "Override gateway token for setup payload")
     .option("--password <password>", "Override gateway password for setup payload")
+    .option(
+      "--person <profileId>",
+      "Explicitly bind this local Gateway handoff to an existing personal profile",
+    )
     .option("--limited", "Pair with limited operator access (omit operator.admin)", false)
     .option("--voice-node", "Pair a voice node with node, read, and Talk access only", false)
     .option("--setup-code-only", "Print only the setup code", false)
@@ -90,6 +95,11 @@ export function registerQrCli(program: Command) {
         const token = trimToUndefined(opts.token) ?? "";
         const password = trimToUndefined(opts.password) ?? "";
         const wantsRemote = opts.remote === true;
+        if (opts.person !== undefined && (wantsRemote || opts.voiceNode)) {
+          throw new Error(
+            "--person requires an attended local Gateway operator handoff, not --remote or --voice-node",
+          );
+        }
 
         const loadedRaw = await captureRuntimeConfigAsyncReader()();
         if (wantsRemote && !opts.url && !opts.publicUrl) {
@@ -165,6 +175,7 @@ export function registerQrCli(program: Command) {
 
         const explicitUrl = trimToUndefined(opts.url) ?? trimToUndefined(opts.publicUrl);
         const resolved = await resolvePairingSetupFromConfig(cfg, {
+          ...(opts.person !== undefined ? { profileId: opts.person } : {}),
           publicUrl: explicitUrl,
           preferRemoteUrl: wantsRemote,
           ...(opts.voiceNode
@@ -189,6 +200,7 @@ export function registerQrCli(program: Command) {
         const setupCode = encodePairingSetupCode(resolved.payload);
 
         if (opts.json) {
+          resolved.assertCurrent?.();
           defaultRuntime.writeJson({
             setupCode,
             gatewayUrl: resolved.payload.url,
@@ -202,6 +214,7 @@ export function registerQrCli(program: Command) {
         }
 
         if (opts.setupCodeOnly) {
+          resolved.assertCurrent?.();
           if (resolved.accessDowngraded) {
             defaultRuntime.error(theme.warn(LIMITED_TRANSPORT_WARNING));
           }
@@ -235,6 +248,7 @@ export function registerQrCli(program: Command) {
           `  ${theme.command(formatCliCommand("openclaw devices approve <requestId>"))}`,
         );
 
+        resolved.assertCurrent?.();
         defaultRuntime.log(lines.join("\n"));
       });
     });

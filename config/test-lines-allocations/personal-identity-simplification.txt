@@ -1,0 +1,2 @@
+12
+# Preserve explicit enrolled/membership-only policy fixtures and prove retained un-enrolled ID authority expires on enrollment during the behavior-preserving simplification.

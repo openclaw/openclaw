@@ -24,6 +24,8 @@ export async function runQuickstartForegroundGateway(params: {
   runtime: RuntimeEnv;
   suppressTokenOutput?: boolean;
   agentId?: string;
+  onReady?: () => Promise<void>;
+  expectUrl?: string;
 }): Promise<void> {
   return await withPluginCache(createPluginCache(), async () => {
     const { runtime } = params;
@@ -40,6 +42,20 @@ export async function runQuickstartForegroundGateway(params: {
       modeOverride: "local",
     });
     const authMode = config.gateway?.auth?.mode ?? (credentials.password ? "password" : "token");
+    if (params.expectUrl) {
+      const { resolveGatewayClientBootstrap } = await import("../gateway/client-bootstrap.js");
+      const current = await readConfigFileSnapshot();
+      if (!current.valid) {
+        throw new Error("The onboarding Gateway configuration changed before startup.");
+      }
+      const target = await resolveGatewayClientBootstrap({
+        config: current.config,
+        ignoreEnvUrlOverride: true,
+      });
+      if (target.url !== params.expectUrl) {
+        throw new Error("The onboarding Gateway target changed before startup.");
+      }
+    }
     const gateway = await startOnboardingGatewayProcess();
     const readiness = new AbortController();
     let failed = false;
@@ -59,6 +75,13 @@ export async function runQuickstartForegroundGateway(params: {
         }),
       ]);
       if (!reachable) {
+        return;
+      }
+      if (params.onReady) {
+        if (!reachable.ok) {
+          throw new Error("The onboarding Gateway is not ready. Personal setup was not started.");
+        }
+        await params.onReady();
         return;
       }
       if (reachable.ok) {

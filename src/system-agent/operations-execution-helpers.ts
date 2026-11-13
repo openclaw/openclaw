@@ -517,6 +517,7 @@ export async function executeSetup(
       ctx.runtime.log(
         `${modelRole === "default" ? "Default" : "Setup"} model: ${verified.modelRef} (verified and kept)`,
       );
+      ctx.deps?.onSetupApplied?.(applied.gateway);
       return {
         summary: "Bootstrapped setup workspace",
         bootstrapPending: applied.bootstrapPending,

@@ -45,6 +45,15 @@ const handshakeRecoverySnapshotSchema = z.strictObject({
   device: z
     .strictObject({ deviceId: boundedString, key: z.string().regex(/^[a-f0-9]{64}$/) })
     .optional(),
+  operatorProfileEnrollment: z
+    .strictObject({
+      deviceId: boundedString,
+      publicKey: boundedString,
+      createdAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      profileId: boundedString,
+    })
+    .optional(),
+  operatorProfileEnrollmentViaPeer: z.literal(true).optional(),
   controlUiAdmin: z.boolean(),
   localOperator: z.boolean(),
   sourceIngress: z.enum(["control-ui", "internal"]),

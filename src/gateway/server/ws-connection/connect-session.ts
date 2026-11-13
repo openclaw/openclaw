@@ -37,7 +37,7 @@ import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
 import { serializeEventPayload } from "../../node-registry.js";
 import { openclawIdTunnelRolePolicy } from "../../openclaw-id/tunnel-principal.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
-import { resolveOperatorRolePolicyForAssignment } from "../../operator-role-policy.js";
+import { resolveOperatorRolePolicyForPrincipal } from "../../operator-role-policy.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
   indexPluginNodeCapabilitySurfaces,
@@ -212,6 +212,7 @@ export async function attachAuthenticatedGatewayConnect(
     recordTiming: context.recordAttachTiming,
   });
   const rolesConfigured = Boolean(context.configSnapshot.gateway?.roles);
+  const transportPolicy = state.operatorProfileEnrollment ? undefined : remoteIngressPrincipal;
   // Only an owner-bound ingress grant receives the shared owner role bypass;
   // an OpenClaw ID owner device is the Gateway owner.
   const openclawIdPrincipal =
@@ -219,12 +220,14 @@ export async function attachAuthenticatedGatewayConnect(
     (authMethod === "trusted-proxy" ? authResult.openclawId : undefined);
   const operatorOwner =
     role === "operator" &&
+    !state.operatorProfileEnrollment &&
     (authMethod === "token" ||
       authMethod === "password" ||
       remoteIngressPrincipal?.operatorRoleActor.kind === "system" ||
       openclawIdPrincipal?.kind === "owner");
   // Authenticated inputs need durable identity even when their presence is omitted.
   const ownerProfileExpected =
+    !state.operatorProfileEnrollment &&
     (shouldTrackPresence || (authMethod !== undefined && authMethod !== "none")) &&
     shouldUseGatewayOwnerProfile({
       role,
@@ -234,7 +237,7 @@ export async function attachAuthenticatedGatewayConnect(
       openclawIdOwner: openclawIdPrincipal?.kind === "owner",
     });
   const identityStartedAt = performance.now();
-  const profileAdmission = remoteIngressPrincipal
+  const profileAdmission = transportPolicy
     ? { ok: true as const, prepared: undefined }
     : await resolveGatewayConnectProfileAdmission({
         context,
@@ -251,11 +254,24 @@ export async function attachAuthenticatedGatewayConnect(
   context.setConnectPhase?.("registration");
   const preparedProfile = profileAdmission.prepared;
   const authenticatedUserProfile =
-    remoteIngressPrincipal?.authenticatedUserProfile ?? preparedProfile?.profile;
+    transportPolicy?.authenticatedUserProfile ?? preparedProfile?.profile;
+  if (
+    state.operatorProfileEnrollment &&
+    remoteIngressPrincipal?.operatorRoleActor.kind === "operator" &&
+    !preparedProfile?.authority.aliases.includes(
+      remoteIngressPrincipal.authenticatedUserProfile.profileId,
+    )
+  ) {
+    await rejectUnavailableProfileConnect(
+      context,
+      new Error("Device enrollment conflicts with the ingress person"),
+    );
+    return;
+  }
   // Identity-derived scopes must be capped only after their durable profile is known.
   // Configured roles fail closed if profile storage or provider verification is unavailable.
   const scopesStartedAt = performance.now();
-  const effectiveScopes = remoteIngressPrincipal
+  const resolvedScopes = remoteIngressPrincipal
     ? deviceScopes
     : resolveEffectiveConnectionScopes({
         role,
@@ -264,21 +280,23 @@ export async function attachAuthenticatedGatewayConnect(
         identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
         upgradeReq: context.handler.upgradeReq,
       });
-  // OpenClaw ID members are capped by their membership role, whatever the device requested.
-  const openclawIdRolePolicy =
-    role === "operator" ? openclawIdTunnelRolePolicy(openclawIdPrincipal) : undefined;
-  const rolePolicy = remoteIngressPrincipal
-    ? remoteIngressPrincipal.operatorRolePolicy
-    : openclawIdRolePolicy
-      ? openclawIdRolePolicy
-      : role === "operator" && !operatorOwner
-        ? resolveOperatorRolePolicyForAssignment(
-            authenticatedUserProfile?.profileId,
-            preparedProfile?.authority.role ?? null,
-            context.configSnapshot,
-            preparedProfile?.authority.githubLogin ?? null,
-          )
-        : undefined;
+  // Enrollment cannot borrow a broader scope grant from a different identity source.
+  const effectiveScopes = state.operatorProfileEnrollment
+    ? intersectOperatorScopes(resolvedScopes, deviceScopes)
+    : resolvedScopes;
+  // Personal policy and membership constrain the same authenticated device.
+  const rolePolicy = transportPolicy
+    ? transportPolicy.operatorRolePolicy
+    : role === "operator" && !operatorOwner
+      ? resolveOperatorRolePolicyForPrincipal(
+          authenticatedUserProfile?.profileId,
+          preparedProfile?.authority.role ?? null,
+          context.configSnapshot,
+          preparedProfile?.authority.githubLogin ?? null,
+          openclawIdPrincipal,
+          state.operatorProfileEnrollment,
+        )
+      : openclawIdTunnelRolePolicy(openclawIdPrincipal);
   const scopes = rolePolicy
     ? intersectOperatorScopes(effectiveScopes, rolePolicy.scopes)
     : effectiveScopes;
@@ -384,15 +402,18 @@ export async function attachAuthenticatedGatewayConnect(
       ? { openclawIdPeerKey: context.handler.ingressAttribution.peerKey }
       : {}),
     ...(openclawIdPrincipal ? { openclawIdPrincipal } : {}),
+    ...(state.operatorProfileEnrollment
+      ? { operatorProfileEnrollment: state.operatorProfileEnrollment }
+      : {}),
     ...(authenticatedOperator ? { authenticatedOperator: true as const } : {}),
     ...(authenticatedControlUi ? { authenticatedControlUi: true as const } : {}),
     ...(controlUiAdmin ? { controlUiAdmin: true as const } : {}),
     ...(trustedAgentRuntimeIdentity ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity } : {}),
-    ...(remoteIngressPrincipal
+    ...(remoteIngressPrincipal ? { remoteIngressPrincipal } : {}),
+    ...(transportPolicy
       ? {
-          remoteIngressPrincipal,
-          operatorRoleActor: remoteIngressPrincipal.operatorRoleActor,
-          operatorAccessAuthority: remoteIngressPrincipal.operatorAccessAuthority,
+          operatorRoleActor: transportPolicy.operatorRoleActor,
+          operatorAccessAuthority: transportPolicy.operatorAccessAuthority,
         }
       : operatorOwner
         ? { operatorRoleActor: { kind: "system" as const } }
@@ -553,7 +574,7 @@ export async function attachAuthenticatedGatewayConnect(
     return;
   }
   try {
-    if (!remoteIngressPrincipal) {
+    if (!remoteIngressPrincipal || state.operatorProfileEnrollment) {
       prepareGatewayConnectOperatorAccess(nextClient);
     }
   } catch {
@@ -568,7 +589,9 @@ export async function attachAuthenticatedGatewayConnect(
     return;
   }
   prepareGatewayRecipientProfile(nextClient, {
-    identity: remoteIngressPrincipal?.preparedSessionProfile ?? preparedProfile?.recipient,
+    identity: state.operatorProfileEnrollment
+      ? preparedProfile?.recipient
+      : (remoteIngressPrincipal?.preparedSessionProfile ?? preparedProfile?.recipient),
   });
   if (!setClient(nextClient)) {
     await releasePendingNodePairingCleanup();

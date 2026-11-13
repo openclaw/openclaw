@@ -139,6 +139,9 @@ export function authorizeControlUiPluginCookieRequest(
       trustDeclaredOperatorScopes: false,
       controlUiPluginGrants: grants,
       ...authenticatedProfile,
+      hasCurrentProfileAuthority: () =>
+        authenticatedProfile.hasCurrentProfileAuthority?.() !== false &&
+        grants.every((grant) => grant.isCurrent?.() !== false),
     },
     // Route dispatch selects the candidate that owns the first matched gateway
     // route. Do not union scopes before that owner boundary is known.

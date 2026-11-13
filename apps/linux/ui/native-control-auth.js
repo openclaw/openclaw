@@ -31,7 +31,7 @@
           if (!allowed()) throw new Error("The native dashboard document changed.");
           const token = documentToken;
           const response = await invoke("gateway_request", {
-            message: { type: "connectAuth", challenge }, token,
+            message: challenge.action === "enrollProfile" ? { type: "enrollProfile", request: challenge } : { type: "connectAuth", challenge }, token,
           });
           if (!allowed() || token !== documentToken) throw new Error("The native dashboard document changed.");
           return response;

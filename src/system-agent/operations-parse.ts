@@ -36,6 +36,12 @@ export type SystemAgentCommandDeps = {
   gatewayHostLifecycle?: import("../gateway/server-public.js").GatewayHostLifecycle;
   /** Where setup side effects run; hosted lifecycle actions require the exact host capability. */
   setupSurface?: "cli" | "gateway";
+  /** Local terminal continuation receives only the actual setup owner's result. */
+  onSetupApplied?: (
+    gateway: import("../wizard/setup.finalize.js").GatewayServiceSetupOutcome,
+  ) => void;
+  /** Set only after attended enrollment reconnects with its saved operator token. */
+  interactiveDeviceAuth?: boolean;
 };
 
 // Grammar tokens. Workspace/path tokens accept quoted strings so paths with

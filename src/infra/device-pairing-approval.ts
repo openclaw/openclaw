@@ -1,5 +1,11 @@
+import {
+  deviceBootstrapProfilesEqual,
+  type DeviceBootstrapProfile,
+} from "../shared/device-bootstrap-profile.js";
 // Pairing approval keeps host policy live until the worker commits its authoritative rows.
-import type { DeviceBootstrapProfile } from "../shared/device-bootstrap-profile.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { prepareUserProfileSelectionAuthority } from "../state/user-channel-identity-operations.js";
+import { prepareDeviceBootstrapProfileAuthority } from "./device-bootstrap-profile-authority.js";
 import type { DevicePairingAdmissionFacts } from "./device-pairing-admission.types.js";
 import type {
   ApproveDevicePairingResult,
@@ -10,6 +16,10 @@ import type {
 import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { publishDevicePairingResolution } from "./device-pairing-resolution.js";
 import { resolvePairingRequestExpiry } from "./device-pairing-state.kernel.js";
+import {
+  loadPairedDevicePairingStoreRecordReadOnly,
+  loadPendingDevicePairingStoreRecordReadOnly,
+} from "./device-pairing-store-readonly.js";
 import {
   DevicePairingAuthorityRefusedError,
   executeDevicePairingMutation,
@@ -90,6 +100,29 @@ export async function approveDevicePairing(
   const options = typeof optionsOrBaseDir === "object" ? optionsOrBaseDir : undefined;
   const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   const { isApprovalCurrent: _isApprovalCurrent, ...wireOptions } = options ?? {};
+  const profileId = options?.operatorProfileId;
+  const context =
+    profileId !== undefined
+      ? captureOpenClawStateWorkerContext(
+          baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {},
+        )
+      : undefined;
+  const person =
+    context && profileId !== undefined
+      ? await prepareUserProfileSelectionAuthority(profileId, {
+          path: context.admission.databasePath,
+          env: context.environment,
+        })
+      : undefined;
+  const assertProfile = context
+    ? () => {
+        context.admission.assertCurrent();
+        if (!person?.isCurrent() || person.profileId !== profileId) {
+          throw new Error("Pairing requires a current personal profile");
+        }
+      }
+    : undefined;
+  assertProfile?.();
   return await withDevicePairingLock(async () => {
     const admission = approvalAdmission(options);
     const result = await executeDevicePairingMutation(
@@ -99,6 +132,8 @@ export async function approveDevicePairing(
       },
       {
         baseDir,
+        context,
+        assertCurrent: assertProfile,
         onAuthorityRefused: () => admission.refusedResult,
         admit: admission.admit,
       },
@@ -114,22 +149,49 @@ export async function approveBootstrapDevicePairing(
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
   return await withDevicePairingLock(async () => {
+    const pending = await loadPendingDevicePairingStoreRecordReadOnly(requestId, baseDir);
+    const existing = pending
+      ? await loadPairedDevicePairingStoreRecordReadOnly(pending.deviceId, baseDir)
+      : null;
+    const inheritedPerson =
+      bootstrapProfile.roles.includes("operator") && existing?.publicKey === pending?.publicKey
+        ? existing?.operatorProfileId
+        : undefined;
+    const requestedProfile = {
+      ...bootstrapProfile,
+      ...(bootstrapProfile.operatorProfileId === undefined && inheritedPerson
+        ? { operatorProfileId: inheritedPerson }
+        : {}),
+    };
+    const authority = await prepareDeviceBootstrapProfileAuthority(requestedProfile, { baseDir });
+    if (!deviceBootstrapProfilesEqual(requestedProfile, authority.profile)) {
+      throw new Error("Bootstrap person role no longer permits the issued grant");
+    }
     const admission = approvalAdmission(options);
     const { result } = await executeDevicePairingMutation(
       {
         type: "devicePairing.approveBootstrap",
         input: {
           requestId,
-          bootstrapProfile,
+          bootstrapProfile: authority.profile,
+          bootstrapSource: options.bootstrapSource,
           accessMetadata: options?.accessMetadata,
           nowMs: Date.now(),
         },
       },
       {
-        baseDir,
+        context: authority.context,
+        assertCurrent: authority.assertCurrent,
         onTokensReplaced: options?.onTokensReplaced,
         onAuthorityRefused: () => ({ result: admission.refusedResult, replacedRoles: [] }),
-        admit: admission.admit,
+        admit: (facts) => {
+          admission.admit(facts);
+          if (facts.kind === "bootstrap.token" && facts.expiresAtMs < Date.now()) {
+            throw new DevicePairingAuthorityRefusedError(
+              "Bootstrap source expired before approval",
+            );
+          }
+        },
       },
     );
     return publishApproval(requestId, result, baseDir);

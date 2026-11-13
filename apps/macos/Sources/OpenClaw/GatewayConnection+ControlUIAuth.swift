@@ -95,7 +95,11 @@ extension GatewayConnection {
                 .token.trimmingCharacters(in: .whitespacesAndNewlines) == token
         }
         guard await self.isCurrentServerLease(lease), isCurrent() else { throw CancellationError() }
-        return DashboardNativeGatewayAuth(json: json, isCurrent: isCurrent)
+        return DashboardNativeGatewayAuth(json: json, isCurrent: isCurrent, enrollProfile: { params in
+            guard isCurrent(), await self.isCurrentServerLease(lease) else { throw CancellationError() }
+            return try await lease.client.enrollControlUIProfile(params, scopes: scopes,
+                ifCurrentConnectionGeneration: lease.socketGeneration)
+        })
     }
 
     private func controlUiServerLease(endpoint: EndpointSnapshot) async throws -> ServerLease {

@@ -57,28 +57,13 @@ import {
   pairedDeviceMatchesNodeApprovalQuery,
   stringsMatch,
 } from "./devices-cli-paired-notices.js";
+import type { DevicesRpcOpts } from "./devices-cli.js";
 import { isUnknownRequestIdError } from "./devices-cli.unknown-id.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
 import { callGatewayFromCliWithTransport } from "./gateway-rpc.js";
 import { prepareCliGatewayStateAccess } from "./gateway-rpc.runtime.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { formatPairingApproveCommand } from "./pairing-command-format.js";
-
-type DevicesRpcOpts = {
-  url?: string;
-  token?: string;
-  password?: string;
-  timeout?: string;
-  json?: boolean;
-  latest?: boolean;
-  yes?: boolean;
-  pending?: boolean;
-  device?: string;
-  role?: string;
-  scope?: string[];
-  scopes?: boolean;
-  name?: string;
-};
 
 type ApprovePairingGatewayContext = {
   originalRequest: PendingDevice | null;
@@ -153,12 +138,14 @@ async function approvePairingWithFallback(
   requestId: string,
   context: ApprovePairingGatewayContext,
 ): Promise<Record<string, unknown> | null> {
-  const { scopes, originalRequest } = context;
+  const { originalRequest } = context;
+  const scopes = opts.person ? [ADMIN_SCOPE] : context.scopes;
+  const profileId = normalizeOptionalString(opts.person);
   try {
     return await callGatewayCli(
       "device.pair.approve",
       opts,
-      { requestId },
+      { requestId, ...(profileId ? { profileId } : {}) },
       scopes ? { scopes } : undefined,
     );
   } catch (error) {
@@ -167,7 +154,7 @@ async function approvePairingWithFallback(
         return await callGatewayCli(
           "device.pair.approve",
           opts,
-          { requestId },
+          { requestId, ...(profileId ? { profileId } : {}) },
           { scopes: [ADMIN_SCOPE] },
         );
       } catch (adminError) {
@@ -186,7 +173,7 @@ async function approvePairingWithFallback(
     }
     return await runWithLocalStateOwner({
       method: "device.pair.approve",
-      params: { requestId },
+      params: { requestId, ...(profileId ? { profileId } : {}) },
       target: requestId,
       databaseEngine: "configured",
       onForeignOwner: "refuse",
@@ -229,6 +216,7 @@ async function approvePairingWithFallback(
             // Local CLI fallback already assumes direct machine access; treat it as an
             // explicit admin approval path instead of relying on missing caller scopes.
             callerScopes: ["operator.admin"],
+            ...(profileId ? { operatorProfileId: profileId } : {}),
             isApprovalCurrent: () => {
               assertCurrent();
               return true;

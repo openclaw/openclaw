@@ -92,6 +92,8 @@ export type ApproveDevicePairingResult =
 
 export type DevicePairingApprovalOptions = {
   callerScopes?: readonly string[];
+  /** An explicit owner-approved person for this operator installation, never device metadata. */
+  operatorProfileId?: string;
   accessMetadata?: DevicePairingAccessMetadata;
   approvedVia?: Extract<
     PairedDeviceApprovalKind,
@@ -119,6 +121,8 @@ export type DeviceBootstrapApprovalOptions = Pick<
   DevicePairingApprovalOptions,
   "accessMetadata" | "isApprovalCurrent"
 > & {
+  /** Exact server-held credential source for a person-selected bootstrap grant. */
+  bootstrapSource?: { token: string; deviceId: string; publicKey: string };
   onTokensReplaced?: (deviceId: string, roles: readonly string[]) => void;
 };
 

@@ -1,16 +1,20 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import {
   resolvePendingDeviceApprovalState,
   type DevicePairingAccessSummary,
   type PendingDeviceApprovalKind,
 } from "../../../../src/shared/device-pairing-access.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
+import { PersonalProfileOptions } from "../../components/solid/personal-profile-options.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { formatList, formatRelativeTimestamp } from "../../lib/format.ts";
 import type { PairedDevice, PendingDevice } from "../../lib/nodes/index.ts";
+import { profileDirectory } from "../../lib/profile-directory.ts";
+import { useApplication } from "../../lib/reactive/context.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { CapabilityList } from "./capability-list.tsx";
 import { PendingDecisions } from "./entry-actions.tsx";
 import { CommandFact, DeviceFact, DeviceIdentityFacts, MetaLine } from "./view-shared.tsx";
@@ -109,6 +113,7 @@ function PendingDevice(props: {
     props.req.ts === undefined ? t("common.na") : formatRelativeTimestamp(props.req.ts),
   );
   const approval = createMemo(() => resolvePendingDeviceApprovalState(props.req, props.paired));
+  const [profileId, setProfileId] = createSignal("");
   return (
     <PendingRow
       name={name()}
@@ -123,7 +128,9 @@ function PendingDevice(props: {
           devices={props.devices}
           requestId={props.req.requestId}
           name={name()}
-          onApprove={props.devices.onDeviceApprove}
+          onApprove={(requestId) =>
+            props.devices.onDeviceApprove(requestId, profileId() || undefined)
+          }
           onReject={props.devices.onDeviceReject}
         />
       }
@@ -136,8 +143,30 @@ function PendingDevice(props: {
           <AccessSummary access={approval().approved} />
         </DeviceFact>
       </Show>
+      <Show when={props.devices.canAdmin && approval().requested.roles.includes("operator")}>
+        <DeviceFact label={t("devices.inventory.operatorPerson")}>
+          <OperatorProfileChoice value={profileId()} onChange={setProfileId} />
+        </DeviceFact>
+      </Show>
       <DeviceIdentityFacts id={props.req.deviceId} />
     </PendingRow>
+  );
+}
+
+/** Selection is presentation only; the approval worker binds the person before issuing access. */
+function OperatorProfileChoice(props: { value: string; onChange: (value: string) => void }) {
+  const app = useApplication();
+  const people = projectOwner(profileDirectory(app.gateway), (directory) => directory);
+  return (
+    <select
+      class="settings-select"
+      aria-label={t("devices.inventory.operatorPerson")}
+      value={props.value}
+      onChange={(event) => props.onChange(event.currentTarget.value)}
+    >
+      <option value="">{t("devices.inventory.keepIdentity")}</option>
+      <PersonalProfileOptions profiles={people.read().result?.profiles} />
+    </select>
   );
 }
 

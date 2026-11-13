@@ -4,10 +4,28 @@ import { isDevicesMachineOutput } from "./devices-output-mode.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
+export type DevicesRpcOpts = {
+  url?: string;
+  token?: string;
+  password?: string;
+  timeout?: string;
+  json?: boolean;
+  latest?: boolean;
+  person?: string;
+  yes?: boolean;
+  pending?: boolean;
+  device?: string;
+  role?: string;
+  scope?: string[];
+  scopes?: boolean;
+  name?: string;
+};
+
 const DEFAULT_DEVICES_TIMEOUT_MS = 10_000;
 
 // Keep device-pairing crypto/table dependencies out of root help startup.
 const deviceAction = createLazyRuntimeMethodBinder(() => import("./devices-cli.runtime.js"));
+const enrollmentAction = createLazyRuntimeMethodBinder(() => import("./devices-cli-enrollment.js"));
 const joinAction = createLazyRuntimeMethodBinder(() => import("./devices-cli-join.js"));
 
 export function registerDevicesCli(program: Command) {
@@ -21,6 +39,18 @@ export function registerDevicesCli(program: Command) {
     .command("list")
     .description("List pending and paired devices")
     .action(deviceAction((runtime) => runtime.runDevicesListCommand));
+
+  devices
+    .command("enroll")
+    .description("Explicitly enroll an approved operator device as a personal profile")
+    .option("--device <id>", "Approved target device (defaults to this CLI installation)")
+    .option("--person <id>", "Existing personal Gateway profile")
+    .option("--name <name>", "Display name for a new local personal profile")
+    .option(
+      "--enrollment-id <uuid>",
+      "Reuse a prior new-profile enrollment after an uncertain response",
+    )
+    .action(enrollmentAction((runtime) => runtime.runDevicesEnrollmentCommand));
 
   devices
     .command("join-code")
@@ -46,6 +76,7 @@ export function registerDevicesCli(program: Command) {
     .command("approve")
     .description("Approve a pending device pairing request")
     .argument("[requestId]", "Pending request id")
+    .option("--person <id>", "Associate operator access with this existing personal profile")
     .option("--latest", "Show the most recent pending request to approve explicitly", false)
     .action(deviceAction((runtime) => runtime.runDevicesApproveCommand));
 

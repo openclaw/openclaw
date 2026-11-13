@@ -5,6 +5,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeScopedGatewayHttpRequestOrReply } from "./http-auth-utils.js";
 import { assertGatewayHttpRequestCurrent } from "./http-request-authority.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
+import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   setOpenClawIdTunnelPrincipalResolver,
@@ -20,11 +21,20 @@ const membership = new Map<string, OpenClawIdTunnelPrincipal>();
 
 afterEach(() => {
   membership.clear();
+  setDeviceTokenBindingOwner(undefined);
   setOpenClawIdTunnelPrincipalResolver(undefined);
   setOpenClawIdTunnelPrincipalLookup(undefined);
 });
 
 function publishMembership() {
+  // The real ID service publishes its binding owner before admitting tunnel traffic.
+  setDeviceTokenBindingOwner({
+    lookup: () => undefined,
+    devicesForPeer: () => [],
+    record: async () => {},
+    forget: async () => {},
+    reportMismatch() {},
+  });
   setOpenClawIdTunnelPrincipalResolver(async (peerKey) => membership.get(peerKey));
   setOpenClawIdTunnelPrincipalLookup((peerKey) => membership.get(peerKey));
 }
@@ -72,6 +82,9 @@ it("an admitted tunnel request loses authority when its device is removed before
     } finally {
       close();
     }
+    membership.set(OWNER_KEY, { kind: "owner", peerKey: OWNER_KEY });
+    setDeviceTokenBindingOwner("unreadable");
+    await expect(admitTunnelRequest(OWNER_KEY)).rejects.toThrow("not admitted (401)");
   });
 });
 

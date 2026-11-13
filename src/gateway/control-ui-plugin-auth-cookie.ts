@@ -4,9 +4,13 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { TLSSocket } from "node:tls";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import type { PairedDeviceTokenIdentity } from "../infra/device-pairing-core.types.js";
+import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";
+import { captureDevicePairingPublication } from "../infra/device-pairing-publication.js";
 import type { GatewayPluginReadCookieV1 } from "../plugins/gateway-ingress.types.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS,
   CONTROL_UI_PLUGIN_AUTH_PROBE_MESSAGE,
@@ -80,11 +84,13 @@ type PluginAuthCookiePayload = {
   generation: string;
   exp: number;
   profileId?: string;
+  device?: PairedDeviceTokenIdentity;
 };
 
 type PluginAuthCookieOptions = {
   generation: string | undefined;
   profileId?: string;
+  device?: PairedDeviceTokenIdentity;
   nowMs?: number;
   basePath?: string;
   request?: IncomingMessage;
@@ -158,6 +164,7 @@ function createControlUiPluginAuthCookie(
     generation: requestCookieGeneration(params.generation, params.request),
     exp,
     ...(params.profileId ? { profileId: params.profileId } : {}),
+    ...(params.device ? { device: params.device } : {}),
   };
   const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   const sig = signPayload(encodedPayload);
@@ -257,13 +264,15 @@ function grantPathMatchesRequest(
   );
 }
 
+type AdmittedCookieGrant = ControlUiPluginTabAuthGrant & { isCurrent?: () => boolean };
+
 export function resolveControlUiPluginAuthCookieGrants(
   req: IncomingMessage,
   params: {
     requestPath: string;
     generation: string | undefined;
   },
-): ControlUiPluginTabAuthGrant[] {
+): AdmittedCookieGrant[] {
   const ingress = getRemoteControlUiIngressContext(req);
   assertRemoteControlUiIngressCurrent(ingress);
   const principal = ingress?.resolvePrincipal();
@@ -279,7 +288,7 @@ export function resolveControlUiPluginAuthCookieGrants(
   if (requestPathContext.malformedEncoding || requestPathContext.decodePassLimitReached) {
     return [];
   }
-  const grants: ControlUiPluginTabAuthGrant[] = [];
+  const grants: AdmittedCookieGrant[] = [];
   for (const value of readCookieHeaderValues(
     req.headers.cookie,
     CONTROL_UI_PLUGIN_AUTH_COOKIE_PREFIX,
@@ -325,6 +334,31 @@ export function resolveControlUiPluginAuthCookieGrants(
         continue;
       }
       const scopes = payload.scopes.filter(isOperatorScope);
+      let isCurrent: (() => boolean) | undefined;
+      if (payload.device) {
+        if (typeof payload.device.deviceId !== "string" || typeof payload.device.key !== "string") {
+          continue;
+        }
+        const source = payload.device;
+        const context = captureOpenClawStateWorkerContext({});
+        const publication = captureDevicePairingPublication(context.admission);
+        isCurrent = () => {
+          try {
+            context.admission.assertCurrent();
+            return isPairedDeviceTokenIdentityCurrent(
+              publication.readDevice(source.deviceId) ?? null,
+              "operator",
+              source,
+              scopes,
+            );
+          } catch {
+            return false;
+          }
+        };
+        if (!isCurrent()) {
+          continue;
+        }
+      }
       const grant = {
         pluginId: payload.pluginId,
         path: payload.path,
@@ -333,6 +367,7 @@ export function resolveControlUiPluginAuthCookieGrants(
           ? intersectOperatorScopes(scopes, principal.scopes).filter(isOperatorScope)
           : scopes,
         ...(payload.profileId ? { profileId: payload.profileId } : {}),
+        ...(isCurrent ? { isCurrent } : {}),
       };
       grants.push(grant);
     } catch {

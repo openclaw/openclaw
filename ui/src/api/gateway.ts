@@ -390,6 +390,15 @@ export class GatewayBrowserClient {
     return this.recovery.resolved;
   }
 
+  /** Connection-owned enrollment inputs; the optional operation checks live admission. */
+  get profileEnrollment() {
+    return {
+      deviceId: this.scopeUpgradeBinding?.deviceId,
+      native: this.opts.nativeConnectAuth,
+      signal: this.nativeAuthAbort?.signal,
+    };
+  }
+
   get scopeUpgradeReady() {
     return this.connected && this.scopeUpgradeBinding !== null;
   }

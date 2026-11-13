@@ -32,6 +32,18 @@ export function createOverlayPairing(params: {
     client: params.gateway.snapshot.client,
     connected: params.gateway.snapshot.phase === "connected",
     onChange: params.publish,
+    canAssociatePerson: () => {
+      const snapshot = params.gateway.snapshot;
+      const auth = snapshot.hello?.auth;
+      return (
+        !params.isDisposed() &&
+        snapshot.phase === "connected" &&
+        snapshot.client === state.client &&
+        auth?.role === "operator" &&
+        Array.isArray(auth.scopes) &&
+        readGatewayOperatorAccess(snapshot).canAdmin
+      );
+    },
   });
   const { gateway, isDisposed, publish } = params;
   let generation = 0;
@@ -79,9 +91,9 @@ export function createOverlayPairing(params: {
     runtime,
     state,
     pendingCount,
-    close(clear = true) {
+    close(clear = true, retirePerson = false) {
       pendingCount.invalidate({ clear });
-      closeDevicePairSetup(state);
+      closeDevicePairSetup(state, retirePerson);
     },
     handleEvent(event: GatewayEventFrame): boolean {
       if (event.event === "device.pair.setup.completed") {

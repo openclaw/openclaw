@@ -32,12 +32,15 @@ import {
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createSandboxHostHttpRequestHandler } from "./mcp-app-sandbox-http.js";
+import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
 import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
+import { createTokenBindingPublisher } from "./openclaw-id/service-token-bindings.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
 import * as operatorRunAuthority from "./operator-run-authority.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import {
   connect,
+  expectEnrolledOperatorIngress,
   request,
   expectHello,
   PNG_BYTES,
@@ -777,6 +780,11 @@ describe("remote Control UI ingress production composition", () => {
   it("uses the original ID membership for roleless app RPC, browser access, and recovery", async () => {
     await configureAuth(TOKEN_AUTH);
     const claw = await linkedClaw();
+    createTokenBindingPublisher({
+      authority: async () => claw.authority,
+      log: { warn() {} },
+      closed: () => false,
+    }).publish(claw.authority);
     const profile = await ensureCanonicalUserProfileForEmail("id-member@ingress.example.test");
     const peerKey = formatIrohEndpointKey(new Uint8Array(32).fill(172));
     const accountId = "ingress-id-member";
@@ -910,8 +918,21 @@ describe("remote Control UI ingress production composition", () => {
         }
       }
     } finally {
+      setDeviceTokenBindingOwner(undefined);
       setOpenClawIdTunnelPrincipalLookup(undefined);
     }
+  });
+
+  it("keeps the enrolled person and device ceiling under an independently authenticated owner ingress", async () => {
+    await configureAuth(TOKEN_AUTH);
+    await expectEnrolledOperatorIngress(async () => {
+      const binding = await factory.bindPrincipal({
+        ...principalOptions,
+        operatorScopeCeiling: ["operator.admin"],
+      });
+      const ui = await binding.openControlUi(presentationOptions);
+      return { peer: await openRemote(ui), close: () => binding.close() };
+    });
   });
 
   it("fences held HTTP, WebSocket and RPC work before effects and publication on grant revocation", async () => {

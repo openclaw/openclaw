@@ -1,7 +1,9 @@
 // Device-code pairing for browsers that hold no Gateway credential yet.
 import { randomInt, randomUUID } from "node:crypto";
 import { buildBrowserPairCode } from "../shared/browser-pair.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { prepareUserProfileSelectionAuthority } from "../state/user-channel-identity-operations.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { publishDevicePairingResolution } from "./device-pairing-resolution.js";
 import {
@@ -92,13 +94,37 @@ export async function decideBrowserPairRequest(
     code: string;
     requestId: string;
     decision: "approve" | "reject";
+    operatorProfileId?: string;
     /** Scopes of the approving operator; the paired grant must stay within them. */
     callerScopes: readonly string[];
     /** Live shared-auth generation; issued browser tokens are bound to it. */
     readSharedGatewaySessionGeneration?: () => string | undefined;
   },
 ) {
-  const { context, assertCurrent, readSharedGatewaySessionGeneration, ...input } = params;
+  const {
+    context: providedContext,
+    assertCurrent: assertSource,
+    readSharedGatewaySessionGeneration,
+    ...input
+  } = params;
+  const context = providedContext ?? captureOpenClawStateWorkerContext();
+  const profile =
+    input.operatorProfileId !== undefined
+      ? await prepareUserProfileSelectionAuthority(input.operatorProfileId, {
+          path: context.admission.databasePath,
+          env: context.environment,
+        })
+      : undefined;
+  const assertCurrent = () => {
+    assertSource?.();
+    if (
+      input.operatorProfileId !== undefined &&
+      (!profile?.isCurrent() || profile.profileId !== input.operatorProfileId)
+    ) {
+      throw new Error("Browser pairing profile changed");
+    }
+  };
+  assertCurrent();
   return await withDevicePairingLock(async () => {
     const nowMs = Date.now();
     const sharedGatewaySessionGeneration = readSharedGatewaySessionGeneration?.();

@@ -5,6 +5,60 @@ const identity = en.profilePage.identity;
 
 const enProfile = {
   profilePage: {
+    enrollment: {
+      title: "Personal profile",
+      description:
+        "Use your own name, preferences, and session ownership on this Gateway. No email or external sign-in required.",
+      shared:
+        "This is shared owner access, not a personal sign-in. Shared tokens remain separate maintenance access.",
+      start: "Set up personal profile",
+      newPerson: "Create a new person",
+      choose: "Person",
+      name: "Your name (optional)",
+      create: "Use this profile",
+      saving: "Setting up…",
+      success: "Personal profile ready. This connection is signed in as the selected person.",
+      assignmentCommitted: "Person assigned. That device will use this profile when it reconnects.",
+      reconnecting: "Reconnecting to confirm your personal profile…",
+      reconnect: "Reconnect to finish personal setup.",
+      restricted:
+        "Personal setup requires an approved owner or admin operator device. Ask an admin to review this device’s access, then reconnect.",
+      conflict:
+        "This device or person changed. Refresh Profile and Devices before trying again. Profiles are never merged automatically.",
+      failed:
+        "Personal setup did not finish. Your choices are kept; retry with the same device. {detail}",
+      connectionChanged:
+        "The connection changed during setup. Reconnect and check Profile before retrying.",
+      directoryFailed:
+        "Couldn’t load existing people. Retry the directory before selecting someone.",
+      rolePreview:
+        "Gateway role: {role}. Device approval may further restrict access; choosing this profile does not add permissions.",
+      defaultRolePreview:
+        "Your personal access follows this Gateway’s policy and device approval. It may be narrower than Shared Owner, including no administration. Shared maintenance credentials are unchanged.",
+      existingHint:
+        "Choose an existing person only when this device belongs to them. This does not merge profiles or grant admin access.",
+      noRolePolicy: "No additional role policy is configured.",
+      deviceCeiling: "Available device/setup scope ceiling: {scopes}.",
+      deviceApprovalUnavailable: "Device approval is not reported in this preview.",
+      defaultRole: "Default local role: {role}. Operator scope policy: {scopes}.",
+      boundedRole: "Combined operator scope ceiling: {scopes}.",
+      roleUnavailable:
+        "Default role policy is not currently reported. Device approval remains a separate limit.",
+      approvalUnavailable:
+        "This device’s approval ceiling is not available here; the role policy is not a grant.",
+      roleAdmission:
+        "Other role restrictions and current device approval still apply. The Gateway decides access at admission.",
+      idOwner: "OpenClaw ID owner certificate",
+      idOwnerDescription:
+        "Device ownership and recovery are separate from your personal profile. Manage ID-owned access in Access.",
+      openAccess: "Open Access",
+      later: "Not now",
+      onboarding: "Your AI is ready. Make this Gateway personal?",
+      manage: "Manage profile",
+      device: "Assign a person",
+      deviceDescription:
+        "Attach this approved operator device to a new or existing person. Node identity is unchanged.",
+    },
     discord: {
       title: "Discord account",
       description:
@@ -53,7 +107,7 @@ const enProfile = {
       loading: "Loading your identity…",
       profileUnavailable: "Couldn’t load your profile. Try again.",
       unidentified:
-        "This connection has no personal profile; sign in through Cloudflare Access, Tailscale Serve, or a trusted proxy to set a name and avatar.",
+        "This connection has no personal profile. An owner or admin can attach an approved operator device below; external sign-in is optional.",
       writeRequired: "You need permission to edit your profile. Ask an admin for access.",
       avatar: identity.avatar,
       avatarDescription: "PNG, JPEG, or WebP. Images are resized to 256 × 256 or smaller.",
@@ -97,7 +151,10 @@ const enProfile = {
 export const registerProfileEnglish = Object.assign(
   () => {
     // Shared menu/search labels stay eager; editor copy loads with its consumers.
-    Object.assign(en.profilePage, { discord: enProfile.profilePage.discord });
+    Object.assign(en.profilePage, {
+      discord: enProfile.profilePage.discord,
+      enrollment: enProfile.profilePage.enrollment,
+    });
     en.profilePage.access = enProfile.profilePage.access;
     Object.assign(en.profilePage.identity, enProfile.profilePage.identity);
   },

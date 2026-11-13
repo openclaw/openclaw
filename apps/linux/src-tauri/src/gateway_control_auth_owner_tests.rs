@@ -439,3 +439,58 @@ async fn native_control_wait_does_not_cross_configuration_generations() {
         .await
         .is_err());
 }
+
+#[tokio::test]
+async fn personal_enrollment_adopts_native_token_before_reconnect_and_refuses_read_only() {
+    let fixture = Fixture::connected();
+    let client = fixture.client.clone();
+    let generation = client.generation();
+    let dashboard = Url::parse("https://gateway.example/control/settings/profile").unwrap();
+    assert!(client
+        .enroll_control_profile(generation, &dashboard, json!({"profileId":"person"}))
+        .await
+        .is_err());
+    client.inner.config.lock().unwrap().native_control_session = NativeControlSession::from_hello(
+        GatewayAuth::DeviceToken("first-grant".into()),
+        Some("device-token"),
+        Some(vec!["operator.admin".into(), "operator.read".into()]),
+        None,
+    );
+    let device_id = client
+        .inner
+        .identity
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .identity()
+        .device_id()
+        .to_string();
+    let (sender, mut receiver) = mpsc::channel(4);
+    *client.inner.commands.lock().unwrap() = Some(sender);
+    let run = client.clone();
+    let operation = tokio::spawn(async move {
+        run.enroll_control_profile(generation, &dashboard, json!({"profileId":"person"}))
+            .await
+    });
+    let DriverCommand::Request {
+        request, complete, ..
+    } = receiver.recv().await.unwrap()
+    else {
+        panic!("expected enrollment request")
+    };
+    assert_eq!(request.method(), "device.profile.enroll");
+    complete(Ok(
+        json!({"deviceId":device_id,"profileId":"person","operatorToken":{"token":"personal-native","scopes":["operator.read"]}}),
+    ));
+    let receipt = operation.await.unwrap().unwrap();
+    assert!(receipt.get("operatorToken").is_none());
+    assert_eq!(receipt["reconnect"], true);
+    assert!(
+        matches!(client.inner.identity.lock().unwrap().as_ref().unwrap().select_auth("wss://gateway.example/control", None, None), GatewayAuth::DeviceToken(ref token) if token == "personal-native")
+    );
+    assert!(matches!(
+        receiver.recv().await.unwrap(),
+        DriverCommand::Reconfigure
+    ));
+}

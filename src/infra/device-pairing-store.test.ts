@@ -188,7 +188,7 @@ test.each([false, true])("isolates reused snapshots (rollback=%s)", (rollback) =
     operator: { token: "tok", role: "operator", scopes: ["operator.read"], createdAtMs: 2 },
   };
   const expected = {
-    node: { ...nodeRecord, remoteIp: "192.0.2.2", tokens },
+    node: { ...nodeRecord, remoteIp: "192.0.2.2", operatorProfileId: "personal-profile", tokens },
     sibling: { deviceId: "sibling", publicKey: "sibling-key", createdAtMs: 3, approvedAtMs: 3 },
   };
   const operate = () =>
@@ -203,7 +203,11 @@ test.each([false, true])("isolates reused snapshots (rollback=%s)", (rollback) =
             expect(reads.counts.paired).toBe(2);
             updatePaired("node", () => ({
               value: undefined,
-              patch: { displayName: "Temporary name", tokens },
+              patch: {
+                displayName: "Temporary name",
+                tokens,
+                operatorProfileId: "personal-profile",
+              },
             }));
             const state = loadState();
             state.pairedByDeviceId.sibling = expected.sibling;

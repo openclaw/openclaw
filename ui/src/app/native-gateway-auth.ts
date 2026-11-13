@@ -24,12 +24,28 @@ export type NativeGatewayAuthorization = {
   device: NonNullable<ConnectParams["device"]>;
 };
 
-export type NativeGatewayConnectAuth = (challenge: {
-  gatewayUrl: string;
-  nonce: string;
-  signedAt: number;
-  signal: AbortSignal;
-}) => Promise<NativeGatewayAuthorization>;
+export type NativeGatewayConnectAuth = {
+  (challenge: {
+    gatewayUrl: string;
+    nonce: string;
+    signedAt: number;
+    signal: AbortSignal;
+  }): Promise<NativeGatewayAuthorization>;
+  enrollProfile?: (
+    params: import("../api/gateway-profile-enrollment.ts").ProfileEnrollmentParams,
+    signal: AbortSignal,
+  ) => Promise<NativeProfileEnrollmentResult>;
+};
+export type NativeProfileEnrollmentResult = {
+  deviceId: string;
+  profileId: string;
+  reconnect: boolean;
+};
+type EnrollmentMessage = {
+  id: string;
+  action: "enrollProfile";
+  params: import("../api/gateway-profile-enrollment.ts").ProfileEnrollmentParams;
+};
 
 type ChallengeMessage = { id: string; nonce: string; signedAt: number };
 
@@ -44,7 +60,9 @@ type NativeAuthHost = Window & {
   };
   webkit?: {
     messageHandlers?: {
-      OpenClawNativeGatewayAuth?: { postMessage(message: ChallengeMessage): Promise<unknown> };
+      OpenClawNativeGatewayAuth?: {
+        postMessage(message: ChallengeMessage | EnrollmentMessage): Promise<unknown>;
+      };
     };
   };
 };
@@ -216,16 +234,19 @@ export function createNativeGatewayConnectAuth(
     );
   }
 
-  return async ({ gatewayUrl: target, nonce, signedAt, signal }) => {
+  const authorize: NativeGatewayConnectAuth = async ({
+    gatewayUrl: target,
+    nonce,
+    signedAt,
+    signal,
+  }) => {
     const { registerLocalErrorsEnglish } = await import("../i18n/locales/en-local-errors.ts");
     // This owner publishes resolved error text after registration, not reactive catalog reads.
     registerLocalErrorsEnglish();
     if (gatewayCredentialScope(target) !== gatewayCredentialScope(gatewayUrl)) {
       throw new Error(t("runtimeErrors.nativeGateway"));
     }
-    if (retired || host.top !== host || (!bridge && !webkit && !options.messagePort)) {
-      throw new Error(t("runtimeErrors.nativeUnavailable"));
-    }
+    // send owns current document/bridge admission at the effect; no awaited work follows validation.
     // Match the supported native challenge representation before dispatch. A
     // malformed challenge cannot recover when the native connection reconnects.
     if (
@@ -237,10 +258,26 @@ export function createNativeGatewayConnectAuth(
     ) {
       throw new Error(t("runtimeErrors.nativeChallenge"));
     }
-    signal.throwIfAborted();
     const request = { id: generateUUID(), nonce, signedAt };
-    return await new Promise<NativeGatewayAuthorization>((resolve, reject) => {
-      const finish = (error?: Error, authorization?: NativeGatewayAuthorization) => {
+    return send(request, signal, (value) => readAuthorization(value, request));
+  };
+  authorize.enrollProfile = async (params, signal) => {
+    const { enrollNativeProfile } = await import("./native-profile-enrollment.ts");
+    return enrollNativeProfile(send, params, signal);
+  };
+  return authorize;
+
+  function send<T>(
+    request: ChallengeMessage | EnrollmentMessage,
+    signal: AbortSignal,
+    readResult: (value: unknown) => T,
+  ): Promise<T> {
+    if (retired || host.top !== host || (!bridge && !webkit && !options.messagePort)) {
+      throw new Error(t("runtimeErrors.nativeUnavailable"));
+    }
+    signal.throwIfAborted();
+    return new Promise<T>((resolve, reject) => {
+      const finish = (error?: Error, authorization?: T) => {
         if (!pending.delete(request.id)) {
           return;
         }
@@ -275,7 +312,7 @@ export function createNativeGatewayConnectAuth(
           if (typeof reply.error === "string") {
             throw new NativeGatewayAuthUnavailableError(reply.error);
           }
-          finish(undefined, readAuthorization(reply.result, request));
+          finish(undefined, readResult(reply.result));
         } catch (error) {
           finish(error instanceof Error ? error : new Error(formatConnectionErrorSummary(error)));
         }
@@ -302,5 +339,5 @@ export function createNativeGatewayConnectAuth(
         void failBridge(error);
       }
     });
-  };
+  }
 }

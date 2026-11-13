@@ -1,7 +1,10 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { deviceBootstrapProfilesEqual } from "../shared/device-bootstrap-profile.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../state/openclaw-state-db-cache.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { prepareDeviceBootstrapProfileAuthority } from "./device-bootstrap-profile-authority.js";
 // Device token operations preserve live handshake authority through worker commit.
 import type {
   RevokeDeviceTokenResult,
@@ -56,21 +59,66 @@ export async function ensureDeviceToken(params: {
   issuer?: DeviceAuthToken["issuer"];
   approval?: DeviceAuthToken["approval"];
   isIssuanceCurrent?: () => boolean;
+  expectedPublicKey?: string;
+  expectedOperatorProfileId?: string;
+  bootstrapSource?: { token: string; deviceId: string; publicKey: string };
 }): Promise<DeviceAuthToken | null> {
-  const { isIssuanceCurrent, ...input } = params;
-  return readCurrentPairedDevice(input.deviceId, (device) => {
-    if (isIssuanceCurrent?.() === false || !device) {
+  const { isIssuanceCurrent, ...rawInput } = params;
+  const input = structuredClone(rawInput);
+  return readCurrentPairedDevice(input.deviceId, async (device) => {
+    if (
+      isIssuanceCurrent?.() === false ||
+      !device ||
+      (input.expectedPublicKey !== undefined && device.publicKey !== input.expectedPublicKey) ||
+      (input.expectedOperatorProfileId !== undefined &&
+        device.operatorProfileId !== input.expectedOperatorProfileId)
+    ) {
       return null;
     }
+    let bootstrapAuthority:
+      | Awaited<ReturnType<typeof prepareDeviceBootstrapProfileAuthority>>
+      | undefined;
+    if (input.bootstrapSource) {
+      const context = captureOpenClawStateWorkerContext();
+      const reply = await executeExistingOpenClawStateRead(
+        { path: context.admission.databasePath, env: context.environment },
+        {
+          type: "devicePairing.bootstrapContext",
+          input: { ...input.bootstrapSource, nowMs: Date.now() },
+        },
+        { current: true },
+      );
+      if (
+        !reply?.context ||
+        reply.context.profile.operatorProfileId !== input.expectedOperatorProfileId
+      ) {
+        throw new Error("Bootstrap token source no longer represents the selected person");
+      }
+      bootstrapAuthority = await prepareDeviceBootstrapProfileAuthority(reply.context.profile, {
+        context,
+      });
+      if (!deviceBootstrapProfilesEqual(reply.context.profile, bootstrapAuthority.profile)) {
+        throw new Error("Bootstrap person role changed before token issuance");
+      }
+    }
     const reusable = reusablePairedDeviceToken(device, input);
-    if (reusable) {
+    if (reusable && !input.bootstrapSource) {
       return reusable;
     }
     return executeDevicePairingMutation(
       { type: "devicePairing.ensureToken", input: { ...input, nowMs: Date.now() } },
       {
+        context: bootstrapAuthority?.context,
         onAuthorityRefused: () => null,
+        admit: (facts) => {
+          if (facts.kind === "bootstrap.token" && facts.expiresAtMs < Date.now()) {
+            throw new DevicePairingAuthorityRefusedError(
+              "Bootstrap source expired before token issuance",
+            );
+          }
+        },
         assertCurrent: () => {
+          bootstrapAuthority?.assertCurrent();
           if (isIssuanceCurrent?.() === false) {
             throw new DevicePairingAuthorityRefusedError("Device token issuance authority changed");
           }

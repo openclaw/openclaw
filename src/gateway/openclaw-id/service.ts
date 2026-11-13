@@ -14,16 +14,11 @@ import { isOpenClawIdEnabled } from "../../shared/openclaw-id-policy.js";
 // process, opens no sockets and contacts no OpenClaw ID, Discovery or relay
 // service. Everything heavier is imported only after the switch turns on.
 import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
-import type {
-  LinkCommit,
-  LinkPreparation,
-  DeviceTokenRef,
-  OpenClawIdAuthority,
-} from "./authority.js";
+import type { LinkCommit, LinkPreparation, OpenClawIdAuthority } from "./authority.js";
 import type { ClawNameRequest } from "./claw-name-check.js";
 import type { OpenClawIdAccount } from "./claw-store.js";
 import { createOpenClawIdConnectionAccess } from "./connection-identity.js";
-import { setDeviceTokenBindingOwner } from "./device-token-binding.js";
+import { setDeviceTokenBindingOwner, type DeviceTokenRef } from "./device-token-binding.js";
 import type { TunnelApiHandler } from "./ingress-listener.js";
 import type { OpenClawIdPeerActivity } from "./member-activity.js";
 import { createOwnerExpiryTimer } from "./owner-expiry.js";

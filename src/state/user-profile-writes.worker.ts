@@ -274,6 +274,56 @@ export function createUserProfileWriteOperation<Input, Output>(
   };
 }
 
+/** A local enrollment key is an idempotency alias, never email or provider proof. */
+export function ensureLocalUserProfile(
+  input: { enrollmentId: string; name?: string },
+  options: UserProfileMutationOptions,
+) {
+  ensureUserProfilesSchema(options);
+  return runUserProfileWriteTransaction(
+    ({ db }) => {
+      const kysely = userProfilesDb(db);
+      const identity = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("user_profile_identities")
+          .select("profile_id")
+          .where("provider", "=", "local-enrollment")
+          .where("subject", "=", input.enrollmentId.toLowerCase()),
+      );
+      if (identity) {
+        return toUserProfile(requireResolvedUserProfileMetadataById(db, identity.profile_id));
+      }
+      const now = Date.now();
+      const profile = insertUserProfile(
+        db,
+        normalizeInitialDisplayName(input.name),
+        now,
+        options.mutation,
+      );
+      executeSqliteQuerySync(
+        db,
+        kysely.insertInto("user_profile_identities").values({
+          provider: "local-enrollment",
+          subject: input.enrollmentId.toLowerCase(),
+          profile_id: profile.id,
+          canonical_login: null,
+          verified_email_json: null,
+          created_at: now,
+        }),
+      );
+      options.mutation?.authority(profile.id);
+      options.mutation?.identity(profile.id);
+      options.mutation?.publish(profile.id);
+      publishUserProfileAuthorityChange(db, profile.id);
+      publishUserProfilesChange(db, profile.id);
+      return toUserProfile(profile);
+    },
+    options,
+    { operationLabel: "user-profiles.ensure-local" },
+  );
+}
+
 /** Assigns or clears the role on an existing profile's current merge head. */
 export function setUserProfileRole(
   profileId: string,

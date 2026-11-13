@@ -315,6 +315,11 @@ describe("registered maintenance commands", () => {
       { json: false, noExport: false, run: false, agent: "qwen" },
     ],
     ["dashboard --no-open --json", dashboardCommand, { noOpen: true, json: true }],
+    [
+      "dashboard --person selected-profile --json",
+      dashboardCommand,
+      { person: "selected-profile", json: true },
+    ],
   ] as const)("dispatches %s", async (args, command, options) => {
     await runCli(args);
     expect(command).toHaveBeenCalledExactlyOnceWith(

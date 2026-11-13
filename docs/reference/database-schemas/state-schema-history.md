@@ -61,10 +61,50 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 37      | Immutable provider resource receipts retained with worker environments through terminal cleanup                                                                                                                                                                                                                                                | Unreleased          |
 | 38      | Repository disk authority and the original authority of pending workspace results                                                                                                                                                                                                                                                              | Unreleased          |
 | 39      | Immutable retained-worker acquisition policy, pending pause/resume operations, and provider observations                                                                                                                                                                                                                                       | Unreleased          |
+| 40      | Explicit personal operator profile association on paired installations; no legacy profile assignment                                                                                                                                                                                                                                           | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 40
+
+Schema 40 adds nullable `device_pairing_paired.operator_profile_id` to the
+existing pairing owner. It stores only the explicitly enrolled personal operator
+profile reference. Legacy devices remain `NULL`; migration does not infer an
+identity from shared Gateway access or backfill profiles. Enrollment and personal
+admission own the identity decision, not client metadata or token scopes.
+
+The association belongs to the paired public-key installation. Same-key repair,
+bootstrap approval, token rotation, and token revocation preserve it. Replacement
+keys do not inherit it. Deleting the paired row removes its reference naturally;
+revoking a token never clears the reference to regain shared-owner access. Node
+role authorization remains independent.
+
+Personal HTTP inference over OpenClaw ID also requires the existing Gateway-local
+token binding to retain the original admitted human principal and membership listing.
+Legacy or stale bindings continue to restrict credential replay to their peer, but
+cannot supply a personal identity until a fresh signed-device admission establishes
+the current listing. This optional claw-record field changes neither signed
+statements nor the SQL schema.
+
+Both engines add one nullable text column with no row rewrite, backfill, index
+build, or DDL row scan. SQLite uses `ALTER TABLE device_pairing_paired ADD COLUMN
+operator_profile_id TEXT`; PostgreSQL uses the corresponding C-collated text
+column. Schema publication also updates `schema_meta` and, when present, the
+shared content-version marker in `config_machine_state`. The exact v39-to-v40
+backup and quick-integrity scope is those three tables only. Backup and integrity
+cost therefore scale with paired-device inventory and publication metadata, not
+transcripts or other shared-state payloads. The largest deployment's paired-row
+count is unavailable from the implementation checkout and remains a deployment
+qualification requirement.
+
+Column installation and version publication are transactional. Older readers
+refuse schema or content version 40 before serving requests; a package-only
+rollback cannot safely reopen personal pairings as shared-owner devices. Restore
+the verified pre-migration backup with its matching older binary instead. Existing
+schema maintenance and update owners retain backup, admission, and recovery
+custody; no runtime profile creation or second store is introduced.
 
 ### State schema 39
 

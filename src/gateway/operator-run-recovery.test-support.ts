@@ -121,18 +121,24 @@ export async function createOperatorRecoveryFixture(params: {
       signedAt: 1,
       nonce: "fixture-nonce",
     };
+    const paired = await loadPairedDevicePairingStoreRecordReadOnly(params.device.deviceId);
+    if (params.device.operatorProfileId) {
+      client.internal.operatorProfileEnrollment = {
+        deviceId: params.device.deviceId,
+        publicKey: params.device.publicKey,
+        createdAtMs: params.device.createdAtMs,
+        profileId: params.device.operatorProfileId,
+      };
+    }
     client.internal.operatorDeviceTokenIdentity = params.tokenlessDevice
       ? null
       : expectDefined(
-          resolveAuthenticatedDeviceTokenIdentity(
-            await loadPairedDevicePairingStoreRecordReadOnly(params.device.deviceId),
-            {
-              role: "operator",
-              publicKey: params.device.publicKey,
-              token: expectDefined(params.device.tokens?.operator, "accepted operator token").token,
-              scopes: client.connect.scopes ?? [],
-            },
-          ),
+          resolveAuthenticatedDeviceTokenIdentity(paired, {
+            role: "operator",
+            publicKey: params.device.publicKey,
+            token: expectDefined(params.device.tokens?.operator, "accepted operator token").token,
+            scopes: client.connect.scopes ?? [],
+          }),
           "exact handshake token identity",
         );
   }

@@ -37,6 +37,13 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../agents/runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
   runSystemAgent: vi.fn<typeof import("../system-agent/system-agent.js").runSystemAgent>(),
   readConfigFileSnapshot: vi.fn<typeof import("../config/config.js").readConfigFileSnapshot>(),
+  personalOffer: vi.fn(async () => null),
+  preparePersonalTarget: vi.fn(async () => ({
+    ready: false,
+    options: { expectUrl: "ws://127.0.0.1:18789" },
+    canHostLocal: true,
+  })),
+  continuePersonalSetup: vi.fn(async () => {}),
 }));
 
 vi.mock("../cli/terminal-interactivity.js", async (importOriginal) => ({
@@ -51,6 +58,13 @@ vi.mock("../agents/runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
 }));
 vi.mock("../system-agent/system-agent.js", () => ({ runSystemAgent: mocks.runSystemAgent }));
+
+// mock-isolation: Inference lifetime tests leave attended personal enrollment to its owner suite.
+vi.mock("./onboard-personal.js", () => ({
+  offerTerminalPersonalSetup: mocks.personalOffer,
+  prepareTerminalPersonalSetupTarget: mocks.preparePersonalTarget,
+  continueTerminalPersonalSetup: mocks.continuePersonalSetup,
+}));
 
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: mocks.createClackPrompter,
@@ -159,7 +173,9 @@ describe("runConversationalOnboarding", () => {
       latencyMs: 1,
       binding: fixture.binding,
     });
-    const launchConversation = vi.fn(async () => {});
+    const launchConversation = vi.fn<
+      typeof import("../system-agent/tui-backend.js").runSystemAgentTui
+    >(async () => {});
     vi.spyOn(
       await import("../system-agent/tui-backend.js"),
       "runSystemAgentTui",
@@ -205,6 +221,24 @@ describe("runConversationalOnboarding", () => {
       },
     };
   }
+
+  it("defers the personal offer until the machine owner's post-readiness continuation", async () => {
+    const { launchConversation } = await prepareConversation();
+    const gateway = { status: "ready", action: "installed" } as const;
+    const continueTerminal = vi.fn(async () => {});
+    const runtime = makeRuntime();
+    launchConversation.mockImplementation(async (options) => {
+      expect(mocks.personalOffer).not.toHaveBeenCalled();
+      await options.onSetupCompleted?.(gateway, continueTerminal);
+    });
+    await runConversationalOnboarding({}, runtime);
+    expect(mocks.personalOffer).not.toHaveBeenCalled();
+    expect(mocks.continuePersonalSetup).toHaveBeenCalledExactlyOnceWith(
+      gateway,
+      runtime,
+      continueTerminal,
+    );
+  });
 
   it("acquires a cold verified harness from verified setup without replacing the root registry", async () => {
     const { launchConversation } = await prepareConversation();

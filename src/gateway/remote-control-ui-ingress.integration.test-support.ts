@@ -5,10 +5,14 @@ import type { SessionsFilesPreviewResult } from "../../packages/gateway-protocol
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
   type DeviceIdentity,
 } from "../infra/device-identity.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { requestDevicePairing } from "../infra/device-pairing.js";
+import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 export const TRUSTED_PROXY = {
   userHeader: "cf-access-authenticated-user-email",
   requiredHeaders: ["cf-access-jwt-assertion"],
@@ -177,4 +181,44 @@ export async function expectReadWriteWithoutAdmin(peer: Peer, trigger: string) {
     ok: false,
     error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
   });
+}
+
+/** An enrolled signed source must keep its person and device ceiling, even under owner transport. */
+export async function expectEnrolledOperatorIngress(
+  openOwner: () => Promise<{ peer: Peer; close: () => Promise<void> }>,
+) {
+  const person = await ensureCanonicalUserProfileForEmail("enrolled-ingress@example.test");
+  const identity = loadOrCreateDeviceIdentity({ identityKey: "personal-ingress" });
+  const pending = await requestDevicePairing({
+    deviceId: identity.deviceId,
+    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    role: "operator",
+    scopes: ["operator.read"],
+    clientId: "openclaw-control-ui",
+    clientMode: "webchat",
+    platform: "browser",
+  });
+  await approveDevicePairing(pending.request.requestId, {
+    callerScopes: ["operator.admin"],
+    operatorProfileId: person.id,
+  });
+  const owner = await openOwner();
+  try {
+    await usePeer(owner.peer, async (peer) => {
+      expectHello(
+        await connect(peer, { identity, profileId: person.id, scopes: ["operator.admin"] }),
+        "remote-ingress",
+        ["operator.read"],
+      );
+      expect(await request(peer, "users.self", {})).toMatchObject({
+        ok: true,
+        payload: { profile: { id: person.id } },
+      });
+      expect(
+        (await request(peer, "users.setRole", { profileId: person.id, role: "admin" })).ok,
+      ).toBe(false);
+    });
+  } finally {
+    await owner.close();
+  }
 }

@@ -14,6 +14,11 @@ function owner(bindings: Record<string, string> = {}) {
   const reportMismatch = vi.fn();
   const value: DeviceTokenBindingOwner = {
     lookup: (deviceId, role) => bindings[`${deviceId}/${role}`],
+    isOperatorBindingCurrent: () => false,
+    devicesForPeer: (peerKey, role) =>
+      Object.entries(bindings)
+        .filter(([key, peer]) => peer === peerKey && key.endsWith(`/${role}`))
+        .map(([key]) => key.slice(0, -role.length - 1)),
     record: async (deviceId, role, peerKey) => {
       bindings[`${deviceId}/${role}`] = peerKey;
     },
@@ -92,6 +97,10 @@ describe("device tokens bound to the authenticated endpoint key", () => {
       lookup: () => {
         throw new Error("uncertain storage outcome");
       },
+      devicesForPeer: () => {
+        throw new Error("uncertain storage outcome");
+      },
+      isOperatorBindingCurrent: () => false,
       record: async () => {},
       forget: async () => {},
       reportMismatch: vi.fn(),

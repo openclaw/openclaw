@@ -37,6 +37,7 @@ struct DashboardNativeGatewayAuth: Sendable {
 
     let json: Data
     let isCurrent: @Sendable () -> Bool
+    var enrollProfile: (@Sendable (GatewayProfileEnrollment) async throws -> Data)? = nil
 
     static func sign(
         identity: DeviceIdentity,

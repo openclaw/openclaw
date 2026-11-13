@@ -1,18 +1,27 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/io.js";
+import { prepareDeviceBootstrapProfileAuthority } from "../../../infra/device-bootstrap-profile-authority.js";
 import { resolveAuthenticatedDeviceTokenIdentity } from "../../../infra/device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../../../infra/device-pairing-store-readonly.js";
+import { getPairedDevice } from "../../../infra/device-pairing.js";
+import { deviceBootstrapProfilesEqual } from "../../../shared/device-bootstrap-profile.js";
+import { intersectOperatorScopes } from "../../../shared/operator-scope-compat.js";
 import {
   GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
   GatewayOperatorAccessDeniedError,
   hasGatewayOperatorAccessPolicies,
   resolveGatewayOperatorAccessAuthority,
 } from "../../operator-access-policy.js";
+import { readOperatorProfileEnrollment } from "../../operator-device-profile.js";
 import { invalidateGatewayPolicyClient } from "../ws-policy-close.js";
 import type { GatewayWsClient } from "../ws-types.js";
+import { resolveGatewayConnectPolicyFailure } from "./connect-admission.js";
+import { resolvePairedAccessScopes } from "./connect-device-metadata.js";
 import type {
+  AuthenticatedGatewayConnect,
   DeviceAuthorizedGatewayConnect,
   GatewayConnectPhaseContext,
 } from "./message-handler-types.js";
@@ -88,16 +97,34 @@ export async function prepareGatewayConnectOperatorDeviceSource(
           context.connectParams.auth?.deviceToken ?? context.connectParams.auth?.token,
         )
       : deviceToken?.token;
+  const paired =
+    device && devicePublicKey ? await loadPairedDevicePairingStoreRecordReadOnly(device.id) : null;
+  const enrollmentCurrent =
+    !state.operatorProfileEnrollment ||
+    Boolean(
+      device &&
+      devicePublicKey &&
+      isDeepStrictEqual(
+        state.operatorProfileEnrollment,
+        readOperatorProfileEnrollment(paired, {
+          role: "operator",
+          deviceId: device.id,
+          publicKey: devicePublicKey,
+        }),
+      ),
+    );
   const identity =
     device && devicePublicKey && token
-      ? resolveAuthenticatedDeviceTokenIdentity(
-          await loadPairedDevicePairingStoreRecordReadOnly(device.id),
-          { role: "operator", publicKey: devicePublicKey, token, scopes },
-        )
+      ? resolveAuthenticatedDeviceTokenIdentity(paired, {
+          role: "operator",
+          publicKey: devicePublicKey,
+          token,
+          scopes,
+        })
       : null;
   // Shared/proxy identity can be tokenless. A token-bearing handshake cannot
   // bind to a replacement credential discovered while preparation yielded.
-  if (token && !identity) {
+  if (!enrollmentCurrent || (token && !identity)) {
     context.markHandshakeFailure("operator-pairing-generation-changed");
     context.sendHandshakeErrorResponse(
       ErrorCodes.NOT_PAIRED,
@@ -108,4 +135,94 @@ export async function prepareGatewayConnectOperatorDeviceSource(
     return undefined;
   }
   return identity;
+}
+
+/** Resolve the personal installation before pairing; the existing owners retain all authority. */
+export async function prepareGatewayConnectDeviceEnrollment(
+  context: GatewayConnectPhaseContext,
+  state: AuthenticatedGatewayConnect,
+) {
+  const { role, device, devicePublicKey, authMethod } = state;
+  let { scopes } = state;
+  let bootstrapAuthority:
+    | Awaited<ReturnType<typeof prepareDeviceBootstrapProfileAuthority>>
+    | undefined;
+  const isCurrent = () => {
+    try {
+      if (bootstrapAuthority) {
+        bootstrapAuthority.assertCurrent();
+        return true;
+      }
+      return resolveGatewayConnectPolicyFailure(context, state) === undefined;
+    } catch {
+      return false;
+    }
+  };
+  const personalBootstrap =
+    authMethod === "bootstrap-token" &&
+    state.issuedBootstrapProfile?.operatorProfileId !== undefined
+      ? state.issuedBootstrapProfile
+      : undefined;
+  if (personalBootstrap) {
+    try {
+      bootstrapAuthority = await prepareDeviceBootstrapProfileAuthority(personalBootstrap, {
+        assertCurrent: () => {
+          if (resolveGatewayConnectPolicyFailure(context, state) !== undefined) {
+            throw new Error("Bootstrap connection authority changed");
+          }
+        },
+      });
+      if (!deviceBootstrapProfilesEqual(personalBootstrap, bootstrapAuthority.profile)) {
+        throw new Error("Bootstrap person role no longer permits the issued grant");
+      }
+    } catch {
+      return {
+        ok: false as const,
+        message: "Personal bootstrap is no longer authorized; request a fresh handoff.",
+      };
+    }
+  }
+  const operatorDevice =
+    role === "operator" && device && devicePublicKey ? await getPairedDevice(device.id) : null;
+  let operatorProfileEnrollment: ReturnType<typeof readOperatorProfileEnrollment>;
+  try {
+    operatorProfileEnrollment =
+      device && devicePublicKey
+        ? readOperatorProfileEnrollment(operatorDevice, {
+            role,
+            deviceId: device.id,
+            publicKey: devicePublicKey,
+            // Only a verified handoff can reach the existing reapproval ceremony.
+            allowReapproval: authMethod === "bootstrap-token",
+          })
+        : undefined;
+  } catch {
+    return {
+      ok: false as const,
+      message: "Personal device enrollment is inactive; request enrollment again.",
+    };
+  }
+  if (
+    operatorProfileEnrollment &&
+    personalBootstrap &&
+    operatorProfileEnrollment.profileId !== personalBootstrap.operatorProfileId
+  ) {
+    return {
+      ok: false as const,
+      message:
+        "This device represents another person; use explicit profile enrollment to change it.",
+    };
+  }
+  if (operatorProfileEnrollment && operatorDevice && authMethod !== "bootstrap-token") {
+    // Shared or ingress authority cannot silently widen a personal installation.
+    scopes = intersectOperatorScopes(scopes, resolvePairedAccessScopes(operatorDevice));
+  }
+  return {
+    ok: true as const,
+    scopes,
+    operatorDevice,
+    operatorProfileEnrollment,
+    personalBootstrap,
+    isCurrent,
+  };
 }

@@ -14,6 +14,7 @@ import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.
 import {
   operatorScopeSatisfied,
   intersectOperatorScopes,
+  roleScopesAllow,
 } from "../shared/operator-scope-compat.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
 import { profileCatalogPath } from "../state/user-profile-identity.read.js";
@@ -31,10 +32,10 @@ import {
   captureGatewayDeviceRevocation,
   onGatewayDeviceSourceRevoked,
 } from "./device-revocation.js";
+import { resolveOpenClawIdOperatorProfileEnrollment } from "./openclaw-id/operator-profile-enrollment.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
   onOpenClawIdTunnelPrincipalsChanged,
-  openclawIdTunnelRolePolicy,
   prepareOpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
 import {
@@ -42,9 +43,13 @@ import {
   resumeGatewayOperatorAccessGrant,
 } from "./operator-access-policy.js";
 import {
+  captureOperatorProfileEnrollmentAssertion,
+  isOperatorProfileEnrollmentCurrent,
+} from "./operator-profile-enrollment-authority.js";
+import {
   onOperatorRolePolicyChanged,
   readOperatorRoleConfigRevision,
-  resolveOperatorRolePolicyForAssignment,
+  resolveOperatorRolePolicyForPrincipal,
 } from "./operator-role-policy.js";
 import {
   isOperatorRoleSourcePolicyCurrent,
@@ -159,7 +164,6 @@ async function restoreGatewayOperatorSnapshot(params: {
       subscriptions.push(() => ingress.signal.removeEventListener("abort", revoke));
     }
     const principal = snapshot.openclawIdPrincipal;
-    const membershipPolicy = openclawIdTunnelRolePolicy(principal);
     if (principal) {
       await prepareOpenClawIdTunnelPrincipal(principal);
     }
@@ -180,13 +184,38 @@ async function restoreGatewayOperatorSnapshot(params: {
     }
     const device = captureGatewayDeviceRevocation(
       gatewayOwner,
-      { deviceId: snapshot.device?.deviceId, role: "operator" },
+      {
+        deviceId: snapshot.operatorProfileEnrollment?.deviceId ?? snapshot.device?.deviceId,
+        role: "operator",
+      },
       () => !signal.signal.aborted,
     );
     subscriptions.push(device.release);
     const releaseDeviceNotification = onGatewayDeviceSourceRevoked(device.isCurrent, revoke);
     if (releaseDeviceNotification) {
       subscriptions.push(releaseDeviceNotification);
+    }
+    let assertEnrollment: (() => void) | undefined;
+    const idEnrollment =
+      principal &&
+      snapshot.operatorProfileEnrollmentViaPeer &&
+      snapshot.sourceIngress !== "principal"
+        ? await resolveOpenClawIdOperatorProfileEnrollment(principal)
+        : undefined;
+    if (
+      idEnrollment &&
+      (JSON.stringify(idEnrollment.enrollment) !==
+        JSON.stringify(snapshot.operatorProfileEnrollment) ||
+        (idEnrollment.scopeCeiling &&
+          !roleScopesAllow({
+            role: "operator",
+            requestedScopes: snapshot.scopes,
+            allowedScopes: idEnrollment.scopeCeiling,
+          })))
+    ) {
+      throw new GatewayOperatorRecoveryAuthorizationError(
+        "Restart recovery operator enrollment changed.",
+      );
     }
     let authPolicy: GatewayAuthPolicy | undefined = snapshot.authPolicy;
     let sourceConfig: OpenClawConfig | undefined;
@@ -195,6 +224,12 @@ async function restoreGatewayOperatorSnapshot(params: {
     const assertSourcePolicy = () => {
       assertLifetime();
       ingress?.assertCurrent();
+      assertEnrollment?.();
+      if (idEnrollment && !idEnrollment.isCurrent()) {
+        throw new GatewayOperatorRecoveryAuthorizationError(
+          "Restart recovery operator enrollment changed.",
+        );
+      }
       const cfg = getConfig();
       const revision = readOperatorRoleConfigRevision(gatewayOwner);
       const publication = runtimeConfigPublication.current?.revision;
@@ -213,13 +248,14 @@ async function restoreGatewayOperatorSnapshot(params: {
           !isOperatorRoleSourcePolicyCurrent(
             snapshot.rolePolicy,
             sourceRolePolicy(
-              membershipPolicy ??
-                resolveOperatorRolePolicyForAssignment(
-                  snapshot.profileId,
-                  snapshot.assignedRole,
-                  cfg,
-                  snapshot.githubLogin,
-                ),
+              resolveOperatorRolePolicyForPrincipal(
+                snapshot.profileId,
+                snapshot.assignedRole,
+                cfg,
+                snapshot.githubLogin,
+                principal,
+                snapshot.operatorProfileEnrollment,
+              ),
             ),
             snapshot.scopes,
           )) ||
@@ -352,10 +388,21 @@ async function restoreGatewayOperatorSnapshot(params: {
     if (snapshot.device) {
       const paired = await loadPairedDevicePairingStoreRecordReadOnly(snapshot.device.deviceId);
       if (
+        (!snapshot.operatorProfileEnrollment && paired?.operatorProfileId !== undefined) ||
         !isPairedDeviceTokenIdentityCurrent(paired, "operator", snapshot.device, snapshot.scopes)
       ) {
         revoke(new GatewayOperatorRecoveryAuthorizationError());
       }
+    }
+    if (snapshot.operatorProfileEnrollment) {
+      const enrollment = snapshot.operatorProfileEnrollment;
+      const paired = await loadPairedDevicePairingStoreRecordReadOnly(enrollment.deviceId);
+      if (!isOperatorProfileEnrollmentCurrent(paired, enrollment, snapshot.scopes)) {
+        throw new GatewayOperatorRecoveryAuthorizationError(
+          "Restart recovery operator enrollment changed.",
+        );
+      }
+      assertEnrollment = captureOperatorProfileEnrollmentAssertion(enrollment, snapshot.scopes);
     }
     assertRecoveryCurrent();
     await prepared.revalidate();
@@ -363,6 +410,7 @@ async function restoreGatewayOperatorSnapshot(params: {
     const live = captureChannelOperatorRunAuthority({
       profileId: snapshot.profileId,
       openclawIdPrincipal: principal,
+      operatorProfileEnrollment: snapshot.operatorProfileEnrollment,
       assignedRole: snapshot.assignedRole,
       githubLogin: snapshot.githubLogin,
       scopes: snapshot.scopes,

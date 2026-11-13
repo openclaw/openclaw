@@ -22,6 +22,9 @@ export async function runTuiCliAction(
 ): Promise<void> {
   const invokedAsLocalAlias = invokedSubcommand === "terminal" || invokedSubcommand === "chat";
   const isLocal = Boolean(opts.local) || invokedAsLocalAlias;
+  if (opts.deviceAuth && (isLocal || opts.token || opts.password)) {
+    throw new Error("--device-auth requires Gateway mode without explicit shared credentials.");
+  }
   if (target && isLocal) {
     throw new Error(
       "a session target cannot be combined with --local, openclaw chat, or openclaw terminal",
@@ -50,6 +53,15 @@ export async function runTuiCliAction(
     token: opts.token,
     password: opts.password,
     tlsFingerprint: opts.tlsFingerprint,
+    ...(opts.deviceAuth ? { deviceAuth: true } : {}),
+    ...(opts.deviceAuth && target
+      ? {
+          deviceIdentity: await (
+            await import("./interactive-device-auth.js")
+          ).loadInteractiveOperatorDeviceIdentity(),
+          useStoredDeviceAuth: true,
+        }
+      : {}),
   };
   const resolved = target
     ? await resolveSessionTarget({
@@ -62,7 +74,17 @@ export async function runTuiCliAction(
   const { url, token, password, tlsFingerprint } = resolved?.gateway ?? {};
   await runTui({
     local: isLocal,
-    ...(url ? { boundGateway: { url, token, password, tlsFingerprint } } : gateway),
+    ...(url
+      ? {
+          boundGateway: {
+            url,
+            token,
+            password,
+            tlsFingerprint,
+            ...(opts.deviceAuth ? { deviceAuth: true } : {}),
+          },
+        }
+      : gateway),
     session: resolved?.sessionKey ?? opts.session,
     ...(resolved ? { agentId: resolved.agentId } : {}),
     deliver: Boolean(opts.deliver),

@@ -192,6 +192,10 @@ impl GatewayDeviceIdentityStore {
 }
 
 impl GatewayDeviceIdentity {
+    pub(crate) fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
     pub(crate) fn signed_device(
         &self,
         auth: &GatewayAuth,

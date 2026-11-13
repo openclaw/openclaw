@@ -21,13 +21,16 @@ import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { resolveAdvertisedLanHostCore } from "../infra/advertised-lan-host.js";
+import { prepareDeviceBootstrapProfileAuthority } from "../infra/device-bootstrap-profile-authority.js";
 import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
 import {
   pickMatchingExternalInterfaceAddress,
   safeNetworkInterfaces,
 } from "../infra/network-interfaces.js";
 import {
-  deviceBootstrapProfilesEqual,
+  deviceBootstrapProfileMatchesAccess,
+  assertDeviceBootstrapPersonalSelection,
+  normalizeDeviceBootstrapProfile,
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
   resolvePairingSetupAccess,
@@ -39,6 +42,8 @@ import {
   resolveTailnetHostWithRunner,
   resolveTailscalePublishedHost,
 } from "../shared/tailscale-status.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { ensureCanonicalLocalUserProfile } from "../state/user-profile-writes.js";
 
 type PairingSetupPayload = {
   url: string;
@@ -80,6 +85,8 @@ type PairingSetupResolution =
       accessDowngraded: boolean;
       setupId: string;
       expiresAtMs: number;
+      /** Internal disclosure guard; never part of the encoded setup payload. */
+      assertCurrent?: () => void;
     }
   | {
       ok: false;
@@ -468,6 +475,10 @@ export async function resolvePairingSetupFromConfig(
     useLocalGateway?: boolean;
     forceSecure?: boolean;
     bootstrapProfile?: DeviceBootstrapProfileInput;
+    profileId?: string;
+    enrollmentId?: string;
+    name?: string;
+    assertCurrent?: () => void;
     issuedBootstrap?: { token: string; expiresAtMs: number; setupId: string };
     runCommandWithTimeout?: PairingSetupCommandRunner;
     networkInterfaces?: () => ReturnType<typeof os.networkInterfaces>;
@@ -475,6 +486,25 @@ export async function resolvePairingSetupFromConfig(
     loadLocalTlsFingerprint?: () => Promise<string | undefined>;
   } = {},
 ): Promise<PairingSetupResolution> {
+  const selectsPerson =
+    options.profileId !== undefined ||
+    options.enrollmentId !== undefined ||
+    options.name !== undefined;
+  if (
+    selectsPerson &&
+    (Boolean(options.profileId) === Boolean(options.enrollmentId) ||
+      (options.profileId !== undefined && options.name !== undefined))
+  ) {
+    throw new Error("Choose an existing profileId or a local enrollmentId/name, not both");
+  }
+  const personContext = selectsPerson
+    ? captureOpenClawStateWorkerContext({ env: options.env ?? process.env })
+    : undefined;
+  const assertCurrent = () => {
+    personContext?.admission.assertCurrent();
+    options.assertCurrent?.();
+  };
+  assertCurrent();
   assertExplicitGatewayAuthModeWhenBothConfigured(cfg);
   const env = options.env ?? process.env;
   const cfgForAuth = await materializeGatewayAuthSecretRefs({
@@ -525,15 +555,59 @@ export async function resolvePairingSetupFromConfig(
   const requestedBootstrapProfile =
     options.bootstrapProfile ?? FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE;
   const accessDowngraded =
-    deviceBootstrapProfilesEqual(
+    deviceBootstrapProfileMatchesAccess(
       requestedBootstrapProfile,
       FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
     ) && !isFullAccessMobilePairingUrl(urlResult.url);
   // Keep plaintext LAN routes useful for node/chat access, but reserve admin
   // handoff for TLS or same-host loopback, where no LAN observer exists.
-  const issuedBootstrapProfile = accessDowngraded
-    ? PAIRING_SETUP_BOOTSTRAP_PROFILE
+  let issuedBootstrapProfile = accessDowngraded
+    ? {
+        ...PAIRING_SETUP_BOOTSTRAP_PROFILE,
+        ...(requestedBootstrapProfile.operatorProfileId !== undefined
+          ? { operatorProfileId: requestedBootstrapProfile.operatorProfileId }
+          : {}),
+      }
     : requestedBootstrapProfile;
+  let personAuthority:
+    | Awaited<ReturnType<typeof prepareDeviceBootstrapProfileAuthority>>
+    | undefined;
+  if (selectsPerson) {
+    if (options.issuedBootstrap || issuedBootstrapProfile.operatorProfileId !== undefined) {
+      throw new Error("Person selection cannot replace a preissued bootstrap grant");
+    }
+    assertDeviceBootstrapPersonalSelection(
+      normalizeDeviceBootstrapProfile({
+        ...issuedBootstrapProfile,
+        operatorProfileId: options.profileId ?? "pending-local-enrollment",
+      }),
+    );
+    assertCurrent();
+    if (!personContext) {
+      throw new Error("Personal setup requires its original state owner");
+    }
+    let profileId = options.profileId;
+    if (profileId === undefined) {
+      if (!options.enrollmentId) {
+        throw new Error("Local setup person creation requires enrollmentId");
+      }
+      profileId = (
+        await ensureCanonicalLocalUserProfile(
+          { enrollmentId: options.enrollmentId, name: options.name },
+          {
+            path: personContext.admission.databasePath,
+            env: personContext.environment,
+            assertCurrent,
+          },
+        )
+      ).id;
+    }
+    personAuthority = await prepareDeviceBootstrapProfileAuthority(
+      { ...issuedBootstrapProfile, operatorProfileId: profileId },
+      { context: personContext, assertCurrent },
+    );
+    issuedBootstrapProfile = personAuthority.profile;
+  }
   const directGatewayTlsFingerprintRaw =
     urlResult.url.startsWith("wss://") && urlResult.source?.startsWith("gateway.bind=")
       ? (options.localTlsFingerprint ?? (await options.loadLocalTlsFingerprint?.()))
@@ -550,7 +624,12 @@ export async function resolvePairingSetupFromConfig(
     options.issuedBootstrap ??
     (await issueDevicePairSetupBootstrapToken({
       profile: issuedBootstrapProfile,
+      ...(personAuthority
+        ? { context: personAuthority.context, assertCurrent: personAuthority.assertCurrent }
+        : { assertCurrent: options.assertCurrent }),
     }));
+  personAuthority?.assertCurrent();
+  assertCurrent();
 
   return {
     ok: true,
@@ -566,5 +645,6 @@ export async function resolvePairingSetupFromConfig(
     accessDowngraded,
     setupId: issued.setupId,
     expiresAtMs: issued.expiresAtMs,
+    ...(personAuthority ? { assertCurrent: personAuthority.assertCurrent } : {}),
   };
 }

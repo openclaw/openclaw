@@ -9,8 +9,7 @@ import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import type { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import { isBrowserOperatorUiClient } from "../utils/message-channel.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
-import { openclawIdTunnelRolePolicy } from "./openclaw-id/tunnel-principal.js";
-import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
+import { resolveOperatorRolePolicyForPrincipal } from "./operator-role-policy.js";
 import { sourceRolePolicy } from "./operator-role-source-policy.js";
 import {
   decodeQueuedOperatorRecoverySource,
@@ -74,6 +73,34 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
   config: OpenClawConfig;
 }): OperatorRunRecoverySnapshot | undefined {
   const { client, authority, identity } = params;
+  const captureSource = () => {
+    const modelPolicy = captureOperatorModelPolicySnapshot(params.modelPolicy);
+    if (params.modelPolicy && !modelPolicy) {
+      return undefined;
+    }
+    const profile = identity.readCurrentProfile();
+    return {
+      profileId: authority.profileId,
+      openclawIdPrincipal: authority.openclawIdPrincipal,
+      scopes: [...authority.scopes],
+      assignedRole: profile.assignedRole,
+      githubLogin: profile.githubLogin ?? null,
+      rolePolicy: sourceRolePolicy(
+        resolveOperatorRolePolicyForPrincipal(
+          profile.profileId,
+          profile.assignedRole,
+          params.config,
+          profile.githubLogin ?? null,
+          authority.openclawIdPrincipal,
+          client.internal?.operatorProfileEnrollment,
+        ),
+      ),
+      modelPolicy,
+      grant: authority.gatewayAccessGrant,
+      aliasBindingIds: identity.emailBindingIds,
+      operatorProfileEnrollment: client.internal?.operatorProfileEnrollment,
+    };
+  };
   const remote = client.internal?.remoteIngressPrincipal;
   if (remote) {
     if (!remote.recoverySource) {
@@ -81,29 +108,12 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
     }
     remote.assertCurrent();
     authority.assertCurrent();
-    const modelPolicy = captureOperatorModelPolicySnapshot(params.modelPolicy);
-    if (params.modelPolicy && !modelPolicy) {
+    const source = captureSource();
+    if (!source) {
       return undefined;
     }
-    const profile = identity.readCurrentProfile();
     return normalizeGatewayOperatorRecoverySnapshot({
-      profileId: authority.profileId,
-      openclawIdPrincipal: authority.openclawIdPrincipal,
-      scopes: [...authority.scopes],
-      assignedRole: profile.assignedRole,
-      githubLogin: profile.githubLogin ?? null,
-      rolePolicy: sourceRolePolicy(
-        openclawIdTunnelRolePolicy(authority.openclawIdPrincipal) ??
-          resolveOperatorRolePolicyForAssignment(
-            profile.profileId,
-            profile.assignedRole,
-            params.config,
-            profile.githubLogin ?? null,
-          ),
-      ),
-      modelPolicy,
-      grant: authority.gatewayAccessGrant,
-      aliasBindingIds: identity.emailBindingIds,
+      ...source,
       sourceIngress: "principal",
       ingress: remote.recoverySource,
       controlUiAdmin: false,
@@ -134,36 +144,20 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
   if (client.usesSharedGatewayAuth && sharedGeneration === undefined) {
     return undefined;
   }
-  const modelPolicy = captureOperatorModelPolicySnapshot(params.modelPolicy);
-  if (params.modelPolicy && !modelPolicy) {
+  const source = captureSource();
+  if (!source) {
     return undefined;
   }
-  const profile = identity.readCurrentProfile();
-  const source = {
-    profileId: authority.profileId,
-    openclawIdPrincipal: authority.openclawIdPrincipal,
-    scopes: [...authority.scopes],
-    assignedRole: profile.assignedRole,
-    githubLogin: profile.githubLogin ?? null,
-    rolePolicy: sourceRolePolicy(
-      openclawIdTunnelRolePolicy(authority.openclawIdPrincipal) ??
-        resolveOperatorRolePolicyForAssignment(
-          profile.profileId,
-          profile.assignedRole,
-          params.config,
-          profile.githubLogin ?? null,
-        ),
-    ),
-    modelPolicy,
-    grant: authority.gatewayAccessGrant,
-    aliasBindingIds: identity.emailBindingIds,
+  return normalizeGatewayOperatorRecoverySnapshot({
+    ...source,
     // Accepted work follows its grant, not unrelated handshake policy changes.
     authPolicy: { ...authPolicy, generation: "" },
     sharedGeneration,
     device,
+    operatorProfileEnrollmentViaPeer:
+      authority.openclawIdPrincipal && !client.connect.device ? true : undefined,
     controlUiAdmin: client.internal?.controlUiAdmin === true,
     localOperator: client.internal?.isLocalClient === true,
     sourceIngress: isBrowserOperatorUiClient(client.connect.client) ? "control-ui" : "internal",
-  };
-  return normalizeGatewayOperatorRecoverySnapshot(source);
+  });
 }

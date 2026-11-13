@@ -2,7 +2,12 @@ import type { SessionApprovalEvent } from "../../../packages/gateway-protocol/sr
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
-import type { DevicePairSetupAccess, DevicePairSetupLifecycle } from "../lib/device-pair-setup.ts";
+import type {
+  DevicePairSetupAccess,
+  DevicePairSetupLifecycle,
+  DevicePairSetupPerson,
+  DevicePairSetupPersonInput,
+} from "../lib/device-pair-setup.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "./exec-approval.ts";
 import type { SubmittedUpdateReport } from "./update-failure-report.ts";
 import type {
@@ -45,6 +50,7 @@ export type ApplicationOverlaySnapshot = ApplicationUpdateOverlaySnapshot & {
   devicePairSetupOpen: boolean;
   devicePairSetupLifecycle: DevicePairSetupLifecycle;
   devicePairPendingCount: number;
+  devicePairSetupPerson?: DevicePairSetupPerson;
 };
 
 export type ApplicationOverlays = {
@@ -67,7 +73,7 @@ export type ApplicationOverlays = {
     projectedApproval?: ExecApprovalRequest,
   ) => Promise<void>;
   openDevicePairSetup: () => Promise<boolean>;
-  refreshDevicePairSetup: () => Promise<void>;
+  refreshDevicePairSetup: (person?: DevicePairSetupPersonInput) => Promise<void>;
   setDevicePairSetupAccess: (access: DevicePairSetupAccess) => Promise<void>;
   closeDevicePairSetup: () => void;
   dispose: () => void;

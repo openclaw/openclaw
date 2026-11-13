@@ -17,8 +17,9 @@ Gateway. A withdrawn code cannot be approved. If approval has already completed,
 Cancel reports that outcome instead; it does not revoke the paired device. If the
 request record has expired or is already absent, Cancel cannot confirm a withdrawal.
 
-Browser-code pairing does not verify a person's identity, so it is unavailable
-when `gateway.roles` is configured. Use the Gateway's identity-aware sign-in,
+Browser-code pairing verifies the browser key, not a person's external identity.
+With `gateway.roles` configured, select a canonical person explicitly using
+`openclaw pair <code> --person <profile-id>`, or use the Gateway's identity-aware sign-in,
 or ask an administrator which sign-in method is supported. Enabling roles while
 a code is pending also prevents approval of that code. This restriction applies
 only to browser-code pairing, not other sign-in or device-pairing methods.
@@ -49,6 +50,36 @@ When you set `--url`, the CLI does not fall back to config or environment creden
 </Warning>
 
 ## Commands
+
+### Personal operator enrollment
+
+Use an existing owner/admin connection to associate an approved operator device
+with a personal Gateway profile. This uses current pairing credentials; it does
+not create an email login, verify a GitHub account, or grant additional scopes.
+
+    openclaw devices enroll --name "Alex"
+    openclaw devices enroll --device <device-id> --person <profile-id>
+
+Omit both person options to create a local profile without a display name. Use
+--person for an existing person, or --name for a new one, not both. The Gateway
+still checks current administrator authority, the target operator grant, and
+any independently authenticated personal identity.
+
+For a new person, `--enrollment-id <uuid>` reuses the same enrollment after a lost
+response. An unconfirmed command reports that ID; retain it rather than creating
+another person. The command never automatically repeats an uncertain mutation
+or falls back to editing the local Gateway database.
+
+For self-enrollment, the refreshed operator credential is saved through the
+existing local credential store, scoped to the selected Gateway. Neither normal
+output nor --json prints the token. Explicitly paired interactive clients can
+then use that profile; ordinary shared-secret maintenance commands remain
+Shared Owner. Enrolling another device does not copy its credential to this CLI.
+
+Device scopes, profile roles, channel rules, and OpenClaw ID membership still
+limit access. Changing the represented person requires authorized re-enrollment;
+renaming a device does not change it. Node capability grants on the same mobile
+device remain separate. Use existing revocation/removal controls to end access.
 
 ### `openclaw devices list`
 
@@ -315,3 +346,9 @@ If approval keeps failing, run `openclaw devices list` first to confirm a pendin
 - [CLI reference](/cli)
 - [Nodes](/nodes)
 - [`openclaw qr`](/cli/qr) — generate the mobile-node bootstrap QR and setup code
+
+Use `openclaw devices approve <request-id> --person <profile-id>` to approve an additional operator installation and its personal association together. This does not associate the node side of a mixed-role device.
+
+After explicit CLI enrollment, `openclaw gateway call users.self --device-auth --json` uses the enrolled installation's stored credential without shared-owner fallback. Omit `--device-auth` for ordinary maintenance calls. `--person` selects a human profile; the root `--profile` option still selects a separate OpenClaw configuration/state profile.
+
+Interactive enrollment uses a separate installation key so ordinary service commands do not inherit the person. Use `openclaw tui --device-auth` for personal terminal chat, or `openclaw gateway call <method> --device-auth` for an explicit personal RPC. These modes require the enrolled credential and do not fall back to shared owner authentication. Existing TUI/service behavior is unchanged when the flag is omitted.

@@ -606,8 +606,14 @@ export async function executeSystemAgentOperation(
       // A reachable Gateway owns the state lock, so embedded mode would fail during hatch.
       // Keep embedded mode only as the no-Gateway fallback for standalone sessions.
       const useEmbeddedTui = !overview.gateway.reachable;
+      if (opts.deps?.interactiveDeviceAuth && useEmbeddedTui) {
+        throw new Error(
+          "The enrolled terminal requires its Gateway. It cannot fall back to a local shared session.",
+        );
+      }
       const result = await runTui({
         local: useEmbeddedTui,
+        ...(opts.deps?.interactiveDeviceAuth ? { deviceAuth: true } : {}),
         session,
         deliver: false,
         historyLimit: 200,

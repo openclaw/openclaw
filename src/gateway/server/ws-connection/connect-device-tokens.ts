@@ -23,6 +23,27 @@ export async function issueGatewayConnectDeviceTokens(params: {
     deviceTokenSharedGatewaySessionGeneration,
     handoffBootstrapProfile,
   } = state;
+  const selectedBootstrap =
+    handoffBootstrapProfile?.operatorProfileId !== undefined
+      ? handoffBootstrapProfile
+      : state.issuedBootstrapProfile?.operatorProfileId !== undefined
+        ? state.issuedBootstrapProfile
+        : undefined;
+  const bootstrapBinding =
+    selectedBootstrap && device && state.bootstrapTokenCandidate && state.devicePublicKey
+      ? {
+          expectedPublicKey: state.devicePublicKey,
+          expectedOperatorProfileId: selectedBootstrap.operatorProfileId,
+          bootstrapSource: {
+            token: state.bootstrapTokenCandidate,
+            deviceId: device.id,
+            publicKey: state.devicePublicKey,
+          },
+        }
+      : undefined;
+  if (selectedBootstrap && !bootstrapBinding) {
+    throw new Error("Person-selected bootstrap credential source is unavailable");
+  }
   const sharedGatewayAuthIssuer =
     sessionSharedGatewaySessionGeneration &&
     (deviceTokenSharedGatewaySessionGeneration !== undefined ||
@@ -49,6 +70,7 @@ export async function issueGatewayConnectDeviceTokens(params: {
                   authority: nodePrincipal.authority,
                 }
               : undefined,
+          ...bootstrapBinding,
           isIssuanceCurrent: params.isIssuanceCurrent,
         })
       : null;
@@ -81,6 +103,7 @@ export async function issueGatewayConnectDeviceTokens(params: {
         deviceId: device.id,
         role: bootstrapRole,
         scopes: bootstrapRoleScopes,
+        ...bootstrapBinding,
         isIssuanceCurrent: params.isIssuanceCurrent,
       });
       if (!extraToken) {

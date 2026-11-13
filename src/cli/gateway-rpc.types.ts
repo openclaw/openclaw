@@ -6,5 +6,6 @@ export type GatewayRpcOpts = {
   password?: string;
   timeout?: string;
   expectFinal?: boolean;
+  deviceAuth?: boolean;
   json?: boolean;
 };

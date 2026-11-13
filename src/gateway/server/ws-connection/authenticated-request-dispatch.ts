@@ -41,6 +41,7 @@ import {
   GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
   hasCurrentGatewayOperatorAccess,
 } from "../../operator-access-policy.js";
+import { captureOperatorProfileEnrollmentAssertion } from "../../operator-profile-enrollment-authority.js";
 import { onOperatorRolePolicyChanged } from "../../operator-role-policy.js";
 import { bindWebSocketRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestEntry } from "../../server-request-entry.js";
@@ -66,8 +67,11 @@ const loadGatewayServerMethods = createLazyPromise(
 
 const DEVICE_CREDENTIAL_INVALIDATING_METHODS = new Set([
   "device.pair.remove",
+  "device.pair.approve",
+  "device.pair.code",
   "device.token.rotate",
   "device.token.revoke",
+  "device.profile.enroll",
   "node.pair.remove",
 ]);
 
@@ -168,7 +172,24 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       getRequiredSharedGatewaySessionGeneration,
     );
     const remoteIngress = client.remoteControlUiIngress;
+    const assertEnrollment = client.internal?.operatorProfileEnrollment
+      ? captureOperatorProfileEnrollmentAssertion(
+          client.internal.operatorProfileEnrollment,
+          client.connect.scopes ?? [],
+        )
+      : undefined;
     const hasCurrentIngress = () => {
+      try {
+        assertEnrollment?.();
+      } catch {
+        invalidateGatewayPolicyClient(client, {
+          reason: "operator-profile-enrollment-changed",
+          code: 4001,
+          message: "Operator device profile enrollment changed",
+          close: () => close(4001, "Operator device profile enrollment changed"),
+        });
+        return false;
+      }
       const principal = client.internal?.openclawIdPrincipal;
       if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
         invalidateGatewayPolicyClient(client, {

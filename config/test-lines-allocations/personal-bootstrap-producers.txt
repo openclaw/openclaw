@@ -1,0 +1,2 @@
+# Exact bootstrap producer regression growth: real worker person/source/role grants, sibling tokens, setup RPC, and CLI selection.
+462

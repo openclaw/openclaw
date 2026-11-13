@@ -1,5 +1,6 @@
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import {
+  deviceBootstrapProfilesEqual,
   resolveDeviceProfileRoleScopes,
   resolveDeviceProfileScopes,
   type DeviceBootstrapProfile,
@@ -8,6 +9,8 @@ import {
   resolveMissingRequestedScope,
   resolveScopeOutsideRequestedRoles,
 } from "../shared/operator-scope-compat.js";
+import { assertBootstrapPersonInDatabase } from "./device-bootstrap-profile.worker.js";
+import { requireDeviceBootstrapSourceInWorker } from "./device-bootstrap.worker-kernel.js";
 import type {
   DevicePairingAccessMetadata,
   ApproveDevicePairingResult,
@@ -29,6 +32,7 @@ import {
 } from "./device-pairing-state.kernel.js";
 import type { DevicePairingStoreState } from "./device-pairing-store.js";
 import { persistDevicePairingStoreState as persistState } from "./device-pairing-store.js";
+import { reusablePairedDeviceToken } from "./device-pairing-token-policy.js";
 import { createDeviceAuthToken, resolveRoleTokenScopes } from "./device-pairing-token-utils.js";
 import type {
   DeviceAuthToken,
@@ -36,6 +40,7 @@ import type {
   PairedDevice,
   PairedDeviceApprovalKind,
 } from "./device-pairing.types.js";
+import type { EngineConnection } from "./sql-connection.js";
 
 const OPERATOR_ROLE = "operator";
 const OPERATOR_SCOPE_PREFIX = "operator.";
@@ -110,6 +115,11 @@ function buildApprovedPairedDevice(params: {
     // Operator-assigned label is owner-side state; device repair or role
     // re-approval must not silently drop it.
     ...(params.existing?.operatorLabel ? { operatorLabel: params.existing.operatorLabel } : {}),
+    // Personal identity belongs to the proven installation, not a reusable device ID.
+    ...(params.existing?.publicKey === params.pending.publicKey &&
+    params.existing.operatorProfileId !== undefined
+      ? { operatorProfileId: params.existing.operatorProfileId }
+      : {}),
     createdAtMs: params.existing?.createdAtMs ?? params.now,
     approvedAtMs: params.now,
     lastSeenAtMs: params.accessMetadata?.lastSeenAtMs ?? params.existing?.lastSeenAtMs,
@@ -216,6 +226,12 @@ export function approveDevicePairingInWorker(
   return withPendingDevicePairingApproval(requestId, nowMs, (state, pendingRecord, existing) => {
     const autoApproveScopes = options?.autoApproveNewDeviceScopes;
     const requestedRoles = resolveRequestedDeviceRoles(pendingRecord);
+    if (
+      options?.operatorProfileId !== undefined &&
+      (!requestedRoles.includes(OPERATOR_ROLE) || (options.approvedVia ?? "owner") !== "owner")
+    ) {
+      throw new Error("Only explicit operator approval may associate a person");
+    }
     // Trusted proxy and remote ingress connects carry authenticated front-door
     // authority, and the handshake has proven possession of the pending key. A
     // matching key on the paired record is therefore the same physical device
@@ -312,6 +328,14 @@ export function approveDevicePairingInWorker(
       approvedVia: options?.approvedVia ?? "owner",
       accessMetadata: options?.accessMetadata,
     });
+    if (options?.operatorProfileId !== undefined) {
+      device.operatorProfileId = options.operatorProfileId;
+      requestDevicePairingMutationAdmission({
+        kind: "pairing-profile-enrollment",
+        deviceId: device.deviceId,
+        profileId: options.operatorProfileId,
+      });
+    }
     return commitApprovedDevicePairing({ state, requestId, device });
   });
 }
@@ -320,13 +344,49 @@ export function approveDevicePairingInWorker(
 export function approveBootstrapDevicePairingInWorker(
   requestId: string,
   bootstrapProfile: DeviceBootstrapProfile,
-  options: Pick<DeviceBootstrapApprovalOptions, "accessMetadata"> | undefined,
+  options: Pick<DeviceBootstrapApprovalOptions, "accessMetadata" | "bootstrapSource"> | undefined,
   nowMs: number,
+  db: EngineConnection,
 ): { result: ApproveDevicePairingResult; replacedRoles: string[] } {
   let replacedRoles: string[] = [];
   const approvedRoles = mergeDevicePairingRoles(bootstrapProfile.roles) ?? [];
   const approvedScopes = resolveDeviceProfileScopes(bootstrapProfile, approvedRoles);
   const result = withPendingDevicePairingApproval(requestId, nowMs, (state, pending, existing) => {
+    assertBootstrapPersonInDatabase(db, bootstrapProfile);
+    const source = options?.bootstrapSource;
+    if (source) {
+      const bound = requireDeviceBootstrapSourceInWorker(source, pending, nowMs);
+      const sameExistingPerson =
+        existing?.publicKey === pending.publicKey &&
+        existing?.operatorProfileId === bootstrapProfile.operatorProfileId;
+      if (
+        (bound.operatorProfileId !== bootstrapProfile.operatorProfileId &&
+          !(bound.operatorProfileId === undefined && sameExistingPerson)) ||
+        !deviceBootstrapProfilesEqual(bound, {
+          ...bootstrapProfile,
+          operatorProfileId: bound.operatorProfileId,
+        })
+      ) {
+        throw new Error("Bootstrap approval source no longer matches its exact person and device");
+      }
+    } else if (
+      bootstrapProfile.operatorProfileId !== undefined &&
+      (existing?.operatorProfileId !== bootstrapProfile.operatorProfileId ||
+        existing.publicKey !== pending.publicKey)
+    ) {
+      throw new Error(
+        "Person-selected bootstrap approval requires its exact server-held credential source",
+      );
+    }
+    if (
+      bootstrapProfile.operatorProfileId !== undefined &&
+      existing?.operatorProfileId &&
+      existing.operatorProfileId !== bootstrapProfile.operatorProfileId
+    ) {
+      throw new Error(
+        "Bootstrap cannot replace a represented person; use explicit device profile enrollment",
+      );
+    }
     const requestedRoles = resolveRequestedDeviceRoles(pending);
     const missingRole = requestedRoles.find((role) => !approvedRoles.includes(role));
     if (missingRole) {
@@ -368,6 +428,20 @@ export function approveBootstrapDevicePairingInWorker(
         roleForToken === OPERATOR_ROLE
           ? resolveDeviceProfileRoleScopes(bootstrapProfile, roleForToken, grantedScopes)
           : [];
+      // Selecting a person changes only operator authority. An active node
+      // keeps its independent credential and provenance, even on node-first setup.
+      if (
+        bootstrapProfile.operatorProfileId !== undefined &&
+        roleForToken === "node" &&
+        existing?.publicKey === pending.publicKey &&
+        reusablePairedDeviceToken(existing, {
+          role: roleForToken,
+          scopes: tokenScopes,
+          issuer: existingToken?.issuer,
+        })
+      ) {
+        continue;
+      }
       tokens[roleForToken] = createDeviceAuthToken({
         role: roleForToken,
         scopes: tokenScopes,
@@ -387,8 +461,14 @@ export function approveBootstrapDevicePairingInWorker(
       approvedVia: "bootstrap",
       accessMetadata: options?.accessMetadata,
     });
+    if (grantedRoles.includes(OPERATOR_ROLE) && bootstrapProfile.operatorProfileId !== undefined) {
+      device.operatorProfileId = bootstrapProfile.operatorProfileId;
+    }
     const approved = commitApprovedDevicePairing({ state, requestId, device });
-    replacedRoles = grantedRoles.filter((role) => existing?.tokens?.[role]);
+    replacedRoles = grantedRoles.filter((role) => {
+      const previous = existing?.tokens?.[role];
+      return previous !== undefined && previous.token !== tokens[role]?.token;
+    });
     return approved;
   });
   return { result, replacedRoles };

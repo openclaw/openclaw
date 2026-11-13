@@ -31,6 +31,7 @@ export function createSyntheticPluginRuntimeClient(
       | "agentRunTracking"
       | "operatorRoleActor"
       | "openclawIdPrincipal"
+      | "operatorProfileEnrollment"
       | "operatorRunAuthority"
       | "operatorAccessAuthority"
       | "cronRunContinuation"
@@ -67,6 +68,9 @@ export function createSyntheticPluginRuntimeClient(
       syntheticClient: true,
       ...(params?.operatorRoleActor ? { operatorRoleActor: params.operatorRoleActor } : {}),
       ...(params?.openclawIdPrincipal ? { openclawIdPrincipal: params.openclawIdPrincipal } : {}),
+      ...(params?.operatorProfileEnrollment
+        ? { operatorProfileEnrollment: params.operatorProfileEnrollment }
+        : {}),
       ...(params?.operatorRunAuthority
         ? { operatorRunAuthority: params.operatorRunAuthority }
         : {}),

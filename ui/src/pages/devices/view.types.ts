@@ -42,11 +42,12 @@ export type DevicesProps = Omit<
   execApprovalsTarget: "gateway" | "node";
   execApprovalsTargetNodeId: string | null;
   onDevicePairSetupOpen: () => void;
-  onDeviceApprove: (requestId: string) => void;
+  onDeviceApprove: (requestId: string, profileId?: string) => void;
   onDeviceReject: (requestId: string) => void;
   /** Carries the row's resolved display name so the rotation outcome names the same
    *  device the operator just clicked, without rederiving the label precedence. */
   onDeviceRotate: (device: { id: string; name: string }, role: string, scopes?: string[]) => void;
+  onDeviceEnroll?: (device: { id: string; name: string }) => void;
   onDeviceRevoke: (deviceId: string, role: string) => void;
   /**
    * Opens the alias editor for one paired device. `operatorLabel` is the alias

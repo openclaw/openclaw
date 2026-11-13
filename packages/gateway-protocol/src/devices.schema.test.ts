@@ -2,6 +2,14 @@
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import { DeviceTokenRotateResultSchema } from "./schema/devices.js";
+import { validateDeviceProfileEnrollParams } from "./validators/workers.js";
+
+it("accepts UUID enrollment keys and refuses invalid keys or caller-supplied scopes", () => {
+  const input = { enrollmentId: "463c0056-33be-46bc-b65e-1cfe21614e67", name: "Local Person" };
+  expect(validateDeviceProfileEnrollParams(input)).toBe(true);
+  expect(validateDeviceProfileEnrollParams({ enrollmentId: "invalid-key" })).toBe(false);
+  expect(validateDeviceProfileEnrollParams({ ...input, scopes: ["operator.admin"] })).toBe(false);
+});
 
 /**
  * Rotation results cross the operator boundary: the Gateway echoes the bearer token

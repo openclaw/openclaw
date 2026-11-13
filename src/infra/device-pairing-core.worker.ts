@@ -19,8 +19,25 @@ import {
   removeOpenClawIdNodePairingsInWorker,
 } from "./device-pairing-openclaw-id.worker.js";
 import * as tokens from "./device-pairing-tokens.kernel.js";
+import {
+  assertPersonalOperatorEnrollmentProfile,
+  enrollDeviceProfileInWorker,
+} from "./device-profile-enrollment.worker.js";
 
 export const devicePairingOperations = {
+  "devicePairing.enrollProfile": devicePairingMutation(
+    (
+      input: Parameters<typeof enrollDeviceProfileInWorker>[1],
+      { database, recordTokenReplacement },
+    ) => {
+      const result = enrollDeviceProfileInWorker(database.db, input);
+      if (result.replaced) {
+        recordTokenReplacement({ deviceId: result.deviceId, roles: ["operator"] });
+      }
+      return result;
+    },
+    { pairedDeviceId: (input) => input.deviceId },
+  ),
   "devicePairing.approveOpenClawIdNode": devicePairingMutation(
     (input: Parameters<typeof approveOpenClawIdNodeInWorker>[1], { database }) =>
       approveOpenClawIdNodeInWorker(database.db, input),
@@ -100,11 +117,20 @@ export const devicePairingOperations = {
     { pairedDeviceId: (input) => input.deviceId },
   ),
   "devicePairing.approve": devicePairingMutation(
-    (input: {
-      requestId: string;
-      options?: Parameters<typeof approval.approveDevicePairingInWorker>[1];
-      nowMs: number;
-    }) => approval.approveDevicePairingInWorker(input.requestId, input.options, input.nowMs),
+    (
+      input: {
+        requestId: string;
+        options?: Parameters<typeof approval.approveDevicePairingInWorker>[1];
+        nowMs: number;
+      },
+      { database },
+    ) => {
+      const profileId = input.options?.operatorProfileId;
+      if (profileId !== undefined) {
+        assertPersonalOperatorEnrollmentProfile(database.db, profileId);
+      }
+      return approval.approveDevicePairingInWorker(input.requestId, input.options, input.nowMs);
+    },
   ),
   "devicePairing.approveBootstrap": devicePairingMutation(
     (
@@ -114,15 +140,19 @@ export const devicePairingOperations = {
         accessMetadata?: NonNullable<
           Parameters<typeof approval.approveBootstrapDevicePairingInWorker>[2]
         >["accessMetadata"];
+        bootstrapSource?: NonNullable<
+          Parameters<typeof approval.approveBootstrapDevicePairingInWorker>[2]
+        >["bootstrapSource"];
         nowMs: number;
       },
-      { recordTokenReplacement },
+      { database, recordTokenReplacement },
     ) => {
       const result = approval.approveBootstrapDevicePairingInWorker(
         input.requestId,
         input.bootstrapProfile,
-        { accessMetadata: input.accessMetadata },
+        { accessMetadata: input.accessMetadata, bootstrapSource: input.bootstrapSource },
         input.nowMs,
+        database.db,
       );
       if (result.result?.status === "approved" && result.replacedRoles.length > 0) {
         recordTokenReplacement({
@@ -138,7 +168,7 @@ export const devicePairingOperations = {
   }),
   "devicePairing.ensureToken": devicePairingMutation(
     (input: Parameters<typeof tokens.ensureDeviceTokenInWorker>[0], { database }) => {
-      const token = tokens.ensureDeviceTokenInWorker(input);
+      const token = tokens.ensureDeviceTokenInWorker(input, database.db);
       if (token?.role === "node" && token.approval) {
         // Same transaction as issuance: explicit removal must not restore this listing's eligibility.
         consumeOpenClawIdNodePairingInWorker(database.db, token.approval);

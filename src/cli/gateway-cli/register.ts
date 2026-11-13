@@ -55,7 +55,18 @@ async function callGatewayReadOnlyCli(
   params?: unknown,
   signal?: AbortSignal,
 ) {
+  if (opts.deviceAuth && (opts.token || opts.password)) {
+    throw new Error("Choose --device-auth or explicit shared credentials, not both.");
+  }
   return await callGatewayFromCliWithTransport(method, opts, params, {
+    ...(opts.deviceAuth
+      ? {
+          useStoredDeviceAuth: true,
+          deviceIdentity: await (
+            await import("../interactive-device-auth.js")
+          ).loadInteractiveOperatorDeviceIdentity(),
+        }
+      : {}),
     defaultTimeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS,
     sharedStateMode: "read-only",
     signal,
@@ -246,6 +257,11 @@ export function registerGatewayCli(program: Command) {
     gateway
       .command("call")
       .description("Call a Gateway method")
+      .option(
+        "--device-auth",
+        "Use this installation's enrolled operator credential, without shared-owner fallback",
+        false,
+      )
       .argument("<method>", "Method name (health/status/system-presence/cron.*)")
       .option(
         "--expect-url <url>",

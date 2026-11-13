@@ -18,11 +18,15 @@ openclaw dashboard
 openclaw dashboard --no-open
 openclaw dashboard --json
 openclaw dashboard --yes
+openclaw dashboard --person <profile-id>
 ```
 
 - `--no-open`: print the URL but do not launch a browser.
 - `--json`: print one machine-readable connection object without opening a browser, using the clipboard, prompting, or starting the Gateway.
 - `--yes`: start/install the Gateway without prompting when needed.
+- `--person <profile-id>`: explicitly bind the one-time browser handoff to an existing personal Gateway profile. The profile must be current and cannot be Shared Owner. Its current role limits the issued scopes; the owner link never promotes its role. Omit this option for the existing unbound owner handoff. First-run personal-profile selection remains optional after inference setup.
+
+A person-bound handoff cannot silently replace a browser that already represents another person. Use explicit device profile enrollment to change that association.
 
 ## Gateway service and state compatibility
 

@@ -78,3 +78,29 @@ test("native failures remain explicit without a browser-identity fallback", asyn
   assert.match(response.error, /grant unavailable/);
   assert.equal(response.result, undefined);
 });
+
+test("personal enrollment uses the same native document authority and returns no credential", async () => {
+  const request = { id: "enroll", action: "enrollProfile", params: { profileId: "person" } };
+  const receipt = { id: request.id, result: { deviceId: "native-device", profileId: "person", reconnect: true } };
+  const value = fixture({ invoke: async (command, args) => {
+    assert.equal(command, "gateway_request");
+    assert.deepEqual(args, { message: { type: "enrollProfile", request }, token: "current-document" });
+    return receipt;
+  }});
+  value.ready("current-document");
+  assert.deepEqual(await value.window.OpenClawNativeGatewayAuth.postMessage(JSON.stringify(request)), receipt);
+});
+
+test("personal enrollment drops its receipt if the native document was replaced", async () => {
+  let finish;
+  let started;
+  const entered = new Promise(resolve => { started = resolve; });
+  const value = fixture({ invoke: () => { started(); return new Promise(resolve => { finish = resolve; }); } });
+  value.ready();
+  const request = { id: "enroll", action: "enrollProfile", params: { profileId: "person" } };
+  const pending = value.window.OpenClawNativeGatewayAuth.postMessage(JSON.stringify(request));
+  await entered;
+  value.ready("other-document");
+  finish({ id: request.id, result: { deviceId: "native-device", profileId: "person", reconnect: true } });
+  assert.match((await pending).error, /document changed/);
+});

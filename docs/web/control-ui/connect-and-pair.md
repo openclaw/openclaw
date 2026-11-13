@@ -76,11 +76,19 @@ If the Gateway denies the upgrade because it exceeds your assigned operator role
 
 </Note>
 
+## Personal identity on an approved device
+
+After the first successful AI setup, optional personal setup can create an email-less local profile or select an existing person. The same operation is available in **Settings > Profile**. Skipping keeps shared maintenance access unchanged.
+
+An administrator can associate an additional operator device with an existing person while approving its pending request in **Devices**, or later choose **Assign a person** in its details. This applies only to the operator grant of a mixed operator/node installation. Nodes and unattended clients do not become people.
+
+Enrolled operator access uses the person's current policy and the device's approved limits on both WebSocket and supported HTTP routes. A missing, conflicting or revoked personal binding is refused rather than becoming Shared Owner. A fresh owner handoff can repair the installation; changing the represented person requires explicit enrollment. Historical Shared Owner activity and credentials are not moved.
+
 ## Pair a browser with a code
 
-Use this when your own browser has no Gateway token and you can run a command on the Gateway host, including over SSH. You do not need a browser on the host, and nothing has to be pasted into the page. Approval grants administrator access; this is not a guest invitation.
+Use this when your own browser has no Gateway token and you can run a command on the Gateway host, including over SSH. You do not need a browser on the host, and nothing has to be pasted into the page. Unbound approval grants shared administrator access; selecting a person also applies their role. This is not an unauthenticated guest invitation.
 
-Code pairing is for a direct connection to the Gateway serving the page, not an OpenClaw ID tunnel or ID owner-browser enrollment. Gateways with `gateway.roles` configured require identity-aware sign-in and refuse this identity-less code flow; use the Gateway's normal sign-in method instead.
+Code pairing is for a direct connection to the Gateway serving the page, not an OpenClaw ID tunnel or ID owner-browser enrollment. With `gateway.roles` configured, the administrator must select an existing person explicitly: `openclaw pair <code> --person <profile-id>`. The code proves the browser key; that trusted selection establishes its local personal association before a credential is delivered. The person's role still limits access; no verified email, GitHub identity, or extra permission is created.
 
 <Steps>
   <Step title="Ask for a code">

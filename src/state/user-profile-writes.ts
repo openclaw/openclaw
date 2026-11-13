@@ -324,6 +324,14 @@ export async function ensureCanonicalUserProfileForTailscaleIdentity(
   return unwrap(await write("userProfiles.ensureTailscale", identity, options));
 }
 
+/** Creates an email-less local identity, with retries resolved by its enrollment alias. */
+export async function ensureCanonicalLocalUserProfile(
+  input: UserProfileWriteOperations["userProfiles.ensureLocal"]["input"],
+  options: ProfileWriteOptions = {},
+): Promise<UserProfile> {
+  return unwrap(await write("userProfiles.ensureLocal", input, options));
+}
+
 /** Ensures an exact OCID profile without email aliases or implicit profile merging. */
 export async function ensureCanonicalUserProfileForOpenClawIdIdentity(
   input: UserProfileWriteOperations["userProfiles.ensureOpenClawId"]["input"],

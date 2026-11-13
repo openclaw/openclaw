@@ -88,6 +88,38 @@ publisher-qualified recommendation ID and its JSON output reports
 proof of a local install. Otherwise keep that ID pending with `--retry` and do
 not overwrite the existing skill.
 
+## Personal setup in the terminal
+
+After inference is verified, terminal-first onboarding offers **Set up** or
+**Not now** before continuing. Browser-first onboarding leaves this offer to the
+dashboard rather than asking twice. **Not now** creates no personal profile or
+operator credential.
+
+**Set up** lets an administrator choose an existing person or create an email-less
+local profile with an optional name. An already-enrolled terminal can keep its
+confirmed current person; non-admin users never receive the People directory.
+Selection and creation use the selected Gateway. It previews that Gateway's current default role;
+it does not assign an administrator role. The interactive terminal uses a
+separate installation identity, leaving unattended maintenance commands unchanged.
+The Gateway's existing device-pairing approval policy still applies, including
+manual approval when local auto-approval is disabled.
+
+Before reporting success, onboarding saves the returned operator credential in
+its existing target-scoped store and reconnects with that credential to confirm
+the represented person. A pairing refusal, lost response, failed credential save,
+or failed confirmation stops this continuation instead of switching to SharedOwner.
+For an uncertain result, use the printed recovery command for openclaw devices
+enroll against the same Gateway; do not start another person. Ordinary onboarding
+reuses the same retry alias for the installation, Gateway, and previous confirmed
+association. A confirmed current person can be kept without another mutation.
+No token is printed.
+
+Fresh conversational setup defers this offer until the machine setup operation
+has completed and its Gateway is ready. If setup skipped service installation,
+the existing foreground child owner keeps the Gateway alive through the terminal
+continuation. An externally supervised Gateway stays with its external owner.
+The local setup assistant remains a setup surface, not a personal Gateway chat.
+
 ## Flags
 
 Local non-interactive onboarding migrates legacy credential JSON before applying

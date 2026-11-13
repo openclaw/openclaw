@@ -42,6 +42,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
+import { devicePersonalEnrollmentAction } from "../profile/personal-enrollment-dialog.tsx";
 import { createDevicesDialogs } from "./devices-dialogs.ts";
 import { createInventoryPresentation } from "./devices-inventory-presentation.ts";
 import { createDevicePolicyActions } from "./devices-policy-actions.ts";
@@ -666,9 +667,9 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
           void context.overlays.openDevicePairSetup();
         }
       },
-      onDeviceApprove: (requestId) => {
+      onDeviceApprove: (requestId, profileId) => {
         if (canManagePairing) {
-          void runPageTask((pageState) => approveDevicePairing(pageState, requestId));
+          void runPageTask((pageState) => approveDevicePairing(pageState, requestId, profileId));
         }
       },
       onDeviceReject: (requestId) => void dialogs.confirmPairingReject("device", requestId),
@@ -686,6 +687,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       },
       onDeviceRotate: (device, role, scopes) =>
         void dialogs.reportRotationOutcome(device, role, scopes),
+      onDeviceEnroll: enrollDevice,
       onDeviceRevoke: (deviceId, role) => void dialogs.confirmTokenRevoke(deviceId, role),
       onDeviceRename: (device) => void dialogs.editAlias(device),
       onLoadConfig: () => void context.runtimeConfig.discardDraft({ reloadOnly: true }),
@@ -701,6 +703,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     };
   }
 
+  const enrollDevice = devicePersonalEnrollmentAction(context, refreshDeviceInventory, pageData);
   const view = createMemo(viewProps);
   createEffect(
     createMemo(() => props.routeData),
@@ -713,8 +716,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
         title={titleForRoute("devices", t)}
         subtitle={
           <>
-            {subtitleForRoute("devices", t)}{" "}
-            <LearnMoreLink url={"https://docs.openclaw.ai/nodes"} />
+            {subtitleForRoute("devices", t)} <LearnMoreLink url="https://docs.openclaw.ai/nodes" />
           </>
         }
       />

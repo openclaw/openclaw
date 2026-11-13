@@ -146,7 +146,11 @@ function resolveSessionHistoryHttpClient(
     },
     authenticatedUserProfile: requestAuth.authenticatedUserProfile,
     preparedSessionProfile: requestAuth.preparedSessionProfile,
-    internal: { operatorRoleActor: requestAuth.operatorRoleActor },
+    internal: {
+      operatorRoleActor: requestAuth.operatorRoleActor,
+      operatorProfileEnrollment: requestAuth.operatorProfileEnrollment,
+      openclawIdPrincipal: requestAuth.openclawIdPrincipal,
+    },
   };
 }
 

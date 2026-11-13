@@ -37,6 +37,7 @@ import {
   recordTokenlessOpenClawIdOperator,
 } from "../../openclaw-id/device-token-binding.js";
 import { approveOpenClawIdNodePairing } from "../../openclaw-id/node-pairing.js";
+import { readOperatorProfileEnrollment } from "../../operator-device-profile.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { broadcastRejectedDevicePairing } from "../../pairing-events.js";
 import { formatForLog } from "../../ws-log.js";
@@ -45,7 +46,6 @@ import {
   applyConnectionScopeCap,
   isStartupNodeBootstrapConnect,
   rejectGatewayStartupConnect,
-  resolveGatewayConnectPolicyFailure,
 } from "./connect-admission.js";
 import {
   pairedDeviceAllowsBootstrapProfile,
@@ -55,6 +55,7 @@ import {
 import { issueGatewayConnectDeviceTokens } from "./connect-device-tokens.js";
 import { authorizeExistingGatewayDevice } from "./connect-existing-device.js";
 import { startGatewayNodePairingSshApproval } from "./connect-node-pairing-ssh.js";
+import { prepareGatewayConnectDeviceEnrollment } from "./connect-operator-access.js";
 import {
   resolveLocalPairingApproval,
   resolvePairingApprovalPlan,
@@ -86,7 +87,6 @@ export async function authorizeGatewayConnectDevice(
     reportedClientIpSource,
     hasBrowserOriginHeader,
   } = context;
-  let { scopes } = state;
   let { handoffBootstrapProfile } = state;
   const {
     role,
@@ -98,8 +98,6 @@ export async function authorizeGatewayConnectDevice(
     skipLocalBackendSelfPairing,
     controlUiPairingKind,
   } = state;
-  const isConnectAuthorizationCurrent = () =>
-    resolveGatewayConnectPolicyFailure(context, state) === undefined;
   const failPairingHandshake = (params: {
     message: string;
     details?:
@@ -116,6 +114,20 @@ export async function authorizeGatewayConnectDevice(
     sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, message, details ? { details } : undefined);
     close(1008, truncateCloseReason(closeReason ?? message));
   };
+  const enrollment = await prepareGatewayConnectDeviceEnrollment(context, state);
+  if (!enrollment.ok) {
+    failPairingHandshake({ message: enrollment.message });
+    return undefined;
+  }
+  let { scopes, operatorProfileEnrollment } = enrollment;
+  const {
+    operatorDevice,
+    personalBootstrap,
+    isCurrent: isConnectAuthorizationCurrent,
+  } = enrollment;
+  if (scopes !== state.scopes) {
+    connectParams.scopes = scopes;
+  }
   const roleConfiguredHumanOperator = role === "operator" && Boolean(configSnapshot.gateway?.roles);
   // An admitted OpenClaw ID owner device is the Gateway owner, like a shared-secret client.
   const sharedSecretOwner =
@@ -125,6 +137,8 @@ export async function authorizeGatewayConnectDevice(
   if (
     roleConfiguredHumanOperator &&
     !sharedSecretOwner &&
+    !operatorProfileEnrollment &&
+    !personalBootstrap &&
     !authResult.user?.trim() &&
     state.remoteIngressPrincipal?.operatorRoleActor.kind !== "operator"
   ) {
@@ -323,6 +337,15 @@ export async function authorizeGatewayConnectDevice(
             {
               accessMetadata: clientAccessMetadata,
               isApprovalCurrent: isConnectAuthorizationCurrent,
+              ...(authMethod === "bootstrap-token" && state.bootstrapTokenCandidate
+                ? {
+                    bootstrapSource: {
+                      token: state.bootstrapTokenCandidate,
+                      deviceId: device.id,
+                      publicKey: devicePublicKey,
+                    },
+                  }
+                : {}),
               onTokensReplaced: (deviceId, roles) =>
                 retireDeviceTokenClients(requestContext, deviceId, roles, "device-token-rotated"),
             },
@@ -555,7 +578,7 @@ export async function authorizeGatewayConnectDevice(
     };
 
     const lookupStartedAt = performance.now();
-    const paired = await getPairedDevice(device.id);
+    const paired = role === "operator" ? operatorDevice : await getPairedDevice(device.id);
     context.recordAttachTiming?.("deviceLookupMs", lookupStartedAt);
     const isPaired = paired?.publicKey === devicePublicKey;
     if (paired && !isPaired && state.remoteIngressPrincipal) {
@@ -646,6 +669,14 @@ export async function authorizeGatewayConnectDevice(
 
   // A token issued over the OpenClaw ID tunnel belongs to the device key that obtained it.
   const issuedPeerKey = openclawIdPeerKeyOf(context.handler.ingressAttribution);
+  // Only the principal accepted for this signed-device admission may establish a personal listing.
+  const acceptedOperatorPrincipal =
+    state.remoteIngressPrincipal?.openclawIdPrincipal ??
+    (authMethod === "trusted-proxy" ? authResult.openclawId : undefined);
+  // Legacy listing-less principals still bind credentials, but cannot attest personal inference.
+  const operatorPrincipal = acceptedOperatorPrincipal?.authority
+    ? acceptedOperatorPrincipal
+    : undefined;
   if (issuedPeerKey && state.device) {
     for (const issued of [deviceToken, ...bootstrapDeviceTokens]) {
       if (issued) {
@@ -653,6 +684,7 @@ export async function authorizeGatewayConnectDevice(
           deviceId: state.device.id,
           role: issued.role,
           peerKey: issuedPeerKey,
+          ...(issued.role === "operator" && operatorPrincipal ? { operatorPrincipal } : {}),
         });
       }
     }
@@ -663,8 +695,36 @@ export async function authorizeGatewayConnectDevice(
       // issued to this key on ordinary ingress needs the same origin there too (accepted).
       const current = await getPairedDevice(state.device.id);
       if (current?.clientId === GATEWAY_CLIENT_IDS.CONTROL_UI) {
-        await recordTokenlessOpenClawIdOperator(state.device.id, issuedPeerKey);
+        await recordTokenlessOpenClawIdOperator(state.device.id, issuedPeerKey, operatorPrincipal);
       }
+    }
+  }
+  if (role === "operator" && device && devicePublicKey) {
+    try {
+      const current = readOperatorProfileEnrollment(await getPairedDevice(device.id), {
+        role,
+        deviceId: device.id,
+        publicKey: devicePublicKey,
+      });
+      if (
+        operatorProfileEnrollment &&
+        (current?.profileId !== operatorProfileEnrollment.profileId ||
+          current.createdAtMs !== operatorProfileEnrollment.createdAtMs)
+      ) {
+        throw new Error("Personal enrollment changed during pairing");
+      }
+      if (personalBootstrap && current?.profileId !== personalBootstrap.operatorProfileId) {
+        throw new Error("The personal handoff association was not committed");
+      }
+      if (!isConnectAuthorizationCurrent()) {
+        throw new Error("Device admission authority changed");
+      }
+      operatorProfileEnrollment = current;
+    } catch {
+      failPairingHandshake({
+        message: "Personal device enrollment changed; reconnect before continuing.",
+      });
+      return undefined;
     }
   }
   context.recordAttachTiming?.("deviceTokensMs", tokensStartedAt);
@@ -675,5 +735,6 @@ export async function authorizeGatewayConnectDevice(
     handoffBootstrapProfile,
     deviceToken,
     bootstrapDeviceTokens,
+    ...(operatorProfileEnrollment ? { operatorProfileEnrollment } : {}),
   };
 }

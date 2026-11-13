@@ -15,7 +15,14 @@ vi.mock("../tui/tui-launch.js", () => ({ launchTuiCli: vi.fn(async () => {}) }))
 // mock-isolation: Verify terminal restoration order without touching the test process TTY.
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({ restoreTerminalState: vi.fn() }));
 
-beforeEach(() => vi.clearAllMocks());
+const personal = vi.hoisted(() => vi.fn(async () => null as { profileId: string } | null));
+// mock-isolation: Exercise terminal routing without creating credentials or a Gateway.
+vi.mock("./onboard-personal.js", () => ({ offerTerminalPersonalSetup: personal }));
+vi.mock("../wizard/clack-prompter.js", () => ({ createClackPrompter: () => ({}) }));
+beforeEach(() => {
+  vi.clearAllMocks();
+  personal.mockResolvedValue(null);
+});
 afterEach(() => vi.restoreAllMocks());
 afterAll(() => {
   vi.doUnmock("node:fs");
@@ -60,4 +67,30 @@ it.each([
   expect(restoreTerminalState).toHaveBeenNthCalledWith(2, "post guided hatch tui", {
     resumeStdinIfPaused: false,
   });
+});
+
+it("offers terminal personal setup before launching the authenticated hatch, without local fallback", async () => {
+  vi.mocked(existsSync).mockReturnValue(false);
+  personal.mockResolvedValue({ profileId: "person" });
+  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  await runGuidedOnboardingHandoff(
+    { workspace: "/fixture/workspace", next: "hatch", local: true, personalSetup: true },
+    {},
+    runtime,
+    {},
+  );
+  expect(personal).toHaveBeenCalledBefore(vi.mocked(launchTuiCli));
+  expect(launchTuiCli).toHaveBeenCalledExactlyOnceWith({ deliver: false, deviceAuth: true });
+
+  vi.clearAllMocks();
+  personal.mockRejectedValueOnce(new Error("pairing approval required"));
+  await expect(
+    runGuidedOnboardingHandoff(
+      { workspace: "/fixture/workspace", next: "hatch", local: false, personalSetup: true },
+      {},
+      runtime,
+      {},
+    ),
+  ).rejects.toThrow("pairing approval required");
+  expect(launchTuiCli).not.toHaveBeenCalled();
 });

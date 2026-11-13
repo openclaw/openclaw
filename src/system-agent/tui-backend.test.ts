@@ -479,3 +479,115 @@ describe("runSystemAgentTui", () => {
     }
   });
 });
+
+it.each([
+  { bootstrapPending: true, retired: false },
+  { bootstrapPending: false, retired: false },
+  { bootstrapPending: true, retired: true },
+])(
+  "continues approved first-run setup after disposal, unless inference retired: %j",
+  async ({ bootstrapPending, retired }) => {
+    const { withTempHome } = await import("openclaw/plugin-sdk/test-env");
+    await withTempHome(async () => {
+      const config = { ...verifiedConfig };
+      let ready = false;
+      const order: string[] = [];
+      const verified = await createVerifiedTuiOptions(
+        {
+          loadOverview: async () => ({
+            ...overview,
+            gateway: { ...overview.gateway, reachable: ready },
+          }),
+        },
+        config,
+      );
+      const apply = vi
+        .spyOn(await import("./setup-apply.js"), "applySystemAgentSetup")
+        .mockImplementation(async () => {
+          order.push("machine-setup");
+          ready = true;
+          if (retired) {
+            vi.mocked(configModule.readConfigFileSnapshot).mockResolvedValue(
+              configSnapshot({
+                ...config,
+                agents: { defaults: { model: "openai/changed-test-route" } },
+              }),
+            );
+          }
+          return {
+            workspaceReady: true,
+            bootstrapPending,
+            configPath: "/tmp/openclaw.json",
+            gateway: { status: "ready", action: "started" },
+            lines: [],
+          };
+        });
+      const liveVerification = vi
+        .spyOn(await import("./setup-inference.js"), "verifySetupInferenceConfig")
+        .mockResolvedValue({ ok: true, modelRef: "openai/gpt-5.5", latencyMs: 1 });
+      const agentTui = vi
+        .spyOn(await import("../tui/tui.js"), "runTui")
+        .mockResolvedValue({ exitReason: "exit" });
+      onTestFinished(() => {
+        apply.mockRestore();
+        liveVerification.mockRestore();
+        agentTui.mockRestore();
+      });
+      let shells = 0;
+      const continuation = vi.fn(
+        async (_gateway, continueTerminal: (deviceAuth: boolean) => Promise<void>) => {
+          expect(order).toEqual(["machine-setup", "disposed"]);
+          order.push("personal-offer");
+          await continueTerminal(true);
+        },
+      );
+      await runSystemAgentTui(
+        {
+          ...verified,
+          welcomeVariant: "onboarding",
+          setupWorkspace: "/tmp/personal-setup-workspace",
+          onSetupCompleted: continuation,
+          runTui: async ({ backend }) => {
+            if (!backend) {
+              throw new Error("Expected setup backend");
+            }
+            if (shells++ > 0) {
+              return { exitReason: "exit" };
+            }
+            const terminal = backend as TestBackend;
+            const dispose = terminal.engine.dispose.bind(terminal.engine);
+            terminal.engine.dispose = async () => {
+              order.push("disposed");
+              await dispose();
+            };
+            const closed = new Promise<void>((resolve) => {
+              terminal.setRequestExitHandler(resolve);
+            });
+            await send(terminal, "yes");
+            await closed;
+            return { exitReason: "exit" };
+          },
+        },
+        createRuntime(),
+      );
+      expect(apply).toHaveBeenCalledOnce();
+      if (retired) {
+        expect(continuation).not.toHaveBeenCalled();
+        expect(agentTui).not.toHaveBeenCalled();
+        return;
+      }
+      expect(continuation).toHaveBeenCalledExactlyOnceWith(
+        { status: "ready", action: "started" },
+        expect.any(Function),
+      );
+      if (bootstrapPending) {
+        expect(agentTui).toHaveBeenCalledWith(
+          expect.objectContaining({ local: false, deviceAuth: true }),
+        );
+      } else {
+        expect(agentTui).not.toHaveBeenCalled();
+        expect(shells).toBe(2);
+      }
+    });
+  },
+);

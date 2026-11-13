@@ -360,6 +360,10 @@ export function registerMaintenanceCommands(
   program
     .command("dashboard")
     .description("Open the Control UI with your current token")
+    .option(
+      "--person <profileId>",
+      "Explicitly represent an existing personal profile in the browser handoff",
+    )
     .addHelpText("after", () => formatDocsHelp("/cli/dashboard"))
     .option("--no-open", "Print URL but do not launch a browser")
     .option("--json", "Output dashboard connection details as JSON", false)
@@ -371,6 +375,7 @@ export function registerMaintenanceCommands(
           json: Boolean(opts.json),
           noOpen: opts.open === false,
           yes: Boolean(opts.yes),
+          ...(typeof opts.person === "string" ? { person: opts.person } : {}),
         });
       });
     });

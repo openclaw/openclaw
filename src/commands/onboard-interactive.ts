@@ -50,10 +50,29 @@ export async function runConversationalOnboarding(
     runtime.exit(1);
     return;
   }
+  const {
+    offerTerminalPersonalSetup,
+    prepareTerminalPersonalSetupTarget,
+    continueTerminalPersonalSetup,
+  } = await import("./onboard-personal.js");
+  const target = await prepareTerminalPersonalSetupTarget();
+  const personal = target.ready
+    ? await offerTerminalPersonalSetup(createClackPrompter(), target.options)
+    : null;
+  // This local setup assistant is not an authenticated Gateway chat. Never
+  // turn a selected profile into a model claim or synthetic operator authority.
   const { runSystemAgent } = await import("../system-agent/system-agent.js");
   await runSystemAgent(
     {
       welcomeVariant: "onboarding",
+      ...(personal ? { interactiveDeviceAuth: true } : {}),
+      ...(!target.ready
+        ? {
+            onSetupCompleted: async (gateway, continueTerminal) => {
+              await continueTerminalPersonalSetup(gateway, runtime, continueTerminal);
+            },
+          }
+        : {}),
       ...(opts.workspace ? { setupWorkspace: opts.workspace } : {}),
       ...(opts.agentName ? { setupAgentName: opts.agentName } : {}),
       verifiedInference: inference.binding,

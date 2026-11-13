@@ -21,12 +21,15 @@ vi.mock("../infra/gateway-lock.js", () => ({
 vi.mock("../infra/device-auth-store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/device-auth-store.js")>()),
   loadOriginDeviceToken: loadOriginDeviceTokenMock,
+  loadOriginDeviceTokenReadOnly: loadOriginDeviceTokenMock,
 }));
 
 vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
   loadDeviceIdentityIfPresentAsync: loadDeviceIdentityIfPresentMock,
 }));
+
+vi.mock("../cli/gateway-rpc.runtime.js", () => ({ prepareCliGatewayStateAccess: async () => {} }));
 
 const { GatewayChatClient } = await import("./gateway-chat.js");
 
@@ -187,4 +190,39 @@ it("points to local chat instead of a token when no local Gateway is running", a
   );
   readActiveGatewayLockPortMock.mockResolvedValue(18789);
   await expect(connect({})).rejects.toThrow("Missing gateway auth token.");
+});
+
+it("selects only the enrolled interactive key and never falls back to ambient maintenance auth", async () => {
+  const url = "wss://personal.example/gateway";
+  setGateway(remote(url, { token: "maintenance-only" }));
+  loadDeviceIdentityIfPresentMock.mockImplementation((options?: { identityKey?: string }) =>
+    options?.identityKey === "interactive-operator"
+      ? { deviceId: "interactive-device" }
+      : { deviceId: "service-device" },
+  );
+  loadOriginDeviceTokenMock.mockImplementation(
+    ({ deviceId, gatewayScope }: { deviceId: string; gatewayScope: string }) =>
+      deviceId === "interactive-device" && gatewayScope === url
+        ? { token: "personal-token", scopes: ["operator.read"] }
+        : null,
+  );
+  const connection = await connect({ deviceAuth: true });
+  expect(connection).toMatchObject({
+    url,
+    deviceAuth: true,
+    deviceIdentity: { deviceId: "interactive-device" },
+    preparedDeviceAuth: { token: "personal-token", scopes: ["operator.read"] },
+  });
+  expect(connection.token).toBeUndefined();
+  expect(connection.password).toBeUndefined();
+  expect(
+    loadOriginDeviceTokenMock.mock.calls.every(
+      ([options]) => options.deviceId === "interactive-device",
+    ),
+  ).toBe(true);
+  loadDeviceIdentityIfPresentMock.mockResolvedValue(null);
+  await expect(connect({ deviceAuth: true })).rejects.toThrow("No interactive operator enrollment");
+  await expect(connect({ deviceAuth: true, token: "maintenance-only" })).rejects.toThrow(
+    "not both",
+  );
 });

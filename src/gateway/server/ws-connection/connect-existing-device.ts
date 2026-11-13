@@ -4,7 +4,6 @@ import {
   listEffectivePairedDeviceRoles,
   type PairedDevice,
 } from "../../../infra/device-pairing.js";
-import { resolveBootstrapProfileScopesForRole } from "../../../shared/device-bootstrap-profile.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
@@ -107,6 +106,15 @@ export async function authorizeExistingGatewayDevice(params: {
     }
   }
 
+  if (
+    role === "operator" &&
+    state.issuedBootstrapProfile?.operatorProfileId !== undefined &&
+    paired.operatorProfileId === undefined &&
+    !(await requirePairing("scope-upgrade", paired))
+  ) {
+    return { ok: false, handoffBootstrapProfile };
+  }
+
   const retryBootstrapHandoffProfile =
     authMethod === "bootstrap-token" &&
     bootstrapTokenCandidate &&
@@ -133,18 +141,14 @@ export async function authorizeExistingGatewayDevice(params: {
       client: connectParams.client,
     })
   ) {
-    const retryBootstrapOperatorScopes = resolveBootstrapProfileScopesForRole(
-      "operator",
-      retryBootstrapHandoffProfile.scopes,
-      retryBootstrapHandoffProfile.purpose,
+    const pairedAllowsHandoff = pairedDeviceAllowsBootstrapProfile(
+      {
+        device: paired,
+        devicePublicKey,
+        profile: retryBootstrapHandoffProfile,
+      },
+      ["operator"],
     );
-    const pairedAllowsHandoff =
-      pairedRoles.includes("operator") &&
-      roleScopesAllow({
-        role: "operator",
-        requestedScopes: retryBootstrapOperatorScopes,
-        allowedScopes: pairedScopes,
-      });
     if (!pairedAllowsHandoff && !(await requirePairing("scope-upgrade", paired))) {
       return { ok: false, handoffBootstrapProfile };
     }

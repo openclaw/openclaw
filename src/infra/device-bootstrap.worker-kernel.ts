@@ -8,13 +8,14 @@ import {
   type DeviceBootstrapProfile,
   type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type {
   WorkerOperationHandlers,
   WorkerOperations,
   WorkerWriteOperationContext,
 } from "../state/worker-operation-registry.js";
+import { assertBootstrapPersonInDatabase } from "./device-bootstrap-profile.worker.js";
 import {
   DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
   resolveDeviceBootstrapTokenExpiresAtMs,
@@ -392,7 +393,10 @@ function verifyDeviceBootstrapToken(
   const allowedProfile = normalizeDeviceBootstrapProfile(record.profile);
   const requestedProfile = resolveRequestedBootstrapProfile({
     role,
-    scopes: params.scopes,
+    scopes:
+      allowedProfile.operatorProfileId !== undefined && role === "operator"
+        ? intersectOperatorScopes(params.scopes, allowedProfile.scopes)
+        : params.scopes,
     purpose: allowedProfile.purpose,
   });
   // Fail closed for any attempt to redeem the token outside the issued
@@ -404,7 +408,8 @@ function verifyDeviceBootstrapToken(
     !bootstrapProfileAllowsRequest({
       allowedProfile,
       requestedRole: role,
-      requestedScopes: params.scopes,
+      requestedScopes:
+        allowedProfile.operatorProfileId !== undefined ? requestedProfile.scopes : params.scopes,
     })
   ) {
     return { ok: false, reason: "bootstrap_token_invalid" };
@@ -481,12 +486,47 @@ export function getBoundDeviceBootstrapContextFromRecords(
   };
 }
 
+/** Pairing and token issuance consume the same exact, live server-held bootstrap source. */
+export function requireDeviceBootstrapSourceInWorker(
+  source: Omit<DeviceBootstrapBoundContextInput, "nowMs">,
+  expected: { deviceId: string; publicKey: string },
+  nowMs: number,
+): DeviceBootstrapProfile {
+  const records = loadState(nowMs);
+  const bound = getBoundDeviceBootstrapContextFromRecords(records, { ...source, nowMs });
+  const found = findBootstrapToken(records, source.token.trim());
+  if (
+    !bound ||
+    !found ||
+    source.deviceId.trim() !== expected.deviceId.trim() ||
+    normalizeBootstrapPublicKey(source.publicKey) !==
+      normalizeBootstrapPublicKey(expected.publicKey)
+  ) {
+    throw new Error("Bootstrap source no longer matches its exact device and grant");
+  }
+  requestDevicePairingMutationAdmission({
+    kind: "bootstrap.token",
+    expiresAtMs: resolveDeviceBootstrapTokenExpiresAtMs(found[1]),
+  });
+  return bound.profile;
+}
+
 export const deviceBootstrapOperations = {
   "bootstrap.issue": devicePairingMutation(
-    (input: Parameters<typeof issueDeviceBootstrapTokenRecord>[0]) =>
-      issueDeviceBootstrapTokenRecord(input),
+    (input: Parameters<typeof issueDeviceBootstrapTokenRecord>[0], { database }) => {
+      assertBootstrapPersonInDatabase(database.db, input.profile);
+      return issueDeviceBootstrapTokenRecord(input);
+    },
   ),
-  "bootstrap.ensure": devicePairingMutation(ensureDevicePairSetupBootstrapToken),
+  "bootstrap.ensure": devicePairingMutation(
+    (input: Parameters<typeof ensureDevicePairSetupBootstrapToken>[0], { database }) => {
+      assertBootstrapPersonInDatabase(
+        database.db,
+        normalizeDeviceBootstrapHandoffProfile(input.profile),
+      );
+      return ensureDevicePairSetupBootstrapToken(input);
+    },
+  ),
   "bootstrap.consume": devicePairingMutation(
     (
       input: Parameters<typeof consumeDeviceBootstrapTokenWithSetupCompletion>[0],

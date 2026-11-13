@@ -8,6 +8,7 @@ import {
   resolveOperatorRolePolicyForAssignment,
 } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -146,6 +147,22 @@ export async function prepareUserProfileAdministration(options: GatewayRequestHa
           );
     if (policy && !policy.scopes.includes("operator.admin")) {
       throw new Error("Profile administration requires operator.admin");
+    }
+  };
+  assertCurrent();
+  return assertCurrent;
+}
+
+/** Personal device enrollment requires a direct authenticated operator, not a synthetic caller. */
+export async function preparePersonalDeviceAdministration(options: GatewayRequestHandlerOptions) {
+  const assertAdmin = await prepareUserProfileAdministration(options);
+  const assertCurrent = () => {
+    assertAdmin();
+    if (
+      isSyntheticGatewayCaller(options.client) ||
+      options.client?.internal?.authenticatedOperator !== true
+    ) {
+      throw new Error("Personal pairing requires an authenticated operator administrator");
     }
   };
   assertCurrent();

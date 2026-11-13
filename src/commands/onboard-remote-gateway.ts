@@ -90,6 +90,7 @@ export async function runRemoteGatewayInferenceOnboarding(
   };
   const explicitAuth = Boolean(target.token || target.password);
   let gatewayWorkspace: string | undefined;
+  let personalDeviceAuth = false;
 
   const request = async <T>(
     params: Pick<
@@ -103,8 +104,12 @@ export async function runRemoteGatewayInferenceOnboarding(
       // Preserve configured SSH routing across RPCs; an explicitly selected
       // listener must not acquire that route merely because its URL matches.
       ...(explicitAuth && !target.configuredRemote ? { url: target.gatewayUrl } : {}),
-      ...(target.token ? { token: target.token } : {}),
-      ...(target.password ? { password: target.password } : {}),
+      ...(personalDeviceAuth
+        ? { useStoredDeviceAuth: true }
+        : {
+            ...(target.token ? { token: target.token } : {}),
+            ...(target.password ? { password: target.password } : {}),
+          }),
       ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),
       ignoreEnvUrlOverride: true,
     });
@@ -298,9 +303,24 @@ export async function runRemoteGatewayInferenceOnboarding(
       const { createClackPrompter } = await import("../wizard/clack-prompter.js");
       const prompter = createClackPrompter();
       await prompter.intro("OpenClaw");
+      const { offerTerminalPersonalSetup } = await import("./onboard-personal.js");
+      const personal = await offerTerminalPersonalSetup(prompter, {
+        config: boundConfig,
+        expectUrl: target.gatewayUrl,
+        ...(explicitAuth && !target.configuredRemote ? { url: target.gatewayUrl } : {}),
+        ...(target.token ? { token: target.token } : {}),
+        ...(target.password ? { password: target.password } : {}),
+        ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),
+        ignoreEnvUrlOverride: true,
+      });
+      personalDeviceAuth = personal !== null;
       // One-shot RPCs have different connections. Preserve a signed device
       // owner across chat replies even when loopback shared auth needs no device.
-      const deviceIdentity = await resolveDeviceIdentityForGatewayCall();
+      const deviceIdentity = personalDeviceAuth
+        ? await (
+            await import("../cli/interactive-device-auth.js")
+          ).loadInteractiveOperatorDeviceIdentity()
+        : await resolveDeviceIdentityForGatewayCall();
       const sessionId = randomUUID();
       let reply = await request<SystemAgentChatResult>({
         method: "openclaw.chat",
@@ -347,13 +367,18 @@ export async function runRemoteGatewayInferenceOnboarding(
       const { runTui } = await import("../tui/tui.js");
       await runTui({
         config: boundConfig,
+        ...(personalDeviceAuth ? { deviceAuth: true } : {}),
         deliver: false,
         ...(agentDraft === "hatch" ? { message: t("wizard.finalize.bootstrapHatchMessage") } : {}),
         boundGateway: {
           url: target.gatewayUrl,
           ...(target.configuredRemote ? { configuredRemote: true } : {}),
-          ...(target.token ? { token: target.token } : {}),
-          ...(target.password ? { password: target.password } : {}),
+          ...(personalDeviceAuth
+            ? { deviceAuth: true }
+            : {
+                ...(target.token ? { token: target.token } : {}),
+                ...(target.password ? { password: target.password } : {}),
+              }),
           ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),
         },
       });

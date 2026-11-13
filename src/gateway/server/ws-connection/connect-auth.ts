@@ -507,6 +507,11 @@ async function authenticateGatewayConnectCore(
   }
   advanceHandshakePhase("auth_validated");
   const issuedBootstrapProfile = boundBootstrapContext?.profile ?? null;
+  if (role === "operator" && issuedBootstrapProfile?.operatorProfileId !== undefined) {
+    // Signature/auth verification used the original request; only the server-held grant can narrow it.
+    scopes = intersectOperatorScopes(scopes, issuedBootstrapProfile.scopes);
+    connectParams.scopes = scopes;
+  }
   const usesSharedGatewayAuth =
     authMethod === "token" ||
     authMethod === "password" ||

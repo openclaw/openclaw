@@ -1,5 +1,5 @@
 import "../../styles/device-pair-setup.css";
-import { action, createOptimistic, For, Show, until } from "solid-js";
+import { action, createOptimistic, createSignal, For, Show, until } from "solid-js";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import "../../components/modal-dialog.tsx";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
@@ -11,12 +11,15 @@ import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import type {
   DevicePairSetupAccess,
   DevicePairSetupLifecycle,
+  DevicePairSetupPerson,
+  DevicePairSetupPersonInput,
 } from "../../lib/device-pair-setup.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatCountdown } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { showToast } from "../../lib/toast.ts";
+import { PairingPersonChoice } from "./view-pairing-person.tsx";
 
 registerEnglishCatalog(registerDevicesEnglish);
 
@@ -34,7 +37,8 @@ export type DevicePairSetupProps = {
   lifecycle: DevicePairSetupLifecycle;
   nowMs: number;
   pendingCount: number;
-  onRefresh: () => Promise<void>;
+  person?: DevicePairSetupPerson;
+  onRefresh: (person?: DevicePairSetupPersonInput) => Promise<void>;
   onAccessChange: (access: DevicePairSetupAccess) => void;
   onClose: () => void;
   onManageDevices: () => void;
@@ -92,6 +96,7 @@ function PairingOutcome(props: { lifecycle: PairingOutcomeLifecycle; description
 
 export function DevicePairSetup(props: DevicePairSetupProps) {
   const [refreshing, setRefreshing] = createOptimistic(false);
+  const [personInput, setPersonInput] = createSignal<DevicePairSetupPersonInput>(null);
   const presentRefresh = action(function* (
     operation: Promise<void>,
     lifecycle: DevicePairSetupLifecycle,
@@ -111,7 +116,9 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
   async function refresh() {
     let lifecycle = props.lifecycle;
     try {
-      const operation = props.onRefresh();
+      const operation = props.onRefresh(
+        canSelectAccess() ? (props.lifecycle.access === "node" ? null : personInput()) : undefined,
+      );
       // Commit the owner's admission before the optimistic presentation joins it.
       await Promise.resolve();
       lifecycle = props.lifecycle;
@@ -136,11 +143,17 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
       : undefined;
   };
   const error = () => (props.lifecycle.phase === "error" ? props.lifecycle : undefined);
+  const uncertainCreate = () => {
+    const failure = error();
+    return failure?.source === "create" && failure.uncertain;
+  };
   // Terminal states reuse their headline so the dialog description follows the visible state.
   const description = () =>
     t(
       props.lifecycle.phase === "success"
-        ? "devices.pairing.pairedTitle"
+        ? props.person
+          ? "devices.pairing.personalDelivered"
+          : "devices.pairing.pairedTitle"
         : props.lifecycle.phase === "delivery-uncertain"
           ? "devices.pairing.deliveryUncertainTitle"
           : props.lifecycle.phase === "expired"
@@ -152,7 +165,9 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
   const showAccessChoices = () =>
     props.lifecycle.phase === "selection" || error()?.source === "create";
   const canSelectAccess = () =>
-    !refreshing() && (props.lifecycle.phase === "selection" || error()?.source === "create");
+    !refreshing() &&
+    (props.lifecycle.phase === "selection" || error()?.source === "create") &&
+    !uncertainCreate();
   const copyLabel = () => t("devices.pairing.copySetupCode");
   return (
     <Show when={props.open}>
@@ -213,6 +228,15 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                 </For>
               </fieldset>
             </Show>
+            <Show when={!isNodeSetup()}>
+              <PairingPersonChoice
+                access={props.lifecycle.access}
+                editable={canSelectAccess()}
+                input={personInput()}
+                person={props.person}
+                onChange={setPersonInput}
+              />
+            </Show>
             <Show
               when={
                 refreshing() ||
@@ -242,6 +266,9 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                     )}
                   </strong>
                   <span>{failure().message}</span>
+                  <Show when={uncertainCreate()}>
+                    <span>{t("devices.pairing.personalUncertain")}</span>
+                  </Show>
                 </InlineAlert>
               )}
             </Show>

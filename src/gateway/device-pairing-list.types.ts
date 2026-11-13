@@ -15,6 +15,8 @@ export type PendingDevice = Pick<DevicePairRequestedEvent, "requestId" | "device
 export type PairedDevice = Omit<PendingDevice, "requestId" | "silent" | "isRepair" | "ts"> & {
   /** Operator-assigned label; preferred over client displayName when rendering. */
   operatorLabel?: string;
+  /** Canonical person reference for operator access only; not the node's identity. */
+  operatorProfileId?: string;
   tokens?: DeviceTokenSummary[];
   approvedVia?: PairedDeviceApprovalKind;
   /** Server-computed: the device currently holds a live gateway connection. */

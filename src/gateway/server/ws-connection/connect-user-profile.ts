@@ -1,5 +1,6 @@
 import { resolveHostAccountName } from "../../../infra/host-account-name.js";
 import { prepareUserProfileRoleAuthority } from "../../../state/user-channel-identity-operations.js";
+import { readResidentUserProfileRevision } from "../../../state/user-profile-list.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
@@ -131,6 +132,14 @@ export function createGatewayConnectProfileLifecycle(
       if (client !== registered || !prepared.authority.isCurrent()) {
         throw new Error("Gateway profile changed before attachment");
       }
+      if (
+        registered.internal?.operatorProfileEnrollment &&
+        !prepared.authority.aliases.includes(
+          registered.internal.operatorProfileEnrollment.profileId,
+        )
+      ) {
+        throw new Error("Personal device enrollment conflicts with the signed-in profile");
+      }
       const { profile } = prepared;
       registered.preparedRecipientProfileId = undefined;
       if (registered.authenticatedUserProfile) {
@@ -155,7 +164,7 @@ export function createGatewayConnectProfileLifecycle(
 
 async function resolveAuthenticatedProfile(
   profileId: string,
-  updatedAt: number,
+  updatedAt: number | undefined,
   assertCurrent?: () => void,
   recordTiming?: GatewayConnectPhaseContext["recordAttachTiming"],
 ) {
@@ -169,8 +178,16 @@ async function resolveAuthenticatedProfile(
   }
   const projectionStartedAt = performance.now();
   const { id, displayName, avatarRevision, hasAvatar } = authority.display;
+  const revision =
+    updatedAt === undefined
+      ? readResidentUserProfileRevision(authority.profileId, authority.readSource().path)
+      : undefined;
+  const profileUpdatedAt = updatedAt ?? revision?.updated_at;
+  if (profileUpdatedAt === undefined) {
+    throw new Error("Personal profile metadata is unavailable");
+  }
   const prepared = {
-    profile: { profileId: id, displayName, avatarRevision, hasAvatar, updatedAt },
+    profile: { profileId: id, displayName, avatarRevision, hasAvatar, updatedAt: profileUpdatedAt },
     authority,
     recipient: {
       profileId: authority.profileId,
@@ -192,7 +209,10 @@ export async function resolveGatewayConnectProfileAdmission(params: {
     Parameters<typeof rejectUnavailableProfileConnect>[0] & {
       handler: Pick<GatewayConnectPhaseContext["handler"], "connId" | "logWsControl">;
     };
-  state: Pick<DeviceAuthorizedGatewayConnect, "authResult" | "role" | "authMethod">;
+  state: Pick<
+    DeviceAuthorizedGatewayConnect,
+    "authResult" | "role" | "authMethod" | "operatorProfileEnrollment"
+  >;
   ownerProfileExpected: boolean;
   authenticatedUserId: string | undefined;
   resolveAuthenticatedGitHubIdentity: ReturnType<typeof createAuthenticatedGitHubIdentitySync>;
@@ -203,6 +223,7 @@ export async function resolveGatewayConnectProfileAdmission(params: {
     Boolean(context.configSnapshot.gateway?.roles) ||
     hasGatewayOperatorAccessPolicies(context.configSnapshot);
   if (
+    !state.operatorProfileEnrollment &&
     !ownerProfileExpected &&
     (!authenticatedUserId || (params.resolveAuthenticatedGitHubIdentity && !profileRequired))
   ) {
@@ -217,21 +238,24 @@ export async function resolveGatewayConnectProfileAdmission(params: {
       state.authMethod === "trusted-proxy" && state.authResult.openclawId?.kind === "member"
         ? state.authResult.openclawId
         : undefined;
-    const profile = ownerProfileExpected
-      ? await ensureCanonicalGatewayOwnerProfile(resolveHostAccountName, options)
-      : member
-        ? await ensureCanonicalUserProfileForOpenClawIdIdentity(
-            { accountId: member.accountId },
-            options,
-          )
-        : params.resolveAuthenticatedGitHubIdentity
-          ? await params.resolveAuthenticatedGitHubIdentity()
-          : state.authResult.tailscaleIdentity
-            ? await ensureCanonicalUserProfileForTailscaleIdentity(
-                state.authResult.tailscaleIdentity,
+    const profile =
+      state.operatorProfileEnrollment && !authenticatedUserId
+        ? { profileId: state.operatorProfileEnrollment.profileId, updatedAt: undefined }
+        : ownerProfileExpected
+          ? await ensureCanonicalGatewayOwnerProfile(resolveHostAccountName, options)
+          : member
+            ? await ensureCanonicalUserProfileForOpenClawIdIdentity(
+                { accountId: member.accountId },
                 options,
               )
-            : await ensureCanonicalUserProfileForEmail(authenticatedUserId!, options);
+            : params.resolveAuthenticatedGitHubIdentity
+              ? await params.resolveAuthenticatedGitHubIdentity()
+              : state.authResult.tailscaleIdentity
+                ? await ensureCanonicalUserProfileForTailscaleIdentity(
+                    state.authResult.tailscaleIdentity,
+                    options,
+                  )
+                : await ensureCanonicalUserProfileForEmail(authenticatedUserId!, options);
     params.assertCurrent?.();
     params.context.recordAttachTiming?.("profileEnsureMs", ensureStartedAt);
     context.setConnectPhase?.("profile-authority");
@@ -242,6 +266,14 @@ export async function resolveGatewayConnectProfileAdmission(params: {
       context.recordAttachTiming,
     );
     params.assertCurrent?.();
+    if (
+      state.operatorProfileEnrollment &&
+      !prepared.authority.aliases.includes(state.operatorProfileEnrollment.profileId)
+    ) {
+      throw new Error(
+        "This device is enrolled to a different person; resolve its enrollment before reconnecting.",
+      );
+    }
     if (!prepared.authority.isCurrent()) {
       throw new Error("Gateway profile changed during acquisition");
     }
@@ -251,11 +283,12 @@ export async function resolveGatewayConnectProfileAdmission(params: {
       `user profile resolution failed conn=${context.handler.connId} user=${formatForLog(authenticatedUserId)}: ${formatForLog(error)}`,
     );
     if (
-      !ownerProfileExpected &&
-      profileRequired &&
-      state.role === "operator" &&
-      state.authMethod !== "token" &&
-      state.authMethod !== "password"
+      Boolean(state.operatorProfileEnrollment) ||
+      (!ownerProfileExpected &&
+        profileRequired &&
+        state.role === "operator" &&
+        state.authMethod !== "token" &&
+        state.authMethod !== "password")
     ) {
       await rejectUnavailableProfileConnect(context, error);
       return { ok: false };

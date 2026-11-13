@@ -732,7 +732,13 @@ impl Routing {
         let inherited = route.and_then(|route| route.pending.as_ref());
         let document = route.and_then(|route| route.document.as_ref());
         let source_url = inherited.map_or_else(
-            || document.map(|doc| doc.navigation_url.clone()),
+            || {
+                // Before the first admitted navigation, about:blank is only the
+                // registration placeholder, not a native source URL to pin.
+                document
+                    .filter(|doc| doc.navigation != 0)
+                    .map(|doc| doc.navigation_url.clone())
+            },
             |pending| pending.intent.source_url.clone(),
         );
         let destination = inherited
@@ -2895,6 +2901,45 @@ pub(crate) async fn gateway_request(
         .unwrap_or(PRIMARY)
         .to_string();
     match action {
+        "enrollProfile" => {
+            let request = message
+                .get("request")
+                .and_then(Value::as_object)
+                .ok_or("Invalid personal setup request.")?;
+            let id = request
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty() && id.len() <= 128)
+                .ok_or("Invalid request ID.")?
+                .to_string();
+            let params = request
+                .get("params")
+                .cloned()
+                .ok_or("Missing personal setup request.")?;
+            crate::gateway_control_auth::validate_profile_enrollment(&params)?;
+            let client = app
+                .state::<crate::gateway_ws::GatewayClient>()
+                .inner()
+                .clone();
+            let generation = client.generation();
+            let url = webview.url().map_err(|_| STALE)?;
+            {
+                let owner = app.state::<GatewayWindows>();
+                let state = owner.routing.lock().map_err(|_| STALE)?;
+                authorize_control_auth(&state, &source, &url)?;
+            }
+            let result = client
+                .enroll_control_profile(generation, &url, params)
+                .await?;
+            return on_main(&app, move |app| {
+                let owner = app.state::<GatewayWindows>();
+                let view = app.get_webview(&source.label).ok_or(STALE)?;
+                let state = owner.routing.lock().map_err(|_| STALE)?;
+                authorize_control_auth(&state, &source, &view.url().map_err(|_| STALE)?)?;
+                Ok(json!({"id":id,"result":result}))
+            })
+            .await;
+        }
         "connectAuth" => {
             let challenge: crate::gateway_control_auth::Challenge = serde_json::from_value(
                 message
@@ -3679,6 +3724,53 @@ mod tests {
             );
             assert!(state.windows["saved"].pending.is_none());
         }
+    }
+
+    #[test]
+    fn native_auth_refresh_before_first_navigation_has_no_placeholder_source() {
+        let mut state = Routing::default();
+        let url = Url::parse("https://gateway.example/team").unwrap();
+        state.publish_primary(
+            &url,
+            Some("native-only".into()),
+            GatewayOwnership::Remote,
+            false,
+        );
+        state.windows.insert(
+            "main".into(),
+            WindowRoute {
+                primary_generation: Some(state.primary_generation),
+                document: Some(Document {
+                    nonce: None,
+                    navigation_url: Url::parse("about:blank").unwrap(),
+                    native_auth: true,
+                    navigation: 0,
+                    completion: Some(SelectionCompletion::Automatic),
+                    ..document("initial")
+                }),
+                ..Default::default()
+            },
+        );
+        // The native hello arrives after dispatch but before the first policy callback.
+        state.publish_primary(
+            &url,
+            Some("accepted-shared".into()),
+            GatewayOwnership::Remote,
+            true,
+        );
+        let (allowed, replacement) = state.admit_document_navigation("main", "initial", &url);
+        assert!(!allowed, "the retired startup script must not navigate");
+        let replacement = replacement.expect("current native authentication must be installed");
+        assert!(
+            replacement.source_url.is_none(),
+            "an uncommitted about:blank placeholder must not become source authority"
+        );
+        assert_eq!(replacement.navigation_url.as_ref(), Some(&url));
+        assert!(state.current(&replacement));
+        // The window intent still retires if the user navigates to native settings.
+        let settings = Url::parse("tauri://localhost/index.html?mode=connectionSettings").unwrap();
+        assert!(state.document_navigation("main", "initial", &settings));
+        assert!(!state.current(&replacement));
     }
 
     #[test]

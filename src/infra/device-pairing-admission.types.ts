@@ -18,6 +18,7 @@ export type DevicePairingAdmissionFacts =
     }
   | { kind: "pairing-prune"; deviceIds: readonly string[] }
   | { kind: "pairing-token-issuance" }
+  | { kind: "pairing-profile-enrollment"; deviceId: string; profileId: string }
   | ({ kind: "node-pending" } & NodePairingPendingSnapshot)
   | { kind: "node-surface"; nodeId: string; pairingGeneration?: string }
   // A browser code decision reached its transaction; the caller checks the deadline live.

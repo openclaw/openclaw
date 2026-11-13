@@ -359,9 +359,12 @@ private class ControlUiWebViewClient(
           ) {
             return@addWebMessageListener
           }
-          val response = respondToChallenge(message.data) ?: return@addWebMessageListener
-          if (isActiveDocument(view) && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-            reply.postMessage(response)
+          respondToNativeRequest(message.data) { response ->
+            view.post {
+              if (isActiveDocument(view) && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+                reply.postMessage(response)
+              }
+            }
           }
         }
         authInstalled = true
@@ -392,6 +395,28 @@ private class ControlUiWebViewClient(
   }
 
   private fun isActiveDocument(view: WebView): Boolean = !released && !navigationRetired && isGatewayPage(view.url)
+
+  private fun respondToNativeRequest(data: String?, reply: (String) -> Unit) {
+    val request = runCatching { Json.parseToJsonElement(data.orEmpty()) as? JsonObject }.getOrNull() ?: return
+    if ((request.get("action") as? JsonPrimitive)?.contentOrNull != "enrollProfile") {
+      respondToChallenge(data)?.let(reply)
+      return
+    }
+    val id = (request["id"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+    val params = request["params"] as? JsonObject
+    if (id.isNullOrBlank() || id.length > 128 || params == null || request.keys != setOf("id", "action", "params")) return
+    val enroll = page.enrollProfile
+    if (enroll == null) {
+      reply(buildJsonObject { put("id", id); put("error", "Reconnect the app to set up a personal profile") }.toString())
+      return
+    }
+    enroll(params) { result ->
+      reply(buildJsonObject {
+        put("id", id)
+        result.fold(onSuccess = { put("result", it) }, onFailure = { put("error", "Native personal setup did not finish. Reconnect and check Profile.") })
+      }.toString())
+    }
+  }
 
   private fun respondToChallenge(data: String?): String? {
     val request = runCatching { Json.parseToJsonElement(data.orEmpty()) as? JsonObject }.getOrNull()
@@ -430,8 +455,9 @@ private class ControlUiWebViewClient(
           message: WebMessage,
         ) {
           if (port !== authPort || !isActiveDocument(view)) return
-          val response = respondToChallenge(message.data) ?: return
-          if (port === authPort && isActiveDocument(view)) port.postMessage(WebMessage(response))
+          respondToNativeRequest(message.data) { response ->
+            view.post { if (port === authPort && isActiveDocument(view)) port.postMessage(WebMessage(response)) }
+          }
         }
       },
     )

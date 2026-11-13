@@ -47,6 +47,7 @@ import {
 import { withLegacyWorkerResourceReceipts } from "./openclaw-state-db-schema-v37-resource-receipts.js";
 import { withLegacyRepositoryDiskAuthority } from "./openclaw-state-db-schema-v38-repository-disk.js";
 import { withLegacyWorkerRetention } from "./openclaw-state-db-schema-v39-worker-retention.js";
+import { withLegacyPersonalOperator } from "./openclaw-state-db-schema-v40-personal-operator.js";
 import {
   admitStateSchemaFacts,
   PostgresSchemaAdmissionUnavailableError,
@@ -174,9 +175,13 @@ function statePostgresVersionSql(version: number): string {
 }
 
 function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
-  const statePostgresSchemaV38 = {
+  const statePostgresSchemaV39 = {
     ...statePostgresSchema,
-    postgres: withLegacyWorkerRetention(statePostgresSchema.postgres),
+    postgres: withLegacyPersonalOperator(statePostgresSchema.postgres),
+  };
+  const statePostgresSchemaV38 = {
+    ...statePostgresSchemaV39,
+    postgres: withLegacyWorkerRetention(statePostgresSchemaV39.postgres),
   };
   const statePostgresSchemaV37 = {
     postgres: withLegacyRepositoryDiskAuthority(statePostgresSchemaV38.postgres),
@@ -387,9 +392,16 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     {
       version: 39,
       fromSchema: statePostgresSchemaV38,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV39,
       sql: `ALTER TABLE worker_environments ADD COLUMN retention_json text COLLATE "C";
         ${statePostgresVersionSql(39)}`,
+    },
+    {
+      version: 40,
+      fromSchema: statePostgresSchemaV39,
+      schema: statePostgresSchema,
+      sql: `ALTER TABLE device_pairing_paired ADD COLUMN operator_profile_id text COLLATE "C";
+        ${statePostgresVersionSql(40)}`,
     },
   ];
 }

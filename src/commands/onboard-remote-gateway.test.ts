@@ -807,3 +807,74 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     },
   );
 });
+
+it("uses only the confirmed interactive identity for the selected remote chat and TUI", async (ctx) => {
+  const offer = vi
+    .spyOn(await import("./onboard-personal.js"), "offerTerminalPersonalSetup")
+    .mockResolvedValue({
+      deviceId: "personal-cli",
+      profileId: "person",
+      gatewayUrl: "wss://selected.example/ws",
+    });
+  const identity = vi
+    .spyOn(
+      await import("../cli/interactive-device-auth.js"),
+      "loadInteractiveOperatorDeviceIdentity",
+    )
+    .mockResolvedValue({
+      deviceId: "personal-cli",
+      publicKeyPem: "synthetic-public",
+      privateKeyPem: "synthetic-private",
+    });
+  ctx.onTestFinished(() => {
+    offer.mockRestore();
+    identity.mockRestore();
+  });
+  const runTui = vi.fn();
+  const calls: CallGatewayCliOptions[] = [];
+  await runWithGatewayMocks({
+    target: makeTarget(makeLocalConfig(), { password: "selected-password" }),
+    callGateway: asGatewayCall(
+      vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
+        calls.push(options);
+        if (options.method === "openclaw.chat") {
+          return { reply: "Ready", action: "open-agent" };
+        }
+        return setupReply(options);
+      }),
+    ),
+    runTui,
+  });
+  expect(offer).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.objectContaining({
+      expectUrl: "wss://selected.example/ws",
+      url: "wss://selected.example/ws",
+      password: "selected-password",
+      tlsFingerprint: "sha256:selected",
+      ignoreEnvUrlOverride: true,
+      config: expect.objectContaining({
+        gateway: expect.objectContaining({
+          remote: expect.objectContaining({ url: "wss://selected.example/ws" }),
+        }),
+      }),
+    }),
+  );
+  const chat = calls.find((call) => call.method === "openclaw.chat");
+  expect(chat).toMatchObject({
+    useStoredDeviceAuth: true,
+    deviceIdentity: { deviceId: "personal-cli" },
+  });
+  expect(chat?.token).toBeUndefined();
+  expect(chat?.password).toBeUndefined();
+  expect(runTui).toHaveBeenCalledWith(
+    expect.objectContaining({
+      deviceAuth: true,
+      boundGateway: {
+        url: "wss://selected.example/ws",
+        deviceAuth: true,
+        tlsFingerprint: "sha256:selected",
+      },
+    }),
+  );
+});

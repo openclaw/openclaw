@@ -24,7 +24,13 @@ import { parseSessionTargetInput, SessionTargetParseError } from "./session-ref.
 
 export type SessionTargetGateway = Pick<
   CallGatewayOptions,
-  "config" | "url" | "token" | "password" | "tlsFingerprint"
+  | "config"
+  | "url"
+  | "token"
+  | "password"
+  | "tlsFingerprint"
+  | "deviceIdentity"
+  | "useStoredDeviceAuth"
 >;
 
 export async function callSessionTargetGateway<T>(params: {
@@ -48,8 +54,11 @@ export async function callSessionTargetGateway<T>(params: {
       timeoutMs: params.timeoutMs,
       mode: GATEWAY_CLIENT_MODES.CLI,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
-      ...(explicitUrl
+      ...(explicitUrl || params.gateway.useStoredDeviceAuth
         ? {
+            ...(params.gateway.deviceIdentity !== undefined
+              ? { deviceIdentity: params.gateway.deviceIdentity }
+              : {}),
             useStoredDeviceAuth: true,
             requiredStoredDeviceAuthScopes: [params.requiredScope],
           }

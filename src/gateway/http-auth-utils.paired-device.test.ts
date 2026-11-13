@@ -6,7 +6,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import * as deviceTokens from "../infra/device-pairing-tokens.js";
-import { requestDevicePairing } from "../infra/device-pairing.js";
+import * as pairingOwner from "../infra/device-pairing.js";
 import { readJsonBodyWithLimit } from "../infra/http-body.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -22,6 +22,7 @@ import {
   setDeviceTokenBindingsLoading,
 } from "./openclaw-id/device-token-binding.js";
 import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
+import { createTokenBindingPublisher } from "./openclaw-id/service-token-bindings.js";
 import { createOpenClawIdService } from "./openclaw-id/service.js";
 import { setOpenClawIdTunnelPrincipalResolver } from "./openclaw-id/tunnel-principal.js";
 import { createRemoteControlUiIngressTestContext } from "./remote-control-ui.test-support.js";
@@ -44,7 +45,7 @@ function profileRequest(token: string, method = "PUT", headers: Record<string, s
 
 async function pairBrowser(scopes: string[], auth = AUTH_TOKEN, controlUi = true) {
   const identity = { deviceId: "browser", role: "operator", scopes };
-  const requested = await requestDevicePairing({
+  const requested = await pairingOwner.requestDevicePairing({
     ...identity,
     publicKey: "fixture-key",
     ...(controlUi ? { clientId: "openclaw-control-ui", clientMode: "webchat" } : {}),
@@ -205,6 +206,8 @@ it("refuses tunnel-bound HTTP tokens outside the tunnel and token fallback for r
     const peerKey = `iroh:${"ac".repeat(32)}`;
     setDeviceTokenBindingOwner({
       lookup: () => peerKey,
+      devicesForPeer: (key, role) => (key === peerKey && role === "operator" ? ["browser"] : []),
+      isOperatorBindingCurrent: () => false,
       record: async () => {},
       forget: async () => {},
       reportMismatch: () => {},
@@ -316,5 +319,44 @@ it("keeps the public shell when a paired token is revoked during bootstrap admis
     const body = String(response.end.mock.calls[0]?.[0] ?? "");
     expect(body).toContain("<openclaw-app");
     expect(body).not.toContain(CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE);
+  });
+});
+
+it("reuses the matched operator instead of enumerating credentials again and still checks peer restrictions", async () => {
+  await withOpenClawTestState({ label: "http-device-exact-revalidation" }, async () => {
+    const token = await pairBrowser(["operator.read"]);
+    const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
+    createTokenBindingPublisher({
+      authority: async () => claw.authority,
+      log: { warn() {} },
+      closed: () => false,
+    }).publish(claw.authority);
+    const enumerate = vi.spyOn(pairingOwner, "listDevicePairing");
+    const req = createRequest({
+      path: "/control-ui-config.json",
+      authorization: "Bearer " + token,
+    });
+    const res = new ServerResponse(req);
+    try {
+      const admitted = await authorizeControlUiReadRequestOrReply({
+        req,
+        res,
+        auth: AUTH_TOKEN,
+        cfg: {},
+        getRuntimeConfig: () => ({}),
+      });
+      expect(admitted?.authMethod).toBe("device-token");
+      expect(enumerate).toHaveBeenCalledTimes(1);
+      enumerate.mockClear();
+      await admitted?.revalidate();
+      expect(enumerate).not.toHaveBeenCalled();
+      await claw.authority.bindToken("browser", "operator", claw.w1);
+      enumerate.mockClear();
+      await expect(admitted?.revalidate()).rejects.toThrow("Unauthorized");
+      expect(enumerate).not.toHaveBeenCalled();
+    } finally {
+      res.destroy();
+      req.destroy();
+    }
   });
 });

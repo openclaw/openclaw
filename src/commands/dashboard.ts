@@ -201,6 +201,7 @@ export async function dashboardCommand(
   options: {
     json?: boolean;
     noOpen?: boolean;
+    person?: string;
     yes?: boolean;
   } = {},
 ) {
@@ -238,8 +239,12 @@ export async function dashboardCommand(
         dashboardJsonFailure(runtime, document.reason);
         return;
       }
-      const browserHandoff = await issueControlUiBrowserHandoff(target.links);
+      const browserHandoff = await issueControlUiBrowserHandoff(
+        target.links,
+        ...(options.person !== undefined ? [{ profileId: options.person }] : []),
+      );
 
+      browserHandoff.assertCurrent?.();
       writeRuntimeJson(
         runtime,
         {
@@ -328,8 +333,14 @@ export async function dashboardCommand(
     return;
   }
   let browserUrl: string;
+  let assertHandoffCurrent: (() => void) | undefined;
   try {
-    browserUrl = (await issueControlUiBrowserHandoff(target.links)).browserUrl;
+    const handoff = await issueControlUiBrowserHandoff(
+      target.links,
+      ...(options.person !== undefined ? [{ profileId: options.person }] : []),
+    );
+    browserUrl = handoff.browserUrl;
+    assertHandoffCurrent = handoff.assertCurrent;
   } catch (error) {
     runtime.error(
       `Could not create a one-time browser pairing link: ${error instanceof Error ? error.message : String(error)}`,
@@ -343,6 +354,7 @@ export async function dashboardCommand(
   runtime.log(`Dashboard URL: ${links.httpUrl}`);
   runtime.log("One-time browser pairing included in browser/clipboard URL.");
 
+  assertHandoffCurrent?.();
   const copied = await copyToClipboard(browserUrl).catch(() => false);
   runtime.log(copied ? "Copied to clipboard." : "Copy to clipboard unavailable.");
 
@@ -355,6 +367,7 @@ export async function dashboardCommand(
       // fragment. Open it through a private file handoff so the credential
       // never appears in a browser-opener process argument, where another
       // OS user could read it from /proc on default procfs hosts.
+      assertHandoffCurrent?.();
       opened = await openUrlPrivately(browserUrl);
     }
     if (!browserSupport.ok || (!opened && !copied && isRemoteEnvironment())) {

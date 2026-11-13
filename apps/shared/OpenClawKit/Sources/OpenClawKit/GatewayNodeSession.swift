@@ -661,6 +661,18 @@ public actor GatewayNodeSession {
         return data
     }
 
+    public func enrollControlUIProfile(_ params: GatewayProfileEnrollment,
+        ifCurrentRoute route: GatewayNodeSessionRoute,
+        onPersisted: (@Sendable () async throws -> Void)? = nil) async throws -> Data
+    {
+        guard self.isCurrentRoute(route), let channel = self.channel,
+              let scopes = self.currentOperatorScopes(ifCurrentRoute: route),
+              self.connectOptions?.role == "operator", self.connectOptions?.clientMode == "ui"
+        else { throw CancellationError() }
+        return try await channel.enrollControlUIProfile(params, scopes: scopes.sorted(),
+            ifCurrentConnectionGeneration: route.socketGeneration, onPersisted: onPersisted)
+    }
+
     public func currentAttachmentLimits(ifCurrentRoute route: GatewayNodeSessionRoute) -> GatewayAttachmentLimits? {
         self.currentRouteValue(self.attachmentLimits, ifCurrentRoute: route)
     }

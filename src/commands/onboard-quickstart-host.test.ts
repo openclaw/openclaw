@@ -41,7 +41,7 @@ function createHostHarness(config: OpenClawConfig = { gateway: { auth: { mode: "
       summary.resolve();
     }
   });
-  mocks.readConfigSnapshot.mockResolvedValue({ config });
+  mocks.readConfigSnapshot.mockResolvedValue({ config, valid: true });
   const close = vi.fn(async () => {});
   mocks.startGateway.mockResolvedValue({ wait: gateway.promise, close });
   mocks.waitForGateway.mockImplementation(() => {
@@ -171,4 +171,28 @@ it.each(["stopped", "failed"] as const)("settles %s during pending handoff", asy
   expect(h.runtime.log).not.toHaveBeenCalledWith(t("wizard.guided.quickstartBrowserUnavailable"));
   expect(h.runtime.log).not.toHaveBeenCalledWith(t("wizard.guided.quickstartReopen"));
   handoff.resolve(true);
+});
+
+it("runs the terminal continuation only after readiness and settles its owned Gateway on failure", async () => {
+  const h = createHostHarness();
+  const onReady = vi.fn(async () => {
+    throw new Error("personal enrollment needs approval");
+  });
+  const host = runQuickstartForegroundGateway({ runtime: h.runtime, onReady });
+  const failed = expect(host).rejects.toThrow("personal enrollment needs approval");
+  await h.probing.promise;
+  expect(onReady).not.toHaveBeenCalled();
+  h.readiness.resolve({ ok: true });
+  await failed;
+  expect(onReady).toHaveBeenCalledOnce();
+  expect(mocks.runBrowserHandoff).not.toHaveBeenCalled();
+  expect(h.close).toHaveBeenCalledOnce();
+});
+
+it("rejects a changed pinned target before starting a Gateway child", async () => {
+  const h = createHostHarness();
+  await expect(
+    runQuickstartForegroundGateway({ runtime: h.runtime, expectUrl: "wss://different.example" }),
+  ).rejects.toThrow("target changed");
+  expect(mocks.startGateway).not.toHaveBeenCalled();
 });

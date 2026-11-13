@@ -1,3 +1,4 @@
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { normalizeDeviceAuthRole, normalizeDeviceAuthScopes } from "./device-auth.js";
 
 export type DeviceBootstrapPurpose =
@@ -12,6 +13,8 @@ export type DeviceBootstrapProfile = {
   roles: string[];
   scopes: string[];
   purpose?: DeviceBootstrapPurpose;
+  /** Server-held represented person, never accepted from connect claims. */
+  operatorProfileId?: string;
 };
 
 /** Caller-provided bootstrap profile before role/scope normalization and bounding. */
@@ -19,6 +22,7 @@ export type DeviceBootstrapProfileInput = {
   roles?: readonly string[];
   scopes?: readonly string[];
   purpose?: DeviceBootstrapPurpose;
+  operatorProfileId?: string;
 };
 
 export type PairingSetupAccess = "full" | "limited" | "node";
@@ -109,6 +113,7 @@ export function deviceBootstrapProfilesEqual(
   const profile = normalizeDeviceBootstrapProfile(left);
   const expected = normalizeDeviceBootstrapProfile(right);
   return (
+    profile.operatorProfileId === expected.operatorProfileId &&
     profile.purpose === expected.purpose &&
     profile.roles.length === expected.roles.length &&
     profile.scopes.length === expected.scopes.length &&
@@ -117,12 +122,46 @@ export function deviceBootstrapProfilesEqual(
   );
 }
 
+/** Access-family matching ignores the person; only bound grants may narrow the closed scopes. */
+export function deviceBootstrapProfileMatchesAccess(
+  input: DeviceBootstrapProfileInput | undefined,
+  template: DeviceBootstrapProfile,
+): boolean {
+  const profile = normalizeDeviceBootstrapProfile(input);
+  const expected = normalizeDeviceBootstrapProfile(template);
+  const access = { ...profile, operatorProfileId: undefined };
+  return profile.operatorProfileId !== undefined
+    ? access.purpose === expected.purpose &&
+        access.roles.length === expected.roles.length &&
+        access.roles.every((role, index) => role === expected.roles[index]) &&
+        access.scopes.every((scope) => expected.scopes.includes(scope))
+    : deviceBootstrapProfilesEqual(access, expected);
+}
+
+/** A selected person can only ride attended operator handoffs, never unattended node grants. */
+export function assertDeviceBootstrapPersonalSelection(profile: DeviceBootstrapProfile): void {
+  if (profile.operatorProfileId === undefined) {
+    return;
+  }
+  if (
+    !profile.operatorProfileId ||
+    profile.operatorProfileId === GATEWAY_OWNER_PROFILE_ID ||
+    !profile.roles.includes("operator") ||
+    profile.purpose === "voice-node" ||
+    profile.purpose === "cloud-worker"
+  ) {
+    throw new Error(
+      "Personal bootstrap requires a canonical person and an attended operator profile",
+    );
+  }
+}
+
 export function isMobilePairingSetupBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): boolean {
   return (
-    deviceBootstrapProfilesEqual(input, PAIRING_SETUP_BOOTSTRAP_PROFILE) ||
-    deviceBootstrapProfilesEqual(input, FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)
+    deviceBootstrapProfileMatchesAccess(input, PAIRING_SETUP_BOOTSTRAP_PROFILE) ||
+    deviceBootstrapProfileMatchesAccess(input, FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)
   );
 }
 
@@ -130,15 +169,18 @@ export function isNodePairingSetupBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): boolean {
   return (
-    deviceBootstrapProfilesEqual(input, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE) ||
-    deviceBootstrapProfilesEqual(input, CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE)
+    deviceBootstrapProfileMatchesAccess(input, NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE) ||
+    deviceBootstrapProfileMatchesAccess(input, CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE)
   );
 }
 
 export function resolvePairingSetupAccess(
   input: DeviceBootstrapProfileInput | undefined,
 ): PairingSetupAccess {
-  if (deviceBootstrapProfilesEqual(input, FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)) {
+  if (
+    deviceBootstrapProfileMatchesAccess(input, FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE) &&
+    input?.scopes?.includes("operator.admin")
+  ) {
     return "full";
   }
   if (isNodePairingSetupBootstrapProfile(input)) {
@@ -209,9 +251,8 @@ export function normalizeDeviceBootstrapHandoffProfile(
   const profile = normalizeDeviceBootstrapProfile(input);
   // Bootstrap handoff profiles can only carry the documented handoff allowlist.
   return {
-    roles: profile.roles,
+    ...profile,
     scopes: resolveBootstrapProfileScopesForRoles(profile.roles, profile.scopes, profile.purpose),
-    ...(profile.purpose ? { purpose: profile.purpose } : {}),
   };
 }
 
@@ -245,5 +286,8 @@ export function normalizeDeviceBootstrapProfile(
     roles: normalizeBootstrapRoles(input?.roles),
     scopes: normalizeDeviceAuthScopes(input?.scopes ? [...input.scopes] : []),
     ...(purpose ? { purpose } : {}),
+    ...(input?.operatorProfileId !== undefined
+      ? { operatorProfileId: input.operatorProfileId.trim() }
+      : {}),
   };
 }

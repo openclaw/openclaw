@@ -1,0 +1,2 @@
+# Remaining exact integrated regression growth after the six scoped grants: real WS/HTTP lifecycle, schema/backup safety, native credential settlement, and Profile/QR browser flows. Total feature credit is 3953 LF; no inherited debt or shared scalar adjustment.
+2178

@@ -84,6 +84,7 @@ export function createConnectedContext(
     },
     config: {
       current: {
+        uploadsEnabled: true,
         assistantIdentity: {
           name: "OpenClaw",
           avatar: null,

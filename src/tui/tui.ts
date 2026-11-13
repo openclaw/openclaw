@@ -78,10 +78,9 @@ import {
 } from "./tui-submit.js";
 import { createTuiTaskSuggestionController } from "./tui-task-suggestions.js";
 import type {
+  RunTuiOptions,
   SessionScope,
-  TuiBoundGateway,
   TuiHistoryRunOutcome,
-  TuiOptions,
   TuiResult,
   TuiStateAccess,
 } from "./tui-types.js";
@@ -92,18 +91,6 @@ const TUI_AUTH_COMMAND_MAX_CHARS = 320;
 const SESSION_SUBSCRIPTION_MAX_ATTEMPTS = 5;
 const SESSION_SUBSCRIPTION_RETRY_DELAY_MS = 25;
 const tuiAuthLog = createSubsystemLogger("tui/auth");
-
-type RunTuiOptions = TuiOptions & {
-  /** Explicit owner for a global session key, which cannot carry an agent prefix itself. */
-  agentId?: string;
-  backend?: TuiBackend;
-  submitBurstWindowMs?: number;
-  onSubmitBurstCaptured?: (value: string) => void;
-  /** Exact pre-probed remote target for an in-process setup handoff. */
-  boundGateway?: TuiBoundGateway;
-  config?: OpenClawConfig;
-  title?: string;
-};
 
 export function resolveTuiLocalAuthCliInvocation(params: { provider?: string }) {
   const provider = params.provider?.trim();
@@ -631,6 +618,7 @@ async function runTuiUnlocked(
       ? await GatewayChatClient.connectBound({ config, ...opts.boundGateway })
       : await GatewayChatClient.connect({
           url: opts.url,
+          ...(opts.deviceAuth ? { deviceAuth: true } : {}),
           token: opts.token,
           password: opts.password,
           tlsFingerprint: opts.tlsFingerprint,

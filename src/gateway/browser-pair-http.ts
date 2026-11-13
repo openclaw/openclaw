@@ -12,11 +12,7 @@ import {
   collectBrowserPairRequest,
   startBrowserPairRequest,
 } from "../infra/device-pairing-browser-code.js";
-import {
-  BROWSER_PAIR_IDENTITY_REQUIRED_MESSAGE,
-  buildBrowserPairPayload,
-  type BrowserPairAction,
-} from "../shared/browser-pair.js";
+import { buildBrowserPairPayload, type BrowserPairAction } from "../shared/browser-pair.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR,
@@ -131,13 +127,6 @@ export async function handleBrowserPairHttpRequest(params: {
       }
       const context = captureOpenClawStateWorkerContext();
       if (action === "start") {
-        if (params.config.gateway?.roles) {
-          sendJson(res, 409, {
-            error: "identity_required",
-            message: BROWSER_PAIR_IDENTITY_REQUIRED_MESSAGE,
-          });
-          return;
-        }
         // Every filed request spends budget: rows are bounded per Gateway, not per source.
         rateLimiter?.recordFailure(clientIp, scope);
         const started = await startBrowserPairRequest({

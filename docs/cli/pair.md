@@ -39,6 +39,7 @@ Codes are not case-sensitive and the hyphen is optional. They expire after ten m
 
 ## Options
 
+- `--person <profile-id>`: associate operator access with this existing personal profile during approval. Required when Gateway roles are enabled; no email or GitHub claim is created.
 - `--yes`: approve without asking. The details are still printed.
 - `--json`: print the result as JSON. Requires `--yes`.
 - `--url <url>`, `--port <port>`, `--token <token>`, `--password <password>`, `--timeout <ms>`: choose the Gateway connection.
@@ -49,6 +50,6 @@ A plain `ssh host openclaw pair ABCD-EFGH` has no terminal to answer the questio
 
 ## Requirements
 
-The Gateway must be running, and the CLI connection needs `operator.admin`. Code pairing does not establish a signed-in user identity, so Gateways with `gateway.roles` configured refuse it; use the Gateway's identity-aware sign-in method instead.
+The Gateway must be running, and the CLI connection needs `operator.admin`. The code proves the browser key, not a human identity. With `gateway.roles` configured, approve with `--person <profile-id>` so the Gateway commits the personal association before delivering a credential. The person's role and the device's approved scopes both limit access; selecting a person never grants administrator status.
 
 If the command says no browser is waiting, check that it reaches the same Gateway the browser opened, including any `--profile` or `OPENCLAW_STATE_DIR` setting. A browser that confirmed **Cancel** has withdrawn its request, so its old code can no longer be approved. Cancellation does not revoke a device whose approval already completed; use Devices or `openclaw devices remove` for that.

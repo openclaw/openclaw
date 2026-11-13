@@ -66,7 +66,15 @@ export async function createIdRelayMember(params: {
   ).toMatchObject({ ok: true });
   setDeviceTokenBindingOwner({
     lookup: (id, role) => claw.authority.tokenBinding(id, role),
-    record: (id, role, key) => claw.authority.bindToken(id, role, key),
+    devicesForPeer: (boundPeerKey, role) =>
+      claw.authority
+        .tokensBoundTo([boundPeerKey])
+        .filter((binding) => binding.role === role)
+        .map((binding) => binding.deviceId),
+    record: (id, role, key, bindingPrincipal) =>
+      claw.authority.bindToken(id, role, key, bindingPrincipal),
+    isOperatorBindingCurrent: (id, bindingPrincipal) =>
+      claw.authority.isOperatorBindingCurrent(id, bindingPrincipal),
     forget: (tokens) => claw.authority.unbindTokens(tokens),
     reportMismatch() {},
   });

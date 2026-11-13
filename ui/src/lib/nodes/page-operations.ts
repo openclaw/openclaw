@@ -227,9 +227,18 @@ async function decidePairing(
   }
 }
 
-export async function approveDevicePairing(state: InventoryState, requestId: string) {
+export async function approveDevicePairing(
+  state: InventoryState,
+  requestId: string,
+  profileId?: string,
+) {
   await decidePairing(state, requestId, () =>
-    runDeviceMutation(state, (client) => client.request("device.pair.approve", { requestId })),
+    runDeviceMutation(state, (client) =>
+      client.request("device.pair.approve", {
+        requestId,
+        ...(profileId ? { profileId } : {}),
+      }),
+    ),
   );
 }
 

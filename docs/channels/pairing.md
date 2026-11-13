@@ -171,9 +171,19 @@ Use an already connected Control UI session with `operator.admin` access:
 2. On the **Devices** page, click **Connect a device**.
 3. Keep **Full access (recommended)**, or select **Limited access** to omit
    administrative Gateway controls.
-4. Click **Create setup code**.
-5. On your phone, open the OpenClaw app → **Settings** → **Gateway**.
-6. Scan the QR code or paste the setup code, then connect.
+4. Optionally choose **Person represented**: an existing person or **New local
+   person**. A local person needs no email or external sign-in. Leave **No person
+   (shared / maintenance)** selected for unbound maintenance access.
+5. Click **Create setup code**.
+6. On your phone, open the OpenClaw app → **Settings** → **Gateway**.
+7. Scan the QR code or paste the setup code, then connect.
+
+Only an authenticated administrator can associate a person. The setup type is
+still the access ceiling; the person’s effective role can narrow it further.
+Node-only setup cannot represent a person. Creating or delivering a personal
+setup code does not mean the new client is signed in: it must finish Gateway
+admission. If issuance is uncertain, use the dialog’s explicit retry, which
+retains the original person choice and local enrollment ID.
 
 Official OpenClaw iOS and Android apps are approved automatically when their
 setup-code metadata matches. If **Pending approval** shows a request (for

@@ -305,6 +305,7 @@ export async function authorizeOpenAiCompatibleHttpSession(params: {
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     operatorRoleActor: params.requestAuth.operatorRoleActor,
     openclawIdPrincipal: params.requestAuth.openclawIdPrincipal,
+    operatorProfileEnrollment: params.requestAuth.operatorProfileEnrollment,
     operatorAccessAuthority: params.requestAuth.operatorAccessAuthority,
     scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [],
   });

@@ -566,7 +566,8 @@ export function ApplicationShell(props: {
             lifecycle: view().overlaySnapshot.devicePairSetupLifecycle,
             nowMs: view().nowMs,
             pendingCount: view().overlaySnapshot.devicePairPendingCount,
-            onRefresh: () => view().context.overlays.refreshDevicePairSetup(),
+            person: view().overlaySnapshot.devicePairSetupPerson,
+            onRefresh: (person) => view().context.overlays.refreshDevicePairSetup(person),
             onAccessChange: (access) =>
               void view().context.overlays.setDevicePairSetupAccess(access),
             onClose: () => view().context.overlays.closeDevicePairSetup(),

@@ -198,6 +198,10 @@ export const validateDevicePairRenameParams = createProtocolValidator(
   S.DevicePairRenameParamsSchema,
   Checks.isDevicePairRenameParams,
 );
+export const validateDeviceProfileEnrollParams = createProtocolValidator(
+  S.DeviceProfileEnrollParamsSchema,
+  Checks.isDeviceProfileEnrollParams,
+);
 export const validateDeviceTokenRotateParams = createProtocolValidator(
   S.DeviceTokenRotateParamsSchema,
   Checks.isDeviceTokenRotateParams,

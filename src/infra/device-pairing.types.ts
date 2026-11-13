@@ -132,6 +132,8 @@ export type PairedDevice = Omit<
   "requestId" | "silent" | "isRepair" | "ts"
 > & {
   operatorLabel?: string;
+  /** Owner-enrolled personal identity; never supplied by reconnect metadata. */
+  operatorProfileId?: string;
   approvedScopes?: string[];
   tokens?: Record<string, DeviceAuthToken>;
   approvedVia?: PairedDeviceApprovalKind;

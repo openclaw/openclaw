@@ -79,6 +79,11 @@ it("marks only OpenClaw ID operator browsers and forgets bindings of a removed p
   });
   setDeviceTokenBindingOwner({
     lookup: (deviceId, role) => bindings.get(`${deviceId}:${role}`),
+    devicesForPeer: (peerKey, role) =>
+      [...bindings].flatMap(([key, value]) =>
+        value === peerKey && key.endsWith(":" + role) ? [key.slice(0, -(role.length + 1))] : [],
+      ),
+    isOperatorBindingCurrent: () => false,
     record: async () => {},
     forget,
     reportMismatch: () => {},

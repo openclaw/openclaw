@@ -27,22 +27,25 @@ import type { UserChannelAuthorizationReference } from "../state/user-profiles.t
 import { isBrowserOperatorUiClient, isWebchatClient } from "../utils/message-channel.js";
 import { createChannelOperatorRevocation } from "./channel-operator-revocation.js";
 import {
+  captureGatewayDeviceRevocation,
   onGatewayDeviceSourceRevoked,
   readGatewayDeviceSourceAuthority,
   readGatewayDeviceSourceIdentity,
   readGatewayDeviceReconnectSourceIdentity,
   retainGatewayDeviceRevocation,
 } from "./device-revocation.js";
+import { resolveOpenClawIdOperatorProfileEnrollment } from "./openclaw-id/operator-profile-enrollment.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
-  openclawIdTunnelRolePolicy,
   onOpenClawIdTunnelPrincipalsChanged,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
+import type { OperatorProfileEnrollment } from "./operator-device-profile.types.js";
+import { captureOperatorProfileEnrollmentAssertion } from "./operator-profile-enrollment-authority.js";
 import {
   onOperatorRolePolicyChanged,
   resolveGatewayOperatorRoleActor,
-  resolveOperatorRolePolicyForAssignment,
+  resolveOperatorRolePolicyForPrincipal,
 } from "./operator-role-policy.js";
 import {
   isOperatorRoleSourcePolicyCurrent,
@@ -207,6 +210,7 @@ export function captureChannelOperatorRunAuthority(input: {
   profileId: string;
   recoveryReference?: UserChannelAuthorizationReference;
   openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
+  operatorProfileEnrollment?: Readonly<OperatorProfileEnrollment>;
   assignedRole: string | null;
   githubLogin?: string | null;
   scopes: readonly string[];
@@ -219,14 +223,14 @@ export function captureChannelOperatorRunAuthority(input: {
   params.assertCurrent();
   const initialConfig = params.getRuntimeConfig();
   const metadata = getProcessGatewayPluginMetadataSnapshot();
-  const membershipPolicy = openclawIdTunnelRolePolicy(params.openclawIdPrincipal);
   const resolveRole = (cfg: OpenClawConfig) =>
-    membershipPolicy ??
-    resolveOperatorRolePolicyForAssignment(
+    resolveOperatorRolePolicyForPrincipal(
       params.profileId,
       params.assignedRole,
       cfg,
       params.githubLogin ?? null,
+      params.openclawIdPrincipal,
+      params.operatorProfileEnrollment,
     );
   const role = resolveRole(initialConfig);
   const modelPolicy = prepareRunModelPolicy({
@@ -252,7 +256,7 @@ export function captureChannelOperatorRunAuthority(input: {
     readCurrentRoleFacts: () => ({
       assignedRole: params.assignedRole,
       githubLogin: params.githubLogin ?? null,
-      ...(membershipPolicy ? { policy: membershipPolicy } : {}),
+      policy: resolveRole(params.getRuntimeConfig()),
     }),
     get modelPolicy() {
       return modelPolicy.readCurrent();
@@ -375,8 +379,24 @@ export async function captureGatewayOperatorRunAuthority(input: {
   const openclawIdPrincipal = client.internal?.openclawIdPrincipal
     ? structuredClone(client.internal.openclawIdPrincipal)
     : undefined;
-  const membershipPolicy = openclawIdTunnelRolePolicy(openclawIdPrincipal);
   const profileId = actor?.kind === "operator" ? actor.profileId : GATEWAY_OWNER_PROFILE_ID;
+  const enrollment = client.internal?.operatorProfileEnrollment;
+  const peerEnrollment =
+    openclawIdPrincipal && !client.connect.device
+      ? await resolveOpenClawIdOperatorProfileEnrollment(openclawIdPrincipal)
+      : undefined;
+  if (
+    peerEnrollment &&
+    (JSON.stringify(peerEnrollment.enrollment) !== JSON.stringify(enrollment) ||
+      (peerEnrollment.scopeCeiling &&
+        !roleScopesAllow({
+          role: "operator",
+          requestedScopes: client.connect.scopes ?? [],
+          allowedScopes: peerEnrollment.scopeCeiling,
+        })))
+  ) {
+    throw new Error("OpenClaw ID personal operator source changed before admission");
+  }
   const connectionId = client.connId;
   const connectionSignal = client.connectionSignal;
   if (params.hasCurrentClientAuthority?.() === false) {
@@ -424,14 +444,13 @@ export async function captureGatewayOperatorRunAuthority(input: {
   };
   const resolveCurrentRole = (cfg = getConfig()) => {
     const profile = assertProfileCurrent();
-    return (
-      membershipPolicy ??
-      resolveOperatorRolePolicyForAssignment(
-        profileId,
-        profile.assignedRole,
-        cfg,
-        profile.githubLogin ?? null,
-      )
+    return resolveOperatorRolePolicyForPrincipal(
+      profileId,
+      profile.assignedRole,
+      cfg,
+      profile.githubLogin ?? null,
+      openclawIdPrincipal,
+      enrollment,
     );
   };
   const assertRoleCurrent = () => {
@@ -456,6 +475,15 @@ export async function captureGatewayOperatorRunAuthority(input: {
       }
     }
   };
+  const enrollmentRevocation =
+    enrollment && !isSourceCurrent
+      ? captureGatewayDeviceRevocation(
+          gatewayContext ?? params.context,
+          { deviceId: enrollment.deviceId, role: "operator" },
+          () => true,
+        )
+      : undefined;
+  let assertEnrollment: (() => void) | undefined;
   const assertSourceCurrent = composeSessionSourceAssertion(
     sourceAuthorities.map((authority) =>
       composeSessionSourceAssertion([authority?.assertCurrent], (assertSource) => {
@@ -468,10 +496,15 @@ export async function captureGatewayOperatorRunAuthority(input: {
       if (revoked || references === 0) {
         throw new Error("operator execution authority is no longer active");
       }
-      if (isSourceCurrent?.() === false || !isGatewayCurrent()) {
+      if (
+        isSourceCurrent?.() === false ||
+        enrollmentRevocation?.isCurrent() === false ||
+        !isGatewayCurrent()
+      ) {
         throw new Error("operator source authority is no longer active");
       }
       assertSources();
+      assertEnrollment?.();
       if (openclawIdPrincipal && !isOpenClawIdTunnelPrincipalCurrent(openclawIdPrincipal)) {
         throw new Error("OpenClaw ID membership authority changed");
       }
@@ -507,7 +540,11 @@ export async function captureGatewayOperatorRunAuthority(input: {
             try {
               params.invocationAuthority?.release?.();
             } finally {
-              releaseDevice?.();
+              try {
+                releaseDevice?.();
+              } finally {
+                enrollmentRevocation?.release();
+              }
             }
           }
         }
@@ -516,11 +553,17 @@ export async function captureGatewayOperatorRunAuthority(input: {
   };
   const release = releaseHold();
   try {
+    assertEnrollment = enrollment
+      ? captureOperatorProfileEnrollmentAssertion(enrollment, scopes)
+      : undefined;
     let assertCapturedRoleCurrent = () => {
       // Capture current policy after preparation; reverted changes need no replay.
     };
     subscriptions.push(
       onGatewayDeviceSourceRevoked(params.hasCurrentClientAuthority, () =>
+        revoke(new Error("operator source authority is no longer active")),
+      ),
+      onGatewayDeviceSourceRevoked(enrollmentRevocation?.isCurrent, () =>
         revoke(new Error("operator source authority is no longer active")),
       ),
       onUserProfilesChanged(() => recheck(assertCapturedRoleCurrent)),
@@ -622,7 +665,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
       rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
       readCurrentRoleFacts: () => ({
         ...assertProfileCurrent(),
-        ...(membershipPolicy ? { policy: membershipPolicy } : {}),
+        policy: resolveCurrentRole(),
       }),
       source: source.token,
       invocation: params.invocationAuthority,

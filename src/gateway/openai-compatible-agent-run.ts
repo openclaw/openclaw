@@ -137,6 +137,7 @@ export async function runOpenAiCompatibleAgentCommand(params: {
     authenticatedUserProfile: params.requestAuth.authenticatedUserProfile,
     operatorRoleActor: params.requestAuth.operatorRoleActor,
     openclawIdPrincipal: params.requestAuth.openclawIdPrincipal,
+    operatorProfileEnrollment: params.requestAuth.operatorProfileEnrollment,
     scopes: [...params.operatorScopes],
   });
   // Tunnel owners also retain their authenticated device, not just owner-profile attribution.

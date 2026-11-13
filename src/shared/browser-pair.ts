@@ -6,7 +6,7 @@ const BROWSER_PAIR_CODE_RE = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/u;
 const BROWSER_PAIR_CODE_LENGTH = 8;
 export const BROWSER_PAIR_ROUTE_PREFIX = "/__openclaw__/browser-pair";
 export const BROWSER_PAIR_IDENTITY_REQUIRED_MESSAGE =
-  "Browser-code pairing is unavailable when gateway.roles is configured because this sign-in does not verify a user identity. Use your Gateway's identity-aware sign-in instead, or ask an administrator for the supported sign-in method.";
+  "gateway.roles requires a personal identity. A code proves this browser's key, not a person; approve with openclaw pair <code> --person <profile-id>, or use an identity-aware sign-in.";
 
 export type BrowserPairAction = "start" | "collect" | "cancel";
 

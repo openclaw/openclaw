@@ -33,10 +33,12 @@ import {
   updatePairedDeviceMetadata,
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   DevicePairingList,
   PairedDevice as RedactedPairedDevice,
 } from "../device-pairing-list.types.js";
+import { retireDeviceTokenClients } from "../device-token-client-lifecycle.js";
 import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
 import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../events.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
@@ -57,6 +59,7 @@ import {
 } from "./device-management-authz.js";
 import type { DeviceManagementAuthz, DeviceSessionAuthz } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
+import { deviceProfileEnrollHandler } from "./device-profile-enrollment.js";
 import { scopeUpgradeHandlers } from "./device-scope-upgrade.js";
 import type {
   GatewayClient,
@@ -66,6 +69,7 @@ import type {
   GatewayRequestHandlerOptions,
   RespondFn,
 } from "./types.js";
+import { preparePersonalDeviceAdministration } from "./users-profile-access.js";
 import { assertValidParams } from "./validation.js";
 
 const MANAGED_BY_ACCESS_MESSAGE =
@@ -451,7 +455,8 @@ export const deviceHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "device.pair.approve": async ({ params, respond, context, client }) => {
+  "device.pair.approve": async (options) => {
+    const { params, respond, context, client } = options;
     if (
       !assertValidParams(params, validateDevicePairApproveParams, "device.pair.approve", respond)
     ) {
@@ -465,7 +470,43 @@ export const deviceHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const approved = await approveDevicePairing(requestId, { callerScopes: authz.callerScopes });
+    const profileId = params.profileId?.trim();
+    if (params.profileId !== undefined && !profileId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "profileId must not be blank"),
+      );
+      return;
+    }
+    let approved: Awaited<ReturnType<typeof approveDevicePairing>>;
+    try {
+      const assertAdmin = profileId
+        ? await preparePersonalDeviceAdministration(options)
+        : undefined;
+      if (profileId && client?.connect.device?.id) {
+        const pending = await getPendingDevicePairing(requestId);
+        assertAdmin?.();
+        if (pending?.deviceId === client.connect.device.id) {
+          holdGatewayPolicyResponse(respond);
+        }
+      }
+      approved = await approveDevicePairing(requestId, {
+        callerScopes: authz.callerScopes,
+        ...(profileId && assertAdmin
+          ? {
+              operatorProfileId: profileId,
+              isApprovalCurrent: () => {
+                assertAdmin();
+                return true;
+              },
+            }
+          : {}),
+      });
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
+      return;
+    }
     if (!approved) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
       return;
@@ -484,6 +525,9 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const normalizedDeviceId = approved.device.deviceId.trim();
+    if (profileId) {
+      retireDeviceTokenClients(context, normalizedDeviceId, ["operator"], "device-token-rotated");
+    }
     // Operator reapproval leaves the narrow requester live. Wake its identity-bound waiter only
     // after durable token rotation, before any node-generation teardown can run.
     context.scopeUpgradeCoordinator?.notify(requestId, "approved");
@@ -660,6 +704,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
     });
   },
+  "device.profile.enroll": deviceProfileEnrollHandler,
   "device.token.rotate": createDeviceTokenHandler("rotate"),
   "device.token.revoke": createDeviceTokenHandler("revoke"),
 };

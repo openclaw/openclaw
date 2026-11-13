@@ -30,6 +30,9 @@ export type RunSystemAgentOptions = {
   setupWorkspace?: string;
   setupAgentName?: string;
   onReady?: () => void;
+  /** Host-only first-run continuation, after the machine setup owner settles. */
+  onSetupCompleted?: import("./tui-backend.js").SystemAgentTuiOptions["onSetupCompleted"];
+  interactiveDeviceAuth?: boolean;
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
   /** Exact live-tested route supplied by the inference gate. */

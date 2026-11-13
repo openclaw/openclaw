@@ -9,6 +9,7 @@ import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
   deviceBootstrapProfilesEqual,
+  deviceBootstrapProfileMatchesAccess,
   isMobilePairingSetupBootstrapProfile,
   isNodePairingSetupBootstrapProfile,
   isVoiceNodePairingSetupBootstrapProfile,
@@ -81,14 +82,17 @@ export function isControlUiOwnerBootstrapProfile(params: {
   const { profile, requestedScopes } = params;
   return Boolean(
     profile &&
-    deviceBootstrapProfilesEqual(profile, CONTROL_UI_OWNER_BOOTSTRAP_PROFILE) &&
+    deviceBootstrapProfileMatchesAccess(profile, CONTROL_UI_OWNER_BOOTSTRAP_PROFILE) &&
     deviceBootstrapProfilesEqual(
       {
         roles: ["operator"],
         scopes: requestedScopes,
         purpose: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE.purpose,
+        ...(profile.operatorProfileId !== undefined
+          ? { operatorProfileId: profile.operatorProfileId }
+          : {}),
       },
-      CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
+      profile.operatorProfileId !== undefined ? profile : CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
     ),
   );
 }
@@ -151,6 +155,8 @@ export function pairedDeviceAllowsBootstrapProfile(
   return Boolean(
     device &&
     device.publicKey === params.devicePublicKey &&
+    (params.profile.operatorProfileId === undefined ||
+      device.operatorProfileId === params.profile.operatorProfileId) &&
     roles.every(
       (role) =>
         hasEffectivePairedDeviceRole(device, role) &&

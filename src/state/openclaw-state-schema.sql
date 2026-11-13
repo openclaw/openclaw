@@ -595,7 +595,8 @@ CREATE TABLE IF NOT EXISTS device_pairing_paired (
   created_at_ms INTEGER NOT NULL,
   approved_at_ms INTEGER NOT NULL,
   last_seen_at_ms INTEGER,
-  last_seen_reason TEXT
+  last_seen_reason TEXT,
+  operator_profile_id TEXT
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_device_pairing_paired_approved

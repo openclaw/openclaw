@@ -1,0 +1,2 @@
+# Exact additional regression growth: released schema-22 upgrade preservation and person-bound real-model browser inference, using existing isolated-instance and screenshot owners. Shared scalar and inherited debt unchanged.
+377

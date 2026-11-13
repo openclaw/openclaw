@@ -1,8 +1,9 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, lazy, Loading, Show } from "solid-js";
 import { nativeSetupCapability } from "../../app/native-setup.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
@@ -10,6 +11,10 @@ import type { CustodianSetupActions } from "./custodian-actions.ts";
 import type { CustodianAutoSetup } from "./custodian-auto-setup.ts";
 import type { CustodianSessionStore } from "./custodian-session-store.ts";
 import "../../styles/custodian-setup-card.css";
+
+const PersonalEnrollment = lazy(() => import("../profile/personal-enrollment.tsx"), {
+  export: "PersonalEnrollment",
+});
 
 function SignInWizard(props: { setup: () => CustodianAutoSetup; actions: CustodianSetupActions }) {
   const state = () => props.setup().wizard.state;
@@ -80,6 +85,7 @@ export function CustodianSetupCard(props: {
   actions: CustodianSetupActions;
 }) {
   const context = useApplication();
+  const configuration = projectApplicationConfig(context.config);
   const source = createMemo(() => props.store);
   const projection = createMemo(() => projectOwner(source(), (store) => store.autoSetup));
   const setup = () => projection().read();
@@ -252,6 +258,17 @@ export function CustodianSetupCard(props: {
                 </button>
               </Show>
             </div>
+          </Show>
+          <Show when={setup().ready && !setup().pending}>
+            <Loading fallback={<p role="status">{t("common.loading")}</p>}>
+              <PersonalEnrollment
+                gateway={context.gateway}
+                basePath={context.basePath}
+                idManaged={configuration.read().openclawIdEnabled}
+                onboarding
+                onLater={() => setup().dismiss()}
+              />
+            </Loading>
           </Show>
           <p class="custodian-setup__safety">{t("custodian.autoSetup.safety")}</p>
         </section>

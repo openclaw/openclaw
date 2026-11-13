@@ -32,6 +32,7 @@ import { isLoopbackHost } from "../net.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { preparePersonalDeviceAdministration } from "./users-profile-access.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 // Keep the rendered QR within the result schema's qrDataUrl bound. A pathological
@@ -104,6 +105,32 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
           return;
         }
         const config = context.getRuntimeConfig();
+        const selectsPerson =
+          params.profileId !== undefined ||
+          params.enrollmentId !== undefined ||
+          params.name !== undefined;
+        let assertPersonCurrent: (() => void) | undefined;
+        if (selectsPerson) {
+          const assertAdmin = await preparePersonalDeviceAdministration(options);
+          const client = options.client;
+          const profileId = client?.authenticatedUserProfile?.profileId;
+          assertPersonCurrent = () => {
+            assertAdmin();
+            if (
+              !client ||
+              !profileId ||
+              client.connect.role !== "operator" ||
+              client.invalidated ||
+              client.connectionSignal?.aborted ||
+              context.getRuntimeConfig() !== config
+            ) {
+              throw new Error(
+                "Personal setup requires a current authenticated operator administrator",
+              );
+            }
+          };
+          assertPersonCurrent();
+        }
         const joinContext =
           params.joinUrl === true ? captureOpenClawStateWorkerContext() : undefined;
         const authority = readGatewayRequestMutationAuthority(options);
@@ -119,6 +146,14 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         assertJoinCurrent?.();
         const requestPublicUrl = params.publicUrl;
         const resolved = await resolvePairingSetupFromConfig(config, {
+          ...(selectsPerson
+            ? {
+                profileId: params.profileId,
+                enrollmentId: params.enrollmentId,
+                name: params.name,
+                assertCurrent: assertPersonCurrent,
+              }
+            : {}),
           env: process.env,
           publicUrl: requestPublicUrl,
           preferRemoteUrl: params.preferRemoteUrl === true,
@@ -139,6 +174,7 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
             await runCommandWithTimeout(argv, { timeoutMs: runOpts.timeoutMs }),
         });
         assertJoinCurrent?.();
+        assertPersonCurrent?.();
         if (!resolved.ok) {
           respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, resolved.error));
           return;
@@ -183,6 +219,8 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
         const qrDataUrl =
           renderedQr && renderedQr.length <= MAX_QR_DATA_URL_LENGTH ? renderedQr : undefined;
         assertJoinCurrent?.();
+        assertPersonCurrent?.();
+        resolved.assertCurrent?.();
         respond(
           true,
           {

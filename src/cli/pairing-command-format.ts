@@ -7,9 +7,13 @@ import { quoteCliArg } from "./quote-cli-arg.js";
 export function formatPairingApproveCommand(
   group: "devices" | "nodes",
   requestId: string,
-  opts: Pick<GatewayRpcOpts, "url" | "timeout" | "json"> = {},
+  opts: Pick<GatewayRpcOpts, "url" | "timeout" | "json"> & { person?: string } = {},
 ): string {
   const args = ["openclaw", group, "approve", requestId];
+  const person = normalizeOptionalString(opts.person);
+  if (group === "devices" && person) {
+    args.push("--person", person);
+  }
   const url = normalizeOptionalString(opts.url);
   if (url) {
     args.push("--url", url);

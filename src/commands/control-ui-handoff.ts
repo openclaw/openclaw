@@ -13,6 +13,7 @@ import {
 import { resolveControlUiLinks } from "../gateway/control-ui-links.js";
 import { createGatewayCredentialPlan } from "../gateway/credential-planner.js";
 import { CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS } from "../infra/control-ui-assets.js";
+import { prepareDeviceBootstrapProfileAuthority } from "../infra/device-bootstrap-profile-authority.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import { readResponseTextSnippet } from "../infra/http-body.js";
 import { fetchConfiguredLocalOriginWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -140,13 +141,22 @@ export async function hasVerifiedControlUiLoopbackAlias(target: {
 }
 
 /** Mint the Control-UI-scoped one-time device grant immediately before actual delivery. */
-export async function issueControlUiBrowserHandoff({
-  httpUrl,
-  wsUrl,
-}: ControlUiHandoffTarget["links"]) {
+export async function issueControlUiBrowserHandoff(
+  { httpUrl, wsUrl }: ControlUiHandoffTarget["links"],
+  options: { profileId?: string } = {},
+) {
+  const person =
+    options.profileId !== undefined
+      ? await prepareDeviceBootstrapProfileAuthority({
+          ...CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
+          operatorProfileId: options.profileId,
+        })
+      : undefined;
   const issued = await issueDeviceBootstrapToken({
-    profile: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
+    profile: person?.profile ?? CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
+    ...(person ? { context: person.context, assertCurrent: person.assertCurrent } : {}),
   });
+  person?.assertCurrent();
   const fragment = new URLSearchParams({
     bootstrapToken: issued.token,
     [CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM]: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
@@ -155,6 +165,7 @@ export async function issueControlUiBrowserHandoff({
   return {
     browserUrl: `${httpUrl}#${fragment.toString()}`,
     expiresAtMs: issued.expiresAtMs,
+    ...(person ? { assertCurrent: person.assertCurrent } : {}),
   };
 }
 

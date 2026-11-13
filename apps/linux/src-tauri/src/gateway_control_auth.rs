@@ -144,6 +144,36 @@ pub(crate) fn connect_auth(
     }))
 }
 
+pub(crate) fn validate_profile_enrollment(params: &Value) -> Result<(), String> {
+    let value = params
+        .as_object()
+        .ok_or("Invalid personal setup request.")?;
+    if value.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "deviceId" | "profileId" | "enrollmentId" | "name"
+        )
+    }) || value.contains_key("profileId") == value.contains_key("enrollmentId")
+        || value
+            .get("profileId")
+            .is_some_and(|id| id.as_str().is_none_or(str::is_empty))
+        || value
+            .get("deviceId")
+            .is_some_and(|id| id.as_str().is_none_or(str::is_empty))
+        || value
+            .get("name")
+            .is_some_and(|name| name.as_str().is_none_or(|name| name.chars().count() > 256))
+        || (value.contains_key("profileId") && value.contains_key("name"))
+        || value.get("enrollmentId").is_some_and(|id| {
+            id.as_str()
+                .is_none_or(|id| uuid::Uuid::parse_str(id).is_err())
+        })
+    {
+        return Err("Invalid personal setup request.".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

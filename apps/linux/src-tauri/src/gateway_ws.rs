@@ -221,6 +221,10 @@ struct SuspendResumeResponse {
 
 enum GatewayRequest {
     AgentsList,
+    ProfileEnroll {
+        generation: GatewayGeneration,
+        params: Value,
+    },
     #[cfg(target_os = "linux")]
     Desktop {
         generation: u64,
@@ -257,6 +261,7 @@ impl GatewayRequest {
     fn method(&self) -> &'static str {
         match self {
             Self::AgentsList => "agents.list",
+            Self::ProfileEnroll { .. } => "device.profile.enroll",
             Self::ChatSend { .. } => "chat.send",
             Self::RefreshCanvasSurface { .. } => "plugin.surface.refresh",
             Self::ChatHistory { .. } => "chat.history",
@@ -431,6 +436,7 @@ pub(crate) struct CanvasSurfaceState {
 struct GatewayConfigState {
     config: Option<GatewayWsConfig>,
     native_control_session: Option<NativeControlSession>,
+    personal_operator_scopes: Option<Vec<String>>,
     canvas_surface: Option<String>,
     user_accent: Option<String>,
 }
@@ -616,6 +622,7 @@ impl GatewayClient {
             .expect("gateway config mutex poisoned");
         current.config = config;
         current.native_control_session = None;
+        current.personal_operator_scopes = None;
         self.inner.connection_changed.notify_waiters();
         let generation = self.inner.config_generation.fetch_add(1, Ordering::SeqCst) + 1;
         *self
@@ -743,6 +750,97 @@ impl GatewayClient {
             &session.scopes,
             challenge,
         )
+    }
+
+    pub(crate) async fn enroll_control_profile(
+        &self,
+        generation: GatewayGeneration,
+        dashboard: &Url,
+        params: Value,
+    ) -> Result<Value, String> {
+        crate::gateway_control_auth::validate_profile_enrollment(&params)?;
+        let (gateway, device_id, scopes, accepted_auth) =
+            self.with_config_state(generation, |state| {
+                let config = state.config.as_ref().ok_or("Native Gateway unavailable.")?;
+                let expected = crate::remote_gateway::dashboard_url(
+                    &Url::parse(&config.ws_url).map_err(|_| "Invalid Gateway.")?,
+                )?;
+                let session = state
+                    .native_control_session
+                    .as_ref()
+                    .ok_or("Native Gateway unavailable.")?;
+                if !self.is_connected()
+                    || config.ownership != GatewayOwnership::Remote
+                    || !crate::gateway_windows::matches_route(dashboard, &expected)
+                    || !session.scopes.iter().any(|scope| scope == "operator.admin")
+                {
+                    return Err(
+                        "Personal setup requires the current native owner/admin connection.".into(),
+                    );
+                }
+                let store = self
+                    .inner
+                    .identity
+                    .lock()
+                    .map_err(|_| "Native identity unavailable.")?;
+                let store = store.as_ref().ok_or("Native identity unavailable.")?;
+                Ok((
+                    config.ws_url.clone(),
+                    store.identity().device_id().to_string(),
+                    session.scopes.clone(),
+                    session.current_auth(store, &config.ws_url)?.json(),
+                ))
+            })?;
+        let result: Value = self
+            .request(GatewayRequest::ProfileEnroll { generation, params })
+            .await?;
+        let reconnect = self.with_config_state(generation, |state| {
+            let config = state.config.as_ref().ok_or("Native Gateway changed.")?;
+            let session = state
+                .native_control_session
+                .as_ref()
+                .ok_or("Native Gateway changed.")?;
+            let mut store = self
+                .inner
+                .identity
+                .lock()
+                .map_err(|_| "Native identity unavailable.")?;
+            let store = store.as_mut().ok_or("Native identity unavailable.")?;
+            if !self.is_connected()
+                || config.ws_url != gateway
+                || store.identity().device_id() != device_id
+                || session.scopes != scopes
+                || session.current_auth(store, &gateway)?.json() != accepted_auth
+            {
+                return Err("Native Gateway changed during personal setup.".into());
+            }
+            if let Some(grant) = result.get("operatorToken") {
+                if result.get("deviceId").and_then(Value::as_str) != Some(device_id.as_str()) {
+                    return Err("Personal setup returned another device's credential.".into());
+                }
+                let token = grant
+                    .get("token")
+                    .and_then(Value::as_str)
+                    .ok_or("Missing personal device token.")?;
+                let granted: Vec<String> =
+                    serde_json::from_value(grant.get("scopes").cloned().unwrap_or(Value::Null))
+                        .map_err(|_| "Invalid personal scopes.")?;
+                if granted.iter().any(|scope| !scopes.contains(scope)) {
+                    return Err("Personal scopes exceed the current grant.".into());
+                }
+                store.persist_device_token(&gateway, token)?;
+                state.personal_operator_scopes = Some(granted);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })?;
+        let receipt = json!({"deviceId": result.get("deviceId").and_then(Value::as_str).ok_or("Missing device.")?,
+            "profileId": result.get("profileId").and_then(Value::as_str).ok_or("Missing person.")?, "reconnect": reconnect});
+        if reconnect {
+            self.resume_reconnect();
+        }
+        Ok(receipt)
     }
 
     pub fn activate(&self, app: AppHandle) {
@@ -1173,15 +1271,31 @@ impl GatewayClient {
             .is_none_or(|value| value.trim().is_empty());
         let connect_identity = identity.clone();
         let connect_auth = auth.clone();
+        let personal_scopes = self
+            .with_config_state(GatewayGeneration(generation), |state| {
+                Ok(state.personal_operator_scopes.clone())
+            })
+            .map_err(RequestFailure::transport)?;
         let session =
             match SharedGatewayClient::connect(shared_config, move |challenge| async move {
-                connect_params(
+                let mut params = connect_params(
                     &connect_identity,
                     &connect_auth,
                     &challenge.nonce,
                     challenge.issued_at_ms,
                     inline_widgets_available,
-                )
+                )?;
+                if let Some(scopes) = personal_scopes {
+                    let scope_refs: Vec<_> = scopes.iter().map(String::as_str).collect();
+                    params["device"] = connect_identity.signed_device_with_scopes(
+                        &connect_auth,
+                        &challenge.nonce,
+                        challenge.issued_at_ms,
+                        &scope_refs,
+                    )?;
+                    params["scopes"] = json!(scopes);
+                }
+                Ok::<Value, String>(params)
             })
             .await
             {
@@ -1806,7 +1920,8 @@ async fn perform_session_request(
     let method = request.method();
     let generation = match &request {
         GatewayRequest::AgentsList => GatewayGeneration(connection_generation),
-        GatewayRequest::ChatSend { generation, .. }
+        GatewayRequest::ProfileEnroll { generation, .. }
+        | GatewayRequest::ChatSend { generation, .. }
         | GatewayRequest::ChatHistory { generation, .. }
         | GatewayRequest::RefreshCanvasSurface { generation, .. } => *generation,
         #[cfg(target_os = "linux")]
@@ -1828,6 +1943,7 @@ async fn perform_session_request(
     #[cfg(target_os = "linux")]
     let mut authority = authority;
     let params = match request {
+        GatewayRequest::ProfileEnroll { params, .. } => params,
         #[cfg(target_os = "linux")]
         GatewayRequest::Desktop { params, .. } => params,
         GatewayRequest::AgentsList => {

@@ -76,9 +76,11 @@ type DevicePairingStoreMutation<T> = {
   value: T;
 };
 
-type PairedDeviceUpdate<T> = {
+export type PairedDeviceUpdate<T> = {
   value: T;
-  patch?: Partial<PairedDeviceMetadataPatch & Pick<PairedDevice, "tokens" | "nodeSurface">>;
+  patch?: Partial<
+    PairedDeviceMetadataPatch & Pick<PairedDevice, "tokens" | "nodeSurface" | "operatorProfileId">
+  >;
 };
 
 const boundDatabase = new AsyncLocalStorage<{
@@ -319,6 +321,9 @@ export function updatePairedDeviceInTransaction<T>(
     const columns = {
       ...("displayName" in patch ? { display_name: patch.displayName ?? null } : {}),
       ...("operatorLabel" in patch ? { operator_label: patch.operatorLabel ?? null } : {}),
+      ...("operatorProfileId" in patch
+        ? { operator_profile_id: patch.operatorProfileId ?? null }
+        : {}),
       ...("platform" in patch ? { platform: patch.platform ?? null } : {}),
       ...("clientId" in patch ? { client_id: patch.clientId ?? null } : {}),
       ...("clientMode" in patch ? { client_mode: patch.clientMode ?? null } : {}),

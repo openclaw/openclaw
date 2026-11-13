@@ -76,6 +76,8 @@ export async function serveControlUiSessionEntry(
     authenticatedUserProfile: requestAuth.authenticatedUserProfile,
     internal: {
       operatorRoleActor: requestAuth.operatorRoleActor,
+      operatorProfileEnrollment: requestAuth.operatorProfileEnrollment,
+      openclawIdPrincipal: requestAuth.openclawIdPrincipal,
       operatorAccessAuthority: requestAuth.operatorAccessAuthority,
     },
   };

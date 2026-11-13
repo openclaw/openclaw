@@ -30,7 +30,12 @@ export async function runInteractiveOnboarding(
   }
 }
 
-async function launchHatchTui(workspace: string, local: boolean, agentId?: string): Promise<void> {
+async function launchHatchTui(
+  workspace: string,
+  local: boolean,
+  agentId?: string,
+  deviceAuth = false,
+): Promise<void> {
   const [{ launchTuiCli }, { DEFAULT_BOOTSTRAP_FILENAME }, fs] = await Promise.all([
     import("../tui/tui-launch.js"),
     import("../agents/workspace.js"),
@@ -43,7 +48,7 @@ async function launchHatchTui(workspace: string, local: boolean, agentId?: strin
     // No timeoutMs: the run-level TUI timeout overrides the configured agent
     // timeout for every turn in the session, not just the hatch message.
     await launchTuiCli({
-      ...(local ? { local: true } : {}),
+      ...(deviceAuth ? { deviceAuth: true } : local ? { local: true } : {}),
       deliver: false,
       ...(agentId ? { session: `agent:${agentId}:main` } : {}),
       // Seed the first-run hatch only when the workspace bootstrap exists;
@@ -58,7 +63,14 @@ async function launchHatchTui(workspace: string, local: boolean, agentId?: strin
 export type GuidedOnboardingHandoff =
   | { next: "browser" }
   | { next: "foreground-gateway"; agentId?: string }
-  | { workspace: string; next: "hatch"; local: boolean; agentId?: string }
+  | {
+      workspace: string;
+      next: "hatch";
+      local: boolean;
+      agentId?: string;
+      personalSetup?: boolean;
+      hostGateway?: boolean;
+    }
   | { workspace: string; next: "chat"; agentName?: string };
 
 export type GuidedOnboardingHandoffDeps = {
@@ -91,7 +103,24 @@ export async function runGuidedOnboardingHandoff(
   // Interactive surfaces start only after the wizard lifecycle restores stdin
   // so the TUI (or recovery chat) receives a clean TTY.
   if (handoff.next === "hatch") {
-    await launchHatchTui(handoff.workspace, handoff.local, handoff.agentId);
+    const continueTerminal = async () => {
+      let personal = null;
+      if (handoff.personalSetup) {
+        const [{ offerTerminalPersonalSetup }, { createClackPrompter }] = await Promise.all([
+          import("./onboard-personal.js"),
+          import("../wizard/clack-prompter.js"),
+        ]);
+        personal = await offerTerminalPersonalSetup(createClackPrompter());
+      }
+      await launchHatchTui(handoff.workspace, handoff.local, handoff.agentId, personal !== null);
+    };
+    if (handoff.hostGateway) {
+      // The existing foreground owner starts, proves readiness, and closes only its own child.
+      const { runQuickstartForegroundGateway } = await import("./onboard-quickstart-host.js");
+      await runQuickstartForegroundGateway({ runtime, onReady: continueTerminal });
+    } else {
+      await continueTerminal();
+    }
     return;
   }
   if (handoff.next === "browser") {

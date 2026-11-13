@@ -101,6 +101,11 @@ beforeAll(async () => {
   const bindings = new Map<string, string>();
   setDeviceTokenBindingOwner({
     lookup: (deviceId, role) => bindings.get(`${deviceId}:${role}`),
+    devicesForPeer: (peerKey, role) =>
+      [...bindings].flatMap(([key, value]) =>
+        value === peerKey && key.endsWith(":" + role) ? [key.slice(0, -(role.length + 1))] : [],
+      ),
+    isOperatorBindingCurrent: () => false,
     record: async (deviceId, role, peerKey) => {
       bindings.set(`${deviceId}:${role}`, peerKey);
     },

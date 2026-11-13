@@ -48,6 +48,7 @@ import {
   type OpenClawIdAccount,
   type StoredClaw,
 } from "./claw-store.js";
+import { createDeviceTokenBindingOperations } from "./device-token-binding.js";
 import { nextPeopleExpiry } from "./invite-expiry.js";
 import { withSweptInvites, resolveReport, resolvedInvite } from "./invite-sweep.js";
 import { listInviteViews } from "./invites-view.js";
@@ -104,9 +105,6 @@ function emptyRecord(clawId: string): StoredClaw {
     },
   };
 }
-
-/** A tunnel-issued device token and the device key it is bound to. */
-export type DeviceTokenRef = { deviceId: string; role: string; peerKey: string };
 
 /** Creates the authority owner over the persisted claw record. */
 export function createOpenClawIdAuthority(
@@ -520,100 +518,18 @@ export function createOpenClawIdAuthority(
       });
     },
 
-    /** The device key a tunnel-issued token belongs to (from memory; load first). */
-    tokenBinding(deviceId: string, role: string): string | undefined {
-      assertReadable();
-      return record?.token_bindings?.find(
-        (binding) => binding.device_id === deviceId && binding.role === role,
-      )?.peer_key;
-    },
-
-    /** Records (or replaces) the device key a token was issued to. */
-    bindToken(deviceId: string, role: string, peerKey: string): Promise<void> {
-      return serialize(async () => {
-        const current = await load();
-        if (!current) {
-          return;
-        }
-        const others = (current.token_bindings ?? []).filter(
-          (binding) => binding.device_id !== deviceId || binding.role !== role,
-        );
-        await commit({
-          ...current,
-          token_bindings: [
-            ...others,
-            { device_id: deviceId, role, peer_key: peerKey, bound_at: nowSeconds() },
-          ],
-        });
-      });
-    },
-
-    /** The tunnel-issued tokens bound to these device keys (from memory; load first). */
-    tokensBoundTo(peerKeys: readonly string[]): DeviceTokenRef[] {
-      return (record?.token_bindings ?? [])
-        .filter((binding) => peerKeys.includes(binding.peer_key))
-        .map((binding) => ({
-          deviceId: binding.device_id,
-          role: binding.role,
-          peerKey: binding.peer_key,
-        }));
-    },
-
-    /**
-     * Tokens still bound to a device key that is no longer in the membership:
-     * removals whose revocation did not finish. The binding keeps refusing them
-     * meanwhile.
-     */
-    async orphanedTokens(): Promise<DeviceTokenRef[]> {
-      const current = await load();
-      const members = new Set<string>(current?.authority ? memberKeys(current.authority) : []);
-      return (current?.token_bindings ?? [])
-        .filter((binding) => !members.has(binding.peer_key))
-        .map((binding) => ({
-          deviceId: binding.device_id,
-          role: binding.role,
-          peerKey: binding.peer_key,
-        }));
-    },
-
-    /** Drops the bindings of tokens whose revocation was confirmed. */
-    unbindTokens(tokens: readonly DeviceTokenRef[]): Promise<void> {
-      return serialize(async () => {
-        const current = await load();
-        const confirmed = (binding: { device_id: string; role: string; peer_key: string }) =>
-          tokens.some(
-            (token) =>
-              token.deviceId === binding.device_id &&
-              token.role === binding.role &&
-              token.peerKey === binding.peer_key,
-          );
-        if (current && (current.token_bindings ?? []).some(confirmed)) {
-          await commit({
-            ...current,
-            token_bindings: (current.token_bindings ?? []).filter((binding) => !confirmed(binding)),
-          });
-        }
-      });
-    },
-
-    /** Drops the bindings of removed device keys; returns the (device, role) tokens to revoke. */
-    unbindPeers(peerKeys: readonly string[]): Promise<Array<{ deviceId: string; role: string }>> {
-      return serialize(async () => {
-        const current = await load();
-        const removed = (current?.token_bindings ?? []).filter((binding) =>
-          peerKeys.includes(binding.peer_key),
-        );
-        if (current && removed.length > 0) {
-          await commit({
-            ...current,
-            token_bindings: (current.token_bindings ?? []).filter(
-              (binding) => !peerKeys.includes(binding.peer_key),
-            ),
-          });
-        }
-        return removed.map((binding) => ({ deviceId: binding.device_id, role: binding.role }));
-      });
-    },
+    ...createDeviceTokenBindingOperations({
+      current: () => {
+        assertReadable();
+        return record;
+      },
+      load,
+      serialize,
+      commit,
+      currentPeer,
+      memberKeys,
+      now: nowSeconds,
+    }),
 
     /**
      * What an owner device reaching the claw over the tunnel may read: the seq to

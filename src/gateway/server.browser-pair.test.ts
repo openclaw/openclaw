@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { getRuntimeConfig, writeConfigFile } from "../config/io.js";
@@ -10,6 +11,7 @@ import { withDevicePairingLock } from "../infra/device-pairing-lock.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { buildBrowserPairPayload, type BrowserPairAction } from "../shared/browser-pair.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { ensureCanonicalLocalUserProfile } from "../state/user-profile-writes.js";
 import { CONTROL_UI_OPERATOR_SCOPES } from "./control-ui-bootstrap-contract.js";
 import { loadDeviceIdentity } from "./device-authz.test-helpers.js";
 import {
@@ -523,7 +525,7 @@ describe("browser device-code pairing", () => {
 
   // Config publication replaces the shared-auth view; finish cases opening shared-secret
   // sockets above before exercising this real runtime configuration change.
-  it("refuses identity-less code pairing when roles are enabled, including already-pending approval", async () => {
+  it("requires explicit personal approval when roles are enabled, including already-pending requests", async () => {
     const browser = newBrowser();
     const { code, requestId } = await start(browser);
     const originalConfig = getRuntimeConfig();
@@ -534,7 +536,7 @@ describe("browser device-code pairing", () => {
         roles: {
           default: "guest",
           definitions: {
-            guest: { sessions: { others: "none" }, agents: [], scopes: [] },
+            guest: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
           },
         },
       },
@@ -542,11 +544,9 @@ describe("browser device-code pairing", () => {
     try {
       const freshBrowser = newBrowser();
       const response = await post("start", signedBody(freshBrowser, "start"));
-      expect(response.status).toBe(409);
-      expect(await response.json()).toMatchObject({
-        error: "identity_required",
-        message: expect.stringContaining("identity-aware sign-in"),
-      });
+      expect(response.status).toBe(200);
+      const fresh = (await response.json()) as Started;
+      expect(fresh.code).toBeTruthy();
       expect(getRuntimeConfig().gateway?.roles).toBeDefined();
       const approval = await decide(code, requestId);
       expect(approval.ok).toBe(false);
@@ -557,12 +557,32 @@ describe("browser device-code pairing", () => {
         pending: { total: 0 },
       });
       expect(await getPairedDevice(browser.identity.deviceId)).toBeNull();
-      // Roles do not prevent withdrawing the pending request or change any other sign-in lane.
-      expect(await (await post("cancel", signedBody(browser, "cancel", requestId))).json()).toEqual(
-        {
-          status: "cancelled",
-        },
-      );
+      const person = await ensureCanonicalLocalUserProfile({
+        enrollmentId: randomUUID(),
+        name: "Code-paired person",
+      });
+      expect(
+        (
+          await rpcReq(adminSocket, "device.pair.code", {
+            code,
+            requestId,
+            decision: "approve",
+            profileId: person.id,
+          })
+        ).ok,
+      ).toBe(true);
+      expect((await getPairedDevice(browser.identity.deviceId))?.operatorProfileId).toBe(person.id);
+      const collected = await collect(browser, requestId);
+      if (typeof collected.body.deviceToken !== "string") {
+        throw new Error("The approved browser received no token");
+      }
+      const connected = await connectBrowser(browser, collected.body.deviceToken);
+      expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
+      expect(connected.payload).toMatchObject({ auth: { scopes: ["operator.read"] } });
+      // Withdrawing an unapproved request still needs only that browser's signed key.
+      expect(
+        await (await post("cancel", signedBody(freshBrowser, "cancel", fresh.requestId))).json(),
+      ).toEqual({ status: "cancelled" });
     } finally {
       await writeConfigFile(originalConfig);
     }

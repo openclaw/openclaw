@@ -370,6 +370,7 @@ CREATE TABLE "device_pairing_paired" (
   "approved_at_ms" bigint NOT NULL,
   "last_seen_at_ms" bigint,
   "last_seen_reason" text COLLATE "C",
+  "operator_profile_id" text COLLATE "C",
   PRIMARY KEY ("device_id")
 );
 

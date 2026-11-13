@@ -453,6 +453,7 @@ async function runGuidedOnboardingFlow(
     localSetup?.status !== "pending" && Boolean(detection?.setupComplete || existingConfig.gateway);
   // Something other than this terminal keeps the Gateway alive after onboarding exits.
   let gatewayRunsWithoutTerminal = false;
+  let terminalNeedsGateway = false;
   const { resolveSetupWorkspaceSelection } = await import("../wizard/setup.workspace.js");
   const workspaceSelection = await resolveSetupWorkspaceSelection({
     baseConfig: existingConfig,
@@ -567,6 +568,7 @@ async function runGuidedOnboardingFlow(
       }
       gatewayRunsWithoutTerminal =
         gateway.status === "skipped" ? gateway.reason === "external" : keepGatewayRunning;
+      terminalNeedsGateway = gateway.status === "skipped" && gateway.reason !== "external";
       // Accepted one-shot setup exception: record completion after Gateway startup.
       const appliedSnapshot =
         localSetup?.status === "pending"
@@ -711,6 +713,8 @@ async function runGuidedOnboardingFlow(
     workspace: hatchWorkspace,
     next: "hatch",
     local: alreadyConfigured,
+    ...(!alreadyConfigured ? { personalSetup: true } : {}),
+    ...(terminalNeedsGateway ? { hostGateway: true } : {}),
     ...(handoffAgentId ? { agentId: handoffAgentId } : {}),
   };
 }

@@ -4,6 +4,7 @@ import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/sc
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PairedDeviceTokenIdentity } from "../infra/device-pairing-core.types.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
@@ -43,7 +44,10 @@ import {
   bindHttpOperatorAccessAuthority,
   sendGatewayHttpAuthFailure,
 } from "./http-operator-access.js";
-import { verifyHttpOperatorDeviceToken } from "./http-operator-device-token.js";
+import {
+  verifyHttpOperatorDeviceToken,
+  type AdmittedHttpOperatorDevice,
+} from "./http-operator-device-token.js";
 import {
   bindHttpResponseAuthority,
   captureHttpRequestAuthority,
@@ -141,7 +145,10 @@ function resolveControlUiReadOperatorScopes(
   req: IncomingMessage,
   authMethod: NonNullable<GatewayAuthResult["method"]>,
   deviceScopes: string[] | undefined,
-  authenticatedRequest?: Pick<AuthorizedGatewayHttpRequest, "operatorRolePolicy">,
+  authenticatedRequest?: Pick<
+    AuthorizedGatewayHttpRequest,
+    "operatorRolePolicy" | "operatorProfileScopeCeiling"
+  >,
 ): string[] {
   if (authMethod === "remote-ingress") {
     return getRemoteControlUiIngressContext(req)?.resolvePrincipal().scopes ?? [];
@@ -160,6 +167,7 @@ function resolveControlUiReadOperatorScopes(
 
 type HttpOperatorCredentialResult = {
   authResult: GatewayAuthResult;
+  operatorDevice?: AdmittedHttpOperatorDevice;
   authGeneration?: string;
   deviceOperatorScopes?: string[];
 };
@@ -168,6 +176,7 @@ async function checkHttpOperatorCredentials(
   params: Omit<GatewayHttpRequestAuthParams, "res"> & {
     token: string | undefined;
     requiredDeviceScopes?: readonly string[];
+    matchedDeviceId?: string;
   },
   authorizeConnect: typeof authorizeHttpGatewayConnect,
 ): Promise<HttpOperatorCredentialResult> {
@@ -213,6 +222,7 @@ async function checkHttpOperatorCredentials(
     const authGeneration = resolveSharedGatewaySessionGeneration(auth, params.trustedProxies);
     let resolvedAuthResult = authResult;
     let deviceScopes: string[] | undefined;
+    let operatorDevice: AdmittedHttpOperatorDevice | undefined;
     if (
       !authResult.ok &&
       authResult.reason !== PROXY_ATTRIBUTION_REQUIRED_REASON &&
@@ -240,13 +250,15 @@ async function checkHttpOperatorCredentials(
           retryAfterMs: deviceRateCheck.retryAfterMs,
         };
       } else {
-        const verifiedScopes = await verifyHttpOperatorDeviceToken(
+        const verifiedDevice = await verifyHttpOperatorDeviceToken(
           token,
           authGeneration,
           params.requiredDeviceScopes,
+          params.matchedDeviceId,
         );
-        if (verifiedScopes) {
-          deviceScopes = verifiedScopes;
+        if (verifiedDevice) {
+          operatorDevice = verifiedDevice;
+          deviceScopes = verifiedDevice.scopes;
           params.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
           resolvedAuthResult = { ok: true, method: "device-token" };
         } else {
@@ -262,6 +274,7 @@ async function checkHttpOperatorCredentials(
       authResult: resolvedAuthResult,
       authGeneration,
       ...(deviceScopes ? { deviceOperatorScopes: deviceScopes } : {}),
+      ...(operatorDevice ? { operatorDevice } : {}),
     };
   };
 
@@ -300,10 +313,11 @@ export async function authorizeControlUiReadRequestOrReply(
     );
   }
   const token = resolveControlUiReadAuthToken(params.req, params.allowQueryToken);
-  const { authResult, authGeneration, deviceOperatorScopes } = await checkHttpOperatorCredentials(
-    { ...params, cfg, auth, token, rateLimiter: token ? params.rateLimiter : undefined },
-    authorizeControlUiReadHttpGatewayConnect,
-  );
+  const { authResult, authGeneration, deviceOperatorScopes, operatorDevice } =
+    await checkHttpOperatorCredentials(
+      { ...params, cfg, auth, token, rateLimiter: token ? params.rateLimiter : undefined },
+      authorizeControlUiReadHttpGatewayConnect,
+    );
   if (!authResult.ok) {
     if (params.replyOnFailure !== false) {
       sendGatewayAuthFailure(params.res, authResult);
@@ -313,6 +327,7 @@ export async function authorizeControlUiReadRequestOrReply(
   const profileAuth = await checkAuthenticatedHttpUserProfile({
     authResult,
     cfg,
+    operatorDevice,
     getRuntimeConfig: params.getRuntimeConfig,
     req: params.req,
     res: params.res,
@@ -362,8 +377,18 @@ export async function authorizeControlUiReadRequestOrReply(
     hasCurrentClientAuthority,
   );
   if (authMethod === "device-token" && token) {
-    const verifyCurrentDeviceToken = () =>
-      verifyHttpOperatorDeviceToken(token, authGeneration, deviceOperatorScopes);
+    const verifyCurrentDeviceToken = async () => {
+      if (!operatorDevice) {
+        return false;
+      }
+      const verified = await verifyHttpOperatorDeviceToken(
+        token,
+        authGeneration,
+        deviceOperatorScopes,
+        operatorDevice.identity.deviceId,
+      );
+      return verified !== null && operatorDevice.isCurrent();
+    };
     // Profile attribution can yield after the original credential verification.
     if (!(await verifyCurrentDeviceToken()) || !requestAuth.hasCurrentClientAuthority()) {
       if (params.replyOnFailure !== false) {
@@ -391,6 +416,7 @@ export async function authorizeControlUiReadRequestOrReply(
       cfg,
       operatorScopes,
       authenticatedProfile.authenticatedUserProfile?.profileId,
+      operatorDevice?.identity,
     ),
   );
   return requestAuth;
@@ -472,6 +498,7 @@ export function setControlUiPluginAuthCookieForRequest(
   cfg: OpenClawConfig,
   authenticatedScopes: readonly string[],
   authenticatedProfileId?: string,
+  deviceIdentity?: PairedDeviceTokenIdentity,
 ): ControlUiPluginTabAuthGrant[] {
   const grants = listControlUiPluginTabAuthGrants(authenticatedScopes);
   if (grants.length > 0) {
@@ -480,6 +507,7 @@ export function setControlUiPluginAuthCookieForRequest(
       basePath: cfg.gateway?.controlUi?.basePath,
       request: req,
       ...(authenticatedProfileId ? { profileId: authenticatedProfileId } : {}),
+      ...(deviceIdentity ? { device: deviceIdentity } : {}),
     });
   }
   return [];
@@ -530,6 +558,7 @@ export async function authorizePluginGatewayHttpRequestOrReply(
           auth: params.getResolvedAuth?.() ?? params.auth,
           token,
           requiredDeviceScopes,
+          matchedDeviceId: requestAuth.operatorProfileEnrollment?.deviceId,
           // Admission owns attempt accounting; this checks the same admitted grant.
           rateLimiter: undefined,
         },
@@ -554,7 +583,7 @@ export async function checkGatewayHttpRequestAuth(
   const cfg = params.cfg ?? getRuntimeConfig();
   const hasCurrentClientAuthority = captureHttpRequestAuthority(params);
   const token = getBearerToken(params.req);
-  const { authResult, deviceOperatorScopes }: HttpOperatorCredentialResult =
+  const { authResult, deviceOperatorScopes, operatorDevice }: HttpOperatorCredentialResult =
     allowDeviceToken || getRemoteControlUiIngressContext(params.req)
       ? await checkHttpOperatorCredentials({ ...params, cfg, token }, authorizeHttpGatewayConnect)
       : {
@@ -577,6 +606,7 @@ export async function checkGatewayHttpRequestAuth(
   const profileAuth = await checkAuthenticatedHttpUserProfile({
     authResult,
     cfg,
+    operatorDevice,
     getRuntimeConfig: params.getRuntimeConfig,
     req: params.req,
     res: params.res,
@@ -593,6 +623,7 @@ export async function checkGatewayHttpRequestAuth(
     requestAuth: {
       hasCurrentClientAuthority: () =>
         hasCurrentClientAuthority() &&
+        authenticatedProfile.hasCurrentProfileAuthority?.() !== false &&
         hasCurrentGatewayOperatorAccess(authenticatedProfile.operatorAccessAuthority),
       authMethod: authResult.method,
       ...(authResult.user ? { user: authResult.user } : {}),
@@ -653,7 +684,7 @@ export function resolveTrustedHttpOperatorScopes(
   req: IncomingMessage,
   requestAuth: Pick<
     AuthorizedGatewayHttpRequest,
-    "trustDeclaredOperatorScopes" | "operatorRolePolicy"
+    "trustDeclaredOperatorScopes" | "operatorRolePolicy" | "operatorProfileScopeCeiling"
   >,
 ): string[] {
   const ingress = getRemoteControlUiIngressContext(req);

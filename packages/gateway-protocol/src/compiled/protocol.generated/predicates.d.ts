@@ -2467,6 +2467,11 @@ export function isDevicePairRenameParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").DevicePairRenameParamsSchema
 >;
+export function isDeviceProfileEnrollParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").DeviceProfileEnrollParamsSchema
+>;
 export function isDeviceTokenRotateParams(
   value: unknown,
 ): value is import("typebox").Static<

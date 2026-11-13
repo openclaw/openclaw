@@ -6,10 +6,12 @@ import type {
   DevicePairSetupCompletedEvent,
   DevicePairSetupStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { registerDevicesEnglish } from "../i18n/locales/en-devices.ts";
 import { formatUiError } from "./format-error.ts";
+import { generateUUID } from "./uuid.ts";
 
 registerDevicesEnglish();
 
@@ -22,6 +24,16 @@ export type DevicePairSetup = DevicePairSetupCodeResult & {
 export type DevicePairJoinSetup = DevicePairSetup &
   Required<Pick<DevicePairSetupCodeResult, "command" | "serviceCommand" | "installedCommand">>;
 export type DevicePairSetupAccess = "full" | "limited" | "node";
+export type DevicePairSetupPersonInput = { profileId: string } | { name: string } | null;
+export type DevicePairSetupPerson =
+  | { profileId: string }
+  | { enrollmentId: string; name?: string }
+  | null;
+type PersonalSetupCodeParams = DevicePairSetupCodeParams & {
+  profileId?: string;
+  enrollmentId?: string;
+  name?: string;
+};
 // Only the fields the modal actually shows. The event also carries deviceId and
 // ts; validating what is never rendered would just be shipped dead weight.
 type DevicePairSetupCompletion = Pick<DevicePairSetupCompletedEvent, "setupId" | "access"> & {
@@ -34,7 +46,7 @@ export type DevicePairSetupLifecycle = { access: DevicePairSetupAccess } & (
   | { phase: "loading" }
   | { phase: "waiting"; setup: DevicePairSetup }
   | { phase: "reconciling"; setupId: string }
-  | { phase: "error"; source: "create"; message: string }
+  | { phase: "error"; source: "create"; message: string; uncertain?: boolean }
   | { phase: "error"; source: "status"; setupId: string; message: string }
   | { phase: "success"; deviceName?: string }
   | { phase: "delivery-uncertain" }
@@ -43,7 +55,7 @@ export type DevicePairSetupLifecycle = { access: DevicePairSetupAccess } & (
 
 function requestDevicePairSetup<Result extends DevicePairSetup = DevicePairSetup>(
   client: GatewayRequestClient,
-  params: DevicePairSetupCodeParams,
+  params: PersonalSetupCodeParams,
 ) {
   return client.request<Result>("device.pair.setupCode", params, {
     timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
@@ -62,6 +74,9 @@ type DevicePairSetupState = {
   devicePairSetupExpiryTimer: ReturnType<typeof setTimeout> | null;
   devicePairSetupCountdownTimer: ReturnType<typeof setInterval> | null;
   onDevicePairSetupChange: () => void;
+  devicePairSetupPerson: DevicePairSetupPerson;
+  devicePairSetupPersonSource: GatewayRequestClient | null;
+  canAssociatePerson: () => boolean;
 };
 
 type DevicePairSetupOverlayState = DevicePairSetupState & { pendingCount: number };
@@ -70,6 +85,7 @@ export function createDevicePairSetupState(params: {
   client: DevicePairSetupState["client"];
   connected: boolean;
   onChange?: () => void;
+  canAssociatePerson?: () => boolean;
 }): DevicePairSetupOverlayState {
   return {
     client: params.client,
@@ -79,6 +95,9 @@ export function createDevicePairSetupState(params: {
     devicePairSetupExpiryTimer: null,
     devicePairSetupCountdownTimer: null,
     onDevicePairSetupChange: params.onChange ?? (() => {}),
+    devicePairSetupPerson: null,
+    devicePairSetupPersonSource: null,
+    canAssociatePerson: params.canAssociatePerson ?? (() => false),
     pendingCount: 0,
   };
 }
@@ -88,6 +107,7 @@ export function readDevicePairSetupSnapshot(state: DevicePairSetupOverlayState) 
     devicePairSetupOpen: state.devicePairSetupOpen,
     devicePairSetupLifecycle: state.devicePairSetupLifecycle,
     devicePairPendingCount: state.pendingCount,
+    devicePairSetupPerson: state.devicePairSetupPerson,
   };
 }
 
@@ -304,7 +324,11 @@ export async function openDevicePairSetup(state: DevicePairSetupState) {
   state.devicePairSetupOpen = true;
 }
 
-export async function refreshDevicePairSetup(state: DevicePairSetupState) {
+export async function refreshDevicePairSetup(
+  state: DevicePairSetupState,
+  personInput?: DevicePairSetupPersonInput,
+) {
+  let selectedInput = personInput;
   const client = state.client;
   const lifecycle = state.devicePairSetupLifecycle;
   const access = lifecycle.access;
@@ -314,6 +338,40 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
     state.devicePairSetupLifecycle.phase === "loading" ||
     devicePairSetupRequests.has(state)
   ) {
+    return;
+  }
+  if (selectedInput !== undefined) {
+    if (
+      lifecycle.phase !== "selection" &&
+      !(lifecycle.phase === "error" && lifecycle.source === "create")
+    ) {
+      return;
+    }
+    if (lifecycle.phase === "error" && lifecycle.source === "create" && lifecycle.uncertain) {
+      // An uncertain issuance retains the original person and enrollment ID; retry is explicit.
+      selectedInput = undefined;
+    } else if (selectedInput && (access === "node" || !state.canAssociatePerson())) {
+      return;
+    }
+  }
+  if (state.devicePairSetupPersonSource !== client) {
+    state.devicePairSetupPerson = null;
+  }
+  if (selectedInput !== undefined) {
+    const previous = state.devicePairSetupPerson;
+    state.devicePairSetupPerson =
+      selectedInput && "name" in selectedInput
+        ? previous && "enrollmentId" in previous
+          ? previous
+          : {
+              enrollmentId: generateUUID(),
+              ...(selectedInput.name.trim() ? { name: selectedInput.name.trim() } : {}),
+            }
+        : selectedInput;
+    state.devicePairSetupPersonSource = client;
+  }
+  const person = access === "node" ? null : state.devicePairSetupPerson;
+  if (person && !state.canAssociatePerson()) {
     return;
   }
   const requestToken = {};
@@ -330,19 +388,20 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
   clearDevicePairSetupExpiry(state);
   state.devicePairSetupLifecycle = { phase: "loading", access };
   try {
-    const result = await requestDevicePairSetup(
-      client,
-      access === "full"
+    const result = await requestDevicePairSetup(client, {
+      ...(access === "full"
         ? {}
         : access === "node"
-          ? { bootstrapProfile: "node", includeQr: false }
-          : { bootstrapProfile: "limited" },
-    );
+          ? { bootstrapProfile: "node" as const, includeQr: false }
+          : { bootstrapProfile: "limited" as const }),
+      ...person,
+    });
     if (
       devicePairSetupRequests.get(state) !== requestToken ||
       state.client !== client ||
       !state.connected ||
-      !state.devicePairSetupOpen
+      !state.devicePairSetupOpen ||
+      (person && !state.canAssociatePerson())
     ) {
       return;
     }
@@ -366,6 +425,9 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
         source: "create",
         access,
         message: formatUiError(err),
+        ...(person && (!(err instanceof GatewayRequestError) || err.retryable)
+          ? { uncertain: true }
+          : {}),
       };
     }
   } finally {
@@ -383,17 +445,42 @@ export async function setDevicePairSetupAccess(
     (state.devicePairSetupLifecycle.phase !== "selection" &&
       (state.devicePairSetupLifecycle.phase !== "error" ||
         state.devicePairSetupLifecycle.source !== "create")) ||
-    state.devicePairSetupLifecycle.access === access
+    state.devicePairSetupLifecycle.access === access ||
+    (state.devicePairSetupLifecycle.phase === "error" &&
+      state.devicePairSetupLifecycle.source === "create" &&
+      state.devicePairSetupLifecycle.uncertain)
   ) {
     return;
+  }
+  if (access === "node") {
+    state.devicePairSetupPerson = null;
   }
   state.devicePairSetupLifecycle = { phase: "selection", access };
 }
 
-export function closeDevicePairSetup(state: DevicePairSetupState) {
+export function closeDevicePairSetup(state: DevicePairSetupState, retirePerson = false) {
   stopDevicePairSetupCountdown(state);
   devicePairSetupRequests.delete(state);
   clearDevicePairSetupExpiry(state);
   state.devicePairSetupOpen = false;
+  const current = state.devicePairSetupLifecycle;
+  if (
+    !retirePerson &&
+    state.devicePairSetupPerson &&
+    state.devicePairSetupPersonSource === state.client &&
+    (current.phase === "loading" ||
+      (current.phase === "error" && current.source === "create" && current.uncertain))
+  ) {
+    state.devicePairSetupLifecycle = {
+      phase: "error",
+      source: "create",
+      access: current.access,
+      uncertain: true,
+      message: t("devices.pairing.personalPaused"),
+    };
+    return;
+  }
+  state.devicePairSetupPerson = null;
+  state.devicePairSetupPersonSource = null;
   state.devicePairSetupLifecycle = { phase: "selection", access: "full" };
 }

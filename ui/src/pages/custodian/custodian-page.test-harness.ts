@@ -154,6 +154,7 @@ export function createContext(
     },
   };
   const context = {
+    config: { current: { openclawIdEnabled: false }, subscribe: () => () => {} },
     gateway,
     runtimeConfig: {
       state: { configSnapshot: null, configLoading: false, lastError: null },
