@@ -71,15 +71,20 @@ const isRow = (key: string) => key !== "composer";
 type Edges = [number, number];
 
 /**
- * How far a row moved between two recorded positions, read on an edge the reader can see: the top
- * when it is on screen in both, else the bottom. Replies grow taller than the screen; their
- * off-screen top can move thousands of points while the visible text holds still. Undefined when
- * neither edge is visible in both (the row spans or leaves the screen).
+ * How far a row moved between two recorded positions. A row that kept its height moved as a whole,
+ * wherever it sits, including a long reply spanning the screen. When the height changed, read an
+ * edge the reader can see: the top when it is on screen in both, else the bottom. Replies grow
+ * taller than the screen; their off-screen top can move thousands of points while the visible text
+ * holds still. Undefined when the height changed and neither edge is visible in both.
  */
 function visibleShift(before: Edges, after: Edges, visibleBottom: number) {
+  const top = after[0] - before[0];
+  if (Math.abs(after[1] - before[1] - top) <= STILL_PT) {
+    return top;
+  }
   const onScreen = (y: number) => y >= 0 && y <= visibleBottom;
   if (onScreen(before[0]) && onScreen(after[0])) {
-    return after[0] - before[0];
+    return top;
   }
   if (onScreen(before[1]) && onScreen(after[1])) {
     return after[1] - before[1];

@@ -56,6 +56,11 @@ describe("motion", () => {
     expect(result).toMatchObject({ teleports: 0, backwardPt: 42, maxDriftPt: 42 });
     // A jump moves the whole row, even from off screen into view.
     expect(motion([tall(0, -5000, 349), tall(16, 216, 5565)]).teleports).toBe(1);
+    // Text filling the screen moves with the row even when both edges are off screen.
+    expect(motion([tall(0, -100, 1000), tall(16, -58, 1042)])).toMatchObject({
+      backwardPt: 42,
+      maxDriftPt: 42,
+    });
   });
 });
 
