@@ -51,6 +51,7 @@ export const databaseEngineAdapters: {
           store.storeId,
           {
             reuse: store.reusePostgresConnection,
+            readOnly: store.input.readOnly,
             lockTimeoutMs: POSTGRES_LOCK_TIMEOUT_MS,
             statementTimeoutMs: POSTGRES_STATEMENT_TIMEOUT_MS,
           },

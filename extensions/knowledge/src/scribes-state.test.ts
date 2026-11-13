@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { locationParams, readLocation } from "./page-location.js";
 import {
+  checkRunMessage,
   defaultOptions,
   repairPrompt,
   scribeById,
@@ -88,11 +89,109 @@ describe("scribes catalog", () => {
     expect(prompt).toContain("leave it as it is and go to the last step");
     expect(prompt).toContain("Pass `enabled: true`");
     expect(prompt.endsWith("```text\nEdited run message\n```")).toBe(true);
+    // Only this agent's automations are cleared or declared.
+    expect(prompt).toContain("list automations for this agent (pass `agentId` from Runtime)");
+    expect(prompt).toContain("never remove another agent's automation");
+    expect(prompt).toContain("- agent: this agent's ID from Runtime");
+    // Options the prompt doesn't set are passed on, so re-declaring keeps them.
+    const saved = { model: "provider/model", activeHours: { start: "09:00", end: "17:00" } };
+    expect(
+      repairPrompt("claim-consolidation", { schedule: { kind: "cron" }, saved }, "update"),
+    ).toContain(`exactly as written: \`${JSON.stringify(saved)}\``);
     expect(
       repairPrompt("claim-consolidation", {
         schedule: { kind: "cron", expr: "5 1 * * 2", tz: "UTC" },
       }),
     ).toContain("- Runs on cron `5 1 * * 2`, time zone UTC.");
+  });
+
+  it("writes a Granola prompt that names the meetings and the meeting-ingest work", () => {
+    const prompt = setupPrompt(
+      scribeSetup("granola", "ongoing", defaultOptions("granola"), "America/Los_Angeles"),
+    );
+    expect(prompt).toContain(
+      [
+        "- Runs weekdays at 10:00 AM, 2:00 PM and 6:00 PM America/Los_Angeles (cron `0 10,14,18 * * 1-5`).",
+        "- Granola meetings: the owner's (recorded by them or with them invited), from the last 7 days.",
+      ].join("\n"),
+    );
+    expect(prompt).toContain("declaration key `knowledge:scribe:granola`");
+    const runMessage = prompt.match(/Run message:\n\n```text\n([\s\S]+)\n```$/)?.[1] ?? "";
+    expect(runMessage).toContain(
+      'Follow "Learn from Granola" in the "Scribe runs" section of the knowledge-meeting-ingest skill',
+    );
+    const once = setupPrompt(
+      scribeSetup("granola", "once", { meetings: "all", since: "30d" }, "UTC"),
+    );
+    expect(once).toContain("Runs once, now, in this turn.");
+    expect(once).toContain("including notes others shared, from the last 30 days.");
+  });
+
+  it("recognizes run messages earlier versions generated and keeps edited ones", () => {
+    const runMessage = (id: "claim-consolidation" | "granola", options: object) =>
+      setupPrompt(scribeSetup(id, "ongoing", options as never, "UTC")).match(
+        /Run message:\n\n```text\n([\s\S]+)\n```$/,
+      )![1]!;
+    // The access step every run message carried before the never-written-store wording.
+    const earlierOf = (message: string) =>
+      message.replace(
+        /writes are enabled; a never-written store [^.]+\./,
+        "writes are enabled, or the store is unprovisioned (a vault that was never written reports writes off until its first write).",
+      );
+    // Consolidation as claim filing only, before runs followed every step of its skill.
+    const claimsOnly = (message: string) =>
+      message
+        .replace(
+          /Follow every step of [^\n]+ even when no claim is left to link\./,
+          'Follow the "Scribe runs" section of the knowledge-claim-consolidation skill: consolidate every claim that names no page until none is left to decide.',
+        )
+        .replace(
+          "withdrawn and left; Timelines retired and left; pages reviewed, changed and left unchanged",
+          "withdrawn and left",
+        );
+    const current = runMessage("claim-consolidation", defaultOptions("claim-consolidation"));
+    expect(current).toContain("Timelines retired and left; pages reviewed, changed");
+    const earlier = claimsOnly(earlierOf(current));
+    expect(checkRunMessage("claim-consolidation", current)).toEqual({ state: "current" });
+    for (const message of [earlier, claimsOnly(current)]) {
+      expect(message).not.toBe(current);
+      expect(checkRunMessage("claim-consolidation", message)).toEqual({
+        state: "outdated",
+        current,
+      });
+    }
+    expect(checkRunMessage("claim-consolidation", `${claimsOnly(current)}\nTidy titles.`)).toEqual({
+      state: "differs",
+      current,
+    });
+    expect(checkRunMessage("claim-consolidation", `${current}\nTidy titles.`)).toEqual({
+      state: "custom",
+    });
+    const granola = runMessage("granola", { meetings: "all", since: "today" });
+    const edited = earlierOf(granola).replace("left pending", "skipped and left for later");
+    expect(checkRunMessage("granola", edited)).toEqual({ state: "differs", current: granola });
+    // Granola runs gained the needs-attention rule; a message from before it is upgraded.
+    expect(granola).toContain("end with `Scribe status: needs attention — <why>` instead.");
+    const beforeAttention = granola.slice(
+      0,
+      granola.lastIndexOf("\n\nIf meetings are left pending"),
+    );
+    expect(checkRunMessage("granola", beforeAttention)).toEqual({
+      state: "outdated",
+      current: granola,
+    });
+    expect(checkRunMessage("granola", `${granola}\nAlso tag speakers.`)).toEqual({
+      state: "custom",
+    });
+    expect(
+      repairPrompt("claim-consolidation", { schedule: { kind: "cron" }, runMessage: earlier }),
+    ).toContain(`\`\`\`text\n${current}\n\`\`\``);
+    expect(repairPrompt("granola", { schedule: { kind: "cron" }, runMessage: edited })).toContain(
+      edited,
+    );
+    expect(
+      setupPrompt(scribeSetup("granola", "ongoing", defaultOptions("granola"), "UTC")),
+    ).toContain("- session target: `current`, so each run starts in a fresh session");
   });
 
   it("reads a status line tolerantly", () => {
@@ -102,6 +201,7 @@ describe("scribes catalog", () => {
       ["`Scribe status: failed - not writable`", "failed", "not writable"],
       ["_Scribe status: on — next run America/Los_Angeles_", "on", "next run America/Los_Angeles"],
       ["scribe status: on", "on", ""],
+      ["Scribe status: needs attention — 3 left pending", "needs-attention", "3 left pending"],
       ["Scribe status: maybe — x"],
       ["All done."],
     ];
@@ -168,6 +268,8 @@ describe("scribes state", () => {
       [{ session, job: job() }, "on"],
       [{ session, job: job({ enabled: false }) }, "paused"],
       [{ session, job: job(), messages: [result("failed")] }, "failing"],
+      [{ session, job: job(), messages: [result("needs attention")] }, "attention"],
+      [{ session, messages: [result("needs attention")] }, "failing"],
       [{ session, job: job({ enabled: false }), messages: [result("failed")] }, "paused"],
       [{ session, job: job({ state: { consecutiveErrors: 2 } }) }, "failing"],
       [
@@ -234,9 +336,10 @@ describe("scribes state", () => {
     expect(snapshots.map((s) => [s.scribe.id, s.status, s.session?.key, s.job?.id])).toEqual([
       ["claim-consolidation", "on", "s-review", "job-review"],
       ["conversations", "available", undefined, undefined],
+      ["granola", "available", undefined, undefined],
       ["memory", "done", "s-memory", undefined],
     ]);
-    expect(snapshots[2]!.result).toEqual({ state: "done", summary: "Saved 4" });
+    expect(snapshots[3]!.result).toEqual({ state: "done", summary: "Saved 4" });
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
       search: scribeLabel(memory),
@@ -288,6 +391,51 @@ describe("scribes state", () => {
     ]);
   });
 
+  it("reads a fresh-session job's status from its latest run unless a later turn answered", async () => {
+    const label = "Scribe · Learn from conversations";
+    const load = async (conversation: unknown[]) => {
+      const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+        if (method === "cron.list") {
+          const current = { sessionTarget: "current", sessionKey: "s-owner" };
+          return { jobs: [{ ...job(current), declarationKey: "knowledge:scribe:conversations" }] };
+        }
+        if (method === "sessions.describe") {
+          return {
+            session: params?.key === "s-owner" ? { key: "s-owner", displayName: label } : null,
+          };
+        }
+        if (method === "sessions.list") {
+          return { sessions: [] };
+        }
+        if (method === "cron.runs") {
+          const run = { ts: 2_000, runAtMs: 1_000, runId: "r1", sessionKey: "s-run" };
+          return { entries: [run] };
+        }
+        // The run's transcript, kept after its session is cleaned up.
+        if (method === "cron.history" && params?.runId === "r1") {
+          return { messages: [assistant("Scribe status: failed — store is read-only")] };
+        }
+        if (method === "chat.history") {
+          return { messages: params?.sessionKey === "s-owner" ? conversation : [] };
+        }
+        throw new Error(`unexpected ${method}`);
+      });
+      const snapshots = await loadScribes({ request } as never, "main");
+      return snapshots.find((snapshot) => snapshot.scribe.id === "conversations")!;
+    };
+    const setup = { ...user("Set up"), timestamp: 500 };
+    const failed = await load([setup, assistant("Scribe status: on — set up")]);
+    expect([failed.session?.key, failed.status, failed.result?.summary]).toEqual([
+      "s-owner",
+      "failing",
+      "store is read-only",
+    ]);
+    const repair = { ...user("Repair the Knowledge scribe"), timestamp: 1_500 };
+    const repaired = await load([repair, assistant("Scribe status: on — repaired")]);
+    // The repair decides the state; the shown result stays the run's.
+    expect([repaired.status, repaired.result?.summary]).toEqual(["on", "store is read-only"]);
+  });
+
   it("detects conversation counts and MEMORY.md, omitting what it cannot read", async () => {
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "sessions.list") {
@@ -295,16 +443,75 @@ describe("scribes state", () => {
           ? { sessions: [], count: 1 }
           : { sessions: [], count: 1, totalCount: 148 };
       }
+      if (method === "plugins.inspect") {
+        return { plugin: { installed: true, enabled: true }, mcpAuth: [{ state: "authorized" }] };
+      }
       return { files: [{ name: "MEMORY.md", missing: false, size: 4096 }] };
     });
     expect(await detectSources({ request } as never, "main")).toEqual({
       activeConversations: 148,
       memoryFile: { size: 4096 },
+      plugins: { granola: "ready" },
     });
     const failing = vi.fn(async () => {
       throw new Error("missing scope");
     });
     expect(await detectSources({ request: failing } as never, "main")).toEqual({});
+  });
+});
+
+describe("plugin readiness", () => {
+  const read = async (answer: () => unknown) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "plugins.inspect") {
+        return answer();
+      }
+      if (method === "sessions.list") {
+        return { sessions: [], count: 0 };
+      }
+      if (method === "agents.files.list") {
+        return { files: [] };
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+    const detection = await detectSources({ request } as never, "main");
+    expect(request).toHaveBeenCalledWith("plugins.inspect", {
+      pluginId: scribeById("granola")!.plugin!.id,
+    });
+    return detection.plugins;
+  };
+
+  it("maps plugins.inspect to missing, disabled, needs sign-in and ready", async () => {
+    const plugin = (installed: boolean, enabled: boolean) => ({ installed, enabled });
+    expect(await read(() => ({ plugin: plugin(false, false) }))).toEqual({ granola: "missing" });
+    expect(await read(() => ({ plugin: plugin(true, false) }))).toEqual({ granola: "disabled" });
+    expect(
+      await read(() => ({
+        plugin: plugin(true, true),
+        mcpAuth: [{ serverName: "granola", state: "requires-authorization" }],
+      })),
+    ).toEqual({ granola: "needs-sign-in" });
+    expect(
+      await read(() => ({
+        plugin: plugin(true, true),
+        mcpAuth: [{ serverName: "granola", state: "authorized" }],
+      })),
+    ).toEqual({ granola: "ready" });
+  });
+
+  it("reads an unknown plugin as missing and any other failure as unknown", async () => {
+    expect(
+      await read(() => {
+        throw Object.assign(new Error('Plugin "granola" not found.'), {
+          gatewayCode: "INVALID_REQUEST",
+        });
+      }),
+    ).toEqual({ granola: "missing" });
+    expect(
+      await read(() => {
+        throw Object.assign(new Error("missing scope"), { gatewayCode: "UNAUTHORIZED" });
+      }),
+    ).toBeUndefined();
   });
 });
 

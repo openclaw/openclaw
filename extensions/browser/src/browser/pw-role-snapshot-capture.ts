@@ -6,6 +6,7 @@ import { snapshotRoleViaCdpSession } from "./cdp-role-snapshot.js";
 import {
   buildRoleSnapshotFromAiSnapshot,
   finalizeRoleSnapshot,
+  redactAiSnapshotFieldValues,
   type RoleSnapshotIdentityMode,
   type RoleSnapshotOptions,
   type RoleSnapshotResult,
@@ -23,6 +24,7 @@ import {
   resolveSnapshotTimeoutMs,
   withSnapshotFrameGuard,
 } from "./pw-snapshot-page.js";
+import { isSensitiveFieldDescriptor } from "./sensitive-field-values.js";
 import { appendSnapshotUrls } from "./snapshot-urls.js";
 
 export async function snapshotRoleViaPlaywright(opts: {
@@ -88,10 +90,28 @@ export async function snapshotRoleViaPlaywright(opts: {
       signal: opts.signal,
       deadlineMs: captureDeadline,
       run: async (assertCurrent) => {
-        const snapshot = await page.ariaSnapshot({
-          mode: "ai",
-          timeout: ariaSnapshotTimeout,
-        });
+        const snapshot = await redactAiSnapshotFieldValues(
+          await page.ariaSnapshot({
+            mode: "ai",
+            timeout: ariaSnapshotTimeout,
+          }),
+          async (ref) => {
+            const field = await page
+              .locator(`aria-ref=${ref}`)
+              .evaluate(
+                (element) => ({
+                  tagName: element.tagName,
+                  type: element.getAttribute("type"),
+                  autocomplete: element.getAttribute("autocomplete"),
+                }),
+                undefined,
+                { timeout: Math.max(1, Math.ceil(captureDeadline - performance.now())) },
+              )
+              .catch(() => null);
+            // A field that cannot be resolved before the capture deadline stays masked.
+            return !field || isSensitiveFieldDescriptor(field);
+          },
+        );
         const built = buildRoleSnapshotFromAiSnapshot(snapshot, opts.options);
         if (opts.options === undefined) {
           built.snapshot = snapshot;

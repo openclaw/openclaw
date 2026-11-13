@@ -17,10 +17,13 @@ async function main() {
       sourceSha: args.releaseSha,
       workflowSha: process.env.GITHUB_WORKFLOW_SHA,
       workflowRef: args.workflowRef,
+      npmDistTag: args.distTag,
       sourceRoot: process.cwd(),
       plugins: args.pluginSelection,
       token: process.env.GH_TOKEN,
       cacheDir,
+      parentRunId: Number(process.env.GITHUB_RUN_ID),
+      parentRunAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
     });
     for (const line of await verifyBetaRelease(args, { pluginNpmReadback })) {
       console.log(line);

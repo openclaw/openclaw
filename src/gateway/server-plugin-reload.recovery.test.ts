@@ -55,6 +55,9 @@ import {
 } from "./server-plugin-reload.fixture-tools.test-support.js";
 import {
   verifyManagedCandidateRetirement,
+  verifyOverlappingCandidatePreparationFailure,
+  verifyOverlappingGenerationRetirement,
+  verifySerializedCandidateStartup,
   verifyExpandedReplacementTargets,
   verifyPreCommitRetirementOwnership,
   verifyPendingServiceCleanupRetry,
@@ -76,8 +79,10 @@ import {
 } from "./server-plugin-reload.recovery.test-support.js";
 import {
   verifyCandidateResourceCleanup,
+  verifyOverlapPublishesDuringAdmittedCall,
   registerPluginRetainedWorkReloadTests,
   verifySharedResourceReplacement,
+  verifySerializedSuccessorJoinsOverlappingPredecessor,
 } from "./server-plugin-reload.resources.test-support.js";
 import { registerPluginServiceRecoveryTests } from "./server-plugin-reload.service-recovery.test-support.js";
 import {
@@ -113,10 +118,10 @@ vi.mock("./server-startup-model-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./server-startup-model-runtime.js")>()),
   publishConfiguredModelRuntimeSnapshots: async () => {},
 }));
-// mock-isolation: Transcript reload startup does not execute config-driven replies or their agent-runtime graph.
-vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
-  getReplyFromConfig: vi.fn(),
-  prewarmConfigDrivenReplyRuntime: async () => {},
+// mock-isolation: Transcript reload startup does not execute the agent-runtime graph.
+vi.mock("../auto-reply/reply/get-reply-run-helpers.js", () => ({
+  loadEmbeddedAgentRuntime: async () => {},
+  loadSessionUpdatesRuntime: async () => {},
 }));
 // mock-isolation: Transcript reload startup owns this import, not authenticated WebSocket connection dispatch.
 vi.mock("./server/ws-connection/message-handler.js", () => ({
@@ -362,6 +367,33 @@ it("disables and re-enables a plugin after its service cleanup fails", () =>
 
 it("preserves pending old service cleanup when candidate startup fails", () =>
   verifyPendingServiceCleanupRollback(createRecoveryFixture));
+
+it.for([undefined, false] as const)(
+  "keeps registration serialized without generation overlap opt-in (%s)",
+  (generationOverlap, { signal }) =>
+    verifySerializedCandidateStartup(createRecoveryFixture, generationOverlap, signal),
+);
+
+it("serializes mixed plugins without draining an opted predecessor's idle background authority", ({
+  signal,
+}) => verifySerializedCandidateStartup(createRecoveryFixture, "mixed", signal));
+
+it("publishes an opted-in successor before stopping an admitted call's service", ({ signal }) =>
+  verifyOverlapPublishesDuringAdmittedCall(createRecoveryFixture, signal));
+
+it("keeps the admitted predecessor serving when an overlapping successor fails preparation", ({
+  signal,
+}) => verifyOverlappingCandidatePreparationFailure(createRecoveryFixture, signal));
+
+it.for(["reload again", "restart"] as const)(
+  "owns overlapping plugin generations until their admitted callers finish across %s",
+  (action, { signal }) =>
+    verifyOverlappingGenerationRetirement(createRecoveryFixture, action, signal),
+);
+
+it("joins an older overlapping predecessor before registering a serialized successor", ({
+  signal,
+}) => verifySerializedSuccessorJoinsOverlappingPredecessor(createRecoveryFixture, signal));
 
 it.each([15_000, 70_000])(
   "waits for an admitted write before replacement and keeps serving on timeout (%i ms)",

@@ -56,6 +56,25 @@ async function inspectSurfaces(page: Page) {
       host: hostStyle.backgroundColor,
       mobileHost: host.classList.contains("sidebar-region--mobile-host"),
       fade: { display: fade.display, background: fade.backgroundImage },
+      // Safari tints its bars from theme-color and exposes the document canvas in safe areas.
+      chrome: {
+        meta: document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')!.content,
+        html: getComputedStyle(root).backgroundColor,
+        body: getComputedStyle(document.body).backgroundColor,
+        topEdge: (() => {
+          for (
+            let element = document.elementFromPoint(innerWidth / 2, 1);
+            element;
+            element = element.parentElement
+          ) {
+            const color = getComputedStyle(element).backgroundColor;
+            if (color !== "rgba(0, 0, 0, 0)") {
+              return color;
+            }
+          }
+          return getComputedStyle(root).backgroundColor;
+        })(),
+      },
       dimensions: {
         composer: dimensions(composer),
         bubble: dimensions(bubble),
@@ -67,7 +86,7 @@ async function inspectSurfaces(page: Page) {
 
 suite.define(() => {
   it.each(["light", "dark"] as const)(
-    "shows the shared theme canvas through both desktop headers in %s mode",
+    "keeps the desktop chat header transparent and the side-panel header opaque in %s mode",
     async (mode) => {
       const { page } = await openThemedChat("absolutely", mode, {
         historyMessages: [{ role: "assistant", content: assistantText }],
@@ -82,13 +101,16 @@ suite.define(() => {
           await page.locator(".side-panel-launcher__card").filter({ hasText: "Files" }).click();
           await page.locator(".side-panel__header--occupied").waitFor();
         }
-        const headers = page.locator(".chat-pane__header, .side-panel__header");
+        const chatHeader = page.locator(".chat-pane__header");
         expect(
-          await headers.evaluateAll((elements) =>
-            elements.map((element) => getComputedStyle(element).backgroundColor),
-          ),
-        ).toEqual(["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)"]);
-        const covered = await headers.evaluateAll((elements) => {
+          await chatHeader.evaluate((element) => getComputedStyle(element).backgroundColor),
+        ).toBe("rgba(0, 0, 0, 0)");
+        const panel = await page
+          .locator(".side-panel__header")
+          .evaluate((element) => getComputedStyle(element).backgroundColor);
+        const colors = await page.evaluate(resolveRenderedColors, { panel });
+        expect(colors.panel!.alpha).toBe(1);
+        const covered = await chatHeader.evaluateAll((elements) => {
           const painted: string[] = [];
           for (const header of elements) {
             for (
@@ -103,7 +125,7 @@ suite.define(() => {
           }
           return painted;
         });
-        expect(covered, "Both headers must expose the same uninterrupted shell canvas").toEqual([]);
+        expect(covered, "The chat header must expose the uninterrupted shell canvas").toEqual([]);
       }
     },
   );
@@ -223,6 +245,19 @@ suite.define(() => {
             });
           }
           expect(original.mobileHost).toBe(true);
+          if (width === 390) {
+            const edges = await page.evaluate(resolveRenderedColors, {
+              host: original.host,
+              ...original.chrome,
+            });
+            expect(edges, "system chrome continues the narrow chat surface").toEqual({
+              host: edges.host,
+              meta: edges.host,
+              html: edges.host,
+              body: edges.host,
+              topEdge: edges.host,
+            });
+          }
           expect(original.fade.display).toBe(width === 390 ? "none" : "block");
           if (width > 768) {
             expect

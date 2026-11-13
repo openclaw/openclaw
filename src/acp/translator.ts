@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type {
-  Agent,
-  AgentSideConnection,
+  AgentContext,
   InitializeRequest,
   InitializeResponse,
   AuthenticateRequest,
@@ -111,7 +110,7 @@ const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
 
 const loadAcpSdkModule = createLazyRuntimeModule(() => import("@agentclientprotocol/sdk"));
 
-export class AcpGatewayAgent implements Agent {
+export class AcpGatewayAgent {
   private readonly sessionUpdates: AcpTranslatorSessionUpdates;
   private readonly promptStream: AcpTranslatorPromptStream;
   private readonly sessionStore: AcpSessionStore;
@@ -124,7 +123,7 @@ export class AcpGatewayAgent implements Agent {
   private readonly log: (msg: string) => void;
 
   constructor(
-    connection: AgentSideConnection,
+    connection: Pick<AgentContext, "notify" | "request">,
     private readonly gateway: GatewayClient,
     private readonly opts: AcpServerOptions & {
       eventLedger: AcpEventLedger;
@@ -280,9 +279,15 @@ export class AcpGatewayAgent implements Agent {
         ? await this.sessionUpdates.readLedgerReplayBySessionKey(params.sessionId)
         : { complete: false, events: [] };
     const routedLedgerReplay = exactLedgerReplay.complete ? exactLedgerReplay : listedLedgerReplay;
+    // Trimmed replay history still keeps the bridge session's binding.
+    const ledgerSessionKey =
+      routedLedgerReplay.sessionKey ??
+      (hasExplicitRouting
+        ? undefined
+        : await this.sessionUpdates.readLedgerSessionKey(params.sessionId));
     const sessionKey = await this.resolveSessionKeyFromMeta({
       meta,
-      fallbackKey: routedLedgerReplay.sessionKey ?? params.sessionId,
+      fallbackKey: ledgerSessionKey ?? params.sessionId,
     });
     const ledgerReplay =
       exactLedgerReplay.complete && exactLedgerReplay.sessionKey === sessionKey
@@ -407,7 +412,27 @@ export class AcpGatewayAgent implements Agent {
     }
 
     const meta = parseSessionMeta(params["_meta"]);
-    const fallbackKey = existingSession?.sessionKey ?? params.sessionId;
+    const hasExplicitRouting = Boolean(
+      meta.sessionKey ||
+      meta.sessionLabel ||
+      this.opts.defaultSessionKey ||
+      this.opts.defaultSessionLabel,
+    );
+    let fallbackKey = existingSession?.sessionKey ?? params.sessionId;
+    if (!existingSession && !hasExplicitRouting) {
+      // Resume needs the binding even when bounded replay history is incomplete.
+      const ledgerKey = await this.sessionUpdates.readLedgerSessionKey(params.sessionId);
+      if (ledgerKey) {
+        // Gateway owns canonicalization of the bridge alias into its agent namespace.
+        const resolved = await this.gateway.request<{ ok: true; key: string }>("sessions.resolve", {
+          key: ledgerKey,
+        });
+        if (!resolved?.key) {
+          throw new Error(`Session key not found: ${ledgerKey}`);
+        }
+        fallbackKey = resolved.key;
+      }
+    }
     const sessionKey = await this.resolveSessionKeyFromMeta({
       meta,
       fallbackKey,

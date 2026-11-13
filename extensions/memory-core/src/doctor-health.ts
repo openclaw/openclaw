@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { HealthCheck } from "openclaw/plugin-sdk/health";
+import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   asOptionalObjectRecord,
@@ -22,11 +22,6 @@ type ProviderFailure = {
   reason: string;
   requirement?: string;
   fixHint?: string;
-};
-type VectorProviderFinding = ProviderFailure & {
-  agentId: string;
-  model: string;
-  configPrefix: string;
 };
 
 type InspectConfiguredProvider = (params: {
@@ -120,8 +115,8 @@ async function collectVectorProviderFindings(
     shouldInspectAgent: (agentId: string) => boolean;
   },
   inspectProvider: InspectConfiguredProvider,
-): Promise<VectorProviderFinding[]> {
-  const findings: VectorProviderFinding[] = [];
+): Promise<HealthFinding[]> {
+  const findings: HealthFinding[] = [];
   for (const agentId of listConfiguredAgentIds(params.config).filter(params.shouldInspectAgent)) {
     // A custom agentDir does not move the canonical per-agent memory index.
     const agentDatabasePath = path.join(
@@ -131,7 +126,30 @@ async function collectVectorProviderFindings(
       "agent",
       "openclaw-agent.sqlite",
     );
-    const model = await readExistingVectorModel(agentDatabasePath);
+    let model: string | null;
+    try {
+      model = await readExistingVectorModel(agentDatabasePath);
+    } catch (error) {
+      const { isSqliteSnapshotCapacityError } = await import("openclaw/plugin-sdk/sqlite-runtime");
+      if (!isSqliteSnapshotCapacityError(error)) {
+        throw error;
+      }
+      // Missing disposable inspection space says nothing about the source or another agent's provider.
+      findings.push({
+        checkId: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
+        severity: "warning",
+        source: "memory-core",
+        target: agentId,
+        requirement: "memory-index-inspection",
+        errorCode: "memory-index-inspection-unavailable",
+        message:
+          `Memory Core semantic-index readiness for agent ${agentId} could not be verified ` +
+          `because temporary snapshot storage is unavailable (${formatErrorMessage(error)}).`,
+        fixHint:
+          "Free temporary snapshot space or quota, then rerun `openclaw doctor --lint --only memory-core/managed-local-embedding-setup`.",
+      });
+      continue;
+    }
     if (!model) {
       continue;
     }
@@ -142,10 +160,16 @@ async function collectVectorProviderFindings(
     });
     if (failure) {
       findings.push({
-        ...failure,
-        agentId,
-        model,
-        configPrefix: resolveConfigPrefix(params.config, agentId),
+        checkId: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
+        severity: "error",
+        source: "memory-core",
+        path: `${resolveConfigPrefix(params.config, agentId)}.provider`,
+        target: `${agentId}/${failure.provider}`,
+        requirement: failure.requirement ?? "managed-local-embedding-setup",
+        message:
+          `Memory index for agent ${agentId} uses vector model ${model}, but ` +
+          `embedding provider "${failure.provider}" cannot initialize (${failure.reason}).`,
+        fixHint: failure.fixHint,
       });
     }
   }
@@ -219,9 +243,8 @@ function createManagedLocalEmbeddingSetupCheck(
         return [];
       }
       const env = ctx.env ?? process.env;
-      let findings: Awaited<ReturnType<typeof collectVectorProviderFindings>>;
       try {
-        findings = await collectVectorProviderFindings(
+        return await collectVectorProviderFindings(
           {
             config: ctx.cfg,
             env,
@@ -264,18 +287,6 @@ function createManagedLocalEmbeddingSetupCheck(
           },
         ];
       }
-      return findings.map((finding) => ({
-        checkId: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
-        severity: "error" as const,
-        source: "memory-core",
-        path: `${finding.configPrefix}.provider`,
-        target: `${finding.agentId}/${finding.provider}`,
-        requirement: finding.requirement ?? "managed-local-embedding-setup",
-        message:
-          `Memory index for agent ${finding.agentId} uses vector model ${finding.model}, but ` +
-          `embedding provider "${finding.provider}" cannot initialize (${finding.reason}).`,
-        fixHint: finding.fixHint,
-      }));
     },
   };
 }

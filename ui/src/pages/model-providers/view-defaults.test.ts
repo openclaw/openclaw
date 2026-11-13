@@ -78,7 +78,7 @@ it("retains a saved unavailable model without offering it for another default se
   expect(onUtilityChange).not.toHaveBeenCalled();
   await choosePickerValue(utility, "__openclaw_automatic_utility__");
   expect(onUtilityChange).toHaveBeenCalledExactlyOnceWith(null);
-  const row = settingsRow(container, "Utility Fallback Model");
+  const row = settingsRow(container, "Utility fallback model");
   expect(row.textContent).toContain("1 more fallback after this one");
   const picker = row.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
   expect(picker.textContent).toContain("Ready");

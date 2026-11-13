@@ -155,10 +155,10 @@ async function canonicalSource(fixture: CanonicalForkFixture, prompt: string) {
 function expectPolicyHandoff(
   calls: CanonicalForkFixture["native"]["calls"],
   threadId: string,
-  body: unknown,
+  policy: unknown,
 ) {
-  if (typeof body !== "string") {
-    throw new Error("Expected the complete generic policy, including an explicit empty body");
+  if (typeof policy !== "string") {
+    throw new Error("Expected the complete delimited native policy");
   }
   const refreshes = calls.filter((call) => call.method === "thread/inject_items");
   expect(refreshes).toHaveLength(1);
@@ -171,7 +171,7 @@ function expectPolicyHandoff(
         content: [
           {
             type: "input_text",
-            text: expect.stringContaining(body || "current OpenClaw generic policy is empty"),
+            text: expect.stringContaining(policy),
           },
         ],
       },
@@ -609,8 +609,9 @@ describe("canonical descendant lifecycle through real owners", () => {
           calls.find((call) => call.method === "thread/resume"),
           "cold configuration",
         );
-        expect(resume.params.developerInstructions).toBe(body);
-        expectPolicyHandoff(calls, binding.threadId, body);
+        const policy = `<thread_policy>\n${body}\n</thread_policy>`;
+        expect(resume.params.developerInstructions).toBe(policy);
+        expectPolicyHandoff(calls, binding.threadId, policy);
         expect(calls.findIndex((call) => call.method === "thread/inject_items")).toBeLessThan(
           calls.findIndex((call) => call.method === "turn/start"),
         );
@@ -1067,6 +1068,41 @@ describe("canonical descendant lifecycle through real owners", () => {
     180_000,
   );
 
+  it("hands a fresh canonical fork to a separate turn connection without a restart", async () => {
+    await withFixture(async (fixture, fork) => {
+      const source = await fixture.adopt();
+      await fixture.turn(source.sessionKey, "canonical");
+      const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
+      const forkOffset = fixture.native.calls.length;
+      const forked = await fork(source.sessionKey, selected.entryId);
+      expect(forked, forked.message).toMatchObject({ ok: true });
+      const childKey = expectDefined(forked.key, "child key");
+      const child = expectDefined(
+        fixture.bindingStore.read(fixture.identity(childKey)),
+        "child binding",
+      );
+      const forkCall = expectDefined(
+        fixture.native.calls.slice(forkOffset).find((call) => call.method === "thread/fork"),
+        "canonical fork request",
+      );
+      const turnOffset = fixture.native.calls.length;
+      // Live supervision turns use another app-server process on the same Codex home.
+      const continued = await fixture.turn(childKey, "warm child turn", {
+        separateConnection: true,
+      });
+      expect(continued.threadId).toBe(child.threadId);
+      const resume = expectDefined(
+        fixture.native.calls
+          .slice(turnOffset)
+          .find(
+            (call) => call.method === "thread/resume" && call.params.threadId === child.threadId,
+          ),
+        "child resume",
+      );
+      expect(resume.client).not.toBe(forkCall.client);
+    });
+  }, 180_000);
+
   it("keeps ordinary archive cleanup on the healthy client while its notification is delayed", async () => {
     await withFixture(async (fixture, fork) => {
       const { source, selected } = await canonicalSource(fixture, "canonical");
@@ -1131,7 +1167,45 @@ describe("canonical descendant lifecycle through real owners", () => {
     });
   }, 180_000);
 
-  it("forks with the current native model instead of the stale persisted model", async () => {
+  it("retains a read-only app tool on a native fork", async () => {
+    await withFixture(
+      async (fixture, fork) => {
+        const source = await fixture.adopt();
+        await fixture.turn(source.sessionKey, "canonical");
+        const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
+        const result = await withRetainedNativeForkAttempt(fixture, () =>
+          fork(source.sessionKey, selected.entryId),
+        );
+        expect(result, result.message).toMatchObject({ ok: true });
+        const binding = expectDefined(
+          bindingFor(fixture, expectDefined(result.key, "child key")),
+          "child binding",
+        );
+        expect(fixture.native.threads.get(binding.threadId)?.config).toMatchObject({
+          apps: {
+            "synthetic-app": {
+              default_tools_enabled: false,
+              tools: { "synthetic.lookup": { enabled: true } },
+            },
+          },
+        });
+      },
+      {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            synthetic: {
+              marketplaceName: "openai-curated",
+              pluginName: "synthetic",
+              read_only: true,
+            },
+          },
+        },
+      },
+    );
+  }, 180_000);
+
+  it("forks with the current native model and keeps provider guidance on cold resume", async () => {
     await withFixture(async (fixture, fork) => {
       const source = await fixture.adopt();
       const binding = await fixture.turn(source.sessionKey, "canonical");
@@ -1148,6 +1222,21 @@ describe("canonical descendant lifecycle through real owners", () => {
         modelProvider: current.thread.modelProvider,
       });
       expect(current.model).toBe("gpt-5.6-luna");
+
+      // Supervision strips the outer runtime plan, so the native provider owns this guidance.
+      const parentBase = expectDefined(
+        nativeCalls(fixture, "thread/start").at(-1)?.params.baseInstructions,
+        "supervised parent base",
+      );
+      expect(parentBase).toContain("<execution_policy>");
+      await fixture.native.restart();
+      const offset = fixture.native.calls.length;
+      await fixture.turn(childKey, "continue the canonical fork");
+      const resume = expectDefined(
+        nativeCalls(fixture, "thread/resume", offset).at(-1),
+        "canonical fork cold resume",
+      );
+      expect(resume.params.baseInstructions).toBe(parentBase);
     });
   }, 180_000);
 

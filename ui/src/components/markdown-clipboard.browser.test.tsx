@@ -1,7 +1,6 @@
 import { createSignal, flush } from "solid-js";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { BrowserTabCardHost } from "../pages/chat/components/browser-tab-card.tsx";
 import { MessageImages } from "../pages/chat/components/chat-message-images-solid.tsx";
 import {
   MessageMarkdown,
@@ -112,35 +111,6 @@ function delayFirstWrite() {
   return pending;
 }
 
-async function mountBrowserCard() {
-  const [url, setUrl] = createSignal("https://example.com/document");
-  const view = mountSolid(() => (
-    <BrowserTabCardHost
-      preview={{
-        kind: "browser-tab",
-        target: "host",
-        profile: "managed",
-        targetId: "clipboard-tab",
-        url: url(),
-      }}
-    />
-  ));
-  flush();
-  const card = view.container.querySelector<HTMLElement>("openclaw-browser-tab-card")!;
-  owners.push(card);
-  return {
-    unmount: view.unmount,
-    setUrl,
-    copy: async () => {
-      card.querySelector<HTMLButtonElement>(".more")!.click();
-      const menu = card.querySelector<HTMLElement>(".oc-menu")!;
-      await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
-      card.querySelector<HTMLButtonElement>('[data-value="copy-url"]')!.click();
-      await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(false));
-    },
-  };
-}
-
 async function flushCopy() {
   // Clipboard handlers update after the transport's rejection/fallback microtasks.
   await new Promise<void>((resolve) => {
@@ -245,43 +215,6 @@ describe("Markdown clipboard operation lifetime", () => {
     },
   );
 
-  it("copies browser-card URLs when the Clipboard API is absent on plain HTTP", async () => {
-    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
-    const browser = await mountBrowserCard();
-    await browser.copy();
-    await flushCopy();
-    expectClipboard("https://example.com/document", ["https://example.com/document"]);
-  });
-
-  it("keeps a newer browser URL copy when older code copying rejects", async () => {
-    const pending = delayFirstWrite();
-    const code = await mountCopy("code");
-    const browser = await mountBrowserCard();
-    code.button.click();
-    await browser.copy();
-    await flushCopy();
-    expect(clipboard).toBe("https://example.com/document");
-    await rejectCopy(pending);
-    expectClipboard("https://example.com/document");
-  });
-
-  it.each(["removed", "URL changed"])(
-    "retires browser URL copying after its card is %s",
-    async (change) => {
-      const pending = delayFirstWrite();
-      const browser = await mountBrowserCard();
-      await browser.copy();
-      if (change === "removed") {
-        browser.unmount();
-      } else {
-        browser.setUrl("https://example.com/new");
-        flush();
-      }
-      await rejectCopy(pending);
-      expect(fallbackCopies).toEqual([]);
-    },
-  );
-
   it.each(["code", "table", "mermaid", "message"] as const)(
     "does not start fallback after the %s control is retired",
     async (surface) => {
@@ -382,10 +315,10 @@ describe("Markdown clipboard operation lifetime", () => {
     button.click();
     button.click();
     await flushCopy();
-    expect(button.getAttribute("aria-label")).toBe("Copied!");
+    expect(button.getAttribute("aria-label")).toBe("Copied");
     await rejectCopy(pending);
     expect(fallbackCopies).toEqual([]);
-    expect(button.getAttribute("aria-label")).toBe("Copied!");
+    expect(button.getAttribute("aria-label")).toBe("Copied");
   });
 
   it.each(["code", "table", "mermaid", "message"] as const)(
@@ -396,7 +329,7 @@ describe("Markdown clipboard operation lifetime", () => {
       button.click();
       await flushCopy();
       expect(fallbackCopies).toEqual([writeText.mock.calls[0]![0]]);
-      expect(button.getAttribute("aria-label")).toBe("Copied!");
+      expect(button.getAttribute("aria-label")).toBe("Copied");
     },
   );
 });

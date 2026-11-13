@@ -32,6 +32,7 @@ export function makeCapabilities(
     skills: [],
     skillsRead: null,
     mcpServers: [],
+    mcpServersReadState: "ready",
     toolsEffectiveResult: null,
     toolsEffectiveLoading: false,
     toolsEffectiveError: false,

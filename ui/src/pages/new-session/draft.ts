@@ -44,6 +44,8 @@ export class NewSessionDraft {
       );
     const showBlocked = (changed = false) =>
       showToast({
+        severity: "error",
+        actionPrimary: true,
         message: t(changed ? "chat.privateDraftReload.changed" : "chat.privateDraftReload.blocked"),
         actionLabel: t("chat.privateDraftReload.review"),
         onAction: () => void review(),
@@ -101,7 +103,7 @@ export class NewSessionDraft {
         await retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...reloadOptions });
       } catch {
         if (currentOwner()) {
-          showToast({ message: t("chat.privateDraftReload.unavailable") });
+          showToast({ severity: "error", message: t("chat.privateDraftReload.unavailable") });
         }
       } finally {
         if (this.privateDraftReview?.controller === controller) {
@@ -228,7 +230,7 @@ export class NewSessionDraft {
     };
     this.place.modelControl.onDraftSelectionChange = () => {
       if (this.place.modelControl.modelDefaultsPolicy === "configured") {
-        this.submission.draftPersistence.noteModelSelectionMutation();
+        this.submission.draftPersistence.noteSelectionMutation("model");
       }
     };
   }
@@ -326,7 +328,7 @@ export class NewSessionDraft {
       !this.submission.submitting &&
       this.place.modelControl.draftSelection(this.place.agentId)
     ) {
-      this.submission.draftPersistence.noteModelSelectionMutation();
+      this.submission.draftPersistence.noteSelectionMutation("model");
     }
     this.modelDefaultsPolicy = this.place.modelControl.modelDefaultsPolicy;
     this.place.restorePreferenceSelections();

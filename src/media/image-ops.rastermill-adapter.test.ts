@@ -22,7 +22,6 @@ describe("image ops Rastermill adapter", () => {
       vi.doUnmock("rastermill");
       vi.doUnmock("@silvia-odwyer/photon-node");
       vi.doUnmock("../infra/resolve-system-bin.js");
-      vi.doUnmock("../agents/image-compression-policy.js");
       vi.doUnmock("../infra/worker-task-pool.js");
       vi.resetModules();
     });
@@ -134,23 +133,20 @@ describe("image ops Rastermill adapter", () => {
       );
 
       createRastermill.mockClear();
-      vi.doMock("../agents/image-compression-policy.js", () => ({
-        resolveImageCompressionModelPolicy: vi.fn(async () => ({ maxSidePx: 1 })),
-      }));
       const { optimizeImageDescriptionInput } =
         await import("../media-understanding/image-input-normalize.js");
       await optimizeImageDescriptionInput({
         buffer: Buffer.alloc(32),
         mime: "image/png",
         maxBytes: 16,
-        provider: "vision-plugin",
-        model: "vision-v1",
+        modelPolicy: { maxSidePx: 1 },
       });
 
+      const { MAX_IMAGE_DOWNSCALE_SOURCE_PIXELS } = await import("./image-processor-config.js");
       expect(createRastermill).toHaveBeenLastCalledWith(
         expect.objectContaining({
           limits: {
-            inputPixels: 40_000_000,
+            inputPixels: MAX_IMAGE_DOWNSCALE_SOURCE_PIXELS,
             outputPixels: MAX_IMAGE_INPUT_PIXELS,
           },
         }),

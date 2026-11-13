@@ -76,7 +76,10 @@ export function registerPluginsCli(program: Command) {
     .description("Inspect plugin details")
     .argument("[id]", "Plugin id")
     .option("--all", "Inspect all plugins")
-    .option("--runtime", "Load plugin runtime for hooks/tools/diagnostics")
+    .option(
+      "--runtime",
+      "Load plugin runtime in this CLI process; include running Gateway status when available",
+    )
     .option("--json", "Print JSON")
     .action(async (id: string | undefined, opts: PluginInspectOptions) => {
       const { runPluginsInspectCommand } = await import("./plugins-inspect-command.js");

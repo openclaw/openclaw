@@ -87,6 +87,8 @@ function createPluginRouteRuntimeClient(
   const authenticatedUserProfile = requestAuth?.authenticatedUserProfile;
   const operatorRoleActor = requestAuth?.operatorRoleActor;
   const operatorAccessAuthority = requestAuth?.operatorAccessAuthority;
+  // Work a relayed device starts here stays bound to that device, as on every other surface.
+  const openclawIdPrincipal = requestAuth?.openclawIdPrincipal;
   const client: NonNullable<GatewayRequestOptions["client"]> = {
     connId: `plugin-http:${clientIp ?? "unknown"}`,
     ...(clientIp ? { clientIp } : {}),
@@ -97,12 +99,16 @@ function createPluginRouteRuntimeClient(
           preparedSessionProfile: principal.preparedSessionProfile,
         }
       : {}),
-    ...(operatorRoleActor || operatorAccessAuthority !== undefined || principal
+    ...(operatorRoleActor ||
+    operatorAccessAuthority !== undefined ||
+    principal ||
+    openclawIdPrincipal
       ? {
           internal: {
             ...(operatorRoleActor ? { operatorRoleActor } : {}),
             ...(operatorAccessAuthority !== undefined ? { operatorAccessAuthority } : {}),
             ...(principal ? { remoteIngressPrincipal: principal } : {}),
+            ...(openclawIdPrincipal ? { openclawIdPrincipal } : {}),
           },
         }
       : {}),

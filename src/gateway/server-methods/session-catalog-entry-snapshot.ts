@@ -22,6 +22,8 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { getPreparedAgentDeletionDiscovery } from "../../state/agent-deletion-journal-status.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { projectSessionActor } from "../session-identity-projection.js";
 import type { SessionEntryPair } from "../session-list-order.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
@@ -96,6 +98,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   if (params.projection.needsSelectionPreparation({ metadataOnly: true })) {
     throw new Error("Prepare current session metadata before capturing catalog entries");
   }
+  const deletions = getPreparedAgentDeletionDiscovery(resolveOpenClawStateSqlitePath());
   const cachedPlanning =
     params.sessionKeys === undefined
       ? planningEntriesByRevision
@@ -131,7 +134,12 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   const captureAgentEntries = (rawAgentId: string): CapturedAgentEntries | undefined => {
     const agentId = normalizeAgentId(rawAgentId);
     if (!entriesByAgentId.has(agentId)) {
-      if (frozen) {
+      // Catalog discovery omits deleted stores; targeted session reads retain their refusal.
+      if (
+        frozen ||
+        (deletions?.status === "present" &&
+          deletions.entries.some((entry) => entry.agentId === agentId))
+      ) {
         return undefined;
       }
       if (params.sessionKeys && !selectedKeysByAgentId) {

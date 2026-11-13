@@ -13,11 +13,13 @@ import {
 } from "./session-delivery-queue-runtime.js";
 import {
   enqueueClaimedSessionDelivery as enqueueClaimed,
-  enqueueSessionDelivery as enqueue,
   releaseSessionDeliveryClaim as releaseClaim,
 } from "./session-delivery-queue-storage.js";
 import * as storage from "./session-delivery-queue-storage.js";
-import { withSessionDeliveryQueue } from "./session-delivery-queue.test-helpers.js";
+import {
+  enqueueUnclaimedSessionDeliveryFixture as enqueue,
+  withSessionDeliveryQueue,
+} from "./session-delivery-queue.test-helpers.js";
 
 const nativeDrain = recovery.drainPendingSessionDelivery;
 const loadPending = storage.loadPendingSessionDelivery;

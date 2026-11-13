@@ -18,7 +18,7 @@ type PortListenerKind = ReturnType<
 export const inspectPortUsage =
   vi.fn<(port: number, options?: { probeHosts?: readonly string[] }) => Promise<PortUsage>>();
 export const monotonicClock = { nowMs: 0 };
-export const sleep = vi.fn(async (ms: number) => {
+export const sleep = vi.fn(async (ms: number, _signal?: AbortSignal) => {
   monotonicClock.nowMs += ms;
 });
 export const classifyPortListener = vi.fn<(_listener: unknown) => PortListenerKind>(
@@ -26,8 +26,12 @@ export const classifyPortListener = vi.fn<(_listener: unknown) => PortListenerKi
 );
 export const callGateway = vi.fn<(opts: CallGatewayOptions) => Promise<unknown>>();
 
-export function gatewayResponseError(message: string): GatewayProtocolRequestError {
-  const error = new GatewayProtocolRequestError({ code: "UNAVAILABLE", message });
+export function gatewayResponseError(message: string, code?: string): GatewayProtocolRequestError {
+  const error = new GatewayProtocolRequestError({
+    code: "UNAVAILABLE",
+    message,
+    details: code ? { code } : undefined,
+  });
   retainGatewayResponsePayload(error, undefined);
   return error;
 }
@@ -48,15 +52,11 @@ export function gatewayProtocolMismatchError(): GatewayClientRequestError {
   return error;
 }
 
-export function gatewayVerifiedUserRequiredError(): GatewayClientRequestError {
-  const error = new GatewayClientRequestError({
-    code: "NOT_PAIRED",
-    message:
-      "operator role policies require a verified user identity for this authentication method; reconnect through the trusted proxy or Tailscale, or use the shared gateway token/password",
-    details: { code: "AUTH_VERIFIED_USER_REQUIRED" },
-  });
-  retainGatewayResponsePayload(error, undefined);
-  return error;
+export function gatewayVerifiedUserRequiredError(): GatewayProtocolRequestError {
+  return gatewayResponseError(
+    "operator role policies require a verified user identity for this authentication method; reconnect through the trusted proxy or Tailscale, or use the shared gateway token/password",
+    "AUTH_VERIFIED_USER_REQUIRED",
+  );
 }
 export const requestStartupProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();
 export const requestReadinessProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();
@@ -181,14 +181,14 @@ vi.mock("../../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
   return {
     ...actual,
-    sleep: (ms: number) => sleep(ms),
+    sleep: (ms: number, signal?: AbortSignal) => sleep(ms, signal),
   };
 });
 
 const originalPlatform = process.platform;
 
 export function makeGatewayService(
-  runtime: { status: "running"; pid: number } | { status: "stopped" },
+  runtime: { status: "running"; pid: number } | { status: "stopped" | "unknown" },
 ): GatewayService {
   return {
     readRuntime: vi.fn(async () => runtime),

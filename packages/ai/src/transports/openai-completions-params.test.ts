@@ -196,6 +196,7 @@ describe("OpenAI completions output budgets", () => {
         { maxTokens: 0 },
       ),
       64_000,
+      "max_tokens",
     );
     expectBudget(
       request(
@@ -229,6 +230,7 @@ describe("OpenAI completions output budgets", () => {
         emptyContext("你好世界".repeat(1_000)),
       ),
       4_999,
+      "max_tokens",
     );
     expectBudget(
       request(proxy, undefined, {
@@ -809,11 +811,11 @@ describe("OpenAI completions compatibility and tools", () => {
             provider: "custom-mistral-host",
             baseUrl: "https://api.mistral.ai/v1",
           },
-          { maxTokens: 2048, reasoningEffort: "high" },
+          { maxTokens: 2048, reasoningEffort: "high", seed: 12345 },
           emptyContext(),
         ),
-        { max_tokens: 2048 },
-        ["max_completion_tokens", "store", "reasoning_effort"],
+        { max_tokens: 2048, random_seed: 12345 },
+        ["max_completion_tokens", "store", "reasoning_effort", "seed"],
       ],
       [
         request({ id: "glm-5", provider: "zai", baseUrl: "" }, undefined, toolContext()),

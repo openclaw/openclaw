@@ -173,6 +173,14 @@ async function prepareStartupAgentTargets(
   cfg: OpenClawConfig,
   signal: AbortSignal,
 ) {
+  return [...new Set([...agents, ...(await prepareStartupStoreAgents(agents, cfg, signal))])];
+}
+
+async function prepareStartupStoreAgents(
+  agents: string[],
+  cfg: OpenClawConfig,
+  signal: AbortSignal,
+) {
   const targets = await Promise.all(
     agents.map((agentId) =>
       prepareSqliteTargetFromSessionStorePath(
@@ -187,7 +195,7 @@ async function prepareStartupAgentTargets(
       ),
     ),
   );
-  return [...new Set([...agents, ...targets.flatMap(({ agentId }) => agentId ?? [])])];
+  return [...new Set(targets.flatMap(({ agentId }) => agentId ?? []))];
 }
 
 /** Applies the router-owned authorization fence before any transport or typed dispatch. */
@@ -246,8 +254,8 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
       details: { ...gatewayStartupUnavailableDetails(), method: params.method },
     });
-  const startupError = () => {
-    if (!params.context.unavailableGatewayMethods?.has(params.method)) {
+  const startupError = (pending = params.context.unavailableGatewayMethods?.has(params.method)) => {
+    if (!pending) {
       return null;
     }
     // Admitted runs can use their tools while startup retains external input admission.
@@ -345,8 +353,9 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       const cfg = params.context.getRuntimeConfig();
       let agents = startupWriteAgents(params, cfg);
       let refusal = startupWriteRefusal(agents);
-      if (!refusal && !isPerAgentSessionStoreConfig(cfg.session?.store)) {
-        agents = await prepareStartupAgentTargets(agents, cfg, waitSignal);
+      if (!refusal && cfg.session?.store) {
+        const inputAgents = await prepareStartupStoreAgents(agents, cfg, waitSignal);
+        agents = [...new Set([...agents, ...inputAgents])];
         if (params.context.getRuntimeConfig() !== cfg) {
           continue;
         }

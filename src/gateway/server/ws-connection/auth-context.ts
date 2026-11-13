@@ -18,6 +18,7 @@ import {
 } from "../../auth.js";
 import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "../../ingress-attribution.js";
 import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
+import { GATEWAY_DELEGATION_DENIED } from "../../trusted-proxy-delegation.js";
 
 type DeviceTokenCandidateSource = "explicit-device-token" | "shared-token-fallback";
 
@@ -174,9 +175,13 @@ async function resolveConnectAuthDecisionCore(
     };
   }
 
-  // Invalid ingress or a redacted configured credential cannot be repaired by
-  // trying another device/bootstrap credential during this handshake.
+  // Tunnel membership is terminal: credentials cannot replace its role or repair
+  // denied admission. Invalid ingress/config also forbids credential fallbacks.
   if (
+    authResult.openclawId ||
+    authResult.delegation ||
+    authResult.reason === GATEWAY_DELEGATION_DENIED ||
+    authResult.reason === "openclaw_id_not_admitted" ||
     authResult.reason === PROXY_ATTRIBUTION_REQUIRED_REASON ||
     authResult.reason === "token_redacted_config" ||
     authResult.reason === "password_redacted_config"

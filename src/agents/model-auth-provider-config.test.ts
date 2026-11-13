@@ -166,35 +166,56 @@ it("evaluates a captured provider without serializing the fleet config", () => {
   ).toHaveLength(0);
 });
 
-it("uses captured provider provenance without rescanning the live model catalog", () => {
-  const { config, provider } = createProviderConfig(100);
-  let catalogReads = 0;
-  for (const entry of provider.models) {
-    const name = entry.name;
-    Object.defineProperty(entry, "name", {
-      get() {
-        catalogReads += 1;
-        return name;
-      },
-    });
-  }
-  setRuntimeConfigSnapshot(config, structuredClone(config));
-  const resolver = createModelAuthAvailabilityResolver({
-    cfg: captureRuntimeConfig(config),
-    authStore: { version: 1, profiles: {} },
-    env: {},
-    metadataSnapshot: createPluginMetadataSnapshotFixture(),
-  });
-  catalogReads = 0;
+it.each(["synthetic-resolved-value", "custom-local"])(
+  "uses captured provider provenance without rescanning the live model catalog: %s",
+  (apiKey) => {
+    const { config, provider } = createProviderConfig(100);
+    provider.apiKey = apiKey;
+    provider.api = "openai-completions";
+    provider.baseUrl = "http://127.0.0.1:11434/v1";
+    let catalogReads = 0;
+    for (const entry of provider.models) {
+      const name = entry.name;
+      Object.defineProperty(entry, "name", {
+        get() {
+          catalogReads += 1;
+          return name;
+        },
+      });
+    }
+    setRuntimeConfigSnapshot(config, structuredClone(config));
+    const remote = structuredClone(config);
+    remote.models.providers.synthetic.baseUrl = "https://remote.example/v1";
+    const resolverFor = (cfg: OpenClawConfig) =>
+      createModelAuthAvailabilityResolver({
+        cfg: captureRuntimeConfig(cfg),
+        authStore: { version: 1, profiles: {} },
+        env: {},
+        metadataSnapshot: createPluginMetadataSnapshotFixture(),
+      });
+    const localResolver = resolverFor(config);
+    const remoteResolver = resolverFor(remote);
+    catalogReads = 0;
 
-  for (const modelId of ["synthetic-0", "synthetic-99"]) {
-    expect(
-      resolver.evaluateRuntimeModelAuth("synthetic", { modelId, runtimeId: "openclaw" }),
-    ).toMatchObject({ availability: true, evidence: "provider-config" });
-  }
+    for (const [resolver, modelId, availability] of [
+      [localResolver, "synthetic-0", true],
+      [remoteResolver, "synthetic-99", apiKey === "custom-local" ? undefined : true],
+      [localResolver, "synthetic-99", true],
+    ] as const) {
+      expect(
+        resolver.evaluateRuntimeModelAuth("synthetic", {
+          modelId,
+          runtimeId: "openclaw",
+        }),
+      ).toMatchObject({
+        availability,
+        ...(apiKey === "custom-local" ? {} : { evidence: "provider-config" }),
+      });
+    }
 
-  expect(catalogReads).toBe(0);
-});
+    expect(catalogReads).toBe(0);
+  },
+);
 
 it("skips configured model scans for complete routes while filling missing route fields", () => {
   const { config, provider } = createProviderConfig(100);

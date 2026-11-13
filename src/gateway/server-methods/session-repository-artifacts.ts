@@ -7,7 +7,8 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { gitEnvironment } from "../../agents/worktrees/git.js";
 import { gitCommandArgv, gitReadOnlyEnvironment } from "../../infra/git-exec.js";
-import { spawnCommand } from "../../process/exec-spawn.js";
+import { spawnCommand, waitForCommandSpawn } from "../../process/exec-spawn.js";
+import { foldSearchCase } from "../../shared/search-case.js";
 import { readSessionRepositoryArtifacts } from "../worker-environments/session-repository-checkpoints.js";
 import type { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
 import { populateSessionFilePreview } from "./workspace-files.js";
@@ -72,12 +73,12 @@ export async function listRepositoryArtifacts(
     return { gitCheckout: true, files };
   }
   const entries = new Map<string, SessionFileBrowserEntry>();
-  const query = request.search?.trim().toLowerCase().normalize("NFC");
+  const query = foldSearchCase(request.search?.trim() ?? "").normalize("NFC");
   const prefix = folder ? `${folder}/` : "";
   for (const [filePath, entry] of changed) {
     if (
       query
-        ? !filePath.toLowerCase().normalize("NFC").includes(query)
+        ? !foldSearchCase(filePath).normalize("NFC").includes(query)
         : !filePath.startsWith(prefix)
     ) {
       continue;
@@ -186,6 +187,9 @@ export async function* streamRepositoryArtifact(
     (error: unknown) => error,
   );
   try {
+    await waitForCommandSpawn(child);
+    signal.throwIfAborted();
+    access.assertCurrent();
     let offset = 0;
     for await (const chunk of child.stdout!) {
       const bytes: Buffer = chunk;

@@ -79,6 +79,22 @@ export function collectFilesSync(
   return files;
 }
 
+/** Git inventories are authoritative only for their requested worktree root. */
+export function isGitWorktreeRoot(directory: string): boolean {
+  try {
+    return (
+      execFileSync("git", ["-C", directory, "rev-parse", "--show-prefix"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 30_000,
+        killSignal: "SIGKILL",
+      }).trim() === ""
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function listRepoFilesSync(
   repoRoot: string,
   options: {
@@ -88,34 +104,37 @@ export function listRepoFilesSync(
   },
 ): string[] {
   const roots = options.roots ?? REPO_SCAN_ROOTS;
-  try {
-    return execFileSync("git", ["-C", repoRoot, "ls-files", "--", ...roots], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: GIT_LS_FILES_TIMEOUT_MS,
-      killSignal: "SIGKILL",
-      maxBuffer: GIT_LS_FILES_MAX_BUFFER,
-    })
-      .split(/\r?\n/u)
-      .filter(Boolean)
-      .map(toPosixPath)
-      .filter(options.includeFile)
-      .toSorted((left, right) => left.localeCompare(right));
-  } catch {
-    return roots
-      .flatMap((root) => {
-        const absoluteRoot = path.join(repoRoot, root);
-        if (!fs.existsSync(absoluteRoot)) {
-          return [];
-        }
-        return collectFilesSync(absoluteRoot, {
-          includeFile: (filePath) =>
-            options.includeFile(toPosixPath(path.relative(repoRoot, filePath))),
-          skipDirNames: options.skipDirNames ?? REPO_SCAN_SKIPPED_DIR_NAMES,
-        }).map((filePath) => toPosixPath(path.relative(repoRoot, filePath)));
+  if (isGitWorktreeRoot(repoRoot)) {
+    try {
+      return execFileSync("git", ["-C", repoRoot, "ls-files", "--", ...roots], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: GIT_LS_FILES_TIMEOUT_MS,
+        killSignal: "SIGKILL",
+        maxBuffer: GIT_LS_FILES_MAX_BUFFER,
       })
-      .toSorted((left, right) => left.localeCompare(right));
+        .split(/\r?\n/u)
+        .filter(Boolean)
+        .map(toPosixPath)
+        .filter(options.includeFile)
+        .toSorted((left, right) => left.localeCompare(right));
+    } catch {
+      // Unavailable Git inventories use the same archive traversal below.
+    }
   }
+  return roots
+    .flatMap((root) => {
+      const absoluteRoot = path.join(repoRoot, root);
+      if (!fs.existsSync(absoluteRoot)) {
+        return [];
+      }
+      return collectFilesSync(absoluteRoot, {
+        includeFile: (filePath) =>
+          options.includeFile(toPosixPath(path.relative(repoRoot, filePath))),
+        skipDirNames: options.skipDirNames ?? REPO_SCAN_SKIPPED_DIR_NAMES,
+      }).map((filePath) => toPosixPath(path.relative(repoRoot, filePath)));
+    })
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 export function toPosixPath(filePath: string): string {

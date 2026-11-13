@@ -15,6 +15,13 @@ export const PROJECTS_LIST_MAX_IDENTITY_PROBES = 32;
 export const ProjectRecordSchema = closedObject({
   id: NonEmptyString,
   displayName: NonEmptyString,
+  repositoryIdentity: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description:
+        "Read-safe org/repo identity for an already discoverable project; excludes origin URLs and checkout paths.",
+    }),
+  ),
   repoRoot: Type.Optional(
     Type.String({
       minLength: 1,
@@ -93,6 +100,7 @@ export const ProjectsCheckoutOptionsParamsSchema = closedObject({
 export const ProjectsCheckoutOptionsResultSchema = closedObject({
   current: Type.Boolean(),
   worktree: Type.Boolean(),
+  refreshing: Type.Optional(Type.Boolean()),
 });
 export type ProjectsCheckoutOptionsResult = Static<typeof ProjectsCheckoutOptionsResultSchema>;
 

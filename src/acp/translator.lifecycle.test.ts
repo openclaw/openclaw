@@ -241,6 +241,59 @@ it("rejects resume for a missing Gateway session without creating bridge state",
   expect(sessionStore.hasSession("missing")).toBe(false);
 });
 
+it.each([
+  ["resume", true],
+  ["resume", false],
+  ["load", true],
+  ["load", false],
+] as const)(
+  "%s keeps a bridge-created session after restart with complete replay=%s",
+  async (route, complete) => {
+    const ledger = createTestAcpEventLedger();
+    const rows: GatewaySessionRow[] = [];
+    const request: RequestHandler = async (method, params) => {
+      const target = `agent:main:${String(params?.key)}`;
+      if (method === "sessions.create") {
+        rows.push(row(target, { thinkingLevel: "adaptive" }));
+      }
+      if (method === "sessions.resolve") {
+        return { ok: true, key: rows.find((entry) => entry.key === target)?.key };
+      }
+      return method === "sessions.list" ? sessions(rows) : { ok: true };
+    };
+    const first = createTranslatorScenario(request, { eventLedger: ledger, sessions: [] }).agent;
+    const created = await first.newSession(createNewSessionRequest(cwd));
+    const key = `acp-bridge:${created.sessionId}`;
+    await ledger.recordUserPrompt({
+      sessionId: created.sessionId,
+      sessionKey: key,
+      runId: "remember",
+      prompt: [{ type: "text", text: "Remember the previous turn." }],
+    });
+    await first.shutdown();
+    if (!complete) {
+      await ledger.markIncomplete({ sessionId: created.sessionId, sessionKey: key });
+    }
+    const second = createTranslatorScenario(request, { eventLedger: ledger, sessions: [] });
+    try {
+      const response = await second.agent[route === "resume" ? "resumeSession" : "loadSession"](
+        createLoadSessionRequest(created.sessionId, cwd),
+      );
+      if (route === "resume") {
+        expect(response.modes?.currentModeId).toBe("adaptive");
+        expect(
+          second.sessionUpdate.mock.calls.some(([{ update }]) =>
+            ["user_message_chunk", "agent_message_chunk"].includes(update.sessionUpdate),
+          ),
+        ).toBe(false);
+      } else {
+        expect(second.sessionStore.getSession(created.sessionId)?.sessionKey).toBe(key);
+      }
+    } finally {
+      await second.agent.shutdown();
+    }
+  },
+);
 it.each(["resume", "load"] as const)(
   "publishes %s snapshots in the Gateway namespace",
   async (route) => {

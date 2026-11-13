@@ -1,4 +1,6 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
+import { readMcpOAuthStoreStatuses } from "../agents/mcp-oauth-store.js";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { cronJobDefinitionFromReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
@@ -7,6 +9,8 @@ import { createTrustedCronScheduledToolPolicy } from "../cron/scheduled-tool-pol
 import { applyDefaultCronToolsAllow } from "../cron/tools-allow.js";
 import type { CronJob, CronStoredJob } from "../cron/types.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import type { TemplateInstallOutcome } from "../shared/template-install-notice.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { TEMPLATE_CRON_REF_SCHEMA_VERSION, type PersistedTemplateCronRef } from "./cron-records.js";
 import { digestTemplateBytes } from "./digest.js";
 import type { TemplateMutationStateOptions } from "./state-mutation-options.js";
@@ -18,7 +22,11 @@ export type { PersistedTemplateCronRef } from "./cron-records.js";
 export type TemplateCronGateway = {
   add: (
     input: Record<string, unknown>,
-    options?: { commitGuard?: () => void; existingRef?: PersistedTemplateCronRef },
+    options?: {
+      commitGuard?: () => void;
+      existingRef?: PersistedTemplateCronRef;
+      captureOwnerProfileId?: (ownerProfileId: string | undefined) => void;
+    },
   ) => Promise<unknown>;
   get?: (schedulerJobId: string) => Promise<unknown>;
   list?: (agentId: string) => Promise<unknown>;
@@ -26,7 +34,6 @@ export type TemplateCronGateway = {
     schedulerJobId: string,
     options: { commitGuard?: () => void; expectedConfigRevision: string },
   ) => Promise<unknown>;
-  waitUntilAgentAvailable?: (agentId: string) => Promise<void>;
   writeScratch?: (jobId: string, content: string, commitGuard: () => void) => Promise<void>;
   enable?: (
     jobId: string,
@@ -92,7 +99,7 @@ function templateCronGatewayInput(agentId: string, ref: PersistedTemplateCronRef
     declarationKey: ref.declarationKey,
     ...(job.name ? { displayName: job.name } : {}),
     owner: { agentId },
-    enabled: true,
+    enabled: job.enabled ?? true,
     agentId,
     schedule: {
       kind: "cron",
@@ -145,6 +152,7 @@ export function templateCronGatewayJobMatchesRef(
   applyDefaultCronToolsAllow(comparableLive);
   const expectedWithPolicy = {
     ...expected,
+    ...ref.nativeOwnership,
     ...(comparableLive.scheduledToolPolicy
       ? { scheduledToolPolicy: createTrustedCronScheduledToolPolicy() }
       : {}),
@@ -175,16 +183,53 @@ export function templateCronGatewayJobConfigRevision(value: unknown): string | u
   return undefined;
 }
 
+async function templateSchedulesNeedSetup(
+  plan: TemplateAddPlan,
+  options: TemplateMutationStateOptions,
+): Promise<boolean> {
+  const env = options.env ?? process.env;
+  const requirements = plan.readiness.requirements;
+  if (
+    requirements.some(
+      (requirement) =>
+        requirement.kind === "plugin-setup" ||
+        (requirement.kind === "environment" && !env[requirement.name]?.trim()),
+    )
+  ) {
+    return true;
+  }
+  const identities = requirements.flatMap((requirement) => {
+    if (requirement.kind !== "oauth") {
+      return [];
+    }
+    const server = plan.actions.find(
+      (action) => action.kind === "mcpServer" && action.id === requirement.mcpServer,
+    );
+    const url = server?.details?.url;
+    if (typeof url !== "string") {
+      throw new Error("Template OAuth requirement has no declared MCP server URL.");
+    }
+    return [operatorMcpOAuthIdentity(requirement.mcpServer, url).storeKey];
+  });
+  if (identities.length === 0) {
+    return false;
+  }
+  const statuses = await readMcpOAuthStoreStatuses(
+    identities,
+    captureOpenClawStateWorkerContext(options),
+  );
+  options.assertCurrent?.();
+  return statuses.some((status) => status.state !== "authorized");
+}
+
 /** Add ordinary agent-owned automations without a Template lifecycle reference. */
 export async function installTemplateCronJobsStateless(
   plan: TemplateAddPlan,
   options: TemplateMutationStateOptions & {
     assertForwardCurrent?: () => void;
-    gateway?: Pick<
-      TemplateCronGateway,
-      "add" | "list" | "get" | "waitUntilAgentAvailable" | "writeScratch" | "enable"
-    >;
+    gateway?: Pick<TemplateCronGateway, "add" | "list" | "get" | "writeScratch" | "enable">;
     nowMs?: number;
+    onSetupOutcome?: (outcome: TemplateInstallOutcome) => Promise<void>;
   } = {},
 ): Promise<PersistedTemplateCronRef[]> {
   const actions = plan.actions.filter((action) => action.kind === "cronJob");
@@ -203,11 +248,18 @@ export async function installTemplateCronJobsStateless(
     options.assertCurrent?.();
     options.assertForwardCurrent?.();
   };
-  await options.gateway.waitUntilAgentAvailable?.(plan.agent.finalId);
+  assertCurrent();
+  // The manifest has no per-routine dependency graph, so unresolved Template-wide
+  // setup pauses every declaration. Preserve its exact schedule, prompt and scratch;
+  // ordinary automation controls can enable it after the requirement is connected.
+  const needsSetup = await templateSchedulesNeedSetup(plan, options);
   assertCurrent();
   let scratchWriteAttempted = false;
+  let currentAction = actions[0]!;
+  let publishingOutcome = false;
   try {
     for (const action of actions) {
+      currentAction = action;
       // SAFETY: cronJob plan actions originate from validated TemplateCronJob manifest entries.
       const details = action.details as TemplateCronJob | undefined;
       if (!action.automation && !details?.id) {
@@ -241,7 +293,8 @@ export async function installTemplateCronJobsStateless(
         );
       }
       const nowMs = options.nowMs ?? Date.now();
-      const activateAfterScratch = action.automation?.enabled && action.scratch !== undefined;
+      const activateAfterScratch =
+        !needsSetup && action.automation?.enabled && action.scratch !== undefined;
       let ref: PersistedTemplateCronRef = {
         schemaVersion: TEMPLATE_CRON_REF_SCHEMA_VERSION,
         agentId: plan.agent.finalId,
@@ -259,6 +312,19 @@ export async function installTemplateCronJobsStateless(
         createdAtMs: nowMs,
         updatedAtMs: nowMs,
       };
+      if (needsSetup) {
+        const automation = normalizeCronJobCreate(
+          templateCronGatewayInput(plan.agent.finalId, ref),
+        );
+        if (!automation) {
+          throw new TemplateCronInstallError(
+            "cron_plan_invalid",
+            "Template schedule is invalid.",
+            refs,
+          );
+        }
+        ref = { ...ref, job: { automation: { ...automation, enabled: false } } };
+      }
       let result: { id: string } | undefined;
       try {
         await options.prepareEffect?.();
@@ -266,6 +332,9 @@ export async function installTemplateCronJobsStateless(
         result = templateCronSchedulerJobFromResult(
           await options.gateway.add(templateCronGatewayInput(plan.agent.finalId, ref), {
             commitGuard: assertCurrent,
+            captureOwnerProfileId: (ownerProfileId) => {
+              ref = { ...ref, nativeOwnership: { ownerProfileId } };
+            },
           }),
         );
         assertCurrent();
@@ -279,7 +348,11 @@ export async function installTemplateCronJobsStateless(
               await options.gateway.list(plan.agent.finalId),
               ref.declarationKey,
             );
-            if (listed && templateCronGatewayJobMatchesRef(plan.agent.finalId, ref, listed)) {
+            if (
+              ref.nativeOwnership &&
+              listed &&
+              templateCronGatewayJobMatchesRef(plan.agent.finalId, ref, listed)
+            ) {
               result = listed;
             }
           } catch {
@@ -325,8 +398,33 @@ export async function installTemplateCronJobsStateless(
           refs[refs.length - 1] = { ...ref, status: "complete", schedulerJobId: result.id };
         }
       }
+      const completed = refs[refs.length - 1]!;
+      const job = completed.job;
+      assertCurrent();
+      publishingOutcome = true;
+      await options.onSetupOutcome?.({
+        kind: "automation-created",
+        declarationId: action.id,
+        schedulerJobId: result.id,
+        name: "automation" in job ? job.automation.name : (job.name ?? job.id),
+        enabled: "automation" in job ? job.automation.enabled : (job.enabled ?? true),
+      });
+      publishingOutcome = false;
+      assertCurrent();
     }
   } catch (error) {
+    if (!publishingOutcome) {
+      try {
+        assertCurrent();
+        await options.onSetupOutcome?.({
+          kind: "automation-failed",
+          declarationId: currentAction.id,
+          name: currentAction.automation?.name ?? currentAction.id,
+        });
+      } catch {
+        // Notice delivery must not replace the installer failure or discard retained jobs.
+      }
+    }
     // Once scratch is exposed, a later Add failure cannot prove that it is still ours.
     throw new TemplateCronInstallError(
       scratchWriteAttempted

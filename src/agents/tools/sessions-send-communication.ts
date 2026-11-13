@@ -51,7 +51,7 @@ import {
 } from "./sessions-send-communication-endpoint.js";
 
 /** A current permission decision rejected delivery, rather than an unavailable dependency. */
-export class SessionCommunicationDeniedError extends Error {}
+class SessionCommunicationDeniedError extends Error {}
 
 /** A host-held return route minted only after the original request was accepted. */
 export type SessionSendReplyAdmission = (

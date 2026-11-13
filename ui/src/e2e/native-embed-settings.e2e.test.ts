@@ -1,8 +1,9 @@
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e-diagnostics.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -114,7 +115,7 @@ async function getLayoutPage(viewport: (typeof viewports)[number], colorScheme: 
 
 suite.define(() => {
   for (const destination of [
-    { from: "memory", route: "memory-import", title: "Import Memory", tab: "Settings" },
+    { from: "memory", route: "memory-import", title: "Import memory", tab: "Settings" },
     { from: "skills", route: "plugins", title: "Plugins", tab: "Plugins" },
     { from: "skills", route: "skill-workshop", title: "Skill workshop", tab: "Skill workshop" },
   ] as const) {
@@ -207,6 +208,34 @@ suite.define(() => {
     );
   });
 
+  it("searches the embedded settings list and clears a search with no results", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true, serviceWorkers: "block" },
+      async ({ page }) => {
+        await installNativeEmbed(page, { platform: "ios", formFactor: "phone" });
+        await installMockGateway(page, { operatorScopes: ["operator.admin", "operator.read"] });
+        await page.goto(new URL("settings", suite.server.baseUrl).toString());
+        await waitForControlUiRoute(page, { routeId: "settings" });
+        const list = page.locator(".settings-embed-list");
+        const search = list.getByRole("searchbox", { name: "Search settings", exact: true });
+        expect(
+          await search.evaluate((input) => Number.parseFloat(getComputedStyle(input).fontSize)),
+        ).toBeGreaterThanOrEqual(16);
+        await search.fill("zzzz");
+        await list.getByRole("button", { name: "Clear settings search" }).last().click();
+        expect(await search.inputValue()).toBe("");
+        await search.fill("appearance");
+        await list.locator('a[href="/settings/appearance"]').click();
+        await waitForControlUiRoute(page, { routeId: "appearance" });
+        await page.locator(".native-embed-header__back").click();
+        await waitForControlUiRoute(page, { routeId: "settings" });
+        await list.locator('a[href="/settings/appearance"]').waitFor();
+        expect(await search.inputValue()).toBe("appearance");
+        expect(await list.locator('a[href="/settings/channels"]').count()).toBe(0);
+      },
+    );
+  });
+
   it("keeps native device capability visibility and overrides native web chrome", async () => {
     await suite.withPage(
       { viewport: { width: 375, height: 812 }, hasTouch: true, serviceWorkers: "block" },
@@ -217,6 +246,7 @@ suite.define(() => {
         await installMockGateway(page, { operatorScopes: ["operator.read"] });
         await page.goto(new URL("settings", suite.server.baseUrl).toString());
         await waitForControlUiRoute(page, { routeId: "settings" });
+        await waitForControlUiGatewayReady(page);
         const list = page.locator(".settings-embed-list");
         await list.locator('a[href="/settings/device"]').waitFor();
         expect(await list.locator('a[href="/settings/security"]').count()).toBe(0);
@@ -314,25 +344,42 @@ suite.define(() => {
               await page.getByRole("combobox", { name: "Search provider", exact: true }).waitFor();
               await page.getByRole("button", { name: "Test search", exact: true }).waitFor();
               expect(await page.locator('openclaw-search-page [role="alert"]').count()).toBe(0);
-            }
-            if (route === "devices") {
-              await page.locator(".device-entry__details summary").first().click();
-              await page.locator(".device-token-table tbody td").first().waitFor();
-            }
-            if (["devices", "secrets", "approvals", "debug"].includes(route)) {
-              await page.locator(".settings-table--stacked tbody td[data-label]").first().waitFor();
+            } else if (route === "devices") {
+              await page.locator("details.device-entry > summary").first().click();
+              await page
+                .locator("details.device-entry[open] .device-entry__facts")
+                .first()
+                .waitFor();
+            } else if (["secrets", "approvals", "debug"].includes(route)) {
+              const content = page.locator(
+                `openclaw-${route}-page :is(.secrets-store__list, .approval-log, .standing-grants, .command-lanes-table.settings-table--stacked)`,
+              );
+              for (const label of route === "secrets"
+                ? ["SYNTHETIC_EXAMPLE_KEY", "SYNTHETIC_SERVICE_URL"]
+                : route === "approvals"
+                  ? ["echo synthetic-phone-layout-approval-command", "Healthy automation"]
+                  : ["synthetic-long-background-lane-name"]) {
+                await content.getByText(label, { exact: true }).waitFor();
+              }
               if (viewport.width <= 400) {
                 expect(
-                  await page
-                    .locator(".settings-table--stacked")
-                    .evaluateAll((tables) =>
-                      tables.every((table) => table.scrollWidth <= table.clientWidth),
-                    ),
+                  await content.evaluateAll((containers) =>
+                    containers.every((container) => container.scrollWidth <= container.clientWidth),
+                  ),
                   route,
                 ).toBe(true);
               }
-            }
-            if (route === "cron") {
+            } else if (route === "profile" && viewport.width <= 400) {
+              const name = "Help for Saved accounts";
+              const help = page.getByRole("button", { name, exact: true });
+              await help.scrollIntoViewIfNeeded();
+              const target = await help.boundingBox();
+              assert(target, "help target has visible bounds");
+              expect([target.width >= 44, target.height >= 44]).toEqual([true, true]);
+              await page.mouse.click(target.x + target.width / 2, target.y + 4);
+              await page.getByRole("dialog", { name, exact: true }).waitFor();
+              await page.keyboard.press("Escape");
+            } else if (route === "cron") {
               await page.getByText("Healthy automation", { exact: true }).first().waitFor();
             }
             expect(

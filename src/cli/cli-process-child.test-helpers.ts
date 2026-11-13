@@ -9,7 +9,7 @@ import {
   NODE_DIAGNOSTIC_REPORT_GRACE_MS as REPORT_GRACE_MS,
   shouldEnableNodeDiagnosticReports,
 } from "../../scripts/lib/node-diagnostic-report.mts";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveNodeCompilerArgs } from "../../scripts/lib/vitest-node-args.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../test/vitest/vitest.timeouts.js";
@@ -189,7 +189,8 @@ export async function runCliProcessChild(params: {
 }): Promise<CliProcessChildResult> {
   const timeoutMs = params.timeoutMs ?? CLI_PROCESS_DEADLOCK_GUARD_MS;
   const executable = params.nodeExecutable ?? process.execPath;
-  const reports = shouldEnableNodeDiagnosticReports() ? createFixtureLifetime() : undefined;
+  const runtime = process.versions.bun && params.nodeExecutable === undefined ? "bun" : "node";
+  const reports = shouldEnableNodeDiagnosticReports(runtime) ? createFixtureLifetime() : undefined;
   let unjoinedWork = false;
   if (reports) {
     (params.onTestFinished ?? onTestFinished)(async () => {
@@ -199,12 +200,12 @@ export async function runCliProcessChild(params: {
     });
   }
   const reportDir = reports?.createTempDir("openclaw-cli-report-");
-  // CLI children use the test runner's V8 policy without inheriting its preloads.
+  // CLI children share compiler stability flags without enabling browser APIs.
   const nodeArgs =
-    process.versions.bun && params.nodeExecutable === undefined
+    runtime === "bun"
       ? params.nodeArgs
       : [
-          ...(params.nodeArgsPolicy === "caller" ? [] : resolveVitestNodeArgs(params.env)),
+          ...(params.nodeArgsPolicy === "caller" ? [] : resolveNodeCompilerArgs(params.env)),
           ...(reportDir
             ? [
                 "--require",

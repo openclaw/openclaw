@@ -1,4 +1,4 @@
-import type { NativeHookRelayProcessResponse } from "./native-hook-relay-types.js";
+import type { JsonValue, NativeHookRelayProcessResponse } from "./native-hook-relay-types.js";
 
 function renderJsonResponse(payload: object): NativeHookRelayProcessResponse {
   return { stdout: `${JSON.stringify(payload)}\n`, stderr: "", exitCode: 0 };
@@ -24,6 +24,19 @@ export const codexNativeHookRelayResponseCodec = {
       }),
       ...(failureDisposition ? { failureDisposition } : {}),
     };
+  },
+  renderPreToolUseUpdatedInputResponse(
+    updatedInput: Record<string, JsonValue>,
+  ): NativeHookRelayProcessResponse {
+    // Codex requires `allow` to accept updatedInput, but it grants no approval:
+    // Codex's own approval path still reviews the replacement.
+    return renderJsonResponse({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "allow",
+        updatedInput,
+      },
+    });
   },
   renderPermissionDecisionResponse(
     decision: "allow" | "deny",

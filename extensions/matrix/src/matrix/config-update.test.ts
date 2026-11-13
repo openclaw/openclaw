@@ -78,8 +78,8 @@ describe("updateMatrixAccountConfig", () => {
       rooms: null,
     });
 
-    expect(updated.channels?.matrix?.dm).toEqual(cfg.channels?.matrix?.dm);
-    expect(updated.channels?.matrix?.groups).toEqual(cfg.channels?.matrix?.groups);
+    expect(updated.channels?.matrix?.dm).toEqual({ policy: "pairing" });
+    expect(updated.channels?.matrix?.groups).toEqual({ "!default:example.org": { enabled: true } });
     expect(updated.channels?.matrix?.accounts?.ops).toEqual({
       enabled: true,
       dm: { enabled: true, policy: "allowlist", allowFrom: ["@alice:example.org"] },

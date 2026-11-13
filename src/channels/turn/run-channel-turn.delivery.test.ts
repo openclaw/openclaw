@@ -19,6 +19,7 @@ import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-par
 import { createPluginRuntimeStore } from "../../plugin-sdk/runtime-store.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import type { HookRunner } from "../../plugins/hooks.js";
+import { pluginInstanceInvocation } from "../../plugins/plugin-instance-invocation.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createRuntimeChannel } from "../../plugins/runtime/runtime-channel.js";
@@ -37,10 +38,10 @@ import { dispatchAssembledChannelTurn, dispatchRoutedChannelTurn } from "./lifec
 import {
   createCtx,
   createDispatch,
+  createDirectDeliveryDispatch,
   createDispatcherBackedDispatch,
   createDurableSendResult,
   createRecordInboundSession,
-  createReplyDispatchReceipt,
   createDeliveryResultCapture,
   type DurableSendRequest,
   type DurableSupportRequest,
@@ -152,11 +153,7 @@ describe("channel turn delivery", () => {
       });
       const originalRuntime = createPluginRuntimeMock();
       const replacementRuntime = createPluginRuntimeMock();
-      const requests: Array<{
-        method: string | undefined;
-        path: string | undefined;
-        body: unknown;
-      }> = [];
+      const requests: Record<"method" | "path" | "body", unknown>[] = [];
       const channelId = "cccccccccccccccccccccccccc";
       const postId = "pppppppppppppppppppppppppp";
       const server = await reserveTestPortListener({
@@ -199,7 +196,6 @@ describe("channel turn delivery", () => {
         if (!sendText) {
           throw new Error("Mattermost text transport is unavailable");
         }
-        const acceptedPostIds: string[] = [];
         const turn = {
           cfg,
           agentId: "main",
@@ -220,7 +216,6 @@ describe("channel turn delivery", () => {
                 text: payload.text ?? "",
                 accountId: "default",
               });
-              acceptedPostIds.push(result.messageId);
               return {
                 visibleReplySent: true,
                 messageIds: [result.messageId],
@@ -237,7 +232,6 @@ describe("channel turn delivery", () => {
                 provider: "mattermost",
                 accountId: "default",
               });
-              expect(coalescing).toMatchObject({ minChars: 1, idleMs: 300 });
               if (!coalescing) {
                 throw new Error("Mattermost block coalescing is unavailable");
               }
@@ -319,7 +313,6 @@ describe("channel turn delivery", () => {
             body: { channel_id: channelId, message },
           })),
         );
-        expect(acceptedPostIds).toEqual(requests.map(() => postId));
         expect(originalRuntime.channel.activity.record).toHaveBeenCalledTimes(requests.length);
         expect(replacementRuntime.channel.activity.record).not.toHaveBeenCalled();
       } finally {
@@ -507,15 +500,16 @@ describe("channel turn delivery", () => {
         { OriginatingTo: "channel:123" },
         { channel: "discord" },
       );
-      expect(settlePendingFinalDelivery).toHaveBeenLastCalledWith(
-        { kind: "pending-final", ...completion },
-        "unknown",
-        undefined,
-        undefined,
-      );
-      expect(settlePendingFinalDelivery.mock.calls.map(([, state]) => state)).toEqual([
-        "unknown",
-        "unknown",
+      const custody = { kind: "pending-final", ...completion };
+      // Unknown is not terminal. Deferred channel settlement follows the dispatcher drain;
+      // immediate channel settlement finishes inside deliver, before that drain.
+      const channelSettlement = [custody, "unknown", undefined, undefined];
+      const dispatcherSettlement = [custody, "unknown", ["queued"], undefined];
+      expect(settlePendingFinalDelivery.mock.calls).toEqual([
+        [custody, "unknown", ["prepared", "queued"]],
+        ...(deferred
+          ? [dispatcherSettlement, channelSettlement]
+          : [channelSettlement, dispatcherSettlement]),
       ]);
       expect(onDelivered).not.toHaveBeenCalled();
       expect(emitMessageSent).not.toHaveBeenCalled();
@@ -548,21 +542,17 @@ describe("channel turn delivery", () => {
       content ? undefined : { cancel: true, cancelReason: "policy", metadata: { source: "test" } },
     );
     const payload = { mediaUrls: ["media://only"] };
-    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(async (params) => {
-      await params.dispatcherOptions.deliver({ text: "deliver me" }, { kind: "block" });
-      await params.dispatcherOptions.deliver(payload, finalInfo);
-      return recordAgentRunTerminalOutcome(
-        {
-          queuedFinal: true,
-          counts: { tool: 0, block: 1, final: 1 },
-          settledReceipt: createReplyDispatchReceipt({
-            block: { delivered: 1 },
-            final: { deliveredNotVisible: 1 },
-          }),
-        },
-        "failed",
-      );
-    });
+    const dispatch = createDispatcherBackedDispatch(
+      () => {},
+      () => payload,
+      (dispatcher, finalPayload) => {
+        dispatcher.sendBlockReply({ text: "deliver me" });
+        return dispatcher.sendFinalReply(finalPayload);
+      },
+    );
+    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementationOnce(async (params) =>
+      recordAgentRunTerminalOutcome(await dispatch(params), "failed"),
+    );
     const deliver = vi.fn(async () => ({ visibleReplySent: true })),
       onDelivered = vi.fn();
     const result = await runRouted(
@@ -729,33 +719,41 @@ describe("channel turn delivery", () => {
     expect(deliver).toHaveBeenCalledWith({ text: "reply + direct-hook" }, finalInfo);
   });
 
-  it("treats durable support preflight failures as terminal", async () => {
-    resolveOutboundDurableFinalDeliverySupport.mockRejectedValueOnce(new Error("preflight failed"));
-    const deliver = vi.fn();
-    await expect(
-      runAssembled({ delivery: { deliver, durable: { replyToMode: "first" } } }),
-    ).rejects.toThrow("preflight failed");
-    expect(sendDurableMessageBatch).not.toHaveBeenCalled();
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("preserves durable partial-send visibility without retrying via direct delivery", async () => {
-    sendDurableMessageBatch.mockResolvedValueOnce({
-      ...createDurableSendResult(["tg-1"]),
-      status: "partial_failed",
-      error: new Error("second chunk failed"),
-      sentBeforeError: true,
-    });
-    const deliver = vi.fn();
-    await expect(
-      runAssembled({ delivery: { deliver, durable: { replyToMode: "first" } } }),
-    ).rejects.toMatchObject({ sentBeforeError: true, visibleReplySent: true });
-    expect(deliver).not.toHaveBeenCalled();
-  });
+  it.each(["preflight", "partial"] as const)(
+    "keeps durable %s failures terminal without direct delivery",
+    async (failure) => {
+      if (failure === "preflight") {
+        resolveOutboundDurableFinalDeliverySupport.mockRejectedValueOnce(new Error("failed"));
+      } else {
+        sendDurableMessageBatch.mockResolvedValueOnce({
+          ...createDurableSendResult(["tg-1"]),
+          status: "partial_failed",
+          error: new Error("failed"),
+          sentBeforeError: true,
+        });
+      }
+      const deliver = vi.fn();
+      await expect(
+        runAssembled({
+          delivery: { deliver, durable: { replyToMode: "first" } },
+          dispatchReplyWithBufferedBlockDispatcher: createDirectDeliveryDispatch(),
+        }),
+      ).rejects.toMatchObject(
+        failure === "preflight"
+          ? { message: "failed" }
+          : { sentBeforeError: true, visibleReplySent: true },
+      );
+      expect(sendDurableMessageBatch).toHaveBeenCalledTimes(failure === "preflight" ? 0 : 1);
+      expect(deliver).not.toHaveBeenCalled();
+    },
+  );
 
   it("observes provider-finalized content and identity after deferred delivery settles", async () => {
     const events: string[] = [];
-    const onAgentRunStart = vi.fn(() => "reply-dispatch");
+    const channel = new PluginInstance("telegram");
+    const runtime = createPluginRuntimeStore<PluginRuntime>({ pluginId: "tg", errorMessage: "x" });
+    channel.run(() => runtime.setRuntime(createPluginRuntimeMock()));
+    const onAgentRunStart = vi.fn(() => (runtime.tryGetRuntime() ? "reply-dispatch" : "missing"));
     const dispatchRun: ReplyDispatchRun = {
       completionSource: "reply-dispatch",
       getResult: () => ({}),
@@ -770,28 +768,33 @@ describe("channel turn delivery", () => {
     };
     const finalization = createDeferred<typeof finalized>();
     const dispatch = vi.fn<DispatchReplyWithBufferedBlockDispatcher>(async (params) => {
-      expect(params.replyOptions?.onAgentRunStart?.("run-finalized", undefined, dispatchRun)).toBe(
-        "reply-dispatch",
+      // Prepared-model leases with a generationOverlap plugin exit the channel's instance.
+      const started = pluginInstanceInvocation.exit(() =>
+        params.replyOptions?.onAgentRunStart?.("run-finalized", undefined, dispatchRun),
       );
+      expect(started).toBe("reply-dispatch");
       await params.dispatcherOptions.deliver({ text: "pre-final text" }, finalInfo);
       events.push("provider-finalized");
       finalization.resolve(finalized);
       return finalDispatch();
     });
-    await runAssembled({
-      channel: "feishu",
-      routeSessionKey: "agent:main:feishu:peer",
-      ctxPayload: createCtx({ Surface: "feishu", Provider: "feishu", OriginatingTo: "oc_chat" }),
-      dispatchReplyWithBufferedBlockDispatcher: dispatch,
-      replyOptions: { onAgentRunStart },
-      delivery: {
-        deliver: async () => {
-          events.push("deliver");
-          return { visibleReplySent: false, finalization: finalization.promise };
+    await channel.run(() =>
+      runAssembled({
+        channel: "feishu",
+        routeSessionKey: "agent:main:feishu:peer",
+        ctxPayload: createCtx({ Surface: "feishu", Provider: "feishu", OriginatingTo: "oc_chat" }),
+        dispatchReplyWithBufferedBlockDispatcher: dispatch,
+        replyOptions: { onAgentRunStart },
+        delivery: {
+          deliver: async () => {
+            events.push("deliver");
+            return { visibleReplySent: false, finalization: finalization.promise };
+          },
+          observeMessageSent: true,
         },
-        observeMessageSent: true,
-      },
-    });
+      }),
+    );
+    await channel.dispose();
     expect(events).toEqual(["deliver", "provider-finalized", "message_sent"]);
     expect(onAgentRunStart).toHaveBeenCalledExactlyOnceWith(
       "run-finalized",

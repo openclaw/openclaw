@@ -8,7 +8,7 @@ import type {
   RepairShortTermPromotionArtifactsResult,
   ShortTermAuditSummary,
   ShortTermDreamingStats,
-} from "../memory-host-sdk/dreaming.js";
+} from "../memory-host-sdk/dreaming-report-types.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import type { PluginStateOperationModuleSource } from "../plugin-state/plugin-state-store.native-binding.js";
 import { isTypeScriptPackageEntry } from "../plugins/package-entrypoints.js";

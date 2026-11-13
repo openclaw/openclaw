@@ -41,7 +41,7 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
   const sessions = context.sessions;
   const rootsSettled =
     !sessions.state.loading &&
-    (Boolean(host.sessionData.sessionMutationError ?? sessions.state.error) ||
+    (Boolean(host.sessionData.sessionListError ?? sessions.state.error) ||
       (sessions.canonicalListReady &&
         Boolean(sessions.presentation.result) &&
         !sessions.presentation.resultCached));
@@ -59,9 +59,11 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
   ) {
     return false;
   }
-  const people = resolveSidebarOnline(host).users;
   if (
-    people.some((person) => person.identity?.type === "profile") &&
+    host.navigationView === "online" &&
+    host.navigationVisible &&
+    !host.navigationCollapsed &&
+    resolveSidebarOnline(host).users.some((person) => person.identity?.type === "profile") &&
     host.sessionData.ownerCounts.counts === null &&
     host.sessionData.ownerCounts.error === null
   ) {
@@ -89,6 +91,10 @@ export function captureSidebarSnapshotModel(
   rows: SidebarRecentSession[],
   sections: SidebarVisibleSections["sections"],
 ): SidebarSnapshotModel | null {
+  const windowKeys = host.scroll?.windowKeys();
+  if (!windowKeys) {
+    return null;
+  }
   const bootRoster = context.sessions.captureBootRoster();
   const agents = context.agents.state.agentsList;
   if (!bootRoster || !agents) {
@@ -100,9 +106,9 @@ export function captureSidebarSnapshotModel(
     host.sidebarSnapshot ||
     (host.navigationView === "pages" &&
       host.navigationCatalog.dashboards?.readSucceeded !== true) ||
-    host.sessionData.sessionMutationError !== null ||
+    host.sessionData.sessionListError !== null ||
     context.sessions.state.error !== null ||
-    host.sessionData.ownerCounts.error !== null ||
+    (host.navigationView === "online" && host.sessionData.ownerCounts.error !== null) ||
     (host.sidebarAgentsMode === "roster" && roster.error !== null) ||
     (context.plugins.registryStatus !== "complete" && !host.sidebarPluginSnapshot)
   ) {
@@ -124,18 +130,15 @@ export function captureSidebarSnapshotModel(
     snapshotSubtitle: row.snapshot
       ? row.snapshotSubtitle
       : resolveSidebarSessionRowSubtitle(host, row),
-    state: sidebarSessionBadgeFacts(
-      host.sessionPullRequests,
-      row,
-      host.sidebarAgentsMode === "roster",
-    ),
+    state: sidebarSessionBadgeFacts(host.sessionPullRequests, row),
   });
   return parseSidebarSnapshot({
     routingDefaults: {
       mainKey: agents.mainKey,
       scope: agents.scope,
     },
-    roster: bootRoster,
+    // The read receipt is not a display change.
+    roster: { ...bootRoster, result: { ...bootRoster.result, ts: 0 } },
     mode: host.sidebarAgentsMode,
     grouping: host.effectiveSessionsGrouping(),
     navigationView: host.navigationView,
@@ -156,7 +159,10 @@ export function captureSidebarSnapshotModel(
     ),
     entries: zone.sidebarEntries.filter((value) => {
       const entry = parseSidebarEntry(value);
-      return entry?.type !== "session" || !isIncognitoSessionKey(entry.key);
+      return (
+        entry?.type !== "session" ||
+        (!isIncognitoSessionKey(entry.key) && !context.sessions.deletionState(entry.key))
+      );
     }),
     issuesCount: snapshotIssuesCount(context.sidebarAttention.entries),
     ...snapshotSections(sections, host.collapsedSessionSections, presentation),
@@ -181,6 +187,8 @@ export function captureSidebarSnapshotModel(
       .map(profilePresenceViewer),
     ownerId: host.sessionOwnerFilterId,
     involvingMe: host.sessionInvolvingMeFilterActive,
+    windowKeys: windowKeys.filter((key) => !isIncognitoSessionKey(key)),
+    rowFloor: host.scroll?.rowFloor() ?? 32,
     footer: displayUser(context.gateway.snapshot.selfUser),
     brand: readSidebarBrandPresentation(host),
   });

@@ -125,6 +125,9 @@ export function resolveColor(
   resolving = new Set<string>(),
 ): Color {
   const color = value.trim();
+  if (color === "transparent") {
+    return { rgb: [0, 0, 0], alpha: 0 };
+  }
   if (color === "white") {
     return { rgb: [255, 255, 255], alpha: 1 };
   }
@@ -170,7 +173,7 @@ export function resolveColor(
   }
 
   const mix = color.match(
-    /^color-mix\(in srgb,\s*(var\(--[\w-]+\))\s+([\d.]+)%,\s*(var\(--[\w-]+\)|white)\s*\)$/u,
+    /^color-mix\(in srgb,\s*(var\(--[\w-]+\))\s+([\d.]+)%,\s*(var\(--[\w-]+\)|white|transparent)\s*\)$/u,
   );
   if (mix) {
     return mixColors(

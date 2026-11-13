@@ -14,21 +14,14 @@ function parsePositiveInt(value: string | undefined): number | null {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-function resolveExplicitVitestWorkerBudget(env: NodeJS.ProcessEnv): number | null {
-  return parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
-}
-
-function shouldApplyNativeWorkerBudget(env: NodeJS.ProcessEnv): boolean {
+function resolveNativeWorkerCount(env: NodeJS.ProcessEnv): string | null {
   if (env.RAYON_NUM_THREADS?.trim() && env.TOKIO_WORKER_THREADS?.trim()) {
-    return false;
+    return null;
   }
-  return (
-    env.OPENCLAW_TEST_PROJECTS_SERIAL === "1" || resolveExplicitVitestWorkerBudget(env) !== null
-  );
-}
-
-function resolveNativeWorkerCount(env: NodeJS.ProcessEnv): number {
-  return Math.min(resolveExplicitVitestWorkerBudget(env) ?? 1, 4);
+  const budget = parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
+  return env.OPENCLAW_TEST_PROJECTS_SERIAL === "1" || budget !== null
+    ? String(Math.min(budget ?? 1, 4))
+    : null;
 }
 
 /** Applies local Vitest scheduling and native worker budget env. */
@@ -40,11 +33,11 @@ export function resolveVitestProcessEnv(env: NodeJS.ProcessEnv = process.env): N
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
   };
-  if (!shouldApplyNativeWorkerBudget(baseEnv)) {
+  const nativeWorkerCount = resolveNativeWorkerCount(baseEnv);
+  if (nativeWorkerCount === null) {
     return baseEnv;
   }
 
-  const nativeWorkerCount = String(resolveNativeWorkerCount(baseEnv));
   return {
     ...baseEnv,
     RAYON_NUM_THREADS: baseEnv.RAYON_NUM_THREADS?.trim() || nativeWorkerCount,
@@ -169,20 +162,6 @@ for (const owner of embeddedAgentVitestProjectOwners) {
     DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   );
 }
-/**
- * Resolves default Node flags for Vitest, including the local Maglev opt-in.
- */
-export function resolveVitestNodeArgs(env: NodeJS.ProcessEnv = process.env): string[] {
-  // Node 24 can join a Sparkplug compiler at process.exit while that compiler
-  // waits for main-thread GC. Keep baseline compilation on the main thread.
-  return [
-    ...(parsePermissiveBooleanToken(env.OPENCLAW_VITEST_ENABLE_MAGLEV) === true
-      ? []
-      : ["--no-maglev"]),
-    "--no-concurrent-sparkplug",
-  ];
-}
-
 /**
  * Reads the explicit no-output watchdog timeout, if configured.
  */

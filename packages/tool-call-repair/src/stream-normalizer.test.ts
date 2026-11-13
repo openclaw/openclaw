@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createForcedScrubSnapshot } from "./stream-normalizer-snapshot.js";
 import {
   normalizePlainTextToolCallStreamEvents as normalizeStream,
   projectScrubbedPlainTextToolCallMessage as scrubMessage,
@@ -576,22 +577,39 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
   });
   const chunked = (text: string, size: number) => cumulativeDeltas(...chunksOf(text, size));
 
-  it("reuses settled scans across a streamed reply with a leaked call (#174345)", async () => {
-    const fenced = fencedSections(40);
-    const source = chunked(leading + fenced, 4);
+  it("does not parse Markdown for replayed non-call prose", async () => {
+    const text = "[read is a literal `example`, with no call payload.\n\n".repeat(32);
     const resolveRanges = vi.fn(resolveTestFenceRanges);
-    const events = await protectedDeltas(source, resolveRanges);
-    expect(textDeltas(events).join("")).toBe(fenced);
-    expect(resolveRanges.mock.calls.length).toBeLessThanOrEqual(Math.ceil(source.length / 4));
-    let visible = "";
-    for (const event of events) {
-      const delta = event.delta;
-      if (typeof delta !== "string" || delta.length === 0) {
-        continue;
-      }
-      visible += delta;
-      expect(event.partial).toEqual(assistant(textContent(visible)));
+    const events = await protectedDeltas(streamDeltas(...chunksOf(text, 16)), resolveRanges);
+    expect(textDeltas(events).join("")).toBe(text);
+    const parsed = resolveRanges.mock.calls.filter(([source]) => /[`~\t]| {4}/u.test(source));
+    expect(parsed).toEqual([]);
+  });
+
+  it("shares ownership when classifying a call followed by an unfinished marker", async () => {
+    const text = leading + "`visible`\n<funct";
+    const resolveRanges = vi.fn(resolveTestFenceRanges);
+    const events = await protectedDeltas([textEvent(text)], resolveRanges);
+    expect(textDeltas(events).join("")).toBe("`visible`\n<funct");
+    // Admission and classification each own one scan; the trailing-marker search shares it.
+    expect(resolveRanges.mock.calls.filter(([source]) => source === text).length).toBe(2);
+  });
+
+  it.each([40, 960, 1920])("bounds snapshot parsing for %i fenced examples", (count) => {
+    const resolveRanges = vi.fn(resolveTestFenceRanges);
+    const scrub = createForcedScrubSnapshot({
+      matcher,
+      resolveProtectedRanges: resolveRanges,
+      protectedRangesFenceCompatible: true,
+    });
+    let visible = "Visible.\n\n";
+    for (let index = 0; index <= count; index += 1) {
+      const message = assistant(textContent(leading + visible));
+      expect(scrub(message, true)?.message).toEqual(assistant(textContent(visible)));
+      visible += "\n```toml\n[tool:read]\n{}\n```\nplain.";
     }
+    const sizes = resolveRanges.mock.calls.map(([text]) => text.length);
+    expect(sizes.reduce((total, size) => total + size, 0)).toBeLessThanOrEqual(visible.length * 4);
   });
 
   it.each([

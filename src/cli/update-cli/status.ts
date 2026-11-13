@@ -48,6 +48,7 @@ import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
+import { resolveSafeTimeoutDelayMs } from "../../utils/timer-delay.js";
 import { VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
@@ -61,13 +62,8 @@ async function readUpdateRecoverySetStatus(readRun?: typeof getUpdateRunAsync) {
     const sets = await inspectUpdateRecoveryBackups(readRun);
     return {
       recoverySets: sets.map((set) =>
-        set.status === "incomplete"
-          ? {
-              directory: set.directory,
-              status: set.status,
-              message: set.message,
-              nextAction: set.nextAction,
-            }
+        set.status === "incomplete" || set.status === "unreadable" || set.status === "warning"
+          ? set
           : {
               runId: set.runId,
               manifestPath: set.ref.manifestPath,
@@ -115,7 +111,7 @@ async function readChannelStatusIssues(
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
   const checkTimeoutMs = parseUpdateTimeoutMs(opts.timeout);
   // --timeout bounds update checks; a short network budget must not discard local history.
-  const timeoutMs = Math.max(30_000, checkTimeoutMs ?? 0);
+  const timeoutMs = resolveSafeTimeoutDelayMs(Math.max(30_000, checkTimeoutMs ?? 0));
   const scope = new AsyncWorkScope();
   const timer = setTimeout(
     () => scope.beginClose(new Error(`Update status timed out after ${timeoutMs / 1000} seconds`)),
@@ -656,8 +652,8 @@ async function inspectUpdateStatus(
     defaultRuntime.log("");
   } else {
     for (const set of recoveryStatus.recoverySets) {
-      if (set.status === "incomplete") {
-        defaultRuntime.log("Update capture: incomplete");
+      if (set.status === "incomplete" || set.status === "unreadable" || set.status === "warning") {
+        defaultRuntime.log(`Update capture: ${set.status}`);
         defaultRuntime.log(safeMessage(set.directory));
       } else {
         const label = set.status === "manual" ? "Doctor capture" : "Update recovery set";

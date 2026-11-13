@@ -1,0 +1,28 @@
+name: Setup Boat
+description: Install the checksum-pinned Boat CLI for Linux x64 runner provisioning.
+
+runs:
+  using: composite
+  steps:
+    - name: Install Boat 1.0.89
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "$(uname -s)/$(uname -m)" != "Linux/x86_64" ]]; then
+          echo "::error::Boat runner provisioning requires Linux x64."
+          exit 1
+        fi
+        install_dir="$RUNNER_TEMP/boat-1.0.89"
+        mkdir -p "$install_dir"
+        curl --fail --silent --show-error --location \
+          --connect-timeout 15 --max-time 120 \
+          https://github.com/ariana-dot-dev/agent-server/releases/download/boat-cli-v1.0.89/boat-linux-x64 \
+          --output "$install_dir/boat.download"
+        printf '%s  %s\n' \
+          1ff048fbc5611166b76c7b79bd75c4b1bf4e87c5eac9e326fa6799fd1b911546 \
+          "$install_dir/boat.download" | sha256sum --check --status
+        install -m 755 "$install_dir/boat.download" "$install_dir/boat"
+        rm "$install_dir/boat.download"
+        test "$("$install_dir/boat" --version)" = "boat 1.0.89"
+        printf '%s\n' "$install_dir" >> "$GITHUB_PATH"
+        printf 'BOAT_NO_UPDATE=1\n' >> "$GITHUB_ENV"

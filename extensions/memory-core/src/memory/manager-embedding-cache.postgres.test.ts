@@ -12,7 +12,10 @@ import {
   isPostgresSqlConnection,
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import {
+  runSqliteImmediateTransactionSync,
+  type SynchronousSqliteCallback,
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -49,7 +52,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
     }
     return database;
   }
-  const write = <T>(operation: () => T) =>
+  const write = <T>(operation: SynchronousSqliteCallback<T>) =>
     withEngineStoreAdmission(() => runSqliteImmediateTransactionSync(database, operation));
   const entries = (size: number) =>
     Array.from({ length: size }, (_, index) => ({
@@ -153,7 +156,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
         String(row["QUERY PLAN"]),
       );
       const scan = plan.find((line) => line.includes("idx_memory_embedding_cache_updated_at"));
-      expect(scan, plan.join("\n")).toMatch(/Index Scan.*actual .*rows=11 loops=1/);
+      expect(scan, plan.join("\n")).toMatch(/Index Scan.*actual .*rows=11(?:\.0+)? loops=1\b/);
       expect(plan.some((line) => line.includes("Seq Scan"))).toBe(false);
     });
   });

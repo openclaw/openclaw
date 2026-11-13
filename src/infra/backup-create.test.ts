@@ -18,13 +18,9 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import {
-  type OpenClawTestState,
-  withOpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as sleepModule from "../utils/sleep.js";
 import {
-  backupCase,
   createOwnedSqliteDatabase,
   declarePluginSqliteResources,
   expectDatabaseRows,
@@ -37,7 +33,8 @@ import {
   createBackupClassificationInventory,
   listArchiveEntries,
   listArchiveEntryDetails,
-  useIsolatedBackupTempRoot,
+  isolatedBackupCase as backupCase,
+  withIsolatedBackupState as withOpenClawTestState,
 } from "./backup-create.test-support.js";
 import { classifyBackupSqliteSource } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
@@ -93,7 +90,6 @@ async function pluginDatabaseFixture(state: OpenClawTestState, filename: string)
 }
 
 const APPLE_DOUBLE_MAGIC = Buffer.from([0x00, 0x05, 0x16, 0x07]);
-useIsolatedBackupTempRoot();
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");

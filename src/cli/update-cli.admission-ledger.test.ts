@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
-import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
 import * as stepWrites from "../infra/update-run-write.async.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -11,7 +10,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
-import { ExpectedCliError } from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 import {
   expectNoSideEffects,
   freshRestartCalls,
@@ -30,7 +29,6 @@ describe("update-cli", () => {
   const f = createUpdateCliFixture();
   function expectNoMutation(...effects: unknown[]) {
     expectNoSideEffects(
-      cleanupStaleManagedServiceUpdateHandoffs,
       update.replaceConfigFile,
       update.updateGitCheckout,
       mocks.syncPluginsForUpdateChannel,
@@ -305,7 +303,7 @@ describe("update-cli", () => {
         },
       );
       const writeStep = stepWrites.recordUpdateRunStepAsync;
-      vi.spyOn(stepWrites, "recordUpdateRunStepAsync").mockImplementation((...args) => {
+      vi.spyOn(stepWrites, "recordUpdateRunStepAsync").mockImplementation(async (...args) => {
         if (args[1].step !== "core migrations" || args[1].status !== "completed") {
           return writeStep(...args);
         }
@@ -313,7 +311,8 @@ describe("update-cli", () => {
         receiptRunId = args[0];
         armed = !intercepted;
         try {
-          return writeStep(...args).catch((error: unknown) => {
+          // Recovery preparation can yield before dispatch; retain the selected receipt through settlement.
+          return await writeStep(...args).catch((error: unknown) => {
             receiptError = error;
             throw error;
           });

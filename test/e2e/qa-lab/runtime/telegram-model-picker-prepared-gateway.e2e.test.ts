@@ -884,6 +884,13 @@ test("lists native CLI-bound models through Telegram polling and provider callba
               fixtureProviderRequests: providerRequests,
             }),
           );
+          // Published model rows can precede the asynchronous native initialization.
+          await expect
+            .poll(async () => (await fs.readFile(nativeRequestsPath, "utf8")).trim(), {
+              interval: 50,
+              timeout: 30_000,
+            })
+            .not.toBe("");
           const cliCalls = (await fs.readFile(authCallsPath, "utf8"))
             .trim()
             .split("\n")
