@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.default-agent-owner.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { stripUnknownConfigKeys } from "../../doctor-config-analysis.js";
 import { projectRetiredHeartbeatConfig } from "../../doctor-heartbeat-legacy.js";
