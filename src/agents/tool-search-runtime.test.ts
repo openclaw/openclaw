@@ -284,7 +284,8 @@ describe("Tool Search input schemas", () => {
       (tool) => tool.name === TOOL_DESCRIBE_RAW_TOOL_NAME,
     );
     assert.ok(describeTool);
-    expect(wrapped.parameters).toHaveProperty("properties.optional.enum", ["true"]);
+    expect(wrapped.parameters).toHaveProperty("properties.optional.type", "boolean");
+    expect(wrapped.parameters).not.toHaveProperty("properties.optional.enum");
     const result = await describeTool.execute("describe-deep", { id: target.name });
     expect(result.details).toHaveProperty("parameters.properties.optional.const", true);
     expect(result.content).toEqual([
@@ -335,7 +336,8 @@ describe("Tool Search input schemas", () => {
     const { catalogRef, runtime } = createRuntime(wrapped);
     const readEntry = catalogRef.current!.entries.find((entry) => entry.name === "read")!;
     const execEntry = catalogRef.current!.entries.find((entry) => entry.name === "exec")!;
-    expect(wrapped[0]?.parameters).toHaveProperty("properties.optional.enum", ["true"]);
+    expect(wrapped[0]?.parameters).toHaveProperty("properties.optional.type", "boolean");
+    expect(wrapped[0]?.parameters).not.toHaveProperty("properties.optional.enum");
     expect(readEntry.parameters).toHaveProperty("properties.optional.const", true);
     expect(compactToolSearchCatalogEntry(readEntry).input).toContain("optional?: true");
     expect((await createCodeModeToolApiFile("read", readEntry)).content).toContain(
