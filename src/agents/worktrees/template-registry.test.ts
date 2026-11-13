@@ -251,6 +251,15 @@ it("admits readers only from retained ready generations and refuses retirement u
     await retain({ ...selection, selection: { ...selection.selection, contentKey: "other" } }),
   ).toBeUndefined();
   expect(await retain(selection)).toEqual(published());
+  for (const now of [10, 30, 25]) {
+    const record = await retain({
+      ...selection,
+      key: "recency",
+      selection: { ...selection.selection, now },
+    });
+    expect(record?.lastUsedAt).toBe(now === 10 ? 20 : 30);
+    await release("recency");
+  }
   expect(await retire()).toBeUndefined();
   await release("first");
   expect(await retire()).toBeUndefined();
