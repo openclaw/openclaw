@@ -46,6 +46,39 @@ struct OpenClawIDRemovalTests {
         #expect(restarted.lastRemoval() == nil)
     }
 
+    @Test func `remote removal retires the current node key rather than the route capture`() async throws {
+        let suite = "ocid-stale-node-removal-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = MacOpenClawIDDeviceStore(defaults: defaults, databaseURL: URL(fileURLWithPath: "/unused.sqlite"))
+        let captured = try MacOpenClawIDDevice(
+            hostname: "studio.example.test", clawID: "fixture",
+            discoveryOrigin: #require(URL(string: "https://id.example.test")), deviceEnrollmentID: UUID(),
+            nodeEnrollmentID: UUID(), approvedWith: .device)
+        var current = captured
+        current.nodeEnrollmentID = UUID()
+        store.save(current)
+        let reenrolled = MacOpenClawIDDevice(
+            hostname: captured.hostname, clawID: captured.clawID, discoveryOrigin: captured.discoveryOrigin,
+            deviceEnrollmentID: UUID(), nodeEnrollmentID: UUID(), approvedWith: .recoveryKit)
+        var deleted: MacOpenClawIDDevice?
+        await store.remove(
+            captured, origin: .elsewhere, stopRoute: {}, deselectNode: {},
+            forgetKeys: { retired in
+                store.save(reenrolled)
+                await Task.yield()
+                deleted = retired
+            }, clearPrimary: {})
+        #expect(deleted == current)
+        #expect(deleted?.nodeEnrollmentID != captured.nodeEnrollmentID)
+        #expect(store.load() == reenrolled)
+        await store.remove(
+            captured, origin: .elsewhere,
+            stopRoute: { Issue.record("stale device removal stopped the new route") }, deselectNode: {},
+            forgetKeys: { _ in Issue.record("stale device removal deleted new keys") }, clearPrimary: {})
+        #expect(store.load() == reenrolled)
+    }
+
     @Test func `verified removal during a local request retains local origin`() async throws {
         let suite = "ocid-local-removal-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

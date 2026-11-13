@@ -100,7 +100,8 @@ final class MacOpenClawIDDeviceStore {
         forgetKeys: ((MacOpenClawIDDevice) async -> Void)? = nil,
         clearPrimary: () -> Void = { try? AppStateStore.shared.setPrimaryGateway(.clear) }) async
     {
-        guard self.load()?.deviceEnrollmentID == device.deviceEnrollmentID else { return }
+        guard let current = self.load(), current.deviceEnrollmentID == device.deviceEnrollmentID else { return }
+        let device = current
         let removal = MacOpenClawIDRemoval(
             hostname: device.hostname,
             date: now,

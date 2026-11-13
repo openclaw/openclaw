@@ -15,8 +15,8 @@ final class MacOpenClawIDSignInPresenter: NSObject, NSWindowDelegate {
         let model = OnboardingOpenClawIDModel(
             service: OnboardingOpenClawIDSignInService(),
             onJoined: { [weak self] claw in
+                try MacOpenClawIDJoinCompletion.finish(claw: claw)
                 self?.close()
-                MacOpenClawIDJoinCompletion.finish(claw: claw)
             })
         let window = NSWindow(
             contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
