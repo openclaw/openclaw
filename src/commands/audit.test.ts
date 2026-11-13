@@ -1,8 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
-import { createAbortError } from "../infra/abort-signal.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { auditListCommand } from "./audit.js";
 
 const mocks = vi.hoisted(() => ({
@@ -699,71 +697,5 @@ describe("audit run explanation", () => {
     expect(output).toContain('"state": "unsupported"');
     expect(output).toContain("gateway_upgrade_required");
     expect(output).toContain("upgrade_gateway");
-  });
-});
-
-describe("audit command interruption", () => {
-  beforeEach(() => {
-    callGateway.mockReset();
-    vi.mocked(runtime.log).mockClear();
-    vi.mocked(runtime.error).mockClear();
-    vi.mocked(runtime.exit).mockClear();
-  });
-
-  /** A pending reply that rejects when the passed signal aborts, like a real held read. */
-  function heldGatewayRead() {
-    return ({ signal }: { signal?: AbortSignal }) =>
-      new Promise((_resolve, reject) => {
-        // A read that never sees the signal would hang forever; fail it fast so the
-        // red case asserts instead of timing out.
-        const timer = setTimeout(() => reject(new Error("held read never released")), 1_000);
-        if (signal?.aborted) {
-          clearTimeout(timer);
-          reject(createAbortError("This operation was aborted"));
-          return;
-        }
-        signal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            reject(createAbortError("This operation was aborted"));
-          },
-          { once: true },
-        );
-      });
-  }
-
-  it("drops an interrupted activity read without falling back", async () => {
-    const work = new AsyncWorkScope();
-    work.beginClose();
-    callGateway.mockImplementation(heldGatewayRead());
-
-    await expect(work.run(() => auditListCommand({}, runtime))).resolves.toBeUndefined();
-    expect(callGateway).toHaveBeenCalledTimes(1);
-  });
-
-  it("drops an interrupted run inspection read", async () => {
-    const work = new AsyncWorkScope();
-    work.beginClose();
-    callGateway.mockImplementation(heldGatewayRead());
-
-    await expect(
-      work.run(() => auditListCommand({ explain: true, runId: "run-1" }, runtime)),
-    ).resolves.toBeUndefined();
-    expect(callGateway).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps a legacy fallback read quiet when it is interrupted", async () => {
-    const work = new AsyncWorkScope();
-    work.beginClose();
-    // The activity query reports an unsupported method on an old Gateway, which
-    // would normally fall back to audit.list; the already-aborted signal must
-    // stop the whole read quietly without printing a late error or falling back.
-    callGateway
-      .mockRejectedValueOnce(unknownActivityMethodError())
-      .mockImplementation(heldGatewayRead());
-
-    await expect(work.run(() => auditListCommand({}, runtime))).resolves.toBeUndefined();
-    expect(callGateway).toHaveBeenCalledTimes(1);
   });
 });

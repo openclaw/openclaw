@@ -217,8 +217,7 @@ async function queryAuditActivity(
       signal,
     });
   } catch (error) {
-    // A Ctrl+C cancels the pending read; keep the canonical abort outcome instead of
-    // printing a late error or falling back to a legacy read the user no longer wants.
+    // An accepted interrupt owns the exit status; skip the error and the legacy fallback.
     if (signal?.aborted) {
       return undefined;
     }
@@ -231,20 +230,16 @@ async function queryAuditActivity(
         { cause: error },
       );
     }
-    try {
-      return await callGateway<AuditListResult>({
-        method: "audit.list",
-        params: toLegacyAuditListParams(params),
-        signal,
-      });
-    } catch (fallbackError) {
-      // A Ctrl+C cancels the legacy fallback read too; exit quietly instead of
-      // reporting the abort as an ordinary error.
+    return await callGateway<AuditListResult>({
+      method: "audit.list",
+      params: toLegacyAuditListParams(params),
+      signal,
+    }).catch((fallbackError: unknown) => {
       if (signal?.aborted) {
         return undefined;
       }
-      throw formatAuditGatewayError(fallbackError);
-    }
+      throw fallbackError;
+    });
   }
 }
 
@@ -282,8 +277,6 @@ async function queryAuditRunInspection(
       signal,
     });
   } catch (error) {
-    // A Ctrl+C cancels the pending read; keep the canonical abort outcome instead of
-    // printing a late error or an upgrade-state reply the user no longer wants.
     if (signal?.aborted) {
       return undefined;
     }
@@ -566,7 +559,6 @@ export async function auditListCommand(
           },
     );
     if (result === undefined) {
-      // Interrupted before the read settled; exit quietly with the normal abort code.
       return;
     }
     if (options.json) {
@@ -605,7 +597,6 @@ export async function auditListCommand(
   };
   const result = await queryAuditActivity(params, options);
   if (result === undefined) {
-    // Interrupted before the read settled; exit quietly with the normal abort code.
     return;
   }
   if (options.json) {
