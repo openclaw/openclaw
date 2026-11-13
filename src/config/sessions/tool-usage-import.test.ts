@@ -323,8 +323,15 @@ it("backfills direct, bare-name dispatch, and Code Mode MCP calls from server ev
   append(nested("n-code", "code", "granola__list_meetings"));
   // MCP evidence for a name a native catalog entry owns stays uncounted, direct or nested.
   append(nested("n-shadow", "code", "granola__shadow"));
-  append({ role: "assistant", content: [call("shadow", "granola__shadow")] }, 100);
+  const shadow = { id: "granola__shadow" };
+  const calls = [call("shadow", "granola__shadow"), call("d-nested", "dispatch_action", shadow)];
+  append(
+    { role: "assistant", content: [...calls, call("d-wrap", "dispatch_action", shadow)] },
+    100,
+  );
   append(result("shadow", "granola__shadow", mcp));
+  append(nested("n-d-nested", "d-nested", "granola__shadow"));
+  append({ ...result("d-wrap", "dispatch_action"), details: { result: { details: mcp } } });
   // A failed MCP call is excluded even with server evidence.
   append(nested("n-failed", "code", "granola__list_meetings", { ...mcp, status: "error" }));
   append(result("bare", "dispatch_action"), 130);
@@ -332,7 +339,7 @@ it("backfills direct, bare-name dispatch, and Code Mode MCP calls from server ev
   expect(scan.result()).toMatchObject({
     rows: [{ toolId: "mcp:granola:granola__list_meetings", score: 3 }],
     successfulCalls: 3,
-    excluded: { unknownTools: 3, errors: 1 },
+    excluded: { unknownTools: 5, errors: 1 },
   });
 });
 

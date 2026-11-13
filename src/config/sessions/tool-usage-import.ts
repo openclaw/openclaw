@@ -25,7 +25,7 @@ function timestamp(value: unknown, fallback: number): number {
   return typeof time === "number" && Number.isFinite(time) ? time : fallback;
 }
 
-/** One session at a time; only call identity and target survive the current payload. */
+/** One session at a time; only call identity and dispatch id survive the current payload. */
 export function createToolUsageTranscriptAccumulator(input: {
   catalog: readonly ToolUsageCatalogEntry[];
   since: number;
@@ -37,10 +37,7 @@ export function createToolUsageTranscriptAccumulator(input: {
   const resolve = createToolUsageCatalogResolver(input.catalog);
   const catalogNames = new Map(input.catalog.map((entry) => [entry.id, entry.name]));
   const rows = new Map<string, ToolUsageRow>();
-  const calls = new Map<
-    string,
-    { name: string; target?: string; dispatchId?: string; codeModeControl: boolean }
-  >();
+  const calls = new Map<string, { name: string; dispatchId?: string; codeModeControl: boolean }>();
   const seen = new Set<string>();
   const nestedParents = new Set<string>();
   const dispatches = new Map<
@@ -176,11 +173,11 @@ export function createToolUsageTranscriptAccumulator(input: {
           excluded.wrappers++;
         } else {
           const parent = parentToolCallId ? calls.get(parentToolCallId) : undefined;
-          // A dispatch counts only the target it named; never a same-named other owner.
+          // A dispatch counts only the target it named, resolved with the result's owner
+          // evidence; never a same-named other owner.
           const dispatched =
-            parent?.name === "dispatch_action"
-              ? (parent.target ??
-                (parent.dispatchId === toolName ? resolve(toolName, result) : undefined))
+            parent?.name === "dispatch_action" && parent.dispatchId
+              ? resolve(parent.dispatchId, result)
               : undefined;
           const target =
             parent?.name === "dispatch_action"
@@ -212,10 +209,6 @@ export function createToolUsageTranscriptAccumulator(input: {
             codeModeControl:
               (call.name === "exec" && typeof args?.code === "string") ||
               (call.name === "wait" && typeof args?.runId === "string"),
-            target:
-              call.name === "dispatch_action" && typeof args?.id === "string"
-                ? resolve(args.id)
-                : resolve(call.name),
           });
         }
         return;
@@ -258,8 +251,7 @@ export function createToolUsageTranscriptAccumulator(input: {
       const at = timestamp(message.timestamp, timestamp(envelope?.timestamp, createdAt));
       if (name === "dispatch_action") {
         excluded.wrappers++;
-        const toolId =
-          call?.target ?? (call?.dispatchId ? resolve(call.dispatchId, dispatchResult) : undefined);
+        const toolId = call?.dispatchId ? resolve(call.dispatchId, dispatchResult) : undefined;
         if (toolId) {
           dispatches.set(message.toolCallId, {
             toolId,
