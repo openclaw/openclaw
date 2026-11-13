@@ -123,7 +123,9 @@ it.each(["admission", "preparation", "handler", "handler-response", "response"])
     let unavailable = phase === "admission";
     const assertCurrent = () => {
       grant.signal.throwIfAborted();
-      if (unavailable) throw new GatewayOperatorAccessUnavailableError();
+      if (unavailable) {
+        throw new GatewayOperatorAccessUnavailableError();
+      }
     };
     client.internal = {
       operatorAccessAuthority: {
@@ -138,7 +140,9 @@ it.each(["admission", "preparation", "handler", "handler-response", "response"])
         return;
       }
       effects++;
-      if (phase === "handler") throw new GatewayOperatorAccessUnavailableError();
+      if (phase === "handler") {
+        throw new GatewayOperatorAccessUnavailableError();
+      }
       if (phase === "handler-response") {
         options.respond(
           false,

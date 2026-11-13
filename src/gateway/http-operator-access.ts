@@ -18,14 +18,17 @@ import {
 export function sendGatewayHttpAuthFailure(
   res: ServerResponse,
   authResult: GatewayAuthResult,
+  { retryable = true }: { retryable?: boolean } = {},
 ): void {
   if (authResult.reason === "operator_access_unavailable") {
     if (prepareGatewayHttpErrorResponse(res, "Service Unavailable")) {
       sendJson(res, 503, {
         error: {
-          message: new GatewayOperatorAccessUnavailableError().message,
+          message: retryable
+            ? new GatewayOperatorAccessUnavailableError().message
+            : "Gateway access policy is unavailable. The operation may have completed; check its status before retrying.",
           type: "service_unavailable",
-          retryable: true,
+          retryable,
         },
       });
     }

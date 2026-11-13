@@ -26,7 +26,9 @@ it("recomputes an unclassified failure before revoking a grant that ended withou
           grantId: "original",
           signal: grant.signal,
           assertCurrent() {
-            if (!active) throw new Error("legacy policy denial");
+            if (!active) {
+              throw new Error("legacy policy denial");
+            }
           },
         }),
         resume: () => undefined,
@@ -101,7 +103,9 @@ it.each([
           expect(authority?.signal.aborted).toBe(false);
         }
         instance.resume();
-        for (const authority of authorities) expect(authority?.assertCurrent).not.toThrow();
+        for (const authority of authorities) {
+          expect(authority?.assertCurrent).not.toThrow();
+        }
         return;
       } else {
         await instance.dispose();

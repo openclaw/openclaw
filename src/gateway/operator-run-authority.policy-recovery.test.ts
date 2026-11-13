@@ -65,7 +65,9 @@ it.each(["closed-scope", "policy-error"])(
               grantId: "lineage-grant",
               assertCurrent: () => {
                 grant.signal.throwIfAborted();
-                if (unavailable) throw new Error("synthetic policy failure");
+                if (unavailable) {
+                  throw new Error("synthetic policy failure");
+                }
               },
             }),
           },
@@ -142,15 +144,21 @@ it.each(["closed-scope", "policy-error"])(
         unavailable = false;
         expect(active).not.toThrow();
         expect(model.assertCurrent).not.toThrow();
-        for (const run of runs) expect(getAdmittedRunDelegatedAuthority(run)).toBeDefined();
+        for (const run of runs) {
+          expect(getAdmittedRunDelegatedAuthority(run)).toBeDefined();
+        }
         // A real grant revocation still cancels the same authority and refuses every descendant.
         grant.abort(new Error("grant revoked"));
         expect(captured.authority.signal?.aborted).toBe(true);
         expect(model.signal.aborted).toBe(true);
         expect(active).toThrow();
-        for (const run of runs) expect(getAdmittedRunDelegatedAuthority(run)).toBeUndefined();
+        for (const run of runs) {
+          expect(getAdmittedRunDelegatedAuthority(run)).toBeUndefined();
+        }
       } finally {
-        for (const release of releases.toReversed()) release();
+        for (const release of releases.toReversed()) {
+          release();
+        }
         rollbackStagedPluginRegistry(previous);
       }
     }),

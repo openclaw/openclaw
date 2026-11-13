@@ -350,11 +350,14 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               }
             });
       const publishResponse = (
-        ok: boolean,
-        payload?: unknown,
-        error?: ErrorShape,
+        initialOk: boolean,
+        initialPayload?: unknown,
+        initialError?: ErrorShape,
         meta?: Record<string, unknown>,
       ) => {
+        let ok = initialOk;
+        let payload = initialPayload;
+        let error = initialError;
         try {
           if (!policyResponse?.pending && !hasCurrentClientAuthority()) {
             diagnostics?.response("suppressed");
@@ -369,7 +372,9 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           payload = undefined;
           error = errorShapeFromError(ErrorCodes.UNAVAILABLE, cause);
         }
-        if (error) error = responseOutcome(error);
+        if (error) {
+          error = responseOutcome(error);
+        }
         try {
           let responseOk = ok;
           let responseError = error;

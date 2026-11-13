@@ -5,7 +5,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 export const GatewayOperatorAccessUnavailableError = resolveGlobalSingleton(
   Symbol.for("openclaw.gatewayOperatorAccessUnavailableError"),
   () =>
-    class GatewayOperatorAccessUnavailableError extends Error {
+    class extends Error {
       constructor() {
         super("Gateway access policy is unavailable; retry the operation.");
         this.name = "GatewayOperatorAccessUnavailableError";

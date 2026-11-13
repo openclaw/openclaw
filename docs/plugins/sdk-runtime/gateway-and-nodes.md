@@ -192,7 +192,9 @@ The Gateway resolves `requiredByRole` from the person's effective role and this
 plugin's ID; role-bound policies use that fact instead of inferring a binding
 from the default role's name.
 Return `undefined` when the policy does not govern that person. Otherwise return
-`{ assertCurrent, signal }`; reject admission when the required access is absent.
+`{ assertCurrent, signal }`. For an explicit role binding, return `undefined` when
+the required grant is absent; otherwise deny access with an already-aborted signal.
+Throw only when evaluation is unavailable, not to report a policy denial.
 
 A named Gateway role can set `accessPolicyPlugin` to your plugin ID. That role
 requires a current authority from your registered policy, including when the
@@ -219,6 +221,8 @@ treating an unclassified exception as a denial. An unavailable evaluation return
 it is retryable and does not authorize the failed operation. After dispatch starts,
 the response instead warns that execution may have completed and is not automatically
 retryable. HTTP authentication returns a retryable 503 for policy unavailability.
+Later HTTP revalidation failures return 503 with the uncertain-outcome warning;
+an already-started response is closed without framing partial data as complete.
 The log includes the redacted inner
 error name and message. Successful responses remain subject to current authority,
 and the next operation checks the policy again.
