@@ -27,7 +27,8 @@ vi.mock("../tool-result-context-guard.js", () => ({
   installContextEngineLoopHook: hoisted.installContextEngineLoopHook,
   installToolResultContextGuard: hoisted.installToolResultContextGuard,
 }));
-vi.mock("../../tools/computer-tool.js", () => ({
+vi.mock("../../tools/computer-tool-shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tools/computer-tool-shared.js")>()),
   invalidateComputerFrameIfMissing: hoisted.invalidateComputerFrameIfMissing,
 }));
 vi.mock("../cache-ttl.js", () => ({

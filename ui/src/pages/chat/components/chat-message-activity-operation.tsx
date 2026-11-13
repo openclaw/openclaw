@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { ActivityOperationProps } from "./chat-message-bubble-options.ts";
@@ -16,7 +16,9 @@ export function descendantCards(group: ToolCallGroup<ToolCard>) {
 
 export function ActivityOperation(props: ActivityOperationProps) {
   const context = () => props.contexts.get(props.group.card)!;
-  const expanded = () => props.options.isToolExpanded?.(context().disclosureId) ?? false;
+  const expanded = createMemo(
+    () => props.options.isToolExpanded?.(context().disclosureId, props.group.card) ?? false,
+  );
   return (
     <ChatToolCard
       card={props.group.card}

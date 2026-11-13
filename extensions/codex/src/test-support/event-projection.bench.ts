@@ -62,7 +62,7 @@ const transcript = () =>
     params,
     "thread",
     "turn",
-    new CodexToolProgressProjection(params),
+    new CodexToolProgressProjection(params, () => {}),
     () => 0,
   );
 const workloads = {

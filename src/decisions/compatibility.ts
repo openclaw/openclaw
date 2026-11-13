@@ -1,7 +1,7 @@
 import { DecisionContractError } from "./contract-error.js";
 import type { DecisionEntry } from "./input-types.js";
 import { validateDecisionBatchV2 } from "./input-validation.js";
-import { validateDecisionResultV2 } from "./result-validation.js";
+import { validateAdmittedDecisionResultV2 } from "./result-validation.js";
 import type { DecisionBatchResultV2, DecisionBatchV2 } from "./types-v2.js";
 import type { DecisionBatch, DecisionBatchResult } from "./types.js";
 import { finiteJson } from "./validation-common.js";
@@ -85,7 +85,7 @@ export function decisionResultV1ToV2(
   ) {
     return undefined;
   }
-  return validateDecisionResultV2(v2Batch, result) ? result : undefined;
+  return validateAdmittedDecisionResultV2(v2Batch, result) ? result : undefined;
 }
 
 /** Narrow only losslessly: V1 cannot carry explicit decisions, errors, or extra usage/metadata. */
@@ -94,7 +94,11 @@ export function decisionResultV2ToV1(
   result: DecisionBatchResultV2,
 ): DecisionBatchResult | undefined {
   const v1Batch = decisionBatchV2ToV1(batch);
-  if (!v1Batch || !validateDecisionResultV2(batch, result) || result.metadata !== undefined) {
+  if (
+    !v1Batch ||
+    !validateAdmittedDecisionResultV2(batch, result) ||
+    result.metadata !== undefined
+  ) {
     return undefined;
   }
   if (

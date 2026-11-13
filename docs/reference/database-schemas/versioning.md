@@ -226,6 +226,15 @@ all incompatibilities without modifying the source files.
 
 Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
 
+Template setup adds a bare nullable `workspace_setup_state.bootstrap_deferred INTEGER`
+column through the startup-additive owner. A value of `1` keeps package bootstrap
+seeding with the initializer across restarts and failed dependency setup; normal
+workspace preparation does not seed defaults or mark setup complete. Successful
+package seeding clears the flag. Existing milestones and attestation hashes are
+unchanged, and existing rows need no backfill. Older builds ignore the column and
+do not resume this new Template setup flow; downgrading is not a setup retry.
+The numeric schema version and backup policy are unchanged.
+
 Session-window preview caching adds bare nullable `row_transcript_json TEXT` and
 `row_transcript_updated_at INTEGER` columns without a numeric version bump.
 Admission adds the columns to existing stores; each row fills lazily through the
@@ -550,8 +559,6 @@ older build is running it cannot enforce generation binding, and changes that
 preserve every observable job value and timestamp cannot be reconstructed later.
 No backfill or schema-version bump is required. The accepted design and rollback
 contract are recorded in [#142153](https://github.com/openclaw/openclaw/pull/142153).
-
-Template Add bootstrap provenance uses the first-use column `workspace_setup_state.bootstrap_supplied INTEGER`: only the write that records a workspace's first `bootstrap_seeded_at` from Template Add adds and sets it, and Template Add rollback clears it with that seed. Opening or upgrading a database never adds it, so existing rows and older readers are unaffected; older writers leave it untouched and treat those workspaces like any other.
 
 Retained ACP imports use the same-version additive-column exception for the bare
 nullable `session_nodes.legacy_acp_migration_json TEXT` column. Legacy session

@@ -17,6 +17,8 @@ import { captureOutput, repoRoot, scriptFiles } from "./run-vitest.test-support.
 import { createPreparedWorkerCompiler } from "./vitest-worker-artifacts.prepared.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// These retention fixtures deliberately keep nested namespaces under one owner.
+const shortTempRoot = process.platform === "win32" ? undefined : fs.realpathSync.native("/tmp");
 const cacheDirs = useAutoCleanupTempDirTracker(afterAll);
 let compileCache: string;
 beforeAll(() => {
@@ -163,7 +165,7 @@ posixIt.each([
 ])(
   "$route cleans its namespace after $pool completion ($homePolicy, failed run: $failRun, paused after acknowledgement: $pauseAfterAck, first-file failure: $failFirstFile)",
   async ({ route, pool, failRun, pauseAfterAck, failFirstFile, homePolicy }) => {
-    const root = tempDirs.make("oc-vt-state-");
+    const root = tempDirs.make("oc-vt-state-", shortTempRoot);
     const files = scriptFiles(root);
     const profileOnly = homePolicy === "profile-only" || homePolicy === "profile-only-parent-shell";
     const { tmp, home } = prepareVitestFixture(root, profileOnly ? "home-$source" : "home");
@@ -743,7 +745,7 @@ console.log(JSON.stringify({ namespace: os.tmpdir(), homes: [os.homedir(), homed
 );
 
 it("retains native home after child and pipes close when descendants cannot be verified", async () => {
-  const root = tempDirs.make("oc-vt-home-retained-");
+  const root = tempDirs.make("oc-vt-home-retained-", shortTempRoot);
   const parent = createVitestResourceOwner(root);
   const log = vi.spyOn(console, "error").mockImplementation(() => {});
   const { child, completion } = spawnOwnedVitestProcess({
@@ -787,9 +789,7 @@ posixIt.for([
   { timeout: 80_000 },
   async ({ pool, mode }, { signal }) =>
     nestedLifetime.run(async () => {
-      const evidence = path.join(repoRoot, ".artifacts/nested-retention");
-      fs.mkdirSync(evidence, { recursive: true });
-      const root = fs.mkdtempSync(path.join(evidence, `${pool}-${mode}-`));
+      const root = fs.mkdtempSync(path.join(shortTempRoot!, "vt-retain-"));
       prepareVitestFixture(root);
       await proveNestedRetention(root, pool, signal, mode);
       expect(fs.existsSync(root), "successful joined fixture must be removed").toBe(false);
@@ -823,7 +823,7 @@ posixIt.each([
   "missing registry",
   "missing parent registry",
 ])("requires positive nested release evidence: %s", async (mode) => {
-  const root = tempDirs.make("oc-vt-receipt-");
+  const root = tempDirs.make("oc-vt-receipt-", shortTempRoot);
   const parent = createVitestResourceOwner(root);
   const receipt = path.join(root, "namespace");
   const { completion } = spawnOwnedVitestProcess({
@@ -902,7 +902,7 @@ posixIt("rejects resource registration before allocating inputs or launching wor
 posixIt(
   "retains the exact namespace with recovery guidance when group verification fails",
   async () => {
-    const root = tempDirs.make("oc-vt-unverified-");
+    const root = tempDirs.make("oc-vt-unverified-", shortTempRoot);
     createVitestResourceOwner(root);
     const receipt = path.join(root, "namespace");
     const { child, completion } = spawnOwnedVitestProcess({

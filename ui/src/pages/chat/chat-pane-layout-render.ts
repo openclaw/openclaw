@@ -237,6 +237,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       this.sessionPresentation === "desktop" &&
       !this.onBackToSubagents &&
       chatProps.disabledBanner?.presentation === "compact";
+    const canShowNewMessages = this.sessionPresentation !== "desktop" || conversationVisible;
     const paneChatProps: ChatProps = merge(chatProps, {
       onConversationFrameRef: (element) => this.registerDetailsElement("frame", element),
       onFooterElementRef: (element) => this.registerDetailsElement("footer", element),
@@ -245,9 +246,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
           ? { ...chatProps.disabledBanner, stop: subagentStop }
           : chatProps.disabledBanner,
       mobileComposer: Boolean(mobileHost),
-      showNewMessages:
-        (this.sessionPresentation !== "desktop" || conversationVisible) &&
-        chatProps.showNewMessages,
+      get showNewMessages() {
+        return canShowNewMessages && chatProps.showNewMessages;
+      },
       mobileActivities: mobileHost
         ? this.mobileChatActivities(state, selectedSession, chatProps)
         : undefined,
@@ -329,7 +330,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
     });
     const discussion = this.sessionDiscussionSource(state, state.sessionKey.trim());
     const discussionState = this.sessionDiscussion.snapshot.states.get(state.sessionKey.trim());
-    const discussionAvailable = discussionState === "available" || discussionState === "open";
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
     const companionSessionKey = state.sessionKey;
     // Publish the mutable owner's current fields across the reactive property boundary.
@@ -514,7 +514,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       connected: state.connected,
       onClearCompanion: this.clearSessionCompanion,
       discussion,
-      discussionAvailable,
+      discussionAvailable: discussionState === "available" || discussionState === "open",
       discussionOpenUrl: discussion?.openUrl ?? null,
       discussionSourceGeneration: this.connectionGeneration,
       pluginPanels: this.context.plugins.registrations("panels"),
@@ -665,6 +665,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
     const region = renderSidebarRegion({
       onPanelReady: () => this.flushPendingPanelToggles(),
       mobileScrollFades: this.mobileScrollFades,
+      visualPresentation: headerPresentation,
       onRegionElementRef: (element) => {
         this.sidebarRegionElement = element;
         const release = this.registerDetailsElement("pane", element);
@@ -708,10 +709,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       background: {
         context: this.context,
         surface: "session",
-        presented:
-          this.presented &&
-          this.visuallyPresented &&
-          isSidebarSlotVisible(sidebarLayout, "conversation"),
+        presented: this.presented && this.visuallyPresented && conversationVisible,
       },
       overlays: {
         presentation: panePresentation,

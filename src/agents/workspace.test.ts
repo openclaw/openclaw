@@ -38,7 +38,6 @@ import {
   loadWorkspaceBootstrapFiles,
   resolveWorkspaceBootstrapStatus,
   resolveDefaultAgentWorkspaceDir,
-  seedWorkspaceBootstrap,
   WORKSPACE_VANISHED_ERROR_CODE,
 } from "./workspace.js";
 
@@ -227,20 +226,6 @@ it.each([SOUL, IDENTITY, USER])(
   },
 );
 
-it("keeps a supplied BOOTSTRAP.md across restarts until the agent removes it", async () => {
-  await seedWorkspaceBootstrap({ dir: tempDir, content: Buffer.from("Ask for the codeword.\n") });
-  await writeWorkspaceFile(SOUL, "Template soul.\n");
-  for (const profile of ["# USER.md\n\n- **Name:** Configured\n", undefined]) {
-    await expect(ensureWorkspace()).resolves.toMatchObject({ bootstrapPending: true });
-    expect(await readWorkspaceFile(BOOTSTRAP)).toBe("Ask for the codeword.\n");
-    expect(await readWorkspaceState(tempDir)).toMatchObject({ bootstrapSupplied: true });
-    closeOpenClawStateDatabaseForTest();
-    await (profile ? writeWorkspaceFile(USER, profile) : fs.rm(workspacePath(BOOTSTRAP)));
-  }
-  await expect(ensureWorkspace()).resolves.toMatchObject({ bootstrapPending: false });
-  await expectCompletedWithoutBootstrap(tempDir);
-});
-
 it("accepts a recently attested workspace when only custom skills survive", async () => {
   await ensureWorkspace();
   await replaceWorkspace({ "skills/.DS_Store": "", "skills/local-skill/SKILL.md": "---\n" });
@@ -286,17 +271,31 @@ it("treats git-backed workspaces as existing even when template files are missin
   await expectCompletedWithoutBootstrap(tempDir);
 });
 
-it("keeps bootstrap status read-only when stale completion evidence exists", async () => {
-  await ensureWorkspace();
-  await writeWorkspaceFile(IDENTITY, "# IDENTITY.md\n\n- **Name:** Example\n");
-  await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
-  await fs.access(workspacePath(BOOTSTRAP));
-  expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBeUndefined();
-  await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(true);
-  await ensureWorkspace();
-  await expectCompletedWithoutBootstrap(tempDir);
-  await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
-});
+it.each(["current", "6.1", "7.1", "8.2", "9.2", "9.3", "9.4", "9.6"])(
+  "keeps %s stock bootstrap pending across restart until profiles are edited",
+  async (version) => {
+    await ensureWorkspace();
+    if (version === "current") {
+      const bootstrap = await readWorkspaceFile(BOOTSTRAP);
+      expect(createHash("sha256").update(bootstrap).digest("hex")).toBe(
+        "0bcb8c9187e32c87bc31dc3e2fa83c4569bfd13267c0bf9766a635dac3df33a3",
+      );
+    } else {
+      const fixture = new URL(`../../test/fixtures/bootstrap/2026.${version}.md`, import.meta.url);
+      await writeWorkspaceFile(BOOTSTRAP, await fs.readFile(fixture, "utf8"));
+    }
+    closeOpenClawStateDatabaseForTest();
+    await expect(ensureWorkspace()).resolves.toMatchObject({ bootstrapPending: true });
+    await writeWorkspaceFile(IDENTITY, "# IDENTITY.md\n\n- **Name:** Example\n");
+    await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
+    await fs.access(workspacePath(BOOTSTRAP));
+    expect((await readWorkspaceState(tempDir)).setupCompletedAt).toBeUndefined();
+    await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(true);
+    await ensureWorkspace();
+    await expectCompletedWithoutBootstrap(tempDir);
+    await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+  },
+);
 
 it("does not read setup state for an absent bootstrap file and refreshes after a setup wait", async () => {
   const actual = workspaceState.readWorkspaceStateSnapshot;
@@ -327,6 +326,28 @@ it("propagates a transient profile read after the retry budget is exhausted", as
     return await originalReadFile(filePath, options);
   });
   await expect(ensureWorkspace()).rejects.toMatchObject({ code: "EAGAIN" });
+});
+
+it("keeps manually preseeded custom onboarding pending without a Template receipt", async () => {
+  const bootstrap = "Ask which competitors to monitor before starting research.\n";
+  await writeWorkspaceFile(BOOTSTRAP, bootstrap);
+  await writeWorkspaceFile(IDENTITY, "# IDENTITY.md\n\n- **Name:** Competitor Watch\n");
+  await writeWorkspaceFile(USER, "Research public product releases.\n");
+  expect((await readWorkspaceStateSnapshot(tempDir)).setupExists).toBe(false);
+
+  for (let restart = 0; restart < 2; restart++) {
+    closeOpenClawStateDatabaseForTest();
+    await expect(ensureWorkspace()).resolves.toMatchObject({ bootstrapPending: true });
+    expect(await readWorkspaceFile(BOOTSTRAP)).toBe(bootstrap);
+    const snapshot = await readWorkspaceStateSnapshot(tempDir);
+    expect(snapshot.setup.setupCompletedAt).toBeUndefined();
+    expect(snapshot.attestation?.generatedHashes.get(BOOTSTRAP)).toBeUndefined();
+    await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
+  }
+
+  await fs.unlink(workspacePath(BOOTSTRAP));
+  await expect(ensureWorkspace()).resolves.toMatchObject({ bootstrapPending: false });
+  await expectCompletedWithoutBootstrap(tempDir);
 });
 
 it("records stale bootstrap completion when BOOTSTRAP.md cleanup fails", async () => {

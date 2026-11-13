@@ -8,6 +8,7 @@ type LazyColumn = readonly [
 
 // Added after v6 shipped; first-use-only columns stay absent until their feature writes.
 const lazyColumns = [
+  ["workspace_setup_state", "bootstrap_deferred", "INTEGER", true],
   ["agent_deletion_journal", "phase", "TEXT", true],
   ["agent_database_leases", "provenance", "TEXT", true],
   ["user_profile_identities", "canonical_login", "TEXT"],
@@ -52,7 +53,6 @@ const lazyColumns = [
   ["cron_jobs", "grant_definition_revision", "TEXT"],
   ["cron_jobs", "grant_definition_generation", "INTEGER"],
   ["cron_jobs", "grant_definition_updated_at", "INTEGER"],
-  ["workspace_setup_state", "bootstrap_supplied", "INTEGER", true],
 ] as const satisfies readonly LazyColumn[];
 
 function lazyColumnDefinitions(firstUseOnly?: boolean) {

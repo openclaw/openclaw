@@ -47,6 +47,7 @@ import {
   isStreamingJsonParseError,
   renderRateLimitOrOverloadedCopy,
 } from "../failover/user-copy.js";
+import { MODEL_REQUEST_POLICY_DENIED_TEXT } from "../harness/errors.js";
 import {
   formatSandboxToolPolicyBlockedMessage,
   type resolveSandboxRuntimeStatus,
@@ -332,6 +333,9 @@ export function formatUserFacingAssistantErrorText(
     return `⚠️ ${approvalMessage}`;
   }
   const facts = classifyAssistantErrorFacts(msg, opts);
+  if (!facts.storageFailure && rawError === MODEL_REQUEST_POLICY_DENIED_TEXT) {
+    return MODEL_REQUEST_POLICY_DENIED_TEXT;
+  }
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
   const schemaFriendlyError =

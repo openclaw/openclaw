@@ -9,7 +9,11 @@ import {
   signOutOfOpenClawId,
 } from "../../lib/openclaw-id/account.ts";
 import { signOutOfRemoteOpenClawId } from "../../lib/openclaw-id/remote-sign-out.ts";
-import type { OpenClawIdStatusResult } from "../../lib/openclaw-id/types.ts";
+import type {
+  OpenClawIdPublication,
+  OpenClawIdSignedIn,
+  OpenClawIdStatusResult,
+} from "../../lib/openclaw-id/types.ts";
 import {
   openClawIdErrorToast,
   type OpenClawIdErrorContext,
@@ -20,6 +24,7 @@ import { renderSidebarMenuAction } from "../app-sidebar-dropdown.tsx";
 import { showConfirmDialog } from "../confirm-dialog.ts";
 import { Icon, type IconName } from "../solid/icon.tsx";
 import type { MenuEntry } from "../solid/menu.tsx";
+import { StrokeIcon } from "../solid/stroke-icon.tsx";
 import { clawNameFromHostname } from "./claw-name.ts";
 
 registerEnglishCatalog(registerOpenClawIdEnglish);
@@ -29,15 +34,20 @@ const MAKE_REACHABLE = `${VALUE_PREFIX}make-reachable`;
 const DEVICES = `${VALUE_PREFIX}devices`;
 const SIGN_OUT = `${VALUE_PREFIX}sign-out`;
 const COPY_LINK = `${VALUE_PREFIX}copy-link`;
+const MOVE_KEYS = `${VALUE_PREFIX}move-keys`;
+const PUBLISH_KEYS = `${VALUE_PREFIX}publish-keys`;
 
 /** Derives the compact account header without ever displaying an account ID. */
 export function openClawIdMenuIdentity(status: OpenClawIdStatusResult) {
   const identity = status.connection;
   if (status.channel === "tunnel") {
     if (identity?.kind === "member") {
-      const role = t(
-        identity.role === "viewer" ? "openclawId.roleViewer" : "openclawId.roleOperator",
-      );
+      const role =
+        identity.role === "operator"
+          ? t("openclawId.roleOperator")
+          : identity.role === "viewer"
+            ? t("openclawId.roleViewer")
+            : identity.role;
       return {
         name: identity.email || t("openclawId.accountFallback"),
         detail: t("openclawId.memberRoleOnClaw", {
@@ -58,7 +68,20 @@ export function openClawIdMenuIdentity(status: OpenClawIdStatusResult) {
       detail: email ? `${email} · ${t("openclawId.ownerRole")}` : t("openclawId.ownerRole"),
     };
   }
-  if (openClawIdAccount()) {
+  const account = openClawIdAccount();
+  if (status.accountSignIn === "device") {
+    // A personal sign-in already names the person; this browser's OpenClaw ID (verified by
+    // the Gateway when it was issued) is shown beside it and grants nothing here.
+    return account
+      ? {
+          name: account.name || account.email || t("openclawId.accountFallback"),
+          detail: account.email
+            ? `${account.email} · ${t("openclawId.menuTitle")}`
+            : t("openclawId.menuTitle"),
+        }
+      : null;
+  }
+  if (account) {
     // Browser storage never supplies the displayed profile; only this RPC does.
     const email = identity?.kind === "local" ? identity.accountEmail : null;
     const name = identity?.kind === "local" ? identity.accountName : null;
@@ -77,13 +100,22 @@ function statusRow(
   icon: IconName,
   detail?: string | null,
   online?: boolean,
+  attention?: boolean,
 ): MenuEntry {
   return {
     kind: "content",
     id: `openclaw-id-${id}`,
     content: (
-      <div class="sidebar-openclaw-id__status">
-        <span class="nav-item__icon" aria-hidden="true">
+      <div
+        class="sidebar-openclaw-id__status"
+        data-attention={attention ? "true" : undefined}
+        role={attention ? "status" : undefined}
+      >
+        <span
+          class="nav-item__icon"
+          aria-hidden="true"
+          style={{ color: attention ? "var(--warn)" : undefined }}
+        >
           <Icon name={icon} />
         </span>
         <span class="sidebar-openclaw-id__lines">
@@ -108,18 +140,65 @@ function makeReachableBlocker(status: OpenClawIdStatusResult): string | undefine
   return status.services.loaderDomain ? undefined : t("openclawId.needsLoaderDomain");
 }
 
-/** Status and actions for the single OpenClaw ID section; Access lives in Pages. */
-export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): MenuEntry[] {
+// Keys this computer cannot use, or newer published keys, each with its fix (local only).
+function keyAttentionEntries(
+  status: OpenClawIdStatusResult,
+  publication: OpenClawIdPublication | null | undefined,
+): MenuEntry[] {
+  const failed = publication?.state === "failed" ? publication.code : undefined;
+  const refused = status.status.state === "keys_refused";
+  const warning = refused
+    ? "keys-refused"
+    : failed === "binding_superseded"
+      ? "binding-superseded"
+      : failed === "needs_link_code"
+        ? "needs-link-code"
+        : null;
+  if (!warning) {
+    return [];
+  }
+  const label = refused
+    ? status.status.reason === "key_mismatch"
+      ? "keysMismatch"
+      : "keysMissing"
+    : failed === "binding_superseded"
+      ? "bindingSuperseded"
+      : "needsLinkCode";
+  const detail = refused ? "keysRefusedDetail" : `${label}Detail`;
+  const entries = [
+    statusRow(
+      warning,
+      t(`openclawId.${label}`),
+      "alertTriangle",
+      t(`openclawId.${detail}`),
+      undefined,
+      true,
+    ),
+  ];
+  if (warning === "needs-link-code") {
+    entries.push(renderSidebarMenuAction(PUBLISH_KEYS, t("openclawId.publishNewKeys"), "radio"));
+  }
+  return entries;
+}
+
+/**
+ * One claw card, followed by its account actions. `publication`
+ * is the owner-only publication state (`openclawId.people`), read on this computer.
+ */
+export function openClawIdMenuEntries(
+  status: OpenClawIdStatusResult | null,
+  publication?: OpenClawIdPublication | null,
+  copied: () => boolean = () => false,
+): MenuEntry[] {
   if (!status || status.status.state === "off") {
     return [];
   }
   if (status.channel !== "tunnel" && !openClawIdAccount()) {
-    const blocker =
-      status.channel !== "local_operator"
-        ? t("openclawId.signInLocalOnly")
-        : !status.services.clientId
-          ? t("openclawId.signInUnconfigured")
-          : undefined;
+    const blocker = !status.accountSignIn
+      ? t("openclawId.signInLocalOnly")
+      : !status.services.clientId
+        ? t("openclawId.signInUnconfigured")
+        : undefined;
     return [
       {
         id: SIGN_IN,
@@ -131,23 +210,37 @@ export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): Me
             {...attributes}
             type="button"
             role="button"
-            class="btn sidebar-openclaw-id__sign-in"
-            title={blocker}
+            class="oc-menu-item sidebar-openclaw-id__card sidebar-openclaw-id__status sidebar-openclaw-id__sign-in"
+            aria-description={blocker}
             disabled={attributes["aria-disabled"] === "true"}
           >
-            {t("openclawId.signIn")}
+            <span class="nav-item__icon" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="m10 17 5-5-5-5M15 12H3M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+              </svg>
+            </span>
+            <span class="sidebar-openclaw-id__lines">
+              <span>{t("openclawId.signIn")}</span>
+              {blocker ? <span class="sidebar-openclaw-id__detail">{blocker}</span> : undefined}
+            </span>
+            {!blocker ? (
+              <span class="oc-menu-item__details">
+                <Icon name="arrowRight" />
+              </span>
+            ) : undefined}
           </button>
         ),
       },
     ];
   }
-  const entries: MenuEntry[] = [
-    {
-      kind: "content",
-      id: "openclaw-id-title",
-      content: <div class="sidebar-customize-menu__title">{t("openclawId.menuTitle")}</div>,
-    },
-  ];
+  const card: MenuEntry[] = [];
   if (status.channel === "tunnel") {
     const connection = status.connection;
     const detail =
@@ -163,40 +256,101 @@ export function openClawIdMenuEntries(status: OpenClawIdStatusResult | null): Me
                 t("openclawId.accountFallback"),
             })
           : null;
-    entries.push(statusRow("encrypted", t("openclawId.encryptedConnection"), "lock", detail));
+    card.push(statusRow("encrypted", t("openclawId.encryptedConnection"), "lock", detail));
   } else if (status.link.linked && status.link.hostname && openClawIdAccount()) {
-    entries.push(
-      statusRow(
-        "reachable",
-        t("openclawId.remoteAccessOn"),
-        "radio",
-        status.link.hostname,
-        status.status.tunnel?.relayOnline === true,
-      ),
-    );
-    if (status.channel === "local_operator") {
-      entries.push(renderSidebarMenuAction(COPY_LINK, t("openclawId.copyRemoteLink"), "link"));
+    const local = status.channel === "local_operator";
+    if (local && status.status.state !== "keys_refused") {
+      card.push({
+        id: COPY_LINK,
+        label: t("openclawId.copyRemoteLink"),
+        closeOnSelect: false,
+        class: "sidebar-openclaw-id__card sidebar-openclaw-id__linked",
+        attributes: {
+          "aria-description": status.link.hostname,
+          get "data-copied"() {
+            return copied() ? "true" : undefined;
+          },
+        },
+        content: (
+          <span class="sidebar-openclaw-id__linked-content">
+            <span class="nav-item__icon" aria-hidden="true">
+              <Icon name="radio" />
+            </span>
+            <span class="sidebar-openclaw-id__label">{t("openclawId.remoteAccessOn")}</span>
+            <span class="sidebar-openclaw-id__trailing">
+              <span
+                class="sidebar-openclaw-id__pill"
+                data-online={status.status.tunnel?.relayOnline === true ? "true" : "false"}
+              >
+                {t(
+                  status.status.tunnel?.relayOnline === true
+                    ? "openclawId.online"
+                    : "openclawId.offline",
+                )}
+              </span>
+              <span class="sidebar-openclaw-id__copy" aria-hidden="true">
+                <span class="sidebar-openclaw-id__copy-a">
+                  <Icon name="copy" />
+                </span>
+                <span class="sidebar-openclaw-id__copy-b">
+                  <Icon name="check" />
+                </span>
+              </span>
+            </span>
+            <span class="sidebar-openclaw-id__detail">{status.link.hostname}</span>
+          </span>
+        ),
+      });
+    } else {
+      if (status.status.state !== "keys_refused") {
+        card.push(
+          statusRow(
+            "reachable",
+            t("openclawId.remoteAccessOn"),
+            "radio",
+            status.link.hostname,
+            status.status.tunnel?.relayOnline === true,
+          ),
+        );
+      }
+      if (local) {
+        card.push(renderSidebarMenuAction(COPY_LINK, t("openclawId.copyRemoteLink"), "link"));
+      }
     }
   } else {
     const blocker = makeReachableBlocker(status);
-    entries.push(
+    card.push(
       renderSidebarMenuAction(MAKE_REACHABLE, t("openclawId.makeReachable"), "radio", {
         disabled: Boolean(blocker),
         title: blocker,
+        details: <Icon name="arrowRight" />,
       }),
     );
   }
+  const entries: MenuEntry[] = [
+    {
+      kind: "group",
+      id: "openclaw-id-card",
+      class:
+        status.channel === "local_operator" &&
+        status.link.linked &&
+        status.status.state !== "keys_refused"
+          ? undefined
+          : "sidebar-openclaw-id__card",
+      items: card,
+    },
+  ];
+  if (status.channel === "local_operator" && status.link.linked && openClawIdAccount()) {
+    entries.push(...keyAttentionEntries(status, publication));
+    entries.push(renderSidebarMenuAction(MOVE_KEYS, t("openclawId.moveToNewKeys"), "key"));
+  }
   if (status.owner && status.link.linked && (status.channel === "tunnel" || openClawIdAccount())) {
-    entries.push(
-      renderSidebarMenuAction(DEVICES, t("openclawId.yourDevices"), "monitor", {
-        details: <span class="sidebar-openclaw-id__count">{status.ownerDeviceCount ?? 0}</span>,
-      }),
-    );
+    entries.push(renderSidebarMenuAction(DEVICES, t("openclawId.yourDevices"), "monitor"));
   }
   return entries;
 }
 
-/** Sign-out follows Settings; remote sessions use the loader's actual mechanism. */
+/** Sign-out is the final account action; remote sessions use the loader's actual mechanism. */
 export function openClawIdSignOutEntries(status: OpenClawIdStatusResult | null): MenuEntry[] {
   if (!status || status.status.state === "off") {
     return [];
@@ -204,9 +358,23 @@ export function openClawIdSignOutEntries(status: OpenClawIdStatusResult | null):
   const available =
     status.channel === "tunnel"
       ? Boolean(navigator.serviceWorker?.controller)
-      : status.channel === "local_operator" && Boolean(openClawIdAccount());
+      : Boolean(status.accountSignIn && openClawIdAccount());
   return available
-    ? [renderSidebarMenuAction(SIGN_OUT, t("openclawId.signOut"), "arrowRight")]
+    ? [
+        {
+          id: SIGN_OUT,
+          label: t("openclawId.signOut"),
+          class: "sidebar-customize-menu__item",
+          icon: (
+            <span class="nav-item__icon" aria-hidden="true">
+              <StrokeIcon>
+                <path d="m16 17 5-5-5-5M21 12H9M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              </StrokeIcon>
+            </span>
+          ),
+          content: <span class="sidebar-customize-menu__text">{t("openclawId.signOut")}</span>,
+        },
+      ]
     : [];
 }
 
@@ -252,6 +420,11 @@ function offerMakeReachable(
   });
 }
 
+// The browser's sign-in, for actions only the operator on this computer may run.
+function localSignedIn(status: OpenClawIdStatusResult): OpenClawIdSignedIn | null {
+  return status.channel === "local_operator" ? openClawIdAccount() : null;
+}
+
 /**
  * Runs an OpenClaw ID menu command. Returns false for values it does not own.
  * Call synchronously from the menu selection so the sign-in popup keeps the
@@ -263,6 +436,8 @@ export function selectOpenClawIdMenuValue(
     status: OpenClawIdStatusResult | null;
     client: GatewayBrowserClient | null | undefined;
     basePath: string;
+    onKeysChanged?: () => void;
+    onLinkCopied?: () => void;
   },
 ): boolean {
   if (!value.startsWith(VALUE_PREFIX) || !context.status || context.status.status.state === "off") {
@@ -274,12 +449,15 @@ export function selectOpenClawIdMenuValue(
       (await import("./owner-devices-dialog.tsx")).showOwnerDevicesDialog({ client }),
     );
   } else if (value === COPY_LINK && status?.channel === "local_operator" && status.link.hostname) {
-    void copyToClipboard(`https://${status.link.hostname}`).then((copied) =>
+    void copyToClipboard(`https://${status.link.hostname}`).then((copied) => {
+      if (copied) {
+        context.onLinkCopied?.();
+      }
       showToast({
         severity: copied ? "success" : "error",
         message: t(copied ? "openclawId.remoteLinkCopied" : "openclawId.remoteLinkCopyFailed"),
-      }),
-    );
+      });
+    });
   } else if (value === SIGN_OUT) {
     if (status?.channel === "tunnel") {
       openDialog(signOutOfRemoteOpenClawId, "signOut");
@@ -295,7 +473,16 @@ export function selectOpenClawIdMenuValue(
         }
       }, "signOut");
     }
-  } else if (value === SIGN_IN && client) {
+  } else if (value === SIGN_IN && client && status.accountSignIn === "device") {
+    openDialog(
+      async () =>
+        (await import("./device-sign-in-dialog.tsx")).showDeviceSignInDialog({
+          client,
+          basePath: context.basePath,
+        }),
+      "signIn",
+    );
+  } else if (value === SIGN_IN && client && status.accountSignIn === "popup") {
     signInWithOpenClawId({ client, basePath: context.basePath }).then(
       (signedIn) =>
         offerMakeReachable(client, status, signedIn.email ?? t("openclawId.accountFallback")),
@@ -308,6 +495,33 @@ export function selectOpenClawIdMenuValue(
     );
   } else if (value === MAKE_REACHABLE && client && status?.services.loaderDomain) {
     startMakeReachable(client, status.services.loaderDomain);
+  } else if (value === MOVE_KEYS && client && status.link.hostname) {
+    const signedIn = localSignedIn(status);
+    const hostname = status.link.hostname;
+    if (signedIn) {
+      openDialog(async () => {
+        if (
+          await (
+            await import("./move-keys-dialog.tsx")
+          ).showMoveKeysDialog({ client, signedIn, hostname })
+        ) {
+          context.onKeysChanged?.();
+        }
+      });
+    }
+  } else if (value === PUBLISH_KEYS && client) {
+    const signedIn = localSignedIn(status);
+    if (signedIn) {
+      openDialog(async () => {
+        const { publishWithLinkCode } = await import("../../lib/openclaw-id/rebind.ts");
+        const { publication } = await publishWithLinkCode(client, signedIn);
+        if (publication?.state === "failed") {
+          throw Object.assign(new Error("OpenClaw ID publication failed"), publication);
+        }
+        context.onKeysChanged?.();
+        showToast({ severity: "success", message: t("openclawId.newKeysPublished") });
+      }, "linkCode");
+    }
   }
   return true;
 }

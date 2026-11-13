@@ -16,6 +16,8 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { ProfilePage } from "./profile-page.tsx";
 
+type GatewayEvent = Parameters<Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0]>[0];
+
 export function createConnectedContext(
   request: GatewayBrowserClient["request"],
   selfUser: AuthenticatedUser | null = null,
@@ -29,6 +31,7 @@ export function createConnectedContext(
   });
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const routeListeners = new Set<() => void>();
+  const eventListeners = new Set<(event: GatewayEvent) => void>();
   const subscribe = () => () => undefined;
   const baseContext = {
     router: {
@@ -54,7 +57,10 @@ export function createConnectedContext(
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
-      subscribeEvents: subscribe,
+      subscribeEvents(listener: (event: GatewayEvent) => void) {
+        eventListeners.add(listener);
+        return () => eventListeners.delete(listener);
+      },
       async loadSelfProfile() {
         if (!snapshot.selfUser || !snapshot.client || snapshot.phase !== "connected") {
           return null;
@@ -108,6 +114,11 @@ export function createConnectedContext(
   };
   return {
     context,
+    emitEvent: (event: GatewayEvent) => {
+      for (const listener of eventListeners) {
+        listener(event);
+      }
+    },
     emitNavigation() {
       for (const listener of routeListeners) {
         listener();

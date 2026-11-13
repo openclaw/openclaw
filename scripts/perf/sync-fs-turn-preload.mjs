@@ -7,6 +7,7 @@ import { Session } from "node:inspector/promises";
 import Module, { createRequire, syncBuiltinESMExports } from "node:module";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
+import { getHeapStatistics } from "node:v8";
 import { isMainThread } from "node:worker_threads";
 
 if (isMainThread && process.env.OPENCLAW_SYNC_FS_PROBE_PORT) {
@@ -21,15 +22,50 @@ if (isMainThread && process.env.OPENCLAW_SYNC_FS_PROBE_PORT) {
   const records = new Map();
   const timingOnly = process.env.OPENCLAW_SYNC_FS_PROBE_MODE === "timing";
   let inspector;
-  function observe(name, invoke) {
+  const category = (file) => {
+    if (typeof file === "number") {
+      return "fd";
+    }
+    if (typeof file !== "string") {
+      return "other";
+    }
+    if (file === process.env.OPENCLAW_STATE_DIR) {
+      return "state-root";
+    }
+    if (file.endsWith("/openclaw-agent.sqlite")) {
+      return "agent-db";
+    }
+    if (file.endsWith("/gateway.state.lock")) {
+      return "gateway-lock";
+    }
+    if (/[/\\]state\.[^/\\]+\.lock$/u.test(file)) {
+      return "state-lock";
+    }
+    if (file.includes("/.openclaw/sandbox-skills/skills/")) {
+      return "skills-tree";
+    }
+    if (file.includes("/credentials/")) {
+      return "credential-file";
+    }
+    return "other";
+  };
+  function observe(name, fileCategory, invoke) {
     if (!active || nested) {
       return invoke();
     }
     const stack = new Error().stack.split("\n").slice(3).join("\n");
-    const key = `${name}\n${stack}`;
+    const key = `${name}:${fileCategory}\n${stack}`;
     let row = records.get(key);
     if (!row) {
-      row = { name, stack, count: 0, totalMs: 0, maxMs: 0 };
+      row = {
+        name,
+        category: fileCategory,
+        kind: name.startsWith("fs-safe.native.") ? "native-dispatch" : "synchronous-api",
+        stack,
+        count: 0,
+        totalMs: 0,
+        maxMs: 0,
+      };
       records.set(key, row);
     }
     const start = performance.now();
@@ -55,10 +91,10 @@ if (isMainThread && process.env.OPENCLAW_SYNC_FS_PROBE_PORT) {
     const original = owner[name];
     owner[name] = new Proxy(original, {
       apply(target, receiver, args) {
-        return observe(label, () => Reflect.apply(target, receiver, args));
+        return observe(label, category(args[0]), () => Reflect.apply(target, receiver, args));
       },
       construct(target, args, newTarget) {
-        return observe(label, () => Reflect.construct(target, args, newTarget));
+        return observe(label, category(args[0]), () => Reflect.construct(target, args, newTarget));
       },
     });
   }
@@ -81,8 +117,8 @@ if (isMainThread && process.env.OPENCLAW_SYNC_FS_PROBE_PORT) {
   wrap(fs.realpathSync, "native", "fs.realpathSync.native");
   const require = createRequire(import.meta.url);
   wrap(require("node:sqlite"), "DatabaseSync", "sqlite.DatabaseSync");
-  // fs-safe native calls bypass node:fs. Record native entry points separately;
-  // Async-suffixed methods enqueue work and are not synchronous syscall evidence.
+  // Native entrypoints are dispatch counts, not synchronous syscall evidence:
+  // even unsuffixed methods such as sha256File can enqueue asynchronous work.
   // eslint-disable-next-line no-underscore-dangle -- Intercept native addon exports before fs-safe captures them.
   const load = Module._load;
   const instrumented = new WeakSet();
@@ -130,6 +166,7 @@ if (isMainThread && process.env.OPENCLAW_SYNC_FS_PROBE_PORT) {
         start: performance.now(),
         cpu: process.cpuUsage(),
         thread: process.threadCpuUsage(),
+        allocatedBytes: getHeapStatistics().total_allocated_bytes,
         delayMs: Number(url.searchParams.get("delayMs") ?? 0),
         match: url.searchParams.get("match") ?? "",
         injected: false,
@@ -140,17 +177,24 @@ if (isMainThread && process.env.OPENCLAW_SYNC_FS_PROBE_PORT) {
       active = undefined;
       loop.disable();
       const metrics = {
+        runtime: process.version,
         elapsedMs: performance.now() - measured.start,
         cpu: process.cpuUsage(measured.cpu),
         threadCpu: process.threadCpuUsage(measured.thread),
         loopP99Ms: loop.percentile(99) / 1e6,
         loopMaxMs: loop.max / 1e6,
       };
-      let allocatedBytes;
+      const allocatedNow = getHeapStatistics().total_allocated_bytes;
+      let allocatedBytes =
+        typeof allocatedNow === "number" && typeof measured.allocatedBytes === "number"
+          ? allocatedNow - measured.allocatedBytes
+          : undefined;
+      let allocationSource = allocatedBytes === undefined ? undefined : "main-isolate-counter";
       if (inspector) {
         const { profile } = await inspector.post("HeapProfiler.stopSampling");
         const sum = (node) => node.selfSize + node.children.reduce((n, child) => n + sum(child), 0);
         allocatedBytes = sum(profile.head);
+        allocationSource = "main-isolate-sampled";
         inspector.disconnect();
         inspector = undefined;
       }
@@ -159,6 +203,7 @@ if (isMainThread && process.env.OPENCLAW_SYNC_FS_PROBE_PORT) {
         JSON.stringify({
           ...metrics,
           allocatedBytes,
+          allocationSource,
           injected: measured.injected,
           records: [...records.values()].toSorted((a, b) => b.totalMs - a.totalMs),
         }),

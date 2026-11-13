@@ -6,6 +6,7 @@ import {
 } from "../../components/config-form.analyze.ts";
 import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { omitCuratedOwnedConfigLeaves } from "./config-sections.ts";
 
 export function asConfigSchema(value: unknown): JsonSchema | null {
   if (!isRecord(value)) {
@@ -13,6 +14,16 @@ export function asConfigSchema(value: unknown): JsonSchema | null {
   }
   // SAFETY: The schema comes from config.schema; the boundary check excludes non-object payloads.
   return value as JsonSchema;
+}
+
+// Hides optional feature controls from the page without changing the editable
+// config; an unresolved schema passes through unchanged.
+export function visibleConfigSchema(
+  value: unknown,
+  openclawIdEnabled: boolean | undefined,
+): unknown {
+  const schema = asConfigSchema(value);
+  return schema ? omitCuratedOwnedConfigLeaves(schema, "", openclawIdEnabled) : value;
 }
 
 export function getConfigSchemaAnalysis(

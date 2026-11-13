@@ -437,6 +437,12 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   text-decoration: underline;
 }
 
+.report-issue-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .card {
   border: 1px solid var(--border);
   background: var(--card);
@@ -2479,7 +2485,7 @@ td.data-table-key-col {
   padding: 4px 12px;
   font-size: 13px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--field-radius);
   background: var(--card);
   color: var(--text);
   transition:
@@ -2632,9 +2638,7 @@ select.data-table-pagination__size {
 }
 
 .agent-scope-control .agent-select__trigger {
-  min-height: 34px;
   border-color: var(--border);
-  border-radius: var(--radius-full);
   background: var(--bg-elevated);
   font-size: 12px;
   font-weight: 600;
@@ -2833,6 +2837,11 @@ select.data-table-pagination__size {
 .agent-select__option .agent-select__avatar {
   width: 20px;
   height: 20px;
+}
+
+/* The search icon and text sit on the rows' avatar and name columns. */
+.agent-select__menu > .header-search {
+  --header-search-icon-slot: 20px;
 }
 
 .code-block-json-node > summary::-webkit-details-marker {

@@ -14,6 +14,7 @@ import { runtimeConfigPublication } from "../config/runtime-config-publication.j
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createOperatorAuthorityInactiveError } from "../infra/operator-authority-error.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -35,6 +36,7 @@ import {
 } from "./device-revocation.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
+  openclawIdSubjectRolePolicy,
   openclawIdTunnelRolePolicy,
   onOpenClawIdTunnelPrincipalsChanged,
   type OpenClawIdTunnelPrincipal,
@@ -221,12 +223,13 @@ export function captureChannelOperatorRunAuthority(input: {
   const metadata = getProcessGatewayPluginMetadataSnapshot();
   const membershipPolicy = openclawIdTunnelRolePolicy(params.openclawIdPrincipal);
   const resolveRole = (cfg: OpenClawConfig) =>
-    membershipPolicy ??
-    resolveOperatorRolePolicyForAssignment(
-      params.profileId,
-      params.assignedRole,
-      cfg,
-      params.githubLogin ?? null,
+    openclawIdSubjectRolePolicy(params.openclawIdPrincipal, () =>
+      resolveOperatorRolePolicyForAssignment(
+        params.profileId,
+        params.assignedRole,
+        cfg,
+        params.githubLogin ?? null,
+      ),
     );
   const role = resolveRole(initialConfig);
   const modelPolicy = prepareRunModelPolicy({
@@ -341,6 +344,16 @@ export async function captureGatewayOperatorRunAuthority(input: {
     client.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID &&
     params.hasCurrentClientAuthority?.() === true &&
     isOpenClawIdTunnelPrincipalCurrent(client.internal.openclawIdPrincipal);
+  // An OpenClaw ID owner device whose account is linked to a personal profile (OCF-510) is
+  // the owner, attributed to that person; only its real tunnel socket carries that subject.
+  const isLinkedOwnerDevice = (currentActor: typeof actor) =>
+    currentActor?.kind === "system" &&
+    client?.internal?.openclawIdPrincipal?.kind === "owner" &&
+    !client.internal.remoteIngressPrincipal &&
+    !client.internal.syntheticClient &&
+    Boolean(client.connId) &&
+    Boolean(client.authenticatedUserProfile?.profileId) &&
+    isOpenClawIdTunnelPrincipalCurrent(client.internal.openclawIdPrincipal);
   // Other owner subjects require a real socket or the host-bound ingress grant.
   // Autonomous/synthetic system callers must not acquire the owner profile.
   // Ephemeral shared-secret sockets attest the owner without display attribution.
@@ -361,6 +374,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
     !client.internal.agentRuntimeIdentity &&
     !client.internal.agentToolCaller &&
     (client.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID ||
+      isLinkedOwnerDevice(currentActor) ||
       (currentActor?.kind === "system" &&
         !client.authenticatedUserProfile &&
         !client.authenticatedUserId &&
@@ -376,13 +390,19 @@ export async function captureGatewayOperatorRunAuthority(input: {
     ? structuredClone(client.internal.openclawIdPrincipal)
     : undefined;
   const membershipPolicy = openclawIdTunnelRolePolicy(openclawIdPrincipal);
-  const profileId = actor?.kind === "operator" ? actor.profileId : GATEWAY_OWNER_PROFILE_ID;
+  const profileId =
+    actor?.kind === "operator"
+      ? actor.profileId
+      : isLinkedOwnerDevice(actor) && client.authenticatedUserProfile
+        ? client.authenticatedUserProfile.profileId
+        : GATEWAY_OWNER_PROFILE_ID;
   const connectionId = client.connId;
   const connectionSignal = client.connectionSignal;
   if (params.hasCurrentClientAuthority?.() === false) {
     throw new Error("Gateway caller authority is no longer active.");
   }
   const releaseDevice = retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
+  const capturedAt = performance.now();
   const isSourceCurrent = readGatewayDeviceSourceAuthority(params.hasCurrentClientAuthority);
   const resolveGatewayContext = params.context.resolveGatewayContext;
   const gatewayContext = resolveGatewayContext?.();
@@ -424,14 +444,13 @@ export async function captureGatewayOperatorRunAuthority(input: {
   };
   const resolveCurrentRole = (cfg = getConfig()) => {
     const profile = assertProfileCurrent();
-    return (
-      membershipPolicy ??
+    return openclawIdSubjectRolePolicy(openclawIdPrincipal, () =>
       resolveOperatorRolePolicyForAssignment(
         profileId,
         profile.assignedRole,
         cfg,
         profile.githubLogin ?? null,
-      )
+      ),
     );
   };
   const assertRoleCurrent = () => {
@@ -466,17 +485,36 @@ export async function captureGatewayOperatorRunAuthority(input: {
     ),
     (assertSources) => {
       if (revoked || references === 0) {
-        throw new Error("operator execution authority is no longer active");
+        throw createOperatorAuthorityInactiveError(
+          references === 0 ? "closure-released" : "closure-revoked",
+          "before-sources",
+          capturedAt,
+        );
       }
-      if (isSourceCurrent?.() === false || !isGatewayCurrent()) {
-        throw new Error("operator source authority is no longer active");
+      if (isSourceCurrent?.() === false) {
+        throw createOperatorAuthorityInactiveError(
+          "source-invalidated",
+          "source-current",
+          capturedAt,
+        );
+      }
+      if (!isGatewayCurrent()) {
+        throw createOperatorAuthorityInactiveError(
+          "gateway-identity-retired",
+          "gateway-current",
+          capturedAt,
+        );
       }
       assertSources();
       if (openclawIdPrincipal && !isOpenClawIdTunnelPrincipalCurrent(openclawIdPrincipal)) {
         throw new Error("OpenClaw ID membership authority changed");
       }
       if (revoked || references === 0) {
-        throw new Error("operator execution authority is no longer active");
+        throw createOperatorAuthorityInactiveError(
+          references === 0 ? "closure-released" : "closure-revoked",
+          "after-sources",
+          capturedAt,
+        );
       }
     },
   );
@@ -521,14 +559,28 @@ export async function captureGatewayOperatorRunAuthority(input: {
     };
     subscriptions.push(
       onGatewayDeviceSourceRevoked(params.hasCurrentClientAuthority, () =>
-        revoke(new Error("operator source authority is no longer active")),
+        revoke(
+          createOperatorAuthorityInactiveError(
+            "source-invalidated",
+            "source-revocation",
+            capturedAt,
+          ),
+        ),
       ),
       onUserProfilesChanged(() => recheck(assertCapturedRoleCurrent)),
       openclawIdPrincipal
         ? onOpenClawIdTunnelPrincipalsChanged(() => recheck(assertSourceCurrent))
         : undefined,
       onOperatorRolePolicyChanged((change) => {
-        if (change.kind === "assignment" && change.profileId === profileId) {
+        if (
+          change.kind === "assignment" &&
+          change.profileId === profileId &&
+          change.roleOnly &&
+          openclawIdPrincipal?.kind === "owner"
+        ) {
+          // A linked owner device's authority is its certificate; its person's role is not.
+          recheck(assertCapturedRoleCurrent);
+        } else if (change.kind === "assignment" && change.profileId === profileId) {
           revoke(new Error("Your operator role changed; reconnect before continuing."));
         } else if (
           change.kind === "config" &&
@@ -575,8 +627,12 @@ export async function captureGatewayOperatorRunAuthority(input: {
     assertCapturedRoleCurrent = () => {
       const current = assertProfileCurrent();
       const policy = resolveCurrentRole();
+      // A current owner certificate, not the linked person's stored role, bounds owner work.
+      const ownerCertificate =
+        openclawIdPrincipal?.kind === "owner" &&
+        isOpenClawIdTunnelPrincipalCurrent(openclawIdPrincipal);
       if (
-        current.assignedRole !== capturedAssignedRole ||
+        (!ownerCertificate && current.assignedRole !== capturedAssignedRole) ||
         !isOperatorRoleSourcePolicyCurrent(capturedSourcePolicy, sourceRolePolicy(policy), scopes)
       ) {
         throw new Error("Your operator role changed; reconnect before continuing.");
