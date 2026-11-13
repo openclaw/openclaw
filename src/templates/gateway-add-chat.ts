@@ -181,15 +181,26 @@ export async function createTemplateAgentFromChat(
   const agentId = admitted.agentId;
   const report: TemplateSetupReport = { failures: [], mcpServers: [] };
   let initialized = false;
-  const kept = (error?: { code: string; message: string }): GatewayTemplateAddApplyResult => ({
-    agentId,
-    status: error ? "partial" : "complete",
-    ...(error ? { agentRetained: true as const } : {}),
-    ...(initialized ? {} : { initializationPending: true as const }),
-    sessionKey,
-    readiness: { ready: !error && report.failures.length === 0, requirements: [] },
-    ...(error ? { error } : {}),
-  });
+  const kept = (failure?: { code: string; message: string }): GatewayTemplateAddApplyResult => {
+    const error =
+      failure ??
+      (report.failures.length
+        ? {
+            code: "template_setup_incomplete",
+            message:
+              "Some Template dependencies could not be set up. The agent and conversation were kept. Continue in this chat; do not add another copy.",
+          }
+        : undefined);
+    return {
+      agentId,
+      status: error ? "partial" : "complete",
+      ...(error ? { agentRetained: true as const } : {}),
+      ...(initialized ? {} : { initializationPending: true as const }),
+      sessionKey,
+      readiness: { ready: !error, requirements: [] },
+      ...(error ? { error } : {}),
+    };
+  };
   const agentLease = { scope: "core:agent-deletion", key: agentId, leaseMs: 60_000, waitMs: 5_000 };
 
   const configure = async (

@@ -346,8 +346,9 @@ agent's pending chat immediately, and the Gateway creates the agent:
 2. It fetches the exact Template release shown in the catalog.
 3. It writes the Template's workspace files and its `BOOTSTRAP.md`.
 4. It copies the Template's `CLAW.md` unchanged to the workspace root, as an
-   ordinary file the agent can read. A Template whose own workspace files
-   include `CLAW.md` keeps its file.
+   ordinary file the agent can read. The workspace root `CLAW.md` is reserved
+   for that original manifest; a conflicting workspace-file declaration fails
+   creation before any Template files are written and removes the new agent.
 5. It installs the declared skills, from ClawHub or bundled in the package.
 6. It installs plugins bundled in the package.
 7. It adds the declared MCP servers.
@@ -369,7 +370,11 @@ the new agent and chat, and the catalog shows the error on that Template's card.
 Add it again after fixing the cause. A skill, bundled plugin, or MCP server that
 cannot be set up does not stop Add: the agent is kept without it. A skill or
 bundled plugin that carries a trust warning is not installed. An MCP server whose
-name is already configured with different settings is left unchanged.
+name is already configured with different settings is left unchanged. Missing
+dependencies are reported as incomplete setup, with their reasons in the opening
+conversation. Continue in that chat instead of adding another copy; no installer
+is continuing those steps in the background. Configured MCP servers may still
+need sign-in or connection checks.
 
 A Template release that ClawHub flagged for review still needs your confirmation.
 The catalog shows the ClawHub warning with **Add anyway** before any agent is kept.

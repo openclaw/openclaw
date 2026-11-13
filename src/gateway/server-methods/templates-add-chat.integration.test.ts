@@ -505,7 +505,17 @@ it("keeps the agent and reports each dependency it could not set up", async () =
     const [ok, result] = await gateway.add(chatAdd);
 
     expect(ok, JSON.stringify(result)).toBe(true);
-    expect(result).toMatchObject({ agentId: "travel-copilot", status: "complete" });
+    expect(result).toMatchObject({
+      agentId: "travel-copilot",
+      sessionKey: expect.any(String),
+      status: "partial",
+      agentRetained: true,
+      readiness: { ready: false },
+      error: {
+        code: "template_setup_incomplete",
+        message: expect.stringContaining("Continue in this chat; do not add another copy."),
+      },
+    });
     const workspace = gateway.workspace("travel-copilot");
     expect(skills.install).not.toHaveBeenCalled();
     expect(await exists(path.join(workspace, "skills", "itinerary", "SKILL.md"))).toBe(true);
