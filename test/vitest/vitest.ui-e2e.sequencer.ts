@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
 import { readUiE2eFileTimings } from "../../scripts/lib/ci-test-timings.mts";
 import { selectWeightedShard } from "./vitest.weighted-sharding.ts";
+import { acquireVitestWorkerArtifacts } from "./vitest.worker-artifacts.ts";
 
 // Cold-start fallback when committed measurements are missing. Refresh
 // config/ci-test-timings.json with `pnpm ci:timings:refit`, not these literals.
@@ -109,9 +110,11 @@ const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 // These source fixtures borrow one invocation's compiled subprocess generation.
 // New borrowers may add preparation elsewhere until this measured group is refreshed.
 const UI_E2E_SHARED_WORKER_FILES = new Set([
+  "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
   "ui/src/e2e/model-providers-profile-outcomes.e2e.test.ts",
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
   "ui/src/e2e/question-guest.e2e.test.ts",
+  "ui/src/e2e/route-asset-requests.e2e.test.ts",
   "ui/src/e2e/screen-requester-routing.e2e.test.ts",
 ]);
 
@@ -127,6 +130,17 @@ function estimateFileSeconds(moduleId: string): number {
 
 export class UiE2eSequencer extends BaseSequencer {
   override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {
+    // Native Vitest shards before sorting. Borrow only for this invocation's selected hooks.
+    if (
+      files.some((file) =>
+        [
+          "ui/src/e2e/route-asset-requests.e2e.test.ts",
+          "ui/src/e2e/team-scale-cold-load.e2e.test.ts",
+        ].includes(relative(repoRoot, file.moduleId).replaceAll("\\", "/")),
+      )
+    ) {
+      await acquireVitestWorkerArtifacts(this.ctx);
+    }
     // eslint-disable-next-line unicorn/no-array-sort -- BaseSequencer.sort is Vitest's ordering API.
     const ordered = await super.sort(files);
     const parallel = ordered.filter((file) =>

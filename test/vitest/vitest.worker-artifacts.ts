@@ -26,6 +26,10 @@ const declarationPrefix = "\0openclaw:compiled-subprocess:";
 type WorkerOwner = { acquire: () => Promise<string> };
 type WorkerVitest = Vitest & { [ownerKey]?: WorkerOwner };
 
+export function acquireVitestWorkerArtifacts(vitest: Vitest): Promise<string> | undefined {
+  return (vitest as WorkerVitest)[ownerKey]?.acquire();
+}
+
 export function compiledSubprocessesPlugin(): Plugin {
   let owner: WorkerOwner | undefined;
   return {

@@ -109,7 +109,36 @@ suite.define(() => {
         await expect.poll(() => stream.evaluate((element) => element.scrollTop)).toBe(0);
         await gateway.resolveDeferred("logs.tail", tail(2_000, 500));
         await page.getByText(/Data log 000500 needle:/).waitFor();
-        expect(await stream.evaluate((element) => element.scrollTop)).toBe(0);
+        expect(
+          await stream.evaluate((element) => {
+            const events: Array<Array<number | boolean>> = [];
+            Object.defineProperty(element, "logsScrollTrace", { value: events });
+            for (const [code, name] of ["wheel", "scroll", "scrollend"].entries()) {
+              element.addEventListener(
+                name,
+                (event) => {
+                  if (events.length === 64) {
+                    events.shift();
+                  }
+                  events.push([
+                    code,
+                    performance.now(),
+                    element.scrollTop,
+                    element.scrollHeight,
+                    element.clientHeight,
+                    element.scrollHeight - element.scrollTop - element.clientHeight,
+                    document.querySelector<HTMLInputElement>('.logs-toolbar input[role="switch"]')
+                      ?.checked ?? false,
+                    event.isTrusted,
+                    event instanceof WheelEvent ? event.deltaY : 0,
+                  ]);
+                },
+                { passive: true },
+              );
+            }
+            return element.scrollTop;
+          }),
+        ).toBe(0);
         await stream.scrollIntoViewIfNeeded();
 
         await page.mouse.wheel(0, 1_000_000);
@@ -132,7 +161,17 @@ suite.define(() => {
           .toBe(true);
         expect(await page.locator(".log-row").count()).toBeLessThan(100);
         // Scrolling back to the end resumes following.
-        await expect.poll(() => autoFollow.isChecked()).toBe(true);
+        await expect
+          .poll(() => autoFollow.isChecked())
+          .toBe(true)
+          .catch(async (cause: unknown) => {
+            const events = await stream.evaluate((element) => {
+              // SAFETY: This synthetic page's earlier evaluation installed this bounded array.
+              return (element as HTMLElement & { logsScrollTrace: Array<Array<number | boolean>> })
+                .logsScrollTrace;
+            });
+            throw new Error(`Logs scroll events: ${JSON.stringify(events)}`, { cause });
+          });
         expect(errors).toEqual([]);
       } finally {
         await (engine === "chromium" ? suite.closeBrowserContext(context) : context.close());
