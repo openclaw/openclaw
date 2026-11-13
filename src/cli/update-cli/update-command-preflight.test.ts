@@ -9,9 +9,11 @@ import type {
   CanaryResult,
   UpdateCandidateCanaryParams,
 } from "../../infra/update-candidate-canary-commands.js";
+import { cleanupUpdateTemporaryDirectory } from "../../infra/update-maintenance.js";
 import { parseUpdateRehearsalEventLine } from "../../infra/update-rehearsal-contract.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { registerUpdateCli } from "../update-cli.js";
 
@@ -44,6 +46,7 @@ beforeEach(() => {
 
 afterEach(() => {
   process.exitCode = previousExitCode;
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -168,8 +171,9 @@ async function rehearse(
 it.each([
   [{ status: "ok" }, 0],
   [{ status: "error", reason: "doctor-failed" }, 3],
+  [{ status: "error", reason: "runtime-verification-failed" }, 3],
 ] as const)(
-  "rehearses the updater's request and answers %o with exit %i",
+  "rehearses the updater's request and answers %j with exit %i",
   async (outcome, code) => {
     const result: CanaryResult = {
       ...outcome,
@@ -256,45 +260,131 @@ it.each([
   "does not start the announced check when the updater %s",
   async (_name, answer, message) => {
     const check = vi.fn();
+    const copy = dirs.make("update-rehearsal-copy-");
     canary.mockImplementation(async (params: UpdateCandidateCanaryParams) => {
-      await params.onProgress?.(rehearsalProgress);
-      check();
+      try {
+        await params.onProgress?.(rehearsalProgress);
+        check();
+      } finally {
+        // The canary removes its state copy this way on every exit.
+        await cleanupUpdateTemporaryDirectory({
+          directory: copy,
+          root: home,
+          name: "candidate-state-cleanup",
+          onProgress: params.onProgress,
+          onWarning: (step) => params.onStep?.(step),
+          onRemoved: params.onStep,
+        });
+      }
       return { status: "ok", phase: "readiness", durationMs: 1, logTail: [], steps: [] };
     });
 
     await rehearse({ protocol: 1, config: {} }, undefined, answer);
 
     expect(check).not.toHaveBeenCalled();
+    // Nobody is left to record the cleanup, and the copy is still removed.
+    await expect(fs.access(copy)).rejects.toMatchObject({ code: "ENOENT" });
     expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(message));
     expect(process.exitCode).toBe(2);
   },
 );
 
-it.each(["candidate-checks-timeout", "candidate-snapshot-failed"] as const)(
-  "does not refuse an update over %s",
-  async (reason) => {
-    canary.mockResolvedValue({
-      status: "error",
-      reason,
-      phase: "snapshot",
-      durationMs: 1,
-      logTail: [],
-      steps: [],
-    } satisfies CanaryResult);
+const timedOut = { exitCode: null, termination: "timeout" } as const;
+const stalledGateway = { ...rehearsalStep, ...timedOut, name: "candidate-gateway-startup" };
 
-    await rehearse({ protocol: 1, config: {} });
+it.each([
+  ["candidate-checks-timeout", "doctor", [], "candidate-checks-timeout"],
+  ["candidate-snapshot-failed", "snapshot", [], "candidate-snapshot-failed"],
+  // The canary reports a Gateway that stalls before it is ready as a failed runtime check.
+  [
+    "runtime-verification-failed",
+    "startup",
+    [stalledGateway],
+    "candidate-gateway-startup ran out of time",
+  ],
+] as const)("does not refuse an update over %s", async (reason, phase, steps, cause) => {
+  canary.mockResolvedValue({
+    status: "error",
+    reason,
+    phase,
+    durationMs: 1,
+    logTail: [],
+    steps: [rehearsalStep, ...steps],
+  } satisfies CanaryResult);
 
-    // No verdict: the installed updater's own checks decide.
-    expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({
-      protocol: 1,
-      error: "rehearsal-execution-failed",
+  await rehearse({ protocol: 1, config: {} });
+
+  // No verdict: the installed updater's own checks decide.
+  expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({
+    protocol: 1,
+    error: "rehearsal-execution-failed",
+  });
+  expect(defaultRuntime.error).toHaveBeenCalledWith(
+    expect.stringContaining(`inconclusive (${cause})`),
+  );
+  expect(process.exitCode).toBe(2);
+});
+
+it.each([
+  ["a Doctor that failed and then hung on exit", "doctor-failed", "doctor", []],
+  ["a Gateway that crashed after a slow Doctor exit", "runtime-verification-failed", "startup", []],
+  [
+    "a Doctor failure whose cleanup ran out of time",
+    "doctor-failed",
+    "doctor",
+    [{ ...rehearsalStep, ...timedOut, name: "candidate-state-cleanup" }],
+  ],
+] as const)("keeps the refusal of %s", async (_name, reason, phase, later) => {
+  const result = {
+    status: "error",
+    reason,
+    phase,
+    durationMs: 1,
+    logTail: [],
+    steps: [{ ...rehearsalStep, ...timedOut }, ...later],
+  } satisfies CanaryResult;
+  canary.mockResolvedValue(result);
+
+  await rehearse({ protocol: 1, config: {} });
+
+  expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({ protocol: 1, result });
+  expect(process.exitCode).toBe(3);
+});
+
+it("reports the processes its own commands start, so the updater can stop them", async () => {
+  let pid: number | undefined;
+  canary.mockImplementation(async () => {
+    // The state copy and inventory run as commands like this one, not as canary checks.
+    const command = await runUtf8CommandWithTimeout([process.execPath, "-e", ""], {
+      timeoutMs: 30_000,
     });
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining(`inconclusive (${reason})`),
-    );
-    expect(process.exitCode).toBe(2);
-  },
-);
+    pid = command.pid;
+    return { status: "ok", phase: "readiness", durationMs: 1, logTail: [], steps: [] };
+  });
+
+  const receipts = await rehearse({ protocol: 1, config: {} });
+
+  expect(pid).toBeTypeOf("number");
+  expect(receipts).toEqual([
+    { type: "process", pid },
+    { type: "process-closed", pid },
+  ]);
+  expect(process.exitCode).toBe(0);
+});
+
+it("ends the rehearsal instead of waiting on a receipt too large to deliver", async () => {
+  canary.mockImplementation(async (params: UpdateCandidateCanaryParams) => {
+    // The updater's line reader drops a line this long, so no answer could ever arrive.
+    await params.onStep?.({ ...rehearsalStep, stdoutTail: "x".repeat(70_000) });
+    return { status: "ok", phase: "readiness", durationMs: 1, logTail: [], steps: [] };
+  });
+
+  expect(await rehearse({ protocol: 1, config: {} })).toEqual([]);
+  expect(defaultRuntime.error).toHaveBeenCalledWith(
+    expect.stringContaining("too large to deliver"),
+  );
+  expect(process.exitCode).toBe(2);
+});
 
 it("proves it is alive while a check runs longer than the updater's patience", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
@@ -314,7 +404,6 @@ it("proves it is alive while a check runs longer than the updater's patience", a
   vi.advanceTimersByTime(45_000);
   finish({ status: "ok", phase: "readiness", durationMs: 1, logTail: [], steps: [] });
   await running;
-  vi.useRealTimers();
 
   expect(receipts).toEqual(Array.from({ length: 3 }, () => ({ type: "heartbeat" })));
 });

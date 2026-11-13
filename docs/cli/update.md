@@ -790,23 +790,27 @@ so no check starts or completes ahead of a recorded step. If the updater cannot
 record a step, or stops answering, the candidate stops before the announced
 check.
 
-Each check runs in its own process group. The candidate reports those processes
-to the updater, and the updater stops any that are still running after the
-candidate exits, crashes, or is forced to stop. A process is signalled only
-while it still has the start time it had when it was reported.
+Each check runs in its own process group, and so does each command that
+inventories or copies state. The candidate reports those processes to the
+updater, and the updater stops any that are still running after the candidate
+exits, crashes, or is forced to stop. A process is signalled only while it
+still has the start time it had when it was reported.
 
 Stdout carries one
 JSON document with `protocol: 1` and the rehearsal result. Exit `0` means the
 checks passed and `3` means the candidate refuses the update; a refusal is
 binding. The candidate refuses only when its Doctor rehearsal or its private
-Gateway fails on the copied state. A check that ran out of time or a state copy
-that failed is not a refusal: the candidate returns no result, and the updater
-runs its own rehearsal. A pass grants nothing: the installed updater still owns
-drain, activation, verification, and rollback.
+Gateway fails on the copied state. A check that ran out of time, including a
+private Gateway that stalls before it is ready, or a state copy that failed is
+not a refusal: the candidate returns no result, and the updater runs its own
+rehearsal. A pass grants nothing: the installed updater still owns drain,
+activation, verification, and rollback.
 
 The updater runs its own rehearsal instead when the target lacks the marker, or
 when the candidate exits with any other status, returns an invalid or
-contradictory document, or stays silent for 15 minutes. The candidate sends a
+contradictory document, sends a report the updater cannot read, or stays silent
+for 15 minutes. A report too large to deliver ends the rehearsal the same way,
+before the candidate sends it. The candidate sends a
 heartbeat every 15 seconds, so that limit detects a dead or blocked candidate
 process and does not bound slow checks. The update output says when the
 candidate ran its own checks, and names the reason when the updater took them

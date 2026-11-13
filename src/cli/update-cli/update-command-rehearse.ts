@@ -2,12 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { resolveStateDir } from "../../config/paths.js";
+import type { CanaryResult } from "../../infra/update-candidate-canary-commands.js";
 import { withCanaryProcessObserver } from "../../infra/update-candidate-canary-process.js";
 import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
 import {
   formatUpdateRehearsalEventLine,
   parseUpdateRehearsalReceiptAnswer,
   parseUpdateRehearsalRequest,
+  UPDATE_REHEARSAL_EVENT_MAX_CHARS,
   UPDATE_REHEARSAL_HEARTBEAT_MS,
   UPDATE_REHEARSAL_PROTOCOL,
   type UpdateRehearsalEvent,
@@ -27,6 +29,24 @@ const INCONCLUSIVE_REASONS: ReadonlySet<string> = new Set([
   "candidate-checks-timeout",
   "candidate-snapshot-failed",
 ]);
+
+/** Why a failed rehearsal is no verdict, or undefined when its refusal stands. */
+function inconclusiveCause(result: CanaryResult): string | undefined {
+  if (result.status !== "error") {
+    return undefined;
+  }
+  if (INCONCLUSIVE_REASONS.has(result.reason)) {
+    return result.reason;
+  }
+  // The canary reports a Gateway that never became ready as a failed runtime check. Only
+  // that step counts: a timed-out exit or cleanup elsewhere leaves a refusal standing.
+  const stalled =
+    result.reason === "runtime-verification-failed" &&
+    result.steps.some(
+      (step) => step.name === "candidate-gateway-startup" && step.termination === "timeout",
+    );
+  return stalled ? "candidate-gateway-startup ran out of time" : undefined;
+}
 
 type Receipt = Extract<UpdateRehearsalEvent, { seq: number }>;
 // Distributes over the union so each receipt keeps its own step type.
@@ -72,9 +92,14 @@ function openReceiptChannel(emit: (event: UpdateRehearsalEvent) => void) {
           reject(lost);
           return;
         }
-        lastSeq += 1;
+        const event = { ...receipt, seq: lastSeq + 1 };
+        if (formatUpdateRehearsalEventLine(event).length > UPDATE_REHEARSAL_EVENT_MAX_CHARS) {
+          reject(new Error(`The ${receipt.type} receipt is too large to deliver to the updater.`));
+          return;
+        }
+        lastSeq = event.seq;
         waiting.set(lastSeq, { resolve, reject });
-        emit({ ...receipt, seq: lastSeq });
+        emit(event);
       }),
     close: () => answers.close(),
   };
@@ -109,40 +134,63 @@ export async function updateRehearseCommand(requestPath?: string): Promise<void>
     if (!request) {
       throw new Error("Candidate rehearsal request is invalid.");
     }
+    // Cleanup receipts report completed work. The candidate removes its own state copy
+    // whether or not the updater is still there to record it.
+    const report = (name: string, receipt: ReceiptBody) => {
+      const sent = receipts.send(receipt);
+      return name.endsWith("-cleanup") ? sent.catch(() => {}) : sent;
+    };
+    // Checks and the commands that copy state run in their own process groups; the updater
+    // stops any left behind.
+    const processes = {
+      started: (pid: number) => emit({ type: "process", pid }),
+      closed: (pid: number) => emit({ type: "process-closed", pid }),
+    };
     const result = await withOwnedManagedUpdateEnv(env, () =>
       withCommandProcessScope(
         () =>
           withArtifactPreservingStateReads(() =>
-            // Checks run in their own process groups; the updater stops any left behind.
-            withCanaryProcessObserver(
-              {
-                started: (pid) => emit({ type: "process", pid }),
-                closed: (pid) => emit({ type: "process-closed", pid }),
-              },
-              () =>
-                validateUpdateCandidateCanary({
-                  root,
-                  ...(request.sourceBundledPlugins
-                    ? { sourceBundledPlugins: request.sourceBundledPlugins }
-                    : {}),
-                  config: request.config,
-                  stateDir: resolveStateDir(env),
-                  env,
-                  timeoutMs: request.timeoutMs,
-                  fullIntegrityCheck: request.fullIntegrityCheck,
-                  gatewayStartupRuntime: request.gatewayStartupRuntime,
-                  signal: resolveCommandProcessSignal(),
-                  onProgress: (step) => receipts.send({ type: "progress", step }),
-                  onStep: (step) => receipts.send({ type: "step", step }),
-                }),
+            withCanaryProcessObserver(processes, () =>
+              validateUpdateCandidateCanary({
+                root,
+                ...(request.sourceBundledPlugins
+                  ? { sourceBundledPlugins: request.sourceBundledPlugins }
+                  : {}),
+                config: request.config,
+                stateDir: resolveStateDir(env),
+                env,
+                timeoutMs: request.timeoutMs,
+                fullIntegrityCheck: request.fullIntegrityCheck,
+                gatewayStartupRuntime: request.gatewayStartupRuntime,
+                signal: resolveCommandProcessSignal(),
+                onProgress: (step) => report(step.step, { type: "progress", step }),
+                onStep: (step) => report(step.name, { type: "step", step }),
+              }),
             ),
           ),
         controller.signal,
+        {
+          reserve: () => {
+            let pid: number | undefined;
+            return {
+              spawned: (identity) => {
+                pid = identity.pid;
+                processes.started(pid);
+              },
+              settled: () => {
+                if (pid !== undefined) {
+                  processes.closed(pid);
+                }
+              },
+            };
+          },
+        },
       ),
     );
     controller.signal.throwIfAborted();
-    if (result.status === "error" && INCONCLUSIVE_REASONS.has(result.reason)) {
-      throw new Error(`Candidate rehearsal was inconclusive (${result.reason}).`);
+    const inconclusive = inconclusiveCause(result);
+    if (inconclusive) {
+      throw new Error(`Candidate rehearsal was inconclusive (${inconclusive}).`);
     }
     // Publish only after snapshot and child cleanup has settled.
     defaultRuntime.writeJson({ protocol: UPDATE_REHEARSAL_PROTOCOL, result });

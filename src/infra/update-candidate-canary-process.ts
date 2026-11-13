@@ -168,6 +168,10 @@ export function launchCanary(params: {
         captureLine(line);
       }
       if (pending.length > 64 * 1024) {
+        // A dropped protocol line still reaches its owner, which cannot read it as an event.
+        if (params.hidesLine?.(pending)) {
+          params.onLine?.(pending);
+        }
         // Discard an oversized unterminated line whole, never through a secret.
         pending = "";
         droppingLine = true;

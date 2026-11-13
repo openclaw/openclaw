@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CanaryResult } from "./update-candidate-canary-commands.js";
@@ -7,6 +8,7 @@ import {
   UpdateDoctorConfigWriteRefusalSchema,
 } from "./update-doctor-config-schema.js";
 import { UpdateDoctorLintFindingSchema } from "./update-doctor-lint-schema.js";
+import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateRunStep } from "./update-run-record.js";
 import { UpdateFailureFactSchema, UpdateRunStepSchema } from "./update-run-schema.js";
 import { UpdateSnapshotCapacitySchema } from "./update-snapshot-capacity-schema.js";
@@ -18,6 +20,11 @@ export const UPDATE_REHEARSAL_PROTOCOL = 1;
 export const UPDATE_REHEARSAL_EVENT_PREFIX = "openclaw-update-rehearsal-event: ";
 /** The candidate proves its orchestrating process is alive; checks keep their own budgets. */
 export const UPDATE_REHEARSAL_HEARTBEAT_MS = 15_000;
+/**
+ * The updater's line reader drops a line longer than 64 KiB whole, so a receipt that long
+ * could never be answered. The candidate ends the rehearsal instead of sending one.
+ */
+export const UPDATE_REHEARSAL_EVENT_MAX_CHARS = 48 * 1024;
 
 const requestSchema = z.object({
   protocol: z.literal(UPDATE_REHEARSAL_PROTOCOL),
@@ -147,8 +154,33 @@ export function parseUpdateRehearsalRequest(value: unknown): UpdateRehearsalRequ
   return parsed.success ? parsed.data : null;
 }
 
-/** Lines without the prefix are ordinary diagnostics; malformed events are ignored. */
-export function parseUpdateRehearsalEventLine(line: string): UpdateRehearsalEvent | null {
+/** The ledger bounds a step's free text when it stores it, so longer text is still a receipt. */
+function boundProgressText(value: unknown): unknown {
+  if (!isRecord(value) || value.type !== "progress" || !isRecord(value.step)) {
+    return value;
+  }
+  const step = { ...value.step };
+  for (const [field, limit] of [
+    ["step", UPDATE_RUN_TEXT_LIMIT],
+    ["detail", UPDATE_RUN_TEXT_LIMIT],
+    ["stderrTail", 8192],
+  ] as const) {
+    const text = step[field];
+    if (typeof text === "string") {
+      step[field] = truncateUtf16Safe(text, limit);
+    }
+  }
+  return { ...value, step };
+}
+
+/**
+ * Lines without the prefix are ordinary diagnostics. A prefixed line that may be a receipt
+ * and is not a valid event is `unreadable`: the candidate may be waiting for its answer, so
+ * it cannot be ignored. An unknown event without a receipt number is ignored.
+ */
+export function parseUpdateRehearsalEventLine(
+  line: string,
+): UpdateRehearsalEvent | { type: "unreadable" } | null {
   if (!line.startsWith(UPDATE_REHEARSAL_EVENT_PREFIX)) {
     return null;
   }
@@ -156,10 +188,13 @@ export function parseUpdateRehearsalEventLine(line: string): UpdateRehearsalEven
   try {
     value = JSON.parse(line.slice(UPDATE_REHEARSAL_EVENT_PREFIX.length));
   } catch {
-    return null;
+    return { type: "unreadable" };
   }
-  const parsed = eventSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
+  const parsed = eventSchema.safeParse(boundProgressText(value));
+  if (parsed.success) {
+    return parsed.data;
+  }
+  return isRecord(value) && !("seq" in value) ? null : { type: "unreadable" };
 }
 
 export function formatUpdateRehearsalEventLine(event: UpdateRehearsalEvent): string {

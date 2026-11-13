@@ -125,9 +125,15 @@ export async function runDelegatedUpdateCandidateRehearsal(
       const relayAbort = new AbortController();
       // Reported check process -> its start time when reported.
       const checks = new Map<number, number | null>();
+      // The candidate sent a line this updater cannot read as an event.
+      let unreadable = false;
       const answer = (seq: number, ok: boolean) => {
+        const stdin = running.child.stdin;
+        if (!stdin || stdin.writableEnded) {
+          return;
+        }
         // A candidate that is already gone needs no answer.
-        running.child.stdin?.write(formatUpdateRehearsalReceiptAnswer({ seq, ok }), () => {});
+        stdin.write(formatUpdateRehearsalReceiptAnswer({ seq, ok }), () => {});
       };
       const running = launchCanary({
         assertCurrent: params.assertCurrent,
@@ -150,6 +156,14 @@ export async function runDelegatedUpdateCandidateRehearsal(
           if (!event || event.type === "heartbeat") {
             return;
           }
+          if (event.type === "unreadable") {
+            // The candidate may be waiting on this line while its heartbeat hides the wait.
+            // Closing the pipe releases every receipt it is waiting on.
+            unreadable = true;
+            running.child.stdin?.end();
+            relayAbort.abort();
+            return;
+          }
           if (event.type === "process") {
             checks.set(
               event.pid,
@@ -164,7 +178,7 @@ export async function runDelegatedUpdateCandidateRehearsal(
           // The candidate waits for each answer, so it never runs ahead of a committed
           // receipt. A refused receipt ends the rehearsal.
           relay = relay.then(async () => {
-            if (relayFailure) {
+            if (relayFailure || unreadable) {
               answer(event.seq, false);
               return;
             }
@@ -219,6 +233,9 @@ export async function runDelegatedUpdateCandidateRehearsal(
         const diagnostic = running.stderrDiagnostic();
         return { owner: "installed", fallbackReason, ...(diagnostic ? { diagnostic } : {}) };
       };
+      if (unreadable) {
+        return fallback("unreadable-event");
+      }
       if (outcome?.status !== "completed") {
         return fallback("stalled");
       }

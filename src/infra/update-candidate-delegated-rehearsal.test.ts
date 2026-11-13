@@ -147,10 +147,10 @@ it.each([undefined, 2, "1"])(
 
 it("relays the candidate's receipts in order and returns its result", async () => {
   const received: unknown[] = [];
-  fixture.events = `${lines({ type: "progress", seq: 1, step: progress })}plain diagnostic\n${lines(
-    { type: "heartbeat" },
-    { type: "step", seq: 2, step: startup },
-  )}`;
+  // An event this updater does not know, and that no receipt waits on, is ignored.
+  fixture.events = `${lines({ type: "progress", seq: 1, step: progress })}plain diagnostic\n${eventLine(
+    '{"type":"note"}',
+  )}\n${lines({ type: "heartbeat" }, { type: "step", seq: 2, step: startup })}`;
   const result = await run({
     sourceBundledPlugins: { packageRoot: "/serving/openclaw" },
     timeoutMs: 90_000,
@@ -260,6 +260,48 @@ it("ends the rehearsal when the updater cannot record a receipt", async () => {
     { seq: 1, ok: false },
     { seq: 2, ok: false },
   ]);
+});
+
+it("records a progress receipt whose text is longer than the ledger keeps", async () => {
+  const onProgress = vi.fn();
+  const detail = `Temporary-copy cleanup /${"nested/".repeat(400)}`;
+  fixture.events = lines({ type: "progress", seq: 1, step: { ...progress, detail } });
+  await expect(run({ onProgress })).resolves.toMatchObject({ owner: "candidate" });
+  // Bounded the way the ledger bounds it, not dropped while the candidate waits.
+  expect(onProgress).toHaveBeenCalledExactlyOnceWith({
+    ...progress,
+    detail: detail.slice(0, 1024),
+  });
+  expect(answers).toEqual([{ seq: 1, ok: true }]);
+});
+
+const eventLine = (payload: string) => `openclaw-update-rehearsal-event: ${payload}`;
+
+it.each([
+  ["a receipt it cannot read", `${eventLine('{"type":"step","seq":1,"step":{}}')}\n`],
+  ["an event that is not JSON", `${eventLine('{"type":"step","seq":1,')}\n`],
+  ["an event too long for its line reader", eventLine("x".repeat(70_000))],
+])("takes the rehearsal back after %s", async (_name, data) => {
+  fixture.pending = true;
+  const result = run();
+  await spawned.promise;
+  let pipeClosedFirst: boolean | undefined;
+  const stop = vi.spyOn(child, "kill").mockImplementation(() => {
+    // Closing the pipe is what releases a candidate that is waiting on an answer.
+    pipeClosedFirst = child.stdin?.writableEnded;
+    child.emit("close", null);
+    return true;
+  });
+  // The candidate keeps proving it is alive, so silence would never end this wait.
+  child.stderr?.emit("data", data);
+  child.stderr?.emit("data", lines({ type: "heartbeat" }));
+  // The dropped line also leaves its "[oversized log line omitted]" diagnostic.
+  await expect(result).resolves.toMatchObject({
+    owner: "installed",
+    fallbackReason: "unreadable-event",
+  });
+  expect(stop).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+  expect(pipeClosedFirst).toBe(true);
 });
 
 it("stops waiting only after the candidate has been silent, however long its checks run", async () => {
