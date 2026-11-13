@@ -6,6 +6,7 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { clearPromptCacheObservations } from "../../../agents/embedded-agent-runner/prompt-cache-observability.js";
 import { createAttemptNestedToolActivityState } from "../../../agents/embedded-agent-runner/run/attempt-nested-tool-activity.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import * as embeddedRuns from "../../../agents/embedded-agent-runner/runs.js";
@@ -359,7 +360,10 @@ export async function withNativePlugin(
         restoreActivePluginRegistrySnapshot(previousRegistry);
       }
     },
-  );
+  ).finally(() => {
+    // Fresh state reuses SESSION_ID only after the previous fixture's work has drained.
+    clearPromptCacheObservations(SESSION_ID);
+  });
 }
 
 export async function connectNativeSession(

@@ -19,6 +19,7 @@ import {
 } from "./bot/helpers.js";
 import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
 import { hasTelegramQuestionCallbackPrefix } from "./question-callback-data.js";
+import { getPreparedTelegramWidgetQuery } from "./widgets/widget-query-context.js";
 
 const TELEGRAM_READ_ONLY_COMMAND_KEYS = new Set([
   "agents",
@@ -200,13 +201,20 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   const threadSpec = msg?.chat
     ? resolveTelegramMessageThreadSpec(msg, forumHint ?? cachedForumFlag)
     : undefined;
-  const threadId =
+  // widget_query omits its topic; the prepared sent-widget origin supplies it.
+  const dmThreadId =
     threadSpec?.scope === "dm"
+      ? threadSpec.id
+      : !msg && update?.widget_query
+        ? getPreparedTelegramWidgetQuery(update)?.messageThreadId
+        : undefined;
+  const threadId =
+    threadSpec?.scope === "dm" || dmThreadId !== undefined
       ? shouldUseTelegramDmThreadSession({
-          dmThreadId: threadSpec.id,
+          dmThreadId,
           botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
         })
-        ? threadSpec.id
+        ? dmThreadId
         : undefined
       : threadSpec?.id;
   if (typeof chatId === "number") {

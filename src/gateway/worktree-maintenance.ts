@@ -289,6 +289,9 @@ export function startWorktreeMaintenance(params: {
                   assertCurrent();
                   params.onError(`Scratch cleanup failed: ${String(error)}`);
                 }
+                for (const error of current.scratch?.errors ?? []) {
+                  params.onError(`Scratch cleanup deferred: ${error}`);
+                }
                 // Scratch consumes fresh commit counters; preserve their backoff for GC admission.
                 if (scratchPressure) {
                   nextRemovalAt = Math.max(nextRemovalAt, scheduler.now() + PRESSURE_BACKOFF_MS);

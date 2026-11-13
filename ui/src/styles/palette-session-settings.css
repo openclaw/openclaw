@@ -1,20 +1,86 @@
-.palette-session-settings__trigger {
-  display: grid;
-  place-items: center;
-  flex: 0 0 30px;
-  width: 30px;
-  height: 30px;
-  padding: 6px;
+/* The composer's chip family, so these read as peers of model and Speed. */
+.palette-session-settings__chip,
+.cmd-palette .palette-session-settings__agent .agent-select--compact .agent-select__trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--chat-composer-chip-gap);
+  width: auto;
+  min-width: 0;
+  height: var(--chat-composer-chip-height);
+  min-height: var(--chat-composer-chip-height);
+  padding-block: 0;
+  padding-inline: var(--chat-composer-chip-padding-inline);
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: transparent;
-  color: var(--muted);
+  color: var(--chat-composer-secondary);
+  font-size: var(--chat-composer-chip-text);
+  font-weight: var(--control-ui-font-weight-normal);
+  line-height: 1.35;
+  white-space: nowrap;
 }
 
-.palette-session-settings__trigger:hover,
-.palette-session-settings__trigger[aria-expanded="true"] {
-  background: var(--bg-hover);
-  color: var(--text);
+.palette-session-settings__chip svg {
+  width: var(--chat-composer-chip-icon);
+  height: var(--chat-composer-chip-icon);
+  flex: none;
+  color: var(--icon-interactive);
+}
+
+.palette-session-settings__chip-chevron,
+.cmd-palette .palette-session-settings__agent .agent-select__chevron {
+  display: grid;
+  place-items: center;
+  flex: none;
+  margin: 0;
+  color: var(--chat-composer-tertiary);
+}
+
+.palette-session-settings__chip .palette-session-settings__chip-chevron svg,
+.cmd-palette .palette-session-settings__agent .agent-select__chevron svg {
+  width: var(--chat-composer-chevron-size);
+  height: var(--chat-composer-chevron-size);
+  color: inherit;
+}
+
+.palette-session-settings__chip-label {
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-session-settings__chip:hover:not(:disabled),
+.palette-session-settings__chip[aria-expanded="true"],
+.palette-session-settings__worktree[aria-checked="true"],
+.cmd-palette
+  .palette-session-settings__agent
+  .agent-select--compact
+  .agent-select__trigger:hover:not(:disabled),
+.cmd-palette
+  .palette-session-settings__agent
+  .agent-select--compact
+  .agent-select__trigger[aria-expanded="true"] {
+  background: var(--chat-composer-hover);
+  color: var(--text-strong);
+}
+
+.palette-session-settings__worktree[aria-checked="true"] svg {
+  color: var(--text-strong);
+}
+
+.palette-session-settings__chip:disabled {
+  opacity: 0.5;
+}
+
+/* Phone width keeps every picker reachable as its glyph. */
+@media (max-width: 560px) {
+  .palette-session-settings__chip-label,
+  .palette-session-settings__chip-chevron,
+  .cmd-palette .palette-session-settings__agent .agent-select__label,
+  .cmd-palette .palette-session-settings__agent .agent-select__chevron {
+    display: none;
+  }
 }
 
 .oc-popover.palette-session-settings {
@@ -33,22 +99,13 @@
   line-height: 1.4;
 }
 
-.palette-session-settings__title,
 .palette-session-settings__machine {
   padding-inline: 10px;
-}
-
-.palette-session-settings__title {
-  padding-block: 9px 6px;
-}
-
-.palette-session-settings__machine {
   padding-top: 4px;
 }
 
 .palette-session-settings__row,
-.palette-session-settings__remember,
-.palette-session-settings .agent-select .agent-select__trigger {
+.palette-session-settings__remember {
   display: grid;
   grid-template-columns: 26px minmax(0, 1fr) auto;
   align-items: center;
@@ -72,9 +129,7 @@
   margin-block-start: var(--menu-item-gap);
 }
 
-.palette-session-settings .agent-select .agent-select__trigger:hover:not(:disabled),
-.palette-session-settings__row:hover:not(:disabled),
-.palette-session-settings__back:hover {
+.palette-session-settings__row:hover:not(:disabled) {
   background: var(--bg-hover);
 }
 
@@ -104,68 +159,41 @@
 }
 
 .palette-session-settings__icon,
-.palette-session-settings__chevron,
 .palette-session-settings__check {
   display: grid;
   place-items: center;
   color: var(--muted);
 }
 
-.palette-session-settings__icon svg,
-.palette-session-settings__trigger svg,
-.palette-session-settings__back svg {
+.palette-session-settings__icon svg {
   width: 18px;
   height: 18px;
 }
 
-.palette-session-settings__chevron svg,
 .palette-session-settings__check svg {
   width: 14px;
   height: 14px;
-}
-
-.palette-session-settings__copy {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  gap: 1px;
-}
-
-.palette-session-settings__secondary,
-.palette-session-settings__unavailable {
-  color: var(--muted);
-  font-size: 11px;
+  color: var(--accent);
 }
 
 .palette-session-settings__unavailable {
   padding: 5px 10px;
+  color: var(--muted);
+  font-size: 11px;
   white-space: normal;
 }
 
-.palette-session-settings__agent .new-session-page__select,
-.palette-session-settings__agent openclaw-agent-select {
-  display: block;
-  width: 100%;
-  max-width: none;
-  font: inherit;
+.palette-session-settings__agent {
+  display: flex;
+  min-width: 0;
 }
 
 .palette-session-settings__agent .agent-select__avatar {
-  justify-self: center;
-  width: 20px;
-  height: 20px;
+  width: var(--chat-composer-chip-icon);
+  height: var(--chat-composer-chip-icon);
 }
 
-.palette-session-settings__worktree {
-  margin-top: 4px;
-  border-top: 1px solid var(--border);
-  border-radius: 0;
-}
-
-.palette-session-settings__switch {
-  display: inline-flex;
-}
-
+/* A sunken band docked to the menu's bottom edge, like the palette's own footer. */
 .palette-session-settings__footer {
   margin: 3px -5px -5px;
   padding: 7px 5px 8px;
@@ -187,27 +215,11 @@
   justify-self: center;
 }
 
-/* Back takes the rows' icon column, so the field starts on their labels without a second leading icon. */
+/* The search icon and text sit on the rows' icon and label columns. */
 .palette-session-settings__heading {
-  --header-search-gap: 11px;
+  --header-search-gap: 16px;
 
-  padding-inline: 10px 2px;
-}
-
-.palette-session-settings__heading > .header-search__icon {
-  display: none;
-}
-
-.palette-session-settings__back {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  padding: 4px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--muted);
+  padding-inline: 15px 2px;
 }
 
 .palette-session-settings__choices {
