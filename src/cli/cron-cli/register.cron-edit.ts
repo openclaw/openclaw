@@ -8,13 +8,13 @@ import type { CronJob } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { CronCliError } from "./cron-cli-error.js";
 import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
-import { resolveDroppedCommandEnvKeys } from "./register.cron-edit-command-env.js";
 import {
   parseCronDeliveryPolicyOptions,
   registerCronMutationOptions,
@@ -534,7 +534,12 @@ export function registerCronEditCommand(cron: Command) {
               outputMaxBytes,
             };
             if (commandEnv) {
-              droppedEnvKeys = await resolveDroppedCommandEnvKeys(readExistingCronJob, commandEnv);
+              // Diagnostics are best effort; an unavailable snapshot must not block a patch.
+              const existing = (
+                await readExistingCronJob().catch(() => void getAsyncWorkSignal()?.throwIfAborted())
+              )?.payload;
+              const stored = existing?.kind === "command" ? Object.keys(existing.env ?? {}) : [];
+              droppedEnvKeys = stored.filter((key) => !Object.hasOwn(commandEnv, key));
             }
           } else if (payloadKind === "script") {
             payload = { kind: "script" };

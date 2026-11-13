@@ -283,6 +283,7 @@ it("bounds oversized poll intervals by the wait timeout", async () => {
 });
 
 const reads = ["list", "show job-1", "status", "get job-1", "runs job-1", "scratch job-1"];
+reads.push("edit job-1 --pacing-min 1s", "edit job-1 --command-env KEEP=new");
 const interruptPhases = ["sleep", "request", "completion", ...reads.map((c) => `cron ${c}`)];
 it.each(interruptPhases)("cancels cron %s", async (phase) => {
   vi.useFakeTimers();
@@ -320,79 +321,6 @@ it.each(interruptPhases)("cancels cron %s", async (phase) => {
     expect(polls()).toHaveLength(1);
   } finally {
     read.resolve(completed);
-    await vi.advanceTimersByTimeAsync(2000);
-    await scope.drain();
-  }
-});
-
-it("cancels cron edit reads", async () => {
-  vi.useFakeTimers();
-  resetGatewayMock();
-  const scope = new AsyncWorkScope();
-  const existing = cronTestJob({ id: "job-1", name: "job" });
-  const read = createDeferredCore<typeof existing>();
-  callGatewayFromCli.mockImplementation(
-    async (method, _opts, _params, extra?: { signal?: AbortSignal }) => {
-      if (method === "cron.get") {
-        extra?.signal?.addEventListener("abort", () => read.reject(extra.signal?.reason));
-        return read.promise;
-      }
-      return { ok: true };
-    },
-  );
-  const settled = vi.fn();
-  const running = scope.track(() => parse([...EDIT, "--pacing-min", "1s"]));
-  void running.then(() => settled(), settled);
-  try {
-    await vi.advanceTimersByTimeAsync(0);
-    expect(callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.get")).toHaveLength(
-      1,
-    );
-    scope.beginClose(new DOMException("CLI stopping (SIGINT)", "AbortError"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(settled).toHaveBeenCalledExactlyOnceWith();
-    for (const output of [defaultRuntime.writeStdout, defaultRuntime.error, defaultRuntime.exit]) {
-      expect(output).not.toHaveBeenCalled();
-    }
-  } finally {
-    read.resolve(existing);
-    await vi.advanceTimersByTimeAsync(2000);
-    await scope.drain();
-  }
-});
-
-it("does not submit cron.update when a command-env edit is cancelled", async () => {
-  vi.useFakeTimers();
-  resetGatewayMock();
-  const scope = new AsyncWorkScope();
-  const existing = cronTestJob({ id: "job-1", name: "job" });
-  const read = createDeferredCore<typeof existing>();
-  callGatewayFromCli.mockImplementation(
-    async (method, _opts, _params, extra?: { signal?: AbortSignal }) => {
-      if (method === "cron.get") {
-        extra?.signal?.addEventListener("abort", () => read.reject(extra.signal?.reason));
-        return read.promise;
-      }
-      return { ok: true };
-    },
-  );
-  const settled = vi.fn();
-  const running = scope.track(() => parse([...EDIT, "--command-env", "KEEP=new"]));
-  void running.then(() => settled(), settled);
-  try {
-    await vi.advanceTimersByTimeAsync(0);
-    expect(callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.get")).toHaveLength(
-      1,
-    );
-    scope.beginClose(new DOMException("CLI stopping (SIGINT)", "AbortError"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(settled).toHaveBeenCalledExactlyOnceWith();
-    expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.update")).toBe(false);
-    for (const output of [defaultRuntime.writeStdout, defaultRuntime.error, defaultRuntime.exit]) {
-      expect(output).not.toHaveBeenCalled();
-    }
-  } finally {
-    read.resolve(existing);
     await vi.advanceTimersByTimeAsync(2000);
     await scope.drain();
   }
