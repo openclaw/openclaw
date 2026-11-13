@@ -144,7 +144,7 @@ describe("ClawRouter provider catalog", () => {
     });
     const deepseek = provider.models.find((model) => model.id === "deepseek/deepseek-v4-flash");
     expect(deepseek).toMatchObject({
-      name: "DeepSeek · deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
       api: "openai-completions",
     });
     expect(deepseek?.compat).toBeUndefined();
@@ -157,7 +157,7 @@ describe("ClawRouter provider catalog", () => {
       baseUrl: "https://clawrouter.example/v1/native/anthropic",
     });
     expect(provider.models.find((model) => model.id === "google/gemini-3.5-flash")).toMatchObject({
-      name: "Google Gemini · google/gemini-3.5-flash",
+      name: "Gemini 3.5 Flash",
       api: "google-generative-ai",
       baseUrl: "https://clawrouter.example/v1/native/google-gemini/v1beta",
     });

@@ -394,9 +394,11 @@ the response cache. A model that needs a new wire protocol requires plugin
 support first. Cached inventory is not authorization: ClawRouter checks current
 grants and budgets when a model request is dispatched.
 
-A model's optional `displayName` is its picker label; without it, OpenClaw uses
-the provider display name and catalog `id`, omitting a repeated `<provider>/`
-prefix from the label (for example, `Anthropic · claude-sonnet-4-6`). The label never changes model
+A model's optional `displayName` is its picker label. Without it, OpenClaw uses
+the name of the matching bundled model (for example, `Claude Opus 5.5`), matched
+the same exact way as the model-identity facts below. Otherwise it uses the
+provider display name and catalog `id`, omitting a repeated `<provider>/` prefix
+from the label (for example, `Anthropic · claude-sonnet-4-6`). The label never changes model
 identity. For conversational requests, Responses and Chat Completions send the
 catalog `id` unchanged; native Anthropic and Gemini routes use `upstream` at dispatch. A facade
 that exposes an alias must return only safe catalog metadata, including that

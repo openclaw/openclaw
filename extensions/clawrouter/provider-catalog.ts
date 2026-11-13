@@ -410,7 +410,10 @@ function buildRoutedModel(
 
   return {
     id,
-    name: normalizeOptionalString(row?.displayName) ?? `${provider.displayName} · ${modelLabel}`,
+    name:
+      normalizeOptionalString(row?.displayName) ??
+      identityFacts?.name ??
+      `${provider.displayName} · ${modelLabel}`,
     api,
     baseUrl,
     // Reaching this point proves this credential grants a compatible chat route.
