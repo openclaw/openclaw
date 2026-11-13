@@ -116,7 +116,8 @@ export async function recoverNoticeAcknowledgementCrash({
   expect(checkpoint).toMatchObject([{ status: "failed" }]);
   expect(JSON.parse(checkpoint[0]!.entry_json)).toMatchObject({
     recoveryState: "settlement_pending",
-    deliveryCompletion: completion,
+    // Queue custody crosses JSON, which omits optional undefined fields.
+    deliveryCompletion: JSON.parse(JSON.stringify(completion)),
   });
   const entry = await readEntry();
   expect(entry.pendingDeliveryNotice).toMatchObject({ state: "owed" });
