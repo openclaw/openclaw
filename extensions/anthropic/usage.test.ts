@@ -93,12 +93,68 @@ it("aggregates provider-reported costs, cache tokens, models, and categories", a
   }
 });
 
-it("uses a stored setup token when no Admin API or OAuth credential is available", async () => {
-  const token = `sk-ant-oat01-${"a".repeat(80)}`;
-  const result = await resolveAuth({
-    resolveApiKeyCandidatesFromConfigAndStore: async () => [token],
+const setupToken = `sk-ant-oat01-${"a".repeat(80)}`;
+const webSessionToken = 'openclaw:anthropic-web-session:v1:{"token":"sk-ant-session"}';
+const webSessionEnv = { CLAUDE_AI_SESSION_KEY: "sk-ant-session" };
+// resolveOAuthToken also resolves stored `token` profiles; their values are key candidates.
+const setupTokenProfile = {
+  resolveApiKeyCandidatesFromConfigAndStore: async () => [setupToken],
+  resolveOAuthToken: async () => ({
+    token: setupToken,
+    authProfileId: "anthropic:default",
+    email: "setup@example.com",
+  }),
+};
+
+it.each([
+  ["stored setup-token profile", setupTokenProfile],
+  [
+    "configured setup token",
+    { resolveApiKeyCandidatesFromConfigAndStore: async () => [setupToken] },
+  ],
+])("skips OAuth usage for a %s without a web session", async (_name, overrides) => {
+  expect(await resolveAuth(overrides)).toEqual({ handled: true });
+});
+
+it("routes a stored setup-token profile to the claude.ai web session", async () => {
+  const auth = await resolveAuth({ ...setupTokenProfile, env: webSessionEnv });
+  expect(auth).toEqual({
+    token: webSessionToken,
+    authProfileId: "anthropic:default",
+    email: "setup@example.com",
   });
-  expect(result).toEqual({ token });
+
+  const fetchFn = vi.fn(async (input: string | URL | Request) =>
+    requestUrl(input).pathname === "/api/organizations"
+      ? Response.json([{ uuid: "org-a" }])
+      : Response.json({ five_hour: { utilization: 12 } }),
+  );
+  const snapshot = await fetchUsage({ ...auth, fetchFn: fetchFn as typeof fetch });
+  expect(snapshot).toMatchObject({
+    windows: [{ label: "5h", usedPercent: 12 }],
+    accountEmail: "setup@example.com",
+  });
+  expect(fetchFn.mock.calls.map(([input]) => requestUrl(input).href)).toEqual([
+    "https://claude.ai/api/organizations",
+    "https://claude.ai/api/organizations/org-a/usage",
+  ]);
+});
+
+it("reports an unavailable web session instead of polling OAuth usage", async () => {
+  const fetchFn = vi.fn(async () => new Response("down", { status: 503 }));
+  const snapshot = await fetchUsage({ token: webSessionToken, fetchFn });
+  expect(snapshot.error).toBe("Claude web usage unavailable");
+  expect(fetchFn).toHaveBeenCalledOnce();
+});
+
+it("keeps OAuth usage for an OAuth profile beside a setup-token candidate", async () => {
+  const oauth = { token: "oauth-access-token", subscriptionType: "max" };
+  const result = await resolveAuth({
+    env: webSessionEnv,
+    resolveApiKeyCandidatesFromConfigAndStore: async () => [setupToken],
+    resolveOAuthToken: async () => oauth,
+  });
+  expect(result).toEqual(oauth);
 });
 
 it("prefers a stored Admin API key when normal API and OAuth credentials coexist", async () => {

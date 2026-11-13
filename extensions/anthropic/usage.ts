@@ -6,6 +6,7 @@ import type {
 import {
   addProviderUsageModel,
   asProviderUsageObject,
+  buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
   buildProviderUsageHistorySnapshot,
   cleanProviderUsageCredential,
@@ -13,19 +14,24 @@ import {
   decodeProviderUsageAdminToken,
   encodeProviderUsageAdminToken,
   fetchProviderUsagePages,
-  fetchClaudeUsage,
   parseProviderUsageNonNegativeInteger,
   parseProviderUsageNumber,
   resolveProviderUsageDailyPeriod,
   resolveProviderUsageDisplayName,
   type ProviderUsageSnapshot,
 } from "openclaw/plugin-sdk/provider-usage";
+import {
+  fetchClaudeUsage,
+  fetchClaudeWebUsage,
+  resolveClaudeWebSessionKey,
+} from "./claude-usage.js";
 import { CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
 
 const ANTHROPIC_COST_URL = "https://api.anthropic.com/v1/organizations/cost_report";
 const ANTHROPIC_MESSAGES_USAGE_URL =
   "https://api.anthropic.com/v1/organizations/usage_report/messages";
 const ANTHROPIC_ADMIN_TOKEN_PREFIX = "openclaw:anthropic-admin:v1:";
+const CLAUDE_WEB_SESSION_TOKEN_PREFIX = "openclaw:anthropic-web-session:v1:";
 const ANTHROPIC_USAGE_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 const ANTHROPIC_USAGE_HISTORY_DAYS = 30;
 
@@ -54,7 +60,11 @@ export async function fetchAnthropicUsage(
 ): Promise<ProviderUsageSnapshot> {
   const adminKey = decodeProviderUsageAdminToken(ANTHROPIC_ADMIN_TOKEN_PREFIX, ctx.token);
   if (!adminKey) {
-    const snapshot = await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
+    const webSessionKey = decodeProviderUsageAdminToken(CLAUDE_WEB_SESSION_TOKEN_PREFIX, ctx.token);
+    const snapshot = webSessionKey
+      ? ((await fetchClaudeWebUsage(webSessionKey, ctx.timeoutMs, ctx.fetchFn)) ??
+        buildUsageErrorSnapshot("anthropic", "Claude web usage unavailable"))
+      : await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn);
     if (snapshot.error) {
       return snapshot;
     }
@@ -229,16 +239,26 @@ export async function resolveAnthropicUsageAuth(
   const oauthToken = await ctx.resolveOAuthToken({
     excludeProfileIds: [CLAUDE_CLI_PROFILE_ID],
   });
-  if (oauthToken) {
+  // Stored setup-token profiles resolve here too. Key candidates never include OAuth
+  // access tokens, so a match is a setup token, which may lack the usage scope.
+  if (oauthToken && !storedCandidates.includes(oauthToken.token)) {
     return oauthToken;
   }
 
+  let setupToken = oauthToken;
   const apiKey = storedCandidates[0];
-  if (apiKey) {
+  if (!setupToken && apiKey) {
     const { validateAnthropicSetupToken } = await import("openclaw/plugin-sdk/provider-auth");
     if (validateAnthropicSetupToken(apiKey) === undefined) {
-      return { token: apiKey };
+      setupToken = { token: apiKey };
     }
+  }
+  const sessionKey = setupToken ? resolveClaudeWebSessionKey(ctx.env) : undefined;
+  if (setupToken && sessionKey) {
+    return {
+      ...setupToken,
+      token: encodeProviderUsageAdminToken(CLAUDE_WEB_SESSION_TOKEN_PREFIX, sessionKey),
+    };
   }
 
   // Claude owns its native refresh-token family. Do not resolve a copied

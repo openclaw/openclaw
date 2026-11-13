@@ -32,7 +32,6 @@ function usageCase(
   };
 }
 const cases = [
-  usageCase("fetchClaudeUsage", usageArgs, (sdk) => sdk.fetchClaudeUsage(...usageArgs)),
   usageCase("fetchCodexUsage", codexArgs, (sdk) => sdk.fetchCodexUsage(...codexArgs)),
   usageCase("fetchDeepSeekUsage", usageArgs, (sdk) => sdk.fetchDeepSeekUsage(...usageArgs)),
   usageCase("fetchGeminiUsage", geminiArgs, (sdk) => sdk.fetchGeminiUsage(...geminiArgs)),

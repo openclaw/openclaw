@@ -1,16 +1,20 @@
-import { parseFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
+import { parseDateStringTimestampMs as parseUsageResetAt } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   buildUsageHttpErrorSnapshot,
+  clampPercent,
   fetchJson,
   fetchUsageJson,
-  parseUsageResetAt,
+  PROVIDER_LABELS,
   readUsageJson,
-} from "./provider-usage.fetch.shared.js";
-import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
-import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
+  type ProviderUsageSnapshot,
+  type UsageWindow,
+} from "openclaw/plugin-sdk/provider-usage";
+import {
+  isRecord,
+  normalizeOptionalString,
+  parseFiniteNumber,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function readClaudeWindow(
   value: unknown,
@@ -100,14 +104,15 @@ function buildClaudeUsageWindows(
   return usage.windows;
 }
 
-function resolveClaudeWebSessionKey(): string | undefined {
-  const direct =
-    process.env.CLAUDE_AI_SESSION_KEY?.trim() ?? process.env.CLAUDE_WEB_SESSION_KEY?.trim();
+export function resolveClaudeWebSessionKey(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const direct = env.CLAUDE_AI_SESSION_KEY?.trim() ?? env.CLAUDE_WEB_SESSION_KEY?.trim();
   if (direct?.startsWith("sk-ant-")) {
     return direct;
   }
 
-  const cookieHeader = process.env.CLAUDE_WEB_COOKIE?.trim();
+  const cookieHeader = env.CLAUDE_WEB_COOKIE?.trim();
   if (!cookieHeader) {
     return undefined;
   }
@@ -117,7 +122,7 @@ function resolveClaudeWebSessionKey(): string | undefined {
   return value?.startsWith("sk-ant-") ? value : undefined;
 }
 
-async function fetchClaudeWebUsage(
+export async function fetchClaudeWebUsage(
   sessionKey: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
