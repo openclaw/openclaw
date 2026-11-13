@@ -1,4 +1,3 @@
-import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import type { ForwardedAvatarOptions } from "../chat-avatar-view.tsx";
@@ -22,7 +21,6 @@ export type RenderMessageGroupOptions = Omit<
   ForwardedAvatarOptions & {
     /** A run frame's line, from its final answer; other groups resolve their own. */
     frameReplyLine?: ReplyLine;
-    latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
     /** Configured main-session key; an agent's main source labels as the agent. */
     mainKey?: string;
     basePath?: string;
@@ -51,6 +49,7 @@ export type RenderMessageGroupOptions = Omit<
     activityGroupKey?: string;
     bubbleActivityGroupKey?: string;
     turnRecap?: TurnRecap;
+    turnDurations?: ReadonlyMap<string, number>;
     /** Frame bodies are pre-rendered by the frame owner; ordinary groups omit them. */
     frameContent?: readonly unknown[];
     frameActionOwner?: MessageGroup["messages"][number] | null;

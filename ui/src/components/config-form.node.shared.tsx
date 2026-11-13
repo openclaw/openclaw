@@ -172,6 +172,7 @@ export function FieldRow(props: {
   required?: boolean;
   control: JSX.Element;
   stacked?: boolean;
+  usingDefault?: boolean;
   /** Field controls share the form's control column; a stepper hugs the edge like a toggle. */
   placement?: "column";
   error?: JSX.Element;
@@ -244,7 +245,7 @@ export function FieldRow(props: {
         </div>
       )}
       {props.control != null && (
-        <div class="settings-row__control">
+        <div class={["settings-row__control", { "cfg-default-control": props.usingDefault }]}>
           {!props.showLabel && props.required && (
             <span class="settings-row__desc" aria-hidden="true">
               {t("configForm.required")}
@@ -356,6 +357,7 @@ export function schemaDefaultValueText(schema: JsonSchema): string | undefined {
 export function SegmentedControl(props: {
   options: unknown[];
   resolvedValue: unknown;
+  usingDefault?: boolean;
   disabled: boolean;
   required?: boolean;
   ariaLabel: string;
@@ -372,6 +374,12 @@ export function SegmentedControl(props: {
       label: configEnumOptionLabel(option, props.options),
     }));
   });
+  const select = (index: string) => {
+    const option = props.options[Number(index)];
+    if (option !== undefined) {
+      return props.onSelect(option);
+    }
+  };
   return (
     <SettingsSegmented
       value={selectedIndex() < 0 ? "" : String(selectedIndex())}
@@ -380,12 +388,8 @@ export function SegmentedControl(props: {
       ariaRequired={props.required}
       ariaLabel={props.ariaLabel}
       descriptionId={props.descriptionId}
-      onChange={(index: string) => {
-        const option = props.options[Number(index)];
-        if (option !== undefined) {
-          return props.onSelect(option);
-        }
-      }}
+      onChange={select}
+      onReselect={props.usingDefault && !props.disabled ? select : undefined}
     />
   );
 }

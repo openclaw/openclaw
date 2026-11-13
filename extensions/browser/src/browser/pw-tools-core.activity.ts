@@ -77,15 +77,11 @@ export async function getNetworkRequestsViaPlaywright(opts: {
 }): Promise<{ requests: BrowserNetworkRequest[] }> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
-  const raw = [...state.requests.values()];
+  const raw = state.readNetworkRequests?.(opts.clear) ?? [];
   const filter = opts.filter?.trim();
   const requests = filter
     ? raw.filter((r) => r.url.includes(filter) || r.resourceType?.includes(filter))
     : raw;
-  if (opts.clear) {
-    state.requests.clear();
-    state.requestIds = new WeakMap();
-  }
   return { requests };
 }
 

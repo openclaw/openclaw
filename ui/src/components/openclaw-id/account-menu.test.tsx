@@ -2,17 +2,29 @@
 import { createRoot, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { signOutOfOpenClawId } from "../../lib/openclaw-id/account.ts";
+import { createGatewayHarness, flushMicrotasks } from "../../app/overlays-access.test-support.ts";
+import { openClawIdAccount, signOutOfOpenClawId } from "../../lib/openclaw-id/account.ts";
 import { OPENCLAW_ID_CALLBACK_KEY_PREFIX } from "../../lib/openclaw-id/callback-contract.ts";
-import type { OpenClawIdStatusResult } from "../../lib/openclaw-id/types.ts";
+import {
+  beginOpenClawIdDeviceSignIn,
+  finishOpenClawIdDeviceSignIn,
+} from "../../lib/openclaw-id/device-sign-in.ts";
+import type { OpenClawIdPublication, OpenClawIdStatusResult } from "../../lib/openclaw-id/types.ts";
+import { disposeSidebarContextLifecycles } from "../../test-helpers/app-sidebar-context-lifecycle.ts";
+import { createContext, createSessions } from "../../test-helpers/app-sidebar.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { showConfirmDialog } from "../confirm-dialog.ts";
-import type { MenuItem } from "../solid/menu.tsx";
+import { Menu, type MenuEntry, type MenuItem } from "../solid/menu.tsx";
 import {
   openClawIdMenuEntries,
   openClawIdMenuIdentity,
   openClawIdSignOutEntries,
   selectOpenClawIdMenuValue,
 } from "./account-menu.tsx";
+import { OpenClawIdIdentityMenu } from "./identity-menu.tsx";
 
 // mock-isolation: the confirmation dialog is answered directly so menu actions run without a modal.
 vi.mock("../confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
@@ -22,6 +34,7 @@ function status(overrides: Partial<OpenClawIdStatusResult> = {}): OpenClawIdStat
     status: { state: "on" },
     link: { linked: false },
     channel: "local_operator",
+    accountSignIn: "popup",
     owner: true,
     connection: { kind: "local" },
     ownerDeviceCount: 2,
@@ -36,9 +49,14 @@ function status(overrides: Partial<OpenClawIdStatusResult> = {}): OpenClawIdStat
 }
 
 // Read the exact rendered content in the same owned scope as the sidebar memo.
-function menu(current: OpenClawIdStatusResult | null) {
+function menu(current: OpenClawIdStatusResult | null, publication?: OpenClawIdPublication) {
   return createRoot((dispose) => {
-    const entries = [...openClawIdMenuEntries(current), ...openClawIdSignOutEntries(current)];
+    const flatten = (items: readonly MenuEntry[]): MenuEntry[] =>
+      items.flatMap((item) => (item.kind === "group" ? flatten(item.items) : [item]));
+    const entries = flatten([
+      ...openClawIdMenuEntries(current, publication),
+      ...openClawIdSignOutEntries(current),
+    ]);
     const rows = entries.filter((entry): entry is MenuItem => !("kind" in entry));
     const text = entries
       .map((entry) => ("content" in entry ? (entry.content as HTMLElement)?.textContent : ""))
@@ -82,13 +100,263 @@ async function signIn(current: OpenClawIdStatusResult) {
 }
 
 describe("approved OpenClaw ID account menu", () => {
-  beforeEach(() => vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true));
+  beforeEach(() => {
+    vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true);
+    // jsdom has no Web Animations; the production-browser suite owns motion proof.
+    const matchMedia = window.matchMedia;
+    vi.spyOn(window, "matchMedia").mockImplementation((query) => {
+      const media = matchMedia(query);
+      Object.defineProperty(media, "matches", {
+        value: query === "(prefers-reduced-motion: reduce)",
+      });
+      return media;
+    });
+  });
 
   afterEach(() => {
+    cleanupSolid();
+    disposeSidebarContextLifecycles();
     signOutOfOpenClawId();
     flush();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it.each([
+    { retirement: "client", code: "needs_link_code", label: "Publish", remedy: "Publish new keys" },
+    {
+      retirement: "revision",
+      code: "binding_superseded",
+      label: "Newer keys",
+      remedy: "Move to new keys",
+    },
+  ])(
+    "keeps $code on a rejected refresh and discards it on $retirement retirement",
+    async ({ retirement, code, label, remedy }) => {
+      const current = status({ link: linked });
+      await signIn(current);
+      const pending = Promise.withResolvers<OpenClawIdPublication>();
+      let publication: OpenClawIdPublication | Promise<OpenClawIdPublication> = {
+        state: "failed",
+        code,
+        message: "publication failed",
+      };
+      const request = vi.fn(async (method: string) => {
+        if (method === "openclawId.status") {
+          return current;
+        }
+        if (method === "openclawId.people") {
+          return { link: { ...linked, publication: await publication } };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const client = createTestGatewayClient(request);
+      const h = createGatewayHarness(client);
+      const context = createContext(h.gateway, createSessions("main", []));
+      const stopEvents = vi.fn();
+      const subscribeEvents = h.gateway.subscribeEvents.bind(h.gateway);
+      vi.spyOn(h.gateway, "subscribeEvents").mockImplementation((listener) => {
+        const stop = subscribeEvents(listener);
+        return () => {
+          stopEvents();
+          return stop();
+        };
+      });
+      const onClose = vi.fn();
+      const view = mountSolid(
+        () => (
+          <OpenClawIdIdentityMenu
+            position={{ x: 0, bottom: 400, width: 280 }}
+            nativeGatewaySnapshot={null}
+            canPairDevice={false}
+            basePath=""
+            gatewayVersion={null}
+            updateAvailable={false}
+            canRetryConnection={false}
+            themeMode="system"
+            triggerWidth={280}
+            onClose={onClose}
+            onNavigate={() => {}}
+            onPairMobile={() => {}}
+          />
+        ),
+        { wrapper: createSolidApplicationContextProvider(context).wrapper },
+      );
+      const warning = () => view.container.querySelector('[data-attention="true"]');
+      await waitForSolid(() => expect(warning()?.textContent).toContain(label));
+      const menuElement = view.container.querySelector(".sidebar-identity-menu");
+      await waitForSolid(() => expect(menuElement?.getAttribute("data-phase")).toBe("open"));
+      h.emitEvent("sessions.changed", {});
+      flush();
+      expect(request.mock.calls.filter(([method]) => method === "openclawId.people")).toHaveLength(
+        1,
+      );
+      publication = pending.promise;
+      h.emitEvent("openclawId.people.changed", {});
+      await waitForSolid(() =>
+        expect(
+          request.mock.calls.filter(([method]) => method === "openclawId.people"),
+        ).toHaveLength(2),
+      );
+      expect(warning()?.querySelector("span")?.style.color).toBe("var(--warn)");
+      pending.reject(new Error("People unavailable"));
+      await expect(request.mock.results.at(-1)?.value).rejects.toThrow("People unavailable");
+      await flushMicrotasks();
+      flush();
+      expect(warning()?.textContent).toContain(label);
+      expect(view.getByText(remedy)).toBeDefined();
+      publication = { state: "published", ownerAccountId: "owner", snapshotSeq: 2 };
+      h.emitEvent("openclawId.people.changed", {});
+      await waitForSolid(() => expect(warning()).toBeNull());
+      publication = { state: "failed", code: "binding_superseded", message: "superseded" };
+      h.emitEvent("openclawId.people.changed", {});
+      await waitForSolid(() => expect(warning()?.textContent).toContain("Newer keys"));
+      expect(view.container.querySelector(".sidebar-identity-menu")).toBe(menuElement);
+      expect(menuElement?.getAttribute("data-phase")).toBe("open");
+      expect(onClose).not.toHaveBeenCalled();
+      const retired = Promise.withResolvers<OpenClawIdPublication>();
+      publication = retired.promise;
+      h.emitEvent("openclawId.people.changed", {});
+      await waitForSolid(() =>
+        expect(
+          request.mock.calls.filter(([method]) => method === "openclawId.people"),
+        ).toHaveLength(5),
+      );
+      const replacement = vi.fn(async (method: string) => {
+        if (method === "openclawId.status") {
+          return current;
+        }
+        throw new Error("New owner's People unavailable");
+      });
+      const replacementClient = createTestGatewayClient(replacement);
+      if (retirement === "client") {
+        h.update({ client: replacementClient });
+      } else {
+        client.request = replacementClient.request.bind(replacementClient);
+        h.gateway.connectionRevision++;
+        h.update({});
+      }
+      await waitForSolid(() => expect(warning()).toBeNull());
+      expect(stopEvents).toHaveBeenCalledOnce();
+      retired.resolve({ state: "failed", code: "binding_superseded", message: "old owner" });
+      await request.mock.results.at(-1)?.value;
+      h.emitEvent("openclawId.people.changed", {});
+      flush();
+      expect(warning()).toBeNull();
+      await waitForSolid(() => expect(replacement).toHaveBeenCalledWith("openclawId.people", {}));
+      const replacementCalls = replacement.mock.calls.length;
+      const nonOwner = vi.fn(async () => ({ ...current, owner: false }));
+      h.update({ client: createTestGatewayClient(nonOwner) });
+      await waitForSolid(() => expect(stopEvents).toHaveBeenCalledTimes(2));
+      h.emitEvent("openclawId.people.changed", {});
+      flush();
+      expect(warning()).toBeNull();
+      expect(nonOwner).toHaveBeenCalledExactlyOnceWith("openclawId.status", {});
+      const calls = request.mock.calls.length;
+      view.unmount();
+      expect(stopEvents).toHaveBeenCalledTimes(2);
+      h.emitEvent("openclawId.people.changed", {});
+      flush();
+      expect(request).toHaveBeenCalledTimes(calls);
+      expect(replacement).toHaveBeenCalledTimes(replacementCalls);
+      expect(nonOwner).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("signs in over a personal sign-in with a device code and shows the account", async () => {
+    vi.useFakeTimers();
+    const personal = status({
+      channel: null,
+      accountSignIn: "device",
+      owner: false,
+      connection: { kind: "none" },
+    });
+    // The person's own profile heads the menu until this browser holds an OpenClaw ID.
+    expect(openClawIdMenuIdentity(personal)).toBeNull();
+    let polls = 0;
+    const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      expect(method).toBe("openclawId.account");
+      if (params.action === "device_begin") {
+        return {
+          state: "d1",
+          userCode: "WDJB-MJHT",
+          verificationUri: "https://issuer.example.test/device",
+          verificationUriComplete: "https://issuer.example.test/device?user_code=WDJB-MJHT",
+          expiresAt: Date.now() + 600_000,
+          interval: 5,
+        };
+      }
+      expect(params).toEqual({ action: "device_poll", state: "d1" });
+      polls += 1;
+      return polls < 2 ? { pending: true, interval: 5 } : { account, idToken: "device-token" };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const started = await beginOpenClawIdDeviceSignIn(client);
+    const finished = finishOpenClawIdDeviceSignIn({
+      client,
+      started,
+      basePath: "",
+      signal: new AbortController().signal,
+    });
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(polls).toBe(0);
+    await vi.advanceTimersByTimeAsync(10_001);
+    await expect(finished).resolves.toMatchObject({ signedIn: { email: "owner@example.test" } });
+    expect(openClawIdAccount()?.idToken).toBe("device-token");
+    expect(openClawIdMenuIdentity(personal)).toEqual({
+      name: "Owner",
+      detail: "owner@example.test · OpenClaw ID",
+    });
+    const signedIn = menu(personal);
+    expect(signedIn.labels).toContain("Sign out of OpenClaw ID");
+    // Signing in grants nothing: remote access setup and owner tools stay on this computer.
+    expect(signedIn.labels).not.toContain("Move to new keys");
+    expect(signedIn.labels).not.toContain("Your devices");
+    vi.useRealTimers();
+  });
+
+  it("retires a device sign-in when this origin signs out while it starts", async () => {
+    const begun = Promise.withResolvers<unknown>();
+    const request = vi.fn(async () => begun.promise);
+    const starting = beginOpenClawIdDeviceSignIn({ request } as unknown as GatewayBrowserClient);
+    window.localStorage.setItem("openclaw.openclawId.signedOut", "another-tab");
+    begun.resolve({
+      state: "d1",
+      userCode: "WDJB-MJHT",
+      verificationUri: "https://issuer.example.test/device",
+      verificationUriComplete: null,
+      expiresAt: Date.now() + 600_000,
+      interval: 5,
+    });
+    await expect(starting).rejects.toThrow("You signed out while sign-in was in progress");
+  });
+
+  it("stops polling a device sign-in when it is cancelled", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async () => ({ pending: true, interval: 5 }));
+    const stop = new AbortController();
+    const finished = finishOpenClawIdDeviceSignIn({
+      client: { request } as unknown as GatewayBrowserClient,
+      started: {
+        state: "d1",
+        userCode: "WDJB-MJHT",
+        verificationUri: "https://issuer.example.test/device",
+        verificationUriComplete: null,
+        expiresAt: Date.now() + 600_000,
+        interval: 5,
+        signOutGeneration: window.localStorage.getItem("openclaw.openclawId.signedOut"),
+      },
+      basePath: "",
+      signal: stop.signal,
+    });
+    const settled = expect(finished).rejects.toBeDefined();
+    await vi.advanceTimersByTimeAsync(5_000);
+    stop.abort();
+    await settled;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(request).toHaveBeenCalledOnce();
+    expect(openClawIdAccount()).toBeNull();
+    vi.useRealTimers();
   });
 
   it("is absent when the Labs flag is off", () => {
@@ -105,18 +373,55 @@ describe("approved OpenClaw ID account menu", () => {
     expect(menu(current).labels).toEqual(["Sign in with OpenClaw ID"]);
     const entries = menu(current);
     expect(entries.text.trim()).toBe("");
-    expect(entries.rows[0]?.icon).toBeUndefined();
     expect(entries.rows[0]?.render).toBeTypeOf("function");
     expect(menu(current).text).not.toMatch(/People|\bAccess\b|Make reachable|Regenerate|Unlink/);
   });
 
-  it("does not allow loopback sign-in over an untrusted connection", () => {
-    expect(
-      menu(status({ channel: null, owner: false, connection: { kind: "none" } })).rows[0]?.disabled,
-    ).toBe(true);
+  it.each([
+    [status(), null],
+    [
+      status({ channel: null, accountSignIn: null, owner: false, connection: { kind: "none" } }),
+      "Sign in through Tailscale or another personal sign-in, or on the computer that runs this claw.",
+    ],
+    [
+      status({
+        channel: null,
+        accountSignIn: "device",
+        owner: false,
+        connection: { kind: "none" },
+      }),
+      null,
+    ],
+    [
+      status({ services: { issuerUrl: null, discoveryUrl: null, loaderDomain: null } }),
+      "OpenClaw ID is not set up for this claw. Ask the person who manages it to finish setup.",
+    ],
+  ])("renders the sign-in card with its availability reason", async (current, reason) => {
+    const onSelect = vi.fn();
+    const { container } = mountSolid(() => (
+      <Menu
+        id="account-sign-in"
+        label="Account"
+        open
+        items={openClawIdMenuEntries(current)}
+        onSelect={onSelect}
+      />
+    ));
+    const card = () =>
+      container.querySelector<HTMLButtonElement>('[data-value="openclaw-id:sign-in"]');
+    await waitForSolid(() => expect(card()).not.toBeNull());
+    expect(card()?.classList.contains("sidebar-openclaw-id__card")).toBe(true);
+    expect(card()?.getAttribute("aria-label")).toBe("Sign in with OpenClaw ID");
+    expect(card()?.disabled).toBe(Boolean(reason));
+    if (reason) {
+      expect(card()?.textContent).toContain(reason);
+      expect(card()?.getAttribute("aria-description")).toBe(reason);
+    }
+    card()!.click();
+    await waitForSolid(() => expect(onSelect).toHaveBeenCalledTimes(reason ? 0 : 1));
   });
 
-  it("remote owner shows verified account, encrypted device, count, and no local actions", () => {
+  it("remote owner shows verified account, encrypted device and no local actions", () => {
     const current = status({
       channel: "tunnel",
       link: linked,
@@ -137,12 +442,16 @@ describe("approved OpenClaw ID account menu", () => {
     expect(menu(current).text).not.toMatch(
       /reachable|crabd|People|\bAccess\b|Sign in|Regenerate|never-display/,
     );
-    expect((menu(current).rows[0]?.details as HTMLElement | undefined)?.textContent).toBe("2");
+    expect(menu(current).rows[0]?.details).toBeUndefined();
   });
 
-  it.each(["viewer", "operator"] as const)(
+  it.each([
+    ["viewer", "Viewer"],
+    ["operator", "Operator"],
+    ["guest", "guest"],
+  ] as const)(
     "remote %s shows own email, role and known inviter with no owner items",
-    (role) => {
+    (role, label) => {
       const current = status({
         channel: "tunnel",
         owner: false,
@@ -158,7 +467,7 @@ describe("approved OpenClaw ID account menu", () => {
       });
       expect(openClawIdMenuIdentity(current)).toEqual({
         name: "member@example.test",
-        detail: `${role === "viewer" ? "Viewer" : "Operator"} on studio`,
+        detail: `${label} on studio`,
       });
       expect(menu(current).labels).toEqual([]);
       expect(menu(current).text).toContain("Invited by Owner");
@@ -180,7 +489,7 @@ describe("approved OpenClaw ID account menu", () => {
         displayName: null,
       },
     });
-    expect(openClawIdMenuIdentity(current).name).toBe("OpenClaw ID account");
+    expect(openClawIdMenuIdentity(current)?.name).toBe("OpenClaw ID account");
     expect(menu(current).text).not.toContain("Invited by");
   });
 
@@ -215,15 +524,14 @@ describe("approved OpenClaw ID account menu", () => {
         connection: { kind: "local", accountEmail: account.email, accountName: account.name },
       });
       await signIn(current);
-      expect(openClawIdMenuIdentity(current).detail).toBe("owner@example.test · Local access");
+      expect(openClawIdMenuIdentity(current)?.detail).toBe("owner@example.test · Local access");
       expect(menu(current).labels).toEqual([
         "Copy claw link",
+        "Move to new keys",
         "Your devices",
         "Sign out of OpenClaw ID",
       ]);
-      expect(menu(current).text).toContain(
-        `Remote access onstudio-e61zr.crabd.xyz${relayOnline ? "Online" : "Offline"}`,
-      );
+      expect(menu(current).text).toContain(`Remote access on${relayOnline ? "Online" : "Offline"}`);
       expect(menu(current).text).not.toMatch(/People|\bAccess\b|Regenerate|Turn off remote|Unlink/);
     },
   );
@@ -232,7 +540,7 @@ describe("approved OpenClaw ID account menu", () => {
     const current = status();
     const request = await signIn(current);
     expect(menu(current).labels).toEqual(["Turn on remote access", "Sign out of OpenClaw ID"]);
-    expect(openClawIdMenuIdentity(current).name).toBe("OpenClaw ID account");
+    expect(openClawIdMenuIdentity(current)?.name).toBe("OpenClaw ID account");
     expect(request).toHaveBeenLastCalledWith("openclawId.authority", {
       action: "account_complete",
       state: "s1",
@@ -266,17 +574,63 @@ describe("approved OpenClaw ID account menu", () => {
     expect(menu(current).labels).toContain("Sign out of OpenClaw ID");
   });
 
-  it("copies the canonical HTTPS remote link", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-    selectOpenClawIdMenuValue("openclaw-id:copy-link", {
-      status: status({ link: linked }),
-      client: null,
+  it("warns about unusable or superseded keys on this computer, each with its fix", async () => {
+    const refused = status({
+      link: linked,
+      status: { state: "keys_refused", key: "gateway", reason: "keys_missing" },
+    });
+    await signIn(refused);
+    const keys = menu(refused);
+    expect(keys.text).toContain("Remote access is off: a key file is missing");
+    expect(keys.text).not.toContain("Remote access on");
+    expect(keys.labels).toContain("Move to new keys");
+    const superseded = menu(status({ link: linked }), {
+      state: "failed",
+      code: "binding_superseded",
+      message: "x",
+    });
+    expect(superseded.text).toContain("Newer keys are in use for this claw");
+    expect(superseded.labels).toContain("Move to new keys");
+    const pending = menu(status({ link: linked }), {
+      state: "failed",
+      code: "needs_link_code",
+      message: "x",
+    });
+    expect(pending.text).toContain("New keys aren't published yet");
+    expect(pending.labels).toContain("Publish new keys");
+    // Over the tunnel nothing here can be fixed: no warnings, no local actions.
+    const remote = menu(status({ channel: "tunnel", link: linked, connection: { kind: "none" } }), {
+      state: "failed",
+      code: "binding_superseded",
+      message: "x",
+    });
+    expect(remote.text).not.toContain("Newer keys");
+    expect(remote.labels).not.toContain("Move to new keys");
+  });
+
+  it("publishes new keys with a link code fetched from the signed-in account", async () => {
+    const current = status({ link: linked });
+    await signIn(current);
+    const request = vi.fn(async (_method: string, params: Record<string, unknown>) =>
+      params.action === "account_link_code"
+        ? { code: "ACCOUNT-CODE" }
+        : { publication: { state: "published", ownerAccountId: "a", snapshotSeq: 3 } },
+    );
+    selectOpenClawIdMenuValue("openclaw-id:publish-keys", {
+      status: current,
+      client: { request } as unknown as GatewayBrowserClient,
       basePath: "",
     });
     await vi.waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith("https://studio-e61zr.crabd.xyz"),
+      expect(request).toHaveBeenLastCalledWith("openclawId.authority", {
+        action: "publish",
+        enrollmentCode: "ACCOUNT-CODE",
+      }),
     );
+    expect(request).toHaveBeenCalledWith("openclawId.authority", {
+      action: "account_link_code",
+      idToken: "test-token",
+    });
   });
 
   it("offers remote sign-out only with the loader's real service worker", () => {

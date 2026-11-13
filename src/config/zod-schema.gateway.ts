@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
@@ -380,6 +381,25 @@ export const GatewayConfigSchema = z
              * trust boundary and direct Gateway access is otherwise locked down.
              */
             allowLoopback: z.boolean().optional(),
+            /** Revision-scoped delegation from OpenClaw Enterprise's private browser proxy. */
+            delegation: z
+              .strictObject({
+                credentialFile: z
+                  .string()
+                  .refine(isAbsolute, "Expected an absolute credential file path"),
+              })
+              .optional(),
+            /** Optional organization commit credit, supplied only by the authenticated proxy. */
+            gitCoauthor: z
+              .strictObject({
+                nameHeader: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u),
+                emailHeader: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u),
+                emailVerifiedHeader: z
+                  .string()
+                  .regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u)
+                  .optional(),
+              })
+              .optional(),
             /** Optional verified GitHub identity from one explicitly trusted Access OIDC provider. */
             cloudflareAccessOidc: z
               .strictObject({

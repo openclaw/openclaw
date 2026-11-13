@@ -62,9 +62,9 @@ topic. The triage ladder stays on this page; open the page that matches your que
     ```
     If RPC is down, fall back to:
     ```bash
-    tail -f "/tmp/openclaw/openclaw-$(date +%F).log"
+    tail -f "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/logs/openclaw-$(date +%F).log"
     # Named profile example:
-    tail -f "/tmp/openclaw/openclaw-dev-$(date +%F).log"
+    tail -f "${OPENCLAW_STATE_DIR:-$HOME/.openclaw-dev}/logs/openclaw-dev-$(date +%F).log"
     ```
     File logs are separate from service logs; see [Logging](/logging) and [Troubleshooting](/gateway/troubleshooting).
   </Step>

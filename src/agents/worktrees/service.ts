@@ -63,6 +63,7 @@ import {
   materializeRepositoryWorktree,
   prepareWarmWorktree,
 } from "./repository-setup.js";
+import { IDLE_GC_MS } from "./retention.js";
 import {
   captureWorktreeRunEndContext,
   withWorktreeRunEnd,
@@ -120,7 +121,6 @@ export {
   type WorktreeRemovalFailureReason,
 } from "./removal-errors.js";
 
-export const IDLE_GC_MS = 7 * 24 * 60 * 60 * 1000; // Idle worktrees remain restorable after automatic cleanup.
 export const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // Snapshot refs expire with their registry affordance.
 export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -167,7 +167,7 @@ export class ManagedWorktreeService {
   private readonly orphanCleanupFailures: Parameters<
     typeof collectRetiredWorktreeArtifacts
   >[0]["orphanFailures"] = new Map();
-  private readonly maintainGit: ReturnType<typeof createWorktreeGitMaintenance>;
+  readonly maintainGit: ReturnType<typeof createWorktreeGitMaintenance>;
 
   constructor(options: ServiceOptions = {}) {
     this.env = options.env ?? process.env;

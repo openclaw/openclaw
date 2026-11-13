@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { repairAcpSessionMetaKeysForDoctor } from "../../acp/runtime/session-meta-doctor.js";
 import { buildAcpDatabaseSessionKey } from "../../acp/runtime/session-meta-keys.js";
@@ -6,6 +8,7 @@ import {
   writeAcpSessionMetaForMigration,
 } from "../../acp/runtime/session-meta.js";
 import { noteSessionTranscriptHealth } from "../../commands/doctor-session-transcripts.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -14,13 +17,19 @@ import {
   readAgentDatabaseAdmissionRefusal,
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
+import { completeAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -216,6 +225,55 @@ it("startup refuses unresolved ACP ownership even without a discovered agent sto
     await expect(startup()).rejects.toThrow("unresolved shared ACP owner");
   });
 });
+
+it.each(["retained-by-deletion", "unconfigured", "configured"] as const)(
+  "startup scopes old-schema ACP stores: %s",
+  async (disposition) => {
+    await withAcpState(
+      ["main", "retired"],
+      async ({ env, cfg, startup, handoff, seed, statePath }) => {
+        seed("agent:main:main");
+        const key = "agent:retired:acp:legacy";
+        const entry = seed(key, "retired");
+        seedMeta(env, key, entry.lifecycleRevision, acpMeta("retired"));
+        const pathname = resolveOpenClawAgentSqlitePath({ agentId: "retired", env });
+        await closeOpenClawAgentDatabaseByPathAsync(pathname);
+        const database = openNodeSqliteDatabase(pathname);
+        database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
+        database.close();
+        if (disposition !== "configured") {
+          delete cfg.agents.entries.retired;
+        }
+        if (disposition === "retained-by-deletion") {
+          const deletion = beginAgentDeletionJournal(
+            {
+              agentId: "retired",
+              operationId: "retained-acp-startup",
+              agentDir: path.dirname(pathname),
+              sessionsDir: statePath("agents", "retired", "sessions"),
+              workspaceDir: statePath("workspace-retired"),
+              deleteFiles: false,
+            },
+            { env },
+          );
+          runOpenClawStateWriteTransaction(
+            (db) => completeAgentDeletionJournalInDatabase(db, "retired", deletion.operationId),
+            { env },
+          );
+        }
+        const before = fs.readFileSync(pathname);
+        if (disposition === "configured") {
+          await expect(startup()).rejects.toMatchObject({ code: "gateway.maintenance_required" });
+          expect(handoff).not.toHaveBeenCalled();
+        } else {
+          await expect(startup()).resolves.toBeUndefined();
+          expect(handoff.mock.calls.map(([target]) => target.agentId)).toEqual(["main"]);
+        }
+        expect(fs.readFileSync(pathname)).toEqual(before);
+      },
+    );
+  },
+);
 
 it("startup requires offline ACP repair before handing restored stores to runtime", async () => {
   await withAcpState(["main", "ops"], async ({ env, cfg, startup, handoff }) => {

@@ -37,7 +37,7 @@ import type {
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import type { ScopeUpgradeCoordinator } from "../device-scope-upgrade.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
-import type { HealthSummary } from "../health/types.js";
+import type { HealthSummary, ReadinessChecker } from "../health/types.js";
 import type { LiveTextProjectionText } from "../live-text-continuity.js";
 import type { MentionInbox } from "../mention-inbox.contracts.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
@@ -291,7 +291,7 @@ type GatewayKernelContext = {
     params: ChatStartupProjectionReadParams,
   ) => Promise<ChatStartupProjectionResult | undefined>;
   getHealthCache: () => HealthSummary | null;
-  getReadiness?: import("../server/readiness.js").ReadinessChecker;
+  getReadiness?: ReadinessChecker;
   logHealth: { error: (message: string) => void };
   logGateway: SubsystemLogger;
   publishPresence: () => void;
@@ -362,7 +362,8 @@ type GatewayTransportContext = {
     record?: ExecApprovalRecord<TPayload>;
   }) => ReadonlySet<string>;
   disconnectClientsForDevice?: (deviceId: string, opts?: { role?: string }) => void;
-  disconnectClientsForUserProfile?: (profileId: string) => void;
+  /** With `roleOnly`, current owner devices stay: their certificate, not the role, bounds them. */
+  disconnectClientsForUserProfile?: (profileId: string, opts?: { roleOnly?: boolean }) => void;
   invalidateClientsForDevice?: (
     deviceId: string,
     opts?: { role?: string; reason?: string },
@@ -477,7 +478,7 @@ export type GatewayRequestContext = GatewayKernelContext &
     /** Entry-only access; the kernel owns closure. Absent in embedded-only contexts. */
     requestEntryLifetime?: Pick<
       import("../server-request-entry.js").GatewayRequestEntryLifetime,
-      "enter" | "signal"
+      "enter" | "signal" | "retainedSignal"
     >;
   };
 

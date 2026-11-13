@@ -207,7 +207,7 @@ suite.define(() => {
     await expectCount(user, 1);
     await expectCount(page.locator(".chat-queue__item"), 0);
     await link.waitFor();
-    await user.getByText("Queued behind the current turn", { exact: false }).waitFor();
+    await user.getByText("Queued", { exact: true }).waitFor();
     await stop.waitFor();
     await gateway.setMethodResponse("chat.history", {
       ...history,
@@ -222,7 +222,7 @@ suite.define(() => {
       reason: "agent.input.settled",
     });
     const queued = page.locator(".chat-queue__item", { hasText: prompt });
-    await queued.getByText("Queued behind the current turn", { exact: true }).waitFor();
+    await queued.getByText("Queued", { exact: true }).waitFor();
     await expectCount(queued.getByRole("button", { name: "Steer queued message", exact: true }), 0);
     await stop.waitFor();
     await capture("followup-queue");
@@ -237,7 +237,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("sessions.changed", settled);
     await user
       .getByRole("status", {
-        name: "Queued behind the current turn",
+        name: "Queued",
         exact: true,
       })
       .waitFor();

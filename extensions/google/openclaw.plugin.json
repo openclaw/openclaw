@@ -67,6 +67,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "google": "google"
+    },
     "discovery": {
       "google": "runtime"
     },
@@ -88,6 +91,29 @@
               "input": 0,
               "output": 0,
               "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "thinkingLevelMap": {
+              "minimal": null
+            },
+            "compat": {
+              "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gemini-4-hydrogen",
+            "name": "Gemini 4 Hydrogen",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 1.5,
+              "output": 7.5,
+              "cacheRead": 0.075,
               "cacheWrite": 0
             },
             "contextWindow": 1048576,
@@ -314,6 +340,48 @@
             "maxTokens": 65536,
             "compat": {
               "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "gemini-decision-1",
+            "name": "Gemini Decision 1",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "gemini-decisions",
+                "input": ["text", "image"],
+                "reasoning": { "modes": ["auto"] },
+                "questions": {
+                  "boolean": { "probabilities": "boolean", "abstention": false },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  }
+                },
+                "confidence": "provider-specific",
+                "limits": {
+                  "maxQuestions": 1000,
+                  "maxStateAndQuestionTokens": 262144,
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": ["image/png", "image/jpeg", "image/webp"],
+                    "remoteUrls": false
+                  }
+                },
+                "billing": {
+                  "unit": "tokens",
+                  "source": "provider-docs",
+                  "usdPerMillion": { "input": 0.1, "output": 0 }
+                }
+              }
             }
           }
         ]
@@ -874,6 +942,31 @@
         "provider": "google-vertex",
         "model": "gemini-live-2.5-flash-preview-native-audio",
         "reason": "Google shut down this Gemini Live preview. Use google-vertex/gemini-3.1-flash-live-preview."
+      },
+      {
+        "provider": "google",
+        "model": "deep-research-preview-04-2026",
+        "reason": "Deep Research is a Google research agent, not a chat model. Use the Google research tool."
+      },
+      {
+        "provider": "google",
+        "model": "deep-research-max-preview-04-2026",
+        "reason": "Deep Research is a Google research agent, not a chat model. Use the Google research tool."
+      },
+      {
+        "provider": "google",
+        "model": "gemini-2.5-computer-use-preview-10-2025",
+        "reason": "Gemini Computer Use needs Google's computer-use tool loop and is not a general chat model."
+      },
+      {
+        "provider": "google",
+        "model": "gemini-3.1-flash-live-preview",
+        "reason": "Gemini Live models serve only the Live API. Use Google realtime voice instead of chat."
+      },
+      {
+        "provider": "google",
+        "model": "gemini-3.1-flash-lite-image",
+        "reason": "Gemini image models are for image generation, not chat."
       }
     ]
   },
@@ -1002,6 +1095,7 @@
     }
   },
   "contracts": {
+    "decisionProviders": ["google"],
     "mediaUnderstandingProviders": ["google"],
     "embeddingProviders": ["gemini", "google"],
     "imageGenerationProviders": ["google"],

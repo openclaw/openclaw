@@ -104,6 +104,11 @@ a new C/Q. Explicit trusted-main or protected-tooling routes remain available
 for diagnostics, main qualification, and postpublish confidence, not fresh
 candidate-owned publication evidence.
 
+When Q differs from C, the helper warns before dispatch and when reconciling the
+request. These runs cannot produce candidate-sealed child receipts, so release
+verification may fail even when the workloads succeed. Use Q=C for candidate
+qualification.
+
 ## Exact frozen-target test omissions
 
 Candidate-owned Q=C qualification rejects test omissions. The following inputs
@@ -163,9 +168,20 @@ node scripts/full-release-validation-at-sha.mjs \
 An existing `--request-file` also enters read-only reconciliation; conflicting
 target, tooling, or input arguments are rejected. An explicitly selected
 `--resume-request <file>` may continue an admitted candidate request only before
-its qualification ref mutation or workflow POST. It retains the original tuple
-and never repeats an uncertain write. Recovery performs no ref
-creation/deletion, dispatch, rerun, cancellation, Git fetch, or request rewrite.
+its first qualification workflow POST. If ref creation succeeded but its readback
+failed, explicit resume verifies the existing ref still points to Q=C and that
+its exact workflow inventory is empty, then reuses it without another ref POST.
+After recovery inventory reads, it revalidates the authenticated admission
+and current signer authority, then reads the ref again immediately before
+recording attempted intent and dispatching. A missing or moved ref, an uncertain inventory, or any
+existing run refuses continuation. An attempted workflow POST remains
+observation-only and is never repeated. Read-only reconciliation verifies an
+uncertain prepared ref before suggesting resume and never rewrites the request.
+The candidate checklist and stable wrapper relay the canonical helper’s recovery
+advice; raw prepared/uncertain state alone never proves resume is safe. Run the
+helper’s explicit resume command when offered, then rerun the wrapper.
+Reconciliation performs no ref creation/deletion, dispatch, rerun, cancellation,
+Git fetch, or request rewrite.
 `dispatch=observed` reports the exact run URL and attempt, not successful
 validation. A newer attempt cannot replace the retained attempt.
 
