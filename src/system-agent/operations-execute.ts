@@ -2,6 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { formatCostUsageCachePrefix } from "../utils/usage-format.js";
 import { t } from "../wizard/i18n/index.js";
 import { isReservedSystemAgentId, SYSTEM_AGENT_ID } from "./agent-id.js";
 import { SYSTEM_AGENT_AUDIT_STORE_LABEL } from "./audit.js";
@@ -19,6 +20,7 @@ import {
   getRegularAgentSetupNotice,
   isPluginBackingDefaultInferenceRoute,
   loadOverviewForOperation,
+  loadUsageForOperation,
   readConfigFileSnapshotLazy,
   readConfigValueAtPath,
   resolveChannelSetupState,
@@ -541,6 +543,37 @@ export async function executeSystemAgentOperation(
     case "health": {
       const { healthCommand } = await import("../commands/health.js");
       await healthCommand({ timeoutMs: 10_000 }, runtime);
+      return { applied: false };
+    }
+    case "usage": {
+      const agentId =
+        opts.requesterAgentId ?? (await loadOverviewForOperation(opts.deps)).defaultAgentId;
+      const summary = await loadUsageForOperation(agentId);
+      const totals = summary.totals;
+      const cacheNotice = formatCostUsageCachePrefix(summary.cacheStatus).trim();
+      const unpriced = totals.totalCost === 0 && totals.missingCostEntries > 0;
+      // The rollup folds catalog estimates into totals for turns without a recorded
+      // charge, so a bare dollar figure would read as provider billing.
+      const costLine = unpriced
+        ? `  Cost: unavailable (cost data missing for ${String(totals.missingCostEntries)} entries)`
+        : `  Cost: $${totals.totalCost.toFixed(4)} (session-derived estimate; catalog prices used where no recorded charge)`;
+      const costBreakdownLine = unpriced
+        ? undefined
+        : `    input $${totals.inputCost.toFixed(4)} · output $${totals.outputCost.toFixed(4)} · cache read $${totals.cacheReadCost.toFixed(4)} · cache write $${totals.cacheWriteCost.toFixed(4)}`;
+      runtime.log(
+        [
+          cacheNotice,
+          `Usage (last ${String(summary.days)} days, agent ${agentId}):`,
+          `  Tokens: ${totals.totalTokens.toLocaleString("en-US")} (input ${totals.input.toLocaleString("en-US")}, output ${totals.output.toLocaleString("en-US")}, cache read ${totals.cacheRead.toLocaleString("en-US")}, cache write ${totals.cacheWrite.toLocaleString("en-US")})`,
+          costLine,
+          costBreakdownLine,
+          totals.missingCostEntries > 0
+            ? `  ${String(totals.missingCostEntries)} entries had no cost data; totals are a lower bound.`
+            : undefined,
+        ]
+          .filter((line): line is string => line !== undefined)
+          .join("\n"),
+      );
       return { applied: false };
     }
     case "gateway-status": {
