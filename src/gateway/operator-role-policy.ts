@@ -105,11 +105,10 @@ export function resolveOperatorRoleSelection(
   const login = githubLogin?.toLowerCase();
   const assignments = roles.assignments?.byGithubLogin;
   if (login && assignments) {
-    for (const configuredLogin in assignments) {
+    for (const configuredLogin of Object.keys(assignments)) {
       if (
-        Object.hasOwn(assignments, configuredLogin) &&
         configuredLogin.trim().toLowerCase() === login &&
-        // SAFETY: the own key above belongs to the validated string-valued assignment map.
+        // SAFETY: Object.keys enumerates the validated string-valued assignment map.
         Object.hasOwn(roles.definitions, assignments[configuredLogin]!)
       ) {
         return { effectiveRole: assignments[configuredLogin], roleSource: "githubLogin" };
