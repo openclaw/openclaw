@@ -51,6 +51,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Gradium](/providers/gradium)
 - [Groq (LPU inference)](/providers/groq)
 - [Hugging Face (Inference)](/providers/huggingface)
+- [JZSTOKEN](/providers/jzstoken)
 - [Kie AI](/providers/kie)
 - [Kilocode](/providers/kilocode)
 - [Levanto Sage (typed decisions, not chat)](/providers/levanto)

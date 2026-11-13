@@ -2336,6 +2336,7 @@
                       "providers/claude-max-api-proxy",
                       "providers/clawrouter",
                       "providers/cloudflare-ai-gateway",
+                      "providers/jzstoken",
                       "providers/kilocode",
                       "providers/liquid-inference",
                       "providers/litellm",
