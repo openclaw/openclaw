@@ -292,7 +292,7 @@ export function isRpcSourceActive(ref: RpcSourceRef | undefined): boolean {
   return isRpcSourceExecuting(ref) && getRpcSourceProjectSessionActive(ref) !== false;
 }
 
-/** Registered preparation and queued input stay visible until their exact source settles. */
+/** Accepted startup stays active; only an actual turn/lane wait projects as queued. */
 export function resolveRpcSourceSessionProgressState(
   ref: RpcSourceRef | undefined,
 ): "queued" | "running" | undefined {
@@ -317,7 +317,9 @@ export function resolveRpcSourceSessionProgressState(
   ) {
     return undefined;
   }
-  return isRpcSourceExecuting(ref) ? "running" : "queued";
+  return ref.input.phase === "waiting" || operation?.phase === "waiting_for_global_lane"
+    ? "queued"
+    : "running";
 }
 
 /** Reads the active-session presentation fact from the exact controller attachment. */
