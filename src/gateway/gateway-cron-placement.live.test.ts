@@ -201,12 +201,17 @@ describeLive("cron placement identity through production Gateway routing", () =>
             connected.request<{ session: GatewaySessionRow }>("sessions.describe", {
               key: rootKey,
             });
-          const historyFor = (run: CronRunLogEntry) =>
-            connected.request<{ messages: unknown[] }>("cron.history", {
-              id: job.id,
-              runId: run.runId,
-              limit: 100,
-            });
+          const historyFor = async (run: CronRunLogEntry, phase = "recorded run") => {
+            try {
+              return await connected.request<{ messages: unknown[] }>("cron.history", {
+                id: job.id,
+                runId: run.runId,
+                limit: 100,
+              });
+            } catch (cause) {
+              throw new Error(`Cron history failed at ${phase}`, { cause });
+            }
+          };
           const sendRoot = async (marker: string, expectedSessionId: string) => {
             const accepted = await connected.request<{ runId: string; status: string }>("agent", {
               agentId: "probe",
@@ -360,12 +365,17 @@ describeLive("cron placement identity through production Gateway routing", () =>
               terminalReply: { disposition: "visible", text: `${marker}_REPLY` },
             });
             expect(gate.effects).toBe(1);
-            const completedHistory = await historyFor(oldRun);
+            const completedHistory = await historyFor(
+              oldRun,
+              `${marker}: before queued completion`,
+            );
             if (queuedRunId) {
               hookTarget = await finishedCronRun(connected, job.id, queuedRunId);
               expect(hookTarget.sessionId).not.toBe(oldRun.sessionId);
               expect((await describeRoot()).session.sessionId).toBe(hookTarget.sessionId);
-              expect(await historyFor(oldRun)).toEqual(completedHistory);
+              expect(await historyFor(oldRun, `${marker}: after queued completion`)).toEqual(
+                completedHistory,
+              );
             }
             expect(
               await connected.request("agent.wait", { runId: accepted.runId, timeoutMs: 0 }),

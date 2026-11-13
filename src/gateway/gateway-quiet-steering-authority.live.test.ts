@@ -887,29 +887,32 @@ describeLive("quiet steering with real caller authority", () => {
         await instance.stopGateway();
         // Read only after the crashed process and its workers have stopped. Public
         // history hides unowned queued rows, so it cannot diagnose orphan discovery.
-        const database = new DatabaseSync(
-          instance.state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
-          { readOnly: true },
-        );
-        try {
-          const pending = executeSqliteQuerySync(
-            database,
-            getSessionKysely(database)
-              .selectFrom("session_pending_inputs as pending")
-              .leftJoin("session_nodes as node", "node.session_key", "pending.session_key")
-              .select([
-                "pending.state",
-                "pending.session_id",
-                "pending.lifecycle_generation",
-                "pending.consumed_event_id",
-                "node.current_session_id",
-              ])
-              .where("pending.run_id", "=", queued.runId),
-          ).rows;
-          console.error("[quiet-live] cold-offline-input " + JSON.stringify(pending));
-        } finally {
-          database.close();
-        }
+        const recordOfflineInput = (phase: string) => {
+          const database = new DatabaseSync(
+            instance.state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+            { readOnly: true },
+          );
+          try {
+            const pending = executeSqliteQuerySync(
+              database,
+              getSessionKysely(database)
+                .selectFrom("session_pending_inputs as pending")
+                .leftJoin("session_nodes as node", "node.session_key", "pending.session_key")
+                .select([
+                  "pending.state",
+                  "pending.session_id",
+                  "pending.lifecycle_generation",
+                  "pending.consumed_event_id",
+                  "node.current_session_id",
+                ])
+                .where("pending.run_id", "=", queued.runId),
+            ).rows;
+            console.error(`[quiet-live] ${phase} ` + JSON.stringify(pending));
+          } finally {
+            database.close();
+          }
+        };
+        recordOfflineInput("cold-offline-input");
         await instance.startGateway();
         expect(instance.child?.pid).not.toBe(oldPid);
         high = await connect(0);
@@ -930,6 +933,15 @@ describeLive("quiet steering with real caller authority", () => {
         const fresh = await send(high, key, "Do not use tools. Reply exactly AFTER_COLD_RESTART.");
         await waitRun(fresh.runId);
         const after = await history(key, [queued.runId]);
+        const newPid = instance.child?.pid;
+        // Freeze the observed post-startup state without letting graceful shutdown
+        // settle inputs and obscure whether startup changed the durable row.
+        await instance.crashGateway();
+        for (const client of clients) {
+          await client.stopAndWait();
+        }
+        await instance.stopGateway();
+        recordOfflineInput("cold-post-startup-input");
         expect(after.inputReceipts).toContainEqual(
           expect.objectContaining({ runId: queued.runId, state: "pending", cancelled: true }),
         );
@@ -953,7 +965,7 @@ describeLive("quiet steering with real caller authority", () => {
         return {
           root: root.runId,
           oldPid,
-          newPid: instance.child?.pid,
+          newPid,
           receipts: after.inputReceipts,
         };
       });
