@@ -9,6 +9,7 @@ import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import type { prepareSandboxDependencyTemplate } from "../../agents/sandbox/dependency-template.js";
 import { createHostSandboxFsBridge } from "../../agents/test-helpers/host-sandbox-fs-bridge.js";
 import { withWorktreeAllocationLease } from "../../agents/worktrees/allocation.js";
+import { resolveWorktreeBase } from "../../agents/worktrees/base-ref.js";
 import { createCopyWorktreeBackend } from "../../agents/worktrees/filesystem-backend.test-support.js";
 import * as worktreeGit from "../../agents/worktrees/git.js";
 import {
@@ -457,7 +458,27 @@ function prewarmFixture() {
   };
   const prepare = (signal: AbortSignal) =>
     prewarmLocalWorkspaceTemplates({ getConfig: () => config, signal });
-  return { state, config, env: { ...process.env }, prepare };
+  const env = { ...process.env };
+  const seed = async (signal: AbortSignal) => {
+    const templateRoot = path.join(state, "worktree-projections");
+    await fs.mkdir(templateRoot);
+    await withWorktreeAllocationLease({ env, signal }, (guard) =>
+      cloneLocalWorkspaceTemplate({
+        source,
+        repoRoot: source,
+        baseCommit,
+        branch: "openclaw/prior-session",
+        destination: path.join(templateRoot, "prior-session"),
+        temporaryRoot: templateRoot,
+        templateRoot,
+        env,
+        sandbox,
+        guard: { ...guard, signal: guard.signal ?? signal },
+      }),
+    );
+    mocks.install.mockClear();
+  };
+  return { state, config, env, prepare, seed };
 }
 
 function holdInstall() {
@@ -480,11 +501,20 @@ function holdInstall() {
 
 it("defers dependency builds while maintenance reports pressure", async ({ signal }) => {
   const warmed = prewarmFixture();
+  await warmed.seed(signal);
   await prewarmLocalWorkspaceTemplates({
     getConfig: () => warmed.config,
     signal,
     shouldDefer: async () => true,
   });
+  expect(mocks.install).not.toHaveBeenCalled();
+});
+
+it("does not build for a configured workspace before its first sandboxed session", async ({
+  signal,
+}) => {
+  const warmed = prewarmFixture();
+  await warmed.prepare(signal);
   expect(mocks.install).not.toHaveBeenCalled();
   await expectMissing(warmed.state, "worktree-projections");
 });
@@ -510,6 +540,7 @@ it.each(["default", "agent-override"] as const)(
 
 it("joins background preparation through the allocation owner", async ({ signal }) => {
   const warmed = prewarmFixture();
+  await warmed.seed(signal);
   const { waitForStart, release } = holdInstall();
   const preparation = warmed.prepare(signal);
   try {
@@ -543,9 +574,11 @@ it("joins background preparation through the allocation owner", async ({ signal 
     await preparation;
     expect(await read(destination, dependencyFile)).toBe(secondLock);
     expect(mocks.install).toHaveBeenCalledOnce();
-    expect(await listTemplatesAsync(warmed.env)).toMatchObject([
-      { status: "ready", sourceCommit: selectedCommit },
-    ]);
+    expect(await listTemplatesAsync(warmed.env)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: "ready", sourceCommit: selectedCommit }),
+      ]),
+    );
   } finally {
     release.resolve();
     await preparation;
@@ -574,11 +607,30 @@ it("prepares the current base of a previously sandboxed project with sandbox mod
       }),
     );
   await clone("prior-session", baseCommit);
+  const priorUse = (await listTemplatesAsync(warmed.env))[0]!.lastUsedAt;
   warmed.config.agents = {
     entries: { main: { workspace: path.join(warmed.state, "unused"), sandbox: { mode: "off" } } },
   };
   await warmed.prepare(signal);
   expect(mocks.install).toHaveBeenCalledTimes(2);
+  expect(
+    (await listTemplatesAsync(warmed.env)).every((record) => record.lastUsedAt === priorUse),
+  ).toBe(true);
+  const expired = vi.spyOn(Date, "now").mockReturnValue(priorUse + 8 * 24 * 60 * 60 * 1000);
+  mocks.backend.mockClear();
+  try {
+    await warmed.prepare(signal);
+    expect(mocks.backend).not.toHaveBeenCalled();
+    expect(
+      (await listTemplatesAsync(warmed.env)).every((record) => record.lastUsedAt === priorUse),
+    ).toBe(true);
+  } finally {
+    expired.mockRestore();
+  }
+  await warmed.prepare(signal);
+  expect(
+    (await listTemplatesAsync(warmed.env)).every((record) => record.lastUsedAt === priorUse),
+  ).toBe(true);
   const commit = await git(source, "rev-parse", "HEAD");
   const phases = new Set<string>();
   await withDiagnosticsTimelineObserver(
@@ -597,14 +649,18 @@ it("prepares the current base of a previously sandboxed project with sandbox mod
     secondLock,
   );
   expect(mocks.install).toHaveBeenCalledTimes(2);
+  expect(
+    (await listTemplatesAsync(warmed.env)).some((record) => record.lastUsedAt > priorUse),
+  ).toBe(true);
 });
 
-it.each(["shutdown", "config"])(
+it.each(["shutdown", "config", "base advance"])(
   "settles a background install without publishing after %s",
   async (reason) => {
     const warmed = prewarmFixture();
     let config = warmed.config;
     const controller = new AbortController();
+    await warmed.seed(controller.signal);
     const { waitForStart, release } = holdInstall();
     let settled = false;
     const preparation = prewarmLocalWorkspaceTemplates({
@@ -617,15 +673,39 @@ it.each(["shutdown", "config"])(
       const signal = await waitForStart(preparation);
       if (reason === "shutdown") {
         controller.abort();
-      } else {
+      } else if (reason === "config") {
         config = { ...config, worktreeAcceleration: false };
+      } else {
+        const remote = await git(source, "remote", "get-url", "origin");
+        const next = await git(
+          remote,
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.invalid",
+          "commit-tree",
+          "HEAD^{tree}",
+          "-p",
+          "HEAD",
+          "-m",
+          "newer default",
+        );
+        await git(remote, "update-ref", "refs/heads/main", next);
+        const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_001);
+        try {
+          expect((await resolveWorktreeBase(source)).commit).toBe(next);
+        } finally {
+          clock.mockRestore();
+        }
       }
-      expect(signal.aborted).toBe(reason === "shutdown");
+      expect(signal.aborted).toBe(reason !== "config");
       await Promise.resolve();
       expect(settled).toBe(false);
       release.resolve();
       await preparation;
-      expect(await listTemplatesAsync(warmed.env)).toMatchObject([{ status: "preparing" }]);
+      expect(await listTemplatesAsync(warmed.env)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ status: "preparing" })]),
+      );
     } finally {
       controller.abort();
       release.resolve();

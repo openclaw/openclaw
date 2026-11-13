@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
-import path from "node:path";
-import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
+import { listAgentIds } from "../../agents/agent-scope-config.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import { listTemplatesAsync } from "../../agents/worktrees/template-registry-async.js";
 import { worktreeTemplateMutationKey } from "../../agents/worktrees/template-registry.js";
-import { resolveStateDir } from "../../config/state-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
@@ -27,23 +25,25 @@ export async function prewarmLocalWorkspaceTemplates(params: {
     }
   };
   const env = process.env;
-  const templates = (await listTemplatesAsync(env, commitGuard)).filter((record) =>
-    record.backend.startsWith("sandbox-"),
+  const { IDLE_GC_MS } = await import("../../agents/worktrees/service.js");
+  const usedSince = Date.now() - IDLE_GC_MS;
+  const templates = (await listTemplatesAsync(env, commitGuard)).filter(
+    (record) => record.backend.startsWith("sandbox-") && record.lastUsedAt > usedSince,
   );
+  if (!templates.length) {
+    return;
+  }
   const visited = new Set<string>();
   for (const agentId of listAgentIds(config)) {
     const sandbox = resolveSandboxConfigForAgent(config, agentId);
-    if (
-      (sandbox.mode === "off" && !templates.length) ||
-      (sandbox.backend !== "docker" && sandbox.backend !== "podman")
-    ) {
+    if (sandbox.backend !== "docker" && sandbox.backend !== "podman") {
       continue;
     }
     try {
       commitGuard();
       const [
         { withWorktreeMutationLease },
-        { resolveWorktreeBase },
+        { resolveWorktreeBase, observeWorktreeBase },
         { resolveRepository },
         { withWorktreeRunEnd },
         { withWorktreeSources },
@@ -66,8 +66,7 @@ export async function prewarmLocalWorkspaceTemplates(params: {
       if (!identity) {
         continue;
       }
-      // Persisted generations identify repositories that have actually used this sandbox policy,
-      // including registered projects and creator-role-required sandboxes.
+      // Background preparation preserves foreground recency, so abandoned repositories age out.
       const candidates = templates
         .filter(
           (record) =>
@@ -75,12 +74,6 @@ export async function prewarmLocalWorkspaceTemplates(params: {
             sandboxTemplateCacheKey(record.commonDir, record.worktreeRoot, identity.key),
         )
         .map((record) => ({ repoRoot: record.repoRoot, templateRoot: record.worktreeRoot }));
-      if (sandbox.mode !== "off") {
-        candidates.push({
-          repoRoot: resolveAgentWorkspaceDir(config, agentId),
-          templateRoot: path.join(await fs.realpath(resolveStateDir(env)), "worktree-projections"),
-        });
-      }
       for (const candidate of candidates) {
         if (await params.shouldDefer?.()) {
           return;
@@ -105,6 +98,12 @@ export async function prewarmLocalWorkspaceTemplates(params: {
                     guard.commitGuard,
                   );
                   const { templateRoot } = candidate;
+                  const superseded = new AbortController();
+                  using _ = observeWorktreeBase((repoRoot, commit) => {
+                    if (repoRoot === repository.repoRoot && commit !== base.commit) {
+                      superseded.abort(new Error("Sandbox dependency prewarm base was superseded"));
+                    }
+                  });
                   guard.commitGuard();
                   await fs.mkdir(templateRoot, { recursive: true, mode: 0o700 });
                   const prepared = await prepareLocalWorkspaceTemplate({
@@ -116,9 +115,13 @@ export async function prewarmLocalWorkspaceTemplates(params: {
                     env,
                     sandbox,
                     identity,
+                    background: true,
                     // Prepare the default projection manifest along with its dependencies.
                     buildCacheInputs: [],
-                    guard: { ...guard, signal: guard.signal ?? signal },
+                    guard: {
+                      ...guard,
+                      signal: AbortSignal.any([guard.signal ?? signal, superseded.signal]),
+                    },
                   });
                   await prepared?.record.release();
                 }),

@@ -1,7 +1,7 @@
 /**
  * Sandbox startup preparation after a lockfile advance.
  * Reuses lane 2416 synthetic seed/cleanup, with real clocks and the Linux spawn broker.
- * Run interleaved A/A and A/B arms; --baseline-dir freezes the three changed owners.
+ * Run interleaved A/A and A/B arms; --baseline-dir freezes the changed owners.
  * Every arm waits 120s after the advance, measuring all background CPU/allocation
  * and loop p99. See the PR for the pinned acceptance rule; no Team state is used.
  */
@@ -122,6 +122,8 @@ const frozenOwners = new Set([
   "server-startup-handler-prewarm.ts",
   "local-workspace-prewarm.ts",
   "local-workspace-template.ts",
+  "template-cache.ts",
+  "base-ref.ts",
 ]);
 const instrumentation = Symbol.for("openclaw.perf.sandbox-template-prewarm");
 let installs = 0;
@@ -227,8 +229,7 @@ const hooks = registerHooks({
       ],
       "local-workspace-prewarm.ts": [["prewarmLocalWorkspaceTemplates", "prewarm"]],
     };
-    const frozen =
-      values["baseline-dir"] && frozenOwners.has(name) && url.includes("/src/gateway/");
+    const frozen = values["baseline-dir"] && frozenOwners.has(name) && url.includes("/src/");
     const measured = url.includes("/src/") ? owners[name] : undefined;
     const handlers = url.endsWith("/src/gateway/server-startup-handler-prewarm.ts");
     if (frozen || measured || handlers) {
