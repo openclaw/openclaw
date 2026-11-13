@@ -144,8 +144,8 @@ openclaw tools usage reset --agent main
   imports only history not already covered by live recording or an earlier
   import. MCP calls are counted when history names their exact catalog ID, or
   when their recorded result identifies the MCP server that owns the name.
-  Calls to a server whose safe name needed a collision suffix are reported as
-  unknown tools. Repeating the same import does not count the same history twice.
+  Calls whose name also belongs to an OpenClaw tool, or to a server whose safe
+  name needed a collision suffix, are reported as unknown tools. Repeating the same import does not count the same history twice.
   The report includes scanned and counted calls, exclusions, errors,
   cancellations, pending calls, wrappers, and top scores. Missing or archived
   history that cannot be scanned is reported rather than inferred. Nested results
