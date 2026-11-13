@@ -1,11 +1,60 @@
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
+import {
+  pluginInvocationContext,
+  runOutsideReleasedPluginInvocationScope,
+  type PluginInstanceHandle,
+} from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createOwnedTestInstance } from "./plugin-instance.test-support.js";
 import { PluginInvocationScope, runPluginCleanupScope } from "./plugin-invocation-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+
+it("keeps live invocation usage and retained overlap admission for independent work", () => {
+  const instance = createOwnedTestInstance("live-independent-work");
+  const registry = instance.owner!.registry!;
+  const used = new Set<PluginInstanceHandle>();
+  const scope = new PluginInvocationScope(registry, [instance], {
+    work: { instances: used, retain: (owner) => used.add(owner) },
+    registryByInstance: new Map([[instance, registry]]),
+  });
+  const callback = instance.wrap(() => getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+  try {
+    expect(scope.run(() => runOutsideReleasedPluginInvocationScope(callback))).toBe(registry);
+    expect([...used]).toEqual([instance]);
+  } finally {
+    scope.release();
+  }
+  const retained = new PluginInvocationScope(registry, [instance], { retained: true });
+  instance.quiesce();
+  try {
+    expect(() => callback()).toThrow(PluginInstanceUnavailableError);
+    expect(retained.run(() => runOutsideReleasedPluginInvocationScope(callback))).toBe(registry);
+  } finally {
+    retained.release();
+  }
+});
+
+it("escapes only released producer custody without reviving an unavailable instance", async () => {
+  const instance = createOwnedTestInstance("released-independent-work");
+  const scope = new PluginInvocationScope(instance.owner!.registry!, [instance]);
+  await scope.run(async () => {
+    scope.release();
+    await Promise.resolve();
+    expect(() => instance.run(() => "forbidden")).toThrow("Plugin invocation scope is closed");
+    expect(runOutsideReleasedPluginInvocationScope(() => instance.run(() => "fresh"))).toBe(
+      "fresh",
+    );
+    // Leaving the independent boundary restores the closed ambient scope.
+    expect(pluginInvocationContext.getStore()).toBe(scope);
+    instance.quiesce();
+    expect(() =>
+      runOutsideReleasedPluginInvocationScope(() => instance.run(() => "retired")),
+    ).toThrow(PluginInstanceUnavailableError);
+  });
+});
 
 it("keeps a child's stream authority independent of the parent's active call", async () => {
   const instance = createOwnedTestInstance("nested-stream");
@@ -107,7 +156,11 @@ it("creates only final teardown views while fencing each retained owner's callba
     instance.quiesce();
     expect(() => firstCallback()).toThrow(/closed/);
     expect(secondCallback()).toBe("owner");
-    expect(cleanup.scope.run(callback)).toBe("owner");
+    expect(first.released).toBe(true);
+    expect(cleanup.scope.released).toBe(false);
+    expect(cleanup.scope.run(() => runOutsideReleasedPluginInvocationScope(callback))).toBe(
+      "owner",
+    );
     const cleanupCallback = cleanup.scope.wrap(callback);
     expect(cleanupCallback()).toBe("owner");
     await cleanup.release();
@@ -191,7 +244,7 @@ it.each(["idle", "active"])(
       expect(() => forbidden()).toThrow(PluginInstanceUnavailableError);
       const resume = async () => {
         await delayed.promise;
-        callback();
+        runOutsideReleasedPluginInvocationScope(callback);
       };
       late = mode === "active" ? second.wrap(resume)() : resume();
     });

@@ -9,6 +9,7 @@ import {
 } from "../agents/tools/gateway-caller-context.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { isHostPluginApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
+import { runOutsideReleasedPluginInvocationScope } from "../plugins/plugin-instance-scope.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getCanonicalGatewayContextResolver,
@@ -235,24 +236,26 @@ export function captureOperatorToolGatewayContinuationContextInternal(
       if (signals.some((signal) => signal.aborted)) {
         release();
       }
-      const assertCurrent = () => {
-        lifetime.signal.throwIfAborted();
-        captured?.authority.assertCurrent();
-        if (captured) {
-          resolved.assertGatewayCurrent();
-        } else {
-          resolved.assertSourceCurrent();
-        }
-        lifetime.signal.throwIfAborted();
-      };
-      const runInScope = <T>(run: () => T): T => {
-        assertCurrent();
-        return withoutGatewayToolCallerIdentity(() =>
-          runOutsideOperatorToolGatewayAuthority(() =>
-            withPluginRuntimeGatewayRequestScope(continuationScope, run),
-          ),
-        );
-      };
+      const assertCurrent = () =>
+        runOutsideReleasedPluginInvocationScope(() => {
+          lifetime.signal.throwIfAborted();
+          captured?.authority.assertCurrent();
+          if (captured) {
+            resolved.assertGatewayCurrent();
+          } else {
+            resolved.assertSourceCurrent();
+          }
+          lifetime.signal.throwIfAborted();
+        });
+      const runInScope = <T>(run: () => T): T =>
+        runOutsideReleasedPluginInvocationScope(() => {
+          assertCurrent();
+          return withoutGatewayToolCallerIdentity(() =>
+            runOutsideOperatorToolGatewayAuthority(() =>
+              withPluginRuntimeGatewayRequestScope(continuationScope, run),
+            ),
+          );
+        });
       return {
         assertCurrent,
         operatorAuthority: captured?.authority,
