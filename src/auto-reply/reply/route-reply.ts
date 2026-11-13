@@ -334,6 +334,10 @@ async function routeReplyOperation(
       signal: abortSignal,
       onPlatformSendDispatch: params.beforeDeliver,
       assertDirectAdapterHandoff: params.assertCurrent,
+      // Reuse the queue-owned ordinary-text replay policy for routed Telegram finals.
+      ...(channelId === "telegram" && params.replyKind === "final"
+        ? { retryAmbiguousFinalText: true as const }
+        : {}),
       ...(params.assertCurrent ? { deliveryRetryOwner: "caller" as const } : {}),
       ...(params.deliveryIntentId
         ? {

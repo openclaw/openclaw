@@ -1,0 +1,4 @@
+75
+# LOCAL 2026.11.8 row 73; source 87b6f52a259295ebea70c6efbc82dd91cb0f6ea7.
+# Exactly 75 LF in routed-final regression coverage; registry +1 physical LF is not ratchet-counted.
+# Preserve Telegram-only replay policy and non-final/non-Telegram controls.
