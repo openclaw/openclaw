@@ -38,9 +38,9 @@ final class SidebarAttentionUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Your research workspace is ready."].waitForExistence(timeout: 30))
         self.openSidebar(app)
         if environment["FAMILY_GROUP_FIXTURE"] == "1" {
-            let group = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "Research")).firstMatch
+            let group = app.buttons["SessionGroup.Caret.Research"]
             XCTAssertTrue(group.waitForExistence(timeout: 10))
-            group.tap()
+            if group.label == "Expand Group" { group.tap() }
         }
         let review = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Pending review")).firstMatch
         XCTAssertTrue(review.waitForExistence(timeout: 15), app.debugDescription)
@@ -63,6 +63,11 @@ final class SidebarAttentionUITests: XCTestCase {
         XCTAssertTrue(grandchild.waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Pending review")).count, 1)
         self.capture(app, named: "sidebar-pending")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.50)).tap()
+        XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 5))
+        self.openSidebar(app)
+        XCTAssertTrue(review.waitForExistence(timeout: 5))
+        XCTAssertTrue(grandchild.waitForExistence(timeout: 5))
 
         let question = app.buttons.matching(identifier: "sidebar-attention-question").firstMatch
         let approval = app.buttons.matching(identifier: "sidebar-attention-approval").firstMatch
