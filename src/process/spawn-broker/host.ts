@@ -112,6 +112,7 @@ export class SpawnBrokerHost {
   constructor(
     private readonly options: {
       onReady?: (pid: number, restarted: boolean) => void;
+      onClosed?: () => void;
       workerUrl?: URL;
       nativeResources?: true;
     } = {},
@@ -731,6 +732,7 @@ export class SpawnBrokerHost {
     } finally {
       this.unregisterExitCleanup();
     }
+    this.options.onClosed?.();
   }
 }
 
