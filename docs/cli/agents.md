@@ -241,6 +241,23 @@ credential failures exit with an error and leave local config, workspace, and
 session state alone. Restore the Gateway connection and credentials, or run the
 command on the Gateway host.
 
+### `agents files`
+
+Read-only access to an agent's editable workspace documents through the Gateway.
+
+- `agents files list [--agent <id>] [--json]` forwards `agents.files.list` and renders
+  `name / state / size / updated`; `state` is `ok`, `missing`, or `optional`
+  (the Gateway marks optional bootstrap documents with `expectedAbsent`).
+- `agents files get <name> [--agent <id>] [--json]` forwards `agents.files.get` and writes the
+  document body to stdout byte-for-byte: no trailing newline is added and an empty document
+  stays empty, so `> file` redirection reproduces the workspace file. Metadata and
+  missing/optional notices go to stderr.
+  `--json` prints the raw RPC result for both verbs.
+
+The Gateway owns the supported-name allowlist, the 2 MiB read bound, and the
+`missing` vs `expectedAbsent` classification; an unknown name fails with the Gateway's
+`unsupported file "…"` error. Writes stay in the Control UI (`agents.files.set`).
+
 ## Routing bindings
 
 Use routing bindings to pin inbound channel traffic to a specific agent.
