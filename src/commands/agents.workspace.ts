@@ -129,8 +129,9 @@ export async function agentsWorkspaceListCommand(
     offset = parseCount(opts.offset, "--offset", 0);
     limit = parseCount(opts.limit, "--limit", 1);
   } catch (err) {
-    runtime.error(`Agent workspace list failed: ${sanitizeTerminalText(formatErrorMessage(err))}`);
-    runtime.exit(1);
+    // Local argument failures use the same reporter as Gateway failures so
+    // `--json` keeps the machine-readable failure envelope scripts rely on.
+    reportFailure(err, opts, runtime, "Agent workspace list");
     return;
   }
 

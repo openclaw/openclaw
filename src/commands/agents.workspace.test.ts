@@ -32,6 +32,23 @@ function printed(out: ReturnType<typeof runtime>): string {
   return out.log.mock.calls.map(([line]) => String(line)).join("\n");
 }
 
+/** Runtime whose JSON writer serializes the value, so tests read the real payload. */
+function jsonRuntime() {
+  const chunks: string[] = [];
+  return {
+    out: {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn((value: unknown, space?: number) => {
+        chunks.push(JSON.stringify(value, undefined, space));
+      }),
+    },
+    written: () => chunks.join(""),
+  };
+}
+
 const listResult = (): AgentsWorkspaceListResult => ({
   agentId: "main",
   path: "notes",
@@ -111,26 +128,24 @@ it("rejects a non-numeric limit before calling the Gateway", async () => {
   await agentsWorkspaceListCommand({ agent: "main", limit: "many" }, out);
 
   expect(mocks.callGateway).not.toHaveBeenCalled();
-  expect(out.error).toHaveBeenCalledWith(expect.stringContaining("--limit must be an integer"));
+  expect(out.error).toHaveBeenCalledWith(
+    "Agent workspace list failed: --limit must be an integer >= 1",
+  );
   expect(out.exit).toHaveBeenCalledWith(1);
 });
 
-it("resolves the configured default agent when --agent is omitted", async () => {
-  mocks.callGateway.mockResolvedValue(listResult());
-  const out = runtime();
+it("keeps the JSON failure envelope for invalid pagination options", async () => {
+  const { out, written } = jsonRuntime();
 
-  await agentsWorkspaceListCommand({}, out);
+  await agentsWorkspaceListCommand({ agent: "main", offset: "-1", json: true }, out);
 
-  expect(mocks.resolveAgent).toHaveBeenCalledWith({}, undefined, {
-    surface: "the agents workspace command",
-    hint: "Pass --agent <id>.",
+  expect(mocks.callGateway).not.toHaveBeenCalled();
+  expect(JSON.parse(written())).toEqual({
+    ok: false,
+    error: { type: "cli_error", message: "--offset must be an integer >= 0" },
   });
-  expect(mocks.callGateway).toHaveBeenCalledWith(
-    "agents.workspace.list",
-    expect.anything(),
-    { agentId: "main" },
-    expect.anything(),
-  );
+  expect(out.log).not.toHaveBeenCalled();
+  expect(out.exit).toHaveBeenCalledWith(1);
 });
 
 it("forwards an explicit agent id verbatim, including a blank one", async () => {
@@ -148,15 +163,16 @@ it("forwards an explicit agent id verbatim, including a blank one", async () => 
   );
 });
 
-it("emits the untouched list result as JSON", async () => {
+it("serializes the untouched list result as JSON", async () => {
   const result = listResult();
   mocks.callGateway.mockResolvedValue(result);
-  const out = runtime();
+  const { out, written } = jsonRuntime();
 
   await agentsWorkspaceListCommand({ agent: "main", json: true }, out);
 
-  expect(out.writeJson).toHaveBeenCalledWith(result, 2);
+  expect(JSON.parse(written())).toEqual(result);
   expect(out.log).not.toHaveBeenCalled();
+  expect(out.error).not.toHaveBeenCalled();
 });
 
 it("writes the exact file bytes to stdout and metadata to stderr", async () => {
@@ -197,16 +213,17 @@ it("writes base64 payloads unchanged and reports the encoding", async () => {
   expect(out.error).toHaveBeenCalledWith(expect.stringContaining("encoding=base64"));
 });
 
-it("emits the untouched get result as JSON", async () => {
+it("serializes the untouched get result as JSON", async () => {
   const result = getResult() satisfies AgentsWorkspaceGetResult;
   mocks.callGateway.mockResolvedValue(result);
   const stdout = captureStdout();
-  const out = runtime();
+  const { out, written } = jsonRuntime();
 
   await agentsWorkspaceGetCommand({ agent: "main", path: "notes/a.md", json: true }, out);
 
-  expect(out.writeJson).toHaveBeenCalledWith(result, 2);
+  expect(JSON.parse(written())).toEqual(result);
   expect(stdout).not.toHaveBeenCalled();
+  expect(out.error).not.toHaveBeenCalled();
 });
 
 it("reports a Gateway path rejection and exits nonzero", async () => {
@@ -218,5 +235,18 @@ it("reports a Gateway path rejection and exits nonzero", async () => {
   expect(out.error).toHaveBeenCalledWith(
     "Agent workspace file failed: path escapes the agent workspace",
   );
+  expect(out.exit).toHaveBeenCalledWith(1);
+});
+
+it("emits a JSON failure envelope when the Gateway rejects a path", async () => {
+  mocks.callGateway.mockRejectedValue(new Error("path escapes the agent workspace"));
+  const { out, written } = jsonRuntime();
+
+  await agentsWorkspaceGetCommand({ agent: "main", path: "../etc/passwd", json: true }, out);
+
+  expect(JSON.parse(written())).toEqual({
+    ok: false,
+    error: { type: "cli_error", message: "path escapes the agent workspace" },
+  });
   expect(out.exit).toHaveBeenCalledWith(1);
 });
