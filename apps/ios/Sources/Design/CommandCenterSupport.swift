@@ -388,9 +388,7 @@ extension View {
             session: session,
             mainSessionKey: mainSessionKey,
             categories: categories,
-            canChangePlacement: canChangePlacement &&
-                session.parentSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
-                session.spawnedBy?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+            canChangePlacement: canChangePlacement,
             isArchived: isArchived,
             isEnabled: isEnabled,
             canArchive: canArchive,

@@ -5,6 +5,14 @@ import Testing
 
 @MainActor
 struct ChatSessionSidebarModelTests {
+    @Test func `placement follows resolved roster not stale parent metadata`() {
+        let parent = self.entry(key: "parent", childSessions: ["child"])
+        let child = self.entry(key: "child")
+        let orphan = self.entry(key: "orphan", parentSessionKey: "missing", spawnedBy: "missing")
+        #expect(ChatSessionSidebarModel.childSessionKeys(in: [parent, child, orphan]) == ["child"])
+        #expect(ChatSessionSidebarModel.childSessionKeys(in: [child, orphan]).isEmpty)
+    }
+
     @Test func `children follow moved parent despite conflicting stored placement`() throws {
         let sessions = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
         {"sessions":[

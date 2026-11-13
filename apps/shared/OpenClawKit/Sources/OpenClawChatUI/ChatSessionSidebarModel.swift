@@ -318,6 +318,12 @@ public enum ChatSessionSidebarModel {
         return result
     }
 
+    /// Placement follows resolved roster edges, not persisted parent metadata.
+    public static func childSessionKeys(in sessions: [OpenClawChatSessionEntry]) -> Set<String> {
+        Set(self.rows(self.tree(from: sessions), showsChildren: { _ in true })
+            .filter { $0.depth > 0 }.map(\.id))
+    }
+
     static func tree(
         from sessions: [OpenClawChatSessionEntry],
         identity: (OpenClawChatSessionEntry) -> String = { $0.key }) -> [Node]
