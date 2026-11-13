@@ -274,6 +274,14 @@ it.each(
   expect(fetchImpl).toHaveBeenCalledOnce();
 });
 
+it("reports malformed response JSON without a traceback", async () => {
+  const fetchImpl = vi.fn(async () => new Response("{"));
+  await expect(fetchAdvisories({ fetchImpl })).rejects.toThrow(
+    /Invalid bulk advisory response: not valid JSON/u,
+  );
+  expect(fetchImpl).toHaveBeenCalledOnce();
+});
+
 it("bounds stalled HTTP 200 bodies by the total budget", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   let cancelled = false;
