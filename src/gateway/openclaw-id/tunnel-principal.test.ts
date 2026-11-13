@@ -3,13 +3,15 @@ import {
   formatIrohEndpointKey,
   randomBytes,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
-import { authorizeHttpGatewayConnect } from "../auth.js";
+import { authorizeWsControlUiGatewayConnect, authorizeHttpGatewayConnect } from "../auth.js";
 import type { GatewayIngressAttribution } from "../ingress-attribution.js";
 import { createOpenClawIdAuthority } from "./authority.js";
 import { linkedClaw } from "./openclaw-id.test-support.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
   openClawIdRecoveryPrincipalSchema,
+  prepareOpenClawIdTunnelPrincipal,
+  resolveOpenClawIdTunnelPrincipal,
   setOpenClawIdTunnelPrincipalLookup,
   openclawIdTunnelRolePolicy,
   openclawIdTunnelUser,
@@ -95,6 +97,78 @@ describe("OpenClaw ID tunnel principals", () => {
     expect(openclawIdTunnelRolePolicy(operator)?.scopes).not.toContain("operator.admin");
     expect(openclawIdTunnelRolePolicy(operator)?.scopes).not.toContain("operator.pairing");
     expect(openclawIdTunnelRolePolicy(viewer)?.scopes).toEqual(["operator.read"]);
+  });
+
+  it("denies unknown member roles at connect, HTTP and retained/recovery admission", async () => {
+    const principal = {
+      kind: "member" as const,
+      peerKey: `iroh:${"ab".repeat(32)}`,
+      accountId: "acct-guest",
+      role: "guest",
+      authority: { clawId: "claw", rootPub: "root", listedSeq: 1 },
+    };
+    setOpenClawIdTunnelPrincipalResolver(async () => principal);
+    setOpenClawIdTunnelPrincipalLookup(() => principal);
+    expect(openclawIdTunnelRolePolicy(principal)).toEqual({
+      scopes: [],
+      agents: [],
+      sessions: { others: "none" },
+    });
+    expect(await resolveOpenClawIdTunnelPrincipal(principal.peerKey)).toBeUndefined();
+    for (const authorize of [authorizeWsControlUiGatewayConnect, authorizeHttpGatewayConnect]) {
+      expect(
+        await authorize({
+          auth: { mode: "token", token: "secret", allowTailscale: false },
+          connectAuth: { token: "secret" },
+          ingressAttribution: tunnelAttribution(principal.peerKey),
+        }),
+      ).toEqual({ ok: false, reason: "openclaw_id_not_admitted" });
+    }
+    expect(isOpenClawIdTunnelPrincipalCurrent(principal)).toBe(false);
+    await expect(prepareOpenClawIdTunnelPrincipal(principal)).rejects.toThrow(
+      "membership authority changed",
+    );
+  });
+
+  it("retains valid opaque role names in recovery records without admitting them", async () => {
+    const principal = {
+      kind: "member",
+      peerKey: `iroh:${"ab".repeat(32)}`,
+      accountId: "acct-guest",
+      role: "guest",
+      authority: { clawId: "claw", rootPub: "root", listedSeq: 1 },
+    };
+    expect(openClawIdRecoveryPrincipalSchema.parse(principal)).toEqual(principal);
+    for (const role of ["", "Guest", "2guest", "a".repeat(65), "guest\n"]) {
+      expect(openClawIdRecoveryPrincipalSchema.safeParse({ ...principal, role }).success).toBe(
+        false,
+      );
+    }
+    const claw = await linkedClaw();
+    const peer = formatIrohEndpointKey(randomBytes(32));
+    expect(
+      await claw.authority.submit(
+        await claw.sign({
+          op: "add",
+          account_id: "acct-guest",
+          role: "guest",
+          peer_keys: [peer],
+          invite_id: null,
+        }),
+        "tunnel",
+      ),
+    ).toMatchObject({ ok: true });
+    const reloaded = createOpenClawIdAuthority(claw.store);
+    await reloaded.load();
+    setOpenClawIdTunnelPrincipalResolver((key) => reloaded.resolvePeer(key));
+    setOpenClawIdTunnelPrincipalLookup((key) => reloaded.currentPeer(key));
+    expect(reloaded.currentPeer(peer)).toMatchObject({ kind: "member", role: "guest" });
+    expect(await resolveOpenClawIdTunnelPrincipal(peer)).toBeUndefined();
+    const stored = openClawIdRecoveryPrincipalSchema.parse(reloaded.currentPeer(peer));
+    expect(isOpenClawIdTunnelPrincipalCurrent(stored)).toBe(false);
+    await expect(prepareOpenClawIdTunnelPrincipal(stored)).rejects.toThrow(
+      "membership authority changed",
+    );
   });
 
   it("authenticates admitted tunnel peers as trusted-proxy principals in token mode", async () => {

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { modelSessionList } from "./chat-runtime-fixtures.test-support.ts";
@@ -29,7 +30,19 @@ suite.define(() => {
             serviceTiers: ["default"],
           },
         ],
-        sessionInfo: { model: id, modelProvider: "clawrouter", thinkingLevel: "medium" },
+        methodResponses: {
+          "sessions.list": modelSessionList(
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              model: id,
+              modelProvider: "clawrouter",
+              thinkingLevel: "medium",
+              updatedAt: 1,
+            },
+            { model: id, modelProvider: "clawrouter" },
+          ),
+        },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = page.locator(".agent-chat__input").first();
@@ -44,6 +57,15 @@ suite.define(() => {
       expect(await option.textContent()).not.toContain("via ClawRouter");
       expect(await option.getAttribute("aria-selected")).toBe("true");
       await page.keyboard.press("Escape");
+      // A fresh canonical descriptor must preserve the same model and effort facts.
+      await evaluateControlUiContext(page, async (app) => {
+        const reconcile = app.sessions.captureReconcile();
+        const { session } = await app.sessions.describe(
+          { key: "agent:main:main", agentId: "main" },
+          { refresh: true },
+        );
+        reconcile(session ?? undefined);
+      });
       await composer.locator('[data-chat-thinking-select="true"]').click();
       await composer.locator("[data-chat-thinking-slider]").waitFor({ state: "visible" });
       expect(await composer.locator(".chat-controls__speed-panel").count()).toBe(0);

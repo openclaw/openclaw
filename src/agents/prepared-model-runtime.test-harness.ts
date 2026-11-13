@@ -30,11 +30,14 @@ const materializationChanges = vi.hoisted<{
 const { makeEmptyPluginMetadataOwners } = await vi.hoisted(
   () => import("../plugins/plugin-metadata-empty.test-support.js"),
 );
+const { createIndexFixture } = await vi.hoisted(
+  () => import("../plugins/test-helpers/installed-plugin-index-fixture.js"),
+);
 const preparedModelRuntimeMocks = vi.hoisted(() => ({
   pluginMetadataSnapshot: {
     plugins: [],
     pluginIds: [],
-    index: { plugins: [] },
+    index: createIndexFixture({}),
     get registryIndex() {
       return this.index;
     },

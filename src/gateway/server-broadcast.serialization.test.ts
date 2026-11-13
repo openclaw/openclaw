@@ -22,7 +22,10 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { makeClient as makePresenceClient } from "./server-broadcast.test-helpers.js";
-import { broadcastFor as broadcaster } from "./server-broadcast.test-support.js";
+import {
+  broadcastFor as broadcaster,
+  createBroadcastPeer,
+} from "./server-broadcast.test-support.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
@@ -266,6 +269,64 @@ describe("broadcast serialization failures", () => {
       }
       expect(sentFrames(ownerPeer)).toEqual(expect.arrayContaining([steeringNotice(true)]));
       expect(viewerPeer.socket.send).not.toHaveBeenCalled();
+    });
+  });
+
+  it("checks real sharing authority for opted-in stdout before and after revocation", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const cfg: OpenClawConfig = {};
+      setRuntimeConfigSnapshot(cfg);
+      const owner = ensureProfileForEmail("stdout-owner@example.test");
+      const viewer = ensureProfileForEmail("stdout-viewer@example.test");
+      const scope = await seedSession("agent:main:stdout-revocation", {
+        sessionId: "stdout-revocation",
+        visibility: "draft",
+        createdActor: { type: "human", source: "profile", id: owner.id },
+      });
+      const peers = [owner, viewer].map((user) => {
+        const peer = createBroadcastPeer(user.id, true);
+        peer.client.authenticatedUserProfile = profile(user.id, user.displayName, user.updatedAt);
+        return peer;
+      });
+      const { connection } = await createProjectedConnection(() => cfg);
+      for (const peer of peers) {
+        connection.clients.add(peer.client);
+        connection.sessionMessageSubscribers.subscribe(peer.client.connId, scope.sessionKey, {
+          includeLiveToolOutput: true,
+        });
+      }
+      const recipients = new Set(peers.map(({ client }) => client.connId));
+      const send = (text: string) =>
+        connection.broadcastToConnIds(
+          "session.tool",
+          {
+            sessionKey: scope.sessionKey,
+            agentId: "main",
+            runId: "stdout-run",
+            stream: "tool",
+            data: {
+              toolCallId: "exec",
+              phase: "update",
+              outputOnly: true,
+              partialResult: { text },
+            },
+          },
+          recipients,
+        );
+      send("Private output");
+      expect(peers.map(({ frames }) => frames.length)).toEqual([1, 0]);
+      await patchSessionEntryCore(scope, () => ({ visibility: "shared" }));
+      send("Shared output");
+      expect(peers.map(({ frames }) => frames.length)).toEqual([2, 1]);
+      await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
+      send("Revoked output");
+      expect(peers.map(({ frames }) => frames.length)).toEqual([3, 1]);
+      expect(peers[0]!.frames.at(-1)?.payload).toMatchObject({
+        data: { partialResult: { text: "Revoked output" } },
+      });
+      expect(peers[1]!.frames[0]?.payload).toMatchObject({
+        data: { partialResult: { text: "Shared output" } },
+      });
     });
   });
 

@@ -69,15 +69,15 @@ suite.define(() => {
       await gateway.resolveDeferred("session.reactions.list");
       const message = page.locator(".chat-group.user", { hasText: prompt });
       const reactions = page.locator(`.chat-message-reactions[data-message-id="${messageId}"]`);
-      await reactions.getByRole("button", { name: "👍 1", exact: true }).waitFor();
+      await reactions.getByRole("button", { name: "👍 Peer", exact: true }).waitFor();
       await page.evaluate(async () => {
         const pane = document.querySelector(".chat-pane-cache__pane--active");
         await Reflect.get(pane!, "sessionSnapshotStore").flush();
       });
       await page.reload();
       await message.waitFor();
-      // Both authoritative reads are held: the message and chip must share the saved paint.
-      expect(await reactions.getByRole("button", { name: "👍 1", exact: true }).count()).toBe(1);
+      // Both authoritative reads are held: the message and its tab must share the saved paint.
+      expect(await reactions.getByRole("button", { name: "👍 Peer", exact: true }).count()).toBe(1);
       await gateway.waitForRequest("session.reactions.list");
       await gateway.resolveDeferred("session.reactions.list", { sessionId, reactions: {} });
       await reactions.waitFor({ state: "detached" });
@@ -130,10 +130,8 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const message = page.locator(".chat-group.user", { hasText: prompt });
       const reactions = page.locator(`.chat-message-reactions[data-message-id="${messageId}"]`);
-      const chip = (emoji: string, pressed: boolean) =>
-        reactions.locator(
-          `.chat-reaction-chip[aria-pressed="${pressed}"][aria-label="${emoji} 1"]`,
-        );
+      const tab = reactions.locator(".chat-reaction-tab");
+      const summary = () => tab.getAttribute("aria-label");
       await message.locator(".chat-bubble").filter({ hasText: prompt }).hover();
       const visibleMetadata = (group: Locator = message) =>
         group.evaluate((element) => ({
@@ -197,13 +195,13 @@ suite.define(() => {
         .toEqual(["msg:id:own-note-0:0"]);
       await page.setViewportSize(desktopViewport);
       await message.locator(".chat-bubble").filter({ hasText: prompt }).hover();
-      // Without reactions the hover row carries the picker; once reacted, the chip row owns it.
+      // The hover row keeps its picker; once reacted, the bubble's tab opens one too.
       const footerPicker = ownedActions.locator(".chat-reaction-action");
-      const rowPicker = reactions.locator("openclaw-message-reaction-picker");
+      const tabPicker = reactions.locator("openclaw-message-reaction-picker");
       // Each picker owns its popover; an unscoped lookup can match a sibling
       // popover that is still animating closed.
       const pick = async (picker: Locator, name: string) => {
-        await exactButton(picker, "Add reaction").click();
+        await picker.locator(".trigger").click();
         await exactButton(picker.locator(".chat-reaction-picker"), name).click();
       };
       const expectSet = async (after: number, fields: Record<string, unknown>) =>
@@ -212,18 +210,30 @@ suite.define(() => {
         ).toMatchObject({ messageId, ...fields });
       await pick(footerPicker, "🎉");
       await expectSet(0, { sessionKey, emoji: "🎉" });
-      await chip("🎉", true).waitFor();
-      await footerPicker.waitFor({ state: "detached" });
+      await expect.poll(summary).toBe("🎉 You");
+      // A lone reaction shows no number, and the tab hangs off the message's own bubble.
+      expect(await tab.textContent()).toBe("🎉");
+      expect(await reactions.evaluate((element) => element.parentElement?.dataset.messageId)).toBe(
+        `msg:id:${messageId}:0`,
+      );
+      expect(await footerPicker.count()).toBe(1);
 
-      await message.locator(".chat-bubble").filter({ hasText: prompt }).hover();
-      await pick(rowPicker, "More…");
+      await pick(tabPicker, "More…");
       // A complete emoji applies on input, so the OS picker needs no extra keystroke.
-      await rowPicker.getByRole("searchbox", { name: "Search emoji…", exact: true }).fill("🦞");
+      await tabPicker.getByRole("searchbox", { name: "Search emoji…", exact: true }).fill("🦞");
       await expectSet(1, { emoji: "🦞" });
-      const ownChip = chip("🦞", true);
-      await ownChip.click();
+      await expect.poll(summary).toBe("🎉 You; 🦞 You");
+      expect(await tab.textContent()).toBe("🎉🦞2");
+      // The opened tab lists the existing reactions; pressing one's own removes it.
+      await expect
+        .poll(() => tabPicker.locator(".chat-reaction-picker").getAttribute("data-phase"))
+        .toBe("hidden");
+      await tab.click();
+      await tabPicker
+        .locator('.chat-reaction-chip[aria-pressed="true"][aria-label="🦞 1"]')
+        .click();
       await expectSet(2, { emoji: "🦞", remove: true });
-      await ownChip.waitFor({ state: "detached" });
+      await expect.poll(summary).toBe("🎉 You");
 
       const listRequests = (await gateway.getRequests("session.reactions.list")).length;
       await gateway.emitGatewayEvent("session.reaction", {
@@ -240,7 +250,13 @@ suite.define(() => {
           { emoji: "👀", count: 1, identities: [{ id: "profile-riley", label: "Riley" }] },
         ],
       });
-      await chip("👀", false).waitFor();
+      await expect.poll(summary).toBe("👍 Sam; 🎉 You; 👀 Riley");
+      // Hovering the tab names who reacted.
+      const who = reactions.locator(".chat-reaction-who");
+      expect(await who.isVisible()).toBe(false);
+      await tab.hover();
+      await expect.poll(() => who.isVisible()).toBe(true);
+      expect(await who.textContent()).toBe("👍Sam🎉You👀Riley");
       expect(await gateway.getRequests("session.reactions.list")).toHaveLength(listRequests);
 
       await page.getByRole("textbox", { name: "Chat composer" }).focus();

@@ -1,2 +1,0 @@
-# Preserve plain-prose whitespace, Unicode folding, and ordered-list search semantics.
-12

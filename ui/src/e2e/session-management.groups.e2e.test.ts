@@ -409,8 +409,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}sessions`);
       const table = page.locator(".sessions-table");
-      const rowNames = () =>
-        table.locator("tbody .session-data-row .session-label-chip").allTextContents();
+      const rowNames = () => table.locator("tbody .session-key-cell__primary").allTextContents();
       await expect.poll(rowNames).toEqual(["Zulu thread", "Alpha thread"]);
 
       for (const name of ["Session", "Updated"]) {
