@@ -32,6 +32,7 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
+import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { adoptStartedChatRun } from "./run-lifecycle.ts";
 import { RealtimeTalkSession } from "./talk/session.ts";
 
@@ -826,6 +827,7 @@ describe("mounted pane session event ownership", () => {
   it.each(["stale", "current", "rowless", "reentrant"] as const)(
     "keeps lifecycle reset delivery within its admitted incarnation (%s)",
     async (generation) => {
+      installOutboxBrowserStorage();
       const reentrant = generation === "reentrant";
       const preservesSuccessor = generation === "stale" || reentrant;
       const row: GatewaySessionRow = {

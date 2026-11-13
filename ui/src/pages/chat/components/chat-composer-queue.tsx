@@ -11,6 +11,7 @@ import {
 import type { ChatQueueItem, ChatQueueDisplayItem } from "../../../lib/chat/chat-types.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
+import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
 import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
@@ -137,8 +138,8 @@ function mountQueueEditInput(element: HTMLTextAreaElement, value: string): void 
   queueMicrotask(() => {
     if (element.isConnected) {
       fitQueueEditInput(element);
-      element.focus();
-      element.setSelectionRange(value.length, value.length);
+      focusComposerInput(element);
+      selectComposerInput(element, value.length, value.length);
     }
   });
 }

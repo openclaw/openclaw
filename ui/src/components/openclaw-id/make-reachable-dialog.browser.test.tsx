@@ -105,11 +105,39 @@ it("retains the setup anchor and gates controls through publication", async () =
   await vi.waitFor(() => expect(getComputedStyle(close).opacity).toBe("0"));
   expect(getComputedStyle(close).pointerEvents).toBe("none");
 
+  const detail = `HTTP 503. ${"Discovery is temporarily unavailable. ".repeat(5)}`;
   commit.resolve({
-    publication: { state: "failed", code: "unavailable", message: "HTTP 503", retryable: true },
+    publication: { state: "failed", code: "unavailable", message: detail, retryable: true },
   });
-  await expect.element(page.getByText(/This claw will keep trying/)).toBeVisible();
+  const warning = page.getByRole("button", { name: /This claw will keep trying/ });
+  await expect.element(warning).toBeVisible();
+  await expect.element(page.getByRole("tooltip", { includeHidden: true })).not.toBeVisible();
+  await userEvent.hover(warning);
+  await expect.element(page.getByRole("tooltip", { includeHidden: true })).toBeVisible();
+  await userEvent.hover(page.getByRole("tooltip", { includeHidden: true }));
+  await expect.element(page.getByText(detail, { exact: true })).toBeVisible();
+  await userEvent.click(warning);
+  await userEvent.hover(page.getByRole("button", { name: "Close", exact: true }).last());
+  await expect.element(page.getByRole("tooltip", { includeHidden: true })).toBeVisible();
+  await userEvent.click(warning);
+  await expect.element(page.getByRole("tooltip", { includeHidden: true })).not.toBeVisible();
+  await userEvent.tab();
+  await userEvent.tab({ shift: true });
+  await expect.element(page.getByRole("tooltip", { includeHidden: true })).toBeVisible();
+  await userEvent.tab();
+  await expect.element(page.getByText(detail, { exact: true })).toHaveFocus();
+  await userEvent.hover(page.getByRole("button", { name: "Close", exact: true }).last());
+  await userEvent.tab();
+  await expect.element(page.getByRole("tooltip", { includeHidden: true })).not.toBeVisible();
+  await userEvent.tab({ shift: true });
+  await expect.element(warning).toHaveFocus();
+  await userEvent.tab();
+  await expect.element(page.getByText(detail, { exact: true })).toHaveFocus();
+  await userEvent.keyboard("{Escape}");
+  await expect.element(page.getByRole("tooltip", { includeHidden: true })).not.toBeVisible();
+  await expect.element(page.getByRole("dialog", { name: "Turn on remote access" })).toBeVisible();
   expect(title.getBoundingClientRect().top).toBe(top);
-  await userEvent.click(page.getByRole("button", { name: "Done", exact: true }));
+  const finish = page.getByRole("button", { name: "Close", exact: true }).last();
+  await userEvent.click(finish);
   expect(await done).toBe(true);
 });

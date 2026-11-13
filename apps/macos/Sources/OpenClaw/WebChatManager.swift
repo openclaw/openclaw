@@ -497,6 +497,13 @@ final class WebChatManager {
         self.primaryGatewayID = gatewayID
     }
 
+    /// Quit runs inside the composer's save pause; write every open draft first.
+    func persistComposerDrafts() async {
+        for instance in self.gatewayWindows.values {
+            await instance.controller.persistComposerDraft()
+        }
+    }
+
     func close() {
         // Invalidate admitted opens before closing windows or awaiting fleet retirement.
         self.windowGeneration &+= 1

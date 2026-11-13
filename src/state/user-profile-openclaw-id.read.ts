@@ -88,9 +88,77 @@ export function readOpenClawIdUserProfilesInDatabase(
   });
 }
 
+/**
+ * The canonical profile an OCID account is linked to (following merges), with its update
+ * time for connection admission, or null when the account has no profile.
+ */
+export function readOpenClawIdLinkedProfileInDatabase(
+  db: EngineConnection,
+  accountId: string,
+): { profileId: string; updatedAt: number } | null {
+  if (!tableExists(db, "user_profile_identities") || !tableExists(db, "user_profiles")) {
+    return null;
+  }
+  return runSqliteReadSnapshotSync(db, () => {
+    const kysely = userProfilesDb(db);
+    const identity = executeSqliteQuerySync(
+      db,
+      kysely
+        .selectFrom("user_profile_identities")
+        .select("profile_id")
+        .where("provider", "=", openClawIdProfileProvider)
+        .where("subject", "=", accountId),
+    ).rows[0];
+    if (!identity) {
+      return null;
+    }
+    const row = (id: string) =>
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .selectFrom("user_profiles")
+          .select(["id", "updated_at", "merged_into"])
+          .where("id", "=", id),
+      ).rows[0];
+    const linked = row(identity.profile_id);
+    const profile = linked?.merged_into ? row(linked.merged_into) : linked;
+    return profile ? { profileId: profile.id, updatedAt: profile.updated_at } : null;
+  });
+}
+
+/** The OCID accounts linked to a profile (several after a merge), oldest first. */
+export function readOpenClawIdLinksOfProfileInDatabase(
+  db: EngineConnection,
+  profileId: string,
+): Array<{ accountId: string; email: string | null }> {
+  if (!tableExists(db, "user_profile_identities")) {
+    return [];
+  }
+  return executeSqliteQuerySync(
+    db,
+    userProfilesDb(db)
+      .selectFrom("user_profile_identities")
+      .select(["subject", "verified_email_json"])
+      .where("provider", "=", openClawIdProfileProvider)
+      .where("profile_id", "=", profileId)
+      .orderBy("created_at"),
+  ).rows.map((identity) => ({
+    accountId: identity.subject,
+    email: readDisplayEmail(identity.verified_email_json),
+  }));
+}
+
 export const openClawIdUserProfileReadOperations = {
   "userProfiles.openClawId.read": ({ accountIds }: { accountIds: readonly string[] }, db) => ({
     type: "userProfiles.openClawId.read" as const,
     profiles: readOpenClawIdUserProfilesInDatabase(db, accountIds),
+  }),
+  "userProfiles.openClawId.linkedProfile": ({ accountId }: { accountId: string }, db) => ({
+    type: "userProfiles.openClawId.linkedProfile" as const,
+    profile: readOpenClawIdLinkedProfileInDatabase(db, accountId),
+  }),
+  "userProfiles.openClawId.linksOf": ({ profileId }: { profileId: string }, db) => ({
+    type: "userProfiles.openClawId.linksOf" as const,
+    links: readOpenClawIdLinksOfProfileInDatabase(db, profileId),
   }),
 } satisfies WorkerOperationHandlers<EngineConnection>;
