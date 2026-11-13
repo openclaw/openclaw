@@ -669,16 +669,20 @@ function cmdNotify(target, author, locationType, secretTypes, replyToNodeId) {
 }
 
 /**
- * resolve <alert-number> [resolution] [comment]
+ * resolve <alert-number> <resolution> [comment]
  * Close a secret scanning alert.
  */
 function cmdResolve(alertNumber, resolution, comment) {
-  if (!alertNumber) {
-    fail("Usage: resolve <alert-number> [resolution] [comment]");
+  if (!alertNumber || !resolution) {
+    fail("Usage: resolve <alert-number> <resolution> [comment]");
   }
 
-  const res = resolution || "revoked";
-  const resComment = comment || "Content redacted and author notified to rotate credentials.";
+  // Removing exposed content does not establish whether its credential was revoked.
+  if (!["false_positive", "wont_fix", "revoked", "used_in_tests"].includes(resolution)) {
+    fail(
+      `Invalid resolution: ${resolution}. Use false_positive, wont_fix, revoked, or used_in_tests.`,
+    );
+  }
 
   const result = gh([
     "api",
@@ -688,9 +692,8 @@ function cmdResolve(alertNumber, resolution, comment) {
     "-f",
     `state=resolved`,
     "-f",
-    `resolution=${res}`,
-    "-f",
-    `resolution_comment=${resComment}`,
+    `resolution=${resolution}`,
+    ...(comment ? ["-f", `resolution_comment=${comment}`] : []),
   ]);
 
   console.log(
@@ -829,7 +832,7 @@ function main(argv = process.argv.slice(2)) {
         "  recreate-comment <issue-n> <file> Create replacement comment",
         "  recreate-discussion-comment <disc-node-id> <file> [reply-to-node-id] Create discussion comment (GraphQL)",
         "  notify <target> <author> <type> <types> [reply-to-node-id|body-result-file] Post notification",
-        "  resolve <n> [resolution] [comment] Close alert",
+        "  resolve <n> <resolution> [comment] Close alert",
         "  list-open                          List open alerts",
         "  summary <json-file>               Print formatted summary",
       ].join("\n"),

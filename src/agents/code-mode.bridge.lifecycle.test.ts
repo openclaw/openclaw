@@ -60,6 +60,7 @@ function createHarness(params: Parameters<typeof subscribeHarness>[0]) {
       harness.executeTool({
         tool: target,
         toolName: target.name,
+        toolId: `openclaw:${overrides.sourceName ?? "core"}:${target.name}`,
         source: "openclaw",
         toolCallId,
         input: {},
@@ -145,8 +146,10 @@ describe("Code Mode subscribed bridge lifecycle", () => {
               ),
             );
             const result = await waitUntilCompleted({ details, waitTool: harness.wait });
+            expect(result.status, JSON.stringify(result)).toBe("completed");
             expectCompleted(result, expect.objectContaining({ input: { value } }));
           }
+          expect(target.execute).toHaveBeenCalledTimes(2);
 
           const activities = await harness.readNestedActivities();
           expect(activities).toMatchObject([

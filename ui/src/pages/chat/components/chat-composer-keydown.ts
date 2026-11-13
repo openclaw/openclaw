@@ -25,6 +25,7 @@ type ComposerKeyDownDeps = {
     event: KeyboardEvent,
     followUpModeOverride?: ChatFollowUpMode,
   ) => void;
+  queueSubmit: (draft: string) => void;
   showAbortableUi: boolean;
   alternateFollowUpMode?: ChatFollowUpMode;
   goalComposer: GoalComposer;
@@ -41,6 +42,7 @@ export function createComposerKeyDownHandler({
   sendShortcut,
   canSubmitDraft,
   submitDraft,
+  queueSubmit,
   showAbortableUi,
   alternateFollowUpMode,
   goalComposer,
@@ -68,7 +70,14 @@ export function createComposerKeyDownHandler({
     }
 
     if (goalComposer.active) {
-      if (event.key === "Escape") {
+      if (
+        (event.key === "Backspace" || event.key === "Delete") &&
+        target.value.length === 0 &&
+        goalComposer.restoreCommand()
+      ) {
+        event.preventDefault();
+        state.slashMenu.update(target.value, slashMenuHost);
+      } else if (event.key === "Escape") {
         event.preventDefault();
         goalComposer.cancel();
       } else if (
@@ -182,6 +191,10 @@ export function createComposerKeyDownHandler({
         return;
       }
       if (!canSubmitDraft(target.value)) {
+        if (props.submitPending) {
+          event.preventDefault();
+          queueSubmit(target.value);
+        }
         return;
       }
       event.preventDefault();

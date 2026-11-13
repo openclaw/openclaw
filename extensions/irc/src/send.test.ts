@@ -384,19 +384,29 @@ describe("IRC outbound and probing", () => {
     expect(mocks.connectIrcClient).not.toHaveBeenCalled();
   });
 
-  it("returns probe latency, forwards timeout and quits on success", async () => {
-    const clock = vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValueOnce(145);
-    onTestFinished(() => clock.mockRestore());
-    await expect(probeIrc(cfg, { timeoutMs: 5000 })).resolves.toEqual({
-      ok: true,
-      ...address,
-      latencyMs: 45,
-    });
-    expect(mocks.connectIrcClient).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ ...address, connectTimeoutMs: 5000 }),
-    );
-    expect(client.quit).toHaveBeenCalledWith("probe");
-  });
+  it.each([0, -3_600_000, 3_600_000])(
+    "returns probe latency across a %dms clock step, forwards timeout and quits",
+    async (step) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance"] });
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      mocks.connectIrcClient.mockImplementationOnce(async () => {
+        vi.advanceTimersByTime(45);
+        vi.setSystemTime(Date.now() + step);
+        return client;
+      });
+      await expect(probeIrc(cfg, { timeoutMs: 5000 })).resolves.toEqual({
+        ok: true,
+        ...address,
+        latencyMs: 45,
+      });
+      expect(mocks.connectIrcClient).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ ...address, connectTimeoutMs: 5000 }),
+      );
+      expect(client.quit).toHaveBeenCalledWith("probe");
+    },
+  );
 
   it("formats non-Error probe failures", async () => {
     mocks.connectIrcClient.mockRejectedValue({ code: "ECONNREFUSED" });

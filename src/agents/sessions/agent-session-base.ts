@@ -1,4 +1,5 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { setInternalBeforeRequest } from "../../../packages/agent-core/src/internal-hooks.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model, ModelRequestHeaders } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -100,6 +101,7 @@ export abstract class AgentSessionBase {
   protected extensionErrorListener?: ExtensionErrorListener;
   protected extensionErrorUnsubscriber?: () => void;
   private readonly cleanupProviderSessionResourcesOnDispose: boolean;
+  protected abstract readonly disposeBackgroundResultPlacement: () => void;
 
   protected sessionModelRegistry: ModelRegistry;
 
@@ -550,6 +552,8 @@ export abstract class AgentSessionBase {
    * Call this when completely done with the session.
    */
   dispose(): void {
+    this.disposeBackgroundResultPlacement();
+    setInternalBeforeRequest(this.agent, undefined);
     notifyListeners(
       [() => this.abortRetry(), () => this.abortCompaction(), () => this.agent.abort()],
       undefined,

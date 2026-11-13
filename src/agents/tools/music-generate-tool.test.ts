@@ -19,11 +19,9 @@ import { createRequireRecord } from "../../../test/helpers/record.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as webMedia from "../../media/web-media.js";
+import type { MusicGenerationProvider } from "../../music-generation/provider-types.js";
 import * as musicGenerationRuntime from "../../music-generation/runtime.js";
-import type {
-  MusicGenerationIgnoredOverride,
-  MusicGenerationProvider,
-} from "../../music-generation/types.js";
+import type { MusicGenerationIgnoredOverride } from "../../music-generation/types.js";
 import { mockFirstObjectArg as callArgument } from "../../test-utils/mock-call-assertions.js";
 import * as fetchTimeout from "../../utils/fetch-timeout.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";

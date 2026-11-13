@@ -56,10 +56,23 @@ of all workers. Startup logging never requests new worker samples.
 
 ## File-based logger
 
-- Default rolling log files are under `/tmp/openclaw/` (one file per day), dated by the gateway host's local timezone. The default profile uses `openclaw-YYYY-MM-DD.log`. Named profiles use `openclaw-<profile>-YYYY-MM-DD.log` (for example, `openclaw-dev-YYYY-MM-DD.log`). If that directory is unsafe or unwritable (wrong owner, world-writable, a symlink), OpenClaw falls back to a user-scoped `os.tmpdir()/openclaw-<uid>` path instead. On Windows it always uses that OS-tmpdir fallback.
+- Default rolling log files are under the selected state directory's `logs/` directory (one file per day), dated by the gateway host's local timezone. The default profile uses `openclaw-YYYY-MM-DD.log`. Named profiles use `openclaw-<profile>-YYYY-MM-DD.log` (for example, `openclaw-dev-YYYY-MM-DD.log`). If that directory is unsafe or unwritable (wrong owner, world-writable, a symlink), OpenClaw falls back to `tmp/openclaw-<uid>` under the same state directory. On Windows it uses `tmp/openclaw` under that state directory. See [log locations and upgrade guidance](/logging#where-logs-live).
 - Active log files rotate at `logging.maxFileBytes` (default: 100 MB). Rotation keeps up to five numbered archives (`.1` through `.5`), and continues to write a fresh active file.
 - Configure the log file path and level via `~/.openclaw/openclaw.json`: `logging.file`, `logging.level`.
 - The file format is one JSON object per line.
+
+Default-directory safety checks, file writes, and rotation run in a lazily started worker, preserving queued record
+order without blocking the Gateway main thread on filesystem checks. Normal
+shutdown drains queued writes; forced process exit retains a synchronous rescue
+for records that have not started writing.
+
+Silent logging does not prepare a file. Requests that report or tail the log path
+wait for its directory to pass the same ownership, permission, and ancestor checks
+used by writes; they never report an unqualified fallback path.
+
+By default, logging retains runtime call-site metadata without probing source-map
+files. The existing `TSLOG_SOURCE_MAPS=on` diagnostic override remains available;
+it enables tslog's synchronous source-map lookups.
 
 With config hot reload enabled, changes to `logging.level`, `logging.file`, and
 `logging.maxFileBytes` apply to the next log record, including records from
@@ -102,6 +115,11 @@ preparations, and model calls independently of log levels.
 Per-request GitHub API timing records also use `debug`, including fetches over
 500 ms. Transport failures and rate-limit errors retain their normal handling.
 
+Slow SQLite holds for `session.transcript.append-turn` include `context.messages`,
+the number of messages submitted to that write transaction. This count includes
+replays and messages later skipped by a predicate; it is not a transcript length
+or committed-message count. It contains no message content or identities.
+
 Plugin host cleanup failures during session reset or deletion emit one
 `plugins/cleanup` warning per failure, including the operation, plugin, hook, and
 error. Check the reported cleanup error before retrying. Successful cleanup
@@ -117,6 +135,13 @@ log egress applies secret redaction, and support bundles omit the nested owner
 details. Plain-text timeout warnings include the bounded structured fields.
 
 The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI does the same:
+
+Gateway tail reads and redaction run in a bounded background worker, so opening
+the Logs tab does not tokenize log records on the shared chat event loop. Each
+response keeps the requested line and byte limits (at most 5,000 lines and 1 MB).
+The byte cursor skips completed records on subsequent polls. The reader may
+inspect older bytes to preserve private-key redaction across window boundaries;
+it uses the current redaction patterns and registered secrets for each request.
 
 ```bash
 openclaw logs --follow
@@ -138,6 +163,25 @@ Failed SQLite session writes include a bounded, redacted `error` summary in
 their structured file-log record, with cause and error-code details when
 available. Long summaries are truncated. The record retains its write timing
 and store fields.
+
+### Slow SQLite transcript hydration
+
+Slow `sessions.transcript-hydration.*` read transactions and
+`session.lifecycle.delete` include native statement attribution on the existing
+slow-hold warning. `statementExecutionMs` sums native execution calls;
+`callbackOtherMs` is the remaining callback wall time, including JavaScript,
+statement preparation, GC, and scheduling. Neither is CPU time. Hydration also
+reports `callbackGcMs` from the current isolate's native GC sampler on Node;
+absence means unavailable, while zero means no observed collection. GC overlaps
+the statement/other wall times and must not be added to them or subtracted from
+both. It cannot locate a collection within a particular statement.
+
+The warning keeps thread identity before its bounded statement summary. The
+summary ranks five groups by total time from at most 32 retained SQL shapes plus
+an overflow group, reports omitted-group count, and identifies the globally
+slowest statement separately. Statement IDs hash normalized SQL; no SQL text or
+bindings are logged. `rows` counts returned rows (`get`/`all`) or consumed iterator
+rows, including early close; it is not the number of rows SQLite scanned.
 
 ### SQLite snapshot cleanup
 
@@ -372,6 +416,22 @@ and cleanup work. Ordinary subscriptions prepare committed access facts without
 waiting for display-row refreshes; incognito reads retain their exact-row
 preparation. Approval subscriptions still prepare and validate the authoritative
 replay before acknowledging. Records contain no session keys or message content.
+
+With the same diagnostics and warning settings, `workboard.cards.list` requests
+taking at least one second emit `slow workboard cards list`. The router records
+`setup`, `projectionReadiness`, `accessFacts`, `admission`, `handlerPreparation`,
+`handler` (including response delivery), and `cleanup` in `phaseDurationsMs`.
+This includes authorization before the Workboard handler, so a fast card query
+does not hide a slow session-access preparation.
+
+Fixed `detail.sessionAuthority.*` timings distinguish profile preparation,
+target preparation, and policy checks. Within target preparation,
+`detail.sessionFacts.*` distinguishes inventory construction, storage readiness,
+discovery, row reads, publication settlement, and selection. These are nested
+wall times: do not add them to the outer phases. Failed calls retain the time
+spent in each phase before the failure. Records contain no request parameters,
+session or card IDs, paths, or error contents. Fast requests emit no warning; no additional logging
+configuration is required beyond the existing diagnostics settings.
 
 The `materialize` phase measures the wait for session-row projection readiness. In-flight
 catalog renewals no longer block lists or descriptions once a catalog is loaded:

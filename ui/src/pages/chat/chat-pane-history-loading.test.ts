@@ -20,7 +20,12 @@ describe("chat pane history loading", () => {
     const { pane, state } = createRefreshChatPane(createGatewayBrowserClientFixture({ request }));
     const messages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
     state.chatMessages = messages;
-    state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
+    state.chatHistoryPagination = {
+      hasMore: true,
+      olderCursor: "older-loading",
+      nextOffset: 2,
+      totalMessages: 4,
+    };
     let refresh!: () => void;
     const { container } = mountSolid(() => {
       const [revision, setRevision] = createSignal(0);
@@ -36,10 +41,9 @@ describe("chat pane history loading", () => {
       refresh();
       flush();
       const button = container.querySelector<HTMLButtonElement>("button")!;
-      const label = loading ? "Loading earlier…" : "Show earlier";
       expect(button.disabled).toBe(false);
-      expect(button.querySelector('[role="status"]')?.textContent?.trim()).toBe(label);
-      expect(button.getAttribute("aria-label")).toBe(label);
+      expect(button.querySelector('[role="status"]')?.textContent?.trim()).toBe("Show earlier");
+      expect(button.getAttribute("aria-label")).toBe("Show earlier");
       expect(button.getAttribute("aria-busy")).toBe(String(loading));
       expect(Boolean(button.closest(".chat-history-boundary--loading"))).toBe(loading);
       return button;
@@ -61,7 +65,13 @@ describe("chat pane history loading", () => {
     loading.click();
     expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
 
-    response.resolve({ messages, hasMore: true, nextOffset: 2, totalMessages: 4 });
+    response.resolve({
+      messages,
+      hasMore: true,
+      olderCursor: "older-loading",
+      nextOffset: 2,
+      totalMessages: 4,
+    });
     await hydration;
     historyAction(false);
   });

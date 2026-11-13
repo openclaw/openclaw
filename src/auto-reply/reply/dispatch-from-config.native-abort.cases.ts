@@ -17,7 +17,7 @@ export function registerNativeDispatchAbortCases(
     dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
     getSessionControllerOperation: typeof import("../../sessions/session-controller.js").getSessionControllerOperation;
     createReplyOperation: typeof import("../../sessions/session-controller.js").createReplyOperation;
-    listActiveReplyRunSessionKeys: typeof import("../../sessions/session-controller.queries.js").listActiveReplyRunSessionKeys;
+    listActiveSessionRunKeys: typeof import("../../sessions/session-controller.queries.js").listActiveSessionRunKeys;
     createDispatchConfig: (diagnostics?: boolean) => OpenClawConfig;
     expectNoReplies: (dispatcher: ReturnType<typeof createDispatcher>) => void;
   },
@@ -26,7 +26,7 @@ export function registerNativeDispatchAbortCases(
     const {
       dispatchReplyFromConfig,
       getSessionControllerOperation,
-      listActiveReplyRunSessionKeys,
+      listActiveSessionRunKeys,
       createDispatchConfig,
       expectNoReplies,
     } = getRuntime();
@@ -92,7 +92,7 @@ export function registerNativeDispatchAbortCases(
       await receipt;
       expect(settled).toHaveBeenCalledOnce();
       expectNoReplies(dispatcher);
-      expect(listActiveReplyRunSessionKeys()).toEqual([]);
+      expect(listActiveSessionRunKeys()).toEqual([]);
     } finally {
       releaseBeforeDispatch.resolve();
       await Promise.allSettled([dispatchPromise, receipt]);
@@ -106,7 +106,7 @@ export function registerNativeDispatchAbortCases(
       dispatchReplyFromConfig,
       getSessionControllerOperation,
       createReplyOperation,
-      listActiveReplyRunSessionKeys,
+      listActiveSessionRunKeys,
       createDispatchConfig,
     } = getRuntime();
     const sourceSessionKey = "agent:main:telegram:slash:user-unauth";
@@ -171,11 +171,11 @@ export function registerNativeDispatchAbortCases(
       targetOperation.complete();
       await Promise.allSettled([dispatchPromise]);
     }
-    expect(listActiveReplyRunSessionKeys()).toEqual([]);
+    expect(listActiveSessionRunKeys()).toEqual([]);
   });
 
   it("does not let a current-session fast abort abort its own dispatch operation", async () => {
-    const { dispatchReplyFromConfig, listActiveReplyRunSessionKeys, createDispatchConfig } =
+    const { dispatchReplyFromConfig, listActiveSessionRunKeys, createDispatchConfig } =
       getRuntime();
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -205,6 +205,6 @@ export function registerNativeDispatchAbortCases(
 
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "stopped" });
-    expect(listActiveReplyRunSessionKeys()).toEqual([]);
+    expect(listActiveSessionRunKeys()).toEqual([]);
   });
 }

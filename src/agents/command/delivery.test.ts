@@ -7,7 +7,6 @@ import { getToolResult, runMessageAction } from "../../infra/outbound/message-ac
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
-import { buildRestartRecoveryTerminalDeliveryEvidence } from "../agent-command-restart-recovery.js";
 import {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
@@ -492,37 +491,8 @@ describe("deliverAgentCommandResult payload normalization", () => {
       const nativePayloads = onDeliveryResult.mock.lastCall?.[1];
       expect(nativePayloads).toEqual([expect.objectContaining({ [flag]: true })]);
       expect(delivered.payloads).toEqual([{ text: "Still checking", mediaUrl: null }]);
-      expect(
-        buildRestartRecoveryTerminalDeliveryEvidence({ ...delivered, payloads: nativePayloads }),
-      ).toMatchObject({ payloads: [{ visible: false }] });
     },
   );
-
-  it.each([
-    { didSendDeterministicApprovalPrompt: true },
-    {
-      acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "agent:main:subagent:child" }],
-    },
-    { successfulCronAdds: 1 },
-  ])("preserves restart-unsafe delivery evidence: %j", async (result) => {
-    const onDeliveryResult = vi.fn();
-    const delivered = await deliverForTest({
-      omitReplyTarget: true,
-      opts: { deliver: false },
-      payloads: [],
-      result: { ...result, requesterContinuationSettled: true },
-      onDeliveryResult,
-    });
-
-    expect(delivered).toMatchObject({ ...result, requesterContinuationSettled: true });
-    expect(onDeliveryResult).toHaveBeenCalledOnce();
-    expect(onDeliveryResult).toHaveBeenCalledWith(delivered, expect.any(Array));
-    expect(buildRestartRecoveryTerminalDeliveryEvidence(delivered)).toEqual({
-      captured: true,
-      requesterContinuationSettled: true,
-      restartUnsafeSideEffectsDetected: true,
-    });
-  });
 
   it("preserves duplicate media needed for a delivery operation", async () => {
     outboundMock.mockResolvedValue(sentMessage);

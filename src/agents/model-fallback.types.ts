@@ -1,4 +1,5 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { AgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import type { FailoverReason } from "./failover/signal.js";
 
 export const MODEL_FALLBACK_SKIPPED_CODE = "MODEL_FALLBACK_SKIPPED";
@@ -25,6 +26,7 @@ export type ModelFallbackCandidate = ModelCandidate & {
 export type FallbackAttempt = ModelCandidate & {
   error: string;
   rateLimitRetriesExhausted?: number;
+  rateLimitResetAt?: number;
   reason?: FailoverReason;
   authMode?: string;
   status?: number;
@@ -40,3 +42,19 @@ export type ModelFallbackAttemptProvenance = {
   selectionChanged?: boolean;
   fallbackReason?: FailoverReason;
 };
+
+export type ModelFallbackResultClassification =
+  | {
+      agentTerminal?: AgentTerminalSnapshot;
+      message: string;
+      reason?: FailoverReason;
+      status?: number;
+      code?: string;
+      rawError?: string;
+      rateLimitRetriesExhausted?: number;
+      preserveResultOnExhaustion?: boolean;
+      preserveResultPriority?: number;
+    }
+  | { error: unknown }
+  | null
+  | undefined;

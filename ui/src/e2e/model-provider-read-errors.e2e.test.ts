@@ -17,7 +17,7 @@ const authStatus = {
 };
 const usage = { updatedAt: 1, providers: [] };
 const primaryError = "Provider access could not be refreshed. Try again.";
-const usageError = "Provider usage is unavailable; the last request failed. Refresh to retry.";
+const usageError = "Couldn’t load provider usage. Refresh to try again.";
 
 suite.define(() => {
   it.each([

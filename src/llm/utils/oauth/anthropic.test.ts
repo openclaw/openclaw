@@ -27,6 +27,7 @@ const login = (options: Partial<OAuthLoginCallbacks> = {}) =>
 const callbackServer = (
   waitForCallback: Loopback.OAuthLoopbackCallbackServer["waitForCallback"] = vi.fn(),
 ) => ({
+  redirectUrl: "http://localhost:53692/callback",
   waitForCallback,
   complete: vi.fn(async () => undefined),
   close: vi.fn(async () => undefined),

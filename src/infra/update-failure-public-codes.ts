@@ -99,6 +99,7 @@ const PUBLIC_CODES = new Set<string>([
   "verification-result-missing",
   "finalization-timeout",
   "finalization-failed",
+  "ancestry-unverified",
   "no-output-timeout",
   "output-limit",
   "signal",
@@ -134,6 +135,7 @@ const PUBLIC_CODES = new Set<string>([
   "config-conflict",
   "config-input-changed",
   "requester-revoked",
+  "interrupted",
   "repair-requires-config-change",
 ]);
 

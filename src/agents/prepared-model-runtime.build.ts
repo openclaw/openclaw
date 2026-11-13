@@ -5,6 +5,10 @@ import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runAbortableTimeout } from "../node-host/with-timeout.js";
 import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
+import {
+  addPluginGenerationMetrics,
+  createPluginGenerationMetrics,
+} from "../plugins/plugin-generation-metrics.js";
 import { settlePluginNativeAdmissions } from "../plugins/plugin-native-admission-state.js";
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -206,6 +210,7 @@ async function buildSnapshotBatch(
       }
       return facts;
     };
+    const pluginPreparation = createPluginGenerationMetrics();
     let runtimePluginMs = 0;
     let pluginMetadataMs = 0;
     let staticProviderCatalogMs = 0;
@@ -262,6 +267,9 @@ async function buildSnapshotBatch(
       preparedGenerations.add(prepared.pluginGeneration);
       assertPreparedModelRuntimeCandidatesCurrent(groupCandidates);
       runtimePluginMs += prepared.buildStats.runtimePluginMs;
+      if (prepared.buildStats.pluginPreparation) {
+        addPluginGenerationMetrics(pluginPreparation, prepared.buildStats.pluginPreparation);
+      }
       pluginMetadataMs += prepared.buildStats.pluginMetadataMs;
       staticProviderCatalogMs += prepared.buildStats.staticProviderCatalogMs;
       ambientCredentialsMs += prepared.buildStats.ambientCredentialsMs;
@@ -363,7 +371,10 @@ async function buildSnapshotBatch(
         assertPreparedModelRuntimeInputCurrent(input, candidate.isBuildCurrent);
         preparedCatalogs.set(
           input,
-          await prepareFullCatalogFacts(agentFacts, pluginGeneration, catalogMode, catalogSource),
+          await prepareFullCatalogFacts(agentFacts, pluginGeneration, catalogMode, catalogSource, {
+            assertCurrent: () =>
+              assertPreparedModelRuntimeInputCurrent(input, candidate.isBuildCurrent),
+          }),
         );
         assertPreparedModelRuntimeInputCurrent(input, candidate.isBuildCurrent);
         runtimeRegistryCount += 1;
@@ -400,6 +411,7 @@ async function buildSnapshotBatch(
       generatedCatalogReadCount,
       workspaceFactsMs,
       runtimePluginMs,
+      pluginPreparation,
       pluginMetadataMs,
       staticProviderCatalogMs,
       ambientCredentialsMs,

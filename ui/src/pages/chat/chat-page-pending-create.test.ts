@@ -19,6 +19,7 @@ import {
 } from "./chat-page.test-support.ts";
 import "./chat-page.tsx";
 import { PendingSessionCreate } from "./pending-session-create-lazy.ts";
+import { buildLocalUserMessage } from "./user-message-content.ts";
 
 const presentedSessions: string[] = [];
 class TranscriptPane extends HTMLElement {
@@ -124,12 +125,10 @@ it.each([
     );
     if (!agentCreation) {
       expect(page.textContent).not.toContain("Creating new agent…");
-      expect(page.textContent).not.toContain("Hi, I’m New agent. Happy to help.");
-    } else {
-      expect(page.querySelector(".chat-group.assistant .chat-text")?.textContent?.trim()).toBe(
-        "Hi, I’m New agent. Happy to help.",
-      );
     }
+    // Creation is progress, not a fabricated assistant turn.
+    expect(page.querySelector(".chat-group.assistant .chat-text")).toBeNull();
+    expect(page.textContent).not.toContain("Happy to help.");
     expect(page.textContent).not.toContain("Reconnecting");
     expect(visiblePane(page)).not.toContain("Transcript:");
     expect(page.textContent).not.toContain(agentId);
@@ -201,3 +200,55 @@ it.each(["rollback", "admission"] as const)(
     }
   },
 );
+
+it("previews a background start's prompt and retries its failure in place", async () => {
+  const previousKey = "agent:main:main";
+  const f = await mountPage(previousKey);
+  const { page, context } = f;
+  const sessionKey = "agent:main:dashboard:background-start";
+  const creation = { sessionKey, admitted: false };
+  const message = buildLocalUserMessage(
+    { text: "Fix the automation timing", createdAt: Date.now() - 22_000 },
+    "available",
+  );
+  const pending = { creation, message, canDisplay: () => true };
+  const preview = context.chatSubmissions.beginBackgroundCreate(pending);
+  page.data = { sessionKey, agentId: "main", creation, face: "chat" };
+  await settleChatPage(page);
+  await settleChatPage(page);
+  expect(page.querySelector("openclaw-pending-session-create")).not.toBeNull();
+  await vi.dynamicImportSettled();
+  await vi.waitFor(() =>
+    expect(page.querySelector(".chat-group.user")?.textContent).toContain(
+      "Fix the automation timing",
+    ),
+  );
+  const indicator = page.querySelector(".chat-thread-inner .chat-working-indicator");
+  expect(indicator?.textContent).toContain("Starting…");
+  expect(indicator?.textContent).toMatch(/2\ds/u);
+  // A background start names itself plainly until the Gateway titles it.
+  expect(page.querySelector(".chat-pane__session-title")?.textContent).toBe("New session");
+  expect(visiblePane(page)).not.toContain("Transcript:");
+
+  const retry = vi.fn();
+  preview.update({ ...pending, failure: { error: "Gateway refused the session", retry } });
+  await settleChatPage(page);
+  expect(page.textContent).toContain("Gateway refused the session");
+  expect(page.querySelector(".chat-group.user")?.textContent).toContain(
+    "Fix the automation timing",
+  );
+  const tryAgain = [...page.querySelectorAll("button")].find(
+    (button) => button.textContent?.trim() === "Try again",
+  );
+  expect(tryAgain?.disabled).toBe(false);
+  tryAgain?.click();
+  expect(retry).toHaveBeenCalledOnce();
+
+  // Admission hands the same route to the real conversation.
+  creation.admitted = true;
+  preview.clear();
+  await settleChatPage(page);
+  await settleChatPage(page);
+  expect(page.querySelector("openclaw-pending-session-create")).toBeNull();
+  expect(visiblePane(page)).toContain(`Transcript: ${sessionKey}`);
+});

@@ -21,7 +21,9 @@ npm run plugin:validate
 
 `plugins init` creates a minimal TypeScript tool plugin by default. The first
 argument is the plugin id; `--name` sets the display name. OpenClaw uses the
-id for the default output directory and package naming. Tool scaffolds use
+id for the default output directory and package naming. Scoped tool and provider
+ids keep their npm scope: `@author/tools` creates `@author/openclaw-plugin-tools`.
+Tool scaffolds use
 `defineToolPlugin` and generate `package.json` scripts `plugin:build` and
 `plugin:validate` that build then call `openclaw plugins build`/`validate`.
 
@@ -34,6 +36,13 @@ authoring workflow.
 
 Authoring metadata must be regular files containing valid UTF-8 JSON. Symlinks to
 regular files are supported; pipes and other special files are rejected before reading.
+
+`plugins init`, `build`, and `validate` report their specific input errors, such as
+an existing output directory, missing entry, or malformed package metadata,
+without requiring debug output. These rejected inputs still exit with code 1
+before writing project files. Feature plugin IDs must start with a lowercase
+letter and contain only lowercase letters, digits, or hyphens; an invalid ID
+leaves the target directory untouched.
 
 `plugins lint --root <path>` inspects a plugin and its materialized runtime
 dependencies without importing plugin code or reading operator configuration.
@@ -76,6 +85,13 @@ another path. Packing follows the package's runtime entry selection, including
 entry paths are rewritten to the compiled files included in the archive.
 See [Feature plugins](/plugins/feature-plugins) for activation approval, reload,
 view lifecycle, and recovery.
+
+Validation refusals, such as a missing plugin manifest or an unsupported archive
+extension, print their specific reason and exit with status `1`.
+If the compiler is missing, the CLI asks you to install `esbuild` in the plugin's
+`devDependencies`, then run `plugins build` again.
+Bundling refusals also report unsupported imports or module-relative resources
+with their existing recovery guidance; rejected builds still exit with status `1`.
 
 ### Provider scaffold
 

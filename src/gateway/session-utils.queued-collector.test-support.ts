@@ -50,7 +50,7 @@ const lifecycleRequests = vi.hoisted(() => ({ controller: new AbortController() 
 type Client = GatewayRequestHandlerOptions["client"];
 type RpcParams = Record<string, unknown>;
 
-vi.mock(import("./server-recovery-runtime-context.js"), async (importOriginal) => ({
+vi.mock(import("./server-lifecycle-runtime-context.js"), async (importOriginal) => ({
   ...(await importOriginal()),
   bindGatewayLifecycleRequest: () => async (request: CallGatewayOptions) => {
     const signal = request.signal
@@ -301,6 +301,7 @@ export function useQueuedCollectorFixture() {
     reserveSwarmRun({ runId, groupId, maxConcurrent: 1, activeRunIds: [] });
     const created = await createInitialSubagentSession({
       cfg: getRuntimeConfig(),
+      projectRequester: { kind: "internal" },
       requesterAgentId: "main",
       targetAgentId: "main",
       childSessionKey,

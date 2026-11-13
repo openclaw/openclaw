@@ -13,6 +13,7 @@ import {
   createProviderRuntimeLogger,
   DEMO_SANITIZED_MESSAGE,
   DEMO_TOOL,
+  loadProviderRuntimeTestOwners,
   PROVIDER_RUNTIME_TEST_MODEL as MODEL,
 } from "./provider-runtime.test-support.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
@@ -59,6 +60,8 @@ const resolveProviderPolicySurfaceMock = vi
 const providerRuntimeWarnMock = vi.fn();
 
 let runtime: typeof import("./provider-runtime.js");
+let owners: Awaited<ReturnType<typeof loadProviderRuntimeTestOwners>>;
+let resolveProviderRuntimePlugin: typeof import("./provider-hook-runtime.js").resolveProviderRuntimePlugin;
 let getAiTransportHost: typeof import("@openclaw/ai").getAiTransportHost;
 let attachModelProviderRuntimePluginHandle: typeof import("./provider-hook-runtime.js").attachModelProviderRuntimePluginHandle;
 let resolveProviderPluginsForHooks: typeof import("./provider-hook-runtime.js").resolveProviderPluginsForHooks;
@@ -130,14 +133,14 @@ function providerParams<TContext extends Record<string, unknown>>(overrides: TCo
 function expectFailover(
   provider?: string,
   context: Omit<
-    Parameters<typeof runtime.classifyProviderFailoverSignalWithPlugin>[0]["context"],
+    Parameters<typeof owners.failover.classifyProviderFailoverSignalWithPlugin>[0]["context"],
     "provider"
   > = {
     errorMessage: "bad request",
   },
 ) {
   return expect(
-    runtime.classifyProviderFailoverSignalWithPlugin({
+    owners.failover.classifyProviderFailoverSignalWithPlugin({
       provider,
       context: { provider, ...context },
     }),
@@ -233,28 +236,28 @@ describe("provider-runtime", () => {
           isPluginProvidersLoadInFlightMock(params),
       };
     });
-    vi.doMock("./provider-hook-runtime.js", async () => {
+    vi.doMock("./provider-hook-runtime.js", async (importOriginal) => {
       const { createProviderHookRuntime } = await import("./provider-hook-runtime-core.js");
+      const { nativePluginBindings } = await import("./loader-runtime-load.js");
       const providers = await import("./providers.runtime.js");
-      return createProviderHookRuntime(providers);
-    });
-    vi.doMock("./provider-external-auth.js", async () => {
-      const { createProviderExternalAuthResolver } =
-        await import("./provider-external-auth-core.js");
-      const hooks = await import("./provider-hook-runtime.js");
-      return createProviderExternalAuthResolver(hooks);
+      return {
+        ...(await importOriginal<typeof import("./provider-hook-runtime.js")>()),
+        ...createProviderHookRuntime({ ...nativePluginBindings.providerRegistry, ...providers }),
+      };
     });
     vi.doMock("../logging/subsystem.js", () => ({
       createSubsystemLogger: () => createProviderRuntimeLogger(providerRuntimeWarnMock),
     }));
     runtime = await import("./provider-runtime.js");
+    owners = await loadProviderRuntimeTestOwners();
     ({ resolvePreparedExtraParams } =
       await import("../agents/embedded-agent-runner/extra-params.js"));
     ({
       attachModelProviderRuntimePluginHandle,
       resolveProviderPluginsForHooks,
       resolveLoadedProviderPluginsForHooks,
-    } = await import("./provider-hook-runtime.js"));
+      resolveProviderRuntimePlugin,
+    } = owners.hooks);
     await import("../agents/ai-transport-runtime-host.js");
     ({ getAiTransportHost } = await import("@openclaw/ai"));
     ({ createEmptyPluginRegistry } = await import("./registry-empty.js"));
@@ -301,11 +304,11 @@ describe("provider-runtime", () => {
     }
     resolvePluginProvidersMock.mockReturnValue(available ? [provider] : []);
 
-    const login = await runtime.loginProviderOAuthWithPlugin({
+    const login = await owners.auth.loginProviderOAuthWithPlugin({
       provider: "plugin-oauth",
       context: { onAuth: vi.fn(), onPrompt: vi.fn(async () => "") },
     });
-    const credential = await runtime.resolveProviderOAuthCredentialWithPlugin({
+    const credential = await owners.auth.resolveProviderOAuthCredentialWithPlugin({
       provider: "plugin-oauth",
       ...(available ? { config: refreshConfig } : {}),
       credential: {
@@ -332,7 +335,7 @@ describe("provider-runtime", () => {
       expect(credential).toEqual({ status: "configured-unavailable" });
     }
     expect(
-      runtime.resolveProviderOAuthRefreshCapabilityWithPlugin({ provider: "plugin-oauth" }),
+      owners.auth.resolveProviderOAuthRefreshCapabilityWithPlugin({ provider: "plugin-oauth" }),
     ).toEqual({
       status: available ? "available" : "configured-unavailable",
     });
@@ -398,7 +401,7 @@ describe("provider-runtime", () => {
       fromActiveRegistry: true,
     });
     expect(
-      runtime.classifyProviderFailoverSignalWithPlugin({
+      owners.failover.classifyProviderFailoverSignalWithPlugin({
         provider: DEMO_PROVIDER_ID,
         workspaceDir: "/tmp/workspace",
         context: createDemoProviderContext({ status: 403, errorMessage: "fixture refusal" }),
@@ -457,7 +460,7 @@ describe("provider-runtime", () => {
       resolvePluginProvidersMock.mockReturnValue([provider]);
     }
 
-    const plugin = runtime.resolveProviderRuntimePlugin({
+    const plugin = resolveProviderRuntimePlugin({
       provider: row.requestedProvider,
       ...(row.loaded ? { workspaceDir: "/tmp/workspace" } : {}),
       config: {
@@ -688,7 +691,7 @@ describe("provider-runtime", () => {
         profileOrder: [],
         authStore: { version: 1 as const, profiles: {} },
       };
-      const first = runtime.resolveProviderRuntimePlugin({
+      const first = resolveProviderRuntimePlugin({
         provider: DEMO_PROVIDER_ID,
         config,
         pluginMetadataSnapshot: firstMetadata,
@@ -701,7 +704,7 @@ describe("provider-runtime", () => {
         logger: { warn: (message) => warnings.push(message) },
       });
       expect(warnings).toEqual([]);
-      const current = runtime.resolveProviderRuntimePlugin({
+      const current = resolveProviderRuntimePlugin({
         provider: DEMO_PROVIDER_ID,
         config,
         pluginMetadataSnapshot: currentMetadata,
@@ -802,13 +805,11 @@ describe("provider-runtime", () => {
         : [provider],
     );
 
-    expect(runtime.resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBeUndefined();
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBeUndefined();
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
 
     providerScopedLoadInFlight = false;
-    expect(runtime.resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toMatchObject(
-      provider,
-    );
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toMatchObject(provider);
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
   });
 
@@ -824,7 +825,7 @@ describe("provider-runtime", () => {
       params.applyAutoEnable === false ? [] : [runtimeProvider],
     );
 
-    expect(runtime.resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toMatchObject(
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toMatchObject(
       runtimeProvider,
     );
 
@@ -844,7 +845,7 @@ describe("provider-runtime", () => {
 
   it("skips provider runtime loading when no plugin declares external auth hooks", () => {
     expect(
-      runtime.resolveExternalAuthProfilesWithPlugins({
+      owners.externalAuth.resolveExternalAuthProfilesWithPlugins({
         env: process.env,
         context: {
           env: process.env,
@@ -875,7 +876,7 @@ describe("provider-runtime", () => {
       ],
     });
 
-    const [profile] = runtime.resolveExternalAuthProfilesWithPlugins({
+    const [profile] = owners.externalAuth.resolveExternalAuthProfilesWithPlugins({
       env: process.env,
       context: {
         env: process.env,
@@ -900,7 +901,7 @@ describe("provider-runtime", () => {
         agents: { defaults: { model } },
       };
       expect(
-        await runtime.augmentModelCatalogWithProviderPlugins({
+        await owners.catalog.augmentModelCatalogWithProviderPlugins({
           config,
           env: process.env,
           metadataSnapshot,
@@ -1157,7 +1158,7 @@ describe("provider-runtime", () => {
         { id: "openai", label: "OpenAI", auth: [], classifyFailoverReason: () => "billing" },
       ]);
       const result = withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
-        runtime.classifyProviderFailoverSignalWithPlugin({
+        owners.failover.classifyProviderFailoverSignalWithPlugin({
           provider,
           context: { provider, errorMessage: "bad request" },
         }),
@@ -1215,7 +1216,7 @@ describe("provider-runtime", () => {
         { id: "second", label: "Second", auth: [], classifyFailoverReason: later },
       ]);
       expect(
-        runtime.classifyProviderFailoverSignalWithPlugin({
+        owners.failover.classifyProviderFailoverSignalWithPlugin({
           context: { errorMessage: "fixture failure" },
         }),
       ).toBe(expected);
@@ -1356,11 +1357,9 @@ describe("provider-runtime", () => {
       const runtimeConfig = params?.config as typeof config | undefined;
       return runtimeConfig?.plugins?.entries?.demo?.enabled === true ? [createDemoProvider()] : [];
     });
-    expect(
-      runtime.resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config }),
-    ).toBeUndefined();
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config })).toBeUndefined();
     config.plugins.entries.demo.enabled = true;
-    expect(runtime.resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config })?.id).toBe(
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config })?.id).toBe(
       DEMO_PROVIDER_ID,
     );
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
@@ -1434,7 +1433,7 @@ describe("provider-runtime", () => {
 
   it.each([
     { change: "API", normalized: { api: "openai-responses" as const } },
-    { change: "base URL", normalized: { baseUrl: "https://normalized.example/v1" } },
+    { change: "base URL", normalized: { baseUrl: "https://api.openai.com/v1/normalized" } },
   ])("applies foreign transport $change normalization for custom hosts", ({ normalized }) => {
     const model = {
       ...MODEL,

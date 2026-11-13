@@ -24,7 +24,6 @@ async function runSecretRedactionScenario(
   scenarioId: (typeof redactionScenarioIds)[number],
   params: {
     providerMode?: "mock-openai" | "live-frontier";
-    seedPriorInbound?: boolean;
     leakSecret?: boolean;
     transcriptEvidence?:
       | "fixture"
@@ -54,7 +53,6 @@ async function runSecretRedactionScenario(
     [unrelatedFilePath, "Unrelated workspace documentation without credential material.\n"],
   ]);
   const agentToolReads: Array<{ path: string; contents: string }> = [];
-  const outboundWaitCursors: number[] = [];
   const gatewayHistoryRequests: Array<{
     method: string;
     params: { sessionKey: string; limit: number; maxChars: number };
@@ -96,14 +94,6 @@ async function runSecretRedactionScenario(
           workspaceFiles.set(filePath, contents);
         },
         readFile: async (filePath: string) => {
-          if (params.seedPriorInbound) {
-            state.addInboundMessage({
-              accountId: "qa-channel",
-              conversation: { id: "qa-operator", kind: "direct" },
-              senderId: "qa-driver",
-              text: "earlier inbound fixture preparation",
-            });
-          }
           return readWorkspaceFixture(filePath);
         },
       },
@@ -201,7 +191,6 @@ async function runSecretRedactionScenario(
         options?: { sinceIndex?: number },
       ) => {
         const sinceIndex = options?.sinceIndex ?? 0;
-        outboundWaitCursors.push(sinceIndex);
         const match = currentState
           .getSnapshot()
           .messages.filter((message) => message.direction === "outbound")
@@ -221,7 +210,6 @@ async function runSecretRedactionScenario(
     fakeSecret,
     fixturePath,
     gatewayHistoryRequests,
-    outboundWaitCursors,
     result,
     state,
   };
@@ -257,53 +245,33 @@ describe("secret redaction scenario proof", () => {
     },
   );
 
-  it.each(redactionScenarioCases)(
-    "rejects a successful unrelated read in $scenarioId under $providerMode",
-    async ({ scenarioId, providerMode }) => {
+  for (const { name, transcriptEvidence } of [
+    {
+      name: "rejects a successful unrelated read in $scenarioId under $providerMode",
+      transcriptEvidence: "unrelated-file",
+    },
+    {
+      name: "rejects an uncorrelated fixture result in $scenarioId under $providerMode",
+      transcriptEvidence: "uncorrelated-result",
+    },
+    {
+      name: "rejects a fixture result without secret material in $scenarioId under $providerMode",
+      transcriptEvidence: "missing-secret",
+    },
+    {
+      name: "rejects failed fixture reads in $scenarioId under $providerMode",
+      transcriptEvidence: "failed-result",
+    },
+  ] as const) {
+    it.each(redactionScenarioCases)(name, async ({ scenarioId, providerMode }) => {
       await expect(
         runSecretRedactionScenario(scenarioId, {
           providerMode,
-          transcriptEvidence: "unrelated-file",
+          transcriptEvidence,
         }),
       ).rejects.toThrow("successful persisted read did not target the fake secret fixture");
-    },
-  );
-
-  it.each(redactionScenarioCases)(
-    "rejects an uncorrelated fixture result in $scenarioId under $providerMode",
-    async ({ scenarioId, providerMode }) => {
-      await expect(
-        runSecretRedactionScenario(scenarioId, {
-          providerMode,
-          transcriptEvidence: "uncorrelated-result",
-        }),
-      ).rejects.toThrow("successful persisted read did not target the fake secret fixture");
-    },
-  );
-
-  it.each(redactionScenarioCases)(
-    "rejects a fixture result without secret material in $scenarioId under $providerMode",
-    async ({ scenarioId, providerMode }) => {
-      await expect(
-        runSecretRedactionScenario(scenarioId, {
-          providerMode,
-          transcriptEvidence: "missing-secret",
-        }),
-      ).rejects.toThrow("successful persisted read did not target the fake secret fixture");
-    },
-  );
-
-  it.each(redactionScenarioCases)(
-    "rejects failed fixture reads in $scenarioId under $providerMode",
-    async ({ scenarioId, providerMode }) => {
-      await expect(
-        runSecretRedactionScenario(scenarioId, {
-          providerMode,
-          transcriptEvidence: "failed-result",
-        }),
-      ).rejects.toThrow("successful persisted read did not target the fake secret fixture");
-    },
-  );
+    });
+  }
 
   it.each(redactionScenarioIds)(
     "rejects leaked fixture material in %s after a nested read",

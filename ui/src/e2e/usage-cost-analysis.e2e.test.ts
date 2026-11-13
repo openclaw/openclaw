@@ -5,7 +5,12 @@ import type { SessionUsageEntry } from "../../../src/shared/usage-types.js";
 import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
 import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
+import {
+  applyUsageQuery,
+  openUsageFilter,
+  selectUsageTimeZone,
+  installUsageOverviewGateway as installMockGateway,
+} from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI usage cost analysis mocked Gateway E2E",
@@ -173,9 +178,7 @@ suite.define(() => {
             },
           });
           await page.goto(`${suite.server.baseUrl}usage`);
-          await page
-            .getByRole("combobox", { name: "Time zone", exact: true })
-            .selectOption(timeZone);
+          await selectUsageTimeZone(page, timeZone);
           // The page title stays with its subtitle instead of moving into the toolbar row.
           await page.locator(".content-header--stacked .page-title").waitFor();
           const content = page.locator("main.content");
@@ -276,8 +279,7 @@ suite.define(() => {
           sessions.map((session) => session.label),
         );
         if (scenario === "filtered") {
-          await page.locator(".usage-query-input").fill("label:Visible");
-          await page.locator(".usage-query-input").press("Enter");
+          await applyUsageQuery(page, "label:Visible");
           await expect.poll(() => list.locator(".session-bar-row").count()).toBe(3);
         }
         if (scenario === "recent-tab") {
@@ -292,7 +294,7 @@ suite.define(() => {
             "Visible A",
             "Visible C",
           ]);
-          await card.getByRole("button", { name: "Clear Selection", exact: true }).click();
+          await card.getByRole("button", { name: "Clear selection", exact: true }).click();
         }
         const names = await list.locator(".session-bar-title").allTextContents();
         await list.getByRole("button", { name: names[0], exact: true }).click();
@@ -307,8 +309,7 @@ suite.define(() => {
           )
           .toEqual(names.toSorted());
         if (scenario === "filtered") {
-          await page.locator(".usage-query-input").fill("");
-          await page.locator(".usage-query-input").press("Enter");
+          await applyUsageQuery(page, "");
           await expect.poll(() => list.locator(".session-bar-row").count()).toBe(4);
           await expect
             .poll(() =>
@@ -369,7 +370,7 @@ suite.define(() => {
         const cachedRow = page.locator(".session-bar-row").filter({ hasText: "Cached session" });
         await expect.poll(() => pendingRow.count(), { timeout: 10_000 }).toBe(1);
 
-        await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("utc");
+        await selectUsageTimeZone(page, "utc");
         await expect
           .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
           .toMatchObject({ mode: "utc" });
@@ -418,34 +419,32 @@ suite.define(() => {
         .poll(async () => (await sessionLabels.allTextContents()).toSorted())
         .toEqual(["Research Review", "Team Planning"]);
 
-      const providerFilter = page.locator(".usage-filter-select").filter({
-        has: page.locator(".usage-filter-trigger", { hasText: "Provider" }),
-      });
-      await providerFilter.locator(".usage-filter-trigger").click();
-      await providerFilter.locator('[data-value="command:select-all"]').click();
-      await expectText(providerFilter.locator(".settings-count")).toBe("2");
+      let providerFilter = await openUsageFilter(page, "Provider");
+      await providerFilter.getByRole("button", { name: "Select all", exact: true }).click();
+      await expectText(page.locator(".usage-filter-chip__value")).toBe("2");
       await expect
         .poll(async () => (await sessionLabels.allTextContents()).toSorted())
         .toEqual(["Research Review", "Team Planning"]);
 
-      const query = page.locator(".usage-query-input");
-      await page.keyboard.press("Escape");
+      const query = page.locator(".usage-filter-menu__query input");
+      await page.locator(".usage-filter-menu__trigger").click();
       for (const token of ["PROVIDER:OpenAI", 'provider:"openai"']) {
-        await query.fill(`${token} provider:anthropic`);
-        await query.press("Enter");
+        await applyUsageQuery(page, `${token} provider:anthropic`);
         await expect
           .poll(async () => (await sessionLabels.allTextContents()).toSorted())
           .toEqual(["Research Review", "Team Planning"]);
-        await providerFilter.locator(".usage-filter-trigger").click();
-        const openai = providerFilter.locator('[data-value="option:openai"]');
+        providerFilter = await openUsageFilter(page, "Provider");
+        const openai = providerFilter.getByRole("menuitemcheckbox", {
+          name: "openai",
+          exact: true,
+        });
         await expect.poll(() => openai.getAttribute("aria-checked")).toBe("true");
         await openai.click();
         await expectTexts(sessionLabels, ["Research Review"]);
         await expect.poll(() => query.inputValue()).toBe("provider:anthropic ");
-        await page.keyboard.press("Escape");
+        await page.locator(".usage-filter-menu__trigger").click();
       }
-      await query.fill('label:"Team Planning"');
-      await query.press("Enter");
+      await applyUsageQuery(page, 'label:"Team Planning"');
       await expectTexts(sessionLabels, ["Team Planning"]);
     });
   });
@@ -508,7 +507,10 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.usage")).length)
         .toBeGreaterThan(requestsBeforeRangeChange);
+      const display = page.getByRole("button", { name: "Display", exact: true });
+      await display.click();
       await page.getByRole("button", { name: "Cost", exact: true }).click();
+      await display.click();
 
       const windowCards = page.locator(".cost-window");
       await expect.poll(() => windowCards.count()).toBe(4);
@@ -518,11 +520,11 @@ suite.define(() => {
           values: await trimmedTexts(windowCards.locator(".cost-window__value")),
         }))
         .toEqual({
-          labels: ["Selected Range", "Today", "Last 7 days", "Last 30 days"],
+          labels: ["Selected range", "Today", "Last 7 days", "Last 30 days"],
           values: ["$32.00", "$11.00", "$20.00", "$27.00"],
         });
       await expectTexts(page.locator(".daily-chart-scale span"), ["$20", "$10", "$0"]);
-      await expectText(page.locator(".usage-insight-card", { hasText: "Top Providers" })).toContain(
+      await expectText(page.locator(".usage-insight-card", { hasText: "Top providers" })).toContain(
         "OpenAI",
       );
     });

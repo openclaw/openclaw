@@ -212,16 +212,16 @@ it("applies schedule, status, trigger, and cross-field phrase filters before pag
   });
   expect(page).toMatchObject({ jobs: [{ id: "job-3" }], total: 1, hasMore: false });
 });
-it("prepares search text once per row generation while rechecking visibility", async () => {
+it("caches canonical search per row generation and rechecks visibility", async () => {
   const state = listState(
-    { id: "one", name: "Alpha", description: "Report", displayName: "日本語 🦞" },
+    { id: "one", name: "A\u0308 Alpha", description: "é Report", displayName: "日本語 🦞" },
     { id: "two", name: "Beta", agentId: "ops" },
   );
   state.schedulerStarted = true;
   const normalize = vi.spyOn(stringCoerce, "normalizeLowercaseStringOrEmpty");
   let visible = true;
   const matchesJob = vi.fn(() => visible);
-  const first = await listPage(state, { query: " ALPHA " }, matchesJob);
+  const first = await listPage(state, { query: " Ä ALPHA E\u0301 " }, matchesJob);
   expect(first.jobs.map((job) => job.id)).toEqual(["one"]);
   expect((await listPage(state, { query: "日本語 🦞" }, matchesJob)).jobs[0]).toBe(first.jobs[0]);
   expect((await listPage(state, { query: "ops" })).jobs.map((job) => job.id)).toEqual(["two"]);
@@ -229,22 +229,22 @@ it("prepares search text once per row generation while rechecking visibility", a
   expect(await listPage(state, { query: "report" }, matchesJob)).toMatchObject({ total: 0 });
   expect(matchesJob).toHaveBeenCalledTimes(3);
   expect(
-    normalize.mock.calls.filter(([value]) => value === "one Alpha Report  日本語 🦞"),
+    normalize.mock.calls.filter(([value]) => value === "one A\u0308 Alpha é Report  日本語 🦞"),
   ).toHaveLength(1);
   expect(normalize.mock.calls.filter(([value]) => value === "two Beta  ops")).toHaveLength(1);
 
   await locked(state, async () => {
     const job = state.store!.jobs[0]!;
     applyCronRuntimeRowsToState(state, [
-      { ...job, name: "Renamed", description: "Changed", displayName: undefined },
+      { ...job, name: "Ä Renamed", description: "Changed", displayName: undefined },
     ]);
   });
   expect(await listPage(state, { query: "alpha" })).toMatchObject({ total: 0 });
   expect(await listPage(state, { query: "日本語" })).toMatchObject({ total: 0 });
-  const changed = await listPage(state, { query: "changed" });
+  const changed = await listPage(state, { query: "A\u0308 Renamed Changed" });
   expect(changed.jobs.map((job) => job.id)).toEqual(["one"]);
   expect(changed.snapshotRevision).not.toBe(first.snapshotRevision);
-  expect(first.jobs[0]?.name).toBe("Alpha");
+  expect(first.jobs[0]?.name).toBe("A\u0308 Alpha");
 });
 
 it("preserves callback failure and subsequent reads when the logger throws", async () => {

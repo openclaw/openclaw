@@ -367,7 +367,7 @@ it("replaces the composer with the archived-session notice", () => {
   ).toBeNull();
   banner?.querySelector<HTMLButtonElement>("button")?.click();
   expect(onAction).toHaveBeenCalledOnce();
-  const stop = query<HTMLButtonElement>(`[aria-label="${t("chat.runControls.stopGenerating")}"]`);
+  const stop = query<HTMLButtonElement>(`[aria-label="${t("chat.runControls.stop")}"]`);
   expect(stop).not.toBeNull();
   stop?.click();
   expect(onAbort).toHaveBeenCalledOnce();

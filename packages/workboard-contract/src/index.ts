@@ -1,6 +1,7 @@
 import type { WorkboardSessionsBoardSpec } from "./sessions-board.js";
 
 export type WorkboardDatabasePortApi<Database, Input> = {
+  postgres: string;
   inspectWorkboardPortSource(db: Database): {
     version: number;
     migrationRequired: boolean;
@@ -349,6 +350,8 @@ export type WorkboardBoardSummary = Omit<WorkboardBoardMetadata, "createdAt" | "
 export type WorkboardOrchestrationSettings = {
   autoDecompose?: boolean;
   autoDecomposePerDispatch?: number;
+  /** Running or claimed cards one owner may hold while starting a card on this board. Default 1. */
+  maxActivePerOwner?: number;
   defaultAssignee?: string;
   orchestratorProfile?: string;
 };

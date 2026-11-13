@@ -47,6 +47,12 @@ import * as chatProgress from "./chat-progress.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import * as chatThread from "./chat-thread.ts";
+import { expectInlineImageOpened } from "./chat-view-media.test-support.ts";
+import {
+  authStatus,
+  googleAuthProviders,
+  subscriptionProfiles,
+} from "./chat-view-model-auth.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import {
   appendChatBubble,
@@ -66,6 +72,7 @@ import {
   renderChatView,
   getComposerTextarea,
   requireElement,
+  waitForElement,
   stubAnimationFrames,
   createDragEvent,
   getChatModelSelect,
@@ -82,11 +89,7 @@ import * as chatMessageConfirmation from "./components/chat-message-confirmation
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
-import {
-  resetThreadPresentation,
-  resetTranscriptSession,
-  toggleTranscriptSearch,
-} from "./components/chat-thread-interactions.ts";
+import { resetThreadPresentation } from "./components/chat-thread-interactions.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -335,76 +338,6 @@ describe("chat typing status", () => {
   );
 });
 
-describe("chat history pagination", () => {
-  it("keeps earlier history discoverable and retryable until the transcript is exhausted", () => {
-    const onShowEarlier = vi.fn();
-    const container = createComposerContainer();
-    for (const [loading, label, clicks] of [
-      [false, "Show earlier", 1],
-      [true, "Loading earlier…", 1],
-      [false, "Show earlier", 2],
-    ] as const) {
-      renderChatInto(container, {
-        historyPagination: { hasMore: true, loading, onShowEarlier },
-      });
-      const button = requireElement(
-        container,
-        ".chat-history-boundary__action",
-        "earlier history action",
-      ) as HTMLButtonElement;
-      expect(button.querySelector('[role="status"]')?.textContent?.trim()).toBe(label);
-      expect(button.getAttribute("aria-label")).toBe(label);
-      expect(button.getAttribute("aria-busy")).toBe(String(loading));
-      expect(button.disabled).toBe(false);
-      expect(button.closest(".chat-thread")).not.toBeNull();
-      if (loading) {
-        expect(button.getAttribute("aria-disabled")).toBe("true");
-        expect(button.closest(".chat-history-boundary--loading")).not.toBeNull();
-      }
-      button.click();
-      expect(onShowEarlier).toHaveBeenCalledTimes(clicks);
-    }
-
-    renderChatInto(container);
-    expect(container.querySelector(".chat-history-boundary")).toBeNull();
-    expect(container.querySelector(".chat-history-sentinel")).toBeNull();
-  });
-
-  it("loads older history from upward wheel and keyboard intent across transcript updates", () => {
-    const onHistoryIntent = vi.fn();
-    const props = {
-      messages: [{ role: "assistant", content: "Current history" }],
-      historyPagination: {
-        hasMore: true,
-        loading: false,
-        onShowEarlier: vi.fn(),
-      },
-      onHistoryIntent,
-    };
-    const container = renderChatView(props);
-    const thread = requireElement(container, ".chat-thread", "chat thread");
-    const sentinel = requireElement(container, ".chat-history-sentinel", "history sentinel");
-
-    expect(sentinel.querySelector("button")).toBeNull();
-    thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
-    thread.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
-    expect(onHistoryIntent).toHaveBeenCalledTimes(2);
-
-    renderChatInto(container, {
-      ...props,
-      messages: [...props.messages, { role: "assistant", content: "Updated history" }],
-    });
-    expect(container.querySelector(".chat-history-sentinel")).toBe(sentinel);
-    expect(thread.contains(sentinel)).toBe(true);
-    thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
-    expect(onHistoryIntent).toHaveBeenCalledTimes(3);
-
-    renderChatInto(container, { messages: props.messages, onHistoryIntent });
-    expect(container.querySelector(".chat-history-sentinel")).toBeNull();
-    expect(thread.contains(sentinel)).toBe(false);
-  });
-});
-
 describe("retained input navigation", () => {
   it("keeps an empty filtered page navigable without blocking an independent send", async () => {
     const sessionKey = "agent:main:hidden-page";
@@ -434,11 +367,13 @@ describe("retained input navigation", () => {
       getDraft: () => "Independent work",
       onSend,
     });
-    const earlier = expectDefined(
-      [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
-        button.textContent?.includes(t("chat.pendingInputs.earlier")),
+    const earlier = await waitForSolid(() =>
+      expectDefined(
+        [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+          button.textContent?.includes(t("chat.pendingInputs.earlier")),
+        ),
+        "earlier pending-input navigation",
       ),
-      "earlier pending-input navigation",
     );
     expect(earlier.disabled).toBe(false);
     const send = expectDefined(
@@ -612,7 +547,7 @@ describe("chat code-block copy", () => {
 });
 
 describe("chat transcript rendering", () => {
-  it("refreshes cached inline reply handlers when the callback identity changes", () => {
+  it("refreshes cached inline reply handlers when the callback identity changes", async () => {
     // Freeze the separate minute-based timestamp dependency while checking callback rebinding.
     vi.spyOn(Date, "now").mockReturnValue(60_000);
     const transcript = createTestTranscript();
@@ -643,11 +578,7 @@ describe("chat transcript rendering", () => {
     };
 
     renderWithReply(firstReply);
-    const button = requireElement(
-      container,
-      '[aria-label="Reply to message"]',
-      "inline reply button",
-    );
+    const button = await waitForElement(container, '[aria-label="Reply to message"]');
     renderWithReply(currentReply);
     expect(container.querySelector('[aria-label="Reply to message"]')).toBe(button);
     button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -697,7 +628,7 @@ describe("chat transcript rendering", () => {
 
   it.each(["ordinary"])(
     "announces named attachment failures within the cap in %s assistant rows",
-    (flow) => {
+    async (flow) => {
       const transcript = createTestTranscript();
       const container = createComposerContainer();
       const existing = {
@@ -711,6 +642,7 @@ describe("chat transcript rendering", () => {
         renderChatInto(container, { transcript, messages });
 
       renderMessages([existing]);
+      await waitForElement(container, ".chat-virtual-row");
       expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe("");
       const attachmentOnly = {
         testVirtualRow: true,
@@ -836,145 +768,10 @@ describe("chat transcript rendering", () => {
         );
       }
       expect(mixedAnnouncement).toBe(
-        "settings.toml: Not sent. Rejected by the local attachment allowlist. Send a supported file type. Partial result",
+        "settings.toml: Not sent. This file type cannot be attached here. If it is saved in this session, download it from Files, or ask for a ZIP containing the original file. Partial result",
       );
     },
   );
-
-  it("announces a run preamble and its later terminal answer separately", () => {
-    const transcript = createTestTranscript();
-    const container = createComposerContainer();
-    const user = {
-      kind: "group",
-      key: "group:user:announcement",
-      role: "user",
-      visibleContent: "text",
-      messages: [
-        {
-          key: "message:user:announcement",
-          message: {
-            role: "user",
-            content: "Start",
-            __openclaw: { id: "user:announcement", idempotencyKey: "run-announcement:user" },
-          },
-        },
-      ],
-      timestamp: 1,
-      isStreaming: false,
-    };
-    const renderItems = (items: ReturnType<typeof chatThread.buildCachedChatItems>) => {
-      vi.mocked(chatThread.buildCachedChatItems).mockReturnValue(items);
-      renderChatInto(container, { transcript, messages: items });
-    };
-
-    renderItems([user] as ReturnType<typeof chatThread.buildCachedChatItems>);
-    const stream = {
-      kind: "stream" as const,
-      key: "stream:announcement",
-      text: "Latest streamed narration",
-      startedAt: 2,
-      isStreaming: true,
-      runId: "run-announcement",
-      boundaryId: "send:run-announcement",
-    };
-    renderItems([
-      user,
-      stream,
-      {
-        kind: "reading-indicator",
-        key: "reading:announcement",
-        startedAt: 2,
-        runId: "run-announcement",
-        boundaryId: "send:run-announcement",
-      },
-    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
-
-    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
-      "Latest streamed narration",
-    );
-
-    renderItems([
-      user,
-      {
-        kind: "group",
-        key: "group:assistant:persisted-announcement",
-        role: "assistant",
-        visibleContent: "text",
-        messages: [
-          {
-            key: "assistant:persisted-announcement",
-            message: {
-              role: "assistant",
-              content: "Persisted narration while the run continues",
-              runId: "run-announcement",
-            },
-          },
-        ],
-        timestamp: 3,
-        isStreaming: false,
-        runId: "run-announcement",
-      },
-      {
-        kind: "reading-indicator",
-        key: "reading:persisted-announcement",
-        startedAt: 4,
-        runId: "run-announcement",
-        boundaryId: "send:run-announcement",
-      },
-    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
-
-    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
-      "Persisted narration while the run continues",
-    );
-
-    renderItems([
-      user,
-      { ...stream, isStreaming: false },
-      {
-        kind: "group",
-        key: "group:tool:announcement",
-        role: "tool",
-        visibleContent: "text",
-        messages: [
-          {
-            key: "tool:announcement",
-            message: {
-              role: "toolResult",
-              content: "Tool output",
-              runId: "run-announcement",
-            },
-          },
-        ],
-        timestamp: 3,
-        isStreaming: false,
-        runId: "run-announcement",
-      },
-      {
-        kind: "group",
-        key: "group:assistant:announcement",
-        role: "assistant",
-        visibleContent: "text",
-        messages: [
-          {
-            key: "assistant:announcement",
-            message: {
-              role: "assistant",
-              phase: "final_answer",
-              content: "Terminal answer",
-              runId: "run-announcement",
-            },
-          },
-        ],
-        timestamp: 4,
-        isStreaming: false,
-        runId: "run-announcement",
-      },
-    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
-
-    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
-      "Terminal answer",
-    );
-  });
 });
 
 describe("chat composer workbench", () => {
@@ -1015,141 +812,6 @@ afterEach(() => {
   resetTranscriptTestDom();
 });
 
-describe("per-pane chat presentation state", () => {
-  it.each(["MacIntel"])(
-    "uses the platform search shortcut on %s without consuming text navigation",
-    async (platform) => {
-      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
-      const primary = platform === "MacIntel" ? { metaKey: true } : { ctrlKey: true };
-      const other = platform === "MacIntel" ? { ctrlKey: true } : { metaKey: true };
-      const container = createComposerContainer();
-      document.body.append(container);
-      try {
-        renderChatInto(container);
-        const composer = getComposerTextarea(container);
-        composer.focus();
-        for (const key of ["f", "а"]) {
-          const navigationEvent = new KeyboardEvent("keydown", {
-            key,
-            code: "KeyF",
-            ...other,
-            bubbles: true,
-            cancelable: true,
-          });
-          composer.dispatchEvent(navigationEvent);
-          expect(navigationEvent.defaultPrevented).toBe(false);
-          expect(container.querySelector(".agent-chat__search-bar")).toBeNull();
-          expect(document.activeElement).toBe(composer);
-          const event = new KeyboardEvent("keydown", {
-            key,
-            code: "KeyF",
-            ...primary,
-            bubbles: true,
-            cancelable: true,
-          });
-
-          composer.dispatchEvent(event);
-          expect(event.defaultPrevented).toBe(true);
-          await waitForSolid(() =>
-            expect(document.activeElement).toBe(
-              container.querySelector<HTMLInputElement>(
-                '.agent-chat__search-bar input[type="text"]',
-              ),
-            ),
-          );
-
-          const closeEvent = new KeyboardEvent("keydown", {
-            key,
-            code: "KeyF",
-            ...primary,
-            bubbles: true,
-            cancelable: true,
-          });
-          document.activeElement?.dispatchEvent(closeEvent);
-          expect(closeEvent.defaultPrevented).toBe(true);
-          await waitForSolid(() => {
-            expect(document.activeElement).toBe(composer);
-            expect(container.querySelector(".agent-chat__search-bar")).toBeNull();
-          });
-          expect(getComposerTextarea(container)).toBe(composer);
-        }
-      } finally {
-        container.remove();
-      }
-    },
-  );
-
-  it("returns focus to the composer when the original target disappears", async () => {
-    const container = createComposerContainer();
-    document.body.append(container);
-    try {
-      renderChatInto(container);
-      const composer = getComposerTextarea(container);
-      const transientTarget = document.createElement("button");
-      const chat = container.querySelector<HTMLElement>(".chat");
-      if (!chat) {
-        throw new Error("expected chat section");
-      }
-      chat.append(transientTarget);
-      transientTarget.focus();
-
-      transientTarget.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "f",
-          code: "KeyF",
-          ctrlKey: true,
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-      await waitForSolid(() =>
-        expect(document.activeElement).toBe(
-          container.querySelector('.agent-chat__search-bar input[type="text"]'),
-        ),
-      );
-
-      transientTarget.remove();
-      document.activeElement?.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "f",
-          code: "KeyF",
-          ctrlKey: true,
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-      await waitForSolid(() => expect(document.activeElement).toBe(composer));
-      expect(container.querySelector(".agent-chat__search-bar")).toBeNull();
-      expect(getComposerTextarea(container)).toBe(composer);
-    } finally {
-      container.remove();
-    }
-  });
-
-  it("keeps search state and resets scoped to its pane", () => {
-    const paneA = createComposerContainer();
-    const paneB = createComposerContainer();
-    const selector = ".agent-chat__search-bar";
-    const renderPane = (container: HTMLElement, paneId: string) =>
-      renderChatInto(container, { paneId, draft: "", getDraft: () => "" });
-    const open = (container: HTMLElement, paneId: string) => {
-      toggleTranscriptSearch(paneId);
-      renderPane(container, paneId);
-    };
-    renderPane(paneA, "pane-a");
-    renderPane(paneB, "pane-b");
-    open(paneA, "pane-a");
-    expect(paneA.querySelector(selector)).not.toBeNull();
-    expect(paneB.querySelector(selector)).toBeNull();
-    open(paneB, "pane-b");
-    resetTranscriptSession("pane-a");
-    renderPane(paneA, "pane-a");
-    renderPane(paneB, "pane-b");
-    expect(paneA.querySelector(selector)).toBeNull();
-    expect(paneB.querySelector(selector)).not.toBeNull();
-  });
-});
-
 describe("chat loading skeleton", () => {
   function createPendingSend(overrides: Partial<ChatQueueItem> = {}): ChatQueueItem {
     return {
@@ -1183,7 +845,7 @@ describe("chat loading skeleton", () => {
     );
   }
 
-  it("retires only the exact saved Talk entries, retaining unsaved speech and repeated words", () => {
+  it("retires only the exact saved Talk entries, retaining unsaved speech and repeated words", async () => {
     const container = renderChatView({
       realtimeTalkActive: true,
       messages: [{ role: "user", content: "Repeated words", __openclaw: { id: "voice:call:1" } }],
@@ -1205,6 +867,7 @@ describe("chat loading skeleton", () => {
         { id: "a1", role: "assistant", text: "Still speaking", isStreaming: true },
       ],
     });
+    await waitForElement(container, ".agent-chat__voice-turn");
     const turns = [...container.querySelectorAll(".agent-chat__voice-turn")];
     expect(turns).toHaveLength(2);
     expect(turns.map((turn) => turn.textContent?.replace(/\s+/g, " ").trim())).toEqual([
@@ -1278,7 +941,7 @@ describe("chat loading skeleton", () => {
     expect(container.querySelectorAll(".chat-working-indicator")).toHaveLength(1);
   });
 
-  it("shows prompt-bar progress beside context usage while the current session send is awaiting acknowledgement", () => {
+  it("shows prompt-bar progress beside context usage while the current session send is awaiting acknowledgement", async () => {
     const container = renderChatView({
       sending: true,
       composerControls: createComposerControlsFixture(),
@@ -1294,12 +957,21 @@ describe("chat loading skeleton", () => {
     expect(container.querySelector(".agent-chat__run-status-announcement")?.textContent).toContain(
       "Sending message",
     );
-    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-reading-indicator")).not.toBeNull(),
+    );
     expect(contextUsage?.closest(".agent-chat__composer-context")).not.toBeNull();
   });
 
-  it("keeps subscription usage and its navigation scoped to the configured base path", () => {
+  it("keeps subscription usage and its navigation scoped to the configured base path", async () => {
+    const controls = createComposerControlsFixture();
+    controls.model.accountSelection = {
+      kind: "shared",
+      label: "Selected account",
+      authProfileId: "openai",
+    };
     const container = renderChatView({
+      composerControls: controls,
       providerUsage: {
         basePath: "/rosita",
         modelAuthStatusResult: {
@@ -1310,7 +982,11 @@ describe("chat loading skeleton", () => {
               displayName: "OpenAI",
               status: "ok",
               profiles: [{ profileId: "openai", type: "oauth", status: "ok" }],
-              usage: { providerId: "openai", windows: [{ label: "Week", usedPercent: 72 }] },
+              usage: {
+                providerId: "openai",
+                authProfileId: "openai",
+                windows: [{ label: "Week", usedPercent: 72 }],
+              },
             },
           ],
         },
@@ -1332,15 +1008,15 @@ describe("chat loading skeleton", () => {
     container.querySelector<HTMLElement>(".context-usage summary")!.click();
     flush();
     expect(container.querySelector("[data-chat-usage-account='true']")?.textContent).toBe("OpenAI");
-    const limitRow = container.querySelector(".context-usage__limit");
-    expect(limitRow?.getAttribute("role")).toBe("progressbar");
-    expect(limitRow?.getAttribute("aria-label")).toBe("Weekly");
-    expect(limitRow?.getAttribute("aria-valuenow")).toBe("72");
+    expect(container.querySelectorAll(".context-usage__limit")).toHaveLength(1);
     const usageLink = container.querySelector<HTMLAnchorElement>(
       ".context-usage__popover [data-chat-provider-usage='true']",
     );
     expect(usageLink?.getAttribute("href")).toBe("/rosita/usage");
     expect(usageLink?.getAttribute("aria-label")).toBe("Open usage dashboard");
+    const limitRow = await waitForElement(container, '.context-usage__limit[role="progressbar"]');
+    expect(limitRow.getAttribute("aria-label")).toBe("Weekly");
+    expect(limitRow.getAttribute("aria-valuenow")).toBe("72");
   });
 
   it.each([
@@ -1359,7 +1035,7 @@ describe("chat loading skeleton", () => {
       false,
       true,
     ],
-  ])("%s", (_name, props, announcement, exact, spark) => {
+  ])("%s", async (_name, props, announcement, exact, spark) => {
     const container = renderChatView(props);
     const announcementElement = container.querySelector(".agent-chat__run-status-announcement");
     expect(announcementElement).not.toBeNull();
@@ -1369,7 +1045,9 @@ describe("chat loading skeleton", () => {
     } else {
       expect(actual).toContain(announcement);
     }
-    expect(container.querySelector(".chat-reading-indicator") !== null).toBe(spark);
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-reading-indicator") !== null).toBe(spark),
+    );
   });
 
   it("lets terminal run status win over stale abortable session UI", () => {
@@ -1411,7 +1089,7 @@ describe("chat loading skeleton", () => {
     }
   });
 
-  it("keeps a completed recap after later tool content", () => {
+  it("keeps a completed recap after later tool content", async () => {
     vi.mocked(chatThread.buildCachedChatItems).mockReturnValueOnce([
       {
         kind: "group",
@@ -1454,8 +1132,9 @@ describe("chat loading skeleton", () => {
       messages: [{ role: "assistant", content: "Interim answer", timestamp: 1 }],
     });
 
+    await waitForElement(container, ".chat-turn-recap");
     expect(container.querySelector(".chat-group.assistant .chat-turn-recap")).toBeNull();
-    expect(container.querySelector(".chat-turn-recap")?.textContent).toContain("Done in");
+    expect(container.querySelector(".chat-turn-recap")?.textContent).toContain("42 output tokens");
   });
 });
 
@@ -1518,8 +1197,8 @@ describe("chat voice controls", () => {
   });
 
   it.each([
-    ["connecting", "Connecting voice input..."],
-    ["thinking", "Asking OpenClaw..."],
+    ["connecting", "Connecting voice input…"],
+    ["thinking", "Asking the agent…"],
   ] as const)("renders %s voice activity with the appropriate status region", (status, label) => {
     const inputLevel = new RealtimeTalkLevelSignal();
     inputLevel.set(0.64);
@@ -1561,7 +1240,7 @@ describe("chat voice controls", () => {
     });
     expect(
       container
-        .querySelector('[role="alert"].agent-chat__talk-status .agent-chat__talk-status-text')
+        .querySelector('[role="alert"].agent-chat__composer-alert .callout__content')
         ?.textContent?.trim(),
     ).toBe(detail);
     const stop = requireElement(
@@ -1831,14 +1510,9 @@ describe("chat slash menu accessibility", () => {
   it.each([{ args: "example/model explain this", allowed: false }])(
     "checks the complete inline model command before sending $args",
     ({ args, allowed }) => {
-      let draft = "";
-      const onDraftChange = vi.fn((next: string) => {
-        draft = next;
-      });
       const onSend = vi.fn();
       const onSlashCommand = vi.fn();
-      const { container } = createReactiveDraftHarness({
-        onDraftChange,
+      const { container, readDraft } = createReactiveDraftHarness({
         onSend,
         onSlashCommand,
         modelRequiredReason: "Connect a provider to send messages.",
@@ -1849,24 +1523,19 @@ describe("chat slash menu accessibility", () => {
       keydownComposer(container, "Enter");
       if (allowed) {
         expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith(`/model ${args}`);
-        expect(draft).toBe("retained draft ");
+        expect(readDraft()).toBe("retained draft ");
       } else {
         expect(onSlashCommand).not.toHaveBeenCalled();
-        expect(draft).toBe(`retained draft /model ${args}`);
+        expect(readDraft()).toBe(`retained draft /model ${args}`);
       }
       expect(onSend).not.toHaveBeenCalled();
     },
   );
 
   it("keeps a typed inline argument on plain Enter in modifier-enter mode", () => {
-    let draft = "";
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
     const onSend = vi.fn();
     const onSlashCommand = vi.fn();
-    const { container } = createReactiveDraftHarness({
-      onDraftChange,
+    const { container, readDraft } = createReactiveDraftHarness({
       onSend,
       onSlashCommand,
       sendShortcut: "modifier-enter",
@@ -1878,22 +1547,18 @@ describe("chat slash menu accessibility", () => {
     expect(plainEnter.defaultPrevented).toBe(false);
     expect(onSlashCommand).not.toHaveBeenCalled();
     expect(onSend).not.toHaveBeenCalled();
-    expect(draft).toBe("hello /think high");
+    expect(readDraft()).toBe("hello /think high");
 
     const modifierEnter = keydownComposer(container, "Enter", { ctrlKey: true });
 
     expect(modifierEnter.defaultPrevented).toBe(true);
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/think high");
     expect(onSend).not.toHaveBeenCalled();
-    expect(draft).toBe("hello ");
+    expect(readDraft()).toBe("hello ");
   });
 
   it("preserves typed inline argument mode across command hydration", async () => {
-    let draft = "";
     let resolveRefresh: (() => void) | undefined;
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
     const onSend = vi.fn();
     const onSlashCommand = vi.fn();
     const onSlashIntent = vi.fn(
@@ -1902,8 +1567,7 @@ describe("chat slash menu accessibility", () => {
           resolveRefresh = resolve;
         }),
     );
-    const { container } = createReactiveDraftHarness({
-      onDraftChange,
+    const { container, readDraft } = createReactiveDraftHarness({
       onSend,
       onSlashCommand,
       onSlashIntent,
@@ -1911,7 +1575,7 @@ describe("chat slash menu accessibility", () => {
 
     inputDraftAtEnd(container, "hello /thin");
     keydownComposer(container, "Enter");
-    expect(draft).toBe("hello /think ");
+    expect(readDraft()).toBe("hello /think ");
 
     resolveRefresh?.();
     await Promise.resolve();
@@ -1920,17 +1584,13 @@ describe("chat slash menu accessibility", () => {
     keydownComposer(container, "Enter");
 
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/think high");
-    expect(draft).toBe("hello ");
+    expect(readDraft()).toBe("hello ");
     expect(onSend).not.toHaveBeenCalled();
   });
 
   it("removes a typed inline command argument without consuming trailing prose", () => {
-    let draft = "";
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
     const onSlashCommand = vi.fn();
-    const { container } = createReactiveDraftHarness({ onDraftChange, onSlashCommand });
+    const { container, readDraft } = createReactiveDraftHarness({ onSlashCommand });
     const textarea = getComposerTextarea(container);
     const initial = "before /thin after";
     const commandEnd = initial.indexOf("/thin") + "/thin".length;
@@ -1939,7 +1599,7 @@ describe("chat slash menu accessibility", () => {
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
 
     keydownComposer(container, "Enter");
-    expect(draft).toBe("before /think  after");
+    expect(readDraft()).toBe("before /think  after");
 
     const withArgument = "before /think high after";
     const argumentEnd = withArgument.indexOf("high") + "high".length;
@@ -1949,52 +1609,40 @@ describe("chat slash menu accessibility", () => {
     keydownComposer(container, "Enter");
 
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/think high");
-    expect(draft).toBe("before after");
-    expect(textarea.value).toBe(draft);
+    expect(readDraft()).toBe("before after");
+    expect(textarea.value).toBe(readDraft());
   });
 
   it("does not consume trailing prose as a directly typed inline argument", () => {
-    let draft = "";
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
     const onSend = vi.fn();
     const onSlashCommand = vi.fn();
-    const { container } = createReactiveDraftHarness({ onDraftChange, onSend, onSlashCommand });
+    const { container, readDraft } = createReactiveDraftHarness({ onSend, onSlashCommand });
 
     inputDraftAtEnd(container, "before /think high then answer concisely");
     keydownComposer(container, "Enter");
 
     expect(onSlashCommand).not.toHaveBeenCalled();
     expect(onSend).toHaveBeenCalledOnce();
-    expect(draft).toBe("before /think high then answer concisely");
+    expect(readDraft()).toBe("before /think high then answer concisely");
   });
 
   it("tab-completes an inline command argument without replacing surrounding prose", () => {
-    let draft = "";
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
     const onSlashCommand = vi.fn();
-    const { container } = createReactiveDraftHarness({ onDraftChange, onSlashCommand });
+    const { container, readDraft } = createReactiveDraftHarness({ onSlashCommand });
 
     inputDraftAtEnd(container, "hello /verb");
     keydownComposer(container, "Tab");
     keydownComposer(container, "Tab");
 
     expect(onSlashCommand).not.toHaveBeenCalled();
-    expect(draft).toBe("hello /verbose on ");
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    expect(readDraft()).toBe("hello /verbose on ");
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(readDraft());
   });
 
   it("uses a trailing colon to select only an inline skill reference", async () => {
     replaceSkillCommands({ key: "weather", description: "Check the weather." });
-    let draft = "";
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
     const onSlashCommand = vi.fn();
-    const { container } = createReactiveDraftHarness({ onDraftChange, onSlashCommand });
+    const { container, readDraft } = createReactiveDraftHarness({ onSlashCommand });
 
     inputDraftAtEnd(container, "Please use /weather:");
     await waitForSolid(() =>
@@ -2003,25 +1651,21 @@ describe("chat slash menu accessibility", () => {
     keydownComposer(container, "Enter");
 
     expect(onSlashCommand).not.toHaveBeenCalled();
-    expect(draft).toBe("Please use $weather ");
+    expect(readDraft()).toBe("Please use $weather ");
   });
 
   it("serializes a selected inline /exec host argument canonically", () => {
-    let draft = "";
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
     const onSend = vi.fn();
     const onSlashCommand = vi.fn();
-    const { container } = createReactiveDraftHarness({ onDraftChange, onSend, onSlashCommand });
+    const { container, readDraft } = createReactiveDraftHarness({ onSend, onSlashCommand });
 
     inputDraftAtEnd(container, "Please /exec");
     keydownComposer(container, "Tab");
     keydownComposer(container, "Enter");
 
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/exec host=auto");
-    expect(draft).toBe("Please ");
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    expect(readDraft()).toBe("Please ");
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(readDraft());
     expect(onSend).not.toHaveBeenCalled();
   });
 
@@ -2032,7 +1676,7 @@ describe("chat slash menu accessibility", () => {
         name: "status-report",
         description: "Prepare a status report.",
         source: "skill",
-        skillModelVisible: true,
+        skillReferenceable: true,
       },
       {
         key: "status-check",
@@ -2084,17 +1728,13 @@ describe("chat slash menu accessibility", () => {
     },
   ])("completes $draft without submitting the surrounding prompt", async (sample) => {
     replaceSkillCommands(sample);
-    let draft = "";
     const onSend = vi.fn();
-    const { container } = createReactiveDraftHarness({
-      onDraftChange: (next) => {
-        draft = next;
-      },
+    const { container, readDraft } = createReactiveDraftHarness({
       onSend,
     });
     inputDraftAtEnd(container, sample.draft);
     keydownComposer(container, "Enter");
-    expect(draft).toBe(sample.expected);
+    expect(readDraft()).toBe(sample.expected);
     expect(onSend).not.toHaveBeenCalled();
     expect(container.querySelector(".skill-menu")).toBeNull();
     await Promise.resolve();
@@ -2250,14 +1890,9 @@ describe("chat slash menu accessibility", () => {
   ])(
     "does not dispatch stale $commandDraft selections after disconnect",
     async ({ commandDraft, optionName, argument }) => {
-      let draft = "";
-      const onDraftChange = vi.fn((next: string) => {
-        draft = next;
-      });
       const onSend = vi.fn();
       const onSlashCommand = vi.fn();
-      const { container, renderCurrent } = createReactiveDraftHarness({
-        onDraftChange,
+      const { container, readDraft, renderCurrent } = createReactiveDraftHarness({
         onSend,
         onSlashCommand,
       });
@@ -2274,15 +1909,15 @@ describe("chat slash menu accessibility", () => {
         ),
       );
       expect(option).toBeInstanceOf(HTMLElement);
-      const draftBeforeDisconnect = draft;
+      const draftBeforeDisconnect = readDraft();
       if (!argument) {
-        expect(draft).toBe("hello /statu");
+        expect(readDraft()).toBe("hello /statu");
       }
       renderCurrent({ connected: false });
       option?.click();
       expect(onSlashCommand).not.toHaveBeenCalled();
       expect(onSend).not.toHaveBeenCalled();
-      expect(draft).toBe(draftBeforeDisconnect);
+      expect(readDraft()).toBe(draftBeforeDisconnect);
     },
   );
 
@@ -2405,29 +2040,7 @@ describe("chat attachment picker", () => {
     expect(rangeDrop.defaultPrevented).toBe(true);
   });
 
-  it("registers a large paste before an immediate send", () => {
-    let attachments: ChatAttachment[] = [];
-    const onSend = vi.fn(() => {
-      expect(attachments).toHaveLength(1);
-    });
-    const container = renderChatView({
-      draft: "Review the attachment",
-      attachments,
-      getAttachments: () => attachments,
-      onAttachmentsChange: (next) => {
-        attachments = next;
-      },
-      onSend,
-    });
-    const textarea = getComposerTextarea(container);
-    const pastedText = `large paste ${"x".repeat(1100)}`;
-    textarea.dispatchEvent(createPasteEvent(pastedText));
-    textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-
-    expect(onSend).toHaveBeenCalledOnce();
-  });
-
-  it("preserves a large paste when a dropped file finishes later", async () => {
+  it("keeps a dropped file independent of native text paste", async () => {
     const readers: FileReader[] = [];
     const readAsDataUrl = vi
       .spyOn(FileReader.prototype, "readAsDataURL")
@@ -2449,11 +2062,13 @@ describe("chat attachment picker", () => {
     });
 
     try {
-      textarea.dispatchEvent(createPasteEvent(pastedText));
+      const paste = createPasteEvent(pastedText);
+      textarea.dispatchEvent(paste);
+      expect(paste.defaultPrevented).toBe(false);
       chat.dispatchEvent(dropEvent);
 
       expect(readers).toHaveLength(1);
-      expect(attachments).toHaveLength(1);
+      expect(attachments).toHaveLength(0);
       Object.defineProperty(readers[0], "result", {
         configurable: true,
         value: `data:application/pdf;base64,${btoa("%PDF-1.4\n")}`,
@@ -2462,27 +2077,26 @@ describe("chat attachment picker", () => {
         new ProgressEvent("load"),
       );
 
-      await waitForFast(() => expect(attachments).toHaveLength(2));
-      expect(attachments.map((attachment) => attachment.fileName)).toEqual([
-        expect.stringMatching(/^pasted-text-\d+\.txt$/u),
-        "brief.pdf",
-      ]);
+      await waitForFast(() => expect(attachments).toHaveLength(1));
+      expect(attachments.map((attachment) => attachment.fileName)).toEqual(["brief.pdf"]);
     } finally {
       readAsDataUrl.mockRestore();
     }
   });
 
   it("keeps the agent-aware placeholder with pasted text, files, images, and comments", () => {
-    let pastedTextAttachments: ChatAttachment[] = [];
-    const pasteTarget = renderChatView({
-      draft: "Review the attachment",
-      getAttachments: () => pastedTextAttachments,
-      onAttachmentsChange: (next) => {
-        pastedTextAttachments = next;
-      },
-    });
-    const textarea = getComposerTextarea(pasteTarget);
-    textarea.dispatchEvent(createPasteEvent(`large paste ${"x".repeat(1100)}`));
+    const pastedTextAttachments = [
+      registerChatAttachmentPayload({
+        attachment: {
+          id: "retained-paste",
+          fileName: "pasted-text-123.txt",
+          mimeType: "text/plain",
+          origin: "paste",
+        },
+        dataUrl: `data:text/plain;base64,${btoa("retained pasted text")}`,
+        file: new File(["retained pasted text"], "pasted-text-123.txt", { type: "text/plain" }),
+      }),
+    ];
 
     const namedLikePaste = registerChatAttachmentPayload({
       attachment: {
@@ -2621,10 +2235,6 @@ describe("chat welcome", () => {
   function renderWelcome(params: {
     assistantAvatar: string | null;
     assistantAvatarUrl?: string | null;
-    sessions?: SessionsListResult | null;
-    sessionKey?: string;
-    sessionHost?: { assistantAgentId?: string | null } | null;
-    onOpenSession?: (sessionKey: string) => void;
     modelSetupRequired?: boolean;
     onModelSetup?: () => void;
   }) {
@@ -2675,7 +2285,7 @@ describe("chat welcome", () => {
       modelSetupRequired: true,
       onModelSetup,
     });
-    expect(container.textContent).toContain("No AI provider configured");
+    expect(container.textContent).toContain("No model set up");
     expect(container.querySelector(".agent-chat__suggestions")).toBeNull();
     container.querySelector<HTMLButtonElement>(".agent-chat__welcome button")?.click();
     expect(onModelSetup).toHaveBeenCalledOnce();
@@ -2693,7 +2303,6 @@ describe("chat welcome", () => {
         ...(canSend
           ? {
               disabledBanner: createChatModelSetupBanner(onModelSetup),
-              modelSetupRequired: true,
             }
           : {}),
         onSend,
@@ -2707,54 +2316,12 @@ describe("chat welcome", () => {
       send.click();
       expect(onSend).toHaveBeenCalledTimes(canSend ? 1 : 0);
       if (canSend) {
-        expect(container.querySelector(".agent-chat__welcome--setup")).not.toBeNull();
+        expect(container.querySelector(".agent-chat__welcome")).toBeNull();
         container.querySelector<HTMLButtonElement>(".agent-chat__disabled-banner button")?.click();
         expect(onModelSetup).toHaveBeenCalledOnce();
       }
     },
   );
-
-  it("lists recent user chats instead of suggestions when any exist", () => {
-    const opened: string[] = [];
-    const container = renderWelcome({
-      assistantAvatar: null,
-      assistantAvatarUrl: null,
-      sessionKey: "agent:main:dashboard:current",
-      sessions: createSessionsResultFromRows([
-        {
-          key: "agent:main:dashboard:current",
-          kind: "direct",
-          updatedAt: 50,
-          label: "Current chat",
-        },
-        {
-          key: "agent:main:dashboard:older",
-          kind: "direct",
-          updatedAt: 10,
-          label: "Older chat",
-          pinned: true,
-          pinnedAt: 5,
-        },
-        {
-          key: "agent:main:discord:group:g-1456",
-          kind: "group",
-          channel: "discord",
-          updatedAt: 90,
-        },
-        { key: "agent:main:dashboard:newer", kind: "direct", updatedAt: 40, label: "Newer chat" },
-      ]),
-      onOpenSession: (key) => opened.push(key),
-    });
-
-    expect(container.querySelector(".agent-chat__suggestion")).toBeNull();
-    const rows = [...container.querySelectorAll<HTMLButtonElement>(".agent-chat__recent")];
-    expect(
-      rows.map((row) => row.querySelector(".agent-chat__recent-name")?.textContent?.trim()),
-    ).toEqual(["Newer chat", "Older chat"]);
-
-    itemAt(rows, 0, "recent session row").click();
-    expect(opened).toEqual(["agent:main:dashboard:newer"]);
-  });
 
   it("retains the draft composer when secondary welcome content fades", () => {
     const composer = document.createElement("textarea");
@@ -2800,41 +2367,6 @@ describe("chat welcome", () => {
 });
 
 describe("chat model controls", () => {
-  const subscriptionProfiles = [
-    { profileId: "openai:work", type: "oauth", status: "ok", email: "work@example.com" },
-    { profileId: "openai:personal", type: "oauth", status: "ok", email: "peter@steipete.me" },
-  ] satisfies ModelAuthStatusResult["providers"][number]["profiles"];
-  const authStatus: ModelAuthStatusResult = {
-    ts: 1,
-    providers: [
-      {
-        provider: "openai-codex",
-        displayName: "OpenAI",
-        status: "ok",
-        profiles: subscriptionProfiles,
-        profileOrder: ["openai:personal", "openai:work"],
-        usage: { providerId: "openai", windows: [], plan: "ChatGPT Pro" },
-      },
-    ],
-  };
-
-  const googleAuthProviders = [
-    {
-      provider: "google",
-      displayName: "Google",
-      status: "static",
-      profiles: [{ profileId: "google:key", type: "api_key", status: "static" }],
-      apiKey: { source: "env", envVar: "GEMINI_API_KEY" },
-    },
-    {
-      provider: "google-gemini-cli",
-      displayName: "Gemini CLI",
-      status: "ok",
-      profiles: [{ profileId: "google:oauth", type: "oauth", status: "ok" }],
-      usage: { providerId: "google", windows: [], plan: "Gemini Pro" },
-    },
-  ] satisfies ModelAuthStatusResult["providers"];
-
   it.each([
     {
       model: { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
@@ -2858,7 +2390,7 @@ describe("chat model controls", () => {
       providers: googleAuthProviders,
     },
     {
-      selected: undefined,
+      selected: "google:oauth",
       expected: "Gemini Pro",
       model: { id: "gemini", name: "Gemini", provider: "google" },
       providers: googleAuthProviders,
@@ -3521,9 +3053,9 @@ describe("chat model controls", () => {
       undefined,
     );
 
+    await import("./components/chat-effort-picker-panel.tsx");
     await waitForSolid(() => expect(getThinkingSlider(container)).toBeInstanceOf(HTMLInputElement));
     const slider = getThinkingSlider(container);
-    expect(slider).toBeInstanceOf(HTMLInputElement);
     if (slider) {
       slider.value = "0";
       slider.dispatchEvent(new Event("input", { bubbles: true }));
@@ -3869,6 +3401,8 @@ describe("chat model controls", () => {
 });
 
 describe("right-click Reply", () => {
+  const escape = () =>
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
   const replyTarget = { messageId: "msg-1", text: "quoted", senderLabel: "User" };
   const renderReply = (overrides: Partial<ChatProps> = {}) =>
     renderChatView({ replyTarget, ...overrides });
@@ -3892,21 +3426,22 @@ describe("right-click Reply", () => {
     return button;
   }
 
-  function renderChatBubble(
+  async function renderChatBubble(
     chatOverrides: Partial<ChatProps> = {},
     bubbleOverrides: Parameters<typeof appendChatBubble>[1] = {},
   ) {
     const container = renderChatView(chatOverrides);
+    await waitForElement(container, ".chat-thread-inner");
     return { container, ...appendChatBubble(container, bubbleOverrides) };
   }
 
   it.each([false, true])(
     "keeps context actions tied to message ownership and active run=%s",
-    (working) => {
+    async (working) => {
       const onRewindMessage = working ? vi.fn() : vi.fn().mockResolvedValue(true);
       const onForkMessage = vi.fn();
       const onCopy = vi.fn();
-      const { bubble, group } = renderChatBubble(
+      const { bubble, group } = await renderChatBubble(
         {
           onRewindMessage,
           onForkMessage,
@@ -3963,7 +3498,7 @@ describe("right-click Reply", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     const onSetReply = vi.fn();
-    const { bubble, group } = renderChatBubble(
+    const { bubble, group } = await renderChatBubble(
       { onSetReply },
       { messageId: "commentary", text: "Intermediate commentary" },
     );
@@ -3983,8 +3518,9 @@ describe("right-click Reply", () => {
     expect(onSetReply).not.toHaveBeenCalled();
   });
 
-  it("dismisses an inline confirmation before opening the reply context menu", () => {
+  it("dismisses an inline confirmation before opening the reply context menu", async () => {
     const container = renderChatView({ onSetReply: vi.fn() });
+    await waitForElement(container, ".chat-thread-inner");
     document.body.appendChild(container);
     const section = container.querySelector<HTMLElement>(".chat")!;
     const confirmationOwner = document.createElement("span");
@@ -4010,7 +3546,7 @@ describe("right-click Reply", () => {
     }
   });
 
-  it("keeps Reply and composer focus available when the pane rerenders with its menu open", () => {
+  it("keeps Reply and composer focus available when the pane rerenders with its menu open", async () => {
     vi.mocked(chatThread.buildCachedChatItems).mockRestore();
     const onSetReply = vi.fn();
     const transcript = createTestTranscript();
@@ -4028,10 +3564,7 @@ describe("right-click Reply", () => {
       },
     ];
     const container = renderChatView({ onSetReply, transcript, messages });
-    const bubble = expectDefined(
-      container.querySelector<HTMLElement>(".chat-bubble"),
-      "rendered message bubble",
-    );
+    const bubble = await waitForElement(container, ".chat-bubble");
     document.body.appendChild(container);
     transcript.start();
 
@@ -4064,8 +3597,8 @@ describe("right-click Reply", () => {
 
   it.each(["linked image", "streaming", "absent callback"] as const)(
     "keeps the native context menu for %s",
-    (mode) => {
-      const { bubble } = renderChatBubble(
+    async (mode) => {
+      const { bubble } = await renderChatBubble(
         mode === "linked image"
           ? { onSetReply: vi.fn() }
           : mode === "absent callback"
@@ -4097,12 +3630,12 @@ describe("right-click Reply", () => {
 
   it.each(["Escape", "owner reset"] as const)(
     "dismisses portaled Rewind confirmation through %s",
-    (mode) => {
+    async (mode) => {
       const flushFrames = stubAnimationFrames();
       const removeDocumentListener = vi.spyOn(document, "removeEventListener");
       const removeWindowListener = vi.spyOn(window, "removeEventListener");
       const onRewindMessage = vi.fn();
-      const { bubble } = renderChatBubble(
+      const { bubble } = await renderChatBubble(
         { paneId: "pane-a", onRewindMessage },
         { entryId: "persisted-user", groupClass: "chat-group user", text: "hello" },
       );
@@ -4116,11 +3649,7 @@ describe("right-click Reply", () => {
         const cancel = document.querySelector<HTMLButtonElement>(".chat-confirm-popover__cancel");
         expect(cancel).toBeInstanceOf(HTMLButtonElement);
         expect(document.activeElement).toBe(cancel);
-        const confirmationEscape = new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-        });
+        const confirmationEscape = escape();
         cancel!.dispatchEvent(confirmationEscape);
         expect(confirmationEscape.defaultPrevented).toBe(true);
         expect(document.querySelector(".chat-confirm-popover")).toBeNull();
@@ -4143,9 +3672,9 @@ describe("right-click Reply", () => {
     },
   );
 
-  it("dismisses the reply context menu before a later context menu opens", () => {
+  it("dismisses the reply context menu before a later context menu opens", async () => {
     const flushFrames = stubAnimationFrames();
-    const { bubble } = renderChatBubble({ onSetReply: vi.fn() }, { text: "hello world" });
+    const { bubble } = await renderChatBubble({ onSetReply: vi.fn() }, { text: "hello world" });
     dispatchContextMenu(bubble);
     flushFrames();
     expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
@@ -4155,7 +3684,7 @@ describe("right-click Reply", () => {
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
   });
 
-  it("renders a dismissible reply preview without splitting an emoji at the limit", () => {
+  it("renders a dismissible reply preview without splitting an emoji at the limit", async () => {
     const onClearReply = vi.fn();
     const container = renderReply({
       replyTarget: {
@@ -4165,16 +3694,15 @@ describe("right-click Reply", () => {
       },
       onClearReply,
     });
-    expect(container.querySelector(".chat-reply-preview__text")?.textContent).toBe(
-      `${"x".repeat(119)}...`,
-    );
+    const preview = await waitForElement(container, ".chat-reply-preview__text");
+    expect(preview.textContent).toBe(`${"x".repeat(119)}...`);
     container.querySelector<HTMLButtonElement>(".chat-reply-preview__dismiss")!.click();
     expect(onClearReply).toHaveBeenCalledTimes(1);
   });
 
   it.each(["isComposing", "keyCode229", "rerendered-live"])(
     "preserves the reply and draft for %s Escape before deliberate reply clearing and abort",
-    (mode) => {
+    async (mode) => {
       const draft = "Keep this reply draft";
       const quote = "Keep this quoted message";
       const pane = createReplyPane(`reply-${mode}`, draft, quote);
@@ -4185,7 +3713,8 @@ describe("right-click Reply", () => {
         textarea.focus();
         expect(document.activeElement).toBe(textarea);
         expect(textarea.value).toBe(draft);
-        expect(pane.container.querySelector(".chat-reply-preview__text")?.textContent).toBe(quote);
+        const preview = await waitForElement(pane.container, ".chat-reply-preview__text");
+        expect(preview.textContent).toBe(quote);
         const updatesBeforeComposition = pane.redraw.mock.calls.length;
         if (mode === "rerendered-live") {
           textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
@@ -4224,11 +3753,7 @@ describe("right-click Reply", () => {
           textarea.focus();
         }
         expect(pane.host.draft).toBe(visibleDraft);
-        const clear = new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-        });
+        const clear = escape();
         textarea.dispatchEvent(clear);
         expect(clear.defaultPrevented).toBe(true);
         expect(pane.onClearReply).toHaveBeenCalledOnce();
@@ -4239,11 +3764,7 @@ describe("right-click Reply", () => {
         expect(textarea.value).toBe(visibleDraft);
         expect(document.activeElement).toBe(textarea);
 
-        const abort = new KeyboardEvent("keydown", {
-          key: "Escape",
-          bubbles: true,
-          cancelable: true,
-        });
+        const abort = escape();
         textarea.dispatchEvent(abort);
         expect(abort.defaultPrevented).toBe(true);
         expect(pane.onAbort).toHaveBeenCalledOnce();
@@ -4259,33 +3780,26 @@ describe("right-click Reply", () => {
     },
   );
 
-  it("keeps a composing reply isolated from Escape in another pane", () => {
+  it("keeps a composing reply isolated from Escape in another pane", async () => {
     const paneA = createReplyPane("reply-pane-a", "Draft A", "Quote A");
     const paneB = createReplyPane("reply-pane-b", "Draft B", "Quote B");
     try {
       document.body.append(paneA.container, paneB.container);
       paneA.redraw();
       paneB.redraw();
+      await waitForElement(paneA.container, ".chat-reply-preview:not([role])");
       const textareaA = getComposerTextarea(paneA.container);
       const textareaB = getComposerTextarea(paneB.container);
       textareaA.focus();
       textareaA.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-      const escapeB = new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
-      });
+      const escapeB = escape();
       textareaB.dispatchEvent(escapeB);
 
       expect(escapeB.defaultPrevented).toBe(true);
       expect(paneB.onClearReply).toHaveBeenCalledOnce();
       expect(paneB.host.replyTarget).toBeNull();
       expect(paneB.container.querySelector(".chat-reply-preview")).toBeNull();
-      const escapeA = new KeyboardEvent("keydown", {
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
-      });
+      const escapeA = escape();
       textareaA.dispatchEvent(escapeA);
       expect(escapeA.defaultPrevented).toBe(false);
       expect(paneA.onClearReply).not.toHaveBeenCalled();
@@ -4314,6 +3828,7 @@ describe("right-click Reply", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     const container = renderChatView({ onSetReply: vi.fn() });
+    await waitForElement(container, ".chat-thread-inner");
     const section = container.querySelector<HTMLElement>(".chat");
     expect(section).not.toBeNull();
 
@@ -4431,14 +3946,9 @@ describe("chat transcript rendering cache", () => {
       expect(container.querySelector("iframe")?.getAttribute("src")).toBe(widgetUrl);
       expect(container.querySelector("iframe")?.getAttribute("sandbox")).toBe("");
       requireElement(container, ".markdown-inline-image-button", "image control").dispatchEvent(
-        new MouseEvent("click", { bubbles: true }),
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
       );
-      await waitForFast(() =>
-        expect(onOpenImage).toHaveBeenCalledExactlyOnceWith(
-          { src: imageSource, title: "Synthetic preview" },
-          7,
-        ),
-      );
+      await expectInlineImageOpened(onOpenImage, imageSource, 7);
       expect(onRequestOpenImage).toHaveBeenCalledOnce();
       requireElement(container, "a.markdown-file-link", "workspace file link").dispatchEvent(
         new MouseEvent("click", { bubbles: true }),

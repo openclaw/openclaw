@@ -15,7 +15,7 @@ import {
   publishPlacementWorkspaceResultState,
 } from "./placement-turn-authority.js";
 import type { PlacementTurnClaimReceipt } from "./placement-turn-claims.types.js";
-import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";
+import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result-owner.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import { boundedWorkerError } from "./worker-error.js";
 

@@ -6,7 +6,7 @@ import {
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth-provider.js";
 import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   isCliRuntimeAliasForProvider,

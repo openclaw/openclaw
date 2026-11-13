@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as activeNodeContext from "../infra/active-node-context.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveAgentRuntimePrompt } from "./runtime-prompt.js";
@@ -108,6 +109,22 @@ describe("resolveAgentRuntimePrompt", () => {
     );
   });
 
+  it("prepares independent runtime facts before waiting for active-node context", async () => {
+    const ready = Promise.withResolvers<void>();
+    const preparation = vi
+      .spyOn(activeNodeContext, "prepareActiveNodeContext")
+      .mockReturnValueOnce(ready.promise);
+    const loading = resolveAgentRuntimePrompt({ agentId: "main", model: "openai/gpt-test" });
+    try {
+      expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledTimes(1);
+      expect(getMachineDisplayNameMock).toHaveBeenCalledTimes(1);
+    } finally {
+      ready.resolve();
+      await loading;
+      preparation.mockRestore();
+    }
+  });
+
   it.each([
     { delivery: { kind: "internal" as const }, expectedChannel: "webchat" },
     { delivery: { kind: "none" as const }, expectedChannel: undefined },
@@ -135,7 +152,7 @@ describe("resolveAgentRuntimePrompt", () => {
         expect(result.runtimeInfo.channel).toBe(expectedChannel);
         expect(result.runtimeChannel).toBe(channel);
         prompts.push(
-          buildConfiguredAgentSystemPrompt({ ...result, workspaceDir: "/tmp/workspace" }),
+          await buildConfiguredAgentSystemPrompt({ ...result, workspaceDir: "/tmp/workspace" }),
         );
       }
       expect(prompts[1]).toBe(prompts[0]);

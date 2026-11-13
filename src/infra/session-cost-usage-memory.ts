@@ -73,11 +73,11 @@ function transcriptFile(
 export async function runSessionActorUsage(
   binding: SessionActorStorageBinding | CapturedUsageCostOwner,
   operation: UsageCostWorkerOperation,
-  resolveCost: UsageCostResolver,
+  prepareCost: () => Promise<UsageCostResolver>,
   waitForRefresh = false,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
   if ("actor" in binding) {
-    return runCapturedSessionActorUsage(binding, operation, resolveCost, waitForRefresh);
+    return runCapturedSessionActorUsage(binding, operation, prepareCost, waitForRefresh);
   }
   const selected =
     binding.binding?.agentId === binding.agentId && binding.binding.path === binding.path
@@ -99,7 +99,7 @@ export async function runSessionActorUsage(
     return await runCapturedSessionActorUsage(
       { ...binding, actor },
       operation,
-      resolveCost,
+      prepareCost,
       waitForRefresh,
     );
   } finally {
@@ -110,7 +110,7 @@ export async function runSessionActorUsage(
 async function runCapturedSessionActorUsage(
   binding: UsageCostMemorySource,
   operation: UsageCostWorkerOperation,
-  resolveCost: UsageCostResolver,
+  prepareCost: () => Promise<UsageCostResolver>,
   waitForRefresh: boolean,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
   if (operation.kind === "overview") {
@@ -139,9 +139,9 @@ async function runCapturedSessionActorUsage(
     const requested =
       operation.kind === "sessions"
         ? operation.sessions.map((entry) => entry.sessionFile)
-        : operation.kind === "summary"
-          ? undefined
-          : operation.sessionFiles;
+        : operation.kind === "refresh"
+          ? operation.sessionFiles
+          : undefined;
     const requestedSessionId = (file: string) => {
       const marker = parseSqliteSessionFileMarker(file);
       if (!marker || marker.agentId !== binding.agentId || marker.storePath !== binding.path) {
@@ -190,11 +190,10 @@ async function runCapturedSessionActorUsage(
     if (operation.kind === "inventory") {
       return {
         kind: "inventory",
-        files: (selectedFiles ?? [...files.values()].map(({ file }) => file))
+        files: [...files.values()]
+          .map(({ file }) => file)
           .filter(
-            (file): file is UsageCostTranscriptFile =>
-              file !== undefined &&
-              (operation.minMtimeMs === undefined || file.mtimeMs >= operation.minMtimeMs),
+            (file) => operation.minMtimeMs === undefined || file.mtimeMs >= operation.minMtimeMs,
           )
           .map(({ kind, sourcePath, sessionId, mtimeMs }) => ({
             kind,
@@ -333,7 +332,7 @@ async function runCapturedSessionActorUsage(
         file,
         events: instance.events ?? [],
         pricingFingerprint: operation.pricingFingerprint,
-        resolveCosts: async (pairs) => pairs.map(resolveCost),
+        resolveCosts: async (pairs) => pairs.map(await prepareCost()),
       });
       const encoded = encodeUsageCostRollup(entry);
       const outcome = await binding.actor.storage!.mutate(

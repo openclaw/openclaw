@@ -60,6 +60,15 @@ arbitrary later candidate. A new channel, identity, scope, or material risk
 requires a new decision. Tool access and green CI are not approval; enforced
 signing and workflow environment gates still apply.
 
+Carry explicit channel/contact restrictions and approved gate exceptions through
+candidate changes and handoffs alongside that authority. A version-wide grant
+remains scoped to that version; an attempt-bound grant does not expand to later
+attempts. Resolve eligibility from pinned P’s checked-in policy, not a fresh
+conversational approval or a blanket “performance cannot be waived” rule.
+Distinguish required failures from advisory results using the selected coverage
+and policy. Neither an advisory warning nor an optional confidence check creates
+a new approval gate; an operator instruction alone cannot bypass enforced gates.
+
 Before requesting stable/extended-stable approval, finish authorized preparation
 and present the exact version, candidate/Release SHA, qualifying run, selected
 surfaces, included/deferred changes, and remaining risks. Approval is the final
@@ -90,16 +99,19 @@ Use local evidence if access is unavailable; ledger synchronization does not
 hold up the release. A hotfix opportunity is not inclusion approval. Follow
 the approved selection scope; obtain the categorized-set approval required by
 backport discovery unless that decision was already explicitly delegated.
-Fix a shared defect once on main through the maintainer workflow, then backport
-with provenance; reuse an already-merged fix. Respect each track's mutation
-route, including extended-stable staging PRs. Preserve the documented exception
-for a blocker that must be fixed/proven on the release branch, and track its
-forward-port for closeout.
+Follow [backports and new fixes](../SKILL.md#backports-and-new-fixes) on every
+track: reuse merged main fixes through individual direct backports, never
+release-branch PRs. Prefer individual main PRs for new fixes; urgent release-first
+fixes go directly to the branch with an owned post-release forward-port.
 
 Make intake explicit:
 
-- **Open preparation:** batch approved changes before freezing C/Q. If the
-  operator requests early diagnostic validation while more backports arrive,
+- **Open preparation:** integrate each approved, dependency-closed group as it
+  becomes ready while independent discovery continues; do not wait for unrelated
+  audit lanes. Serialize changes to the canonical branch and record source and
+  destination commits plus focused proof before taking the next group. Finish
+  the complete inventory and resolve the final selection before freezing C/Q.
+  If the operator requests early diagnostic validation while more backports arrive,
   record that it is provisional; it qualifies publication only if the final
   candidate and all required inputs remain exactly unchanged and eligible.
 - **Frozen/validating:** new opportunities normally queue for the next release;
@@ -123,11 +135,22 @@ identity from [validation](validation.md) and `$release-openclaw-ci`. Stable
 promotion needs stable/full evidence even when its beta was green. Preserve
 C/Q/P, exact attempts, immutable artifacts, and mandatory prepush/source gates.
 
-Keep one watcher for the active run. Collect failures as selected jobs finish,
-classify each with evidence, and start independent investigations/fix reviews
-while other lanes drain. Batch confirmed repairs before the next candidate;
-do not launch a replacement parent for each newly observed failure. Do not
-cancel useful surviving work merely because another lane failed.
+Follow the [FRV wall-time loop](../../release-openclaw-ci/SKILL.md#keep-frv-off-the-idle-path).
+Keep one watcher for the active run and start repairs as failures arrive, not
+when Diagnostic Drain ends. Aim to have all drained failures fixed on the branch
+by drain completion, so the next cycle can start with little downtime. Include
+all known non-flake fixes affecting that run rather than fixing one per cycle;
+this is not a demand to rule out undiscovered failures. Keep useful surviving
+diagnostics running while repairs proceed.
+
+While a long lane or operator decision is pending, keep either the active FRV
+or a named blocker/proof lane in flight. Pre-stage the next eligible FRV inputs
+and run independent proofs, but do not dispatch a duplicate parent. If an
+approved port is expected to land within about 15 minutes, wait for it before
+dispatching so the run can qualify the resulting candidate. Ask decisions in a
+non-blocking update with a recommended reversible default while independent
+work continues. If the question remains unanswered, send one notification;
+do not re-arm a watcher that has no new transition or work.
 
 Apply the existing blocker/flake policy: diagnose first, repair the owner,
 retry the affected surface within its budget, and retain successful exact-input
@@ -151,10 +174,13 @@ replace final tags or rebuild immutable published versions.
 Track every selected surface independently in the handoff table. A successful
 parent does not prove detached ClawHub or native-app completion. Preserve the
 track's scope: extended-stable excludes native apps and ClawHub. Native
-publication does not hold the priority npm/GitHub/main-closeout path; pending
-platform work still needs an owner and an accurate status.
+publication does not hold the priority npm/GitHub/main-closeout path. ClawHub
+starts at its existing dispatch point and runs independently thereafter; its
+authorization, failures, and recovery never block core or the closeout and
+retrospective PRs. Pending work still needs an owner and an accurate status.
 
-Finish `$verify-release`, required platform work, applicable
+Finish the [hotfix ledger integrity check](hotfix-ledger-management.md#final-closeout-integrity-check),
+`$verify-release`, required platform work, applicable
 [main closeout](stable-main-closeout.md), and
 [retrospective](retrospective.md), including its shared issue ledger. Keep
 findings and operator corrections from the start, not only the final context
@@ -169,9 +195,11 @@ publication approval wait “released.”
 Keep the [handoff record](release-handoff-template.md) current at meaningful
 phase changes. The outgoing owner stops new mutations and identifies any
 in-flight operations before the successor takes over; never have two writers.
-The successor acknowledges ownership and verifies branch/tag SHAs, live run
-attempts, receipts, approval scope, pending fixes, and next action. Reconcile
-uncertain writes before retrying. A predecessor's credential failure is not a
+The successor acknowledges ownership and verifies remote branch/tag SHAs, live run
+attempts, receipts, approval scope (including restrictions and gate exceptions),
+pending fixes, and next action. Local tracking refs alone do not establish remote
+freshness. Preserve frozen C/Q/P while reconciling; newer main is not a new cut.
+Reconcile uncertain writes before retrying. A predecessor's credential failure is not a
 reason to re-cut, rerun green proof, or discard publication approval.
 
 Link the predecessor's record and frozen retrospective snapshot. Preserve

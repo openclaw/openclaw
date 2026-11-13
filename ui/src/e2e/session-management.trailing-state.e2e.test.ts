@@ -7,6 +7,7 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 import * as ui from "./session-management.compact.test-support.ts";
 import {
   actionOpacity,
+  controlUiSessionPath,
   createSessionManagementE2eSuite,
 } from "./session-management.test-support.ts";
 
@@ -149,7 +150,7 @@ suite.define(() => {
       });
     }));
 
-  it("keeps fork provenance in the title above always-visible touch actions", () =>
+  it("keeps fork provenance and navigation clear of touch actions", () =>
     suite.withPage(touchOptions, async ({ page }) => {
       await ui.installSessionRows(
         page,
@@ -187,6 +188,11 @@ suite.define(() => {
       expect(ui.centerY(nameBounds)).toBeCloseTo(ui.centerY(pinBounds), 1);
       expect(ui.right(nameBounds)).toBeLessThanOrEqual(pinBounds.x + 1);
       expect(ui.right(pinBounds)).toBeLessThanOrEqual(menuBounds.x);
+      expect(nameBounds.width).toBeGreaterThan(0);
+      await row.locator(".sidebar-recent-session__link").tap();
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:touch-forked"));
     }));
 
   it("keeps unread glyph badges visible while PR icons yield to hover actions", () =>
@@ -227,12 +233,12 @@ suite.define(() => {
           ui.bounds(row.locator(".sidebar-session-indicator .session-glyph__badge--unread")),
         ]);
 
-        expect(badgeBounds).toMatchObject({ width: 7, height: 7 });
-        expect(badgeBounds.y).toBeCloseTo(glyphBounds.y - 2, 1);
+        expect(badgeBounds).toMatchObject({ width: 8, height: 8 });
+        expect(badgeBounds.y).toBeCloseTo(glyphBounds.y - 1, 1);
         return ui.right(glyphBounds) - ui.right(badgeBounds);
       };
       // Trailing metadata cannot move unread off the row's own glyph corner.
-      expect(await badgeInsetFromGlyphRight(pullRequestRow)).toBeCloseTo(-2, 1);
+      expect(await badgeInsetFromGlyphRight(pullRequestRow)).toBeCloseTo(-1, 1);
       expect(await badgeInsetFromGlyphRight(pullRequestRow)).toBeCloseTo(
         await badgeInsetFromGlyphRight(plainRow),
         1,
@@ -332,7 +338,7 @@ suite.define(() => {
           const { width, height } = icon.getBoundingClientRect();
           return { width, height };
         }),
-      ).toEqual({ width: 12, height: 12 });
+      ).toEqual({ width: 14, height: 14 });
       const stateLayout = await row.evaluate((element) => {
         const layoutLeft = (node: HTMLElement) => {
           let left = 0;

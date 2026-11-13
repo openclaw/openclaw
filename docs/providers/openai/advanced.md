@@ -295,7 +295,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     stream wrapper auto-enables server-side compaction for store-capable direct
     OpenAI Responses models (`openai/*` resolved to `api.openai.com`):
 
-    - Forces `store: true` (unless model compat sets `supportsStore: false`)
+    - Uses `store: true` until input contains a compaction checkpoint, then uses
+      `store: false` for replay (unless model compat sets `supportsStore: false`)
     - Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
     - Default `compact_threshold`: 70% of `contextWindow` (or `80000` when
       unavailable)
@@ -310,6 +311,13 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     On direct API-key `openai-responses` routes, defaults, explicit opt-in, and
     stored checkpoint replay follow
     [context-engine compaction ownership](/concepts/context-engine#provider-compaction-ownership).
+
+    Checkpoint replay is stateless: OpenAI can reject repeated stored checkpoint
+    input with `item_conflict`, even when item IDs are removed. OpenClaw preserves
+    the checkpoint and retained context and sends `store: false`, without a stored
+    `previous_response_id`. This also lets an already-affected session recover on
+    its next turn without editing its history. Requests without checkpoints retain
+    stored continuation. Azure and custom endpoint storage policies are unchanged.
 
     On the native ChatGPT sign-in route, the built-in runtime instead uses
     **Codex V2 compaction** by default for context-budget pressure before a model
@@ -439,8 +447,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     separate endpoint. `/compact <focus>`, provider-confirmed overflow, and
     endpoint failures use client-side summarization.
 
-    Direct OpenAI Responses models still force `store: true` unless compat
-    sets `supportsStore: false`.
+    Direct OpenAI Responses models use `store: false` when replaying a compaction
+    checkpoint, as described above.
     </Note>
 
   </Accordion>
@@ -511,6 +519,22 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     - Accept `params.chat_template_kwargs` for OpenAI-compatible Completions
       proxies such as vLLM
     - Do not force strict tool schemas or native-only headers
+
+    Both native OpenAI and compatible `openai-completions` routes accept
+    `params.extraBody` (alias `extra_body`). For example, to send an explicit
+    [OpenAI safety identifier](https://developers.openai.com/api/docs/guides/safety-best-practices#implement-safety-identifiers),
+    configure a model with `api: "openai-completions"` and set its per-model
+    params:
+
+    ```json5
+    { extraBody: { safety_identifier: "<stable-user-id-hash>" } }
+    ```
+
+    Supply a stable, non-PII hash yourself; OpenClaw does not derive this value
+    from channel senders or other user identity. A shared static value identifies
+    the shared scope, not each person using it. This passthrough belongs to the
+    embedded OpenClaw runtime; it does not apply to models configured directly
+    with `api: "openai-responses"` or to the native Codex runtime.
 
     If a usable tool schema is incompatible with requested strict mode, the request uses
     `strict: false`. Debug logs report the downgrade under `openai-transport`,

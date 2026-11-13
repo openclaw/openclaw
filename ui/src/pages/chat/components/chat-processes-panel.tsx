@@ -208,7 +208,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                     <span class="chat-processes__activity">
                       <span
                         class={{
-                          "chat-processes__shimmer": !data().stopping.has(row().instanceId),
+                          "text-shimmer": !data().stopping.has(row().instanceId),
                         }}
                       >
                         {data().stopping.has(row().instanceId)
@@ -433,7 +433,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             when={selectedRow()}
             fallback={
               <Show
-                when={detailProps.loading}
+                when={detailProps.loading && !data().hasResult}
                 fallback={
                   <div class="chat-processes__empty" role="status">
                     {t(
@@ -495,7 +495,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             when={rows().length}
             fallback={
               <Show
-                when={data().hasResult && !data().error && !contentProps.loading}
+                when={data().hasResult && !data().error}
                 fallback={
                   <Show
                     when={contentProps.loading}

@@ -1,18 +1,40 @@
 import { isGatewayProtocolResponseError } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { AgentsListResult, ConfigSnapshot } from "../../api/types.ts";
+import type { AgentsListResult, ConfigSnapshot, GatewayAgentRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerAgentCreationEnglish } from "../../i18n/locales/en-agent-creation.ts";
 import { buildAgentMainSessionKey } from "../sessions/session-key.ts";
 import type {
   AgentCreationAttempt,
   AgentCreationResult,
-  createAgentCreationRecovery,
+  AgentCreationRequest,
 } from "./creation-recovery.ts";
 import type { AgentsState } from "./index.ts";
 
 registerAgentCreationEnglish();
+
+/** Completion is synchronous once this interaction-only runtime has loaded. */
+export function completeAgentCreation(
+  state: Pick<AgentsState, "agentsList" | "recentlyCreatedAgentId" | "agentsError">,
+  pending: { isCurrent: () => boolean; clear: () => void },
+  created: GatewayAgentRow,
+): void {
+  if (!pending.isCurrent()) {
+    return;
+  }
+  const roster = state.agentsList;
+  if (roster) {
+    const row = roster.agents.find((entry) => entry.id === created.id) ?? created;
+    state.agentsList = {
+      ...roster,
+      agents: [row, ...roster.agents.filter((entry) => entry.id !== created.id)],
+    };
+  }
+  state.recentlyCreatedAgentId = created.id;
+  state.agentsError = null;
+  pending.clear();
+}
 
 export class AgentCreationUncertainError extends Error {
   constructor() {
@@ -22,7 +44,7 @@ export class AgentCreationUncertainError extends Error {
 }
 
 /** Loaded after provisional navigation; the eager owner retains attempted identities. */
-export async function executeAgentCreation(
+async function executeAgentCreation(
   client: GatewayBrowserClient,
   attempt: AgentCreationAttempt,
   previous: boolean,
@@ -98,9 +120,9 @@ export async function executeAgentCreation(
 
 /** Creation-only roster work stays lazy; the capability owns synchronous provisional navigation. */
 export async function createAgentInRoster(
-  state: Pick<AgentsState, "agentsList" | "agentsError" | "recentlyCreatedAgentId">,
+  state: Pick<AgentsState, "agentsError">,
   loadList: () => Promise<AgentsListResult | null>,
-  attempt: ReturnType<ReturnType<typeof createAgentCreationRecovery>["prepare"]>,
+  creation: AgentCreationRequest,
   isCurrent: () => boolean,
 ): Promise<AgentCreationResult | null> {
   if (!isCurrent()) {
@@ -115,22 +137,15 @@ export async function createAgentInRoster(
   }
   // The creation owner verifies inference with the opening message before
   // persistence, then returns the saved conversation in the same receipt.
-  const created = await attempt.execute(isCurrent);
+  const created = await executeAgentCreation(
+    creation.client,
+    creation.attempt,
+    creation.previous,
+    creation.attempts,
+    isCurrent,
+  );
   if (!created || !isCurrent()) {
     return null;
   }
-  // Publish the authoritative create receipt immediately. Config events own
-  // the full roster refresh; opening this chat must not wait for another read.
-  const current = state.agentsList ?? previous;
-  const row = current.agents.find((agent) => agent.id === created.agentId) ?? {
-    id: created.agentId,
-    name: created.name,
-  };
-  state.agentsList = {
-    ...current,
-    agents: [row, ...current.agents.filter((agent) => agent.id !== created.agentId)],
-  };
-  state.recentlyCreatedAgentId = created.agentId;
-  state.agentsError = null;
   return created;
 }

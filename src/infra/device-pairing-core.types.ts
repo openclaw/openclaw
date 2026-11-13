@@ -95,7 +95,13 @@ export type DevicePairingApprovalOptions = {
   accessMetadata?: DevicePairingAccessMetadata;
   approvedVia?: Extract<
     PairedDeviceApprovalKind,
-    "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "remote-ingress" | "ssh-verified"
+    | "owner"
+    | "silent"
+    | "trusted-cidr"
+    | "trusted-proxy"
+    | "remote-ingress"
+    | "ssh-verified"
+    | "openclaw-id-node"
   >;
   /** Revalidate automatic approval against current policy after all pairing-lock awaits. */
   isApprovalCurrent?: (state: {

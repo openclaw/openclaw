@@ -11,10 +11,7 @@ import {
   createAgentCleanupScope,
 } from "../agents/run-cleanup-timeout.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import type { EmbeddedStateLockHandle } from "../infra/embedded-state-lock.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
 import {
   getInstallationTarget,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
@@ -63,10 +60,6 @@ async function requireDirectory(value: string, label: string): Promise<string> {
     throw new Error(`${label} is not a directory: ${resolved}`);
   }
   return resolved;
-}
-
-function formatActiveGatewayExecRefusal(identity: GatewayLockIdentity): string {
-  return `A Gateway is running for this state directory (pid ${identity.pid}, port ${identity.port}). Omit --state-dir to use isolated temporary state, or stop the Gateway first (${formatCliCommand("openclaw gateway stop")}).`;
 }
 
 function isStructuredTimeoutError(error: unknown): boolean {
@@ -118,26 +111,21 @@ export async function agentExecCommand(
   let restoreRuntimeConfigSnapshot: (() => void) | undefined;
   let runtimePaths: typeof import("../config/paths.js") | undefined;
   let configIo: typeof import("../config/io.js") | undefined;
-  let stopLocalAuditWriter: (() => Promise<void>) | undefined;
-  let stateLock: EmbeddedStateLockHandle | null | undefined;
   let temporaryDatabaseScope:
     | import("../state/openclaw-state-db-async-lifecycle.js").OpenClawDatabaseMaintenanceScope
     | undefined;
   let abortSignal = signal;
   let signalBridge:
-    | ReturnType<
-        (typeof import("../infra/embedded-state-lock.js"))["createEmbeddedStateSignalBridge"]
-      >
+    | ReturnType<(typeof import("../infra/process-signal-bridge.js"))["createProcessSignalBridge"]>
     | undefined;
   try {
     signal.throwIfAborted();
     const codeModeOverride = normalizeCodeMode(opts.codeMode);
     const prompt = await resolveAgentExecPrompt(positionalMessage, opts.messageFile);
     const cwd = await requireDirectory(opts.cwd ?? process.cwd(), "Working directory");
-    const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
-      await import("../infra/embedded-state-lock.js");
+    const { createProcessSignalBridge } = await import("../infra/process-signal-bridge.js");
     // Admit cancellation before creating state so signals unwind temporary runs too.
-    signalBridge = createEmbeddedStateSignalBridge();
+    signalBridge = createProcessSignalBridge();
     abortSignal = AbortSignal.any([signal, signalBridge.signal]);
     const stateDir = opts.stateDir
       ? await requireDirectory(opts.stateDir, "State directory")
@@ -176,6 +164,10 @@ export async function agentExecCommand(
       }).publish();
     }
     const runConfig = buildExecRunConfig({ base: baseConfig, cwd, opts });
+    if (temporaryStateDir || opts.isolated) {
+      // Throwaway state must never create stores in the operator's PostgreSQL namespaces.
+      runConfig.database = { engine: "sqlite" };
+    }
     // Plugin discovery and its index keep the operator's roots after state moves.
     const inheritInstalledPlugins = opts.isolated !== true && opts.authEnvOnly !== true;
     const pluginInstallContext = inheritInstalledPlugins
@@ -236,12 +228,12 @@ export async function agentExecCommand(
       // Temporary runs own their resources without borrowing maintenance schema authority.
       temporaryDatabaseScope = createOpenClawDatabaseMaintenanceScope();
     }
-    if (opts.stateDir) {
-      stateLock = await acquireEmbeddedStateLock({
-        signal: abortSignal,
-        formatActiveGatewayRefusal: formatActiveGatewayExecRefusal,
-      });
-    }
+    const [{ resolveDatabaseEngineSelection }, { installDatabaseEngineSelection }] =
+      await Promise.all([
+        import("../infra/database-engine/config.js"),
+        import("../infra/database-engine/context.js"),
+      ]);
+    installDatabaseEngineSelection(await resolveDatabaseEngineSelection(runConfig));
     // Publish in memory; a temporary config file would expose resolved provider keys to tools.
     snapshotIo.setRuntimeConfigSnapshot(runConfig);
     const [
@@ -277,6 +269,7 @@ export async function agentExecCommand(
           timeout,
           modelFallbacksOverride: fallbacks.length > 0 ? fallbacks : undefined,
           cleanupBundleMcpOnRunEnd: true,
+          cleanupMemoryOnRunEnd: Boolean(temporaryStateDir),
           cleanupCliLiveSessionOnRunEnd: true,
           oneShotCliRun: true,
           operatorDirectRoot: true,
@@ -304,6 +297,7 @@ export async function agentExecCommand(
             runWithPluginInstallRoots,
           );
     const run = async () => {
+      let stopLocalAuditWriter: (() => Promise<void>) | undefined;
       if (isExecutionIdentityCollectionEnabled(runConfig)) {
         try {
           stopLocalAuditWriter = (
@@ -313,15 +307,31 @@ export async function agentExecCommand(
           // Admission emits a bounded warning if the direct-process writer is unavailable.
         }
       }
-      return await toolBudget.run(() =>
-        withHostExecInheritedEnvOmitted(
-          listKnownProviderAuthEnvVarNamesCore({ env: process.env }),
-          runWithAuthScope,
-        ),
-      );
+      try {
+        return await toolBudget.run(() =>
+          withHostExecInheritedEnvOmitted(
+            listKnownProviderAuthEnvVarNamesCore({ env: process.env }),
+            runWithAuthScope,
+          ),
+        );
+      } finally {
+        await stopLocalAuditWriter?.().catch(() => undefined);
+      }
     };
+    const { runWithLocalStateOwner } = await import("../cli/local-state-owner.js");
+    // A caller's --state-dir is shared state: a running Gateway owns it.
     const result = await runtimeCleanup.run(() =>
-      temporaryDatabaseScope ? temporaryDatabaseScope.run(run) : run(),
+      temporaryDatabaseScope
+        ? temporaryDatabaseScope.run(run)
+        : runWithLocalStateOwner({
+            method: "agent exec --state-dir",
+            params: {},
+            target: "agent state",
+            onForeignOwner: "refuse",
+            onlineAlternative: "Omit --state-dir to use isolated temporary state.",
+            retainAfterUncertainCleanup: true,
+            runLocal: run,
+          }),
     );
     signal.throwIfAborted();
     if (!result) {
@@ -358,10 +368,6 @@ export async function agentExecCommand(
   const recordCleanupError = (error: unknown) => {
     cleanupError = error;
   };
-  const stopAudit = async () => await stopLocalAuditWriter?.();
-  await (temporaryDatabaseScope ? temporaryDatabaseScope.run(stopAudit) : stopAudit()).catch(
-    () => undefined,
-  );
   // Delayed worker registration can outlive its lexical maintenance scope. Drain the
   // exact temporary owners before the scope closes and the filesystem root is removed.
   if (!cleanupError && temporaryStateDir) {
@@ -383,9 +389,6 @@ export async function agentExecCommand(
   }
   if (!cleanupError) {
     await temporaryDatabaseScope?.close().catch(recordCleanupError);
-  }
-  if (!cleanupError) {
-    await stateLock?.release().catch(recordCleanupError);
   }
   const runCleanupStep = (step: () => void) => {
     try {

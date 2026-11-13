@@ -115,6 +115,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       () => options?.pluginRegistry ?? createEmptyPluginRegistry(),
     ),
   }));
+  // mock-isolation: Runner orchestration uses synthetic snapshots without booting plugin catalogs or runtime owners.
   vi.doMock("../prepared-model-runtime.js", () => {
     const acquire = async (input: PreparedModelRuntimeInput) => {
       if (!input.readOnly) {
@@ -127,6 +128,7 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       }
       return {
         snapshot: createEmptyPreparedModelRuntimeSnapshot(input, options?.pluginRegistry),
+        run: <T>(run: () => T): T => run(),
         [Symbol.asyncDispose]: vi.fn(async () => {}),
       };
     };
@@ -332,13 +334,9 @@ export function installEmbeddedRunnerFastRunE2eMocks(
   vi.doMock("../embedded-agent-runner/run/attempt.js", () => ({
     runEmbeddedAttempt: (params: EmbeddedRunAttemptParams) => options.runEmbeddedAttempt(params),
   }));
-  vi.doMock("../../plugins/provider-external-auth.js", () => ({
-    resolveExternalAuthProfilesWithPlugins: vi.fn(() => []),
-  }));
   // mock-isolation: runner fixtures exercise core preparation without loading installed plugins.
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     applyProviderResolvedTransportWithPlugin: vi.fn(() => undefined),
-    augmentModelCatalogWithProviderPlugins: vi.fn(async () => []),
     buildProviderMissingAuthMessageWithPlugin: vi.fn(() => undefined),
     buildProviderUnknownModelHintWithPlugin: vi.fn(() => undefined),
     normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),

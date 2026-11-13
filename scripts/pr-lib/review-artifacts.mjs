@@ -133,6 +133,9 @@ export function validateReviewArtifacts({ review, prMeta }) {
     }
     return true;
   };
+  const requireStringEnum = (record, key, enumName, field, messagePrefix) =>
+    requireType(typeof record[key] === "string", `${messagePrefix}: ${field} must be a string`) &&
+    requireEnum(record[key], enumName, field, messagePrefix);
 
   const reviewIsObject = requireType(
     isObject(review),
@@ -255,37 +258,28 @@ export function validateReviewArtifacts({ review, prMeta }) {
     if (nitSweepPerformedIsBoolean && nitSweep.performed !== true) {
       add("Invalid nit sweep in .local/review.json: nitSweep.performed must be true");
     }
-    const nitSweepStatusIsString = requireType(
-      typeof nitSweep.status === "string",
-      "Invalid nit sweep status in .local/review.json: nitSweep.status must be a string",
+    const validStatus = requireStringEnum(
+      nitSweep,
+      "status",
+      "nitSweepStatus",
+      "nitSweep.status",
+      "Invalid nit sweep status in .local/review.json",
     );
-    if (nitSweepStatusIsString) {
-      const validStatus = requireEnum(
-        nitSweep.status,
-        "nitSweepStatus",
-        "nitSweep.status",
-        "Invalid nit sweep status in .local/review.json",
-      );
-      if (validStatus && nitSweep.status === "none" && nitFindingsCount > 0) {
-        add(
-          "Invalid nit sweep in .local/review.json: nitSweep.status is none but NIT findings exist",
-        );
-      }
-      if (validStatus && nitSweep.status === "has_nits" && nitFindingsCount < 1) {
-        add(
-          "Invalid nit sweep in .local/review.json: nitSweep.status is has_nits but no NIT findings exist",
-        );
-      }
-    }
-    requireType(
-      typeof nitSweep.summary === "string",
-      "Invalid nit sweep summary in .local/review.json: nitSweep.summary must be a string",
-    );
-    if (typeof nitSweep.summary === "string" && !isNonEmptyString(nitSweep.summary)) {
+    if (validStatus && nitSweep.status === "none" && nitFindingsCount > 0) {
       add(
-        "Invalid nit sweep summary in .local/review.json: nitSweep.summary must be a non-empty string",
+        "Invalid nit sweep in .local/review.json: nitSweep.status is none but NIT findings exist",
       );
     }
+    if (validStatus && nitSweep.status === "has_nits" && nitFindingsCount < 1) {
+      add(
+        "Invalid nit sweep in .local/review.json: nitSweep.status is has_nits but no NIT findings exist",
+      );
+    }
+    // Fresh templates omit the optional sweep; name both ways out for a partial one.
+    requireType(
+      isNonEmptyString(nitSweep.summary),
+      'Invalid nit sweep summary in .local/review.json: nitSweep.summary must be a non-empty string describing the sweep result (for example "No nits."); remove nitSweep if no nit sweep was performed',
+    );
   }
 
   const issueValidation = issueValidationIsObject ? value.issueValidation : {};
@@ -300,30 +294,20 @@ export function validateReviewArtifacts({ review, prMeta }) {
   ) {
     add("Invalid issue validation in .local/review.json: issueValidation.performed must be true");
   }
-  const issueSourceIsString = requireType(
-    typeof issueValidation.source === "string",
-    "Invalid issue validation source in .local/review.json: issueValidation.source must be a string",
+  requireStringEnum(
+    issueValidation,
+    "source",
+    "issueValidationSource",
+    "issueValidation.source",
+    "Invalid issue validation source in .local/review.json",
   );
-  if (issueSourceIsString) {
-    requireEnum(
-      issueValidation.source,
-      "issueValidationSource",
-      "issueValidation.source",
-      "Invalid issue validation source in .local/review.json",
-    );
-  }
-  const issueStatusIsString = requireType(
-    typeof issueValidation.status === "string",
-    "Invalid issue validation status in .local/review.json: issueValidation.status must be a string",
+  requireStringEnum(
+    issueValidation,
+    "status",
+    "issueValidationStatus",
+    "issueValidation.status",
+    "Invalid issue validation status in .local/review.json",
   );
-  if (issueStatusIsString) {
-    requireEnum(
-      issueValidation.status,
-      "issueValidationStatus",
-      "issueValidation.status",
-      "Invalid issue validation status in .local/review.json",
-    );
-  }
   requireType(
     typeof issueValidation.summary === "string",
     "Invalid issue validation summary in .local/review.json: issueValidation.summary must be a string",
@@ -356,30 +340,20 @@ export function validateReviewArtifacts({ review, prMeta }) {
   ) {
     add("Invalid behavioral sweep in .local/review.json: behavioralSweep.performed must be true");
   }
-  const behavioralStatusIsString = requireType(
-    typeof behavioralSweep.status === "string",
-    "Invalid behavioral sweep status in .local/review.json: behavioralSweep.status must be a string",
+  const behavioralStatusIsValid = requireStringEnum(
+    behavioralSweep,
+    "status",
+    "behavioralSweepStatus",
+    "behavioralSweep.status",
+    "Invalid behavioral sweep status in .local/review.json",
   );
-  const behavioralStatusIsValid =
-    behavioralStatusIsString &&
-    requireEnum(
-      behavioralSweep.status,
-      "behavioralSweepStatus",
-      "behavioralSweep.status",
-      "Invalid behavioral sweep status in .local/review.json",
-    );
-  const behavioralRiskIsString = requireType(
-    typeof behavioralSweep.silentDropRisk === "string",
-    "Invalid behavioral sweep risk in .local/review.json: behavioralSweep.silentDropRisk must be a string",
+  const behavioralRiskIsValid = requireStringEnum(
+    behavioralSweep,
+    "silentDropRisk",
+    "behavioralSweepRisk",
+    "behavioralSweep.silentDropRisk",
+    "Invalid behavioral sweep risk in .local/review.json",
   );
-  const behavioralRiskIsValid =
-    behavioralRiskIsString &&
-    requireEnum(
-      behavioralSweep.silentDropRisk,
-      "behavioralSweepRisk",
-      "behavioralSweep.silentDropRisk",
-      "Invalid behavioral sweep risk in .local/review.json",
-    );
   requireType(
     typeof behavioralSweep.summary === "string",
     "Invalid behavioral sweep summary in .local/review.json: behavioralSweep.summary must be a string",
@@ -485,18 +459,13 @@ export function validateReviewArtifacts({ review, prMeta }) {
   if (testsGapsAreArray && !tests.gaps.every((entry) => typeof entry === "string")) {
     add("Invalid tests in .local/review.json: tests.gaps must be an array of strings");
   }
-  const testsResultIsString = requireType(
-    typeof tests.result === "string",
-    "Invalid tests result in .local/review.json: tests.result must be a string",
+  requireStringEnum(
+    tests,
+    "result",
+    "testsResult",
+    "tests.result",
+    "Invalid tests result in .local/review.json",
   );
-  if (testsResultIsString) {
-    requireEnum(
-      tests.result,
-      "testsResult",
-      "tests.result",
-      "Invalid tests result in .local/review.json",
-    );
-  }
   const ci = tests.preExistingCi;
   const attributedCiFailure =
     tests.result === "fail" &&
@@ -560,25 +529,14 @@ export function validateReviewArtifacts({ review, prMeta }) {
     );
   }
 
-  const docsIsString = requireType(
-    typeof value.docs === "string",
-    "Invalid docs status in .local/review.json: docs must be a string",
+  requireStringEnum(value, "docs", "docs", "docs", "Invalid docs status in .local/review.json");
+  requireStringEnum(
+    value,
+    "changelog",
+    "changelog",
+    "changelog",
+    "Invalid changelog status in .local/review.json",
   );
-  if (docsIsString) {
-    requireEnum(value.docs, "docs", "docs", "Invalid docs status in .local/review.json");
-  }
-  const changelogIsString = requireType(
-    typeof value.changelog === "string",
-    "Invalid changelog status in .local/review.json: changelog must be a string",
-  );
-  if (changelogIsString) {
-    requireEnum(
-      value.changelog,
-      "changelog",
-      "changelog",
-      "Invalid changelog status in .local/review.json",
-    );
-  }
 
   return violations;
 }

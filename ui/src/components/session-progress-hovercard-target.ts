@@ -1,3 +1,14 @@
+export type SessionTitleDisplay = {
+  title?: string;
+  onTitle: (title: string | undefined) => void;
+};
+
+// Producers can mount before the app's lazy hovercard bootstrap has loaded.
+export const { promise: sessionTitleRegistrar, resolve: installSessionTitleRegistrar } =
+  Promise.withResolvers<
+    (target: HTMLElement, label: HTMLElement, display?: SessionTitleDisplay) => () => void
+  >();
+
 const SESSION_PROGRESS_HOVER_LINK_SELECTOR = "a.markdown-session-link, [data-session-href]";
 export const SESSION_TITLE_TARGET_SELECTOR = `${SESSION_PROGRESS_HOVER_LINK_SELECTOR}, [data-session-title-only]`;
 const SESSION_PROGRESS_HOVER_SIDEBAR_SELECTOR = ".sidebar-recent-session[data-session-key]";

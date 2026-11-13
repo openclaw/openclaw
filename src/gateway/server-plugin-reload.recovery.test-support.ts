@@ -60,6 +60,7 @@ export async function createPluginReloadRecoveryFixture(
   },
   options: {
     config?: OpenClawConfig;
+    generationOverlap?: boolean;
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
     env?: NodeJS.ProcessEnv;
     register?: (
@@ -70,6 +71,7 @@ export async function createPluginReloadRecoveryFixture(
     registerFirst?: (api: OpenClawPluginApi, record: ReturnType<typeof createPluginRecord>) => void;
     abortOnCandidateStart?: boolean;
     waitForDrain?: boolean;
+    automatic?: boolean;
     drainSignal?: AbortSignal;
     checkpoint?: Parameters<typeof reloadGatewayPlugins>[1]["checkpoint"];
     prepareAttached?: () => Promise<void>;
@@ -127,7 +129,10 @@ export async function createPluginReloadRecoveryFixture(
     }
   };
   for (const id of ["first", "sibling"] as const) {
-    const record = createPluginRecord({ id });
+    const record = createPluginRecord({
+      id,
+      ...(id === "first" ? { generationOverlap: options.generationOverlap } : {}),
+    });
     previous.registry.plugins.push(record);
     const api = previous.createApi(record, { config });
     register(api, id, record);
@@ -174,7 +179,10 @@ export async function createPluginReloadRecoveryFixture(
       if (id === "first" && cfg.plugins?.entries?.first?.enabled === false) {
         continue;
       }
-      const record = createPluginRecord({ id });
+      const record = createPluginRecord({
+        id,
+        ...(id === "first" ? { generationOverlap: options.generationOverlap } : {}),
+      });
       candidate.registry.plugins.push(record);
       if (loadModules) {
         const api = candidate.createApi(record, { config: cfg });
@@ -298,7 +306,7 @@ export async function createPluginReloadRecoveryFixture(
           prepareAttachedPluginRuntime: async (candidate, trackActivationCleanup) => {
             await options.prepareAttached?.();
             return {
-              publish: () => {
+              publish: (beforeDispose) => {
                 adoptPluginHttpRouteHandoffs(registryOwner.registry, candidate.pluginRegistry);
                 activatePluginRegistry(
                   candidate.pluginRegistry,
@@ -308,7 +316,7 @@ export async function createPluginReloadRecoveryFixture(
                   registryOwner.registry,
                   trackActivationCleanup,
                 );
-                registryOwner.publish(candidate.pluginRegistry);
+                registryOwner.publish(candidate.pluginRegistry, beforeDispose);
               },
               afterCommit: vi.fn(),
             };
@@ -322,13 +330,15 @@ export async function createPluginReloadRecoveryFixture(
           prepareConfigEffects:
             options.prepareConfigEffects ??
             (() => ({ retire: () => {}, rollback: rollbackConfigEffects })),
-          pluginLifecycle: {
-            reason: "reload",
-            waitForDrain: options.waitForDrain,
-            drainSignal: options.drainSignal,
-            operationId: "service-recovery",
-            pluginIds,
-          },
+          pluginLifecycle: options.automatic
+            ? undefined
+            : {
+                reason: "reload",
+                waitForDrain: options.waitForDrain,
+                drainSignal: options.drainSignal,
+                operationId: "service-recovery",
+                pluginIds,
+              },
           commitRuntime: async (publication) => {
             await options.beforePublish?.();
             publication?.publish();

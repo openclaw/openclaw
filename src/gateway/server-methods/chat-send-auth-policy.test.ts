@@ -18,6 +18,7 @@ import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.tes
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { publishOperatorRoleConfigChange } from "../operator-role-policy.js";
+import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
 import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import {
   createDispatchTestHarness,
@@ -61,6 +62,10 @@ it.each([true, false])(
     };
     const harness = createDispatchTestHarness({
       buildRequestContext: () => context,
+      getRequiredSharedGatewaySessionGeneration: new SharedGatewaySessionGenerationState({
+        current: undefined,
+        required: null,
+      }).reader,
       extraHandlers: { "chat.send": handleChatSend },
     });
     const publish = (next: typeof current) => {

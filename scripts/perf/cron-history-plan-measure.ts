@@ -12,13 +12,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { CronRunRecord } from "../../src/cron/store/run-history.types.js";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -65,12 +65,7 @@ for (let index = 0; index < warmup; index++) {
 global.gc?.();
 const inspector = new Session();
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 16384,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 16384);
 }
 const hostLoadBefore = loadavg();
 const memoryBefore = process.memoryUsage();
@@ -91,9 +86,7 @@ let sampledBytes: number | null = null;
 if (values.mode === "allocation") {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
   inspector.disconnect();
-  const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
-    node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
-  sampledBytes = sum(profile.head);
+  sampledBytes = sumSampledHeapBytes(profile.head);
 }
 const result = { reconciliations, summedNextSweepAtMs };
 const report = {

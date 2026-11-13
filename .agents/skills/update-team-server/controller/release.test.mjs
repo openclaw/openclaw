@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, chownSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -237,10 +237,14 @@ function writeProcess(root, pid, startTicks) {
 
 const verifiedTarget = "c".repeat(40);
 
-function releaseProof(fixture, ...args) {
-  const result = spawnSync(process.execPath, ["--no-warnings", fixture.library, ...args], {
-    encoding: "utf8", env: fixture.env, timeout: 30000,
+function releaseProofResult(fixture, args, input) {
+  return spawnSync("bash", ["-c", 'exec 9<>"$OPENCLAW_TEAM_LOCK_FILE"; flock -n 9 || exit 75; exec "$@"', "fixture-proof", process.execPath, "--no-warnings", fixture.library, ...args], {
+    encoding: "utf8", env: fixture.env, input, timeout: 30000,
   });
+}
+
+function releaseProof(fixture, ...args) {
+  const result = releaseProofResult(fixture, args);
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
@@ -323,7 +327,9 @@ esac`);
   writeFileSync(capacityShim, `
 import { spawnSync } from 'node:child_process';
 if (process.argv[2] !== 'release-capacity') {
-const result = spawnSync(process.execPath, [${JSON.stringify(f.library)}, ...process.argv.slice(2)], { stdio: 'inherit' });
+const result = spawnSync(process.execPath, [${JSON.stringify(f.library)}, ...process.argv.slice(2)], {
+  stdio: ['inherit', 'inherit', 'inherit', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 9],
+});
 process.exit(result.status ?? 1);
 }
 `);
@@ -409,7 +415,7 @@ describe("Team activation handoff ordering and prepared recovery", () => {
     const result = runOwner(f, ["--interrupt-after-drain"]);
     assert.equal(result.status, 0, result.stderr + events(f));
     const log = events(f);
-    assert.ok(log.indexOf("handoff.armed") >= 0 && log.indexOf("handoff.armed") < log.indexOf("service.system.stop"), log);
+    assert.ok(log.indexOf("handoff.committed") >= 0 && log.indexOf("handoff.committed") < log.indexOf("service.system.stop"), log);
     assert.ok(log.indexOf("service.system.stop") < log.indexOf("pointer.current.inactive"), log);
     assert.ok(log.indexOf("pointer.current.inactive") < log.indexOf("service.system.start"), log);
     assert.doesNotMatch(log, /pointer\.current\.active|service\.system\.restart/);
@@ -980,6 +986,36 @@ describe("Team suspension preparation failure diagnostics", () => {
 });
 
 describe("Team verified release retention and recovery refusal", () => {
+  test("held preservation accepts a root-created archive parent with runtime-owned data", t => {
+    if (process.platform !== "linux" || process.getuid() !== 0) {
+      t.skip("archive ownership proof requires disposable Linux root");
+      return;
+    }
+    const f = makeReleaseFixture(t), stateRoot = join(f.root, "runtime-state");
+    const databasePath = join(stateRoot, "state", "openclaw.sqlite");
+    const agentPath = join(stateRoot, "agents", "controller-test-agent", "agent", "openclaw-agent.sqlite");
+    mkdirSync(dirname(databasePath), { recursive: true });
+    mkdirSync(dirname(agentPath), { recursive: true });
+    copyFileSync(f.databasePath, databasePath);
+    copyFileSync(f.agentDatabasePath, agentPath);
+    const original = releaseProof(f, "session-preservation-witness", f.initial, f.initial, databasePath);
+    const shared = new DatabaseSync(databasePath);
+    shared.exec("CREATE TABLE agent_databases (agent_id TEXT, path TEXT)");
+    shared.prepare("INSERT INTO agent_databases VALUES (?, ?)").run("controller-test-agent", agentPath);
+    shared.close();
+    const archive = join(stateRoot, "held-agent-archive", "controller-test-agent-held-fixture");
+    mkdirSync(dirname(archive));
+    renameSync(dirname(dirname(agentPath)), archive);
+    const path = join(archive, "agent", "openclaw-agent.sqlite");
+    for (const pathname of [stateRoot, archive, dirname(path), path]) chownSync(pathname, 1000, 1000);
+    const bytes = readFileSync(path), mtime = lstatSync(path, { bigint: true }).mtimeNs;
+    const result = releaseProofResult(f, ["session-preservation-verify", f.initial, f.initial, databasePath], original);
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(readFileSync(path), bytes);
+    assert.equal(lstatSync(path, { bigint: true }).mtimeNs, mtime);
+  });
+
   test("successful deployment records a private verified marker after full acceptance", (t) => {
     const f = deploymentFixture(t);
     const failed = join(f.serving, "failed", after);
@@ -1202,6 +1238,8 @@ if (args[0] === 'stat-identity' && args[1] === release) {
 
   for (const [scenario, args] of [["success", ["--recover", "--sha", verifiedTarget]], ["user-manager-offline", ["--recover"]], ["channel-client-auth-held", ["--recover"]]]) test(`live current keeps full verified-no-restart recovery unchanged: ${scenario}`, (t) => {
     const f = failedReleaseFixture(t, true, scenario);
+    const failed = join(f.serving, "failed", after);
+    writeFileSync(failed, after + "\n", { mode: 0o600 });
     if (scenario === "channel-client-auth-held") f.env.OPENCLAW_TEAM_VERIFICATION_BUDGET = "30";
     if (process.env.TEAM_OWNER_TEST_SOURCE) f.owner = process.env.TEAM_OWNER_TEST_SOURCE;
     verificationMarker(f, verifiedTarget);
@@ -1209,6 +1247,12 @@ if (args[0] === 'stat-identity' && args[1] === release) {
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr + events(f));
     assert.match(result.stdout, /RECOVERED phase=ROLLBACK_FAILED action=verified-current-candidate-no-restart/);
+    const marker = join(f.serving, "verified", after), entry = lstatSync(marker);
+    assert.equal(readFileSync(marker, "utf8"), after + "\n");
+    assert.equal(entry.mode & 0o7777, 0o600);
+    assert.equal(entry.uid, process.getuid());
+    assert.equal(entry.gid, process.getgid());
+    assert.equal(readFileSync(failed, "utf8"), after + "\n");
     const probe = JSON.parse(readFileSync(join(f.state, "channel-probe-params"), "utf8"));
     assert.equal(probe.probe, true);
     assert.ok(Number.isInteger(probe.timeoutMs) && probe.timeoutMs > 0);
@@ -1217,9 +1261,37 @@ if (args[0] === 'stat-identity' && args[1] === release) {
     assert.doesNotMatch(events(f), /service\..*\.(stop|start|restart)|account\.openclaw-deploy/);
   });
 
+  test("failed rollback recovery retains its journal until the verified marker can be published", t => {
+    const f = failedReleaseFixture(t, true), journal = readFileSync(f.journal);
+    const node = join(f.commands, "node-marker-failure");
+    executable(node, `
+if [[ "$1" == -e && "\${@: -2:1}" == record ]]; then
+  printf 'synthetic marker publication failure\\n' >&2
+  exit 74
+fi
+exec '${process.execPath}' "$@"`);
+    f.env.OPENCLAW_TEAM_NODE_BIN = node;
+    const failed = runOwner(f, ["--recover"]);
+    assert.notEqual(failed.status, 0, failed.stdout);
+    assert.match(failed.stderr, /synthetic marker publication failure/);
+    assert.deepEqual(readFileSync(f.journal), journal);
+    assert.equal(existsSync(join(f.serving, "verified", after)), false);
+    f.env.OPENCLAW_TEAM_NODE_BIN = process.execPath;
+    const recovered = runOwner(f, ["--recover"]);
+    assert.equal(recovered.status, 0, recovered.stderr + events(f));
+    assert.equal(readFileSync(join(f.serving, "verified", after), "utf8"), after + "\n");
+    assert.equal(existsSync(f.journal), false);
+    assert.doesNotMatch(events(f), /service\..*\.(stop|start|restart)/);
+  });
+
   for (const phase of ["D_VERIFYING", "ROLLBACK_FAILED"]) {
     for (const state of ["live", "stopped", "unverifiable"]) {
-      test(`native ${phase} recovery: ${state} migrated candidate`, t => {
+      for (const held of phase === "ROLLBACK_FAILED" && state === "live"
+        ? ["none", "in-place", "archived", "archive-only", "new-witness", "reconstructed", "replaced-archive", "live-mismatch"]
+        : ["none"])
+      for (const native of ["in-place", "archived"].includes(held) ? [true, false]
+        : [!["replaced-archive", "live-mismatch"].includes(held)])
+      test(`${native ? "native" : "ordinary"} ${phase} recovery: ${state} migrated candidate (${held})`, t => {
         if (state === "unverifiable" && !existsSync("/usr/local/lib/openclaw-team/gateway-suspension-contract.mjs")) {
           t.skip("live rollback requires the disposable host's installed suspension contract");
           return;
@@ -1239,8 +1311,60 @@ if (args[0] === 'stat-identity' && args[1] === release) {
         writeFileSync(backup, "original pre-migration state");
         const record = JSON.parse(readFileSync(f.journal));
         record.phase = phase;
-        record.nativeUpdate = { backupRoot };
+        if (native) record.nativeUpdate = { backupRoot };
+        const stateRoot = dirname(dirname(f.databasePath)), heldDir = join(stateRoot, "agents", "retained");
+        let heldPath = join(heldDir, "agent", "openclaw-agent.sqlite");
+        const hold = () => {
+          const db = new DatabaseSync(f.databasePath);
+          db.exec(`CREATE TABLE agent_deletion_journal (agent_id TEXT PRIMARY KEY, agent_dir TEXT,
+            database_paths_json TEXT, cleanup_completed INTEGER, delete_files INTEGER)`);
+          db.prepare("INSERT INTO agent_deletion_journal VALUES (?, ?, ?, 1, 0)")
+            .run("retained", dirname(heldPath), JSON.stringify([heldPath]));
+          db.close();
+        };
+        if (held !== "none") {
+          mkdirSync(dirname(heldPath), { recursive: true });
+          copyFileSync(f.agentDatabasePath, heldPath);
+          const db = new DatabaseSync(heldPath);
+          db.exec("UPDATE schema_meta SET agent_id='retained'"); db.close();
+          const shared = new DatabaseSync(f.databasePath);
+          shared.exec("CREATE TABLE agent_databases (agent_id TEXT, path TEXT)");
+          shared.prepare("INSERT INTO agent_databases VALUES (?, ?)")
+            .run("retained", "agents/retained/agent/openclaw-agent.sqlite");
+          shared.close();
+          for (const id of ["claude", "codex", "visitors"]) mkdirSync(join(stateRoot, "agents", id));
+          if (["new-witness", "reconstructed"].includes(held)) {
+            if (held === "new-witness") hold();
+            else {
+              const shared = new DatabaseSync(f.databasePath);
+              shared.exec("CREATE TABLE migration_sources (source_key TEXT PRIMARY KEY, report_json TEXT)");
+              shared.prepare("INSERT INTO migration_sources VALUES (?, ?)").run("agent-deletion-journal-reconstruction",
+                JSON.stringify({ description: "Synthetic reconstruction", held: [{ agentId: "retained", path: "agents/retained/agent/openclaw-agent.sqlite" }] }));
+              shared.close();
+            }
+            const db = new DatabaseSync(heldPath);
+            db.exec("PRAGMA user_version=0; UPDATE schema_meta SET schema_version=0"); db.close();
+          }
+        }
         const witness = releaseProof(f, "session-preservation-witness", f.initial, join(f.serving, "releases", after), f.databasePath);
+        if (held !== "none") {
+          if (["new-witness", "reconstructed"].includes(held)) {
+            const tuple = JSON.parse(JSON.parse(witness).find(value => JSON.parse(value)[0] === "retained"));
+            assert.deepEqual(tuple.slice(4), ["", "", null, null, "held"]);
+          }
+          if (!["new-witness", "reconstructed", "archive-only", "live-mismatch"].includes(held)) hold();
+          const db = new DatabaseSync(heldPath);
+          db.exec("PRAGMA user_version=0; UPDATE schema_meta SET schema_version=0"); db.close();
+          if (["archived", "archive-only", "replaced-archive"].includes(held)) {
+            const archive = join(stateRoot, "held-agent-archive", "retained-held-schema0-fixture");
+            mkdirSync(dirname(archive), { recursive: true }); renameSync(heldDir, archive);
+            heldPath = join(archive, "agent", "openclaw-agent.sqlite");
+            if (held === "replaced-archive") {
+              copyFileSync(heldPath, heldPath + ".replacement"); renameSync(heldPath + ".replacement", heldPath);
+            }
+          }
+        }
+        const heldBefore = held === "none" ? undefined : { bytes: readFileSync(heldPath), mtime: lstatSync(heldPath, { bigint: true }).mtimeNs };
         const name = `original-${handoffId}.json`, witnessPath = join(f.serving, "journal", name);
         writeFileSync(witnessPath, witness, { mode: 0o600 });
         const witnessStat = lstatSync(witnessPath);
@@ -1262,10 +1386,20 @@ if (args[0] === 'stat-identity' && args[1] === release) {
         assert.equal(readFileSync(backup, "utf8"), "original pre-migration state");
         assert.equal(readFileSync(`${backupRoot}.receipt.json`, "utf8"), receipt);
         assert.equal(readFileSync(witnessPath, "utf8"), witness);
-        if (state === "live") {
+        if (heldBefore) {
+          assert.deepEqual(readFileSync(heldPath), heldBefore.bytes);
+          assert.equal(lstatSync(heldPath, { bigint: true }).mtimeNs, heldBefore.mtime);
+          for (const id of ["claude", "codex", "visitors"])
+            assert.equal(existsSync(join(stateRoot, "agents", id, "agent", "openclaw-agent.sqlite")), false);
+        }
+        if (["replaced-archive", "live-mismatch"].includes(held)) {
+          assert.notEqual(result.status, 0);
+          assert.equal(existsSync(f.journal), true);
+          assert.doesNotMatch(result.stdout, /verified-migrated-candidate-forward/);
+        } else if (state === "live") {
           assert.equal(result.status, 0, result.stderr + events(f));
           assert.equal(existsSync(f.journal), false);
-          assert.match(result.stdout, new RegExp(`RECOVERED phase=${phase} action=verified-migrated-candidate-forward`));
+          assert.match(result.stdout, new RegExp(`RECOVERED phase=${phase} action=${native ? "verified-migrated-candidate-forward" : "verified-current-candidate-no-restart"}`));
           assert.equal(readFileSync(join(f.serving, "verified", after), "utf8"), after + "\n");
           assert.equal(readlinkSync(join(f.serving, "current")), join(f.serving, "releases", after));
           assert.match(events(f), /gateway gateway call channels.status/);
@@ -1641,6 +1775,7 @@ describe("Team history gaps warn without blocking deployment", () => {
     assert.match(result.stdout, /RECOVERED phase=ROLLBACK_FAILED/);
     assert.equal(existsSync(f.journal), false);
     assert.equal(readFileSync(original.path, "utf8"), original.witness);
+    assert.equal(readFileSync(join(f.serving, "verified", position === "selected" ? after : before), "utf8"), (position === "selected" ? after : before) + "\n");
     assert.doesNotMatch(result.stderr, /agent:controller-test-agent:fixture-|window-11/);
     assert.doesNotMatch(events(f), /service\..*\.(stop|start|restart)/);
   });
@@ -1667,9 +1802,7 @@ describe("Team history gaps warn without blocking deployment", () => {
     changed.prepare("DELETE FROM transcript_rewrite_watermarks WHERE session_id = ?").run(session);
     changed.close();
     const verify = () => {
-      const result = spawnSync(process.execPath,
-        [f.library, "session-preservation-verify", f.initial, f.initial, f.databasePath],
-        { env: f.env, input: witness, encoding: "utf8", timeout: 30_000 });
+      const result = releaseProofResult(f, ["session-preservation-verify", f.initial, f.initial, f.databasePath], witness);
       assert.ifError(result.error);
       assert.equal(result.status, 0, result.stderr);
       return result;
@@ -1686,6 +1819,39 @@ describe("Team history gaps warn without blocking deployment", () => {
     const preserved = verify();
     assert.equal(preserved.stdout.trim(), "SESSIONS_PRESERVED");
     assert.doesNotMatch(preserved.stderr, /HISTORY_PRESERVATION/);
+  });
+  test("history reason counts include failures beyond the private detail cap", t => {
+    const f = makeReleaseFixture(t), db = new DatabaseSync(f.agentDatabasePath);
+    db.exec("DELETE FROM session_nodes");
+    for (let index = 0; index < 27; index++) {
+      const session = `history-window-${index}`, key = `agent:controller-test-agent:history-${String(index).padStart(2, "0")}`;
+      db.prepare("INSERT INTO session_nodes VALUES (?, ?, ?, ?, NULL)")
+        .run(key, session, JSON.stringify({ sessionId: session, updatedAt: 1 }), 1);
+      db.prepare("INSERT INTO session_windows VALUES (?, ?)").run(session, key);
+      if (index >= 20) db.prepare("INSERT INTO transcript_rewrite_watermarks VALUES (?, ?)")
+        .run(session, `history-generation-${index}`);
+    }
+    db.close();
+    const witness = releaseProof(f, "session-preservation-witness", f.initial, f.initial, f.databasePath);
+    const changed = new DatabaseSync(f.agentDatabasePath);
+    changed.exec("DELETE FROM transcript_rewrite_watermarks"); changed.close();
+    const result = releaseProofResult(f, ["session-preservation-verify", f.initial, f.initial, f.databasePath], witness);
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "SESSIONS_HISTORY_WARNING count=27");
+    assert.match(result.stderr, /WARNING HISTORY_PRESERVATION_GAPS count=27 shown=8 historical-bytes=unverified continuation=allowed/);
+    const summary = / reasonCounts=(\{[^\n]+\})\n/.exec(result.stderr);
+    assert.ok(summary, "warning summary must account for every gap reason");
+    assert.deepEqual(JSON.parse(summary[1]), {
+      "exact-owner-generation-missing/exact-tuple-missing": 7,
+      "missing-generation": 20,
+    });
+    const details = [...result.stderr.matchAll(/HISTORY_PRESERVATION_GAP diagnostic=(.+)/g)]
+      .map(([, value]) => JSON.parse(value));
+    assert.equal(details.length, 8);
+    assert.ok(details.every(detail => detail.captured.generation === "null"));
+    assert.doesNotMatch(result.stderr, /agent:controller-test-agent:history-|history-window-|history-generation-/);
+    assert.equal(result.stderr.includes(f.agentDatabasePath), false);
   });
   for (const fault of ["table-missing", "witness-replaced", "database-replaced"]) test(`${fault} remains fatal and retains the exact journal`, t => {
     const f = failedReleaseFixture(t, true), original = originalWitness(f), journal = readFileSync(f.journal);
@@ -1826,6 +1992,7 @@ describe("Team marker terminal observation", () => {
   for(const scenario of ["marker-wrong-session","marker-wrong-model","marker-missing-receipt","marker-error-with-reply","marker-abort-with-reply","marker-pending-with-receipt","marker-generation-change","marker-generation-change-after-wait"]) test(scenario+" cannot retire recovery evidence",t=>{
     const f=failedReleaseFixture(t,true);writeFileSync(join(f.state,"scenario"),scenario);const journal=readFileSync(f.journal);
     const result=runOwner(f,["--recover"]);assert.notEqual(result.status,0,result.stdout);assert.deepEqual(readFileSync(f.journal),journal);
+    assert.equal(existsSync(join(f.serving,"verified",after)),false);
     assert.equal(events(f).split("gateway gateway call agent\n").length-1,1);assert.doesNotMatch(result.stdout,/RECOVERED/);
   });
 });

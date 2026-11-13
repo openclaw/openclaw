@@ -331,7 +331,10 @@ describe("google prompt cache", () => {
       name: "cachedContents/system-cache-1",
       expireTime,
     });
-    const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn();
+    const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn("stream", {
+      tools: [{ functionDeclarations: [{ name: "lookup" }] }],
+      toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+    });
     const providerMetadata = createPluginMetadataSnapshotFixture({
       plugins: [
         {
@@ -366,7 +369,11 @@ describe("google prompt cache", () => {
             {
               name: "lookup",
               description: "Look up a value",
-              parameters: { type: "object" },
+              parameters: {
+                type: "object",
+                properties: { from: { type: "string" } },
+                required: ["from"],
+              },
             },
           ],
         } as never,
@@ -398,7 +405,11 @@ describe("google prompt cache", () => {
             {
               name: "lookup",
               description: "Look up a value",
-              parametersJsonSchema: { type: "object" },
+              parametersJsonSchema: {
+                type: "object",
+                properties: { from_: { type: "string" } },
+                required: ["from_"],
+              },
             },
           ],
         },
@@ -411,7 +422,11 @@ describe("google prompt cache", () => {
     });
     expect(innerStreamFn).toHaveBeenCalledTimes(1);
     expect(streamContext(innerStreamFn).systemPrompt).toBeUndefined();
-    expect(streamContext(innerStreamFn).tools).toBeUndefined();
+    expect(streamContext(innerStreamFn).tools).toMatchObject([
+      { name: "lookup", parameters: { properties: { from: { type: "string" } } } },
+    ]);
+    expect(getCapturedPayload()).not.toHaveProperty("tools");
+    expect(getCapturedPayload()).not.toHaveProperty("toolConfig");
     expect(streamOptions(innerStreamFn).temperature).toBe(0.2);
     expect(streamOptions(innerStreamFn).toolChoice).toBe("auto");
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-1");

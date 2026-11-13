@@ -332,6 +332,26 @@ describe("resolveSandboxedMediaSource", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "allows managed media spelled through an alias of the config dir",
+    async () => {
+      await withManagedMediaRoot(async ({ stateDir }) => {
+        const media = path.join(stateDir, "media", "tool-file-transfer", "fetched.png");
+        await fs.writeFile(media, "image", "utf8");
+        const alias = `${stateDir}-alias`;
+        await fs.symlink(stateDir, alias);
+        try {
+          await expectMediaPath(
+            path.join(alias, "media", "tool-file-transfer", "fetched.png"),
+            () => media,
+          );
+        } finally {
+          await fs.rm(alias);
+        }
+      });
+    },
+  );
+
   it("does not allow unrelated state media directories as managed media", async () => {
     await withManagedMediaRoot(async ({ stateDir }) => {
       const media = path.join(stateDir, "media", "inbound", "reply.png");

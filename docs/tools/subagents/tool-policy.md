@@ -42,18 +42,22 @@ their existing source-bound `message` grant. When that restricted surface needs
 its own Claude CLI session, the requester's next resumed turn receives the
 completion prompt and reply as bounded quoted context for that same native session; see [CLI backends](/gateway/cli-backends#sessions).
 
-Sub-agents always lose `gateway`, `agents_list`, `session_status`, `progress_card`, `cron`,
-`sessions_send`, and the `conversations_*` tools regardless of
+Hidden sub-agents always lose `gateway`, `agents_list`, `session_status`, `progress_card`, `cron`,
+`message`, `sessions_send`, and the `conversations_*` tools regardless of
 depth or role (system-level/interactive tools, parent-owned progress cards, direct delivery surfaces, or
 tools the main agent should coordinate). This hard-deny layer is derived from
-the persisted sub-agent session envelope on every turn, including resumed and
-visible dashboard sessions; ordinary `allow`/`alsoAllow` entries cannot override
-it. Hidden helpers also lose `message`; visible spawned dashboard sessions may use
-it for user-approved replies, subject to configured, inherited, sandbox, and channel
-restrictions. Hidden launches disable `message` before tool construction as defense
-in depth. Sub-agents at the configured depth cap additionally
+the persisted sub-agent session envelope on every turn, including resumed
+sessions; ordinary `allow`/`alsoAllow` entries cannot override it. Hidden
+launches disable `message` before tool construction as defense in depth.
+Hidden sub-agents at the configured depth cap additionally
 lose `subagents`, `sessions_list`, `sessions_history`, and `sessions_spawn`, so
 their communication stays on the announce chain.
+
+Visible spawned sessions (`visible: true`) are interactive sessions and do not
+get these built-in denies at any depth. Configured `tools.subagents.tools`
+entries, inherited sender restrictions, sandbox, and channel policies still
+apply to them, and their own `sessions_spawn` calls remain subject to the spawn
+depth and child limits.
 
 `sessions_history` remains a bounded recall view without secret masking here too — it
 is neither a raw transcript dump nor a prose-only rendering.

@@ -12,6 +12,7 @@ import {
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
+import * as logging from "../logging/logger.js";
 import * as commands from "../process/exec.js";
 import { runCommandBuffered, runUtf8CommandWithTimeout } from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -21,8 +22,11 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { runtimeProcessScriptEntrypoints } from "./runtime-process-manifest.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
+import { removeTempDirectory } from "./sqlite-readonly-location-cleanup.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
+import { withStateInspectionCleanup } from "./update-candidate-state.process.js";
 import {
   captureUpdateCandidateDeadline,
   inventoryUpdateCandidateStateWorker,
@@ -115,8 +119,8 @@ it.each([
 ] as const)(
   "$mode: $cleanup cleanup with readError=$readError",
   async (scenario) => {
-    const { mode } = scenario;
-    const fixture = path.join(root, `${scenario.cleanup}-${scenario.readError}`);
+    const { mode, cleanup } = scenario;
+    const fixture = path.join(root, `${cleanup}-${scenario.readError}`);
     const stateDir = path.join(fixture, "source");
     const source = path.join(stateDir, "state", "openclaw.sqlite");
     const cache = path.join(fixture, "cache");
@@ -132,7 +136,10 @@ it.each([
       candidateRoot: path.join(fixture, "package"),
       config: {},
     };
-    const stagingRoot = mode === "snapshot" ? input.targetStateDir : path.join(cache, "openclaw");
+    const stagingRoot =
+      mode === "snapshot"
+        ? input.targetStateDir
+        : resolvePrivateSqliteSnapshotStagingRoot({ ...process.env, XDG_CACHE_HOME: cache });
     const admitted =
       mode === "snapshot" ? await inventoryUpdateCandidateStateWorker(input) : undefined;
     if (scenario.readError && mode === "snapshot") {
@@ -156,7 +163,7 @@ it.each([
       const removeAsync = fs.promises.rm;
       const stagingRoot = ${JSON.stringify(stagingRoot)};
       const attemptsPath = ${JSON.stringify(attemptsPath)};
-      const fault = ${JSON.stringify(scenario.cleanup)};
+      const fault = ${JSON.stringify(cleanup)};
       const removeDirectory = ${JSON.stringify(removeDirectory)};
       let attempts = 0;
       const prepareRemoval = (location) => {
@@ -190,8 +197,14 @@ it.each([
       };
     `,
     );
+    // The worker's file log goes to this fixture, not to a shared log.
+    const log = path.join(fixture, "worker.log");
+    const configPath = path.join(fixture, "openclaw.json");
+    await fs.writeFile(configPath, JSON.stringify({ logging: { file: log, level: "warn" } }));
     const result = await runWorker({ mode, ...input, ...admitted }, preload, {
       XDG_CACHE_HOME: cache,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_TEST_FILE_LOG: "1",
     });
     expect(await fs.readFile(source)).toEqual(sourceBytes);
     expect(await fs.readdir(path.dirname(source))).toEqual(sourceEntries);
@@ -211,13 +224,19 @@ it.each([
     const retained = (await fs.readdir(stagingRoot)).filter((name) =>
       name.startsWith("openclaw-sqlite-readonly-"),
     );
-    expect(attempts).toHaveLength(scenario.cleanup === "healthy" ? 1 : 2);
+    expect(attempts).toHaveLength(cleanup === "healthy" ? 1 : 2);
     expect(attempts.every((attempt) => attempt.before)).toBe(true);
-    expect(attempts.at(-1)?.after).toBe(scenario.cleanup === "persistent");
-    expect(retained).toHaveLength(scenario.cleanup === "persistent" ? 1 : 0);
-    expect(result.code, result.stdout.toString()).toBe(1);
-    expect(result.stdout.toString()).toBe("");
-    if (scenario.readError) {
+    expect(attempts.at(-1)?.after).toBe(cleanup === "persistent");
+    // A copy that could not be removed waits for the Gateway sweep; it never fails the read.
+    expect(retained).toHaveLength(cleanup === "persistent" ? 1 : 0);
+    expect(result.code, result.stderr.toString()).toBe(scenario.readError ? 1 : 0);
+    expect(result.stderr.toString()).not.toContain("snapshot cleanup failed");
+    if (!scenario.readError) {
+      const output = JSON.parse(result.stdout.toString()) as unknown;
+      const versions = mode === "versions" ? output : (output as { versions: unknown }).versions;
+      expect(versions).toContainEqual(expect.objectContaining({ path: source, userVersion: 3 }));
+    } else {
+      expect(result.stdout.toString()).toBe("");
       expect(result.stderr.toString()).toContain('no such column: "path"');
       const [recorded] = updateRunStepsFromResultStep({
         name: "candidate snapshot",
@@ -229,10 +248,8 @@ it.each([
       );
       expect(recorded?.detail?.length).toBeLessThanOrEqual(300);
     }
-    if (scenario.cleanup !== "healthy") {
-      expect(result.stderr.toString()).toContain("snapshot cleanup failed");
-      expect(result.stderr.toString()).toContain(attempts[0]!.directory);
-    }
+    const logged = fsSync.existsSync(log) ? await fs.readFile(log, "utf8") : "";
+    expect(logged.includes(JSON.stringify(attempts[0]!.directory))).toBe(cleanup !== "healthy");
   },
   30_000,
 );
@@ -242,6 +259,61 @@ function isMetadataInventoryCommand(argv: readonly string[]): boolean {
     (arg) => path.basename(arg) === runtimeProcessScriptEntrypoints.updateStateSizes.fileName,
   );
 }
+
+it.each([
+  { warnOnly: false, readError: false },
+  { warnOnly: true, readError: false },
+  { warnOnly: true, readError: true },
+])(
+  "preserves parent cleanup policy (warnOnly=$warnOnly, readError=$readError)",
+  async ({ warnOnly, readError }) => {
+    const staging = await fs.mkdtemp(path.join(root, "parent-staging-"));
+    const original = new Error("schema inspection failed");
+    const logger = logging.getChildLogger({ subsystem: "infra/sqlite-snapshot" });
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
+    const remove = fsSync.rmSync;
+    let injected = false;
+    const fault = vi.spyOn(fsSync, "rmSync").mockImplementation((file, options) => {
+      if (String(file) !== staging) {
+        return remove(file, options);
+      }
+      injected = true;
+      throw Object.assign(new Error("parent snapshot removal denied"), { code: "EACCES" });
+    });
+    try {
+      const outcome = await capture(
+        withStateInspectionCleanup(
+          staging,
+          async () => {
+            if (readError) {
+              throw original;
+            }
+            return "inspected";
+          },
+          warnOnly ? { cleanupFailure: "warn" } : undefined,
+        ),
+      );
+      expect(injected).toBe(true);
+      if (warnOnly) {
+        expect(outcome).toEqual(readError ? { error: original } : { value: "inspected" });
+        expect(warn).toHaveBeenCalledWith(
+          expect.objectContaining({ path: staging, errorCode: "EACCES" }),
+          expect.stringContaining("snapshot cleanup failed"),
+        );
+      } else {
+        expect(outcome).toMatchObject({
+          error: { message: expect.stringContaining("snapshot cleanup failed") },
+        });
+        expect(warn).not.toHaveBeenCalled();
+      }
+      expect(fsSync.existsSync(staging)).toBe(true);
+    } finally {
+      fault.mockRestore();
+      expect(removeTempDirectory(staging)).toBe(true);
+    }
+  },
+);
 
 function inspectionResult(
   value: unknown,
@@ -424,7 +496,10 @@ it.runIf(process.platform !== "win32")(
   "kills a cancelled schema worker before removing its parent-owned staging root",
   async ({ signal }) => {
     const cache = path.join(root, "kill-cache");
-    const cacheOwner = path.join(cache, "openclaw");
+    const cacheOwner = resolvePrivateSqliteSnapshotStagingRoot({
+      ...process.env,
+      XDG_CACHE_HOME: cache,
+    });
     const pidPath = path.join(root, "hung-worker.pid");
     const stagingPath = path.join(root, "hung-worker-staging.txt");
     const runner = path.join(root, "hung-worker.mjs");

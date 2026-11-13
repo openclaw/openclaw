@@ -49,6 +49,8 @@
   --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: var(--font-body);
   --font-chat: var(--font-body);
+  --link: var(--accent);
+  --link-on-tint: #ff7dc0;
 }
 
 :root[data-theme="miami-light"] {
@@ -74,7 +76,6 @@
   --card-foreground: #241c2b;
   --card-highlight: rgba(60, 30, 60, 0.02);
   --popover-foreground: #241c2b;
-  --session-hovercard-surface: var(--card);
 
   --text: #3c3244;
   --text-strong: #241c2b;
@@ -96,4 +97,6 @@
   --font-body: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-display: var(--font-body);
   --font-chat: var(--font-body);
+  --link: #aa1d6a;
+  --link-on-tint: #9f0a61;
 }

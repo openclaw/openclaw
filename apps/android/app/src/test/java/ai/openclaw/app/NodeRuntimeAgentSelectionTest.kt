@@ -20,8 +20,10 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
@@ -964,9 +966,22 @@ class NodeRuntimeAgentSelectionTest {
       val releaseRoster = CompletableDeferred<Unit>()
       val history = CompletableDeferred<String?>()
       val requests = Collections.synchronizedList(mutableListOf<Pair<String, String?>>())
+      val observations = Collections.synchronizedList(mutableListOf<String>())
+      val phase = AtomicReference("installing-fixture")
+      val operatorSession = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
+
+      fun diagnosticState(): String =
+        "phase=${phase.get()} thread=${Thread.currentThread().name} " +
+          "operatorConnected=${ReflectionHelpers.getField<Boolean>(runtime, "operatorConnected")} " +
+          "transportReady=${operatorSession.isReady()} " +
+          "main=${runtime.mainSessionKey.value} chat=${runtime.chat.sessionKey.value}"
+
       try {
+        // Finish constructor hydration before replacing its request adapters with this recorder.
+        withTimeout(2_000) { runtime.chat.historyLoading.first { !it } }
         val refreshes = answerAgentList(runtime, "agent-b", beforeAnswer = { releaseRoster.await() })
         installChatGateway(runtime, requestGateway = { method, params ->
+          observations += "${diagnosticState()} method=$method params=$params"
           requests += method to params
           when (method) {
             "sessions.describe" -> {
@@ -983,18 +998,26 @@ class NodeRuntimeAgentSelectionTest {
             }
           }
         })
+        phase.set("reconnect-callbacks")
         reconnectOperator(runtime, mainSessionKey = "agent:agent-a:main")
+        phase.set("awaiting-roster-request")
         val refresh = withTimeout(2_000) { refreshes.receive() }
+        phase.set("roster-held")
         assertTrue("Chat must wait for the allowed roster", requests.isEmpty())
 
+        phase.set("roster-released")
         releaseRoster.complete(Unit)
         withTimeout(2_000) { refresh.join() }
+        phase.set("roster-settled")
         assertTrue(withTimeout(2_000) { history.await() }.orEmpty().contains("agent:agent-b:"))
         assertEquals("agent-b", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
         assertEquals(runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
         synchronized(requests) {
           assertFalse(requests.any { (_, params) -> params.orEmpty().contains("agent:agent-a:") })
         }
+      } catch (error: Throwable) {
+        println("COLD_START_DIAGNOSTIC ${diagnosticState()} requests=$requests observations=$observations")
+        throw error
       } finally {
         releaseRoster.complete(Unit)
         closeNodeRuntimeTestFixture(runtime)
@@ -1168,6 +1191,88 @@ class NodeRuntimeAgentSelectionTest {
         assertEquals("scout", runtime.chat.sessionOwnerAgentId.value)
       } finally {
         loader.join(2_000)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun cancelledCatalogContinuationClearsBusyStateAndAllowsRetry() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val requestStarted = CompletableDeferred<Unit>()
+      val releaseResponse = CompletableDeferred<Unit>()
+      val entry =
+        SessionCatalogEntry(
+          catalogId = "codex",
+          hostId = "desktop",
+          threadId = "cancelled-thread",
+          agentId = "main",
+          status = "idle",
+          archived = false,
+          canContinue = true,
+        )
+      try {
+        val originalSessionKey = runtime.chat.sessionKey.value
+        var requestCount = 0
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          check(method == "sessions.catalog.continue")
+          requestCount += 1
+          requestStarted.complete(Unit)
+          releaseResponse.await()
+          """{"sessionKey":"agent:main:catalog"}"""
+        }
+        val continuation = async { runtime.continueSessionCatalogEntry(entry) }
+        withTimeout(2_000) { requestStarted.await() }
+        assertEquals(entry.locatorId, runtime.sessionCatalogState.value.continuingEntryId)
+        assertFalse(runtime.continueSessionCatalogEntry(entry))
+        assertEquals(1, requestCount)
+
+        // The ViewModel caller can be cleared without disconnecting the process runtime.
+        withTimeout(2_000) { continuation.cancelAndJoin() }
+        assertTrue(continuation.isCancelled)
+        assertEquals(null, runtime.sessionCatalogState.value.continuingEntryId)
+        assertEquals(null, runtime.sessionCatalogState.value.errorText)
+        assertEquals(originalSessionKey, runtime.chat.sessionKey.value)
+
+        releaseResponse.complete(Unit)
+        assertTrue(withTimeout(2_000) { runtime.continueSessionCatalogEntry(entry) })
+        assertEquals(2, requestCount)
+        assertEquals("agent:main:catalog", runtime.chat.sessionKey.value)
+        assertEquals(null, runtime.sessionCatalogState.value.continuingEntryId)
+      } finally {
+        releaseResponse.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun failedCatalogContinuationClearsBusyStateWithoutSelectingSession() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      try {
+        val originalSessionKey = runtime.chat.sessionKey.value
+        val entry =
+          SessionCatalogEntry(
+            catalogId = "codex",
+            hostId = "desktop",
+            threadId = "failed-thread",
+            agentId = "main",
+            status = "idle",
+            archived = false,
+            canContinue = true,
+          )
+        var requestedMethod: String? = null
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          requestedMethod = method
+          "{}"
+        }
+
+        assertFalse(withTimeout(2_000) { runtime.continueSessionCatalogEntry(entry) })
+        assertEquals("sessions.catalog.continue", requestedMethod)
+        assertEquals(null, runtime.sessionCatalogState.value.continuingEntryId)
+        assertEquals("Could not open this session.", runtime.sessionCatalogState.value.errorText)
+        assertEquals(originalSessionKey, runtime.chat.sessionKey.value)
+      } finally {
         closeNodeRuntimeTestFixture(runtime)
       }
     }
@@ -2141,7 +2246,70 @@ class NodeRuntimeAgentSelectionTest {
     withTimeout(2_000) { refreshes.receive().join() }
   }
 
-  // Drives the operator session's own callbacks, as a gateway restart does.
+  @Test
+  fun configChangeReplacesCachedRealtimeAdmissionWithNativeTalk() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val originalScope = ReflectionHelpers.getField<CoroutineScope>(runtime, "scope")
+      try {
+        ReflectionHelpers.setField(runtime, "scope", CoroutineScope(originalScope.coroutineContext + Dispatchers.Unconfined))
+        val readiness = ReflectionHelpers.getField<MutableStateFlow<GatewayTalkSetupReadiness>>(runtime, "_talkSetupReadiness")
+        val unconfiguredRealtime =
+          """{"realtime":{"ready":false,"providers":[]},"transcription":{"ready":true,"activeProvider":"system","providers":[{"id":"system","label":"System","configured":true}]}}"""
+        readiness.value =
+          talkSetupReadinessFromGateway(
+            catalog =
+              Json
+                .parseToJsonElement(unconfiguredRealtime)
+                .jsonObject,
+            talkConfig =
+              Json
+                .parseToJsonElement("""{"talk":{"realtime":{"mode":"realtime"}}}""")
+                .jsonObject,
+          )
+        assertTrue(runtime.talkSetupReadiness.value.launch.requiresSetup)
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "talk.catalog" -> {
+              unconfiguredRealtime
+            }
+
+            "talk.config" -> {
+              """{"config":{"talk":{"realtime":{"mode":"stt-tts"}}}}"""
+            }
+
+            "models.list" -> {
+              """{"models":[]}"""
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[]}"""
+            }
+
+            "config.get" -> {
+              """{"config":{}}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        }
+        ReflectionHelpers.callInstanceMethod<Unit>(
+          runtime,
+          "handleGatewayEvent",
+          ReflectionHelpers.ClassParameter.from(String::class.java, "config.changed"),
+          ReflectionHelpers.ClassParameter.from(String::class.java, "{}"),
+        )
+        assertEquals(TalkLaunchRoute.Native, runtime.talkSetupReadiness.value.talkLaunchRoute)
+        assertFalse(runtime.talkSetupReadiness.value.launch.requiresSetup)
+      } finally {
+        ReflectionHelpers.setField(runtime, "scope", originalScope)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  // This fixture owns reconnect callbacks; discovery must not start a competing connection.
   private fun reconnectOperator(
     runtime: NodeRuntime,
     disconnectCallbacks: Int = 1,
@@ -2171,7 +2339,7 @@ class NodeRuntimeAgentSelectionTest {
         "openclaw.node.session.selection.test.${UUID.randomUUID()}",
         Context.MODE_PRIVATE,
       )
-    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs)).also { runtime ->
+    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs), initialReconnectSuppressed = true).also { runtime ->
       ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
       ReflectionHelpers.setField(runtime, "operatorConnected", true)
     }

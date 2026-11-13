@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  PG16_GATEWAY_SMOKE_RESERVATION_SECONDS,
   assignPostgresConformanceShards,
   createPostgresConformanceEstimator,
+  isPostgresConformanceTestTarget,
 } from "../../scripts/lib/postgres-conformance-shards.mts";
 
 const timings: Parameters<typeof createPostgresConformanceEstimator>[0] = {
@@ -21,6 +23,16 @@ const timings: Parameters<typeof createPostgresConformanceEstimator>[0] = {
 const estimate = createPostgresConformanceEstimator(timings, () => 1);
 
 describe("PostgreSQL conformance cost model", () => {
+  it.each([
+    ["src/new-owner/deleted.postgres.test.ts", true],
+    ["extensions/new-plugin/deleted.postgres.test.ts", true],
+    ["extensions/new-plugin/ordinary.test.ts", false],
+    ["src/infra/database-engine/deleted.test.ts", true],
+    ["src/infra/database-engine/ignored.spec.ts", false],
+  ])("classifies %s without filesystem access", (file, expected) => {
+    expect(isPostgresConformanceTestTarget(file)).toBe(expected);
+  });
+
   it("shares workers within a configuration and sums sequential configurations", () => {
     expect(estimate(["a", "b"])).toBe(42);
     expect(estimate(["a", "b", "c"])).toBe(85);
@@ -32,6 +44,18 @@ describe("PostgreSQL conformance cost model", () => {
     expect(shards.some((shard) => shard.includes("runtime-a") && shard.includes("runtime-b"))).toBe(
       true,
     );
+  });
+
+  it("reserves the first shard's PG16 smoke while balancing PG17 work", () => {
+    const targets = Array.from({ length: 12 }, (_, index) => `test-${index}`);
+    const estimateWork = (selected: readonly string[]) => selected.length * 50;
+    const shards = assignPostgresConformanceShards(targets, 3, estimateWork);
+    expect(shards.map(estimateWork)).toEqual([
+      250 - PG16_GATEWAY_SMOKE_RESERVATION_SECONDS,
+      250,
+      250,
+    ]);
+    expect(shards.flat().toSorted()).toEqual(targets.toSorted());
   });
 
   it("prices the cold file-size order instead of optimistically running slow files first", () => {

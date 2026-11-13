@@ -3,12 +3,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
+import { resolveAgentSkillsRoot } from "../skills/loading/skill-paths.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { collectInstalledSkillsCodeSafetyFindings } from "./audit.deep.runtime.js";
+
+// The skill-workshop plugin's manifest `agentSkillsDir`.
+const resolveWorkshopSkillsDir = (config: OpenClawConfig, agentId: string) =>
+  resolveAgentSkillsRoot({ config, agentId, dirName: "workshop-skills" });
 
 function withAuditState(
   run: (state: OpenClawTestState & { cfg: OpenClawConfig }) => Promise<void>,

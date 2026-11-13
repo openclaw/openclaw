@@ -26,6 +26,7 @@ import {
 } from "./in-process-subagent-resume.js";
 import {
   projectOperatorScopesForMethod,
+  resolveAgentRuntimeCronScope,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./method-scopes.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
@@ -43,12 +44,14 @@ import {
   runWithOperatorToolGatewayAuthority,
   runOutsideOperatorToolGatewayAuthority,
 } from "./operator-tool-gateway-authority.js";
+import { resolvePluginSessionWorkDispatch } from "./plugin-session-work-authority.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type {
   DispatchGatewayMethodInProcessOptions,
   OperatorToolGatewayAuthority,
   ResolvedInProcessGatewayDispatch,
 } from "./server-plugin-in-process-dispatch.types.js";
+import { resolveSystemScopeCeiling } from "./server-plugin-in-process-system-ceiling.js";
 import {
   createSyntheticPluginRuntimeClient,
   mergePluginRuntimeClientInternal,
@@ -260,7 +263,7 @@ export function captureOperatorToolGatewayContinuationContextInternal(
         /** Re-enter only the requester selected before transfer, under this retained source. */
         runWithRequester<T>(run: () => Promise<T>): Promise<T> {
           return runInScope(() =>
-            requester?.origin
+            requester
               ? withGatewayToolCallerIdentity(
                   {
                     agentId: requester.agentId,
@@ -332,6 +335,13 @@ export function resolveInProcessGatewayDispatch(
       `In-process gateway dispatch requires a gateway request scope or instance binding (method: ${method}).`,
     );
   }
+  const service = resolvePluginSessionWorkDispatch({
+    method,
+    params,
+    context,
+    scopedPluginId: scope?.pluginId,
+    pluginRuntimeOwnerId: options?.pluginRuntimeOwnerId,
+  });
   const operatorRunAuthority =
     selection?.operatorAuthority ??
     caller?.operatorAuthority ??
@@ -369,6 +379,9 @@ export function resolveInProcessGatewayDispatch(
     options.agentToolCaller?.agentId === caller.agentId &&
     options.agentToolCaller.sessionKey === caller.sessionKey;
   const assertInvocationCurrent = composeSessionSourceAssertion([
+    // Host-owned agent paths may omit the ambient invocation guard below, but
+    // none may outlive or broaden a recovered service operation's tool ceiling.
+    service?.assertCurrent,
     selection?.assertCurrent,
     runtimeAuthority?.assertCurrent,
     assertSettleWakeCurrent,
@@ -463,11 +476,7 @@ export function resolveInProcessGatewayDispatch(
   const delegatedToolPolicyHandoffId = options?.delegatedToolPolicyHandoff
     ? registerSubagentCompletionToolHandoff(options.delegatedToolPolicyHandoff)
     : undefined;
-  // Built-in requests retain the explicit ceiling of a positively scoped System caller.
-  const scopedSystemScopes =
-    options?.syntheticScopeMode !== undefined && scopedActor?.kind === "system"
-      ? (scope?.client?.connect.scopes ?? [])
-      : undefined;
+  const scopedSystemScopes = resolveSystemScopeCeiling(method, options, scope?.client, caller);
   const selectedScopes =
     selection && operatorRunAuthority && caller?.operatorAuthority
       ? intersectOperatorScopes(operatorRunAuthority.scopes, caller.operatorAuthority.scopes)
@@ -492,7 +501,16 @@ export function resolveInProcessGatewayDispatch(
     .getGatewayMethodRegistry?.()
     .getSessionAccess?.(method)?.allowOwnSessionScope;
   const syntheticScopeMode = options?.syntheticScopeMode;
+  const cronScope = agentRuntimeIdentity && resolveAgentRuntimeCronScope(method);
+  // Scheduling retains the initiating grant for the saved continuation, not only
+  // permission to edit its job. Other scoped cron calls need just cron authority.
+  const cronScopes = cronScope
+    ? ((method === "cron.add" || method === "cron.update" ? operatorScopes : undefined) ?? [
+        cronScope,
+      ])
+    : undefined;
   const requestedSyntheticScopes = (
+    (syntheticScopeMode === "minimum" ? cronScopes : undefined) ??
     options?.syntheticScopes ??
     (syntheticScopeMode === "exact"
       ? (operatorScopes ?? scope?.client?.connect.scopes)
@@ -679,6 +697,7 @@ export function resolveInProcessGatewayDispatch(
     assertSourceCurrent,
     assertInvocationCurrent,
     assertContextCurrent: composeSessionSourceAssertion([
+      service?.assertCurrent,
       selection?.assertCurrent,
       runtimeAuthority?.assertCurrent,
       assertSourceCurrent,

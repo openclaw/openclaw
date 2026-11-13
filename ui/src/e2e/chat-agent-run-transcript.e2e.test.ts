@@ -97,10 +97,10 @@ suite.define(() => {
     await gateway.waitForRequest("chat.startup");
     await gateway.resolveDeferred("chat.startup");
     const failure = page.locator(".chat-run-failure");
-    await failure.getByText(summary, { exact: true }).waitFor();
+    await failure.getByText(summary, { exact: true }).waitFor({ state: "attached" });
     await flushSnapshot(page);
     await page.reload();
-    await failure.getByText(summary, { exact: true }).waitFor();
+    await failure.getByText(summary, { exact: true }).waitFor({ state: "attached" });
     await gateway.waitForRequest("chat.startup");
     const answer = "The check completed while you were away.";
     await gateway.resolveDeferred("chat.startup", {
@@ -172,9 +172,7 @@ suite.define(() => {
     await assistant.getByText(text, { exact: true }).waitFor();
     expect(await assistant.getByText(commentary, { exact: true }).count()).toBe(1);
     expect(await assistant.getByText("Draft before reload.", { exact: true }).count()).toBe(0);
-    expect(
-      await page.getByRole("button", { name: "Stop generating", exact: true }).isVisible(),
-    ).toBe(true);
+    expect(await page.getByRole("button", { name: "Stop", exact: true }).isVisible()).toBe(true);
   });
 
   it("collapses nested tool activity after commentary across history reload", async () => {

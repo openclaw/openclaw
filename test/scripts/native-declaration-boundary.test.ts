@@ -1,9 +1,14 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createDeclarationInputBoundary } from "../../scripts/lib/local-check-runtime.mts";
 import { emitNativeDeclarations } from "../../scripts/lib/native-declaration-emitter.mts";
-import { readNativeTypeScriptConfig } from "../../scripts/lib/native-typescript-config.mts";
+import {
+  createNativeTypeScriptConfigReader,
+  readNativeTypeScriptConfig,
+} from "../../scripts/lib/native-typescript-config.mts";
+import { createNodeEvalArgs } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   installNativeAncestorTypes,
@@ -16,6 +21,34 @@ const roots = useAutoCleanupTempDirTracker(afterEach);
 const tempRoot = (name: string) =>
   fs.realpathSync.native(roots.make(`native-declaration-${name}-`));
 const moduleOptions = { module: "NodeNext", moduleResolution: "NodeNext", target: "ES2023" };
+
+it("keeps roots, options, and input inventories separate across a config-reading batch", () => {
+  const root = tempRoot("config-batch");
+  for (const [file, contents] of Object.entries({
+    "alpha/base.json": '{"compilerOptions":{"strict":true}}',
+    "beta/base.json": '{"compilerOptions":{"strict":false}}',
+    "alpha/tsconfig.json": '{"extends":"./base.json","files":["entry.ts"]}',
+    "beta/tsconfig.json": '{"extends":"./base.json","files":["entry.ts"]}',
+    "alpha/entry.ts": "export const alpha = 1;",
+    "beta/entry.ts": "export const beta = 2;",
+  })) {
+    writeNativeFixtureFile(root, file, contents);
+  }
+  using reader = createNativeTypeScriptConfigReader({ cwd: root });
+  const alpha = reader.read("alpha/tsconfig.json");
+  const beta = reader.read("beta/tsconfig.json");
+  for (const [name, parsed, strict] of [
+    ["alpha", alpha, true],
+    ["beta", beta, false],
+  ] as const) {
+    expect(parsed.fileNames).toEqual([path.join(root, name, "entry.ts")]);
+    expect(parsed.options.strict).toBe(strict);
+    expect(parsed.configFiles).toEqual([
+      path.join(root, name, "base.json"),
+      path.join(root, name, "tsconfig.json"),
+    ]);
+  }
+});
 
 it("keeps test-only ambient augmentation out of declaration roots but in test graphs", () => {
   const root = fs.realpathSync.native(roots.make("native-declaration-production-roots-"));
@@ -461,7 +494,7 @@ it("preserves default-glob emission with inherited path mappings", async () => {
 
 it.skipIf(process.platform === "win32")(
   "emits declarations from a checkout path containing a line break",
-  async () => {
+  () => {
     const parent = tempRoot("trace-framing");
     // Windows does not permit control characters in file names.
     const root = path.join(parent, "split\nname");
@@ -470,11 +503,34 @@ it.skipIf(process.platform === "win32")(
       "src/index.ts": 'export type { Marker } from "./contract.js";\n',
       "src/contract.ts": "export interface Marker { value: 1 }\n",
     });
-    const emitted = await fixture.compile();
-    expect(emitted.declarations.get(path.join(root, "src/index.ts"))?.code).toContain(
-      'export type { Marker } from "./contract.js"',
+    // Vitest's external-module loader normalizes the newline in the compiler path.
+    const result = spawnSync(
+      process.execPath,
+      createNodeEvalArgs(
+        `import path from "node:path";
+        import { emitNativeDeclarations } from ${JSON.stringify(new URL("../../scripts/lib/native-declaration-emitter.mts", import.meta.url).href)};
+        import { createDeclarationInputBoundary } from ${JSON.stringify(new URL("../../scripts/lib/local-check-runtime.mts", import.meta.url).href)};
+        const root = ${JSON.stringify(root)};
+        const boundary = createDeclarationInputBoundary(root);
+        const emitted = await emitNativeDeclarations({
+          cwd: root, compilerRoot: root, configFile: path.join(root, "tsconfig.json"),
+          roots: [path.join(root, "src/index.ts")], assertInput: (file) => boundary.assert(file),
+        });
+        console.log(JSON.stringify({
+          declaration: emitted.declarations.get(path.join(root, "src/index.ts"))?.code,
+          inputs: emitted.inputs,
+        }));`,
+        { imports: [import.meta.resolve("tsx")] },
+      ),
+      { encoding: "utf8", timeout: 30_000 },
     );
-    expect(emitted.inputs).toContain(path.join(root, "src/contract.ts"));
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    const emitted: unknown = JSON.parse(result.stdout);
+    expect(emitted).toEqual({
+      declaration: expect.stringContaining('export type { Marker } from "./contract.js"'),
+      inputs: expect.arrayContaining([path.join(root, "src/contract.ts")]),
+    });
     expect(fs.readdirSync(path.join(root, ".artifacts"))).toEqual([]);
   },
 );

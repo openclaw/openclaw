@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -7,7 +8,6 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
-import { runWithAgentCommandRecoveryOwner } from "../../agents/agent-command-recovery-owner.js";
 import * as runs from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { createEnteredGate } from "../../agents/entered-gate.test-support.js";
@@ -19,34 +19,32 @@ import {
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { executeAgentTurn } from "../../auto-reply/reply/agent-runner-execution.js";
-import * as restartRecovery from "../../auto-reply/reply/agent-runner-restart-recovery.js";
 import { withFullRuntimeReplyConfig } from "../../auto-reply/reply/get-reply-fast-path.js";
 import * as replyRunHelpers from "../../auto-reply/reply/get-reply-run-helpers.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import * as sessions from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { listSessionPendingInputs } from "../../config/sessions/session-pending-input-history.js";
-import {
-  getAgentEventLifecycleGeneration,
-  rotateAgentEventLifecycleGeneration,
-} from "../../infra/agent-events.js";
-import { createRestartRecoveryClaimChangedError } from "../../infra/agent-lifecycle-error.js";
+import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as runAuthority from "../../infra/agent-run-registry.js";
+import * as timeline from "../../infra/diagnostics-timeline.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { isRpcSourceQueued } from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
+import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { broadcastFor, createBroadcastPeer } from "../server-broadcast.test-support.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
+import { handleChatHistoryRequest } from "./chat-history-handler.js";
 import { loadRealChatDispatch, successfulChatTurn } from "./chat-send-authority.test-support.js";
 import {
   setClientProfile,
   useBrowserFollowupFixture,
 } from "./chat-send-pending-inputs.test-support.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import type { RespondFn } from "./types.js";
 
 installGatewayTestHooks();
@@ -60,6 +58,124 @@ vi.mock("../../auto-reply/reply/agent-runner-execution.js", async (importOrigina
 type Fixture = Awaited<ReturnType<typeof createFixture>>;
 type DispatchParams = Parameters<typeof dispatchInboundMessage>[0];
 type Gate = ReturnType<typeof createDeferred<void>>;
+
+it.for(["completed", "failed", "cancelled"] as const)(
+  "shows a reply-initialization queue until the active turn is %s",
+  async (outcome, { signal }) => {
+    const fixture = await createFixture({ preserveContent: true });
+    const initialConnId = expectDefined(fixture.client.connId, "browser connection");
+    fixture.params.idempotencyKey = `reply-initialization-${outcome}`;
+    fixture.params.message = "/verbose on Explain the queued request.";
+    const config = steeringConfig(fixture);
+    const dispatchActual = await loadRealChatDispatch();
+    const waiting = createDeferred();
+    const started = createDeferred();
+    const dispatched = createDeferred();
+    const queued = vi.fn();
+    using _ = { [Symbol.dispose]: onSessionLifecycleEvent(queued) };
+    const info = vi.spyOn(fixture.context.logGateway, "info");
+    const realNow = performance.now.bind(performance);
+    let waitMs = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => realNow() + waitMs);
+    const observe = timeline.observeDiagnosticsTimelinePhases;
+    const observing = vi
+      .spyOn(timeline, "observeDiagnosticsTimelinePhases")
+      .mockImplementation((name) => {
+        if (name === "reply.admission.mailbox_wait") {
+          waiting.resolve();
+        }
+        return observe(name);
+      });
+    dispatchInboundMessageMock.mockImplementation((raw: unknown) =>
+      dispatchActual({ ...(raw as DispatchParams), cfg: config }).finally(() =>
+        dispatched.resolve(),
+      ),
+    );
+    runtime.execute.mockReset().mockImplementation(async (params) => {
+      const runId = await recordInput(params);
+      started.resolve();
+      return successfulChatTurn(runId, "Queued request answered.");
+    });
+    try {
+      await fixture.send();
+      await withinTest(
+        awaitGateBeforeSettlement(waiting.promise, dispatched.promise, "did not wait"),
+        signal,
+      );
+      expect.soft(queued).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: fixture.scope.sessionKey,
+          reason: "agent.input.queued",
+        }),
+      );
+      await initializeSessionReadContext(fixture.context);
+      for (const connId of [initialConnId, "reconnected-browser"]) {
+        const params = {
+          sessionKey: fixture.scope.sessionKey,
+          inputRunIds: [fixture.params.idempotencyKey],
+        };
+        const respond = vi.fn<RespondFn>();
+        await handleChatHistoryRequest({
+          req: { type: "req", id: connId, method: "chat.history", params },
+          method: "chat.history",
+          params,
+          respond,
+          context: fixture.context,
+          client: { ...fixture.client, connId },
+          isWebchatConnect: () => true,
+        });
+        expect.soft(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            pendingInputs: expect.objectContaining({
+              queuedCount: 1,
+              items: [
+                expect.objectContaining({ runId: fixture.params.idempotencyKey, queued: true }),
+              ],
+            }),
+            inputReceipts: [
+              { runId: fixture.params.idempotencyKey, state: "pending", queued: true },
+            ],
+          }),
+        );
+      }
+      expect(runtime.execute).not.toHaveBeenCalled();
+      waitMs = 594_031;
+      if (outcome === "failed") {
+        fixture.activeRun!.fail("run_failed", new Error("Synthetic active failure"));
+      }
+      if (outcome === "cancelled") {
+        fixture.activeRun!.abortByUser();
+      }
+      fixture.activeRun!.complete();
+      await withinTest(
+        awaitGateBeforeSettlement(started.promise, dispatched.promise, "did not start"),
+        signal,
+      );
+      await withinTest(dispatched.promise, signal);
+      await fixture.finishDispatch();
+      expect(runtime.execute).toHaveBeenCalledOnce();
+      expect(info).toHaveBeenCalledWith(
+        expect.stringMatching(/slow chat send .*stage=queued .*replyInitialization=\d+ms/),
+      );
+      expect(fixture.context.broadcastToConnIds).toHaveBeenCalledWith(
+        "chat.send_timing",
+        expect.objectContaining({
+          runId: fixture.params.idempotencyKey,
+          phase: "agent-run-started",
+        }),
+        new Set([initialConnId]),
+        { dropIfSlow: true },
+      );
+      expect((await listSessionPendingInputs(fixture.scope)).items).toEqual([]);
+    } finally {
+      now.mockRestore();
+      observing.mockRestore();
+      fixture.activeRun!.complete();
+      await fixture.cleanup();
+    }
+  },
+);
 
 function observeAdmission(params: DispatchParams, queued: Gate, settled: Gate) {
   const lifecycle = expectDefined(params.replyOptions?.turnAdoptionLifecycle, "input custody");
@@ -417,7 +533,6 @@ it.for([false, true])(
     let recorder: UserTurnTranscriptRecorder | undefined;
     const directGate = createEnteredGate();
     const cleanupGate = createEnteredGate();
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const dispatchActual = await loadRealChatDispatch();
     dispatchInboundMessageMock.mockImplementation((raw: unknown) => {
       const params = raw as DispatchParams;
@@ -434,66 +549,45 @@ it.for([false, true])(
     });
     let command: Promise<void> | undefined;
     try {
-      command = withSessionTurn(scope, async (operation, abortSignal) =>
-        runWithAgentCommandRecoveryOwner({
-          lifecycleGeneration,
-          mode: "claim",
-          opts: { message: "Synthetic subagent completion", runId: instance.runId, abortSignal },
-          prepare: async () => ({ ...scope, sessionAgentId: "main", isNewSession: false }),
-          run: async () => {
-            // The command producer records this fence before starting a direct embedded run.
-            await sessions.patchSessionEntryCore(scope, () => ({
-              status: undefined,
-              abortedLastRun: false,
-              restartRecoveryRuns: [{ runId: instance.runId, lifecycleGeneration }],
-            }));
-            await withGatewayToolCallerIdentity(
-              {
-                agentId: scope.agentId,
-                sessionKey: scope.sessionKey,
-                operationalRunInstance: instance,
-                embeddedRunToolAuthorityBinding: () => ({
-                  source: "attempt",
-                  requesterPrincipalKey: resolveRequesterPrincipalKey(requesterOrigin),
-                  acceptsRequesterOrigin: (incoming) =>
-                    hasSameRequesterOrigin(requesterOrigin, incoming),
-                  assertRegistrationActive: () => {},
-                  assertActive: () => {},
-                  project: () => "human-tools",
-                  projectAsync: async () => "human-tools",
-                }),
-              },
-              () =>
-                runs.attachActiveEmbeddedRun(
-                  scope.sessionId,
-                  handle,
-                  scope.sessionKey,
-                  undefined,
-                  scope.agentId,
-                  expectDefined(operation, "direct turn owner"),
-                ),
-            );
-            await wait(directGate.wait());
-            runs.detachActiveEmbeddedRun(scope.sessionId, handle);
-            await wait(cleanupGate.wait());
-            await sessions.patchSessionEntryCore(scope, () => ({
-              restartRecoveryRuns: undefined,
-              status: "done",
-            }));
+      command = withSessionTurn(scope, async (operation) => {
+        await withGatewayToolCallerIdentity(
+          {
+            agentId: scope.agentId,
+            sessionKey: scope.sessionKey,
+            operationalRunInstance: instance,
+            embeddedRunToolAuthorityBinding: () => ({
+              source: "attempt",
+              requesterPrincipalKey: resolveRequesterPrincipalKey(requesterOrigin),
+              acceptsRequesterOrigin: (incoming) =>
+                hasSameRequesterOrigin(requesterOrigin, incoming),
+              assertRegistrationActive: () => {},
+              assertActive: () => {},
+              project: () => "human-tools",
+              projectAsync: async () => "human-tools",
+            }),
           },
-        }),
-      );
+          () =>
+            runs.attachActiveEmbeddedRun(
+              scope.sessionId,
+              handle,
+              scope.sessionKey,
+              undefined,
+              scope.agentId,
+              expectDefined(operation, "direct turn owner"),
+            ),
+        );
+        await wait(directGate.wait());
+        runs.detachActiveEmbeddedRun(scope.sessionId, handle);
+        await wait(cleanupGate.wait());
+      });
       void command.catch(() => {});
       await wait(directGate.entered);
       const directOwner = expectDefined(
         getSessionControllerOperation(scope.sessionKey),
         "direct command controller owner",
       );
-      expect(sessions.loadSessionEntry(scope)).toMatchObject({
-        abortedLastRun: false,
-        restartRecoveryRuns: [{ runId: instance.runId, lifecycleGeneration }],
-      });
-      expect((await fixture.send()).mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+      const ack = await fixture.send();
+      expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
       await waitForGate(
         queued.promise,
         dispatched.promise,
@@ -569,63 +663,3 @@ it.for([false, true])(
     }
   },
 );
-
-it("preserves direct pre-adoption rejection guidance instead of publishing queued cancellation", async ({
-  signal,
-}) => {
-  const fixture = await createFixture({ active: false, preserveContent: true });
-  const runId = "direct-admission-rejected-before-adoption";
-  fixture.params.idempotencyKey = runId;
-  const config = withFullRuntimeReplyConfig(fixture.context.getRuntimeConfig());
-  fixture.context.getRuntimeConfig = () => config;
-  const dispatchActual = await loadRealChatDispatch();
-  const dispatched = createDeferred();
-  const originalCreate = restartRecovery.createReplyAgentRestartRecoveryController;
-  const admissionFailure = createRestartRecoveryClaimChangedError();
-  let inputSignal: AbortSignal | undefined;
-  const rejectAdmission = vi
-    .spyOn(restartRecovery, "createReplyAgentRestartRecoveryController")
-    .mockImplementation((context) => {
-      const recovery = originalCreate(context);
-      if (context.opts?.runId !== runId) {
-        return recovery;
-      }
-      return {
-        ...recovery,
-        admitUserTurn: async () => {
-          throw admissionFailure;
-        },
-      };
-    });
-  runtime.execute.mockReset();
-  dispatchInboundMessageMock.mockImplementation((raw: unknown) => {
-    const params = raw as Parameters<typeof dispatchInboundMessage>[0];
-    inputSignal = params.replyOptions?.turnAdoptionLifecycle?.abortSignal;
-    return dispatchActual({ ...params, cfg: config }).finally(() => dispatched.resolve());
-  });
-  const guidance =
-    "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed.";
-  try {
-    expect((await fixture.send()).mock.calls[0]?.[1]).toMatchObject({ runId, status: "started" });
-    await withinTest(dispatched.promise, signal);
-    await fixture.finishDispatch();
-    expect(inputSignal?.aborted).toBe(false);
-    expect(runtime.execute).not.toHaveBeenCalled();
-    expect(fixture.context.dedupe.get(`chat:${runId}`)).toMatchObject({
-      ok: false,
-      payload: { runId, status: "error", summary: guidance },
-    });
-    expect(fixture.context.broadcast).not.toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({ runId, state: "aborted" }),
-      expect.anything(),
-    );
-    expect((await fixture.send()).mock.calls[0]).toMatchObject({
-      0: false,
-      1: { runId, status: "error", summary: guidance },
-    });
-  } finally {
-    rejectAdmission.mockRestore();
-    await fixture.cleanup();
-  }
-});

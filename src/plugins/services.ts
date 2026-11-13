@@ -12,13 +12,16 @@ import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { createPluginServiceGatewayEvents } from "./gateway-events.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
-import { getPluginInstance, runPluginCleanup } from "./plugin-instance-scope.js";
+import {
+  getPluginInstance,
+  pluginInvocationContext,
+  runPluginCleanup,
+} from "./plugin-instance-scope.js";
 import { withPluginRetentionOwner } from "./plugin-retention-diagnostics.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
 import { getPluginRecordRegistry } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
-import type { PluginRegistry } from "./registry.js";
 import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 import { pluginRuntimeLoaderLogger } from "./runtime/load-context.js";
@@ -26,10 +29,12 @@ import { createPluginServiceAutomationCapabilities } from "./service-automation-
 import { createPluginServiceControlUiIngress } from "./service-control-ui-ingress.js";
 import { createPluginServiceDiagnostics } from "./service-diagnostics.js";
 import { createPluginServiceHealthReporter } from "./service-health.js";
+import { preparePluginServicesOwner } from "./service-lifecycle-owner.js";
 import type {
   OwnedPluginService,
   PluginServicesHandle,
   PluginServicesOwner,
+  PreparedPluginServicesParams,
   StartPluginServicesParams,
 } from "./service-lifecycle.types.js";
 import { createPluginServiceNodeInvoker } from "./service-nodes.js";
@@ -37,7 +42,7 @@ import { withPluginServiceScheduler } from "./service-scheduler-binding.js";
 import { createPluginServiceSchedulerRunner } from "./service-scheduler-context.js";
 import { createPluginServiceScheduler } from "./service-scheduler.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
-import type { OpenClawPluginServiceContextV2 } from "./types.js";
+import type { OpenClawPluginServiceContextV3 } from "./types.js";
 
 export type { PluginServicesHandle } from "./service-lifecycle.types.js";
 
@@ -78,46 +83,6 @@ export function getPluginServiceCleanupSettlement(
 
 const serviceOwners = new WeakMap<PluginServicesHandle, PluginServicesOwner>();
 
-function preparePluginServicesOwner(
-  registry: PluginRegistry,
-  previousHandle: PluginServicesHandle | null | undefined,
-): PluginServicesOwner {
-  // Failed starts still own their cleanup and remain selectable for a later retry.
-  const previous = previousHandle && serviceOwners.get(previousHandle);
-  const owner: PluginServicesOwner = {
-    services: [],
-    attempts: previous?.attempts ?? new WeakMap(),
-    registrations: new Set(registry.services),
-    stopped: new Set(),
-    closed: false,
-  };
-  if (previous) {
-    for (const registration of owner.registrations) {
-      previous.registrations.delete(registration);
-      const entry = owner.attempts.get(registration);
-      if (!entry) {
-        continue;
-      }
-      // Rollback can reclaim an earlier attempt that the rejected candidate did not select.
-      const source = entry.owner;
-      source.registrations.delete(registration);
-      source.services.splice(source.services.indexOf(entry), 1);
-      // Explicitly stopped, fully cleaned registrations can start again in a new
-      // generation. Failed attempts stay in the inventory until an explicit reload.
-      if (source.stopped.has(registration) && entry.cleaned && !entry.startup) {
-        owner.attempts.delete(registration);
-        continue;
-      }
-      if (source.stopped.has(registration)) {
-        owner.stopped.add(registration);
-      }
-      entry.owner = owner;
-      owner.services.push(entry);
-    }
-  }
-  return owner;
-}
-
 // Long-lived callbacks must not capture the startup-only predecessor and publication callback.
 export function startPluginServices({
   previous,
@@ -126,7 +91,10 @@ export function startPluginServices({
 }: StartPluginServicesParams): Promise<PluginServicesHandle> {
   return startPreparedPluginServices({
     ...params,
-    owner: preparePluginServicesOwner(params.registry, previous),
+    owner: preparePluginServicesOwner(
+      params.registry,
+      previous ? serviceOwners.get(previous) : undefined,
+    ),
     publication: { callback: onHandle },
   });
 }
@@ -144,10 +112,7 @@ async function startPreparedPluginServices({
   throwOnStartError,
   owner,
   publication,
-}: Omit<StartPluginServicesParams, "previous" | "onHandle"> & {
-  owner: PluginServicesOwner;
-  publication: { callback: ((handle: PluginServicesHandle) => void) | undefined };
-}): Promise<PluginServicesHandle> {
+}: PreparedPluginServicesParams): Promise<PluginServicesHandle> {
   const { services: ownedServices } = owner;
   for (const entry of ownedServices) {
     if (entry.pendingReload) {
@@ -259,14 +224,13 @@ async function startPreparedPluginServices({
             const ready = beforeStop ? beforeStop.then(() => entry.startup) : entry.startup;
             const stop = () => (ready ? ready.then(invokeStop) : Promise.resolve(invokeStop()));
             // A timed-out start loses execution authority now, but still owns its final stop.
-            const stopping = entry.startupConsumer
+            entry.stopping = entry.startupConsumer
               ? entry.startupConsumer.close(async () => {
                   await stop();
                 })
               : stop();
-            entry.stopping = stopping;
             // Completion follows the attempt across handoff, independently of an observer's deadline.
-            void stopping.then(
+            void entry.stopping.then(
               () => {
                 entry.cleaned = entry.cleanupErrors.length === 0;
                 if (entry.cleaned && entry.pendingReload) {
@@ -498,12 +462,13 @@ async function startPreparedPluginServices({
       instance?.lifecycle.runInBackgroundContext ??
       (<T>(run: () => T) => readOnlyWorkerScope.exit(run));
     // Native service receivers retain their brands; registration owns their invocation scope.
-    const runServiceCleanup = <T>(run: () => T): T => {
-      const cleanup = () => withPluginRetentionOwner({ serviceId: id }, run);
-      return instance
-        ? instance.runCleanup(() => runInServiceContext(cleanup))
-        : runPluginCleanup(service, cleanup);
-    };
+    const runServiceCleanup = <T>(run: () => T): T =>
+      pluginInvocationContext.exit(() => {
+        const cleanup = () => withPluginRetentionOwner({ serviceId: id }, run);
+        return instance
+          ? instance.runCleanup(() => runInServiceContext(cleanup))
+          : runPluginCleanup(service, cleanup);
+      });
     const traceName = `sidecars.plugin-services.${encodeStartupTraceSegment(entry.pluginId)}.${encodeStartupTraceSegment(entry.id)}`;
     const lease = createPluginRuntimeCapabilityLease("plugin service");
     const gatewayEvents = createPluginServiceGatewayEvents({
@@ -524,8 +489,11 @@ async function startPreparedPluginServices({
     const runServiceStart = runInServiceContext(() =>
       createScheduledGatewayRunner(resolveGatewayContext),
     );
-    const { getCron, mcpEvents } = createPluginServiceAutomationCapabilities({
+    const { getCron, mcpEvents, sessionWork } = createPluginServiceAutomationCapabilities({
       pluginId: entry.pluginId,
+      serviceId: entry.id,
+      registry,
+      signal: scheduling.scheduler.signal,
       lease,
       getCronService,
       resolveGatewayContext,
@@ -551,7 +519,8 @@ async function startPreparedPluginServices({
 
     const scopeTraceName = (name: string) =>
       `${traceName}.${name.split(".").map(encodeStartupTraceSegment).join(".")}`;
-    const serviceContext: OpenClawPluginServiceContextV2 = {
+    const serviceContext: OpenClawPluginServiceContextV3 = {
+      sessionWork,
       scheduler: scheduling.scheduler,
       config,
       workspaceDir,

@@ -4,21 +4,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
-  getPreparedRuntimeAuthProfileStoreSnapshot,
-  loadAuthProfileStoreWithoutExternalProfiles,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../../agents/auth-profiles.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { configForProviders } from "../../agents/model-auth.fixtures.test-support.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { PreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
 import { materializePreparedModelCatalog } from "../../agents/prepared-model-runtime.full-catalog.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
@@ -26,20 +21,16 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { assertPluginMetadataSnapshotConsistency } from "../plugin-metadata.test-helpers.js";
-import {
-  type PreparedGatewayModelCatalogSnapshot,
-  registerGatewayModelCatalogPrivateAccess,
-} from "../server-model-catalog-auth.js";
 import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
+import { listModels, requestModelsList } from "./models-list.test-support.js";
 import {
   claudeOptOutConfig,
   EXPECTED_DEMO_IDENTITY,
   EXPECTED_IMPLICIT_CODEX_RUNTIME,
   EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
   thinkingLevels,
+  withStatedRuntime,
 } from "./models-runtime.fixtures.test-support.js";
-import { modelsHandlers } from "./models.js";
-import type { RespondFn } from "./types.js";
 
 const FILE_SECRETS: NonNullable<OpenClawConfig["secrets"]> = {
   providers: {
@@ -166,132 +157,8 @@ function catalogLoader(entries: Array<Record<string, unknown>>) {
   return vi.fn(async () => entries);
 }
 
-function requestModelsList(params: {
-  view: "default" | "configured" | "provider-config" | "all";
-  agentId?: string;
-  runtimeConfig?: OpenClawConfig;
-  loadGatewayModelCatalog: (params?: {
-    agentId?: string;
-    agentDir?: string;
-    readOnly?: boolean;
-    workspaceDir?: string;
-  }) => Promise<Array<Record<string, unknown>>>;
-  reqId?: string;
-  includeDefaultModels?: boolean;
-  includeProviderCapabilities?: boolean;
-  deferredAuth?: Promise<PreparedModelRuntimeAuth>;
-  refresh?: boolean;
-  publishedCatalog?: ModelCatalogEntry[];
-  catalogComplete?: boolean;
-  preparedAuthModes?: PreparedModelRuntimeAuth["authModes"];
-}) {
-  const respond = vi.fn();
-  const runtimeConfig = params.runtimeConfig ?? {};
-  const getRuntimeConfig = () => runtimeConfig;
-  const resolveOwnerFacts = () => {
-    const config = getRuntimeConfig();
-    const agentId = params.agentId ?? resolveDefaultAgentId(config);
-    const agentDir = resolveAgentDir(config, agentId);
-    return {
-      agentId,
-      agentDir,
-      workspaceDir: agentDir,
-      config,
-      observationConfig: config,
-      isCurrent: () => getRuntimeConfig() === config,
-      authModes: params.preparedAuthModes ?? {},
-      authStore:
-        getPreparedRuntimeAuthProfileStoreSnapshot(agentDir) ??
-        loadAuthProfileStoreWithoutExternalProfiles(agentDir, { allowKeychainPrompt: false }),
-      metadataSnapshot: loadManifestMetadataSnapshot({ config, env: process.env }),
-    };
-  };
-  const loadSnapshot = async (loadParams: Parameters<typeof params.loadGatewayModelCatalog>[0]) => {
-    const entries = await params.loadGatewayModelCatalog(loadParams);
-    const owner = resolveOwnerFacts();
-    return {
-      ...owner,
-      ...(loadParams?.agentId ? { agentId: loadParams.agentId } : {}),
-      catalogComplete: params.catalogComplete ?? loadParams?.readOnly === false,
-      entries,
-      routeVariants: entries,
-      authMaterializations: [],
-    } as unknown as PreparedGatewayModelCatalogSnapshot;
-  };
-  const loadGatewayModelCatalogSnapshot = async (
-    loadParams: Parameters<typeof params.loadGatewayModelCatalog>[0],
-  ) => loadSnapshot(loadParams);
-  let published: PreparedGatewayModelCatalogSnapshot | undefined;
-  registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
-    loadDeferred: async (loadParams) => {
-      const snapshot = await loadSnapshot(loadParams);
-      published = snapshot;
-      if (!params.deferredAuth) {
-        return snapshot;
-      }
-      published = { ...snapshot, ...(await params.deferredAuth) };
-      return published;
-    },
-    readPrepared: async () => {
-      if (published && published.config === getRuntimeConfig()) {
-        return published;
-      }
-      published = params.publishedCatalog
-        ? {
-            ...resolveOwnerFacts(),
-            catalogComplete: false,
-            entries: params.publishedCatalog,
-            routeVariants: params.publishedCatalog,
-            authMaterializations: [],
-          }
-        : await loadSnapshot({ agentId: params.agentId, readOnly: true });
-      return published;
-    },
-  });
-  const requestParams = {
-    view: params.view,
-    ...(params.includeDefaultModels === undefined
-      ? {}
-      : { includeDefaultModels: params.includeDefaultModels }),
-    ...(params.refresh ? { refresh: true } : {}),
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.includeProviderCapabilities ? { includeProviderCapabilities: true } : {}),
-  };
-  const request = expectDefined(
-    modelsHandlers["models.list"],
-    'modelsHandlers["models.list"] test invariant',
-  )({
-    req: {
-      type: "req",
-      id: params.reqId ?? `req-models-list-${params.view}`,
-      method: "models.list",
-      params: requestParams,
-    },
-    params: requestParams,
-    respond: respond as RespondFn,
-    client: null,
-    isWebchatConnect: () => false,
-    context: {
-      getRuntimeConfig,
-      loadGatewayModelCatalog: params.loadGatewayModelCatalog,
-      loadGatewayModelCatalogSnapshot,
-      logGateway: {
-        debug: vi.fn(),
-        warn: vi.fn(),
-      },
-    } as never,
-  });
-  return { request, respond };
-}
-
-async function listModels(params: Parameters<typeof requestModelsList>[0]) {
-  const { request, respond } = requestModelsList(params);
-  await request;
-  return respond;
-}
-
 function expectModels(respond: ReturnType<typeof vi.fn>, models: unknown) {
-  expect(respond).toHaveBeenCalledWith(true, { models }, undefined);
+  expect(respond).toHaveBeenCalledWith(true, { models: withStatedRuntime(models) }, undefined);
 }
 
 async function expectModelsList(params: Parameters<typeof requestModelsList>[0], models: unknown) {
@@ -1058,25 +925,23 @@ describe("models.list", () => {
               },
             }).models,
           } as unknown as OpenClawConfig;
-          const expected = {
-            models: [
-              {
-                id: "llama-configured",
-                name: "Llama Configured",
-                provider: "vllm",
-                local: true,
-                available: true,
-                tags: ["default"],
-              },
-              {
-                id: "llama-discovered",
-                name: "Llama Discovered",
-                provider: "vllm",
-                local: true,
-                available: true,
-              },
-            ],
-          };
+          const expected = [
+            {
+              id: "llama-configured",
+              name: "Llama Configured",
+              provider: "vllm",
+              local: true,
+              available: true,
+              tags: ["default"],
+            },
+            {
+              id: "llama-discovered",
+              name: "Llama Discovered",
+              provider: "vllm",
+              local: true,
+              available: true,
+            },
+          ];
 
           for (const view of ["default", "configured"] as const) {
             const { request, respond } = requestModelsList({
@@ -1086,7 +951,7 @@ describe("models.list", () => {
               loadGatewayModelCatalog: catalogLoader(catalog),
             });
             await request;
-            expect(respond).toHaveBeenCalledWith(true, expected, undefined);
+            expectModels(respond, expected);
           }
         },
       );
@@ -1187,6 +1052,7 @@ describe("models.list", () => {
                     source: "model",
                   },
                   available,
+                  supportsFastMode: false,
                   tags: ["configured"],
                   ...(authenticated ? {} : { unavailableReason: "missing-auth" }),
                 },
@@ -1269,13 +1135,13 @@ describe("models.list", () => {
           loadGatewayModelCatalog: catalogLoader([LLAMA_SECURE]),
         });
 
-        expect.soft(respond).toHaveBeenCalledWith(
-          true,
-          {
-            models: [{ ...LLAMA_SECURE, available: true }],
-          },
-          undefined,
-        );
+        expect
+          .soft(respond)
+          .toHaveBeenCalledWith(
+            true,
+            { models: withStatedRuntime([{ ...LLAMA_SECURE, available: true }]) },
+            undefined,
+          );
       }
     } finally {
       clearRuntimeConfigSnapshot();

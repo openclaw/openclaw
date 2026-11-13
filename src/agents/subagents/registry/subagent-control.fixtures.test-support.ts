@@ -16,7 +16,7 @@ import type { OpenClawAgentDatabaseExecution } from "../../../state/openclaw-age
 import * as executionOwner from "../../../state/openclaw-agent-execution.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission-state.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
-import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
+import { enqueueSwarmRun } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 

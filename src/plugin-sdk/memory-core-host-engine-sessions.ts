@@ -5,7 +5,7 @@ import {
   listSessionTranscriptCorpusEntriesForAgent as listSessionTranscriptCorpusEntriesFromHost,
   readSessionResetRecallCutoff as readSessionResetRecallCutoffFromHost,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
-import { assertBoundIncognitoMemorySyncAccess } from "../../packages/memory-host-sdk/src/host/openclaw-runtime-session.js";
+import { assertBoundIncognitoMemorySyncAccess } from "../../packages/memory-host-sdk/src/host/session-memory-authority.js";
 import {
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
@@ -77,7 +77,6 @@ export {
   extractKeywords,
   isCronRunSessionKey,
   isDreamingNarrativeSessionStoreKey,
-  matchesSessionEntryPrefixHash,
   parseUsageCountedSessionIdFromFileName,
   readTranscriptStatsBatchReadOnlyAsync,
   readTranscriptStatsBatchReadOnlySync,
@@ -85,6 +84,8 @@ export {
   sessionPathForSessionIdentity,
   statSessionEntry,
   statSessionEntrySync,
+  streamSessionEntries,
+  streamSessionEntry,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
 
 // Internal actor sources are not part of the released plugin call signatures.
@@ -102,6 +103,9 @@ export const readSessionResetRecallCutoff: (
 ) => ReturnType<typeof readSessionResetRecallCutoffFromHost> = readSessionResetRecallCutoffFromHost;
 
 export type {
+  SessionEntryPage,
+  SessionEntryStream,
+  SessionEntrySummary,
   SessionFileEntry,
   SessionFileState,
   SessionTranscriptCorpusEntry,
@@ -174,7 +178,7 @@ export async function loadMemorySessionMetadataBatchAsync(params: {
       )
     : (
         await listSessionTranscriptInstancesInWorker(
-          { ...scope, projection: "list" },
+          { ...scope, projection: "list", includeParticipants: false },
           { includeAllWindows: true, sessionIds },
         )
       ).map((instance) => projectSessionMetadata(instance));

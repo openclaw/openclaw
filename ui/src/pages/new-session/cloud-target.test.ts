@@ -35,7 +35,12 @@ describe("cloud target menu", () => {
     const profile = { id: "zeta", providerId: "crabbox", machines: [machine] };
     const environment = { id: "node:zeta", type: "node", status: "available" };
     const request = vi.fn().mockResolvedValue({
-      profiles: [profile, { id: "alpha", providerId: "crabbox" }],
+      profiles: [
+        profile,
+        { id: "alpha", providerId: "crabbox" },
+        { id: "denied", providerId: "crabbox" },
+      ],
+      dispatchableProfileIds: ["alpha", "zeta"],
       environments: [
         environment,
         { id: "node:alpha", type: "node", status: "available" },
@@ -94,7 +99,7 @@ describe("cloud target menu", () => {
         projectDevicePlacements(environments),
       ),
     ).toBe(
-      "No devices have session hosting enabled. Connect a machine with session hosting enabled, or enable it on a paired device.",
+      "No devices have session hosting enabled. Connect a device with session hosting enabled, or enable it on a paired device.",
     );
   });
 
@@ -204,7 +209,7 @@ describe("cloud target menu", () => {
     expect(enabled?.disabled).toBe(false);
     expect(enabled?.getAttribute("aria-disabled")).toBe(global ? "true" : null);
     expect(enabled?.getAttribute("aria-description")).toBe(
-      `Cloud worker provider: static-ssh${global ? `, ${reason}` : ""}`,
+      `Cloud provider: static-ssh${global ? `, ${reason}` : ""}`,
     );
   });
 });

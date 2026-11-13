@@ -349,6 +349,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
         );
         const child = await createInitialSubagentSession({
           cfg: config,
+          projectRequester: { kind: "internal" },
           requesterAgentId: "main",
           targetAgentId: "main",
           childSessionKey: childKey,
@@ -430,9 +431,9 @@ describe("manual library resources through embedded and host-bound reads", () =>
           await expect(read.execute("symlink-escape", { path: escapeLink })).rejects.toThrow(
             /symlink|sandbox|outside|escape/i,
           );
-          // The existing regular-file reader rejects final symlinks, even within an allowed root.
+          // Both symlink validation and regular-file admission reject links within an allowed root.
           await expect(read.execute("contained-link", { path: containedLink })).rejects.toThrow(
-            /regular file/i,
+            /symlink|regular file/i,
           );
         }
         if (toolOwner !== "embedded") {

@@ -114,7 +114,7 @@ function assertQueuedCompactionPreparationActive(
  * Use this from outside a lane context. If already inside a lane, use
  * `compactEmbeddedAgentSessionDirect` to avoid deadlocks.
  */
-export async function compactEmbeddedAgentSession(
+export async function compactQueuedEmbeddedAgentSession(
   input: CompactEmbeddedAgentSessionParams,
   options: QueuedCompactionHostOptions,
 ): Promise<EmbeddedAgentCompactResult> {
@@ -368,7 +368,7 @@ async function compactEmbeddedAgentSessionImpl(
       agentDir: lease.snapshot.agentDir,
     };
     assertQueuedCompactionPreparationActive(inputParams, host);
-    return await withPluginRuntimeGenerationScope(lease.snapshot, async () => {
+    const runPreparedCompaction = async (): Promise<EmbeddedAgentCompactResult> => {
       owner.captureContext();
       await ensureContextEnginesInitialized();
       const contextEngine = await owner.resolveEngine(() =>
@@ -694,6 +694,9 @@ async function compactEmbeddedAgentSessionImpl(
         contextTokenBudget,
         attemptNativeHarnessCompaction,
       });
-    });
+    };
+    return await lease.run(() =>
+      withPluginRuntimeGenerationScope(lease.snapshot, runPreparedCompaction),
+    );
   });
 }

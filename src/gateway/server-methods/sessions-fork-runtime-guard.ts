@@ -1,3 +1,8 @@
+import {
+  ErrorCodes,
+  errorShape,
+  type SessionVisibility,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { listRegisteredAgentHarnesses } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
@@ -6,11 +11,50 @@ import { readRetainedSessionEntryFacts } from "../../config/sessions/session-ent
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { SessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import { resolveSessionCreateVisibility } from "../session-create-visibility.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import type { GatewaySessionEntryRead } from "../session-utils-store.js";
 import { resolveSessionNativeRuntimeRestriction } from "./sessions-patch-model-selection.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
+
+export const EXTERNAL_CONVERSATION_ERROR =
+  "Session history changes are unavailable because this session is owned by an external agent harness.";
+
+export function createLocalMessageCutGuards(params: {
+  action: "fork" | "rewind" | "switch";
+  context: Pick<GatewayRequestContext, "getRuntimeConfig" | "getCommittedRuntimeConfig">;
+  hasUpstream: () => boolean;
+}) {
+  const upstreamChanged = new SessionMutationAuthorizationChangedError(
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      params.action === "fork" ? "Session changed; retry fork." : EXTERNAL_CONVERSATION_ERROR,
+    ),
+  );
+  const assertUpstreamCurrent = () => {
+    if (params.hasUpstream()) {
+      throw upstreamChanged;
+    }
+  };
+  const assertForkVisibilityAllowed = (visibility: SessionVisibility | undefined) => {
+    const selected = resolveSessionCreateVisibility(
+      {
+        cfg: params.context.getCommittedRuntimeConfig?.() ?? params.context.getRuntimeConfig(),
+        visibility,
+      },
+      undefined,
+    );
+    if (!selected.ok) {
+      throw new SessionMutationAuthorizationChangedError({
+        ...selected.error,
+        message:
+          "Draft creation is disabled. Continue in this conversation, or ask an administrator to enable Drafts before forking.",
+      });
+    }
+  };
+  return { upstreamChanged, assertUpstreamCurrent, assertForkVisibilityAllowed };
+}
 
 type UpstreamForkHarness = {
   harness: AgentHarness;

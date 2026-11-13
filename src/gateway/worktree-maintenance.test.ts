@@ -1,20 +1,27 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { afterEach, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
-import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
+import type { WorktreeWarmPoolRequest } from "../agents/worktrees/template-registry.js";
+import type { ManagedWorktreeGcResult, ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import {
   getRuntimeConfigSnapshot,
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as hostIoPressure from "../infra/host-io-pressure.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { prepareScratchMaintenanceTargets } from "./scratch-maintenance-custody.js";
+import { sweepLocalWorkspaceManifests } from "./worker-environments/local-workspace-gc.js";
 import {
   notifyGatewayWorktreeArchive,
   requestGatewayWorktreeMaintenance,
@@ -26,9 +33,102 @@ vi.mock("./worker-environments/local-workspace-gc.js", () => ({
   sweepLocalWorkspaceManifests: vi.fn(async () => {}),
 }));
 
+// mock-isolation: Run custody has its own integration suite; these fixtures own scheduling.
+vi.mock("./scratch-maintenance-custody.js", () => ({
+  prepareScratchMaintenanceTargets: vi.fn(async () => ({ targets: [], release: () => {} })),
+}));
+
+const cleanupRecord: ManagedWorktreeRecord = {
+  id: "worktree",
+  name: "expired",
+  repoFingerprint: "repository",
+  repoRoot: "/repository",
+  path: "/worktree",
+  branch: "expired",
+  baseRef: "main",
+  ownerKind: "session",
+  ownerId: "agent:main:expired",
+  createdAt: 1,
+  lastActiveAt: 1,
+};
+
 function completedResult(): ManagedWorktreeGcResult {
   return { ...new WorktreeGcProgress().result, limitsSatisfied: true };
 }
+
+it("reports scratch progress and deferrals before GC and preserves completed removals across restart", async () => {
+  const dirs = createTrackedTempDirs();
+  try {
+    const root = await fs.realpath(await dirs.make("worktree-maintenance-scratch-"));
+    const scratch = path.join(root, ".openclaw/tmp/proof.txt");
+    await fs.mkdir(path.dirname(scratch), { recursive: true });
+    await fs.writeFile(scratch, "proof");
+    await fs.utimes(scratch, 1, 1);
+    const fresh = path.join(root, ".openclaw/tmp/fresh.txt");
+    await fs.writeFile(fresh, "keep");
+    await fs.utimes(fresh, 1_800_000_000, 1_800_000_000);
+    const custody = {
+      targets: [{ root, kind: "checkout" as const, isLive: () => false }],
+      release: () => {},
+    };
+    vi.mocked(prepareScratchMaintenanceTargets)
+      .mockResolvedValueOnce({
+        ...custody,
+        targets: [
+          ...custody.targets,
+          {
+            root: path.join(root, "unavailable"),
+            kind: "checkout",
+            isLive: () => false,
+            prepare: async () => {
+              throw new Error("synthetic custody unavailable");
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce(custody);
+    await using fixture = maintenanceFixture();
+    fixture.clock.setTime(1_800_000_000_000);
+    const { entered, release } = fixture.hold();
+    const owner = fixture.start();
+    await fixture.run();
+    const running = fixture.run();
+    await awaitCleanup(entered.promise, running);
+    await expect(fs.stat(scratch)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(owner.request()).toMatchObject({
+      state: "running",
+      scratch: {
+        entriesRemoved: 1,
+        bytesRemoved: 5,
+        skippedLive: 0,
+        deferred: 1,
+        errors: [expect.stringContaining("synthetic custody unavailable")],
+      },
+    });
+    expect(fixture.onError).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("Scratch cleanup deferred:"),
+    );
+    expect(fixture.onError).toHaveBeenCalledWith(
+      expect.stringContaining("synthetic custody unavailable"),
+    );
+    const stopping = owner.stop();
+    release.resolve(completedResult());
+    await stopping;
+    await running;
+    fixture.start();
+    await fixture.run();
+    await fixture.run();
+    expect(fixture.onComplete).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        scratch: expect.objectContaining({ entriesRemoved: 0, scanned: 1, errors: [] }),
+      }),
+    );
+    await expect(fs.stat(scratch)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(fresh, "utf8")).toBe("keep");
+  } finally {
+    await dirs.cleanup();
+  }
+});
 
 function maintenanceFixture(config: OpenClawConfig = {}) {
   const clock = createGatewaySchedulerClock();
@@ -82,6 +182,24 @@ function maintenanceFixture(config: OpenClawConfig = {}) {
   };
 }
 
+it.each(["custody unavailable", "host IO pressure"])(
+  "still collects worktrees under %s",
+  async (reason) => {
+    if (reason === "host IO pressure") {
+      vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(async () => true);
+    } else {
+      vi.mocked(prepareScratchMaintenanceTargets).mockRejectedValueOnce(new Error(reason));
+    }
+    vi.spyOn(managedWorktrees, "gc").mockResolvedValue(completedResult());
+    await using fixture = maintenanceFixture();
+    const owner = fixture.start();
+    const receipt = owner.request();
+    await fixture.run();
+    expect(owner.request({ jobId: receipt.jobId }).state).toBe("completed");
+    expect(fixture.onError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(reason));
+  },
+);
+
 function holdGc(repeat = false, onRun = () => {}) {
   const entered = createDeferred<NonNullable<Parameters<typeof managedWorktrees.gc>[0]>>();
   const release = createDeferred<ManagedWorktreeGcResult>();
@@ -103,10 +221,169 @@ function awaitCleanup<T>(entered: Promise<T>, running: Promise<void> | void) {
   return awaitGateBeforeSettlement(entered, Promise.resolve(running), "cleanup never started");
 }
 
+function warmPoolDemand() {
+  let notify: (request: WorktreeWarmPoolRequest) => void = () => {};
+  const unregister = vi.fn();
+  vi.spyOn(managedWorktrees, "onWarmPoolNeeded").mockImplementation((listener) => {
+    notify = listener;
+    return unregister;
+  });
+  return {
+    unregister,
+    notify(cacheKey: string, sourceCommit = cacheKey) {
+      notify({
+        sourceOnly: true,
+        template: {
+          cacheKey,
+          sourceCommit,
+          id: cacheKey,
+          repoRoot: "/synthetic/repo",
+          commonDir: "/synthetic/repo/.git",
+          worktreeRoot: "/synthetic/worktrees",
+          path: `/synthetic/worktrees/.templates/${cacheKey}`,
+          backend: "btrfs",
+          contentKey: sourceCommit,
+          status: "ready",
+          createdAt: 1,
+          lastUsedAt: 1,
+        },
+      });
+    },
+  };
+}
+
+beforeEach(() => {
+  vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(async () => false);
+  vi.spyOn(managedWorktrees, "gc").mockResolvedValue(completedResult());
+  vi.spyOn(managedWorktrees, "maintainGit").mockResolvedValue();
+});
+
+it("maintains Git while a cleanup sweep is still waiting under load", async () => {
+  await using fixture = maintenanceFixture();
+  const maintain = vi.spyOn(managedWorktrees, "maintainGit").mockResolvedValue();
+  const { owner, receipt, release } = await fixture.runHeld();
+  await fixture.clock.advanceBy(5 * 60_000);
+  expect(maintain).toHaveBeenCalledOnce();
+  expect(owner.request({ jobId: receipt.jobId }).state).toBe("running");
+  release.resolve(completedResult());
+});
+
 afterEach(() => {
   resetConfigRuntimeState();
   resetGatewayWorkAdmission();
   vi.restoreAllMocks();
+});
+
+it("refills serially in maintenance context, coalescing bounded latest repository demand", async () => {
+  await using fixture = maintenanceFixture();
+  const demand = warmPoolDemand();
+  const context = new AsyncLocalStorage<string>();
+  const observed: Array<[string, string | undefined]> = [];
+  const entered = createDeferred();
+  const release = createDeferred();
+  vi.spyOn(managedWorktrees, "prewarm").mockImplementation(async (request) => {
+    observed.push([request.template.sourceCommit, context.getStore()]);
+    if (observed.length === 1) {
+      entered.resolve();
+      await release.promise;
+    }
+  });
+  context.run("maintenance", () => fixture.start());
+  context.run("request", () => {
+    for (let index = 0; index < 33; index++) {
+      demand.notify(String(index));
+    }
+    demand.notify("0", "latest");
+  });
+  const running = fixture.run();
+  try {
+    await awaitCleanup(entered.promise, running);
+    expect(observed).toEqual([["latest", "maintenance"]]);
+    demand.notify("0", "consumed-again");
+  } finally {
+    release.resolve();
+  }
+  await running;
+  expect(observed).toEqual([
+    ["latest", "maintenance"],
+    ...Array.from({ length: 31 }, (_, index) => [String(index + 1), "maintenance"]),
+    ["consumed-again", "maintenance"],
+  ]);
+  expect(fixture.onError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("queue is full"));
+});
+
+it.each(["stop", "configuration"])("withdraws refill authority on %s", async (change) => {
+  const config: OpenClawConfig = {};
+  await using fixture = maintenanceFixture(config);
+  const demand = warmPoolDemand();
+  const entered = createDeferred<Parameters<typeof managedWorktrees.prewarm>[1]>();
+  const release = createDeferred();
+  const prewarm = vi
+    .spyOn(managedWorktrees, "prewarm")
+    .mockImplementation(async (_request, guard) => {
+      entered.resolve(guard);
+      await release.promise;
+      guard.commitGuard?.();
+    });
+  const owner = fixture.start();
+  demand.notify("first");
+  const running = fixture.run();
+  const guard = await awaitCleanup(entered.promise, running);
+  let stopped = false;
+  let stopping: Promise<void> | undefined;
+  try {
+    if (change === "stop") {
+      stopping = owner.stop().then(() => {
+        stopped = true;
+      });
+      fixture.track(stopping);
+      expect(guard.signal?.aborted).toBe(true);
+      expect(demand.unregister).toHaveBeenCalledOnce();
+    } else {
+      config.worktreeAcceleration = false;
+    }
+    demand.notify("second");
+    expect(() => guard.commitGuard?.()).toThrow(/stopping|configuration changed/);
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+  } finally {
+    release.resolve();
+  }
+  await running;
+  await stopping;
+  expect(prewarm).toHaveBeenCalledOnce();
+  expect(fixture.onError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("refill failed"));
+});
+
+it("includes archives during scratch cleanup without repeating the upcoming GC census", async () => {
+  await using fixture = maintenanceFixture();
+  const entered = createDeferred();
+  const release = createDeferred();
+  vi.mocked(prepareScratchMaintenanceTargets).mockImplementationOnce(async () => {
+    entered.resolve();
+    await release.promise;
+    return { targets: [], release: () => {} };
+  });
+  const gc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue(completedResult());
+  fixture.start().request();
+  const running = fixture.run();
+  try {
+    await awaitCleanup(entered.promise, running);
+    notifyGatewayWorktreeArchive(fixture.getRuntimeConfig);
+  } finally {
+    release.resolve();
+  }
+  await running;
+  await fixture.run();
+  expect(gc).toHaveBeenCalledOnce();
+  vi.mocked(sweepLocalWorkspaceManifests).mockClear();
+  for (let request = 0; request < 6; request++) {
+    notifyGatewayWorktreeArchive(fixture.getRuntimeConfig);
+    await fixture.run();
+    await fixture.clock.advanceBy(10 * 60_000);
+    await fixture.run();
+  }
+  expect(sweepLocalWorkspaceManifests).toHaveBeenCalledOnce();
 });
 
 it("coalesces archives in the maintenance context and sweeps again after in-flight commits", async () => {
@@ -135,6 +412,33 @@ it("coalesces archives in the maintenance context and sweeps again after in-flig
   await clock.advanceBy(0);
   expect(gc).toHaveBeenCalledTimes(2);
 });
+
+it.each(["checkout", "template"])(
+  "carries scratch pressure into %s backoff without holding GC entry",
+  async (kind) => {
+    // A fresh slow commit is reported once; unchanged counters are healthy on the next sample.
+    const probe = vi.fn().mockResolvedValueOnce(true).mockResolvedValue(false);
+    vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(probe);
+    await using fixture = maintenanceFixture();
+    const removed = vi.fn();
+    const gc = vi.spyOn(managedWorktrees, "gc").mockImplementation(async (params = {}) => {
+      if (kind === "template") {
+        await params.beforeTemplateRemoval!();
+      } else {
+        await params.beforeRemoval!(cleanupRecord);
+      }
+      removed();
+      return completedResult();
+    });
+    fixture.start().request();
+    void fixture.run();
+    await vi.waitFor(() => expect(gc).toHaveBeenCalledOnce());
+    await fixture.clock.advanceBy(299_999);
+    expect(removed).not.toHaveBeenCalled();
+    await fixture.clock.advanceBy(1);
+    await vi.waitFor(() => expect(removed).toHaveBeenCalledOnce());
+  },
+);
 
 it.each([
   { budget: "eight checkouts", batchSize: 8, elapsedMs: 0 },
@@ -201,6 +505,108 @@ it.each([
     expect(owner.request({ jobId: receipt.jobId }).removed).toEqual([]);
   },
 );
+
+it("admits only one checkout or template removal per minute across cohorts and sweeps", async () => {
+  await using fixture = maintenanceFixture();
+  const removed: number[] = [];
+  vi.spyOn(managedWorktrees, "gc").mockImplementation(async (params = {}) => {
+    const progress = completedResult();
+    for (let index = 0; index < 3; index++) {
+      if (index === 1) {
+        await params.beforeTemplateRemoval?.();
+      } else {
+        await params.beforeRemoval?.(cleanupRecord);
+      }
+      removed.push(fixture.clock.clock.now());
+      progress.removed.push(String(index));
+      await params.checkpoint?.(progress);
+    }
+    return progress;
+  });
+  const owner = fixture.start();
+  owner.request();
+  void fixture.run();
+  await vi.waitFor(() => expect(removed).toHaveLength(1));
+  await fixture.clock.advanceBy(59_999);
+  expect(removed).toEqual([0]);
+  await fixture.clock.advanceBy(1);
+  await vi.waitFor(() => expect(removed).toHaveLength(2));
+  await fixture.clock.advanceBy(60_000);
+  await vi.waitFor(() => expect(fixture.onComplete).toHaveBeenCalledOnce());
+  expect(removed).toEqual([0, 60_000, 120_000]);
+  owner.request();
+  void fixture.run();
+  await fixture.clock.advanceBy(59_999);
+  expect(removed).toHaveLength(3);
+  await fixture.clock.advanceBy(1);
+  await vi.waitFor(() => expect(removed).toHaveLength(4));
+});
+
+it("settles overlapping removal and checkpoint waits independently", async () => {
+  await using fixture = maintenanceFixture();
+  const { guard, release } = await fixture.runHeld();
+  await guard.beforeRemoval!(cleanupRecord);
+  const resumed: string[] = [];
+  const removal = guard.beforeRemoval!(cleanupRecord).then(() => resumed.push("removal"));
+  const checkpoint = (async () => {
+    for (let index = 0; index < 8; index++) {
+      await guard.checkpoint!(completedResult());
+    }
+    resumed.push("checkpoint");
+  })();
+  fixture.track(Promise.allSettled([removal, checkpoint]).then(() => {}));
+  await vi.waitFor(() => expect(fixture.clock.armedAtMs).toBe(1_000));
+  await fixture.clock.advanceBy(1_000);
+  await checkpoint;
+  expect(resumed).toEqual(["checkpoint"]);
+  await fixture.clock.advanceBy(59_000);
+  await vi.waitFor(() => expect(resumed).toEqual(["checkpoint", "removal"]));
+  release.resolve(completedResult());
+});
+
+it.each([
+  ["checkout", "recover"],
+  ["checkout", "stop"],
+  ["checkout", "configuration"],
+  ["template", "recover"],
+  ["template", "stop"],
+  ["template", "configuration"],
+])("pauses %s removal under host pressure and handles %s", async (kind, outcome) => {
+  const probe = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
+  vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(probe);
+  const config: OpenClawConfig = {};
+  await using fixture = maintenanceFixture(config);
+  const removed = vi.fn();
+  vi.spyOn(managedWorktrees, "gc").mockImplementation(async (params = {}) => {
+    if (kind === "template") {
+      await params.beforeTemplateRemoval!();
+    } else {
+      await params.beforeRemoval!(cleanupRecord);
+    }
+    removed();
+    return completedResult();
+  });
+  const owner = fixture.start();
+  owner.request();
+  void fixture.run();
+  await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+  await fixture.clock.advanceBy(299_999);
+  expect(removed).not.toHaveBeenCalled();
+  if (outcome === "stop") {
+    await owner.stop();
+  } else {
+    probe.mockResolvedValue(false);
+    if (outcome === "configuration") {
+      config.worktreeRoot = "/synthetic/replaced";
+      setRuntimeConfigSnapshot(config);
+    }
+    await fixture.clock.advanceBy(1);
+    await vi.waitFor(() =>
+      expect(outcome === "recover" ? fixture.onComplete : fixture.onError).toHaveBeenCalledOnce(),
+    );
+  }
+  expect(removed).toHaveBeenCalledTimes(outcome === "recover" ? 1 : 0);
+});
 
 it("waits for admitted cleanup to settle when stopped and withdraws its authority immediately", async () => {
   await using fixture = maintenanceFixture();

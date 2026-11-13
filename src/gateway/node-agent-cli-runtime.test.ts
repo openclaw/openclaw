@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { decodeClaudeCliNodeRunParams } from "../node-host/invoke-agent-cli-claude-params.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
@@ -8,15 +10,6 @@ const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
   isNodeCommandAllowed: vi.fn(),
   resolveNodeCommandAllowlist: vi.fn(() => new Set<string>()),
-}));
-
-vi.mock("../plugins/runtime/gateway-request-scope.js", () => ({
-  getPluginRuntimeGatewayRequestScope: () => ({
-    context: {
-      getRuntimeConfig: mocks.getRuntimeConfig,
-      nodeRegistry: { get: mocks.get, invoke: mocks.invoke },
-    },
-  }),
 }));
 
 vi.mock("./node-command-policy.js", async (importOriginal) => ({
@@ -29,16 +22,26 @@ import { invokeNodeClaudeCliRun } from "./node-agent-cli-runtime.js";
 import { NodeRegistry } from "./node-registry.js";
 import { makeClient } from "./node-registry.test-helpers.js";
 
+const gateway = {
+  getRuntimeConfig: mocks.getRuntimeConfig,
+  nodeRegistry: { get: mocks.get, invoke: mocks.invoke },
+} as unknown as GatewayRequestContext;
+
+// Turns run under the Gateway's resolver after the originating request ends, without a direct context.
 function invoke(overrides: Partial<Parameters<typeof invokeNodeClaudeCliRun>[0]> = {}) {
-  return invokeNodeClaudeCliRun({
-    nodeId: "node-1",
-    argv: ["-p"],
-    stdin: "hello",
-    timeoutMs: 10_000,
-    idleTimeoutMs: 1_000,
-    onProgress: () => {},
-    ...overrides,
-  });
+  return withPluginRuntimeGatewayContextResolver(
+    () => gateway,
+    () =>
+      invokeNodeClaudeCliRun({
+        nodeId: "node-1",
+        argv: ["-p"],
+        stdin: "hello",
+        timeoutMs: 10_000,
+        idleTimeoutMs: 1_000,
+        onProgress: () => {},
+        ...overrides,
+      }),
+  );
 }
 
 describe("invokeNodeClaudeCliRun", () => {

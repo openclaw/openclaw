@@ -7,16 +7,15 @@ import {
 import { hasBrowserControlWork } from "../browser-control-state.js";
 import { BROWSER_PROXY_COMMAND, BROWSER_PROXY_UPLOAD_COMMAND } from "../browser-node-commands.js";
 import {
-  assertBrowserProxyFileCountWithinLimit,
   assertBrowserProxyFileBytesWithinLimits,
   BROWSER_PROXY_ERROR_ENVELOPE,
   BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
   createBrowserProxyFailure,
+  collectBrowserProxyFilePaths,
   type BrowserProxyEnvelope,
   type BrowserProxyFile,
   type BrowserProxyRoute,
   type BrowserProxyUploadV1,
-  visitBrowserProxyFilePaths,
 } from "../browser-proxy-envelope.js";
 import { resolveBrowserProxyTimeoutMs } from "../browser-proxy-timeouts.js";
 import {
@@ -123,15 +122,6 @@ export function hasBrowserNodeHostWork(): boolean {
   return hasBrowserControlWork() || hasBrowserProxyUploadWork();
 }
 
-function collectBrowserProxyPaths(payload: unknown): string[] {
-  const paths = new Set<string>();
-  visitBrowserProxyFilePaths(payload, (filePath) => {
-    paths.add(filePath);
-    assertBrowserProxyFileCountWithinLimit(paths.size);
-  });
-  return [...paths];
-}
-
 async function readBrowserProxyFiles(filePaths: string[]): Promise<BrowserProxyFile[]> {
   const files: BrowserProxyFile[] = [];
   let totalBytes = 0;
@@ -174,6 +164,7 @@ function combineBrowserProxySignals(
 function isWsBackedBrowserProxyPath(path: string): boolean {
   return (
     path === "/act" ||
+    path === "/operator/input" ||
     path === "/download" ||
     path === "/navigate" ||
     path === "/pdf" ||
@@ -478,8 +469,8 @@ export async function runBrowserProxyCommand(
     });
   }
 
-  const paths = collectBrowserProxyPaths(result);
-  const files = paths.length > 0 ? await readBrowserProxyFiles(paths) : undefined;
+  const paths = collectBrowserProxyFilePaths(result);
+  const files = paths.size > 0 ? await readBrowserProxyFiles([...paths]) : undefined;
 
   const payload: BrowserProxyEnvelope = {
     result,

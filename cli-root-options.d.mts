@@ -11,6 +11,8 @@ export function consumeKnownOptionToken(
   mode?: "route" | "command-path",
 ): number;
 export function getRootOptionAwareCommandPath(argv: readonly string[], depth: number): string[];
+export function rewriteUpdateFlagArgv(argv: string[]): string[];
+export function isUpdateCommandArgv(argv: string[]): boolean;
 
 type CommandPositionalsParseOptions = {
   commandPath: ReadonlyArray<string>;
