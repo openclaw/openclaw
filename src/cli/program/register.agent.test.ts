@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   list: vi.fn(),
   exit: vi.fn(),
   verbose: vi.fn(),
+  workspaceList: vi.fn(),
+  workspaceGet: vi.fn(),
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
 }));
 
@@ -37,6 +39,11 @@ vi.mock("../../commands/agents.commands.delete.js", () => ({ agentsDeleteCommand
 
 // mock-isolation: Agent enumeration is a controlled command collaborator.
 vi.mock("../../commands/agents.commands.list.js", () => ({ agentsListCommand: mocks.list }));
+// mock-isolation: Agent workspace reads must not call a real Gateway.
+vi.mock("../../commands/agents.workspace.js", () => ({
+  agentsWorkspaceListCommand: mocks.workspaceList,
+  agentsWorkspaceGetCommand: mocks.workspaceGet,
+}));
 // mock-isolation: Argument parsing must not mutate process-wide verbosity.
 vi.mock("../../global-state.js", () => ({ setVerbose: mocks.verbose }));
 vi.mock("../../runtime.js", async (importOriginal) => ({
@@ -156,6 +163,18 @@ describe("agent command registration", () => {
       );
     },
   );
+
+  it("dispatches agents workspace list and get", async () => {
+    await runCli(["agents", "workspace", "list", "--agent", "ops", "--path", "notes", "--json"]);
+    expect(mocks.workspaceList).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ agent: "ops", path: "notes", json: true }),
+    );
+
+    await runCli(["agents", "workspace", "get", "notes/a.md", "--agent", "ops"]);
+    expect(mocks.workspaceGet).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ agent: "ops", path: "notes/a.md" }),
+    );
+  });
 
   it("renders Gateway request failures without internal class names", async () => {
     const message =

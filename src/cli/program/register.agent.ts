@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { hasExplicitOptions } from "../command-options.js";
+import { addGatewayClientOptions } from "../gateway-rpc.js";
 import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
 
@@ -167,6 +168,39 @@ ${formatHelpExamples([
         await agentsDeleteCommand({ ...opts, id });
       });
     });
+
+  const agentWorkspace = agents
+    .command("workspace")
+    .description("Browse an agent's workspace files (read-only)");
+
+  const agentWorkspaceList = agentWorkspace
+    .command("list")
+    .description("List a directory in the agent workspace")
+    .option("--agent <id>", "Agent id (defaults to the configured default agent)")
+    .option("--path <dir>", "Workspace-relative directory to list (defaults to the workspace root)")
+    .option("--offset <n>", "Skip this many entries")
+    .option("--limit <n>", "Maximum entries to return (Gateway default 250, max 500)")
+    .option("--json", "Output JSON instead of text", false);
+  addGatewayClientOptions(agentWorkspaceList);
+  agentWorkspaceList.action(async (opts): Promise<void> => {
+    await runAgentsCommandAction(async () => {
+      const { agentsWorkspaceListCommand } = await import("../../commands/agents.workspace.js");
+      await agentsWorkspaceListCommand(opts);
+    });
+  });
+
+  const agentWorkspaceGet = agentWorkspace
+    .command("get <path>")
+    .description("Print one file from the agent workspace")
+    .option("--agent <id>", "Agent id (defaults to the configured default agent)")
+    .option("--json", "Output JSON instead of text", false);
+  addGatewayClientOptions(agentWorkspaceGet);
+  agentWorkspaceGet.action(async (path, opts): Promise<void> => {
+    await runAgentsCommandAction(async () => {
+      const { agentsWorkspaceGetCommand } = await import("../../commands/agents.workspace.js");
+      await agentsWorkspaceGetCommand({ ...opts, path });
+    });
+  });
 
   agents.action(async (): Promise<void> => {
     await runAgentsCommandAction(async () => {
