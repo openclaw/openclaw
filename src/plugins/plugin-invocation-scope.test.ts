@@ -23,6 +23,34 @@ it("finishes plugin and module disposal after its caller scope closes", async ()
   expect(completed).toEqual(["plugin", "module"]);
 });
 
+it("keeps exact retained work callable after its admitting parent closes", async () => {
+  const registry = createEmptyPluginRegistry();
+  const instance = new PluginInstance("retained-capture");
+  const sibling = new PluginInstance("unretained-capture");
+  const parent = new PluginInvocationScope(registry, [instance, sibling], { retained: true });
+  const capture = parent.run(
+    () => new PluginInvocationScope(registry, [instance], { retained: true }),
+  );
+  const called = vi.fn();
+  const callback = capture.wrap(instance.wrap(called));
+  const unrelated = sibling.wrap(called);
+  try {
+    parent.release();
+    expect(instance.retainedWorkCount).toBe(1);
+    expect(sibling.retainedWorkCount).toBe(0);
+    callback();
+    expect(called).toHaveBeenCalledOnce();
+    expect(() => capture.run(unrelated)).toThrow("Plugin invocation scope is closed");
+    capture.release();
+    expect(() => callback()).toThrow("Plugin retained-capture consumer is closed");
+    expect(instance.retainedWorkCount).toBe(0);
+  } finally {
+    parent.release();
+    capture.release();
+    await Promise.all([instance.dispose(), sibling.dispose()]);
+  }
+});
+
 it.each(["idle", "active"])(
   "bounds %s cross-plugin teardown authority to its host cleanup",
   async (mode) => {

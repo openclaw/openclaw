@@ -108,7 +108,7 @@ describe("Doctor CLI migration refusal", () => {
   }, 60_000);
 
   it(
-    "fails closed with manual recovery for an unsupported workspace and conflicting exec policy",
+    "fails closed for an unsupported workspace while preserving conflicting exec policy",
     async () => {
       const root = fs.realpathSync(tempDirs.createTempDir("openclaw-doctor-unsupported-state-"));
       const stateDir = path.join(root, "state");
@@ -122,6 +122,9 @@ describe("Doctor CLI migration refusal", () => {
         configPath,
         JSON.stringify({
           agents: { ownership: "explicit", entries: { main: { workspace: workspaceDir } } },
+          // The valid canonical exec policy makes its legacy conflict advisory. Keep
+          // unrelated auth repair hints out of the later workspace refusal assertion.
+          gateway: { mode: "local", auth: { mode: "token", token: "test-token" } },
           plugins: { enabled: false },
         }),
       );

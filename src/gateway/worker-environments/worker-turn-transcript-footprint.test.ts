@@ -14,6 +14,7 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   placements,
+  readWorkerTurnTranscriptStorageRows,
   seedActivePlacement,
   sessionTarget,
   setupWorkerTurnLauncherTest,
@@ -204,8 +205,10 @@ describe("Gateway worker-turn selected transcript preparation", () => {
         expect(tunnelCalls).toBe(0);
         expect(localCalls).toBe(0);
         if (recorder) {
-          expect(recorder.hasPersisted()).toBe(true);
-          expect(recorder.getAdmissionReceipt()?.entryId).toEqual(expect.any(String));
+          // Credential acquisition precedes the prepared-input policy gate.
+          // The recorder must not persist unapproved input at this boundary.
+          expect(recorder.hasPersisted()).toBe(false);
+          expect(recorder.getAdmissionReceipt()).toBeUndefined();
         }
         expect(observation?.inactiveLoadedMessages).toBe(0);
         expect(observation?.loadedMessages).toBe(expectedMessages);
@@ -243,6 +246,11 @@ describe("Gateway worker-turn selected transcript preparation", () => {
           expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
         }
         expect(destroyCalls).toBe(0);
+        if (recorder) {
+          expect(recorder.hasPersisted()).toBe(false);
+          expect(recorder.getAdmissionReceipt()).toBeUndefined();
+          expect(JSON.stringify(readWorkerTurnTranscriptStorageRows())).not.toContain(INPUT_TEXT);
+        }
       } catch (error) {
         failures.push(error);
       }

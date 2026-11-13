@@ -130,6 +130,12 @@ export class PluginInvocationScope {
   /** Carry exact custody across nested scopes, without lending invocation authority. */
   retainInvocation(instance: PluginInstanceHandle): void {
     this.assertOpen();
+    // An independently retained consumer already acquired this exact instance
+    // through its live parent. Its callbacks may outlive that parent (for
+    // example, transcript capture cleanup), but not their own consumer.
+    if (this.consumerKind === "work" && this.consumers.has(instance)) {
+      return;
+    }
     if (!this.consumers.has(instance)) {
       this.work?.retain(instance);
     }

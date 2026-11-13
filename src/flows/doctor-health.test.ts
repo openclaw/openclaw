@@ -127,7 +127,9 @@ describe("runDoctorHealthFlow", () => {
       if (windows) {
         await expect(run).rejects.toThrow("Doctor could not enter maintenance");
         await expect(run).rejects.toThrow("gateway status --deep");
-        await expect(run).rejects.toThrow("openclaw doctor --fix");
+        await expect(run).rejects.toThrow("operator-owned launcher override");
+        await expect(run).rejects.toThrow("The service was left unchanged.");
+        await expect(run).rejects.not.toThrow("openclaw doctor --fix");
         await expect(run).rejects.not.toThrow(/--no-restart|before the update/);
         expect(mocks.config).not.toHaveBeenCalled();
         expect(mocks.runContributions).not.toHaveBeenCalled();

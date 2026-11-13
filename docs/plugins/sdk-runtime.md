@@ -276,7 +276,9 @@ Host-created request scopes borrow their plugin registry. A direct registry-scop
 callback keeps its registry until its returned operation settles; detached async
 resources do not extend that lifetime. Access to a released registry fails instead
 of silently selecting the current generation. Admitted turns and explicitly
-retained consumers keep their selected generation until they settle.
+retained consumers keep their selected generation until they settle. A retained
+consumer can outlive its admitting caller for its acquired instances; it does not
+keep the caller's authority to invoke other instances.
 Registry-dependent runtime APIs re-enter their live plugin owner after adoption
 and preserve an explicitly prepared registry, including an empty selection.
 

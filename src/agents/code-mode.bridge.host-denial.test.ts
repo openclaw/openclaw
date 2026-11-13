@@ -438,10 +438,9 @@ describe("Code Mode subscribed host denial", () => {
       const expressions = order.startsWith("denial-first")
         ? [deny, "record_mutation({})"]
         : ["record_mutation({})", deny];
-      const code =
-        order === "late-settlement"
-          ? `await Promise.all([record_mutation({}), ${deny}]);`
-          : `const results = await Promise.allSettled([${expressions.join(",")}]); throw new Error(results.find(r => r.status === "rejected").reason.message);`;
+      // Keep the cell pending until every sibling settles. An uncaught denial
+      // terminates the cell immediately and cancels its remaining bridge calls.
+      const code = `const results = await Promise.allSettled([${expressions.join(",")}]); throw new Error(results.find(r => r.status === "rejected").reason.message);`;
       let details = await harness.run(code);
       if (order === "late-settlement") {
         expect(details.status).toBe("waiting");

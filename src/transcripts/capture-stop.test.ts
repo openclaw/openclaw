@@ -467,7 +467,15 @@ it.each(["inspection", "prepared"] as const)(
       expect(instance.retainedWorkCount).toBeGreaterThan(0);
       await request!.onUtterance({ text: "Speech after the agent turn finished" });
       disabled = prepareTranscriptCaptureDisable(stateDir);
-      await expect(disabled.drain()).rejects.toThrow("Transcript capture policy drainage failed");
+      await expect(disabled.drain()).rejects.toMatchObject({
+        message: "Transcript capture policy drainage failed",
+        errors: [
+          expect.objectContaining({
+            message: "transcripts provider cleanup failed: caption transport stop failed",
+          }),
+        ],
+      });
+      expect(stop).toHaveBeenCalledOnce();
       expect(disposed).not.toHaveBeenCalled();
       expect(instance.retainedWorkCount).toBeGreaterThan(0);
       failStop = false;
