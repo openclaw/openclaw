@@ -139,12 +139,9 @@ it.each([
         requesterAuthority,
       };
       mocks.nativeSupport.mockResolvedValue(true);
-      mocks.validateCanary.mockResolvedValue({
+      mocks.checkCandidate.mockResolvedValue({
         status: "ok",
-        phase: "readiness",
         steps: [],
-        durationMs: 1,
-        logTail: [],
         doctorConfigWrites: true,
       });
       const runUpdate = async (

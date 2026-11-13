@@ -33,7 +33,11 @@ const mocks = vi.hoisted(() => ({
   runGitUpdate: vi.fn(),
   runPackageUpdate: vi.fn(),
   runtimeError: vi.fn(),
-  validateCanary: vi.fn(),
+  checkCandidate: vi.fn(),
+  activatedCheck:
+    vi.fn<
+      typeof import("../../infra/update-activated-gateway-check.js").checkActivatedGatewayStartup
+    >(),
   nativeSupport: vi.fn<typeof serviceCommand.isUpdatedInstallGatewayExecutorSupported>(),
   serviceStopped: false,
   shouldBlockServiceUpdate: vi.fn(),
@@ -42,8 +46,8 @@ const mocks = vi.hoisted(() => ({
 
 export { mocks };
 
-export function readyCanary(steps: UpdateStepResult[], durationMs = 1, logTail: string[] = []) {
-  return { status: "ok" as const, phase: "readiness" as const, steps, durationMs, logTail };
+export function readyCandidate(steps: UpdateStepResult[]) {
+  return { status: "ok" as const, steps };
 }
 
 export function packageCandidate(root: string) {
@@ -67,14 +71,15 @@ vi.mock(import("../../infra/update-global.js"), async (original) => ({
   ...(await original()),
   verifyPackageUpdateRecovery: mocks.verifyPackageRecovery,
 }));
-vi.mock("../../infra/update-candidate-canary.js", () => ({
-  validateUpdateCandidateCanary: mocks.validateCanary,
+// mock-isolation: the candidate check spawns a staged package worker these fixtures do not build.
+vi.mock("../../infra/update-candidate-check.js", () => ({
+  checkUpdateCandidate: mocks.checkCandidate,
 }));
 
-// Like the canary above, the activated-release boot is a process boundary.
+// Like the candidate check above, the activated-release boot is a process boundary.
 vi.mock(import("../../infra/update-activated-gateway-check.js"), async (original) => ({
   ...(await original()),
-  checkActivatedGatewayStartup: async ({ result }) => result,
+  checkActivatedGatewayStartup: mocks.activatedCheck,
 }));
 vi.mock("./update-command-plugin-preflight.js", () => ({
   preflightConfiguredNpmPluginTargets: mocks.pluginPreflight,
@@ -232,7 +237,8 @@ beforeEach(() => {
   successfulUpdate.steps = [];
   vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([]);
   mocks.serviceStopped = false;
-  mocks.validateCanary.mockResolvedValue(readyCanary([]));
+  mocks.checkCandidate.mockResolvedValue(readyCandidate([]));
+  mocks.activatedCheck.mockImplementation(async ({ result }) => result);
   mocks.captureManagedContext.mockResolvedValue(undefined);
   mocks.captureManagedPreflight.mockResolvedValue(schemaContext("default"));
   mocks.captureSchemaContext.mockResolvedValue(schemaContext("invoker"));

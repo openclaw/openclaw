@@ -94,10 +94,10 @@ describe("update-cli", () => {
       }
     };
     const validate = requireValue(
-      mocks.candidateValidation.getMockImplementation(),
+      mocks.candidateCheck.getMockImplementation(),
       "candidate validation",
     );
-    mocks.candidateValidation.mockImplementation(async (...args) => {
+    mocks.candidateCheck.mockImplementation(async (...args) => {
       assertRootsOwned();
       return await validate(...args);
     });

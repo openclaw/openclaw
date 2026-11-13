@@ -220,23 +220,25 @@ export async function runAutoUpdateCommand(
 
 export type AutoUpdateRunner = (params: AutoUpdateRunParams) => Promise<AutoUpdateRunResult>;
 
-function candidateDoctorFailureSignature(run: UpdateRunRecord): string | undefined {
+// A release that fails these checks rolls back; retrying the same release fails the same way.
+const ACTIVATION_CHECK_STEPS = new Set([
+  "openclaw doctor",
+  "post-update verification",
+  "activated-gateway-startup",
+]);
+
+function activationFailureSignature(run: UpdateRunRecord): string | undefined {
   if (run.trigger !== "campaign" || run.status !== "failed" || !run.reason) {
     return undefined;
   }
   const failed = run.steps.filter(
-    (step) =>
-      step.status === "failed" &&
-      (step.step === "candidate-doctor" || step.step === "candidate-doctor-lint"),
+    (step) => step.status === "failed" && ACTIVATION_CHECK_STEPS.has(step.step),
   );
   if (!failed.length) {
     return undefined;
   }
-  // Rehearsal directory identities and elapsed time change between identical failures.
-  const stable = (detail: string | undefined) =>
-    detail
-      ?.replace(/openclaw-update-canary-[A-Za-z0-9]+/gu, "openclaw-update-canary-[attempt]")
-      .replace(/\(\d+ms\)/gu, "(elapsed)");
+  // Elapsed time changes between identical failures.
+  const stable = (detail: string | undefined) => detail?.replace(/\(\d+ms\)/gu, "(elapsed)");
   return JSON.stringify([
     run.reason,
     failed
@@ -302,7 +304,7 @@ export async function runCampaignUpdate(params: {
   if (!isCurrent() || !params.canApply()) {
     return "failed";
   }
-  const signature = recent[0] && candidateDoctorFailureSignature(recent[0]);
+  const signature = recent[0] && activationFailureSignature(recent[0]);
   // The existing terminal rows are the durable backoff fact. A new candidate or
   // an intervening operator run breaks the pair without another state store.
   if (
@@ -312,13 +314,13 @@ export async function runCampaignUpdate(params: {
       (run) =>
         run.target.channel === params.channel &&
         (params.mode === "git" ? run.target.sha : run.target.version) === params.version &&
-        candidateDoctorFailureSignature(run) === signature,
+        activationFailureSignature(run) === signature,
     )
   ) {
     const nextAction =
       "Inspect `openclaw update status`, resolve the reported check, then run `openclaw update` to retry; a new candidate also resumes automatic updates.";
     params.log.info(
-      `Warning: Automatic updates paused after repeated candidate-doctor failure. ${nextAction}`,
+      `Warning: Automatic updates paused after repeated activation failure. ${nextAction}`,
       {
         version: params.version,
         reason: recent[0]?.reason,

@@ -30,12 +30,9 @@ const snapshotCases = [
   { current: true, runtimeReady: false, noOp: false, reportingFails: false },
   { current: false, runtimeReady: true, noOp: false, reportingFails: true },
 ];
-it.each([
-  ...snapshotCases.map((entry) => Object.assign({ backupShortfall: false }, entry)),
-  { current: false, runtimeReady: true, noOp: false, reportingFails: false, backupShortfall: true },
-])(
-  "checks snapshot space after the Git no-op decision (current=$current, runtimeReady=$runtimeReady, reportingFails=$reportingFails, backupShortfall=$backupShortfall)",
-  async ({ current, runtimeReady, noOp, reportingFails, backupShortfall }) => {
+it.each(snapshotCases)(
+  "checks database backup space after the Git no-op decision (current=$current, runtimeReady=$runtimeReady, reportingFails=$reportingFails)",
+  async ({ current, runtimeReady, noOp, reportingFails }) => {
     await withTestDir({ prefix: "git-update-snapshot-" }, async (base) => {
       const root = path.join(base, "checkout");
       const stateDir = path.join(base, "state");
@@ -71,7 +68,7 @@ it.each([
         target = await git(root, "rev-parse", "HEAD");
         await git(root, "checkout", "--detach", before);
       }
-      if (backupShortfall) {
+      {
         const file = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
         await fs.mkdir(path.dirname(file), { recursive: true });
         using db = openNodeSqliteDatabase(file);
@@ -82,9 +79,7 @@ it.each([
       const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
         targetPath,
         checkedPath: targetPath,
-        availableBytes: backupShortfall
-          ? (targetPath === path.join(root, ".artifacts") ? 100 : 160) * 1024 ** 2
-          : 0,
+        availableBytes: 0,
         totalBytes: 1024 ** 3,
       }));
       const runCommand = processRunner.runCommandWithTimeout;
@@ -135,16 +130,8 @@ it.each([
             expect.objectContaining({
               exitCode: 1,
               stderrTail: expect.stringMatching(
-                /snapshot-capacity-insufficient[\s\S]*Initial snapshot needs/,
+                /snapshot-capacity-insufficient[\s\S]*have not been migrated/,
               ),
-              snapshotCapacity: expect.objectContaining({
-                reason: "snapshot-capacity-insufficient",
-                requiredBytes: expect.any(Number),
-                selection: null,
-                candidates: expect.arrayContaining([
-                  expect.objectContaining({ availableBytes: 0 }),
-                ]),
-              }),
             }),
           );
         } else {
@@ -177,9 +164,7 @@ it.each([
           [candidateCommand, beforeGitMutation, validateCandidate].map((fn) => fn.mock.calls),
         ).toEqual([[], [], []]);
         expect(await git(root, "rev-parse", "HEAD")).toBe(before);
-        expect((await fs.readdir(stateDir)).toSorted()).toEqual(
-          backupShortfall ? ["agents", "openclaw.json"] : ["openclaw.json"],
-        );
+        expect((await fs.readdir(stateDir)).toSorted()).toEqual(["agents", "openclaw.json"]);
       } finally {
         process.argv = originalArgv;
       }

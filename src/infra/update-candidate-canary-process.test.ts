@@ -33,28 +33,9 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-it("routes a worker target through the embedded entry dispatcher", async () => {
-  const entry = path.join(root, "dist/infra/update-migrated-finalize.worker.js");
-  const running = launchCanary({
-    target: { kind: "worker", url: pathToFileURL(entry) },
-    args: ["--check"],
-    root,
-    env: {},
-    stateDir: root,
-    capture() {},
-  });
-  await running.closed;
-  expect(await running.result).toBe(0);
-  expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
-    process.execPath,
-    [...(process.versions.bun ? ["--no-install"] : []), entry, "--check"],
-    expect.objectContaining({ cwd: root }),
-  );
-});
-
 it("routes a CLI target through the standalone command entry", async () => {
   const running = launchCanary({
-    target: { kind: "cli", entryPath: path.join(root, "dist/index.js") },
+    entryPath: path.join(root, "dist/index.js"),
     args: ["gateway", "run"],
     root,
     env: {},

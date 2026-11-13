@@ -191,75 +191,72 @@ describe("automatic campaign handoff failure", () => {
     "different check",
     "different detail",
     "transient metadata",
-  ] as const)(
-    "backs off only identical candidate Doctor failures across restart: %s",
-    async (resume) => {
-      const log = { info: vi.fn() };
-      const step: UpdateStepResult = {
-        name: "candidate-doctor",
-        command: "doctor",
-        cwd: "/private/candidate",
-        durationMs: 10,
-        exitCode: 1,
-        stderrTail: "Plugin dependency is outside the temporary update copy: chromium-bidi",
-      };
-      const outcome: Awaited<ReturnType<AutoUpdateRunner>> = {
-        status: "failed",
-        message: "Candidate Doctor failed.",
-        result: updateResult({ reason: "doctor-failed", steps: [step], durationMs: 10 }),
-      };
-      const runAuto = vi.fn<AutoUpdateRunner>(async () => structuredClone(outcome));
-      const attempt = async (version = "2.0.0-beta.1") => {
-        const campaign = createApplyingCampaign(version);
-        try {
-          return await runBetaCampaign({ version, log, campaign, runAuto });
-        } finally {
-          campaign.clear();
-        }
-      };
-      if (resume === "transient metadata") {
-        step.failureFacts = doctorFacts("Check failed in openclaw-update-canary-Abc123 (5ms)");
+  ] as const)("backs off only identical activation failures across restart: %s", async (resume) => {
+    const log = { info: vi.fn() };
+    const step: UpdateStepResult = {
+      name: "openclaw doctor",
+      command: "doctor",
+      cwd: "/private/candidate",
+      durationMs: 10,
+      exitCode: 1,
+      stderrTail: "Plugin dependency is unavailable: chromium-bidi",
+    };
+    const outcome: Awaited<ReturnType<AutoUpdateRunner>> = {
+      status: "failed",
+      message: "Doctor failed after activation.",
+      result: updateResult({ reason: "doctor-failed", steps: [step], durationMs: 10 }),
+    };
+    const runAuto = vi.fn<AutoUpdateRunner>(async () => structuredClone(outcome));
+    const attempt = async (version = "2.0.0-beta.1") => {
+      const campaign = createApplyingCampaign(version);
+      try {
+        return await runBetaCampaign({ version, log, campaign, runAuto });
+      } finally {
+        campaign.clear();
       }
-      await attempt();
-      if (resume === "different reason") {
-        outcome.result.reason = "candidate-checks-timeout";
-      } else if (resume === "different check") {
-        step.name = "candidate-doctor-lint";
-      } else if (resume === "different detail") {
-        step.stderrTail = "A different dependency is unavailable: kerberos";
-      } else if (resume === "transient metadata") {
-        step.failureFacts = doctorFacts("Check failed in openclaw-update-canary-Def456 (19ms)");
-      }
-      await attempt();
-      expect(runAuto).toHaveBeenCalledTimes(2);
-      const failures = listUpdateRuns();
-      expect(failures).toHaveLength(2);
-      await closeStateDatabaseForTest();
-      await attempt();
-      if (resume.startsWith("different")) {
-        expect(runAuto).toHaveBeenCalledTimes(3);
-        return;
-      }
-      expect(runAuto).toHaveBeenCalledTimes(2);
-      expect(listUpdateRuns()).toHaveLength(2);
-      expect(log.info).toHaveBeenCalledWith(
-        expect.stringContaining("Automatic updates paused after repeated candidate-doctor failure"),
-        expect.objectContaining({
-          version: "2.0.0-beta.1",
-          runIds: failures.map((run) => run.runId),
-          nextAction: expect.stringContaining("openclaw update"),
-        }),
-      );
-      if (resume === "manual update") {
-        const manual = createUpdateRun({ trigger: "cli" });
-        finishUpdateRun(manual.runId, { status: "failed", reason: "doctor-failed" });
-      }
-      await attempt(resume === "new candidate" ? "2.0.0-beta.2" : undefined);
-      expect(runAuto).toHaveBeenCalledTimes(
-        resume === "new candidate" || resume === "manual update" ? 3 : 2,
-      );
-    },
-  );
+    };
+    if (resume === "transient metadata") {
+      step.failureFacts = doctorFacts("Check failed (5ms)");
+    }
+    await attempt();
+    if (resume === "different reason") {
+      outcome.result.reason = "candidate-checks-timeout";
+    } else if (resume === "different check") {
+      step.name = "activated-gateway-startup";
+    } else if (resume === "different detail") {
+      step.stderrTail = "A different dependency is unavailable: kerberos";
+    } else if (resume === "transient metadata") {
+      step.failureFacts = doctorFacts("Check failed (19ms)");
+    }
+    await attempt();
+    expect(runAuto).toHaveBeenCalledTimes(2);
+    const failures = listUpdateRuns();
+    expect(failures).toHaveLength(2);
+    await closeStateDatabaseForTest();
+    await attempt();
+    if (resume.startsWith("different")) {
+      expect(runAuto).toHaveBeenCalledTimes(3);
+      return;
+    }
+    expect(runAuto).toHaveBeenCalledTimes(2);
+    expect(listUpdateRuns()).toHaveLength(2);
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("Automatic updates paused after repeated activation failure"),
+      expect.objectContaining({
+        version: "2.0.0-beta.1",
+        runIds: failures.map((run) => run.runId),
+        nextAction: expect.stringContaining("openclaw update"),
+      }),
+    );
+    if (resume === "manual update") {
+      const manual = createUpdateRun({ trigger: "cli" });
+      finishUpdateRun(manual.runId, { status: "failed", reason: "doctor-failed" });
+    }
+    await attempt(resume === "new candidate" ? "2.0.0-beta.2" : undefined);
+    expect(runAuto).toHaveBeenCalledTimes(
+      resume === "new candidate" || resume === "manual update" ? 3 : 2,
+    );
+  });
 
   it("does not clear a replacement campaign after sentinel settlement", async () => {
     const campaign = createApplyingCampaign();

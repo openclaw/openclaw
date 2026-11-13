@@ -29,7 +29,7 @@ The installed updater must contain this fix; an older release may still need its
 temp hierarchy repaired before updating. Shared coordination databases and service
 locks keep their existing per-user locations across profiles.
 
-Update checks, candidate rehearsal, activation Doctor, and verification inherit
+Update checks, activation Doctor, and verification inherit
 the managed Gateway's Node heap controls from its effective service command and
 `NODE_OPTIONS`. Command-line heap controls take precedence. An empty service
 `NODE_OPTIONS` preserves heap controls supplied by the invoking shell while still
@@ -323,7 +323,7 @@ For admitted updates, unexpected exceptions retain a bounded, redacted error ide
 in update history, along with the operation reached and the installation and target
 facts resolved so far. Failure reports include the initiating action and the owner's
 recorded rollback outcome. Failed steps use stable identifiers such as
-`candidate-state-snapshot`, `candidate-doctor-lint`, and `post-install-verify` in
+`candidate-recovery`, `activated-gateway-startup`, and `post-install-verify` in
 the report body and issue title; command arguments and private paths remain redacted.
 Snapshot errors identify the active database, execution approvals, or plugin phase.
 Snapshot watchdog failures also retain the last progress event, its age, and the
@@ -431,7 +431,7 @@ Build-account provisioning remains staged and has no supported CLI command or
 provisioning instructions when that workflow becomes available.
 
 `--drain-timeout <seconds>` sets the immutable drain budget independently of
-`--timeout`, which retains the canary/readiness phase budget. The default drain
+`--timeout`, which retains the candidate check and readiness phase budgets. The default drain
 budget comes from the existing restart deferral policy (300 seconds). Drain
 completes immediately when ready; after its budget,
 the native suspension owner can interrupt ordinary work while preserving
@@ -472,14 +472,12 @@ restore the sealed predecessor when the protected state remains compatible;
 rollback retains a resumable record. This slice does not rewind migrated
 databases or collect release directories. It supports matching database schema
 contracts only; incompatible migration requirements refuse activation before
-drain. Canary rehearsal boots the candidate against isolated copies before
-cutover, preserving input that the candidate itself must migrate at startup.
-It does not pre-repair that input with Doctor. No live Doctor or optional NOCOW
-rewrite runs inside this activation.
-After live readiness, the updater repeats that startup-only canary against a
-fresh private copy while the selected Gateway serves, then verifies the same
-live PID and boot once more before completing activation. This is canary proof;
-it does not dispatch a model marker turn.
+drain. Before drain, the updater loads the candidate's recovery runtime
+(`update-migrated-finalize --check`) and refuses a candidate that cannot load it.
+Gateway startup is proven live: the selected Gateway must reach readiness with the
+expected generation, or the updater restores the predecessor. No live Doctor or
+optional NOCOW rewrite runs inside this activation. Readiness verification does
+not dispatch a model marker turn.
 JSON distinguishes preparation
 (`prepared`) from activation (`succeeded`, `rolled-back`, `pending`, or `error`).
 `pending`, `rolled-back`, and `error` return a nonzero exit status.
@@ -515,8 +513,7 @@ Before an immutable activation stops the serving Gateway, the updater prewarms
 the candidate's Node compile cache as the service account at its final release
 path. This imports the Gateway graph without starting a server. The existing
 build-ID cache namespace and disabled-cache setting still apply; a failed
-prewarm is advisory and ordinary cold startup remains available. Candidate
-rehearsal keeps its separate, cache-disabled environment. Mutable package
+prewarm is advisory and ordinary cold startup remains available. Mutable package
 updates do not prewarm: staging paths change during activation, and compiling
 again at the final path would add work during downtime.
 
@@ -635,7 +632,7 @@ release; candidate code cannot change the behavior of an older installed updater
 For package-manager updates, `openclaw update` privately stages the selected
 package once, then lets that candidate decide whether the live installation can
 be updated. Registry targets and explicit artifacts such as `--tag ./openclaw.tgz`
-use the same flow. The stage is reused for verification, canary rehearsal, and
+use the same flow. The stage is reused for verification, the candidate check, and
 activation; a refusal or pre-mutation failure removes it and leaves the installed
 package and serving Gateway in place. After admission and package verification,
 a matching installed version and artifact build identity remain a no-op unless
@@ -708,7 +705,7 @@ candidate admission, so candidate family compatibility remains pending.
 | Owner                                | Checks and operations                                                                                                                                                                                                                                                                                                                    |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Candidate-owned (via `update admit`) | Config read/validation with the candidate schema (missing-path style problems that candidate Doctor preserves/handles are `admit` + warning), database schema preflight against the explicit installation root, plugin availability preflight. The Node engine comparison is informational (`ok` or `warn`) and cannot refuse admission. |
-| Installed-owned (unchanged)          | Run admission/ledger, executor lease, managed-service preflight (ownership/ancestry), Node runtime selection/provisioning, directory permissions, npm/pnpm lifecycle policy, staging/verify/canary/swap/post-core.                                                                                                                       |
+| Installed-owned (unchanged)          | Run admission/ledger, executor lease, managed-service preflight (ownership/ancestry), Node runtime selection/provisioning, directory permissions, npm/pnpm lifecycle policy, staging/verify/candidate check/swap/post-core.                                                                                                              |
 
 The candidate inspects the live installation read-only, using the same selected
 profile, state directory, configuration path, and environment. It does not
@@ -765,31 +762,34 @@ to the installed checks. It exits `0`
 for admission, `3` for refusal, or `2` for an internal error without a valid
 verdict. It rejects inherited update authority variables with exit `2`, allowing
 the supervisor to fall back. It does not perform managed-service ancestry checks.
-The default admission budget is 120 seconds and follows the canary timeout
-budget resolution.
+The default admission budget is 120 seconds and follows the candidate check
+timeout budget resolution.
 
 ### External supervisor readiness
 
 Candidates that declare `openclaw.updatePreflightProtocol: 1` in `package.json`
 support the hidden `openclaw update preflight --json` command. An external
 supervisor can run this candidate before stopping its serving Gateway, using the
-serving profile's environment and `--source-root <absolute-package-root>` for its
-bundled plugin paths. `--timeout <seconds>` controls the candidate check budget.
+serving profile's environment. It still accepts an absolute
+`--source-root <absolute-package-root>` from supervisors that pass one; the check
+does not use it. `--timeout <seconds>` controls the candidate check budget.
 The command rejects inherited update and service continuation authority.
 
-Preflight reuses the isolated candidate rehearsal: copy state, run candidate
-Doctor and validation, then probe a private Gateway's startup and readiness.
-It does not repair the live profile, stop its service, or admit an update run.
+Preflight reads the serving profile's config and loads the candidate's recovery
+runtime (`update-migrated-finalize --check`), which reports the database versions
+it supports. It does not copy state, run Doctor, or start a Gateway. It does not
+repair the live profile, stop its service, or admit an update run.
 Stdout contains one JSON receipt with `protocol: 1`, `mode: "preflight"`,
-`candidateVersion`, `status`, and `coverage: "isolated-core-startup"`. Exit `0`
+`candidateVersion`, `status`, `phase`, and `coverage: "candidate-runtime"`. Exit `0`
 means `ready`, `3` means `blocked`, and `2` means `unverified`. Missing runtime
-support, inconclusive probes, cancellation, and execution failures never mean
-ready. Diagnostic output goes to stderr; the receipt follows child cleanup.
+support, cancellation, and execution failures never mean ready. Diagnostic output
+goes to stderr; the receipt follows child cleanup.
 
-This proves isolated core startup against copied state. Plugin downloads and
-convergence remain deferred to finalization; channels, providers, sidecars, and
-production listener and authentication settings are not exercised. A ready
-receipt does not guarantee finalization or production service readiness.
+Earlier candidates reported `coverage: "isolated-core-startup"` after booting a
+private Gateway on copied state. `candidate-runtime` proves less: Doctor,
+plugins, and Gateway startup are not exercised. The supervisor must verify the
+activated release's readiness and own its rollback. A ready receipt does not
+guarantee finalization or production service readiness.
 Candidates without this capability retain their supervisor's legacy upgrade
 and rollback flow.
 
@@ -1025,7 +1025,7 @@ Use `openclaw update status` and Doctor for recovery guidance.
 | `--admission <auto\|installed>`                  | Choose candidate admission when supported (`auto`, the default), or force installed admission checks. This option has no environment-variable form. Dry runs always use installed checks.                                                                                                                                                                         |
 | `--json`                                         | Print machine-readable `UpdateRunResult` JSON. Includes `postUpdate.plugins.warnings` when a managed plugin needs repair, beta-channel plugin fallback details, and `postUpdate.plugins.integrityDrifts` when npm plugin artifact drift is detected during post-update sync.                                                                                      |
 | `--timeout <seconds>`                            | Optional overall update budget in seconds, shared by activation, readiness, recovery, and native service commands. Without it, package installation and deferred lifecycle scripts have no work deadline; candidate Doctor, checks, and recovery retain their step bounds.                                                                                        |
-| `--drain-timeout <seconds>`                      | Immutable installations only: override the drain budget before interruption, independently of canary/readiness deadlines. Also accepted by `update recover`; healthy recovery never stops the process.                                                                                                                                                            |
+| `--drain-timeout <seconds>`                      | Immutable installations only: override the drain budget before interruption, independently of candidate check and readiness deadlines. Also accepted by `update recover`; healthy recovery never stops the process.                                                                                                                                               |
 | `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                                                   |
 | `--reapply-local-overrides`                      | Replay trusted local packaged `dist` edits when the new package has the same baseline. Otherwise preserve them for manual recovery.                                                                                                                                                                                                                               |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes during post-update sync. This acknowledges the exact staged capability surface; it does not disable capability checks or establish future trust.                                                                                                                                                                 |
@@ -1111,8 +1111,8 @@ retired, and registered custom agent stores and names every incompatible store
 before changing the installation or stopping the Gateway. State newer than the
 updater can read retains a single install-compatible-build or restore-backup refusal.
 
-During candidate validation, Doctor leaves bookkeeping-only version, wizard, and
-migration stamps out of the copied config so older updaters do not mistake them
+During an older updater's private rehearsal, Doctor leaves bookkeeping-only version, wizard, and
+migration stamps out of the copied config so those updaters do not mistake them
 for required config repairs. Webhook completion without endpoint changes is
 recorded in the rehearsal state. Real config migrations still run; normal config
 writes after activation record the candidate's version and migration metadata.
@@ -1158,7 +1158,7 @@ completion in a new shell profile remains an interactive choice.
 govern later foreground and automatic updates, even after a one-off beta
 install. Use `--channel` to change that policy.
 
-For explicit package artifacts, configured plugin availability is checked against the privately staged package version before rehearsal or activation. `--dry-run` does not stage the artifact and reports that this check remains pending.
+For explicit package artifacts, configured plugin availability is checked against the privately staged package version before activation. `--dry-run` does not stage the artifact and reports that this check remains pending.
 
 Managed update handoffs preserve the selected artifact, including already-current
 repeats, so target checks use that artifact's database schema and runtime requirements.
