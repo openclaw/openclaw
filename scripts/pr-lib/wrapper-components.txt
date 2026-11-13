@@ -1166,6 +1166,7 @@ src/infra/net/undici-family-policy.ts
 src/infra/net/undici-global-dispatcher.ts
 src/infra/net/undici-runtime.ts
 src/infra/node-compile-cache-env.ts
+src/infra/node-filesystem-policy.ts
 src/infra/node-runner-inventory.ts
 src/infra/node-runtime-executable.ts
 src/infra/node-sqlite.ts
