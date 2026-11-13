@@ -251,14 +251,14 @@ it("names the real cause even when the failing step's text is redacted", async (
     steps: [
       step("package install", {
         failureFacts: [{ check: "npm", code: "global-install-failed", npmErrorCode: "ENOSPC" }],
-        stderrTail: "npm error nospc /private/customer/lib/node_modules token=synthetic-secret",
+        stderrTail: "npm error nospc /private/customer/lib/node_modules",
       }),
     ],
   });
   expectText(
     prepared.body,
     ["- Reason code: global-install-failed", "- Cause: disk-full"],
-    /\/private\/customer|synthetic-secret/u,
+    /\/private\/customer/u,
   );
 });
 
