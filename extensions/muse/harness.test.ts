@@ -721,6 +721,8 @@ describe("Muse native MSP harness", () => {
       );
       const models = await harness.loadModelCatalog(scope);
       expect(models).toMatchObject(rows.map(([id, name]) => ({ id, name })));
+      // Rows without an MSP contextLimit leave the window to core rather than guessing one.
+      expect(Array.isArray(models) && !models.some((model) => "contextWindow" in model)).toBe(true);
       vi.stubEnv("MUSE_FIXTURE_CATALOG_PATH", undefined);
       vi.stubEnv("MUSE_FIXTURE_CATALOG_SOURCE", "bundledCatalog");
       await writeFile(join(stateDir, "muse", "muse", "auth.json"), '{"changed":true}');

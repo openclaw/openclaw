@@ -1,0 +1,2 @@
+2
+# Muse catalog reader: native MSP contextLimit becomes the catalog contextWindow; rows without one stay unset.
