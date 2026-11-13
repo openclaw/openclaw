@@ -9,7 +9,7 @@ import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
 import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import {
-  reportStatusScanFailure,
+  reportStatusScanFailureUnlessInterrupted,
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
@@ -50,7 +50,7 @@ export async function runStatusJsonCommand(params: {
         params.runtime,
       ),
     )
-    .catch((error: unknown) => reportStatusScanFailure(error, params.runtime, opts.timeoutMs));
+    .catch((error: unknown) => reportStatusScanFailureUnlessInterrupted(error, params.runtime, opts.timeoutMs));
   if (!scan) {
     return;
   }

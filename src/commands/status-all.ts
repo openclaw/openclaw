@@ -303,9 +303,6 @@ export async function statusAllCommand(
         summarizingChannels: "Summarizing channels…",
       },
     }).catch((error: unknown) => reportStatusScanFailure(error, runtime, opts?.timeoutMs));
-    if (!overview) {
-      return;
-    }
     progress.setLabel("Checking services…");
     const [daemon, nodeService] = await resolveStatusServiceSummaries(opts.timeoutMs);
     const nodeOnlyGateway = await resolveNodeOnlyGatewayInfo({
