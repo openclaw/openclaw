@@ -7,6 +7,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { NodeRegistry } from "../../node-registry.js";
+import { GatewayOperatorAccessUnavailableError } from "../../operator-access-policy.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
 import { dispatchProfile } from "../client-fixtures.test-support.js";
 import type { GatewayWsClient } from "../ws-types.js";
@@ -109,6 +110,50 @@ function createDispatcher(
   const harness = createDispatchTestHarness({ connId: client.connId });
   return { socket, client, ...harness };
 }
+
+it.each(["admission", "response"])(
+  "reports a retryable policy error at %s without closing the connection",
+  async (phase) => {
+    const fixture = createDispatcher();
+    const grant = new AbortController();
+    let unavailable = phase === "admission";
+    fixture.client.internal = {
+      operatorAccessAuthority: {
+        signal: grant.signal,
+        assertCurrent: () => {
+          grant.signal.throwIfAborted();
+          if (unavailable) throw new GatewayOperatorAccessUnavailableError();
+        },
+      },
+    };
+    handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
+      unavailable = phase === "response";
+      options.respond(true, { privateResult: "must not disclose" });
+    });
+    await fixture.dispatcher.dispatch(requestFrame("failed", "health"), fixture.client);
+    expect(await fixture.awaitResponseFrame("failed")).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        retryable: true,
+        details: { code: "OPERATOR_ACCESS_UNAVAILABLE" },
+      },
+    });
+    expect((await fixture.awaitResponseFrame("failed")).payload).toBeUndefined();
+    expect(fixture.close).not.toHaveBeenCalled();
+    expect(grant.signal.aborted).toBe(false);
+    unavailable = false;
+    handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) =>
+      options.respond(true, { recovered: true }),
+    );
+    await fixture.dispatcher.dispatch(requestFrame("recovered", "health"), fixture.client);
+    expect(await fixture.awaitResponseFrame("recovered")).toMatchObject({
+      ok: true,
+      payload: { recovered: true },
+    });
+    expect(fixture.close).not.toHaveBeenCalled();
+  },
+);
 
 describe("authenticated WebSocket request cancellation", () => {
   it.each([

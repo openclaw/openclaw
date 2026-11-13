@@ -22,6 +22,7 @@ import {
   parseDiagnosticTraceparent,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
@@ -342,9 +343,19 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         error?: ErrorShape,
         meta?: Record<string, unknown>,
       ) => {
-        if (!policyResponse?.pending && !hasCurrentClientAuthority()) {
-          diagnostics?.response("suppressed");
-          return;
+        try {
+          if (!policyResponse?.pending && !hasCurrentClientAuthority()) {
+            diagnostics?.response("suppressed");
+            return;
+          }
+        } catch (cause) {
+          if (!isOperatorAuthorityUnavailable(cause)) {
+            throw cause;
+          }
+          // A policy outage may disclose only its identity-free failure, never the payload.
+          ok = false;
+          payload = undefined;
+          error = errorShapeFromError(ErrorCodes.UNAVAILABLE, cause);
         }
         try {
           let responseOk = ok;
@@ -447,8 +458,15 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         return true;
       };
       const respondWithAuthority: typeof respond = (ok, payload, error, meta) => {
-        if (hasCurrentRuntimeAuthority()) {
-          respond(ok, payload, error, meta);
+        try {
+          if (hasCurrentRuntimeAuthority()) {
+            respond(ok, payload, error, meta);
+          }
+        } catch (cause) {
+          if (!isOperatorAuthorityUnavailable(cause)) {
+            throw cause;
+          }
+          publishResponse(false, undefined, errorShapeFromError(ErrorCodes.UNAVAILABLE, cause));
         }
       };
       const policyResponse = registerGatewayPolicyResponse(
@@ -617,6 +635,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           ? params.handler.nodeLifecycleDispatch.dispatch(req.method, dispatchRequest)
           : dispatchRequest();
       await requestDispatch;
+    } catch (error) {
+      if (!isOperatorAuthorityUnavailable(error)) {
+        throw error;
+      }
+      // Profile binding can fail before the ordinary response guard has been installed.
+      sendResponse({
+        type: "res",
+        id: req.id,
+        ok: false,
+        error: errorShapeFromError(ErrorCodes.UNAVAILABLE, error),
+      });
     } finally {
       try {
         releaseAuthority();
