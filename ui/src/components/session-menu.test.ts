@@ -109,7 +109,6 @@ describe("session menu", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledWith("users.list", {}));
     expect(menu.textContent).toContain("Loading");
     expectCurrentOwner();
-
     pending.reject(new Error("Directory is temporarily unavailable."));
     await waitForFast(() =>
       expect(menu.querySelector('[role="alert"]')?.textContent).toContain(
@@ -226,6 +225,7 @@ describe("session menu", () => {
   it("filters owner names typed in another Unicode form", async () => {
     const owner = createSessionOwnerMenuHarness(() => sessionOwnerProfiles("Jose\u0301", "Zoë"));
     const menu = await mountMenu({ context: owner.context });
+    await waitForOwners(menu, ["Me", "Research", "Jose\u0301", "Zoë"]);
     const panel = await openSubmenu(menu, "Assign to…");
     panel.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
     await settleSessionMenu(menu);
