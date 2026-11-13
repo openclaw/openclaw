@@ -6596,9 +6596,9 @@ Cron retention discovery shares the session-store pool with exact-entry and proj
 reads. Foreground history keeps its own queue while full-store validation runs.
 The pool retains the same admission, revocation, cleanup, and idle-retirement rules;
 a database close joins every lane that holds it. Workers are created on demand and
-retire on idle timeout or after one continuous idle second under critical memory
-pressure. This avoids repeatedly reloading workers between adjacent requests;
-explicit database closure and shutdown still drain immediately. Discovery validates the
+retire on idle timeout or after one continuous idle second under moderate memory
+pressure, so adjacent requests reuse workers. Critical pressure reclaims idle
+workers immediately; explicit database closure and shutdown still drain immediately. Discovery validates the
 complete physical store's metadata and participants in one read snapshot. Its
 existing full-row decoder streams JSON once and retains prompt snapshots only
 for expired cron runs belonging to the logical agent. The

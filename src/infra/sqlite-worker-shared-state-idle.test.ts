@@ -138,9 +138,9 @@ it("retains pressure retirement across path close and releases its subscription 
   await nextTurn();
   expect(second.worker.threadId).not.toBe(-1);
   expect(await second.read()).toBeUndefined();
-  clock.mockReturnValue(1_000);
+  clock.mockReturnValue(500);
   const secondExited = once(second.worker, "exit");
-  pressure.publish({});
+  pressure.publish(true);
   await secondExited;
   await closeAll();
   expect(pressure.hasSubscribers).toBe(false);

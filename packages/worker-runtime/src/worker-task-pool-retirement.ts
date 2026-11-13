@@ -16,9 +16,9 @@ import type { Slot, WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
 
 const WORKER_WARM_WINDOW_MS = 5 * 60_000;
 
-// A pressure sample between adjacent requests must not repeatedly reload a busy worker.
-export function isWorkerIdleForPressure(idleSince: number | undefined): boolean {
-  return idleSince !== undefined && performance.now() - idleSince >= 1_000;
+// Moderate pressure preserves reuse; critical pressure cannot afford the idle grace.
+export function isWorkerIdleForPressure(idleSince: number | undefined, critical = false): boolean {
+  return idleSince !== undefined && (critical || performance.now() - idleSince >= 1_000);
 }
 
 /** Repeated idle notifications preserve the deadline; only admitted work clears it. */
@@ -436,14 +436,14 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
     },
     clearIdle,
     idle,
-    retireIdle(resourceClosures: WeakMap<WorkerLifecycle, { pending: number }>) {
+    retireIdle(resourceClosures: WeakMap<WorkerLifecycle, { pending: number }>, critical = false) {
       for (const slot of slots) {
         if (
           !slot.task &&
           !slot.retiring &&
           !slot.retirementFailed &&
           slot.worker &&
-          isWorkerIdleForPressure(slot.idleSince) &&
+          isWorkerIdleForPressure(slot.idleSince, critical) &&
           !resourceClosures.get(slot.worker)?.pending
         ) {
           void retire(slot, "memory_pressure").catch(() => undefined);

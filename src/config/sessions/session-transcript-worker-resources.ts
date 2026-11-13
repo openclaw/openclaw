@@ -149,7 +149,7 @@ export const refreshDatabaseWorkerPressureSubscription =
       databaseWorkerLanes.some(
         (lane) => lane.pending > 0 || lane.rotation !== undefined || lane.native,
       ),
-    () => retireIdleDatabaseWorkers(true),
+    (critical) => retireIdleDatabaseWorkers(true, critical),
   );
 
 registerOpenClawStateDatabaseAsyncResource({
@@ -168,13 +168,13 @@ registerOpenClawStateDatabaseAsyncResource({
   },
 });
 
-function retireIdleDatabaseWorkers(pressure = false): void {
+function retireIdleDatabaseWorkers(pressure = false, critical = false): void {
   for (const lane of databaseWorkerLanes) {
     if (
       lane.pending > 0 ||
       lane.rotation ||
       !lane.native ||
-      (pressure && !isWorkerIdleForPressure(lane.idleSince))
+      (pressure && !isWorkerIdleForPressure(lane.idleSince, critical))
     ) {
       continue;
     }

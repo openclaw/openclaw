@@ -233,9 +233,9 @@ function createSharedStateWorkerOwner() {
       });
     }
   });
-  function retireIdleWorkers() {
+  function retireIdleWorkers(critical: boolean) {
     for (const entry of stores) {
-      if (!isWorkerIdleForPressure(entry.idleSince)) {
+      if (!isWorkerIdleForPressure(entry.idleSince, critical)) {
         continue;
       }
       void runInDetachedAsyncContext(() => retireIdle(entry))?.catch((error: unknown) => {
