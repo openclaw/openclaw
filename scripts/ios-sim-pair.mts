@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
@@ -71,7 +72,7 @@ async function waitForGateway(port: number): Promise<boolean> {
     if (await gatewayListening(port)) {
       return true;
     }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await delay(1000);
   }
   return false;
 }
