@@ -518,9 +518,9 @@ it.each([
   let merged = false;
   let reads = 0;
   const writes: unknown[] = [];
-  const github = vi
-    .spyOn(publicationTransport, "runPublicationCommand")
-    .mockImplementation(async (argv, options) => {
+  vi.spyOn(publicationTransport, "runPublicationCommand").mockImplementation(
+    async (argv, options) => {
+      // Match the subprocess boundary: rejected attempts execute no GitHub I/O.
       options?.beforeRun?.();
       if (selfRemoving) {
         expect(context.cron.getJob(job.id)).toBeUndefined();
@@ -549,7 +549,8 @@ it.each([
         }
       }
       return publicationCommandResult(merged);
-    });
+    },
+  );
   const restartEntered = createDeferredCore();
   const restartContinue = createDeferredCore();
   let entered = 0;
@@ -947,7 +948,7 @@ it.each([
       scenario !== "role revoked during merge"
     ) {
       expect(writes).toEqual([]);
-      expect(github).not.toHaveBeenCalled();
+      expect(reads).toBe(0);
       expect(receipt).not.toHaveBeenCalled();
     }
     if (recurring) {
