@@ -647,8 +647,19 @@ Mid-session changes (skills, workspace files, permissions, exec wakes,
 inter-session input, subagent completions) go out as appended deltas: an
 in-history system message where the route supports one (direct Anthropic API
 keys on prefix-binding Claude models, native OpenAI Responses), otherwise a
-user-role note. A tool that the session has not sent before extends the tool
-pin once.
+user-role note.
+
+The session's first request fixes its tool definitions. A later turn that builds
+more tools (for example an exec wake or a subagent handoff) does not add them to
+the request; tools that a turn did not build stay listed and refuse their calls.
+
+One owner sends every foreground request of a session. It sends each earlier
+message exactly as it was first sent and appends only new messages. If replay
+re-derives an already-sent message with different bytes, the owner sends the
+original bytes and logs `[prompt-cache] re-derived history changed ...` once per
+session and message role. A request joins the session's sent prefix only after
+the provider accepts it, so a rejected or aborted request and its retry are not
+held to each other's bytes.
 
 The session prompt rebuilds only at these points:
 
@@ -657,6 +668,11 @@ The session prompt rebuilds only at these points:
 - A model or provider switch, including a change of API, base URL, agent
   harness, tool surface (direct tools, tool search, or Code Mode), or the
   session's selected personal profile.
+- A tool-policy configuration change.
+- A recovery that changes earlier history on purpose: one repair after the
+  provider rejects replayed history (for example an invalid thinking
+  signature), context-overflow truncation of earlier tool results, or idle
+  pruning after the provider cache expired.
 
 These are also the operator refresh points: use `/compact` or `/new` to make the
 model see a fully re-rendered prompt.
@@ -664,12 +680,13 @@ model see a fully re-rendered prompt.
 Known exceptions:
 
 - Remote worker turns still render the system prompt on each turn.
+- The owner keeps the sent prefix in Gateway memory. After a Gateway restart,
+  the first request of a session re-derives history from the transcript.
 - A provider plugin can opt out of retained runtime-context carriers
   (`appendOnlyRuntimeContext: false` in its replay policy), for example for
   Gemini's managed explicit caching or a proxy that misreads a trailing
   carrier. That route then drops the previous turn's carrier, which rewrites
   that turn's tail once.
-- A tool that the session has not sent before extends the tool pin once.
 - Routes that merge consecutive user turns (strict Chat Completions
   compatibility, Google, Bedrock) can rewrite the last message once. This
   happens when a turn with a prompt update ends without a stored assistant
