@@ -258,7 +258,7 @@ it("measures actions at the registered boundary with a large authority inventory
  for(let i=0;i<runs;i++) subagentRuns.set(\`fixture-\${i}\`,createSubagentRunRecord({runId:\`fixture-\${i}\`,childSessionKey:\`agent:main:subagent:fixture-\${i}\`,requesterSessionKey:\`agent:main:fixture:\${i%sessions}\`,completionRequesterSessionId:\`fixture-\${i%sessions}\`,requesterDisplayKey:"fixture",task:"fixture",cleanup:"keep",createdAt:i+1,endedAt:i+2}));
  await using visitors = await startVisitorPublicationFixture(f);
  const current=currentGitHubPublicationConfig();
- const config={...current,gateway:{...current.gateway,roles:{...current.gateway!.roles!,assignments:{byGithubLogin:Object.fromEntries([...Array.from({length:roles},(_,i)=>[\`fixture-\${i}\`,"guest"]),["contributor","guest"]])}}}};
+ const config={...current,agents:{...current.agents,defaults:{...current.agents?.defaults,model:"fixture/model"}},gateway:{...current.gateway,roles:{...current.gateway!.roles!,assignments:{byGithubLogin:Object.fromEntries([...Array.from({length:roles},(_,i)=>[\`fixture-\${i}\`,"guest"]),["contributor","guest"]])}}}};
  setRuntimeConfigSnapshot(config);
  prepareGatewayConnectOperatorAccess(f.guestSource.client);
  const rows=[];
