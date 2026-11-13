@@ -75,7 +75,6 @@ import {
   ModelAccountConnectAuthorityError,
   ModelAccountConnectInputError,
 } from "../model-account-connect-errors.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
 import {
   invalidateOperatorRolePolicy,
   resolveOperatorRoleSelection,
@@ -104,6 +103,7 @@ import {
   prepareAuthenticatedProfile,
   prepareProfileMutationAccess,
   prepareUserProfileAdministration,
+  resolveUserRoleAssignmentError,
 } from "./users-profile-access.js";
 import {
   assertValidParams,
@@ -690,18 +690,8 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     const { profileId, role } = params;
-    const unknownRoleMessage = `unknown operator role "${role}"; define it under gateway.roles.definitions before assigning it`;
-    const roleAssignmentError = () => {
-      if (role === null) {
-        return undefined;
-      }
-      const cfg = context.getRuntimeConfig();
-      const definitions = cfg.gateway?.roles?.definitions;
-      if (definitions && !isNamedOperatorRoleEnforcementEnabled(cfg)) {
-        return "Named-role assignment requires gateway.roles.default to enable named-role enforcement.";
-      }
-      return definitions && Object.hasOwn(definitions, role) ? undefined : unknownRoleMessage;
-    };
+    const roleAssignmentError = () =>
+      resolveUserRoleAssignmentError(() => context.getRuntimeConfig(), role);
     const assignmentError = roleAssignmentError();
     if (assignmentError) {
       respondError(respond, ErrorCodes.INVALID_REQUEST, assignmentError);
