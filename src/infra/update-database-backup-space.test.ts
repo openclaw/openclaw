@@ -87,17 +87,23 @@ it.each([false, true])(
       backupDirectory: f.directory,
     });
     expect(preflight.exitCode, preflight.stderrTail ?? undefined).toBe(0);
+    await f.unchanged();
     const backup = await createUpdateDatabaseBackupInProcess({ ...f, stopped: true });
     expect(backup.databases).toHaveLength(2);
     for (const entry of backup.databases) {
-      using db = new DatabaseSync(entry.snapshotPath, { readOnly: true });
-      expect(db.prepare("SELECT rowid,length(value) AS bytes FROM witness").get()).toEqual({
-        rowid: 42,
-        bytes: entry.path === f.agent ? 4 * 1024 ** 2 : 1,
-      });
-      expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      for (const file of [entry.path, entry.snapshotPath]) {
+        using db = new DatabaseSync(file, { readOnly: true });
+        expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 17 });
+        expect(db.prepare("SELECT rowid,length(value) AS bytes FROM witness").get()).toEqual({
+          rowid: 42,
+          bytes: entry.path === f.agent ? 4 * 1024 ** 2 : 1,
+        });
+        expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      }
     }
-    await f.unchanged();
+    if (!wal) {
+      await f.unchanged();
+    }
   },
 );
 
