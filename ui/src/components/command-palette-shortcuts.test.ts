@@ -70,16 +70,18 @@ describe("CommandPalette platform shortcuts", () => {
       expect(open.defaultPrevented).toBe(true);
       expect(palette.isOpen).toBe(true);
       const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+      input.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+      );
+      await palette.updateComplete;
       const start = palette.querySelector<HTMLButtonElement>(
-        ".cmd-palette__input-actions .cmd-palette__create",
+        ".agent-chat__composer-actions .cmd-palette__create",
       )!;
       expect(start.disabled).toBe(true);
       expect(start.hidden).toBe(false);
-      expect(start.textContent).toContain("New session");
-      expect(start.querySelector("kbd")?.textContent?.replace(/\s+/gu, "").trim()).toBe(
-        platform === "MacIntel" ? "⌘⏎" : "CtrlEnter",
-      );
-      expect(start.querySelectorAll("kbd svg")).toHaveLength(platform === "MacIntel" ? 2 : 0);
+      expect(start.getAttribute("aria-label")).toBe("Start new session in background");
+      // A label on the send button would break the composer's round arrow.
+      expect(start.textContent?.trim()).toBe("");
       const editQuery = chord(other);
       input.dispatchEvent(editQuery);
       expect(editQuery.defaultPrevented).toBe(false);

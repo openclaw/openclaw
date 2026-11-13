@@ -12,6 +12,7 @@ import {
   runHttpConnectionRequest,
   waitForHttpRequestRejection,
 } from "../infra/http-request-lifecycle.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
@@ -127,6 +128,15 @@ export function finishGatewayHttpAuthorityError(res: ServerResponse, error: unkn
   }
   if (error instanceof GatewayOperatorAccessDeniedError) {
     sendGatewayHttpAuthFailure(res, { ok: false, reason: "operator_access_denied" });
+    return true;
+  }
+  if (isOperatorAuthorityUnavailable(error)) {
+    // A handler may already have written before revalidating its response authority.
+    sendGatewayHttpAuthFailure(
+      res,
+      { ok: false, reason: "operator_access_unavailable" },
+      { retryable: false },
+    );
     return true;
   }
   return error instanceof GatewayHttpRequestAuthorityError;

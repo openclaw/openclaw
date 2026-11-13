@@ -144,17 +144,10 @@ it("registers alias batches once and rolls back conflicts without publishing par
     );
   register([...aliases, aliases[0]!], 1000);
   register(aliases, 2000);
-  expect(sql("SELECT COUNT(*) AS count FROM workspace_path_aliases").get()).toEqual({
-    count: 70,
-  });
+  expect(sql("SELECT COUNT(*) AS count FROM workspace_path_aliases").get()).toEqual({ count: 70 });
+  const updatedAt = sql("SELECT updated_at_ms FROM workspace_path_aliases WHERE alias_key = ?");
   for (const alias of aliases) {
-    expect(
-      sql("SELECT updated_at_ms FROM workspace_path_aliases WHERE alias_key = ?").get(
-        alias.workspaceKey,
-      ),
-    ).toEqual({
-      updated_at_ms: 1000,
-    });
+    expect(updatedAt.get(alias.workspaceKey)).toEqual({ updated_at_ms: 1000 });
   }
   const missing = Array.from({ length: 65 }, (_, index) =>
     createWorkspaceStateIdentity(testState.path(`rollback-${index}`)),
@@ -168,9 +161,7 @@ it("registers alias batches once and rolls back conflicts without publishing par
     ),
   ).toThrow("workspace path alias conflicts with canonical state");
   expect(observed.size).toBe(0);
-  expect(sql("SELECT COUNT(*) AS count FROM workspace_path_aliases").get()).toEqual({
-    count: 70,
-  });
+  expect(sql("SELECT COUNT(*) AS count FROM workspace_path_aliases").get()).toEqual({ count: 70 });
 });
 
 it("replaces complete hash sets and removes aliased setup and attestation state", async () => {
@@ -243,15 +234,10 @@ it("refuses a retired Gateway's pending deletion and lets its successor delete s
 
 it("registers and retires aliases in the captured caller-selected state database", async () => {
   const alias = testState.path("workspace-link");
-  const env = {
-    ...process.env,
-    OPENCLAW_STATE_DIR: testState.path("custom-state"),
-  };
+  const env = { ...process.env, OPENCLAW_STATE_DIR: testState.path("custom-state") };
   fs.symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
   const identity = resolveWorkspaceStateIdentity(dir);
-  await mergeWorkspaceSetupState(dir, { bootstrapSeededAt: seededAt }, 1_000, {
-    env,
-  });
+  await mergeWorkspaceSetupState(dir, { bootstrapSeededAt: seededAt }, 1_000, { env });
 
   expect((await read(alias, { env })).identity).toStrictEqual(identity);
   fs.unlinkSync(alias);

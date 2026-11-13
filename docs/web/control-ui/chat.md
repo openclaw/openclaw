@@ -568,7 +568,10 @@ while you use its controls.
 Enable **Settings → Labs → Composer predictions** to try optional next-message
 suggestions. The experiment is off by default. After a reply finishes in the
 active conversation, OpenClaw can make one additional model request and show a
-possible follow-up as muted text in an empty composer. It may show no suggestion.
+possible follow-up as muted text in an empty composer. The suggestion is written
+as your reply: when the assistant asks a question or offers options, it answers
+with the recommended choice. It may show no suggestion, for example while the
+assistant is still working or after an error.
 It does not predict on every keystroke. Each active browser tab can make its own
 prediction request. Read-only, imported, and incognito conversations do not show
 predictions.
@@ -588,7 +591,8 @@ The Labs model selector offers:
   conversation's model override.
 
 Predictions use bounded recent text from the current conversation in an isolated,
-tool-free request. They cannot run tools, retrieve memory, or send messages. An
+tool-free request. Tool calls and results are skipped, and long messages keep
+their endings. They cannot run tools, retrieve memory, or send messages. An
 unavailable selected model skips the suggestion rather than silently switching
 to another model. Enabling the experiment can add model usage and cost; existing
 model configuration, provider credentials, and session access rules still apply.
@@ -1283,14 +1287,7 @@ view. References that change earlier Markdown can also reset the view.
 Completed lists also stay cached as later blocks arrive; loose or nested list
 continuations remain together until the list ends.
 
-Browser results for X and Twitter posts use a wider card with the author, handle,
-available post text, and preview image. **Open post** and **More actions** stay
-visible on touch screens. Text and social images reuse the anonymous page preview;
-when metadata is unavailable, the card keeps the post link and handle. It does
-not load an X embed script or require an X account.
-
-**Copy URL** in browser tab cards also works on plain HTTP connections where the
-browser does not provide its Clipboard API.
+Browser tool calls keep their normal expandable results without automatic page-preview cards. Visiting a page, including an X or Twitter post, does not add a card to the conversation. Links, media, and widgets deliberately included in the assistant’s reply remain visible.
 
 If the browser rejects a text clipboard write, starting another text or image
 copy cancels its delayed fallback. Code blocks replaced during streaming and

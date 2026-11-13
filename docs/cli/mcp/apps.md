@@ -79,6 +79,8 @@ A server advertises entrypoints on its normal tool descriptor:
 
 Global and thread entrypoint tools accept `{}`. File entrypoints declare extensions with a leading dot, such as `.stl`, and receive the selected file's name and host-issued resource URI. The host supplies the initial tool result to the app; the app should render that result instead of repeating the opening tool call.
 
+In Control UI conversations, expanding an App opens it in the existing side panel so the transcript and message composer stay usable. Closing the panel returns the same App inline without reloading its canvas. Narrow layouts use the conversation’s existing mobile panel. Expanded tabs use the owning plugin or MCP server name, with the installed plugin’s portable icon when available. Otherwise, they use advertised App/server artwork or a generic App icon. Ordinary Review panels, board widgets, and standalone App windows keep their own display behavior.
+
 App resource metadata can declare supported and preferred display modes. Apps must inspect the actual host capabilities before using an extension: a standalone channel window does not have every capability of a connected Control UI conversation. Do not infer file, messaging, or model-context authority from a successful MCP connection alone.
 
 When an App asks to send a message to the assistant, review its preview and choose **Send** or **Cancel** in the App pane's confirmation strip.
