@@ -287,9 +287,15 @@ export function installEmbeddedAttemptStreamGuards(
     isOpenAIResponsesApi,
   };
   let normalizeToolCallIds: Parameters<typeof wrapStreamFnWithMessageTransform>[1] | undefined;
+  // A session fork spells ids the same way but keeps its own placeholders for running calls.
+  let normalizeForkToolCallIds: typeof normalizeToolCallIds;
   if (shouldApplyReplayToolCallIdSanitizer(replayToolCallIdSanitizerDecision)) {
     const mode = replayToolCallIdSanitizerDecision.toolCallIdMode;
-    normalizeToolCallIds = (messages, model) =>
+    const normalize = (
+      messages: Parameters<NonNullable<typeof normalizeToolCallIds>>[0],
+      model: Parameters<NonNullable<typeof normalizeToolCallIds>>[1],
+      repairToolUseResultPairing: boolean | undefined,
+    ) =>
       sanitizeReplayToolCallIdsForStream({
         messages,
         mode,
@@ -301,8 +307,11 @@ export function installEmbeddedAttemptStreamGuards(
           provider: attempt.provider,
           policy: transcriptPolicy,
         }),
-        repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
+        repairToolUseResultPairing,
       });
+    normalizeToolCallIds = (messages, model) =>
+      normalize(messages, model, transcriptPolicy.repairToolUseResultPairing);
+    normalizeForkToolCallIds = (messages, model) => normalize(messages, model, false);
   }
 
   // Responses and eligible Anthropic routes replay provider checkpoints; a rejected one must be
@@ -468,6 +477,7 @@ export function installEmbeddedAttemptStreamGuards(
   });
   return {
     normalizeToolCallIds,
+    normalizeForkToolCallIds,
     /** Returns the measured predecessor that may anchor this exact request's pressure. */
     onModelRequest: async (
       ...args: [

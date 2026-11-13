@@ -68,6 +68,7 @@ export async function runEmbeddedAttemptExecutionPhase(
   const idleTimeoutTriggerRef: { current?: (error: Error) => void } = {};
   const {
     normalizeToolCallIds,
+    normalizeForkToolCallIds,
     onModelRequest,
     onModelUsage,
     getPromptCacheObservation,
@@ -158,8 +159,15 @@ export async function runEmbeddedAttemptExecutionPhase(
     attempt,
     agentSession: sessionRuntime.agentSession,
     getUserTranscriptContexts: sessionRuntime.boundary.getUserTranscriptContexts,
-    projectSessionForkMessages: (messages) =>
-      replayToolResultPromptProjections(messages, sessionRuntime.toolResultPromptProjectionState),
+    projectSessionForkMessages: (messages) => {
+      const projected = replayToolResultPromptProjections(
+        messages,
+        sessionRuntime.toolResultPromptProjectionState,
+      );
+      // A fork sends the session's in-flight calls before the session's own next request does;
+      // it uses the same id normalizer, so both requests spell every id alike.
+      return normalizeForkToolCallIds?.(projected, attempt.model) ?? projected;
+    },
     readSessionForkBoundary: () => ({
       timezone: sessionRuntime.boundary.boundaryTimezone,
       includeTimestamp: sessionRuntime.boundary.includeBoundaryTimestamp,
