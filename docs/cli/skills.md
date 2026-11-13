@@ -170,6 +170,8 @@ Notes:
 
 Press Ctrl-C to cancel a pending search or Trending request without printing results afterward.
 
+Press Ctrl-C during `update --all` to stop before the next skill; the skill already updating finishes.
+
 | Flag/behavior                    | Description                                                                                                                                                                                                                                                                                                                       |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `search [query...]`              | Optional query; omit it to browse the ClawHub Trending skills feed.                                                                                                                                                                                                                                                               |
