@@ -141,7 +141,7 @@ export function createSidebarPeople(
         loading = null;
         if (requestGeneration === generation && host.isConnected) {
           clearPending();
-          showToast({ message: t("presence.card.loadFailed") });
+          showToast({ severity: "error", message: t("presence.card.loadFailed") });
         }
       },
     );

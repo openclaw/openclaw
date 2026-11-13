@@ -203,10 +203,7 @@ export async function restoreControlUiLocaleArtifacts(params: {
       artifact.memories.length !== expected.size ||
       artifact.memories.some((memory) => !expected.has(memory.path));
     const canonicalChanged = changed.some(
-      (file) =>
-        file === "ui/src/i18n/.i18n/glossary." + locale + ".json" ||
-        expected.has(file) ||
-        expected.has(file.replace(/\.meta\.json$/u, ".tm.jsonl")),
+      (file) => expected.has(file) || expected.has(file.replace(/\.meta\.json$/u, ".tm.jsonl")),
     );
     if (policyChanged || ownershipChanged || canonicalChanged) {
       // A current canonical correction or policy change wins over worker data.

@@ -124,9 +124,10 @@ invoker. When admission has a verified human requester, `representedSubject`
 records that person's installation-local pseudonym separately. A supported
 explicit user selection can therefore create a child representing Bob while
 the parent execution continues as Alice. This does not mean Bob personally
-requested or approved the tool call. Agent-initiated `sessions_create` and
-`sessions_send` executions also record the trusted agent invoker and prepared
-human subject when available; they do not invent spawn lineage. The lineage
+requested or approved the tool call. Agent-initiated `sessions_send` executions also record the trusted agent invoker
+and prepared human subject when available; they do not invent spawn lineage.
+`sessions_create` uses the visible-spawn creation path, so its opening execution
+records the same lineage as `sessions_spawn`. The lineage
 projection for `sessions_spawn` links the
 parent context, execution, run, and agent when the exact private parent token
 was available. Its delegation reference covers the spawn relation plus the

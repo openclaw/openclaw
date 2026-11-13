@@ -5,6 +5,7 @@ import {
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
+import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http.js";
@@ -18,9 +19,11 @@ const unauthorized = async () => ({ kind: "unauthorized" as const });
 
 async function withTransferServer({
   run,
+  tunnel,
   ...options
 }: Partial<Parameters<typeof createGatewayHttpServer>[0]> & {
   run: (origin: string) => Promise<void>;
+  tunnel?: boolean;
 }) {
   const hooks = vi.fn(async () => false);
   const server = createGatewayHttpServer({
@@ -32,6 +35,15 @@ async function withTransferServer({
     getRuntimeConfig: () => ({}),
     ...options,
   });
+  if (tunnel) {
+    server.prependListener("request", (req) =>
+      markGatewayIngressTransport(req, {
+        kind: "openclaw-id-tunnel",
+        peerKey: `iroh:${"a3".repeat(32)}`,
+        clientIp: "fd69:726f:6800::3",
+      }),
+    );
+  }
   const origin = await listenLoopback(server);
   try {
     await run(origin);
@@ -174,6 +186,44 @@ it("rate-limits invalid transfer auth before invoking the callback again", async
       expect(limited.headers.get("retry-after")).toBe("60");
       await expect(limited.json()).resolves.toEqual({ error: "rate_limited" });
       expect(callback).toHaveBeenCalledOnce();
+    },
+  });
+});
+
+// Tunnel W grants no HTTP operator access: these routes retain their separate capabilities.
+it("accepts tunnel-attributed bundle and workspace transfers only with their own credentials", async () => {
+  const callback = async ({
+    bearer,
+    res,
+  }: {
+    bearer: string;
+    res: import("node:http").ServerResponse;
+  }) =>
+    bearer === "transfer-capability"
+      ? {
+          kind: "authorized" as const,
+          handle: () => {
+            res.end("transfer");
+          },
+        }
+      : { kind: "unauthorized" as const };
+  await withTransferServer({
+    tunnel: true,
+    resolvedAuth: { mode: "token", token: "unrelated-gateway-token", allowTailscale: false },
+    handleNodeWorkerBundleTransferRequest: callback,
+    handleNodeWorkspaceTransferRequest: callback,
+    run: async (origin) => {
+      for (const path of [
+        `/__openclaw__/worker-bundle/v1/bundles/${digest}`,
+        `${transferPath}/snapshots/${digest}/pack`,
+      ]) {
+        const refused = await authorizedFetch(`${origin}${path}`, "unrelated-gateway-token");
+        expect(refused.status).toBe(404);
+        await refused.arrayBuffer();
+        const accepted = await authorizedFetch(`${origin}${path}`, "transfer-capability");
+        expect(accepted.status).toBe(200);
+        expect(await accepted.text()).toBe("transfer");
+      }
     },
   });
 });

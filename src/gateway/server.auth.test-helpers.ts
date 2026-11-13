@@ -5,6 +5,7 @@ import { expect } from "vitest";
 import { WebSocket } from "ws";
 import { buildDeviceAuthPayload } from "../../packages/gateway-client/src/device-auth.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { acquireGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import type { GatewayAuthConfig, GatewayConfig } from "../config/types.gateway.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
@@ -83,10 +84,7 @@ export async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<
 async function openAuthWs(url: string, headers?: Record<string, string>) {
   const ws = new WebSocket(url, headers ? { headers } : undefined);
   trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => {
-    ws.once("open", resolve);
-  });
-  return ws;
+  return await acquireGatewayTestWebSocket(ws, 10_000);
 }
 
 export const openWs = (port: number, headers?: Record<string, string>) =>

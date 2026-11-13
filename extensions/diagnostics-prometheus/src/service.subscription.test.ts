@@ -305,23 +305,47 @@ it("replaces trusted retention gauges and clears them on retirement", () => {
     entries: 25600,
     estimatedBytes: 24985600,
   } as const;
+  const projection = {
+    type: "sessions.projection.retention",
+    projections: 2,
+    entries: 700,
+    estimatedBytes: 59040000,
+    truncatedProjections: 1,
+  } as const;
   metrics.record(list);
   metrics.record(rows);
+  metrics.record(projection);
   const retained = metrics.render();
   expectMetrics(retained)(`openclaw_session_event_rows_retained_bytes 24985600
 openclaw_session_event_rows_retained_entries 25600
+openclaw_session_projection_owners 2
+openclaw_session_projection_rows_retained_entries 700
+openclaw_session_projection_rows_retained_bytes 59040000
+openclaw_session_projection_rows_estimate_truncated 1
 openclaw_sessions_list_retained_bytes 3504
 openclaw_sessions_list_retained_refs 17
 openclaw_sessions_list_retained_views 3`);
   for (const metadata of [untrusted, { trusted: false, internal: true }]) {
     metrics.record({ ...list, views: 99 }, metadata);
     metrics.record({ ...rows, entries: 99 }, metadata);
+    metrics.record({ ...projection, entries: 99 }, metadata);
   }
   expect(metrics.render()).toBe(retained);
   metrics.record({ ...list, views: 0, refs: 0, estimatedBytes: 0 });
   metrics.record({ ...rows, entries: 0, estimatedBytes: 0 });
+  metrics.record({
+    ...projection,
+    projections: 0,
+    entries: 0,
+    estimatedBytes: 0,
+    truncatedProjections: 0,
+  });
   expectMetrics(metrics.render())(`openclaw_session_event_rows_retained_bytes 0
 openclaw_session_event_rows_retained_entries 0
+openclaw_session_projection_owners 0
+openclaw_session_projection_rows_retained_entries 0
+openclaw_session_projection_rows_retained_bytes 0
+openclaw_session_projection_rows_estimate_truncated 0
 openclaw_sessions_list_retained_bytes 0
 openclaw_sessions_list_retained_refs 0
 openclaw_sessions_list_retained_views 0`);

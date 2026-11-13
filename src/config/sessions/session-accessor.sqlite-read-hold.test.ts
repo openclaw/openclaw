@@ -6,10 +6,8 @@ import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { readActiveTranscriptEntryAnchor, replaceSessionEntry } from "./session-accessor.js";
-import {
-  readTranscriptExportSnapshotReadOnlySync,
-  readTranscriptStatsSync,
-} from "./session-accessor.sqlite-read.js";
+import { readTranscriptExportSnapshotReadOnlySync } from "./session-accessor.sqlite-export-read.js";
+import { readTranscriptStatsSync } from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,

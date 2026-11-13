@@ -80,13 +80,13 @@ describe("agents skills panel (browser)", () => {
     mountSolid(AgentSkills, params, container);
     await waitForSolid(() => {
       expect(container.querySelectorAll(".agent-skill-row")).toHaveLength(2);
-      expect(container.textContent).toContain("Loading");
+      expect(container.textContent).toContain("Refreshing");
     });
     const rows = [...container.querySelectorAll(".agent-skill-row")];
     const filter = container.querySelector("input[name=agent-skills-filter]");
 
     pending.resolve(structuredClone(params.agentSkillsReport!));
-    await waitForSolid(() => expect(container.textContent).not.toContain("Loading"));
+    await waitForSolid(() => expect(container.textContent).not.toContain("Refreshing"));
     const currentRows = [...container.querySelectorAll(".agent-skill-row")];
     expect(currentRows).toHaveLength(rows.length);
     rows.forEach((row, index) => expect(currentRows[index]).toBe(row));
@@ -111,7 +111,7 @@ describe("agents skills panel (browser)", () => {
     const { container, params } = view;
     await waitForSolid(() => {
       expect(container.querySelectorAll(".agent-skill-row")).toHaveLength(2);
-      expect(container.textContent).not.toContain("Loading");
+      expect(container.textContent).not.toContain("Refreshing");
     });
     const rows = view.rows();
     expect(rows[0]!.textContent).toContain("bin:any of (claude, codex, opencode)");
@@ -122,7 +122,7 @@ describe("agents skills panel (browser)", () => {
       ...params,
       agentSkillsRead: { agentId: "main", result: refreshed.promise },
     });
-    await view.text(["Loading"]);
+    await view.text(["Refreshing"]);
     expect(view.filter()).toBe(filter);
     view.expectRows(rows);
 
@@ -218,7 +218,7 @@ describe("agents skills panel (browser)", () => {
       agentSkillsRead: { agentId: "main", result: initial.promise },
     });
     const { params } = view;
-    await view.text(["Loading"], ["No skills found.", "0 shown"]);
+    await view.text(["Refreshing"], ["No skills found.", "0 shown"]);
     initial.reject(new Error("Initial skills failure"));
     const onRefresh = vi.fn(() =>
       view.update({
@@ -231,7 +231,7 @@ describe("agents skills panel (browser)", () => {
     await view.text(["Initial skills failure"], ["No skills found.", "0 shown"]);
     view.button("Refresh").click();
     expect(onRefresh).toHaveBeenCalledOnce();
-    await view.text(["Loading"], ["Initial skills failure", "No skills found.", "0 shown"]);
+    await view.text(["Refreshing"], ["Initial skills failure", "No skills found.", "0 shown"]);
     const report = {
       workspaceDir: "/workspace/synthetic",
       managedSkillsDir: "/skills/synthetic",
@@ -245,7 +245,7 @@ describe("agents skills panel (browser)", () => {
       agentSkillsAgentId: "main",
       agentSkillsRead: { agentId: "main", result: refreshed.promise },
     });
-    await view.text(["Synthetic cached skill", "Loading"]);
+    await view.text(["Synthetic cached skill", "Refreshing"]);
     refreshed.reject(new Error("Synthetic skills failure"));
     await view.text(["Synthetic skills failure", "Synthetic cached skill"]);
     const empty = mountSkills([]);
@@ -261,7 +261,7 @@ describe("agents skills panel (browser)", () => {
         agentSkillsRead: { agentId: "main", result: retired.promise },
       });
       const { params } = view;
-      await view.text(["Loading"]);
+      await view.text(["Refreshing"]);
       const agentId = replacement === "agent" ? "other" : "main";
       view.update({
         ...params,
@@ -300,7 +300,7 @@ describe("agents skills panel (browser)", () => {
           (element) => element.textContent === label,
         );
       await waitForSolid(() => {
-        expect(button("Loading…")?.disabled).toBe(true);
+        expect(button("Refreshing…")?.disabled).toBe(true);
         expect(container.querySelectorAll(".agent-skill-row")).toHaveLength(cached ? 1 : 0);
         expect(container.textContent).not.toContain("Load skills for this agent");
       });
@@ -309,7 +309,7 @@ describe("agents skills panel (browser)", () => {
 
       pending.resolve(undefined);
       await waitForSolid(() => {
-        expect(button("Loading…")).toBeUndefined();
+        expect(button("Refreshing…")).toBeUndefined();
         expect(button("Refresh")?.disabled).toBe(false);
         expect(container.querySelectorAll(".agent-skill-row")).toHaveLength(cached ? 1 : 0);
         if (cached) {

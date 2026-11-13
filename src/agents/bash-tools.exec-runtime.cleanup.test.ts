@@ -210,6 +210,7 @@ it.each([
     markBackgrounded(guest.session);
     markBackgrounded(other.session);
     try {
+      expect(guest.session.sandboxContainerName).toBe("shared-fixture");
       expect(sandbox.buildExecSpec).toHaveBeenCalledWith(
         expect.objectContaining({
           env: expect.objectContaining({ CODEX_SANDBOX_EXEC_ID: "guest" }),
@@ -366,6 +367,39 @@ it.each([
       finalization.release();
       await run?.promise;
     }
+  },
+);
+
+const descendantCleanupFailure = "service child cleanup did not complete before its hard deadline";
+
+it.each([
+  { exitCode: 0, status: "completed", reported: "@1\n\nOpenClaw could not confirm" },
+  {
+    exitCode: 3,
+    status: "completed",
+    reported: "(Command exited with code 3)\n\nOpenClaw could not confirm",
+  },
+  { exitCode: 127, status: "failed", reported: descendantCleanupFailure },
+])(
+  "keeps the observed exit when descendant cleanup is unconfirmed (exitCode=$exitCode)",
+  async ({ exitCode, status, reported }) => {
+    const cleanupScope = createAgentCleanupScope();
+    queueRun(async () => createRunExit({ exitCode }), "@1\n", {
+      waitForExtinction: async () => {
+        throw new Error(descendantCleanupFailure);
+      },
+    });
+    await cleanupScope.run(async () => {
+      const run = await runTestExecProcess({ command: "tmux new -d" });
+      await expect(run.promise).resolves.toMatchObject({
+        status,
+        exitCode,
+        aggregated: expect.stringContaining(reported),
+      });
+      expect(run.session.aggregated).toContain("@1");
+      expect(run.session.cleanupUncertain || run.session.finalizationFailed).toBe(true);
+    });
+    expect(cleanupScope.outcome).toBe("uncertain");
   },
 );
 

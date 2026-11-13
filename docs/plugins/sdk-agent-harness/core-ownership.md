@@ -255,7 +255,7 @@ native session's model and connection.
 
 ### Native setup verification
 
-For profileless Model Setup activation, a harness with `authBootstrap: "harness"`
+For profileless Models activation, a harness with `authBootstrap: "harness"`
 can implement `verifySetup(ctx): Promise<void>`. The context provides `config`,
 `provider`, `modelId`, `workspaceDir`, `signal`, and `assertCurrent()`.
 Import its type from `openclaw/plugin-sdk/agent-harness`.

@@ -184,7 +184,7 @@ it("leaves Agents through RouterOutlet while its admitted default write settles 
     await router.navigate("agents", context);
     const defaultItem = () =>
       [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) =>
-        /^(Set Default|Saving)/.test(item.textContent?.trim() ?? ""),
+        /^(Set default|Saving)/.test(item.textContent?.trim() ?? ""),
       );
     const trigger = await waitForSolid(() => {
       const element = mounted.container.querySelector<HTMLButtonElement>(
@@ -195,7 +195,7 @@ it("leaves Agents through RouterOutlet while its admitted default write settles 
     });
     trigger.click();
     const control = await waitForSolid(() => {
-      expect(defaultItem()?.textContent).toContain("Set Default");
+      expect(defaultItem()?.textContent).toContain("Set default");
       return defaultItem()!;
     });
     control.click();
@@ -259,7 +259,7 @@ it("leaves Agents through RouterOutlet while its admitted file write settles", a
   const client = createTestGatewayClient(request);
   const currentGateway = gateway({
     ...snapshot(client),
-    hello: gatewayHelloForMethods(["agents.files.set"]),
+    hello: gatewayHelloForMethods(["agents.files.list", "agents.files.get", "agents.files.set"]),
   });
   const agents = agentsCapability(async () => ({
     agentId: "main",
@@ -329,7 +329,7 @@ it("leaves the avatar route before its admitted generation settles", async () =>
   });
   const currentGateway = gateway({
     ...snapshot(createTestGatewayClient(request)),
-    hello: gatewayHelloForMethods(["agents.update", "agents.avatar.generate"]),
+    hello: gatewayHelloForMethods(["agents.list", "agents.update", "agents.avatar.generate"]),
   });
   const agents = agentsCapability(async () => ({ agentId: "main", workspace: "", files: [] }));
   const baseContext = pageContext(currentGateway, agents);
@@ -356,7 +356,7 @@ it("leaves the avatar route before its admitted generation settles", async () =>
     );
     generateTab.click();
     const prompt = await waitForSolid(() =>
-      mounted.getByRole<HTMLTextAreaElement>("textbox", { name: "Describe your blobster..." }),
+      mounted.getByRole<HTMLTextAreaElement>("textbox", { name: "Describe your blobster…" }),
     );
     prompt.value = "A patient gardener";
     prompt.dispatchEvent(new Event("input", { bubbles: true }));

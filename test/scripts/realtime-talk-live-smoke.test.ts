@@ -1,7 +1,7 @@
 import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { RealtimeVoiceBridgeCreateRequest } from "../../src/talk/provider-types.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../../src/talk/provider-contexts.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../helpers/promise.js";
 
 const backend = vi.hoisted(() => ({ onFirstAudio: () => {} }));

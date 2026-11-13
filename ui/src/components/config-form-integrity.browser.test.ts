@@ -272,7 +272,7 @@ describe("config form integrity", () => {
         onPatch,
       });
 
-      const addEntry = button(container, "Add Entry");
+      const addEntry = button(container, "Add");
       addEntry.click();
       const draftHost = expectElement(
         container.querySelector<HTMLElement>("openclaw-config-form-collection-draft"),
@@ -291,7 +291,7 @@ describe("config form integrity", () => {
         draft.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
         "[data-collection-draft-value]",
       );
-      const commit = button(draft, "Add Entry");
+      const commit = button(draft, "Add entry");
       typeValue(key, "fixed");
       typeValue(value, "123");
       flush();
@@ -311,7 +311,7 @@ describe("config form integrity", () => {
       );
       typeValue(invalidValueInput, "abc");
       flush();
-      button(draftHost, "Add Entry").click();
+      button(draftHost, "Add entry").click();
       flush();
       const invalidValue = expectElement(
         draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
@@ -322,7 +322,7 @@ describe("config form integrity", () => {
 
       typeValue(invalidValue, "123");
       flush();
-      button(draftHost, "Add Entry").click();
+      button(draftHost, "Add entry").click();
       expect(onPatch).toHaveBeenCalledWith(["aliases"], { [entryKey]: "123" });
       flush();
       expect(container.querySelector(".cfg-map .cfg-collection-draft")).toBeNull();

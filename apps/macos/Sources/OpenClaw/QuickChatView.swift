@@ -490,7 +490,9 @@ struct QuickChatView: View {
         if case let .failed(message) = self.model.sendState { return (message, true) }
         if let message = self.model.textContextCaptureMessage { return (message, false) }
         if let message = self.model.dictationStatusMessage { return (message, true) }
-        if let message = self.model.modelControlStatusMessage { return (message, true) }
+        if self.model.connectionGate == .available, let message = self.model.modelControlStatusMessage {
+            return (message, true)
+        }
         if let message = self.replyBinding.pasteStatusMessage { return (message, true) }
         if let message = self.model.connectionStatusMessage { return (message, false) }
         return nil

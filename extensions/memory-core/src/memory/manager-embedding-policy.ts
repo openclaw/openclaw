@@ -6,6 +6,8 @@ import {
   formatEmbeddingModelInput,
   resolveEmbeddingInputFormatVersion,
   type EmbeddingInput,
+  type MemoryEmbeddingProvider,
+  type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
@@ -13,10 +15,21 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { EmbeddingProvider } from "./embeddings.js";
+import type { MemoryEmbeddingBatchConfig } from "./manager-sync-base.js";
+
+export function resolveMemoryIndexConcurrency(
+  batch: Pick<MemoryEmbeddingBatchConfig, "enabled" | "concurrency">,
+  runtime?: MemoryEmbeddingProviderRuntime,
+): number {
+  if (batch.enabled) {
+    return batch.concurrency;
+  }
+  const declared = runtime?.inlineIndexConcurrency;
+  return declared !== undefined && Number.isSafeInteger(declared) && declared > 0 ? declared : 4;
+}
 
 export function embedMemoryQuery(
-  provider: EmbeddingProvider,
+  provider: MemoryEmbeddingProvider,
   text: string,
   settings: Pick<ResolvedMemorySearchConfig, "queryInstruction" | "inputFormat">,
   options: EmbeddingProviderCallOptions,
@@ -35,7 +48,7 @@ export function embedMemoryQuery(
 }
 
 export function embedMemoryDocuments(
-  provider: EmbeddingProvider,
+  provider: MemoryEmbeddingProvider,
   inputs: Array<string | EmbeddingInput>,
   inputFormat: ResolvedMemorySearchConfig["inputFormat"],
   options: EmbeddingProviderCallOptions,

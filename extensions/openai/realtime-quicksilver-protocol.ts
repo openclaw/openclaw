@@ -95,8 +95,7 @@ export async function closeOpenAILiveSocket(
       const timeout = setTimeout(
         () => finish(new Error("GPT-Live session.closed timed out; finalization is unconfirmed")),
         15_000,
-      );
-      timeout.unref?.();
+      ).unref();
       socket.on("message", onMessage);
       socket.on("close", onClose);
       socket.on("error", onClose);

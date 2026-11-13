@@ -10,6 +10,7 @@ import {
   Show,
   useContext,
 } from "solid-js";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import {
   createMarkdownRef,
   type MarkdownContentValue,
@@ -20,7 +21,10 @@ import type { MarkdownRenderOptions } from "../../../components/markdown-render-
 import { partitionMarkdownHtml, toSanitizedJsonHtml } from "../../../components/markdown.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import type { MarkdownContent as PreparedMarkdownContent } from "../../../lib/markdown-content.ts";
+import {
+  markdownContentHtml,
+  type MarkdownContent as PreparedMarkdownContent,
+} from "../../../lib/markdown-content.ts";
 import type { MarkdownDomMedia, MarkdownMediaRoot } from "../../../lib/markdown-dom-reconciler.ts";
 import { elementRef as registerElementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -28,6 +32,7 @@ import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import { hydrateLinkFavicons, releaseLinkFavicons } from "../link-favicon-loader.ts";
+import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
 import { messageOverflowRef, shouldCollapseUserMessage } from "./chat-message-overflow.ts";
 import {
@@ -76,6 +81,7 @@ export type MessageMarkdownProps = {
   options: MessageTextOptions;
   markdownOptions: MarkdownRenderOptions;
   media?: MarkdownMedia;
+  onOpenImage?: (item: ImageLightboxItem, index: number) => void;
 };
 
 export function MessageMarkdown(props: MessageMarkdownProps) {
@@ -108,6 +114,7 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
           <MarkdownText
             content={presentation()}
             media={props.media}
+            onOpenImage={props.onOpenImage}
             direction={detectTextDirection(props.media?.text ?? presentation().source)}
             elementRef={elementRef}
             fetchLinkFavicon={props.options.fetchLinkFavicon}
@@ -213,8 +220,8 @@ function DisclosureContent(props: {
     }),
     {
       equals: (before, next) =>
-        before.parts[0] === next.parts[0] &&
-        before.parts[1] === next.parts[1] &&
+        markdownContentHtml(before.parts[0]) === markdownContentHtml(next.parts[0]) &&
+        markdownContentHtml(before.parts[1]) === markdownContentHtml(next.parts[1]) &&
         before.expanded === next.expanded &&
         before.forwarded === next.forwarded &&
         before.connected === next.connected,
@@ -306,8 +313,23 @@ export function MarkdownText(
     class?: string;
     elementRef?: (element: HTMLDivElement) => void;
     fetchLinkFavicon?: LinkFaviconFetcher;
+    onOpenImage?: (item: ImageLightboxItem, index: number) => void;
   },
 ) {
+  const openImage = (event: Event) => {
+    const onOpenImage = props.onOpenImage;
+    if (onOpenImage && event.currentTarget instanceof HTMLElement) {
+      openInlineChatImage(
+        event,
+        (item, index) => {
+          if (index !== undefined) {
+            onOpenImage(item, index);
+          }
+        },
+        event.currentTarget,
+      );
+    }
+  };
   let element!: HTMLDivElement;
   const hydrate = createMemo(() => {
     const fetcher = props.fetchLinkFavicon;
@@ -317,6 +339,12 @@ export function MarkdownText(
     <div
       class={props.class ?? "chat-text"}
       dir={props.direction}
+      onClick={openImage}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          openImage(event);
+        }
+      }}
       ref={[
         registerElementRef((node: HTMLDivElement) => {
           element = node;

@@ -39,38 +39,70 @@ export function ChatAttachmentInputs(
               prop:onUpload={openInput("photo")}
             />
             <For each={["file", "photo", "camera", "media"] as const}>
-              {(kind) => (
-                <input
-                  ref={(element) => {
-                    inputs[kind] = element;
-                  }}
-                  type="file"
-                  tabindex="-1"
-                  aria-hidden="true"
-                  accept={
-                    props.imagesOnly || kind === "photo" || kind === "camera"
-                      ? "image/*"
-                      : kind === "media"
-                        ? "image/*,video/*"
-                        : undefined
-                  }
-                  multiple={kind !== "camera"}
-                  capture={kind === "camera" ? "environment" : undefined}
-                  class={[`agent-chat__${kind}-input`]}
-                  disabled={props.disabled}
-                  onChange={(event) => {
-                    if (!props.disabled) {
+              {(kind) => {
+                let pickScope: { signal: AbortSignal | undefined } | undefined;
+                let cancelled = false;
+                const scope = () => props.readSignal ?? props.attachmentReads?.readSignal;
+                return (
+                  <input
+                    ref={(element) => {
+                      inputs[kind] = element;
+                    }}
+                    type="file"
+                    tabindex="-1"
+                    aria-hidden="true"
+                    accept={
+                      props.imagesOnly || kind === "photo" || kind === "camera"
+                        ? "image/*"
+                        : kind === "media"
+                          ? "image/*,video/*"
+                          : undefined
+                    }
+                    multiple={kind !== "camera"}
+                    capture={kind === "camera" ? "environment" : undefined}
+                    class={[`agent-chat__${kind}-input`]}
+                    disabled={props.disabled}
+                    onClick={(event) => {
+                      if (
+                        props.disabled ||
+                        !uploadsEnabled(props.uploadConfig) ||
+                        scope()?.aborted
+                      ) {
+                        pickScope = undefined;
+                        cancelled = true;
+                        event.preventDefault();
+                        return;
+                      }
+                      pickScope = { signal: scope() };
+                      cancelled = false;
+                    }}
+                    onCancel={() => {
+                      pickScope = undefined;
+                      cancelled = true;
+                    }}
+                    onChange={(event) => {
+                      const admitted =
+                        !cancelled &&
+                        !scope()?.aborted &&
+                        (!pickScope ||
+                          (pickScope.signal === scope() && !pickScope.signal?.aborted));
+                      if (!admitted) {
+                        cancelled = true;
+                      }
+                      pickScope = undefined;
                       const input = event.target;
                       if (!(input instanceof HTMLInputElement)) {
                         return;
                       }
                       const files = [...(input.files ?? [])];
                       input.value = "";
-                      appendChatAttachmentFiles(files, props);
-                    }
-                  }}
-                />
-              )}
+                      if (!props.disabled && admitted) {
+                        appendChatAttachmentFiles(files, props);
+                      }
+                    }}
+                  />
+                );
+              }}
             </For>
           </>
         );

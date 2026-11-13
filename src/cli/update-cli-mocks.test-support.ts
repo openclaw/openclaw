@@ -196,6 +196,11 @@ vi.mock("../infra/update-repair-agent.js", () => ({
 vi.mock("../infra/update-candidate-canary.js", () => ({
   validateUpdateCandidateCanary: candidateValidation,
 }));
+// The activated-release boot is a process boundary like the canary above.
+vi.mock(import("../infra/update-activated-gateway-check.js"), async (original) => ({
+  ...(await original()),
+  checkActivatedGatewayStartup: async ({ result }) => result,
+}));
 // Runtime retention and publication have real owner/process coverage; CLI
 // orchestration must not copy or rebuild the checkout behind its simulated updater.
 vi.mock("./update-cli/update-command-runtime.js", async (importOriginal) => ({
@@ -291,41 +296,10 @@ vi.mock("../config/io.js", async (importOriginal) => {
 });
 
 vi.mock("../infra/update-check.js", async (importOriginal) => ({
-  formatGitInstallLabel: (await importOriginal<typeof import("../infra/update-check.js")>())
-    .formatGitInstallLabel,
+  ...(await importOriginal<typeof import("../infra/update-check.js")>()),
   checkUpdateStatus: vi.fn(),
   resolveUpdateInstallKind: vi.fn(),
   resolveUpdateInstallIdentity: vi.fn(),
-  compareSemverStrings: vi.fn((left: string | null, right: string | null) => {
-    const parse = (value: string | null) => {
-      if (!value) {
-        return null;
-      }
-      const match = value.match(/(\d+)\.(\d+)\.(\d+)/);
-      if (!match) {
-        return null;
-      }
-      return [
-        Number.parseInt(match[1] ?? "0", 10),
-        Number.parseInt(match[2] ?? "0", 10),
-        Number.parseInt(match[3] ?? "0", 10),
-      ] as const;
-    };
-    const a = parse(left);
-    const b = parse(right);
-    if (!a || !b) {
-      return null;
-    }
-    for (let index = 0; index < a.length; index += 1) {
-      const diff =
-        expectDefined(a[index], "a[index] test invariant") -
-        expectDefined(b[index], "b[index] test invariant");
-      if (diff !== 0) {
-        return diff;
-      }
-    }
-    return 0;
-  }),
   fetchNpmTagVersion: vi.fn(),
   resolveExtendedStablePackage: vi.fn(),
   resolveNpmChannelTag: vi.fn(),

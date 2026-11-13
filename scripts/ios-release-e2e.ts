@@ -16,7 +16,7 @@ export const MODEL_REF = "openai/ios-e2e";
 const IOS_RELEASE_CHAT_FAILURE =
   /IOS_RELEASE_CHAT_FAILURE (first|second|relaunch) (submission|reply) draft=(true|false) keyboard=(true|false) reply=(true|false) writing=(true|false) jump=(true|false) foreground=(true|false) input=(true|false) transcript=(true|false) send=(true|false)/u;
 export const IOS_RELEASE_TEST_FAILURE_LOCATION =
-  /(?:^|\/)OpenClawSnapshotUITests\.swift:([1-9][0-9]{0,4})(?::[0-9]+)?: error:/gmu;
+  /(?:^|\/)(OpenClawSnapshotUITests(?:\+(?:Chat|Helpers))?\.swift):([1-9][0-9]{0,4})(?::[0-9]+)?: error:/gmu;
 const SAMPLE_INTERVAL_MS = 1_000;
 const MAX_SAMPLE_GAP_MS = 3_000;
 export type Mode = "stock" | "compare";
@@ -120,11 +120,11 @@ export class OperationError extends Error {
         }
       }
       // Keep failure locations actionable without exporting assertion text, paths, or credentials.
-      const lines = [...output.matchAll(IOS_RELEASE_TEST_FAILURE_LOCATION)].map(
-        (match) => match[1],
+      const locations = [...output.matchAll(IOS_RELEASE_TEST_FAILURE_LOCATION)].map(
+        (match) => `${match[1]}:${match[2]}`,
       );
       this.diagnostic.context.push(
-        ...[...new Set(lines)].slice(0, 8).map((line) => `xctest-line:${line}`),
+        ...[...new Set(locations)].slice(0, 8).map((location) => `xctest-location:${location}`),
       );
     }
   }

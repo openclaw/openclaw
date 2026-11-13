@@ -1,7 +1,7 @@
 import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { For, createMemo } from "solid-js";
+import { createMemo } from "solid-js";
 import { i18n } from "../i18n/index.ts";
 import { isEnvPlaceholder, REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
@@ -45,6 +45,7 @@ import {
   storedSecretState,
 } from "./config-form.secret-field.tsx";
 import { configFieldId, hintForPath, schemaType } from "./config-form.shared.ts";
+import { SettingsSelect } from "./solid/settings-select.tsx";
 
 function coerceTextInputValue(
   value: string,
@@ -407,7 +408,7 @@ function ScalarInput(props: {
       {!props.params.compact && (
         <button
           type="button"
-          class="btn btn--sm btn--icon"
+          class="cfg-stepper__button"
           aria-label={`${state().field.label}: ${direction < 0 ? "-" : "+"}${state().numericStep}`}
           disabled={props.params.disabled}
           onClick={() => step(direction)}
@@ -597,6 +598,8 @@ function ScalarInput(props: {
   return (
     <FieldRow
       {...state().field}
+      stacked={state().multiline}
+      placement={props.stepped ? undefined : state().field.placement}
       errorId={state().errorId}
       errorRef={draft.errorRef}
       defaultValue={
@@ -606,11 +609,11 @@ function ScalarInput(props: {
       }
       control={
         props.stepped ? (
-          <>
+          <span class="cfg-stepper">
             {stepButton(-1)}
             {control}
             {stepButton(1)}
-          </>
+          </span>
         ) : (
           presentedInput
         )
@@ -646,18 +649,40 @@ export function SelectInput(props: {
           ? String(currentIndex)
           : unset;
   });
+  const selectOptions = createMemo(() => {
+    getLocale();
+    const { schema, options, isRequired, path, hints } = props.params;
+    return [
+      {
+        value: unset,
+        disabled: isRequired && schema.default === undefined,
+        label:
+          schema.default !== undefined
+            ? // A required field stores its default, so it can't promise to unset.
+              t(isRequired ? "configForm.defaultOption" : "configForm.useDefaultValue", {
+                value: configEnumOptionLabel(schema.default, options),
+              })
+            : (hintForPath(path, hints)?.placeholder ?? t("configForm.select")),
+      },
+      ...(canSelectNull() ? [{ value: nullValue, label: t("configForm.nullValue") }] : []),
+      ...options.map((option, index) => ({
+        value: String(index),
+        label: configEnumOptionLabel(option, options),
+      })),
+    ];
+  });
   return (
     <FieldRow
       {...field()}
       defaultValue={schemaDefaultValueText(props.params.schema)}
       control={
-        <select
-          class="settings-select"
+        <SettingsSelect
           aria-label={field().label}
           aria-required={field().required ? "true" : undefined}
           aria-describedby={field().helpId}
           disabled={props.params.disabled}
           value={selectedValue()}
+          options={selectOptions()}
           onChange={(event) => {
             const params = props.params;
             const target = event.currentTarget;
@@ -685,27 +710,7 @@ export function SelectInput(props: {
               target.value = selectedValue();
             }
           }}
-        >
-          <option
-            value={unset}
-            disabled={props.params.isRequired && props.params.schema.default === undefined}
-          >
-            {props.params.schema.default !== undefined
-              ? t("configForm.defaultValue", {
-                  value: configEnumOptionLabel(props.params.schema.default, props.params.options),
-                })
-              : (hintForPath(props.params.path, props.params.hints)?.placeholder ??
-                t("configForm.select"))}
-          </option>
-          {canSelectNull() && <option value={nullValue}>{t("configForm.nullValue")}</option>}
-          <For each={props.params.options}>
-            {(option, index) => (
-              <option value={String(index())}>
-                {configEnumOptionLabel(option, props.params.options)}
-              </option>
-            )}
-          </For>
-        </select>
+        />
       }
     />
   );

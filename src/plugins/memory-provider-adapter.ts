@@ -10,14 +10,16 @@ import {
 } from "../memory-host-sdk/host/types.js";
 import { assertMemoryCallerCurrent, prepareMemoryCallerRead } from "./memory-audience.js";
 import type {
-  MemoryCallerContext,
   MemoryProviderHandle,
-  MemoryProviderOpenParams,
-  MemoryProviderOpenResult,
   MemorySearchHit,
   MemorySearchPage,
   MemoryCitation,
   MemoryReference,
+} from "./memory-provider-runtime-types.js";
+import type {
+  MemoryCallerContext,
+  MemoryProviderOpenParams,
+  MemoryProviderOpenResult,
 } from "./memory-provider-types.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
@@ -29,8 +31,15 @@ function legacyCoverageWarning(status: MemoryProviderStatus): string | undefined
   }
   const providerState = status.custom?.providerState;
   if (providerState && typeof providerState === "object" && "mode" in providerState) {
-    // A lazy manager with embeddings explicitly disabled has nothing semantic to initialize.
-    if (providerState.mode === "pending" && status.requestedProvider !== "none") {
+    // Pending describes this manager's initialization, not stored vector coverage.
+    // Empty and complete indexes remain usable before embeddings initialize.
+    const indexState = status.vector?.index?.state;
+    if (
+      providerState.mode === "pending" &&
+      status.requestedProvider !== "none" &&
+      indexState !== "complete" &&
+      indexState !== "empty"
+    ) {
       return "Memory embeddings are pending. Search results may be incomplete.";
     }
     if (

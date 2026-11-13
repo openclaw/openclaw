@@ -22,7 +22,9 @@ Details keeps session metadata visible. Pull requests and automations appear
 expanded when they contain items; empty sections are omitted entirely. You can
 collapse populated sections without ordinary updates reopening them. Loading or
 failed automation reads show their status and retry action without an empty
-disclosure. Task progress remains independently collapsible.
+disclosure. Task progress remains independently collapsible. If the connection
+drops, progress shows **Disconnected · Activity may be outdated** while keeping
+the saved steps visible. A failed refresh keeps the last update and offers a retry.
 
 ## OpenClaw system care
 
@@ -40,13 +42,15 @@ Guided channel setup, workspace skills setup, web-search provider setup, and loc
 
 For Gateway setup, say `configure gateway` to choose the port, bind address, token or password auth, and Tailscale exposure. Before the first question, the web surface warns that applying the saved settings requires a restart that may disconnect the chat or require a new Control UI sign-in. The wizard changes config only; say `restart gateway` when you are ready to apply it. It manages only a local Gateway, so remote mode changes stay in `openclaw onboard` or `openclaw configure`.
 
-Say `import memory` to copy detected local memory into the existing default agent workspace. This flow does not change config or import credentials or skills, needs no Gateway restart, and distinguishes confirmed imports, nothing to import, provider failures, and failures where some files may already have been copied. Finish onboarding first if the default workspace does not exist. See [Import assistant memory](/web/control-ui/settings#import-assistant-memory) for the broader page that can target another agent or replace existing imports, and [`openclaw setup`](/cli/openclaw) for the operation and approval contract.
+Say `import memory` to copy detected local memory into the existing default agent workspace. This flow does not change config or import credentials or skills, needs no Gateway restart, and distinguishes confirmed imports, nothing to import, provider failures, and failures where some files may already have been copied. Finish onboarding first if the default workspace does not exist. See [Import agent memory](/web/control-ui/settings#import-assistant-memory) for the broader page that can target another agent or replace existing imports, and [`openclaw setup`](/cli/openclaw) for the operation and approval contract.
 
 Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel check, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
 
 ## Home dock
 
 Use the **Home** button in the sidebar footer, or in the toolbar when the sidebar is collapsed, to open the selected agent's main conversation alongside your current page. Select the **Ask OpenClaw** tab in the same dock for system setup and repair. When the same Home conversation is already open as the page, the dock stays hidden rather than showing it twice.
+
+The Home dock uses the same session read permissions as the full page. If you can read the selected Home conversation but cannot write to it, you can open it in view-only mode; sending and session actions remain unavailable. Opening Home does not change its sharing permissions or create a missing conversation for a reader.
 
 Your Home draft and attachments follow the conversation between the page and dock. Files still being prepared keep their progress and Remove action, and Send waits until preparation finishes.
 
@@ -101,6 +105,8 @@ Terminal sessions appear as tabs in the Chat side-panel header; choosing **Termi
 
 The unified panel also hosts **Browser**, **Files**, **Review**, **Side chat**, and capability-dependent **Desktop** and **Discussion** tabs. Its open or minimized state, active tab, tab order, width, dock, and expanded state are stored per session in the current browser profile, so on desktop switching sessions or reloading restores each session's own working layout. A chat conversation without a saved panel layout does not inherit panels open in another session. Drag tabs to reorder them, close a tab without closing the other tools, or use the panel close button to minimize the whole panel.
 
+In **Review**, choose **Sync locally** to copy the command for mirroring the session’s committed changes in a local checkout. **Files** distinguishes a search with no results (**No files match your search.**) from a filter with no matches (**No files match this filter.**).
+
 The side-panel divider follows the pointer and arrow-key direction in both
 left-to-right and right-to-left layouts.
 
@@ -110,7 +116,7 @@ A connected **Desktop** viewer stays connected for 30 seconds while its tab is h
 
 When you open a chat, the panel automatically reveals an available desktop assigned to that exact session. Discovery only reads existing resources: it never provisions a desktop or attaches an unrelated global or child-session resource. Session and inventory events refresh desktop discovery while the chat is visible. Resources without explicit session metadata remain available through the manual panel controls.
 
-Browser-tool results stay inline on desktop and mobile; they do not automatically open the Browser panel. Choose **Open** on a browser preview card, use the panel controls, or ask your agent to show it. A panel you explicitly opened still follows its saved per-session layout when you return or reload.
+Browser tool calls do not add automatic preview cards or open the Browser panel. To inspect the agent’s browser, choose **Browser** from the panel’s **+** menu or ask your agent to show it. The panel uses the session’s latest successful browser target. A panel you explicitly opened still follows its saved per-session layout when you return or reload.
 
 Automatic desktop reveals reuse the existing panel and keep an already-selected tool in front. Automatically discovered desktops stay out of the saved layout, including after resizing or docking, so reloading validates the resource again before opening it. If discovery confirms that the desktop is no longer available, its automatic tab closes without affecting an explicitly selected desktop or disabling future automatic reveals. Mobile chat shows these panels full-width, just like manually opened panels; other narrow panes retain their bottom-docked layout. Minimizing the panel or closing a Browser or Desktop tab disables further automatic desktop reveals for that session in the current browser profile, including after reload; the **+** menu can still open them manually.
 

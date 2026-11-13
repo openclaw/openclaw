@@ -1,7 +1,8 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { hasMenuSurface } from "../../components/menu-surface.ts";
 import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
+import { iconButtonClass } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PhoneSheet } from "../../components/solid/phone-sheet.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
@@ -70,7 +71,6 @@ const SESSION_GROUP_MODE_LABELS = {
 } as const satisfies Record<SessionsGroupBy, string>;
 
 export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JSX.Element {
-  const [searching, setSearching] = createSignal(false);
   let popover: PopoverHandle | undefined;
   const phone = () => Boolean(props.phoneLayout);
   // Archived timestamps are intentionally stale, so recency only applies to the active view.
@@ -107,18 +107,16 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
     props.statusFilter !== "active" ||
     props.groupBy !== "none";
   const triggerClass = () => [
-    "btn btn--xs btn--icon sessions-toolbar__icon sessions-filter-popover__trigger",
+    iconButtonClass(),
+    "sessions-toolbar__icon sessions-filter-popover__trigger",
     { active: active() },
   ];
   const search = () => (
     <HeaderSearch
-      title={t("sessionsView.filters")}
       label={t("sessionsView.searchPlaceholder")}
-      closeLabel={t("sessionsView.clearSearch")}
+      clearLabel={t("sessionsView.clearSearch")}
       class="sessions-filter-popover__search"
       query={props.searchQuery}
-      open={searching() || Boolean(props.searchQuery)}
-      onOpenChange={setSearching}
       onQueryChange={props.onSearchChange}
       ownsEscape={() =>
         !props.sessionMenu &&

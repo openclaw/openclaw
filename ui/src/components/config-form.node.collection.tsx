@@ -4,11 +4,12 @@ import { copyWithPathPatch } from "../lib/config-form-utils.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import {
   ConfigCollectionDraft,
+  createCollectionDraftSource,
   type ConfigCollectionDraftHandle,
   type ConfigFormCollectionDraftCommit,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
-import { arrayItemSchema } from "./config-form.array-items.ts";
+import { arrayItemSchema, objectPropertyKeys } from "./config-form.array-items.ts";
 import {
   arrayConstraintCandidates,
   arrayInputConstraints,
@@ -40,9 +41,8 @@ import {
   matchesNodeSelf,
   resolveConfigFieldMeta as resolveFieldMeta,
 } from "./config-form.search.ts";
-import { configFieldId, type JsonSchema } from "./config-form.shared.ts";
+import { configFieldId, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { Icon } from "./solid/icon.tsx";
-import { SettingsEmpty } from "./solid/settings-ui.tsx";
 
 const UNSET_ARRAY_SOURCE_IDENTITY = Symbol("unset-array-source");
 
@@ -138,7 +138,8 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
   );
 
   const labeled = () => props.params.path.length !== 1 && props.params.showLabel !== false;
-  const onlyMap = () => (labeled() && object().fields.length === 0 ? object().additional : null);
+  const onlyMap = () =>
+    labeled() && objectPropertyKeys(props.params.schema).length === 0 ? object().additional : null;
   // Top-level objects, label-less contexts and in-place objects emit sibling settings rows.
   return (
     <Show when={labeled() && !props.params.inlineObject} fallback={fields()}>
@@ -194,7 +195,11 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
   );
 }
 
-function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArrayIdentity) {
+function resolveArrayContent(
+  params: ConfigNodeRenderParams,
+  rows: ConfigFormArrayIdentity,
+  editEntry: (expected: unknown[], dispatch: () => boolean) => boolean,
+) {
   const { schema, value, path, hints, disabled, onPatch, searchCriteria } = params;
   const showLabel = params.showLabel ?? true;
   const showHeaderMeta = params.showHeaderMeta ?? showLabel;
@@ -318,7 +323,7 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
       nextValue[itemIndex] = nextItem.value;
     }
     if (canApplyArrayCandidate(schema, arrayValue, nextValue, true)) {
-      return patch(nextValue, rowIdentities);
+      return editEntry(nextValue, () => patch(nextValue, rowIdentities));
     }
     return false;
   };
@@ -397,6 +402,7 @@ function ConfigArrayRow(
       onPatch: props.content.patchArrayItem,
     } satisfies ConfigNodeRenderParams;
   });
+  const isObjectItem = () => schemaType(node().schema) === "object";
   const remove = () =>
     canRemove() &&
     props.content.patch(nextValue(), props.content.rowIdentities.toSpliced(props.index, 1));
@@ -414,10 +420,10 @@ function ConfigArrayRow(
   );
   return (
     <Show
-      when={props.params.compact}
+      when={props.params.compact || !isObjectItem()}
       fallback={
         <>
-          <div class="settings-row">
+          <div class="settings-row cfg-collection-row">
             <div class="settings-row__text">
               <span class="settings-row__title">#{props.index + 1}</span>
             </div>
@@ -427,7 +433,7 @@ function ConfigArrayRow(
         </>
       }
     >
-      <div class="cfg-array__item">
+      <div class={["cfg-array__item", { "cfg-array__item--row": !props.params.compact }]}>
         <div class="cfg-array__value">{props.renderNode(node)}</div>
         {removeControl()}
       </div>
@@ -448,8 +454,11 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
   });
   const content = createMemo(() => {
     getLocale();
-    return resolveArrayContent(props.params, identity());
+    return resolveArrayContent(props.params, identity(), (expected, dispatch) =>
+      draftSource.editEntry(expected, dispatch),
+    );
   });
+  const draftSource = createCollectionDraftSource(() => content()?.draftProps.sourceIdentity);
   const entries = createMemo(
     () =>
       content()?.arrayValue.map((item, index) => ({
@@ -473,7 +482,7 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
     >
       {(current) => (
         <div class="cfg-block cfg-array">
-          <div class="settings-row">
+          <div class="settings-row cfg-collection-row">
             <div class="settings-row__text">
               <Show when={current().showLabel}>
                 <span class="settings-row__title">
@@ -515,16 +524,6 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
               </Show>
             </div>
             <div class="settings-row__control">
-              <Show when={!props.params.compact}>
-                <span class="settings-row__value">
-                  {t(
-                    current().arrayValue.length === 1
-                      ? "configForm.itemCountOne"
-                      : "configForm.itemCount",
-                    { count: String(current().arrayValue.length) },
-                  )}
-                </span>
-              </Show>
               <button
                 ref={focus.addRef}
                 type="button"
@@ -545,18 +544,12 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
           </div>
           <ConfigCollectionDraft
             {...current().draftProps}
+            sourceIdentity={draftSource.draftSource()}
             id={current().draftId}
             ref={(handle) => (draft = handle)}
             onCommit={(value) => current().commitDraft(value)}
           />
-          <Show
-            when={entries().length > 0}
-            fallback={
-              <Show when={!props.params.compact}>
-                <SettingsEmpty message={t("configForm.noItems")} />
-              </Show>
-            }
-          >
+          <Show when={entries().length > 0}>
             <div class="settings-subrows">
               <For each={entries()} keyed={(entry) => entry.identity}>
                 {(entry, index) => (

@@ -15,5 +15,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  }
+  },
+  "recommendedPrompts": [
+    "Help me plan a Telegram bot connection and choose who can access it.",
+    "Draft a Telegram poll for my chosen chat or topic without sending it."
+  ]
 }

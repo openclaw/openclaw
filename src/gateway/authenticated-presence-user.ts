@@ -24,8 +24,8 @@ export function buildAuthenticatedPresenceUser(params: {
     ...(params.authenticatedUserProfile.displayName
       ? { name: params.authenticatedUserProfile.displayName }
       : {}),
-    // This authenticated route resolves uploaded avatars first and then the
-    // gateway-side Gravatar proxy, so it remains present without an upload.
+    // The authenticated profile route owns upload, verified GitHub and Gravatar
+    // precedence, so every self/presence surface uses the same photo.
     avatarUrl: buildControlUiUserAvatarPath(
       params.authenticatedUserProfile.profileId,
       params.authenticatedUserProfile.avatarRevision,

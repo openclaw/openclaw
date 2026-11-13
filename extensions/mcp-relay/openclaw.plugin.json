@@ -49,5 +49,9 @@
     "styles": [
       "dist/control-ui/2a51d7d8d2e4e1bad981b014f3a481b1903ec641534aca084a10c809b297abe6/index.css"
     ]
-  }
+  },
+  "recommendedPrompts": [
+    "Help me plan an MCP Relay connection from ChatGPT, Codex, or Claude to this Gateway.",
+    "Review my connected MCP Relay apps and their access without changing grants."
+  ]
 }

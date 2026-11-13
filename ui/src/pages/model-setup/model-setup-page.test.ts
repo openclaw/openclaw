@@ -155,11 +155,11 @@ describe("ModelSetupPage catalog icons", () => {
 
     await waitForFast(() => {
       expect(page.textContent).toContain(
-        "llama.cpp did not expose a usable local model. Review the setup result, then retry.",
+        "Couldn’t find a usable local model from llama.cpp. Review the setup result, then try again.",
       );
     });
     expect(page.textContent).not.toContain("llama-cpp/persisted-before-verification");
-    expect(page.textContent).not.toContain("Connection verified");
+    expect(page.textContent).not.toContain("Model verified");
     expect(request).not.toHaveBeenCalledWith(
       "openclaw.setup.activate.start",
       expect.anything(),
@@ -228,7 +228,7 @@ describe("ModelSetupPage catalog icons", () => {
     snapshot.hello.auth.scopes = ["operator.read"];
     configSet.resolve({ hash: "hash-2" });
 
-    await waitForText(page, "Model setup request failed.");
+    await waitForText(page, "Couldn’t set up the model. Try again.");
     expect(request).not.toHaveBeenCalledWith(
       "openclaw.setup.auth.start",
       expect.anything(),
@@ -412,7 +412,7 @@ describe("ModelSetupPage catalog icons", () => {
     });
     authButton(page, "provider-auth")?.click();
     await waitForFast(() => {
-      expect(page.textContent).toContain("Connection verified");
+      expect(page.textContent).toContain("Model verified");
       const warning = page.querySelector(".model-setup-success__warning")?.textContent;
       for (const expected of ["Gateway restart required.", refreshError]) {
         expect(warning).toContain(expected);
@@ -617,7 +617,7 @@ describe("Model setup account connections", () => {
         await waitForFast(
           () =>
             expect(page.textContent).toContain(
-              operation === "connect" ? "Provider credentials saved." : "Connection verified",
+              operation === "connect" ? "Provider credentials saved." : "Model verified",
             ),
           { timeout: 3000 },
         );

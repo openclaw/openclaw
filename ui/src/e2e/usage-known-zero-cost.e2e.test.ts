@@ -2,7 +2,10 @@ import { expect, it } from "vitest";
 import { createRecordedCostUsage } from "../pages/usage/test-helpers/recorded-cost.test-support.ts";
 import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
+import {
+  applyUsageQuery,
+  installUsageOverviewGateway as installMockGateway,
+} from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI known-zero usage cost mocked Gateway E2E",
@@ -43,7 +46,6 @@ suite.define(() => {
         await page.clock.setFixedTime(new Date(updatedAt));
         const gateway = await installMockGateway(page, { methodResponses: responses });
         await page.goto(`${suite.server.baseUrl}usage`);
-        const query = page.locator(".usage-query-input");
         const hintButton = page.locator("#usage-summary-hint-average-cost");
         const card = page.locator(".usage-summary-card").filter({ has: hintButton });
         const tooltipHost = hintButton.locator("xpath=..");
@@ -59,13 +61,9 @@ suite.define(() => {
         ];
         for (const step of steps) {
           if (step.stage === "cleared") {
-            await page
-              .locator(".usage-query-actions")
-              .getByRole("button", { name: "Clear", exact: true })
-              .click();
+            await page.getByRole("button", { name: "Clear all", exact: true }).click();
           } else if (step.stage !== "mixed") {
-            await query.fill(step.query);
-            await query.press("Enter");
+            await applyUsageQuery(page, step.query);
           }
           await expect.poll(() => page.locator(".session-bar-title").count()).toBe(step.count);
           await expect.poll(async () => (await value.textContent())?.trim()).toBe(step.value);

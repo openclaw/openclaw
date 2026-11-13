@@ -736,7 +736,7 @@ it.each([false, true])(
       plugins.entries = { "memory-core": { config: { dreaming: { enabled: false } } } };
     }
     context.setConfig({ plugins });
-    await waitForSolid(() => expect(page.container.textContent).toContain("Memory engine is Off"));
+    await waitForSolid(() => expect(page.container.textContent).toContain("Memory engine is off."));
     const toggle = page.query<HTMLInputElement>('input[role="switch"]')!;
     expect(toggle.disabled).toBe(true);
     expect(toggle.checked).toBe(false);

@@ -1,2 +1,0 @@
-# Reject unsupported runner measurements and preserve mixed-run timing history.
-64

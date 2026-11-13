@@ -225,7 +225,7 @@ it.each([
         await expect(preparation).rejects.toBe(failure);
       }
       if (custody === "committed" || custody === "settlement-failed") {
-        expect(finish).toHaveBeenCalledExactlyOnceWith("cancelled");
+        expect(finish).toHaveBeenCalledExactlyOnceWith("cancelled", undefined);
       }
       expect(cleanup).toHaveBeenCalledTimes(1);
       expect(onUserTurnMediaPersisted).toHaveBeenCalledTimes(custody === "unretained" ? 0 : 1);

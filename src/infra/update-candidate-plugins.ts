@@ -294,20 +294,29 @@ export async function prepareUpdateCandidatePlugins(
   }
   // Bundled payload selection remains with bundledPluginRedirects below.
   const globalRoot = path.join(canonicalStateRoot, "extensions");
+  const discovered = discoverOpenClawPlugins({
+    env: {
+      ...params.env,
+      OPENCLAW_STATE_DIR: canonicalStateRoot,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    },
+    installRecords: records,
+  });
   const globalSources = new Set(
-    discoverOpenClawPlugins({
-      env: {
-        ...params.env,
-        OPENCLAW_STATE_DIR: canonicalStateRoot,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
-      installRecords: records,
-    }).candidates.flatMap((candidate) => {
-      const source = candidate.packageDir;
-      return candidate.origin === "global" && source && path.dirname(source) === globalRoot
-        ? [source]
-        : [];
-    }),
+    [
+      ...discovered.candidates.map((candidate) =>
+        candidate.origin === "global" ? candidate.packageDir : undefined,
+      ),
+      // A package skipped with preserved config must stay present, so candidate
+      // Doctor keeps the runtime's compatibility warning instead of a missing plugin.
+      ...discovered.diagnostics.map((diagnostic) =>
+        diagnostic.configDisposition === "preserve" && diagnostic.source
+          ? path.dirname(diagnostic.source)
+          : undefined,
+      ),
+    ].filter(
+      (source): source is string => source !== undefined && path.dirname(source) === globalRoot,
+    ),
   );
   for (const source of globalSources) {
     sources.add(source);
@@ -414,7 +423,10 @@ export async function copyUpdateCandidatePlugins(
       { sourceRoot: plan.trees.privateRoot, destinationRoot: targetStateDir },
     ]);
   await copyUpdateCandidatePluginTrees(plan.trees, params);
-  for (const entry of plan.aliases) {
+  // Parents first: a nested alias would otherwise materialize its parent as a directory.
+  for (const entry of plan.aliases.toSorted(
+    (left, right) => left.alias.length - right.alias.length,
+  )) {
     const alias = rebase(entry.alias);
     const target = rebase(entry.target);
     // Preserve the entry basename/ID while imports use the canonical copied owner.

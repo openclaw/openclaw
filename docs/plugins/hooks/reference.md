@@ -241,7 +241,7 @@ Return quickly or keep finalization bounded and persistence crash-consistent.
 If the budget expires, OpenClaw logs `shutdown session-end drain timed out`
 and continues shutdown, so unfinished plugin work can be interrupted.
 
-For `sessions.create` calls with `parentSessionKey` and `emitCommandHooks: true`, a distinct child always receives `session_start`. Callers declare whether the parent also receives terminal `session_end` with `succeedsParent`: `true` means successor, `false` means parallel child. Omission preserves the legacy parent-rollover behavior. The `command:new` and `before_reset` hooks still describe the requested `/new` action in both cases.
+For `sessions.create` calls with `parentSessionKey` and `emitCommandHooks: true`, a distinct child always receives `session_start`. Callers declare whether the parent also receives terminal `session_end` with `succeedsParent`: `true` means successor, `false` means parallel child. Omission preserves the legacy parent-rollover behavior. The `command:new` and `before_reset` hooks still describe the requested `/new` action in both cases when the parent is idle. An ordinary parallel child created while its parent is active skips those parent reset hooks and leaves the parent run alive; forks and worktree creation retain their existing active-parent restrictions.
 
 ### Explicit Stop
 

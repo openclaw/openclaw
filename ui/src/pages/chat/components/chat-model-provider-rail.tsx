@@ -1,5 +1,8 @@
 import { createMemo, createSignal, For } from "solid-js";
-import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
+import {
+  providerDisplayLabel,
+  type ProviderPresentation,
+} from "../../../components/provider-icon-data.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createTabList } from "../../../lib/tabs.ts";
 import { ChatModelProviderIcon, ChatModelTargetIcon } from "./chat-model-picker-options.tsx";
@@ -7,6 +10,7 @@ import { loadModelProviderOrder, saveModelProviderOrder } from "./model-provider
 
 export function ChatModelProviderRail(props: {
   providers: string[];
+  presentation: (provider: string) => ProviderPresentation | undefined;
   targets: readonly { id: string; label: string }[];
   active?: string;
   disabled: boolean;
@@ -18,7 +22,11 @@ export function ChatModelProviderRail(props: {
     ...props.providers.filter((id) => !order().includes(id)),
   ]);
   const items = createMemo(() => [
-    ...providers().map((id) => ({ id, label: providerDisplayLabel(id), draggable: true })),
+    ...providers().map((id) => ({
+      id,
+      label: providerDisplayLabel(id, props.presentation(id)),
+      draggable: true,
+    })),
     ...props.targets.map((group) => ({
       id: `target:${group.id}`,
       label: group.label,
@@ -39,7 +47,7 @@ export function ChatModelProviderRail(props: {
     next.splice(to, 0, id);
     setOrder(next);
     saveModelProviderOrder(next);
-    announce(`${providerDisplayLabel(id)}, ${to + 1} / ${next.length}`);
+    announce(`${providerDisplayLabel(id, props.presentation(id))}, ${to + 1} / ${next.length}`);
   };
   const tabs = createTabList(
     () => ({ active: props.active ?? null, onSelect: (id) => props.onSelect(id) }),
@@ -143,7 +151,10 @@ export function ChatModelProviderRail(props: {
               }}
             >
               {item().draggable ? (
-                <ChatModelProviderIcon provider={item().id} />
+                <ChatModelProviderIcon
+                  provider={item().id}
+                  presentation={props.presentation(item().id)}
+                />
               ) : (
                 <ChatModelTargetIcon />
               )}

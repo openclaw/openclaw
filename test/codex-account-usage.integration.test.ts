@@ -38,19 +38,16 @@ it.each([false, true])(
         assertCurrent() {},
       };
       const { authProfileId: profileId } = connectUserModelAccount(connection);
+      const reconnected: {
+        account: Awaited<ReturnType<typeof connectUserModelAccountAsync>> | null;
+      } = { account: null };
       vi.mocked(readCodexAppServerUsage).mockImplementation(async (options) => {
         options.assertCurrent?.();
-        expect(options.preparedAuth).toMatchObject({
-          kind: "profile",
-          profileId,
-          store: { profiles: { [profileId]: credential } },
-        });
         if (reconnect) {
-          const connected = await connectUserModelAccountAsync({
+          reconnected.account = await connectUserModelAccountAsync({
             ...connection,
             matchesCredential: () => true,
           });
-          expect(connected.authProfileId).toBe(profileId);
         }
         return { rateLimits: { rateLimits: { limitId: "codex" } } };
       });
@@ -68,6 +65,14 @@ it.each([false, true])(
           context: { getRuntimeConfig: () => config } as GatewayRequestHandlerOptions["context"],
           hasCurrentClientAuthority: () => true,
         });
+        expect(vi.mocked(readCodexAppServerUsage).mock.calls[0]?.[0].preparedAuth).toMatchObject({
+          kind: "profile",
+          profileId,
+          store: { profiles: { [profileId]: credential } },
+        });
+        if (reconnect) {
+          expect(reconnected.account?.authProfileId).toBe(profileId);
+        }
         const provider = expect.objectContaining({ provider: "openai" });
         const expected = reconnect
           ? [false, undefined, expect.objectContaining({ code: "UNAVAILABLE" })]
