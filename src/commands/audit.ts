@@ -28,6 +28,7 @@ import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { formatHumanList } from "../shared/human-list.js";
 
 const DEFAULT_AUDIT_LIMIT = 100;
@@ -218,13 +219,19 @@ function toLegacyAuditListParams(params: AuditActivityListParams): AuditListPara
 async function queryAuditActivity(
   params: AuditActivityListParams,
   options: AuditListCommandOptions,
-): Promise<AuditActivityListResult | AuditListResult> {
+): Promise<AuditActivityListResult | AuditListResult | undefined> {
+  const signal = getAsyncWorkSignal();
   try {
     return await callGateway<AuditActivityListResult>({
       method: "audit.activity.list",
       params,
+      signal,
     });
   } catch (error) {
+    // An accepted interrupt owns the exit status; skip the error and the legacy fallback.
+    if (signal?.aborted) {
+      return undefined;
+    }
     if (!isUnsupportedAuditMethodError(error, "audit.activity.list")) {
       throw formatAuditGatewayError(error);
     }
@@ -243,6 +250,12 @@ async function queryAuditActivity(
     return await callGateway<AuditListResult>({
       method: "audit.list",
       params: toLegacyAuditListParams(params),
+      signal,
+    }).catch((fallbackError: unknown) => {
+      if (signal?.aborted) {
+        return undefined;
+      }
+      throw fallbackError;
     });
   }
 }
@@ -272,10 +285,18 @@ function unsupportedRunInspection(
 
 async function queryAuditRunInspection(
   params: AuditRunInspectParams,
-): Promise<AuditRunInspectResult> {
+): Promise<AuditRunInspectResult | undefined> {
+  const signal = getAsyncWorkSignal();
   try {
-    return await callGateway<AuditRunInspectResult>({ method: "audit.run.inspect", params });
+    return await callGateway<AuditRunInspectResult>({
+      method: "audit.run.inspect",
+      params,
+      signal,
+    });
   } catch (error) {
+    if (signal?.aborted) {
+      return undefined;
+    }
     if (!isUnsupportedAuditMethodError(error, "audit.run.inspect")) {
       throw formatAuditGatewayError(error);
     }
@@ -554,6 +575,9 @@ export async function auditListCommand(
             ...decisionPage,
           },
     );
+    if (result === undefined) {
+      return;
+    }
     if (options.json) {
       writeRuntimeJson(runtime, result);
       return;
@@ -589,6 +613,9 @@ export async function auditListCommand(
     ...(options.cursor ? { cursor: options.cursor } : {}),
   };
   const result = await queryAuditActivity(params, options);
+  if (result === undefined) {
+    return;
+  }
   if (options.json) {
     writeRuntimeJson(runtime, result);
     return;

@@ -1469,6 +1469,8 @@ const workerCachePreset = (shard) => {
 };
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
 const packedNodeTestRows = [];
+// CLI audit evidence has a separate namespace and one upload per scheduled run.
+let auditCliObservationsAssigned = false;
 const nodeTestShards = targetNodeTestShards
   .toSorted(
     (a, b) =>
@@ -1502,8 +1504,22 @@ const nodeTestShards = targetNodeTestShards
             ...(shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
           ])
         : undefined;
+    const auditCliObservations =
+      !auditCliObservationsAssigned &&
+      eventName === "schedule" &&
+      isCanonicalRepository &&
+      !frozenTarget &&
+      !shard.requiresDist &&
+      groups?.some(
+        (group) =>
+          group.configs?.length === 1 &&
+          group.configs[0] === "test/vitest/vitest.cli-process.config.ts",
+      ) &&
+      !groups.some((group) => group.configs?.includes("test/vitest/vitest.unit-fast.config.ts"));
+    auditCliObservationsAssigned ||= Boolean(auditCliObservations);
     const row = {
       check_name: shard.checkName,
+      audit_cli_observations: auditCliObservations || undefined,
       test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
       adaptive_observations:
         (shard.groups ?? [shard]).some((group) =>

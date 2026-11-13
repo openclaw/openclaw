@@ -640,9 +640,9 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(fixture.failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
     const [payload] = buildEmbeddedRunPayloads({ ...fixture.attempt, sessionKey: "cap-test" });
     expect(payload?.isError).toBe(true);
-    expect(payload?.text).toBe(
-      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
-    );
+    expect(payload?.text).toContain("openai/mock-1 is rate-limited.");
+    expect(payload?.text).toContain("retry in 3 hours");
+    expect(payload?.text).toContain("model picker");
   });
 
   it("exhausts sixteen rate-limited attempts with bounded history before rotation and failover", async () => {

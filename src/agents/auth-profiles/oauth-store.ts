@@ -118,7 +118,7 @@ export async function adoptNewerMainOAuthCredential(params: {
 }
 
 /** Validate and mirror the current shared credential before peer settlement. */
-export async function resolveAuthoritativeSharedOAuthCredentialUnderLock(params: {
+async function resolveAuthoritativeSharedOAuthCredentialUnderLock(params: {
   profileId: string;
   candidate: OAuthCredential;
   validateCredential?: (credential: OAuthCredential) => void;

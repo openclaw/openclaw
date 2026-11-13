@@ -25,6 +25,7 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
@@ -74,8 +75,10 @@ export function createAdmittedRunOperatorAuthority(
       signal?.throwIfAborted();
       assertSource();
     } catch (error) {
-      revoked = true;
-      revocationReason = error;
+      if (!isOperatorAuthorityUnavailable(error)) {
+        revoked = true;
+        revocationReason = error;
+      }
       throw error;
     }
   });
@@ -201,7 +204,8 @@ export function bindOperatorModelExecution(
   }
   const selected = model ? { ...model } : undefined;
   const assertModelAllowed = createOperatorModelSelectionAssertion(authority, selected);
-  const mapError = (error: unknown) => mapAuthorizationError?.(error) ?? error;
+  const mapError = (error: unknown) =>
+    isOperatorAuthorityUnavailable(error) ? error : (mapAuthorizationError?.(error) ?? error);
   let releaseAuthority: (() => void) | undefined;
   try {
     assertModelAllowed();
@@ -220,7 +224,9 @@ export function bindOperatorModelExecution(
       assertModelAllowed();
     } catch (error) {
       const failure = mapError(error);
-      revoked.abort(failure);
+      if (!isOperatorAuthorityUnavailable(error)) {
+        revoked.abort(failure);
+      }
       throw failure;
     }
   };
@@ -534,9 +540,11 @@ export function prepareAgentRunAdmission(params: {
       try {
         assertSources();
       } catch (error) {
-        sourceFailure = new Error("source execution authority is no longer active", {
-          cause: error,
-        });
+        if (!isOperatorAuthorityUnavailable(error)) {
+          sourceFailure = new Error("source execution authority is no longer active", {
+            cause: error,
+          });
+        }
         throw error;
       }
     });
