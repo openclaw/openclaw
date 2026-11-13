@@ -1860,6 +1860,32 @@
   font-variant-numeric: tabular-nums;
 }
 
+.chat-attachment-thumb--preparation.chat-attachment-thumb--error {
+  height: auto;
+  min-height: 56px;
+}
+
+.chat-attachment-thumb--preparation.chat-attachment-thumb--error .chat-attachment-file {
+  height: auto;
+}
+
+.chat-attachment-file__type.chat-attachment-compression-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  white-space: normal;
+}
+
+.chat-attachment-compression-error {
+  overflow-wrap: anywhere;
+}
+
+.chat-attachment-compression-diagnostic {
+  display: block;
+  color: var(--muted);
+}
+
 :is(.chat-attachment-compress, .chat-attachment-text-action) {
   padding: 0;
   border: 0;

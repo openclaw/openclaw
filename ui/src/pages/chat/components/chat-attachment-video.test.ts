@@ -36,7 +36,7 @@ const advance = () => vi.advanceTimersByTimeAsync(0);
 async function failedEncoding() {
   const context = await encoding();
   vi.useFakeTimers();
-  context.worker.reply({ type: "error", reason: "failed" });
+  context.worker.reply({ type: "error", reason: "failed", stage: "encoding" });
   await advance();
   return context;
 }
@@ -93,7 +93,7 @@ it("keeps encoding alive beyond the read timeout and publishes only verified byt
   await vi.advanceTimersByTimeAsync(20_000);
   expect(reads.pendingReads).toBe(1);
   expect(attachments()).toEqual([]);
-  expect(reads.project([])[0]?.progress).toBeCloseTo(0.38);
+  expect(reads.project([])[0]?.progress).toBeCloseTo(0.4);
   ready(worker);
   await advance();
   expect(reads.pendingReads).toBe(0);
@@ -103,6 +103,44 @@ it("keeps encoding alive beyond the read timeout and publishes only verified byt
     mimeType: "video/webm",
   });
   expect(worker.terminate).toHaveBeenCalledOnce();
+});
+
+it("separates encoding progress from attachment preparation", async () => {
+  const readers: Reader[] = [];
+  vi.stubGlobal(
+    "FileReader",
+    class extends Reader {
+      override readAsDataURL() {
+        readers.push(this);
+      }
+    },
+  );
+  const { entry, worker, reads } = await encoding();
+  vi.useFakeTimers();
+  worker.reply({ type: "progress", progress: 0.9 });
+  ready(worker);
+  await advance();
+  expect(entry).toMatchObject({ preparation: "preparing", progress: 0 });
+  const reader = readers[0]!;
+  reader.dispatchEvent(
+    new ProgressEvent("progress", { lengthComputable: true, loaded: 3, total: 100 }),
+  );
+  expect(entry).toMatchObject({ preparation: "preparing", progress: 0.03 });
+  reader.dispatchEvent(new Event("load"));
+  expect(reads.pendingReads).toBe(0);
+  expect(entry.state).toBe("ready");
+});
+
+it("retains a bounded failure diagnostic without exposing worker error content", async () => {
+  const { entry, worker, reads } = await encoding();
+  worker.dispatchEvent(new ErrorEvent("error", { message: "PRIVATE filename and codec detail" }));
+  await vi.waitFor(() => expect(reads.pendingReads).toBe(0));
+  expect(entry).toMatchObject({
+    state: "error",
+    errorMessage: "chat.attachments.compressionFailed",
+    compressionDiagnostic: "worker/runtime",
+  });
+  expect(JSON.stringify(entry)).not.toContain("PRIVATE");
 });
 
 it.each([
@@ -140,7 +178,7 @@ it.each(["unsupported", "failed", "oversize"] as const)(
     worker.reply(
       failure === "oversize"
         ? { type: "ready", file: video() }
-        : { type: "error", reason: failure },
+        : { type: "error", reason: failure, stage: "encoding" },
     );
     await vi.waitFor(() => expect(reads.pendingReads).toBe(0));
     expect(attachments()).toEqual([]);

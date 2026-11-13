@@ -306,7 +306,10 @@ const catalog = {
       compressionHint:
         "Video is too large. Compress a copy on this device; the original stays unchanged.",
       compressing: "Compressing · {progress}%",
-      compressionUnsupported: "This browser cannot compress this video.",
+      preparingVideo: "Preparing attachment · {progress}%",
+      compressionDiagnostic: "Error code: {code}",
+      compressionUnsupported:
+        "This browser cannot compress this video. Try a smaller file or another browser.",
       compressionTooLarge: "Video is still too large. Try a smaller file.",
       compressionFailed: "Could not compress video. Try again.",
       showInTextField: "Show in text field",

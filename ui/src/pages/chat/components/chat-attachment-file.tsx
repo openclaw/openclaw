@@ -35,7 +35,10 @@ export function AttachmentRemove(props: {
   );
 }
 
-type VideoPreparation = { state: "offer" | "compressing" | "error"; progress?: number };
+type VideoPreparation = {
+  state: "offer" | "compressing" | "preparing" | "error";
+  progress?: number;
+};
 
 function AttachmentVideoPreview(props: {
   attachment: ChatAttachment;
@@ -67,7 +70,7 @@ function AttachmentVideoPreview(props: {
                 { "chat-attachment-video__placeholder--error": preparation().state === "error" },
               ]}
             >
-              {preparation().state === "compressing" ? (
+              {preparation().state === "compressing" || preparation().state === "preparing" ? (
                 <svg class="chat-attachment-compression-progress" viewBox="0 0 24 24">
                   <circle
                     class="chat-attachment-compression-progress__track"

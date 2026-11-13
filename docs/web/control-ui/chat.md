@@ -517,7 +517,12 @@ When a selected video exceeds the attachment limit or the remaining batch budget
 select **Compress to fit** to prepare a smaller copy on your device. Compression
 starts only after you choose it; ordinary files and videos that already fit stay
 unchanged. The encoder loads on demand and runs in a background worker, with
-per-file progress while you keep typing. Remove the file to cancel. Nothing is
+per-file progress while you keep typing. **Compressing** measures encoding;
+**Preparing attachment** then measures reading the copy into the draft. Each
+phase has its own progress percentage. If compression fails, the attachment tile
+shows the reason, a bounded error code you can report, and **Retry compression**.
+Error codes contain only a preparation stage and failure category, not filenames
+or codec exception text. Remove the file to cancel. Nothing is
 uploaded until preparation finishes and you send the message.
 
 Compression re-encodes a copy, targets the displayed orientation, and limits the
