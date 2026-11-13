@@ -7,6 +7,7 @@ import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-id
 import { resolveGitRepositoryPaths } from "../../agents/worktrees/git.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import type { WorkerExecutionMode, WorkerProfile, WorkerProvider } from "../../plugins/types.js";
+import type { QueuedOperatorRecoverySource } from "../operator-run-recovery-source.codec.js";
 import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import { assertEnvironmentRecipeSecretsMapped } from "./environment-recipe.js";
 import {
@@ -26,7 +27,6 @@ import type { RepositoryWorkerProjectSnapshot } from "./repository-project-sourc
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as validation from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
-import { boundedWorkerError } from "./worker-error.js";
 import { prepareWorkerProjectSnapshot, workerLocalProjectKey } from "./workspace-git-base.js";
 
 type WorkerProviderIntentOptions = Pick<
@@ -42,6 +42,7 @@ type WorkerProviderIntentOptions = Pick<
     beforeProvision?: () => void,
     repositorySource?: WorkerProviderRepositorySource,
     wakeRetained?: () => void,
+    originalSource?: () => void,
   ) => Promise<WorkerEnvironmentRecord>;
 };
 
@@ -69,6 +70,7 @@ export type WorkerProviderIntentPreparationOptions = {
   signal?: AbortSignal;
   setupAuthorized?: boolean;
   beforeProvision?: () => void;
+  provisionSource?: QueuedOperatorRecoverySource;
   assertCurrent?: () => void;
   readNativeCredential?: GitHubCredentialReader;
   retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
@@ -86,31 +88,6 @@ function allocationSnapshot(
     ...(os === undefined ? {} : { os }),
     ...(executionMode === undefined ? {} : { executionMode }),
   };
-}
-
-export async function failUnallocatedImageIntent(
-  options: Pick<WorkerProviderLifecycleOptions, "store" | "move">,
-  record: WorkerEnvironmentRecord,
-  error: unknown,
-  signal: AbortSignal,
-): Promise<never> {
-  const preparation = prep.readWorkerPreparation(record.profileSnapshot);
-  const current = options.store.get(record.environmentId);
-  // Reconciliation must not retry a refused image without its live admission.
-  // Provisioning rows can already own a paid lease; cancellation owns its teardown.
-  if (
-    !signal.aborted &&
-    preparation &&
-    "source" in preparation &&
-    preparation.source === "image" &&
-    current?.state === "requested" &&
-    current.provisionOperationId === record.provisionOperationId &&
-    current.ownerEpoch === record.ownerEpoch &&
-    current.destroyRequestedAtMs === null
-  ) {
-    await options.move(current, "failed", { lastError: boundedWorkerError(error) });
-  }
-  throw error;
 }
 
 /** Admits one immutable allocation intent before the provider lifecycle can allocate a lease. */
@@ -704,10 +681,12 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           profileId: normalizedProfileId,
           profileSnapshot,
           provisionOperationId,
+          provisionSource: createOptions.provisionSource,
           retention: retainedPolicy ?? admitted.retainedPolicy,
         },
         () => {
           signal?.throwIfAborted();
+          createOptions.beforeProvision?.();
           assertPreparedIntentCurrent(profileId, admitted);
         },
       );
@@ -718,6 +697,8 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         undefined,
         beforeProvision(admitted),
         preparedIntents.get(admitted)?.repository,
+        undefined,
+        createOptions.provisionSource ? createOptions.beforeProvision : undefined,
       );
     });
   };

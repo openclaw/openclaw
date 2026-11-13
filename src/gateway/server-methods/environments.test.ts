@@ -325,14 +325,18 @@ it.each([
 });
 
 it("creates a worker from a configured profile", async () => {
-  const create = vi.fn(async () =>
+  const createWithRequest = vi.fn(async () =>
     workerRecord({ desktopAvailable: true, desktopApps: ["browser", "terminal"] }),
   );
-  const service = workerService({ create });
+  const service = workerService({ createWithRequest });
   const [ok, payload] = await call("environments.create", createParams, { service });
 
   expect(ok).toBe(true);
-  expect(create).toHaveBeenCalledWith("development", "request-1");
+  expect(createWithRequest).toHaveBeenCalledWith({
+    ...createParams,
+    provisionSource: { kind: "unavailable" },
+    beforeProvision: expect.any(Function),
+  });
   expect(payload).toMatchObject({
     id: "worker-1",
     type: "worker",
@@ -348,7 +352,7 @@ it("creates a worker from a configured profile", async () => {
 
 it("hides provider failure details when worker creation fails", async () => {
   const service = workerService({
-    create: rejectService("provider_failure", "private endpoint details"),
+    createWithRequest: rejectService("provider_failure", "private endpoint details"),
   });
   expectFailure(
     await call("environments.create", createParams, { service }),
@@ -357,28 +361,27 @@ it("hides provider failure details when worker creation fails", async () => {
   );
 });
 
-it("launches only a closed advertised desktop app and returns readiness", async () => {
-  const service = workerService();
-  const { launchDesktopApp } = service;
-  const result = await call(
-    "worker.desktop.launch",
-    { environmentId: "worker-1", app: "browser" },
-    { service },
-  );
+it.each(["worker.desktop.launch", "desktop.launch"] as const)(
+  "%s launches only a closed advertised desktop app and returns readiness",
+  async (method) => {
+    const service = workerService();
+    const { launchDesktopApp } = service;
+    const target =
+      method === "desktop.launch"
+        ? { source: { kind: "environment", environmentId: "worker-1" } }
+        : { environmentId: "worker-1" };
+    const result = await invoke(method, { ...target, app: "browser" }, mockContext(service));
 
-  expect(result).toEqual([true, { app: "browser", status: "ready" }, undefined]);
-  expect(launchDesktopApp).toHaveBeenCalledExactlyOnceWith({
-    environmentId: "worker-1",
-    app: "browser",
-  });
-  const rejected = await call(
-    "worker.desktop.launch",
-    { environmentId: "worker-1", app: "editor" },
-    { service },
-  );
-  expect(rejected[0]).toBe(false);
-  expect(launchDesktopApp).toHaveBeenCalledOnce();
-});
+    expect(result).toEqual([true, { app: "browser", status: "ready" }, undefined]);
+    expect(launchDesktopApp).toHaveBeenCalledExactlyOnceWith(
+      { environmentId: "worker-1", app: "browser" },
+      expect.any(Function),
+    );
+    const rejected = await invoke(method, { ...target, app: "editor" }, mockContext(service));
+    expect(rejected[0]).toBe(false);
+    expect(launchDesktopApp).toHaveBeenCalledOnce();
+  },
+);
 
 it.each([
   ["observe", "invalid_state", ErrorCodes.INVALID_REQUEST, "environment has no desktop"],
@@ -443,7 +446,11 @@ it("logs best-effort forced teardown errors without failing the call", async () 
   expect(context.logGateway.warn).toHaveBeenCalledWith(
     "worker environment forced teardown cleanup failed: Error: provider stop remains pending",
   );
-  expect(forceDestroyEnvironment).toHaveBeenCalledExactlyOnceWith("worker-1", expect.any(Function));
+  expect(forceDestroyEnvironment).toHaveBeenCalledExactlyOnceWith(
+    "worker-1",
+    expect.any(Function),
+    expect.any(Function),
+  );
   expect(service.destroy).not.toHaveBeenCalled();
   expect(service.destroyUnattached).not.toHaveBeenCalled();
 });

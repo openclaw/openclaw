@@ -115,6 +115,8 @@ beforeEach(() => {
   mocks.events.length = 0;
   vi.clearAllMocks();
   mocks.getMemoryCapabilityRegistration.mockReset();
+  vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
+  vi.spyOn(process, "availableMemory").mockReturnValue(0);
 });
 
 afterEach(async () => {
@@ -122,6 +124,7 @@ afterEach(async () => {
     admission.release();
   }
   await Promise.all(sidecars.splice(0).map((sidecar) => Promise.resolve(sidecar.stop())));
+  vi.restoreAllMocks();
   vi.useRealTimers();
   resetGatewayWorkAdmission();
 });
@@ -363,6 +366,25 @@ it("refreshes dependency templates between sessions without overlapping preparat
     await handle.stop();
   }
 });
+
+it.each([
+  [0, 0, false],
+  [1000, 201, false],
+  [1000, 200, true],
+] as const)(
+  "reserves constrained memory for requests (limit: %i, available: %i)",
+  async (limit, available, skipped) => {
+    vi.spyOn(process, "constrainedMemory").mockReturnValue(limit);
+    vi.spyOn(process, "availableMemory").mockReturnValue(available);
+    const handles = scheduleGatewayPrewarm(prewarmOptions());
+    sidecars.push(...handles);
+    expect(handles).toHaveLength(skipped ? 0 : 2);
+    await vi.waitFor(() => {
+      expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledTimes(skipped ? 0 : 1);
+      expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledTimes(skipped ? 0 : 1);
+    });
+  },
+);
 
 it.each(["close", "restart"] as const)(
   "cancels dependency preparation on %s and joins installer cleanup",
