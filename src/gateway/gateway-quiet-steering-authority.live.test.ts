@@ -864,7 +864,7 @@ describeLive("quiet steering with real caller authority", () => {
       }
       await restartQueue(false, "queue");
 
-      await caseRun("cold Gateway process restart with queued input", async () => {
+      await caseRun("cold Gateway restart settles inputs without replay", async () => {
         const key = await create("cold");
         const gate = relay.arm();
         const root = await send(high, key, "Do not use tools. Reply COLD_ROOT.");
@@ -897,8 +897,14 @@ describeLive("quiet steering with real caller authority", () => {
               pending: recovered.pendingInputs,
             }),
         );
-        await waitRun(queued.runId);
+        // SIGKILL has no graceful-restart marker. A new admitted turn is the
+        // startup-settlement barrier; the orphan must not be replayed.
+        const fresh = await send(high, key, "Do not use tools. Reply exactly AFTER_COLD_RESTART.");
+        await waitRun(fresh.runId);
         const after = await history(key, [queued.runId]);
+        expect(after.inputReceipts).toContainEqual(
+          expect.objectContaining({ runId: queued.runId, state: "pending", cancelled: true }),
+        );
         expect(
           after.pendingInputs?.items.filter(
             (input) => input.runId === queued.runId && input.state === "queued",
@@ -909,7 +915,13 @@ describeLive("quiet steering with real caller authority", () => {
             .filter((message) => message.role === "assistant")
             .map(safeAssistantText)
             .join("\n"),
-        ).toContain("COLD_QUEUED_RECOVERED");
+        ).not.toContain("COLD_QUEUED_RECOVERED");
+        expect(
+          after.messages
+            .filter((message) => message.role === "assistant")
+            .map(safeAssistantText)
+            .join("\n"),
+        ).toContain("AFTER_COLD_RESTART");
         return {
           root: root.runId,
           oldPid,
