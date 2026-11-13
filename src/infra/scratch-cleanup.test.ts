@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { SCRATCH_TTL_MS } from "../shared/scratch-expiry.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
 import {
   cleanScratch,
   closeScratchCleanupCursor,
@@ -174,7 +175,7 @@ it("resumes a claimed tree after a process crash without touching a replacement 
   expect(claims).toHaveLength(1);
   expect(claims[0]).toMatch(/^\.reclaim-/);
   // 131 files, the Git directory and the claimed root, less the first 128 removals.
-  expect(await fs.readdir(path.join(scratch, claims[0]!), { recursive: true })).toHaveLength(4);
+  expect(await listDirectoryTreeStrict(path.join(scratch, claims[0]!))).toHaveLength(4);
   const fresh = await f.file(".openclaw/tmp/proof/fresh", 1);
   const resumed = await run(false);
   expect(JSON.parse(resumed.stdout)).toMatchObject({
