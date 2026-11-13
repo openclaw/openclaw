@@ -165,6 +165,12 @@ current session:
 Task status and duplicate detection are scoped to the requesting chat, even
 when direct chats share the main session transcript. Completion returns to
 the peer who requested the image.
+Exact retries reuse active or recently completed tasks. Keeping the same prompt while changing
+references, model, or options starts different work; image references are loaded
+before duplicate detection, so replacing a file at the same path also counts.
+Started and completed receipts include ordered `referenceInputs` facts (SHA-256,
+byte count, and MIME type) for the bytes loaded, not proof of what the provider
+visually preserved. Inline image payloads are omitted from printable receipts.
 
 ## Provider capabilities
 
