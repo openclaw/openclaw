@@ -189,13 +189,7 @@ export async function isAudioModelEntryAvailable(params: {
       await resolveProviderExecutionAuth({ ...params, capability: "audio", providerId, provider });
     }
     return true;
-  } catch (error) {
-    // A Gateway-owned sign-in is ready, just not refreshable here; report why.
-    const { OAuthRefreshOwnerError } =
-      await import("../agents/auth-profiles/oauth-refresh-failure.js");
-    if (error instanceof OAuthRefreshOwnerError) {
-      throw error;
-    }
+  } catch {
     return false;
   }
 }
