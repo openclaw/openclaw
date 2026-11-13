@@ -21,6 +21,7 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   ensureCanonicalUserProfileForEmail,
@@ -560,7 +561,15 @@ describe("shared GitHub publication requester authority", () => {
       const visitors = await startVisitorPublicationFixture(f);
       try {
         const first = (await visitors.store.lookup(email))!;
+        const policy = getPluginRegistryState()!.activeRegistry!.gatewayAccessPolicies.find(
+          (entry) => entry.pluginId === "visitor-access",
+        )!.policy;
+        using resumes = vi.spyOn(policy, "resume");
         const original = await guestRequester(f);
+        const resumed = resumes.mock.calls.length;
+        original.requester.assertCurrent();
+        original.requester.assertCurrent();
+        expect(resumes).toHaveBeenCalledTimes(resumed);
         const claim = await holdWorkerTurn(f);
         if (ending === "renewal") {
           expect(original.requester.snapshot.grant).toMatchObject({

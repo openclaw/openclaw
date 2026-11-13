@@ -3823,6 +3823,93 @@ server.listen(0, "127.0.0.1", () => {
     }
   });
 
+  it("rebuilds only new hosted Linux pnpm store generations without losing bootstrap assets", () => {
+    const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
+    const steps = warmer.jobs.dependencies.steps as WorkflowStep[];
+    const fresh = requiredWorkflowStep(steps, "Populate fresh hosted Linux dependency store");
+    const outputs = {
+      "cache-mode": "read-write",
+      "pnpm-store-cache-key": "new-dependency-generation",
+      "pnpm-store-cache-hit": "false",
+    };
+    const context = {
+      eventName: "schedule" as const,
+      repository: "openclaw/openclaw",
+      runnerOs: "Linux" as const,
+      runnerEnvironment: "github-hosted" as const,
+      runAttempt: 1,
+      steps: { "setup-node-env": { outputs } },
+    };
+    for (const runnerOs of ["Linux", "macOS", "Windows"] as const) {
+      for (const runnerEnvironment of ["github-hosted", "self-hosted"] as const) {
+        for (const hit of ["false", "true"]) {
+          expect(
+            evaluateWorkflowCondition(expectDefined(fresh.if, "fresh store condition"), {
+              ...context,
+              runnerOs,
+              runnerEnvironment,
+              steps: { "setup-node-env": { outputs: { ...outputs, "pnpm-store-cache-hit": hit } } },
+            }),
+          ).toBe(runnerOs === "Linux" && runnerEnvironment === "github-hosted" && hit === "false");
+        }
+      }
+    }
+    for (const rejected of [{ "cache-mode": "restore" }, { "pnpm-store-cache-key": "" }]) {
+      expect(
+        evaluateWorkflowCondition(expectDefined(fresh.if, "fresh store condition"), {
+          ...context,
+          steps: { "setup-node-env": { outputs: { ...outputs, ...rejected } } },
+        }),
+      ).toBe(false);
+    }
+    expect(steps.indexOf(fresh)).toBeLessThan(
+      steps.indexOf(requiredWorkflowStep(steps, "Save exact dependency cache")),
+    );
+
+    const root = tempDirs.make("openclaw-fresh-store-");
+    const store = path.join(root, ".cache", "openclaw-pnpm-store");
+    const modules = [
+      "node_modules",
+      "ui/node_modules",
+      "packages/p/node_modules",
+      "extensions/p/node_modules",
+      "examples/p/node_modules",
+    ];
+    for (const directory of [
+      ...modules,
+      ".cache/openclaw-pnpm-store/toolchain",
+      ".github/actions/setup-node-env",
+      "tmp",
+    ]) {
+      mkdirSync(path.join(root, directory), { recursive: true });
+    }
+    writeFileSync(path.join(store, "stale-package"), "old snapshot");
+    writeFileSync(path.join(store, "toolchain", "pnpm.tgz"), "authenticated bootstrap bytes");
+    writeFileSync(
+      path.join(root, ".github/actions/setup-node-env/install-dependencies.sh"),
+      'test "$DEPENDENCY_CACHE_HIT" = false && test "$FROZEN_LOCKFILE" = true && touch installed\n',
+    );
+    const result = runWorkflowShellScript(expectDefined(fresh.run, "fresh store script"), {
+      cwd: root,
+      env: {
+        ...process.env,
+        ...fresh.env,
+        GITHUB_WORKSPACE: root,
+        PNPM_CONFIG_STORE_DIR: store,
+        RUNNER_TEMP: path.join(root, "tmp"),
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(path.join(root, "installed"))).toBe(true);
+    expect(readFileSync(path.join(store, "toolchain", "pnpm.tgz"), "utf8")).toBe(
+      "authenticated bootstrap bytes",
+    );
+    expect(existsSync(path.join(store, "stale-package"))).toBe(false);
+    for (const directory of modules) {
+      expect(existsSync(path.join(root, directory))).toBe(false);
+    }
+  });
+
   it("warms full builds with the release runtime without changing test cache selectors", () => {
     const warmer = readWorkflow(".github/workflows/vitest-cache-warm.yml");
     const npm = readWorkflow(".github/workflows/openclaw-npm-preflight.yml");
