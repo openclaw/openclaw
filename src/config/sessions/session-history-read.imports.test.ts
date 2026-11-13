@@ -42,7 +42,10 @@ it.each([
     "lazy runtime",
     gateway("session-history-worker-reader"),
     [
-      ...gateway("session-utils-store-sources"),
+      ...gateway(
+        "session-utils-store-sources chat-history-reply-messages current-user-profile-display",
+      ),
+      ...paths("src/cron/store/", "job-name.kernel paths"),
       ...sessions("store-target-inventory"),
       "src/config/runtime-source-projection.ts",
       "src/agents/bash-tools.process-schema.ts",
