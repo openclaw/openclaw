@@ -548,7 +548,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     const admitted = await userTurn.prepareSystemPromptUpdate!(
       "## Tooling\n- exec\n- suggest_task",
     );
-    admitted.commit();
+    admitted.commit?.();
     await fixture.persist(userTurn);
     // An inter-session turn renders without the task-suggestion grant.
     const sendTurn = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
