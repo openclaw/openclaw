@@ -80,3 +80,66 @@ Each nudge-that-should-be-a-default and each P0/P1 follow-up becomes a skill,
 tooling, or issue change on `main` (release-process changes then reach the
 active release branch per the shared release boundaries). Link them from the
 retrospective PR when they exist.
+
+## Track in-flight fixes per agent
+
+[openclaw/tideclaw#11 — Release Retro In-Flight Fix Tracker](https://github.com/openclaw/tideclaw/issues/11)
+is the canonical coordination surface for agents fixing retrospective ledger
+findings. The ledger records durable findings and outcomes; the tracker shows
+who is working on what now. Do not commit claim reservations, WIP status, or
+heartbeat updates to either repository just to advertise work. Keep unfinished
+changes local; commit the actual fix only after its required work and validation
+are complete. This does not change the report/ledger delivery process above.
+
+1. **Read before claiming.** Read the issue and all comments, then locate the
+   selected `RRI-NNN` entries in the current ledger and check linked fixes/PRs.
+   Reuse an existing repair or coordinate with its owner instead of duplicating
+   it. The tracker is coordination, not authority to implement, publish, merge,
+   or release anything outside the task's existing authorization.
+2. **Claim in one per-agent comment.** Create a comment headed with your agent
+   name and a stable task/session identifier. Use one row per ledger item or
+   explicitly grouped shared-cause repair. Link the ledger entries and describe
+   the repair scope so distinct work on the same item is not confused. Retain
+   the comment URL as your status record; edit it for later updates rather than
+   posting a new comment for each step. Do not put all agents in one mutable
+   issue-body table or overwrite another agent's comment.
+3. **Check for overlap.** After posting, reread the tracker for concurrent
+   claims. If scopes overlap, coordinate one implementation owner and mark the
+   other claim as handed off or released. A timestamp is not a lock, and an old
+   update alone does not mean a claim is abandoned.
+4. **Update at meaningful transitions.** Record the current status, UTC update
+   time, next action, and blockers. Add branch/PR and focused proof links when
+   available. A parent coordinating children names the actual worker per row;
+   a handoff links the successor's comment and records who owns the next step.
+   If you cannot edit the original comment, post a linked replacement and make
+   clear which record supersedes it. After an uncertain write, reread before
+   retrying to avoid duplicate comments.
+5. **Close the claim, not the tracker.** Keep `PR open` distinct from `done`: a
+   published fix awaiting review, CI, or merge is still in flight. Record the
+   verified outcome and fix/merge evidence when complete, or mark `released`
+   with a reason when stopping without a fix. Use `blocked` with the missing
+   prerequisite and next owner when work cannot proceed. Do not close issue
+   #11 when your own work finishes; other agents continue using it. Update the
+   durable ledger outcome through its normal reviewed process, not as a stream
+   of progress commits.
+
+Copy this into your comment, replacing placeholders and omitting unused fields:
+
+```markdown
+## Agent: <name> — <stable task/session identifier>
+
+Updated: <YYYY-MM-DD HH:MM UTC>
+
+| Ledger item(s) | Scope                             | Status  | Next action / blocker | Fix and evidence                |
+| -------------- | --------------------------------- | ------- | --------------------- | ------------------------------- |
+| <RRI links>    | <shared cause or specific repair> | claimed | <next step>           | <PR/proof links when available> |
+
+Handoff: <none, or successor and comment link>
+```
+
+Use plain statuses: `claimed`, `in progress`, `blocked`, `PR open`, `done`,
+`handed off`, or `released`. Include only information safe for the target
+repository; never paste credentials, private runtime details, or raw logs.
+If tracker access is unavailable, report that the claim is **unconfirmed**,
+retain a local note, and ask an authorized coordinator to post it. Do not
+substitute a repository commit or claim exclusive ownership without visibility.
