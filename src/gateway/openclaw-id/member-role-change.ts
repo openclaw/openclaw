@@ -1,6 +1,7 @@
-import type {
-  AuthorityEvent,
-  AuthorityState,
+import {
+  parseStatement,
+  type AuthorityEvent,
+  type AuthorityState,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { PluginStateStoreError } from "../../plugin-state/plugin-state-error.js";
@@ -19,6 +20,16 @@ export function refuseUndefinedMemberRole(error: unknown): AuthorityRefusal {
     return { ok: false, code: "role_undefined", detail: cause.message };
   }
   throw error;
+}
+
+/** Capture the requested role while leaving its catalog check at storage commit. */
+export function prepareMemberRoleChangeAssertion(input: unknown): () => void {
+  const change = parseStatement(input, "MembershipChange");
+  const role =
+    change.ok && change.statement.body.target.op === "set_role"
+      ? change.statement.body.target.role
+      : undefined;
+  return () => assertMemberRoleDefined(role);
 }
 
 /** Passed to the store's live pre-commit assertion for owner-signed set_role. */
