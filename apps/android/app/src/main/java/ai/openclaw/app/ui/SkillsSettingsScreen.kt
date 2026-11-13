@@ -84,7 +84,7 @@ internal fun SkillsSettingsScreen(
   val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val canManageSkills = isConnected && operatorAdminScopeAvailable
   val skills = skillsState.summary?.skills.orEmpty()
-  var selectedSkillKey by remember { mutableStateOf<String?>(null) }
+  var selectedSkillKey by rememberSaveable { mutableStateOf<String?>(null) }
   var selectedTabName by rememberSaveable { mutableStateOf(SkillsTab.Installed.name) }
   var installedSearch by rememberSaveable { mutableStateOf("") }
   var installedFilterName by rememberSaveable { mutableStateOf(InstalledSkillFilter.All.name) }

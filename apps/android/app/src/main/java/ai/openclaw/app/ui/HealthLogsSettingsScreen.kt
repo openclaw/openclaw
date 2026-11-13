@@ -28,7 +28,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,7 +55,7 @@ internal fun HealthLogsSettingsScreen(
   val talkAwaitingAgent by viewModel.talkAwaitingAgent.collectAsState()
   val talkStatus by viewModel.talkModeStatusText.collectAsState()
   val logsState by viewModel.healthLogsState.collectAsState()
-  var selectedLogEntry by remember { mutableStateOf<GatewayLogEntry?>(null) }
+  var selectedLogEntry by rememberSaveable(stateSaver = GatewayLogEntrySaver) { mutableStateOf<GatewayLogEntry?>(null) }
 
   SettingsRefreshOnConnect(isConnected) { viewModel.refreshHealthLogs() }
 
@@ -111,6 +112,19 @@ internal fun HealthLogsSettingsScreen(
     }
   }
 }
+
+// Keep the opened snapshot: a refreshed log tail may no longer contain this entry.
+private val GatewayLogEntrySaver =
+  Saver<GatewayLogEntry?, ArrayList<String?>>(
+    save = { entry ->
+      entry?.let { arrayListOf(it.time, it.level, it.subsystem, it.message, it.raw) } ?: arrayListOf()
+    },
+    restore = { fields ->
+      fields.takeIf { it.isNotEmpty() }?.let {
+        GatewayLogEntry(it[0], it[1], it[2], requireNotNull(it[3]), requireNotNull(it[4]))
+      }
+    },
+  )
 
 internal fun voiceRuntimeReady(
   voiceCaptureMode: VoiceCaptureMode,
