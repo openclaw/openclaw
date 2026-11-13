@@ -100,7 +100,14 @@ const records = Array.from({ length: count }, (_, n): LoadedRecord => {
     hash: hash(raw),
   };
 });
-const data: ScanResult = { records, ontology: null, sources: [], issues: [], checkedAt: at };
+const data: ScanResult = {
+  records,
+  recall: new Map(),
+  ontology: null,
+  sources: [],
+  issues: [],
+  checkedAt: at,
+};
 const queries: SearchInput[] = [
   { query: "orchid", tag: "selected" },
   { query: "flower", tag: "selected", offset: 20, limit: 10 },
