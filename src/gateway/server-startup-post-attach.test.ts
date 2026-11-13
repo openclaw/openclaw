@@ -2109,7 +2109,8 @@ describe("startGatewayPostAttachRuntime", () => {
       "channel startup failed: Error: channel unavailable",
     );
     expect(trace.measures.indexOf("sidecars.channel-start")).toBeGreaterThanOrEqual(0);
-    expect(trace.measures.indexOf("sidecars.plugin-services")).toBeGreaterThan(
+    expect(trace.measures.indexOf("sidecars.plugin-services")).toBeGreaterThanOrEqual(0);
+    expect(trace.measures.indexOf("sidecars.plugin-services")).toBeLessThan(
       trace.measures.indexOf("sidecars.channel-start"),
     );
   });

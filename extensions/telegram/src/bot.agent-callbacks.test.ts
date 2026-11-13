@@ -12,8 +12,14 @@ import type { TelegramInlineButtons } from "./button-types.js";
 import { telegramMessageActions } from "./channel-actions.js";
 import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.js";
 
-const { editMessageReplyMarkupSpy, getLoadConfigMock, getOnHandler, replySpy, sendMessageSpy } =
-  await import("./bot.create-telegram-bot.test-harness.js");
+const {
+  editMessageReplyMarkupSpy,
+  getLoadConfigMock,
+  getOnHandler,
+  replySpy,
+  sendMessageSpy,
+  telegramBotDepsForTest,
+} = await import("./bot.create-telegram-bot.test-harness.js");
 const { createTelegramBotCore } = await import("./bot-core.js");
 
 beforeEach(async ({ onTestFinished }) => {
@@ -47,7 +53,11 @@ async function renderMessageSendCallback(value: string): Promise<string> {
 }
 
 async function tap(data: string) {
-  await createTelegramBotCore({ token: "tok", botInfo: telegramBotInfoForTest });
+  await createTelegramBotCore({
+    token: "tok",
+    botInfo: telegramBotInfoForTest,
+    telegramDeps: telegramBotDepsForTest,
+  });
   await getOnHandler("callback_query")(
     createTelegramCallbackContext({
       id: "cbq-agent-choice",
