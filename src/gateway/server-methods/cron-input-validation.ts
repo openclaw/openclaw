@@ -4,7 +4,7 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir, tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
 import type { AuthProfileAuthorization } from "../../agents/auth-profiles/authorization-contract.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { captureScheduledOperatorSource } from "../../agents/operator-run-recovery-source.js";
@@ -12,6 +12,7 @@ import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-co
 import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import {
   assertValidCronAnnounceDelivery,
   assertValidCronFailureAlert,
@@ -389,7 +390,10 @@ export async function captureCronCreatorSession(
       ? await captureCronInferenceForCaller(
           {
             cfg,
-            agentId: agentId ?? resolveDefaultAgentId(cfg),
+            agentId: resolveCronJobEffectiveAgentId(
+              { ...job, agentId },
+              tryResolveAmbientOwnerAgentId(cfg),
+            ),
             model: job.payload.model,
             isGmailHook:
               (job.payload.externalContentSource ??
@@ -426,7 +430,7 @@ export async function captureCronUpdatedInferenceBinding(
     return undefined;
   }
   const model = patch.payload && "model" in patch.payload ? patch.payload.model : undefined;
-  const agentId = nextJob.agentId ?? resolveDefaultAgentId(cfg);
+  const agentId = resolveCronJobEffectiveAgentId(nextJob, tryResolveAmbientOwnerAgentId(cfg));
   const selection = model
     ? resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: model })
     : null;

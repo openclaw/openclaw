@@ -1,0 +1,5 @@
+30
+# LOCAL 2026.11.8 row 57; source 28d20f9532f4a5c4f20e5ad85a1ea370444886f6.
+# Both existing agent-less inference-validation paths now use the established cron owner resolver and configured ambient/system agent, matching cron service and execution ownership. Explicit agent and session-key precedence remain owned by the existing resolver.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.

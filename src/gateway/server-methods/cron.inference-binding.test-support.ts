@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi } from "vitest";
+import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import {
   removeAuthProfilesAcrossOwnerStores,
   setAuthProfileOrder,
@@ -111,7 +112,8 @@ async function createFixture(stateDir: string, agentDir: string) {
       scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: false,
-      defaultAgentId: "main",
+      // Same owner resolution the Gateway wires into its cron service.
+      resolveDefaultAgentId: () => tryResolveAmbientOwnerAgentId(cfg),
       log: createNoopLogger(),
       enqueueSystemEvent: () => {},
       runIsolatedAgentJob: async () => {
@@ -375,6 +377,14 @@ async function createFixture(stateDir: string, agentDir: string) {
             ...cfg.agents?.entries,
             [agentId]: { agentDir: path.join(stateDir, "agents", agentId, "agent") },
           },
+        },
+      });
+    },
+    setSystemAgent(agentId: string) {
+      publish({
+        agents: {
+          ...cfg.agents,
+          defaults: { ...cfg.agents?.defaults, systemAgent: { agentId } },
         },
       });
     },
