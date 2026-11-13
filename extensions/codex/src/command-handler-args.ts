@@ -41,6 +41,12 @@ type ParsedCodexCliSessionsArgs = {
   host?: string;
   filter: string;
   limit?: number;
+  /**
+   * Opt out of the bounded rollout scan so the listing reads every record of every rollout under the
+   * codex-home: a filter reaches every match, and an unfiltered page ranks sessions by their records
+   * rather than by file mtime.
+   */
+  searchAll?: boolean;
   help?: boolean;
 };
 
@@ -199,11 +205,12 @@ export function parseBindArgs(args: readonly string[]): ParsedBindArgs {
 }
 
 export function parseCodexCliSessionsArgs(args: readonly string[]): ParsedCodexCliSessionsArgs {
-  const { parsed, values, filter } = parseConnectionArgs(args, "sessions");
+  const { parsed, values, filter, searchAll } = parseConnectionArgs(args, "sessions");
   return {
     ...parsed,
     host: normalizeOptionalString(values.get("host")),
     filter: filter.join(" ").trim(),
+    searchAll,
   };
 }
 
@@ -220,6 +227,7 @@ function parseConnectionArgs(args: readonly string[], kind: keyof typeof CONNECT
   const parsed: Pick<ParsedResumeArgs, "threadId" | "help"> & { limit?: number } = {};
   const values = new Map<string, string>();
   const filter: string[] = [];
+  let searchAll = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = expectDefined(
       args[index],
@@ -227,6 +235,10 @@ function parseConnectionArgs(args: readonly string[], kind: keyof typeof CONNECT
     );
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
+      continue;
+    }
+    if (kind === "sessions" && arg === "--search-all") {
+      searchAll = true;
       continue;
     }
     const option = CONNECTION_OPTIONS[kind].get(arg);
@@ -263,7 +275,7 @@ function parseConnectionArgs(args: readonly string[], kind: keyof typeof CONNECT
   if (kind !== "sessions") {
     parsed.threadId = normalizeOptionalString(parsed.threadId);
   }
-  return { parsed, values, filter };
+  return { parsed, values, filter, searchAll };
 }
 
 export function parseComputerUseArgs(args: readonly string[]): ParsedComputerUseArgs {

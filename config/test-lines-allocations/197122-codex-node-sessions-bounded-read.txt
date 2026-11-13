@@ -1,0 +1,4 @@
+# Coverage for bounded reads of Codex node CLI session files: JSONL line framing, session file
+# scanning limits, command routing, and the node invoke deadline integration.
+# Exact net growth for PR #197122.
+1406

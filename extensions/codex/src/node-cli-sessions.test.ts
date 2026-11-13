@@ -70,16 +70,6 @@ function resumeRequest(
   return JSON.stringify({ sessionId, prompt: "continue", ...overrides });
 }
 
-function summary(
-  sessionId: string,
-  sessionFile: string,
-  cwd: string,
-  lastMessage: string,
-  updatedAt = "2026-05-14T00:10:24.000Z",
-) {
-  return { sessionId, sessionFile, cwd, lastMessage, updatedAt, messageCount: 1 };
-}
-
 async function scriptProcess(scriptArgs: string[]): Promise<RunCommandBuffered> {
   const { runCommandBuffered } = await vi.importActual<
     typeof import("openclaw/plugin-sdk/process-runtime")
@@ -104,17 +94,6 @@ async function writeHistory(records: Array<{ session_id: string; ts: number; tex
     records.map((record) => JSON.stringify(record)).join("\n"),
   );
 }
-
-const meta = (id: string, cwd: string, timestamp = "2026-05-14T00:10:23.618Z") => ({
-  timestamp,
-  type: "session_meta",
-  payload: { id, cwd },
-});
-const userMessage = (text: string, timestamp = "2026-05-14T00:10:24.000Z") => ({
-  timestamp,
-  type: "response_item",
-  payload: { type: "message", role: "user", content: [{ type: "input_text", text }] },
-});
 
 async function writeRollout(sessionId: string, records: unknown[] = [], large = false) {
   const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");
@@ -551,57 +530,6 @@ it.each(["thread", "node", "lock", "initializing", "missing row", "missing marke
   },
 );
 
-it("streams many-chunk records and truncates previews at UTF-16 boundaries", async () => {
-  const prefix = "b".repeat(136);
-  const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5250";
-  const cwd = "/tmp/codex-work";
-  const sessionFile = await writeRollout(sessionId, [
-    meta(sessionId, cwd),
-    { type: "event_msg", payload: { type: "token_count", padding: "x".repeat(5 * 1_024 * 1_024) } },
-    userMessage(`${prefix}🤖tail`),
-  ]);
-  const readFile = vi.spyOn(fs, "readFile");
-  const parsed = await listLocalSessions({ limit: 5 });
-  expect(readFile).not.toHaveBeenCalledWith(sessionFile, "utf8");
-  expect(parsed.sessions).toEqual([summary(sessionId, sessionFile, cwd, `${prefix}...`)]);
-});
-
-it.each(["read", "close"] as const)("handles a large-file %s failure", async (failure) => {
-  const partial = failure === "read";
-  const sessionId = partial
-    ? "019e23d1-f33d-78e3-959e-0f56f30a5251"
-    : "019e23d1-f33d-78e3-959e-0f56f30a5252";
-  const cwd = partial ? "/tmp/partial" : "/tmp/close-failure";
-  const sessionFile = await writeRollout(sessionId, [], true);
-  const content = Buffer.from(
-    [
-      JSON.stringify(meta(sessionId, cwd)),
-      ...(partial ? [] : [JSON.stringify(userMessage("survives close failure"))]),
-    ].join("\n") + (partial ? "\n" : ""),
-  );
-  const ioError = Object.assign(new Error(`${failure} failed`), { code: "EIO" });
-  const close = vi.fn(async () => {
-    if (!partial) {
-      throw ioError;
-    }
-  });
-  const read = vi.fn().mockImplementationOnce(async (buffer: Buffer) => {
-    content.copy(buffer);
-    return { bytesRead: content.length, buffer };
-  });
-  if (partial) {
-    read.mockRejectedValueOnce(ioError);
-  } else {
-    read.mockResolvedValueOnce({ bytesRead: 0, buffer: Buffer.alloc(0) });
-  }
-  vi.spyOn(fs, "open").mockResolvedValue({ read, close } as never);
-  const parsed = await listLocalSessions({ limit: 5 });
-  expect(parsed.sessions).toEqual(
-    partial ? [] : [summary(sessionId, sessionFile, cwd, "survives close failure")],
-  );
-  expect(close).toHaveBeenCalledOnce();
-});
-
 it("reports malformed node session payloadJSON with an owned error", async () => {
   const invoke = vi.fn(async () => ({ ok: true, payloadJSON: "{not json" }));
   const runtime = {
@@ -617,4 +545,30 @@ it("reports malformed node session payloadJSON with an owned error", async () =>
     "Codex CLI node command returned malformed payloadJSON.",
   );
   expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ scopes: ["operator.write"] }));
+});
+
+it("leaves rollout counts absent when a node build does not report them", async () => {
+  const nodeInvoke = vi.fn(async () => ({
+    ok: true,
+    payloadJSON: JSON.stringify({
+      codexHome: "/Users/mariano/.codex",
+      searchTruncated: true,
+      sessions: [],
+    }),
+  }));
+  const nodeRuntime = {
+    nodes: {
+      list: vi.fn(async () => ({
+        nodes: [{ nodeId: "node-1", connected: true, commands: ["codex.cli.sessions.list"] }],
+      })),
+      invoke: nodeInvoke,
+    },
+  } as unknown as PluginRuntime;
+
+  const listing = await listNode({ runtime: nodeRuntime, requestedNode: "node-1" });
+
+  // Coercing an absent counter to 0 would make the truncation notice claim "0 of 0 rollouts".
+  expect(listing.result.scannedFileCount).toBeUndefined();
+  expect(listing.result.sessionFileCount).toBeUndefined();
+  expect(listing.result.searchTruncated).toBe(true);
 });
