@@ -1,4 +1,5 @@
 import {
+  stripDeepSeekDsmlToolCallBlocks,
   stripRelevantMemoriesTags,
   stripAssistantInternalTraceLines,
   stripLegacyBracketToolCallBlocks,
@@ -19,6 +20,7 @@ const transforms = orderInternalScaffoldingStages<(text: string) => string>({
       trim: "none",
       recoverUnclosed: true,
     }),
+  dsml: stripDeepSeekDsmlToolCallBlocks,
   modelTokens: stripModelSpecialTokens,
   memories: stripRelevantMemoriesTags,
   xml: stripToolCallXmlTags,
