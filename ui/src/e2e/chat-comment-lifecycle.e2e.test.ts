@@ -1,6 +1,8 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "../pages/chat/chat-history-events.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
@@ -113,21 +115,14 @@ suite.define(() => {
       expect(await inline.textContent()).not.toContain("Loading");
       expect((await inline.boundingBox())?.height).toBe(before!.height);
       const canonicalBody = createDeferred();
+      const canonicalBodyRead = createDeferred();
+      const historySettled = createDeferred();
       const reread = createDeferred();
       let reads = 0;
       let tickets = 0;
-      let metadataCompleted = 0;
-      let failedReads = 0;
-      page.on("requestfailed", (request) => {
-        if (
-          request.url().includes("/assistant-media?") &&
-          !new URL(request.url()).searchParams.has("meta")
-        ) {
-          failedReads += 1;
-        }
-      });
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         if (new URL(route.request().url()).searchParams.has("meta")) {
+          await historySettled.promise;
           const now = await page.evaluate(() => Date.now());
           await route.fulfill({
             json: {
@@ -135,13 +130,20 @@ suite.define(() => {
               mediaTicketExpiresAt: new Date(now + 60_000).toISOString(),
             },
           });
-          metadataCompleted += 1;
           return;
         }
-        await (++reads === 1 ? canonicalBody.promise : reread.promise);
+        reads += 1;
+        canonicalBodyRead.resolve();
+        await (reads === 1 ? canonicalBody.promise : reread.promise);
         await route.fulfill({ contentType: "text/plain", body: sent.attachment });
       });
-      let canonicalRead: ReturnType<typeof page.waitForResponse> | undefined;
+      const canonicalRead = page.waitForResponse(
+        (response) =>
+          response.url().includes("/assistant-media?") &&
+          !new URL(response.url()).searchParams.has("meta"),
+      );
+      // An earlier assertion can close the page before the response is awaited.
+      void canonicalRead.catch(() => undefined);
       const canonicalId = `mock-user:${sent.idempotencyKey}`;
       const canonicalSeq = history.length + 1;
       const canonical = {
@@ -162,6 +164,7 @@ suite.define(() => {
         },
       };
       const session = await gateway.getSessionRow(sent.sessionKey);
+      await gateway.deferNext("chat.history");
       try {
         await gateway.emitGatewayEvent("session.message", {
           sessionKey: sent.sessionKey,
@@ -176,27 +179,35 @@ suite.define(() => {
           message: canonical,
         });
         await page.locator(`[data-entry-id="${canonicalId}"]`).waitFor();
+        // History reconciliation can retire the live row's first attachment reader.
+        await gateway.waitForRequest("chat.history");
+        const historyCommitted = await page
+          .locator(`[data-entry-id="${canonicalId}"]`)
+          .evaluateHandle((element, eventName) => {
+            const pane = element.closest<ChatPaneElement>("openclaw-chat-pane")!;
+            return {
+              ready: new Promise<void>((resolve) => {
+                pane.addEventListener(eventName, () => resolve(), { once: true });
+              }).then(() => pane.updateComplete),
+            };
+          }, CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT);
         try {
-          await expect.poll(() => reads, { timeout: 30_000 }).toBe(1);
-        } catch (error) {
-          throw new Error(
-            "Canonical attachment read did not start: " +
-              JSON.stringify({ tickets, metadataCompleted, reads, failedReads }),
-            { cause: error },
-          );
+          await gateway.resolveDeferred("chat.history");
+          await Promise.race([historyCommitted.evaluate(({ ready }) => ready), canonicalRead]);
+        } finally {
+          await historyCommitted.dispose();
         }
-        canonicalRead = page.waitForResponse(
-          (response) =>
-            response.url().includes("/assistant-media?") &&
-            !new URL(response.url()).searchParams.has("meta"),
-        );
+        historySettled.resolve();
+        await Promise.race([canonicalBodyRead.promise, canonicalRead]);
         expect(await quote.isVisible()).toBe(true);
         expect(await inline.textContent()).toContain(comment);
+        expect(await inline.textContent()).not.toContain("Loading");
         expect((await inline.boundingBox())?.height).toBe(before!.height);
       } finally {
+        historySettled.resolve();
         canonicalBody.resolve();
       }
-      await (await canonicalRead!).finished();
+      await (await canonicalRead).finished();
       await quote.waitFor();
       await waitForChatScrollIdle(page);
       expect(await inline.textContent()).toContain(comment);
