@@ -38,6 +38,12 @@ suite.define(() => {
         assistantName: "Main agent",
         defaultAgentId: "main",
         agentModel: null,
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "agents.list",
+          "config.get",
+          "models.list",
+        ],
         models: [
           { id: "reconnect-draft", name: "Reconnect draft", provider: "openai" },
           { id: "after-reload", name: "After reload", provider: "openai" },
@@ -160,7 +166,13 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           assistantName: "Main agent",
           defaultAgentId: "main",
-          featureMethods: [...defaultControlUiFeatureMethods, "tools.catalog", "tools.effective"],
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "agents.list",
+            "config.get",
+            "tools.catalog",
+            "tools.effective",
+          ],
           methodResponses: {
             "agents.list": agentRoster,
             "config.get": configResponse(config),
@@ -238,6 +250,12 @@ suite.define(() => {
           blockedByAgentFilter,
         });
       const gateway = await installMockGateway(page, {
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "agents.list",
+          "config.get",
+          "skills.status",
+        ],
         assistantName: "Main agent",
         defaultAgentId: "main",
         methodResponses: {

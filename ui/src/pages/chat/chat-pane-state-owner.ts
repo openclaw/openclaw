@@ -446,6 +446,7 @@ export abstract class ChatPaneStateOwner {
     hasPendingScrollCommand: () =>
       this.state !== undefined && hasPendingManualChatScroll(this.state),
     onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
+    onRequestEnd: () => this.state?.scrollToBottom({ smooth: true }),
     onNativeScroll: (event) => this.handleTranscriptScroll(event),
   });
   protected get progressCards() {

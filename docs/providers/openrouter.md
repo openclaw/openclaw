@@ -520,7 +520,9 @@ does **not** inject those OpenRouter-specific headers or prompt-cache markers.
   <Accordion title="Anthropic cache markers">
     On verified OpenRouter routes, Anthropic model refs keep OpenRouter's
     Anthropic `cache_control` markers for better prompt-cache reuse on
-    system/developer prompt blocks.
+    system/developer prompt blocks. Opening turns also checkpoint session-shared
+    guidance before producer-delimited Runtime facts; later turns reserve the
+    fourth marker for conversation history.
   </Accordion>
 
   <Accordion title="Anthropic reasoning prefill">
@@ -575,11 +577,14 @@ does **not** inject those OpenRouter-specific headers or prompt-cache markers.
 
     On verified OpenRouter routes, `google/gemini*` refs (including `~google/`
     aliases and `:variant` suffixes) receive one `cache_control: { type:
-    "ephemeral" }` marker on the stable system/developer prompt prefix. Gemini
-    uses only the last breakpoint, so OpenClaw does not mark tools or history.
-    `cacheRetention: "none"` disables it; `"short"` and `"long"` keep the
-    provider's default cache window. The model's minimum cacheable prompt size
-    still applies. See [Prompt caching](/reference/prompt-caching#openrouter).
+    "ephemeral" }` marker on the complete system/developer message. OpenClaw
+    moves only producer-delimited Runtime facts to the first eligible user turn;
+    other instructions remain in the system message. Without a user carrier,
+    the complete prompt stays there. Gemini caches the whole `systemInstruction`,
+    so OpenClaw does not mark tools or history. `cacheRetention: "none"` disables
+    the marker; `"short"` and `"long"` keep the provider's default cache window.
+    The model's minimum cacheable prompt size still applies. See
+    [Prompt caching](/reference/prompt-caching#openrouter).
 
   </Accordion>
 

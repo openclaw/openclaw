@@ -137,10 +137,16 @@ export default defineConfig({
 });
 `,
       );
+      const suppressCrashCore =
+        process.platform === "linux" &&
+        !/^Max core file size\s+\S+\s+0\s/mu.test(await fs.readFile("/proc/self/limits", "utf8"));
       let joined = false;
       try {
         const result = await runVitestShutdownCommand({
+          bin: suppressCrashCore ? "prlimit" : process.execPath,
           args: [
+            // One byte suppresses piped Linux collectors for this deliberate renderer crash.
+            ...(suppressCrashCore ? ["--core=1:1", "--", process.execPath] : []),
             path.join(path.dirname(require.resolve("vitest/package.json")), "vitest.mjs"),
             "run",
             "--root",

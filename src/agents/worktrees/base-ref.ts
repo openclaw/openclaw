@@ -20,6 +20,8 @@ import {
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { startWorktreeWait } from "./allocation.js";
+import { fetchRemoteDefault } from "./base-fetch.js";
+import type { ResolvedWorktreeBase } from "./base-ref.types.js";
 import { estimateWorktreeGitBytes } from "./capacity.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
@@ -28,16 +30,6 @@ import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 import type { CreateManagedWorktreeParams, WorktreeWaitBudget } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
-
-type ResolvedWorktreeBase = {
-  commit: string;
-  gitOperand: string;
-  recordRef: string;
-  noOrigin?: true;
-  fetchSucceeded?: boolean;
-  warning?: string;
-  preparationKey?: string;
-};
 
 type RemoteDefaultAttempt = {
   pending: Promise<ResolvedWorktreeBase & { branch?: string }>;
@@ -416,116 +408,6 @@ async function prepareDefaultBase(
   return { commit, gitOperand: commit, recordRef: "HEAD", noOrigin: true };
 }
 
-// `ls-remote --symref` names HEAD's branch, then the object id it advertises for that tip.
-const ADVERTISED_HEAD = /^ref: refs\/heads\/(.+)\tHEAD\r?$(?:\n([a-f0-9]{40,64})\tHEAD\r?$)?/mu;
-
-async function fetchRemoteDefault(
-  repoRoot: string,
-  options: NonNullable<Parameters<typeof runGit>[2]>,
-): Promise<ResolvedWorktreeBase & { branch: string }> {
-  const cached = await runGit(
-    repoRoot,
-    ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
-    options,
-  );
-  if (cached.cleanup === "uncertain") {
-    throw new CommandProcessCleanupError();
-  }
-  const advertised = await runGit(repoRoot, ["ls-remote", "--symref", "origin", "HEAD"], {
-    ...options,
-    timeoutMs: 30_000,
-  });
-  if (advertised.cleanup === "uncertain") {
-    throw new CommandProcessCleanupError();
-  }
-  if (options.signal?.aborted) {
-    requireGitCommandOutput("git ls-remote origin HEAD", advertised);
-    options.signal.throwIfAborted();
-  }
-  const advertisedOk = advertised.termination === "exit" && advertised.code === 0;
-  const [, advertisedBranch, advertisedCommit] =
-    (advertisedOk && ADVERTISED_HEAD.exec(advertised.stdout)) || [];
-  const cachedBranch =
-    cached.termination === "exit" && cached.code === 0
-      ? /^refs\/remotes\/origin\/(.+)$/u.exec(cached.stdout.trim())?.[1]
-      : undefined;
-  let branch = advertisedBranch ?? cachedBranch;
-  const warnings: string[] = [];
-  if (!advertisedOk) {
-    warnings.push(commandError("git ls-remote origin HEAD", advertised).message);
-  } else if (!advertisedBranch) {
-    warnings.push("origin did not advertise a default branch; using its cached default.");
-  }
-  if (!branch || branch === "HEAD") {
-    throw new Error(
-      `Remote default branch is unavailable. Repair origin or choose an explicit worktree base ref. ${redactSensitiveText(warnings.join("\n"))}`,
-    );
-  }
-  let remoteRef = `refs/remotes/origin/${branch}`;
-  const cachedCommit =
-    advertisedCommit &&
-    (await requireGit(repoRoot, ["for-each-ref", "--format=%(objectname)", remoteRef], options));
-  // A matching advertised tip skips fetch; hydration still checks the captured commit.
-  let fetchSucceeded = advertisedCommit !== undefined && advertisedCommit === cachedCommit;
-  if (!fetchSucceeded) {
-    const fetched = await runGit(
-      repoRoot,
-      [
-        "fetch",
-        "--no-auto-maintenance",
-        "--no-recurse-submodules",
-        "--no-tags",
-        // This branch's previous tip avoids negotiating unrelated session histories.
-        ...(cachedCommit ? [`--negotiation-tip=${cachedCommit}`] : []),
-        "origin",
-        `+refs/heads/${branch}:${remoteRef}`,
-      ],
-      { ...options, timeoutMs: 60_000 },
-    );
-    if (fetched.cleanup === "uncertain") {
-      throw new CommandProcessCleanupError();
-    }
-    if (options.signal?.aborted) {
-      requireGitCommandOutput("git fetch origin default branch", fetched);
-      options.signal.throwIfAborted();
-    }
-    fetchSucceeded = fetched.termination === "exit" && fetched.code === 0;
-    if (!fetchSucceeded) {
-      warnings.push(commandError("git fetch origin default branch", fetched).message);
-      branch = cachedBranch ?? branch;
-      remoteRef = `refs/remotes/origin/${branch}`;
-    }
-  }
-  const verified = await runGit(
-    repoRoot,
-    ["rev-parse", "--verify", `${remoteRef}^{commit}`],
-    options,
-  );
-  if (verified.cleanup === "uncertain") {
-    throw new CommandProcessCleanupError();
-  }
-  if (options.signal?.aborted) {
-    requireGitCommandOutput("git rev-parse remote default", verified);
-    options.signal.throwIfAborted();
-  }
-  if (verified.termination !== "exit" || verified.code !== 0) {
-    throw new Error(
-      `Remote default ${remoteRef} is unavailable. Repair origin or choose an explicit worktree base ref. ${redactSensitiveText(warnings.join("\n"))}`,
-    );
-  }
-  if (fetchSucceeded && advertisedBranch && cachedBranch !== branch) {
-    await requireGit(repoRoot, ["symbolic-ref", "refs/remotes/origin/HEAD", remoteRef], options);
-  }
-  return {
-    branch,
-    commit: requireGitCommandOutput("git rev-parse remote default", verified).trim(),
-    gitOperand: remoteRef,
-    recordRef: `origin/${branch}`,
-    fetchSucceeded,
-    ...(warnings.length ? { warning: redactSensitiveText(warnings.join("\n")) } : {}),
-  };
-}
-
 class LocalDefaultBusyError extends Error {}
 
 async function assertWorktreeGitOperationsIdle(
@@ -721,11 +603,13 @@ export async function logWorktreeBase(
       },
     ),
   );
-  const ageDays = Math.max(0, (context.now / 1000 - committedAt) / 86_400);
-  const stale = ageDays > 7;
+  // Epoch-zero roots (including empty workspaces) do not carry a meaningful creation date.
+  const ageDays =
+    committedAt === 0 ? undefined : Math.max(0, (context.now / 1000 - committedAt) / 86_400);
+  const stale = ageDays !== undefined && ageDays > 7;
   const label = base.noOrigin ? "local HEAD (no origin remote)" : base.recordRef;
   const staleHint = `; base is older than 7 days. Check ${base.noOrigin ? "local HEAD" : "origin"} before starting work.`;
-  const message = `worktree base ${label} at ${commit} (commit age ${ageDays.toFixed(1)} days; fetch ${base.fetchSucceeded === undefined ? "not requested" : base.fetchSucceeded ? "succeeded" : "failed"})${base.warning ? `: ${base.warning}` : ""}${stale ? staleHint : ""}`;
+  const message = `worktree base ${label} at ${commit} (commit age ${ageDays === undefined ? "unspecified" : `${ageDays.toFixed(1)} days`}; fetch ${base.fetchSucceeded === undefined ? "not requested" : base.fetchSucceeded ? "succeeded" : "failed"})${base.warning ? `: ${base.warning}` : ""}${stale ? staleHint : ""}`;
   const metadata = {
     worktreePath: context.worktreePath,
     ownerId: context.ownerId,

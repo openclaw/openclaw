@@ -536,6 +536,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
             await expect(result.attempt.outcome).resolves.toEqual({
               status: "rejected",
               reason: change === "backend replaced" ? "no_active_run" : "injection_unavailable",
+              ...(change === "backend unavailable" ? { runtimeReason: "turn_not_steerable" } : {}),
             });
             expect(queueMessage).not.toHaveBeenCalled();
           }

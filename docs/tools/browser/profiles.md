@@ -61,6 +61,23 @@ screenshots for node-routed browsers, Chrome MCP existing-session profiles,
 missing Playwright, or stream connection failures. Navigation rules apply to
 the stream: navigating to a blocked address stops it and clears the view.
 
+### Chrome settings and passwords
+
+You can open `chrome://settings` (for example `chrome://settings/payments`) and
+`chrome://password-manager` from the panel's address bar, to add a payment card
+or manage saved passwords yourself. They always open in a new tab, and only
+your authenticated Control UI connection can list, view or use them. The agent's
+browser tool, the `openclaw browser` CLI and other Gateway clients cannot open,
+list, read, capture or interact with these pages, including while you have one
+open. Other `chrome://` pages stay blocked for everyone.
+
+This works for locally managed and CDP-attached Chromium profiles on the Gateway
+host. It is not available for node-routed browsers, Chrome MCP existing-session
+profiles or the browser extension, and a profile that runs Chrome's headless
+shell has no settings pages to open. Chrome may ask for your device password
+before showing a saved password; that prompt appears on the computer running the
+browser, not in the panel.
+
 After an established stream disconnects, the panel refreshes its screenshot
 and retries the stream automatically after a short delay. Annotation and
 inspection keep their captured image until you return to interaction mode.
@@ -74,6 +91,17 @@ for the same browser profile and host or node. The card opens the most recently
 used tab; different page URLs or browser routes stay separate. Long URLs that
 may have been shortened in tool metadata keep separate tab cards to avoid hiding
 different pages. Expand the tool activity to inspect every original call and result.
+
+The panel's address bar opens web addresses and searches everything else.
+An `http(s)://` URL, or a host with a dot, a port, `localhost` or an IPv6
+address, opens as an address, even when its path or query contains spaces.
+Other text, such as words with spaces or a single word like `openclaw`,
+opens a Google search. For a single name such as `devbox`, the address bar
+also offers **Go to `https://devbox/`** to open it as an address instead. None
+of the browsers the panel drives exposes its own default search engine to
+OpenClaw. Addresses without a scheme open over
+`https://`; other schemes such as `javascript:` or `file:` are not opened,
+and the address bar says so.
 
 If a listed tab cannot be accessed, the panel explains whether navigation rules
 blocked it or its address could not be verified. Select another tab, enter an

@@ -101,7 +101,9 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         });
         return;
       case "turn_end":
-        void scheduleEvent(evt, () => ctx.noteLastAssistant(evt.message));
+        void scheduleEvent(evt, () => {
+          ctx.noteLastAssistant(evt.message);
+        });
         return;
       case "tool_execution_start":
         void scheduleEvent(evt, () => handleToolExecutionStart(ctx, evt));

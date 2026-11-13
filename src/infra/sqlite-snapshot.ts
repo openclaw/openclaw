@@ -36,11 +36,11 @@ import {
   hashOpenPublishedFile,
   hashPublishedFile,
   hashPublishedFileSync,
-  removePublicationStagingDirectory,
   removePublishedTargetIfOwned,
   sameFileStatFingerprint,
   type SqliteFileContent,
 } from "./sqlite-snapshot-file.js";
+import { removePublicationStagingDirectory } from "./sqlite-snapshot-publication-cleanup.js";
 import {
   prepareSqliteReadOnlyLocation,
   withSqliteSnapshotSource,

@@ -8,11 +8,13 @@ import { createNestedToolActivity } from "../../../sessions/nested-tool-activity
 import { notifyToolActivity } from "../../../shared/tool-activity-heartbeat.js";
 import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
+import { isCodeModeControlTool } from "../../code-mode-control-tools.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { retainToolSearchImplementation } from "../../tool-search-scheduling.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
+import { isToolUsageWrapper } from "../../tool-usage.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
 import type { AttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
@@ -60,6 +62,12 @@ export function createSubscribedToolSearchExecutor(params: {
     return await raceWithAbortSignal(
       subscription.runToolLifecycle({
         toolName: toolParams.toolName,
+        toolUsageId:
+          toolParams.source === "openclaw" &&
+          !isCodeModeControlTool(toolParams.tool) &&
+          !isToolUsageWrapper(toolParams.toolName)
+            ? toolParams.toolId
+            : undefined,
         toolCallId: toolParams.toolCallId,
         parentToolCallId: toolParams.parentToolCallId,
         args: lifecycleArgs,

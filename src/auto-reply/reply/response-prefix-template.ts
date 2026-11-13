@@ -42,8 +42,22 @@ export function resolveResponsePrefixTemplate(
   });
 }
 
+/** Projects a run's selected model into the template fields replies and tool sends share. */
+export function resolveModelResponsePrefixContext(params: {
+  provider: string;
+  model: string;
+  thinkLevel?: string;
+}): ResponsePrefixContext {
+  return {
+    provider: params.provider,
+    model: extractShortModelName(params.model),
+    modelFull: `${params.provider}/${params.model}`,
+    thinkingLevel: params.thinkLevel,
+  };
+}
+
 /** Strips the provider prefix, date suffix, and trailing -latest tag for display. */
-export function extractShortModelName(fullModel: string): string {
+function extractShortModelName(fullModel: string): string {
   const slash = fullModel.lastIndexOf("/");
   const modelPart = slash >= 0 ? fullModel.slice(slash + 1) : fullModel;
 
