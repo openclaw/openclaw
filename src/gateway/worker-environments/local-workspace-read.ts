@@ -13,7 +13,10 @@ export async function readLocalWorkspacePath(params: {
   assertCurrent?: () => void;
 }) {
   const context = captureWorktreeRunEndContext(process.env);
-  const accept = captureWorktreeRegistryReadGuard(context, "lifecycle");
+  const accept = captureWorktreeRegistryReadGuard(context, "lifecycle", {
+    id: params.worktreeId,
+    ownerKind: "session",
+  });
   const worktree = await readLiveRegistryWorktreeByPath(context, params.cwd);
   const assertWorktreeCurrent = accept(worktree);
   const assertCurrent = () => {
