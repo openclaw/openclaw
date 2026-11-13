@@ -375,7 +375,7 @@ export function registerCliReplyCompletionTests({
     }
   });
 
-  it("does not mistake CLI WebChat progress for a final result", async () => {
+  it("does not mistake internal CLI WebChat progress for a final result", async () => {
     const sessionKey = "agent:main:webchat:dm:cli-internal-source";
     const { dir, sessionTarget } = createSessionFixture({ sessionKey });
     const config: OpenClawConfig = {
@@ -390,6 +390,7 @@ export function registerCliReplyCompletionTests({
       messageChannel: "webchat",
       messageProvider: "webchat",
       sourceReplyDeliveryMode: "message_tool_only",
+      inputProvenance: { kind: "internal_system" },
     });
     context.backendResolved.config.output = "jsonl";
     const tool = createMessageTool({

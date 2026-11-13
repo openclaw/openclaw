@@ -21,6 +21,9 @@ not post the same images again.
 
 You can send a follow-up while the completion agent is still working. The new
 turn waits for the completion and its delivery to settle before starting.
+On an external channel, the generated files are sent once the turn that
+requested them has finished, even while later turns in that chat are still
+running.
 
 In WebChat and the macOS app, generated attachments stay on the completion
 reply instead of appearing again in a separate image-only message. An interactive
@@ -391,6 +394,10 @@ and ComfyUI support 1.
     `aspectRatio` or `resolution` directly. When possible OpenClaw maps
     those into a supported `size`, otherwise the tool reports them as
     ignored overrides.
+
+    OpenClaw also reports `size` in `ignoredOverrides` when it can read a
+    returned image's dimensions and they differ from the requested size.
+    The generated image is still returned.
 
     For direct OpenAI Images API requests, `gpt-image-2` and its
     `gpt-image-2-2026-04-21` snapshot preserve valid explicit

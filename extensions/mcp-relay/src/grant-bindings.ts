@@ -8,7 +8,7 @@ import type { RelayState } from "./state.js";
 
 export async function registerRelayPrincipalRecovery(
   factory: GatewayControlUiIngressFactoryV2,
-  state: Pick<RelayState, "getGrant" | "assertGrantCurrent">,
+  state: Pick<RelayState, "getGrant" | "getGrantSignal" | "assertGrantCurrent">,
   signal: AbortSignal,
 ): Promise<void> {
   await factory.registerPrincipalRecovery?.(async (audienceId) => {
@@ -22,7 +22,7 @@ export async function registerRelayPrincipalRecovery(
       recoveryId: grant.issuanceId,
       principal: grant.principal,
       operatorScopeCeiling: grant.ceiling,
-      signal,
+      signal: AbortSignal.any([signal, state.getGrantSignal(audienceId)]),
       assertCurrent: () => {
         signal.throwIfAborted();
         state.assertGrantCurrent(audienceId);
@@ -49,7 +49,7 @@ export class GrantBindings {
   readonly #bindings = new Map<string, Promise<GatewayIngressPrincipalBindingV1>>();
   constructor(
     readonly factory: GatewayControlUiIngressFactoryV2,
-    readonly state: Pick<RelayState, "getGrant" | "assertGrantCurrent">,
+    readonly state: Pick<RelayState, "getGrant" | "getGrantSignal" | "assertGrantCurrent">,
     readonly signal: AbortSignal,
   ) {}
 
@@ -70,7 +70,7 @@ export class GrantBindings {
       audienceId: grantId,
       principal: grant.principal,
       operatorScopeCeiling: grant.ceiling,
-      signal: this.signal,
+      signal: AbortSignal.any([this.signal, this.state.getGrantSignal(grantId)]),
       assertCurrent: () => {
         this.signal.throwIfAborted();
         this.state.assertGrantCurrent(grantId);

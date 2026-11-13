@@ -116,6 +116,8 @@ export type OpenClawSharedToolsOptions = {
 };
 
 export type OpenClawToolsOptions = {
+  /** Internal listing owner pins discovery changes or renders a read-only inventory. */
+  githubPublicationConfigurationAware?: true;
   /** Internal inventory projection; the resulting GitHub tool cannot execute. */
   githubPublicationPreview?: true;
   /** Actual prepared sandbox passed only by the coding-tool assembly owner. */
@@ -146,6 +148,8 @@ export type OpenClawToolsOptions = {
   execSession?: ExecSessionDefaults;
   /** Effective run-local exec overrides, including prepared permission mode. */
   execOverrides?: ExecPolicyOverrides;
+  /** Host-owned execution path with final callable exec and no unverified client-side policy. */
+  delegationExecAuthority?: () => "gateway-host" | undefined;
   /** Trusted operator devices allowed to review this run's terminal input. */
   approvalReviewerDeviceIds?: string[];
   /** Trusted account used for authorization; delivery keeps agentAccountId. */

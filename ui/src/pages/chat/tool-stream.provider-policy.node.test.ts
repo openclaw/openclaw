@@ -22,7 +22,13 @@ const pendingSend = (
 ): ChatQueueItem => ({ id, text, createdAt, sendRunId, sendState: "sending", sessionKey: "main" });
 
 function queuedHost(chatQueue: ChatQueueItem[] = [], chatSending?: boolean) {
-  return { ...createHost(), chatMessages: [], chatQueue, ...(chatSending ? { chatSending } : {}) };
+  return {
+    ...createHost(),
+    settings: {},
+    chatMessages: [],
+    chatQueue,
+    ...(chatSending ? { chatSending } : {}),
+  };
 }
 
 const policy = {

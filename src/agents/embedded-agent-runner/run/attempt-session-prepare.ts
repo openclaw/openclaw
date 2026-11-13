@@ -107,6 +107,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
 }) {
   const { attempt, prepareSystemPromptUpdate, clientToolPreparation: clientTools } = input;
   const settingsManager = createPreparedEmbeddedAgentSettingsManager({
+    agentId: input.sessionAgentId,
     sessionId: attempt.sessionId,
     cwd: input.effectiveCwd,
     agentDir: input.agentDir,
@@ -632,7 +633,6 @@ export async function prepareEmbeddedAttemptSessionManager(
       : undefined,
     allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
     missingToolResultText: isOpenAIResponsesApi ? "aborted" : undefined,
-    allowedToolNames: input.replayAllowedToolNames,
     trigger: attempt.trigger,
     suppressNextUserMessagePersistence:
       prepareInitialUserTurnReplay !== undefined || attempt.suppressNextUserMessagePersistence,

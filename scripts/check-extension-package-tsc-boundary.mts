@@ -515,7 +515,6 @@ async function runCompileCheck(extensionIds: string[], selectedPreparation: bool
           emit: false,
         }),
       ];
-      before.signature(config, args, []);
       const recordPath = resolveBoundaryTsStampPath(extensionId);
       mkdirSync(dirname(inputReceipt), { recursive: true });
       if (

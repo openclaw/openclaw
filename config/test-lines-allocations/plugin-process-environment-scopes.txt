@@ -1,2 +1,0 @@
-28
-# Preserve scoped tool catalogs and restored auth across ambient environment replacement.

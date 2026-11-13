@@ -1,12 +1,12 @@
 import { observeAsyncIterator, type Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { APIError } from "openai";
+import { APIError } from "openai/core/error";
 import { Stream } from "openai/core/streaming";
 import type { ResponseInput } from "openai/resources/responses/responses.js";
 import type { CompactionReplayRejection } from "../provider-options.js";
+import type { createOpenAIResponsesClient } from "../providers/openai-provider-client.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import { prepareModelRequestBody } from "./model-request-body.js";
-import type { createOpenAIResponsesClient } from "./openai-responses-client.js";
 import {
   DEFAULT_AZURE_OPENAI_API_VERSION,
   isPreviousResponseRejection,

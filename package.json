@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.11.2",
+  "version": "2026.11.3",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "updatePreflightProtocol": 1,
@@ -16,8 +16,8 @@
       "team-reports"
     ],
     "schemaVersions": {
-      "state": 39,
-      "agent": 41
+      "state": 40,
+      "agent": 42
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -315,6 +315,7 @@
     "!dist/extensions/brave/**",
     "!dist/extensions/byteplus/**",
     "!dist/extensions/buzz/**",
+    "!dist/extensions/celeris/**",
     "!dist/extensions/cerebras/**",
     "!dist/extensions/liquid-ai/**",
     "!dist/extensions/chutes/**",
@@ -334,6 +335,7 @@
     "!dist/extensions/duckduckgo/**",
     "!dist/extensions/exa/**",
     "!dist/extensions/facetime/**",
+    "!dist/extensions/fastino/**",
     "!dist/extensions/featherless/**",
     "!dist/extensions/feishu/**",
     "!dist/extensions/firecrawl/**",
@@ -363,6 +365,7 @@
     "!dist/extensions/msteams/**",
     "!dist/extensions/muse/**",
     "!dist/extensions/mxc/**",
+    "!dist/extensions/nace/**",
     "!dist/extensions/nextcloud-talk/**",
     "!dist/extensions/nostr/**",
     "!dist/extensions/novita/**",
@@ -1684,6 +1687,10 @@
       "types": "./dist/plugin-sdk/decisions-openai-runtime.d.ts",
       "default": "./dist/plugin-sdk/decisions-openai-runtime.js"
     },
+    "./plugin-sdk/decisions-http-runtime": {
+      "types": "./dist/plugin-sdk/decisions-http-runtime.d.ts",
+      "default": "./dist/plugin-sdk/decisions-http-runtime.js"
+    },
     "./plugin-sdk/secret-ref-readonly": {
       "types": "./dist/plugin-sdk/secret-ref-readonly.d.ts",
       "default": "./dist/plugin-sdk/secret-ref-readonly.js"
@@ -1817,6 +1824,7 @@
     "bench:ui:copies": "node --import ./scripts/tsx.mjs scripts/bench-control-ui-copies.ts",
     "bench:usage-refresh-memory": "node --import ./scripts/tsx.mjs scripts/bench-usage-refresh-memory.ts",
     "build": "node --import ./scripts/tsx.mjs scripts/build-all.mts",
+    "build:iroh": "node scripts/build-iroh.mjs",
     "build:ci-artifacts": "node --import ./scripts/tsx.mjs scripts/build-all.mts ciArtifacts",
     "build:docker": "pnpm plugins:assets:build && node --import ./scripts/tsx.mjs scripts/tsdown-build.mts && node --import ./scripts/tsx.mjs scripts/check-cli-bootstrap-imports.mts && node scripts/runtime-postbuild.mjs && node --import ./scripts/tsx.mjs scripts/build-stamp.mts && node --import ./scripts/tsx.mjs scripts/runtime-postbuild-stamp.mts && pnpm plugins:assets:copy && node --import ./scripts/tsx.mjs scripts/write-build-info.ts && node --import ./scripts/tsx.mjs scripts/write-cli-startup-metadata.ts",
     "build:package": "node --import ./scripts/tsx.mjs scripts/build-all.mts package",
@@ -2250,7 +2258,7 @@
     "test:e2e": "pnpm test:e2e:gateway && pnpm test:e2e:agent-plugin-gateway && pnpm test:ui:e2e",
     "test:e2e:agent-plugin-gateway": "node --import ./scripts/tsx.mjs scripts/agent-plugin-gateway-e2e.ts",
     "test:e2e:browser-extension": "node --import ./scripts/tsx.mjs scripts/build-all.mts qaRuntime && node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
-    "test:e2e:browser-mcp": "node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_BROWSER_MCP_E2E=1 OPENCLAW_BROWSER_WAIT_E2E=1 OPENCLAW_VITEST_MAX_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/src/browser/chrome-mcp.chromium.test.ts extensions/browser/src/browser/chrome-mcp-labels.chromium.test.ts extensions/browser/src/browser/routes/agent.act.wait-visibility.chromium.test.ts test/scripts/check-openclaw-package-tarball.bundled-mcp.test.ts",
+    "test:e2e:browser-mcp": "node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_BROWSER_MCP_E2E=1 OPENCLAW_BROWSER_WAIT_E2E=1 OPENCLAW_BROWSER_OPERATOR_PAGES_E2E=1 OPENCLAW_VITEST_MAX_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/src/browser/chrome-mcp.chromium.test.ts extensions/browser/src/browser/chrome-mcp-labels.chromium.test.ts extensions/browser/src/browser/routes/agent.act.wait-visibility.chromium.test.ts extensions/browser/src/browser/routes/operator-pages.chromium.test.ts test/scripts/check-openclaw-package-tarball.bundled-mcp.test.ts",
     "test:e2e:gateway": "node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts",
     "test:e2e:node-auto-update": "node scripts/e2e/lib/node-auto-update/scenario.mjs",
     "test:e2e:openshell": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_E2E_OPENSHELL=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/openshell/src/backend.e2e.test.ts",
@@ -2407,6 +2415,7 @@
     "verify": "node --import ./scripts/tsx.mjs scripts/verify.mts"
   },
   "bundleDependencies": [
+    "acorn",
     "chrome-devtools-mcp",
     "playwright-core"
   ],

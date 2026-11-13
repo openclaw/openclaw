@@ -15,6 +15,8 @@ export type SessionsSpawnToolOptions = {
   agentSessionKey?: string;
   /** Trusted parent invocation fact, not a model-facing spawn parameter. */
   senderIsOwner?: boolean;
+  /** Rechecks a retained owner `senderIsOwner` before each spawn records it. */
+  assertSenderOwnerCurrent?: () => void;
   requesterTurnRunId?: string;
   /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
   completionOwnerKey?: string;

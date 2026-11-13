@@ -1,7 +1,7 @@
 // Plain-language text for the People page: who someone is, what their devices
 // are doing and what a removal cut. Pure functions, so the wording is tested
 // without rendering.
-import type { Invite, Member, MemberDevice, RemovalSummary } from "./types.js";
+import type { Member, MemberDevice, RemovalSummary } from "./types.js";
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -70,10 +70,9 @@ export function memberRunning(
     : `running ${runs.length} ${runs.length === 1 ? "task" : "tasks"}`;
 }
 
-/** The invite's role and creation day, without repeating the requester's email. */
-export function inviteUsed(invite: Invite, locale: string): string {
-  const role = invite.role.charAt(0).toUpperCase() + invite.role.slice(1);
-  return `${role} invite · created ${formatDay(invite.createdAt, locale)}`;
+/** Display role names consistently in invite summaries and the picker. */
+export function roleName(role: string): string {
+  return role === "operator" ? "Operator" : role === "viewer" ? "Viewer" : role;
 }
 
 /** What a removal changed, e.g. "Bob removed · 1 connection closed · 1 task stopped". */
@@ -87,4 +86,16 @@ export function removalNote(name: string, removal: RemovalSummary | null): strin
   );
   parts.push(`${removal.runsCancelled} ${removal.runsCancelled === 1 ? "task" : "tasks"} stopped`);
   return parts.join(" · ");
+}
+
+/** Decorative initials only; the full reported identity stays beside the avatar. */
+export function personInitials(name: string): string {
+  return name
+    .split("@")[0]!
+    .split(/[\s._-]+/u)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => Array.from(part)[0])
+    .join("")
+    .toLocaleUpperCase();
 }

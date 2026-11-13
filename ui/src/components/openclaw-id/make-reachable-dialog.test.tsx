@@ -1,10 +1,20 @@
 /* @vitest-environment jsdom */
+import "../modal-dialog.tsx";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { startOpenClawIdFeatureLifetime } from "../../lib/openclaw-id/feature-lifetime.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { installSafeLocalStorageForTesting } from "../../test-helpers/storage.ts";
+import * as confirmDialogs from "../confirm-dialog.ts";
 import { showMakeReachableDialog } from "./make-reachable-dialog.tsx";
+
+const signedIn = {
+  sub: "owner",
+  email: "owner@example.test",
+  name: null,
+  exp: 2_000_000_000,
+  idToken: "synthetic",
+};
 
 // Dialogs open only while the enabled feature's lifetime runs.
 let endFeature = () => {};
@@ -37,10 +47,10 @@ vi.mock("../../lib/openclaw-id/link.ts", () => ({
 // Click only enabled controls, so assertions follow the actual wizard gates.
 async function click(label: string) {
   await vi.waitFor(() => {
-    const button = [...document.querySelectorAll("button")].find(
+    const button = [...document.querySelectorAll("button")].findLast(
       (candidate) => candidate.textContent?.trim() === label,
     );
-    expect(button).toBeDefined();
+    expect(button, `enabled ${label} button`).toBeDefined();
     expect(button?.disabled).toBe(false);
     button!.click();
   });
@@ -92,13 +102,6 @@ describe("Make reachable publication outcome", () => {
         }
         return { claw_id: "synthetic-claw", hostname: "studio-test.claws.test", available: true };
       });
-      const signedIn = {
-        sub: "owner",
-        email: "owner@example.test",
-        name: null,
-        exp: 2_000_000_000,
-        idToken: "synthetic",
-      };
       const storage = installSafeLocalStorageForTesting();
       storage.setItem("openclaw.openclawId.account", JSON.stringify(signedIn));
       window.dispatchEvent(
@@ -113,7 +116,6 @@ describe("Make reachable publication outcome", () => {
         signedIn,
       });
       await click("Continue");
-      await click("Create recovery kit");
       await vi.waitFor(() =>
         expect(document.querySelector('input[type="checkbox"]')).not.toBeNull(),
       );
@@ -134,19 +136,21 @@ describe("Make reachable publication outcome", () => {
       form.removeEventListener("submit", submitted);
       expect(password.value).toBe("");
       expect(document.body.textContent).toContain(expected);
+      expect(document.querySelectorAll(".openclaw-id-steps li")).toHaveLength(4);
       if (online && !retryable) {
         expect(document.body.textContent).not.toContain("will keep trying");
       }
       if (!online) {
         expect(document.body.textContent).toContain("Remote access is not connected yet");
       }
-      const details = [...document.querySelectorAll("details")].find((item) =>
-        item.textContent?.includes("HTTP 503"),
+      const warning = document.querySelector<HTMLButtonElement>(
+        '.openclaw-id-steps__item[data-state="warning"] button',
       );
-      expect(details?.open).toBe(false);
-      expect(details?.querySelector("summary")?.textContent).toBe("Technical details");
+      expect(warning?.getAttribute("aria-label")).toContain(expected);
+      const tooltip = document.getElementById(warning!.getAttribute("aria-describedby")!);
+      expect(tooltip?.textContent).toContain("HTTP 503");
       expect(document.body.textContent).not.toMatch(/add an enrollment code/i);
-      await click("Done");
+      await click("Close");
       expect(await done).toBe(true);
     },
   );
@@ -155,72 +159,114 @@ describe("Make reachable publication outcome", () => {
 describe("Make reachable preparation", () => {
   afterEach(() => {
     cleanupSolid();
+    vi.restoreAllMocks();
     localStorage.removeItem("openclaw.openclawId.account");
     window.dispatchEvent(new StorageEvent("storage", { key: "openclaw.openclawId.account" }));
   });
 
-  it("checks the default name with the account's code, then asks for one preparation", async () => {
-    const preparations: ((value: unknown) => void)[] = [];
-    const request = vi.fn((method: string, params: { action?: string }) => {
-      if (method === "openclawId.status") {
-        return Promise.resolve({ status: { state: "on", tunnel: { state: "running" } } });
-      }
-      if (params.action === "prepare") {
-        return new Promise((resolve) => {
-          preparations.push(resolve);
-        });
-      }
-      if (params.action === "account_link_code") {
-        return Promise.resolve({ code: "synthetic-code" });
-      }
-      return Promise.resolve({ hostname: "studio-test.claws.test", available: true });
-    });
-    const signedIn = {
-      sub: "owner",
-      email: "owner@example.test",
-      name: null,
-      exp: 2_000_000_000,
-      idToken: "synthetic",
-    };
-    installSafeLocalStorageForTesting().setItem(
-      "openclaw.openclawId.account",
-      JSON.stringify(signedIn),
-    );
-    // The link code is requested only for the account this tab has published.
-    window.dispatchEvent(
-      new StorageEvent("storage", {
-        key: "openclaw.openclawId.account",
-        newValue: JSON.stringify(signedIn),
-      }),
-    );
-    const done = showMakeReachableDialog({
-      client: { request } as unknown as GatewayBrowserClient,
-      loaderDomain: "claws.test",
-      signedIn,
-    });
-    const next = await vi.waitFor(() => {
-      const button = [...document.querySelectorAll("button")].find(
-        (candidate) => candidate.textContent?.trim() === "Continue",
+  it.each([false, true])(
+    "prepares once after account-code loading (manual fallback: %s)",
+    async (manualCode) => {
+      const preparations: ((value: unknown) => void)[] = [];
+      const enrollment = Promise.withResolvers<{ code: string }>();
+      const request = vi.fn((method: string, params: { action?: string }) => {
+        if (method === "openclawId.status") {
+          return Promise.resolve({ status: { state: "on", tunnel: { state: "running" } } });
+        }
+        if (params.action === "prepare") {
+          return new Promise((resolve) => {
+            preparations.push(resolve);
+          });
+        }
+        if (params.action === "account_link_code") {
+          return enrollment.promise;
+        }
+        return Promise.resolve({ hostname: "studio-test.claws.test", available: true });
+      });
+      installSafeLocalStorageForTesting().setItem(
+        "openclaw.openclawId.account",
+        JSON.stringify(signedIn),
       );
-      expect(button?.disabled).toBe(false);
-      return button!;
-    });
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith(
-        "openclawId.authority",
-        expect.objectContaining({ action: "check_name", enrollmentCode: "synthetic-code" }),
-      ),
-    );
-    next.click();
-    next.click();
-    expect(preparations).toHaveLength(1);
-    preparations[0]!({ claw_id: "synthetic-claw", hostname: "studio-test.claws.test" });
-    await click("Create recovery kit");
-    await vi.waitFor(() => expect(document.querySelector('input[type="checkbox"]')).not.toBeNull());
-    expect(preparations).toHaveLength(1);
-    await click("Cancel");
-    expect(await done).toBe(false);
-  });
+      // The link code is requested only for the account this tab has published.
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: "openclaw.openclawId.account",
+          newValue: JSON.stringify(signedIn),
+        }),
+      );
+      const done = showMakeReachableDialog({
+        client: { request } as unknown as GatewayBrowserClient,
+        loaderDomain: "claws.test",
+        signedIn,
+      });
+      await vi.waitFor(() =>
+        expect(document.querySelector("#openclaw-id-claw-name")).not.toBeNull(),
+      );
+      expect(document.querySelector("#openclaw-id-link-code")).toBeNull();
+      expect(document.body.textContent).toContain("Signed in as owner@example.test.");
+      if (manualCode) {
+        enrollment.reject(new Error("Synthetic link-code failure"));
+        const input = await vi.waitFor(() => {
+          const field = document.querySelector<HTMLInputElement>("#openclaw-id-link-code");
+          expect(field).not.toBeNull();
+          return field!;
+        });
+        input.value = "synthetic-code";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      } else {
+        enrollment.resolve({ code: "synthetic-code" });
+      }
+      const next = await vi.waitFor(() => {
+        const button = [...document.querySelectorAll("button")].find(
+          (candidate) => candidate.textContent?.trim() === "Continue",
+        );
+        expect(button?.disabled).toBe(false);
+        return button!;
+      });
+      if (manualCode) {
+        document
+          .querySelector("#openclaw-id-link-code")!
+          .dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "openclawId.authority",
+          expect.objectContaining({ action: "check_name", enrollmentCode: "synthetic-code" }),
+        ),
+      );
+      next.click();
+      next.click();
+      expect(preparations).toHaveLength(1);
+      preparations[0]!({ claw_id: "synthetic-claw", hostname: "studio-test.claws.test" });
+      await vi.waitFor(() =>
+        expect(document.querySelector('input[type="checkbox"]')).not.toBeNull(),
+      );
+      expect(preparations).toHaveLength(1);
+      const password = document.querySelector<HTMLInputElement>(
+        'input[autocomplete="new-password"]',
+      )!;
+      vi.spyOn(confirmDialogs, "showConfirmDialog").mockRejectedValueOnce(
+        new Error("Confirmation dialog could not load"),
+      );
+      await click("Cancel");
+      await vi.waitFor(() =>
+        expect(document.querySelector('[role="alert"]')?.textContent ?? "").toContain(
+          "Could not confirm that setup finished",
+        ),
+      );
+      expect(document.querySelector('input[autocomplete="new-password"]')).toBe(password);
+      expect(password.value).toBe("synthetic kit");
+      await click("Cancel");
+      await click("Back");
+      expect(document.querySelector('[role="alert"]')).toBeNull();
+      expect(document.querySelector('input[autocomplete="new-password"]')).not.toBeNull();
+      document
+        .querySelector("openclaw-modal-dialog")!
+        .dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+      await click("Cancel");
+      expect(await done).toBe(false);
+    },
+  );
 });
 
 describe("Make reachable and the Labs switch", () => {
