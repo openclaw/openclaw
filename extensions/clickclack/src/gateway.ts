@@ -183,6 +183,7 @@ export async function startClickClackGatewayAccount(
       config,
       message,
       access,
+      abortSignal,
       buildContext,
       ...(correlationId ? { correlationId } : {}),
     });
