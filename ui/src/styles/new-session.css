@@ -1589,8 +1589,7 @@ div.new-session-page__project-search {
 
 .new-session-page__context-tray .new-session-page__trigger {
   opacity: 1;
-  transition: opacity calc(var(--oc-overlay-hide-duration) * 0.4) var(--new-session-tray-ease)
-    calc(var(--oc-overlay-hide-duration) * 0.6);
+  transition: opacity calc(var(--oc-overlay-hide-duration) * 0.4) var(--new-session-tray-ease);
 
   min-width: 0;
   max-width: 100%;
@@ -1650,24 +1649,27 @@ div.new-session-page__project-search {
   display: none;
 }
 
-.new-session-page__picker-popover .header-search > .header-search__input {
-  height: 36px;
-  padding-inline: 12px;
-}
-
 .new-session-page__context-tray .new-session-page__picker-popover input,
+.new-session-page__context-tray .new-session-page__picker-popover input:hover,
 .new-session-page__context-tray .new-session-page__picker-popover input:focus,
 .new-session-page__context-tray .new-session-page__picker-popover input:focus-visible {
+  height: 32px;
+  padding-inline: 12px;
   border: 0;
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--chat-composer-surface) 50%, var(--new-session-tray-surface));
+  background: color-mix(in srgb, var(--chat-composer-surface) 35%, var(--new-session-tray-surface));
+  color: var(--text);
   outline: none;
   box-shadow: none;
 }
 
 .new-session-page__context-tray .new-session-page__picker-popover input:focus,
 .new-session-page__context-tray .new-session-page__picker-popover input:focus-visible {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 40%, transparent);
+  background: color-mix(in srgb, var(--chat-composer-surface) 60%, var(--new-session-tray-surface));
+}
+
+.new-session-page__context-tray .new-session-page__picker-popover input::placeholder {
+  color: var(--muted);
 }
 
 .new-session-page__picker-back {
@@ -1855,8 +1857,7 @@ div.new-session-page__project-search {
 
 .new-session-page__checkout-popover .new-session-page__menu-field input {
   width: 100%;
-  height: 32px;
-  padding: 0 12px;
+  padding-block: 0;
   font: inherit;
   font-size: 13px;
 }
@@ -1996,8 +1997,7 @@ div.new-session-page__project-search {
   .new-session-page__picker-popover:popover-open:not([data-phase="closing"])
   > .new-session-page__picker-panel {
   opacity: 1;
-  transition: opacity calc(var(--oc-overlay-show-duration) * 0.8) var(--new-session-tray-ease)
-    calc(var(--oc-overlay-show-duration) * 0.2);
+  transition: opacity calc(var(--oc-overlay-show-duration) * 0.8) var(--new-session-tray-ease);
 }
 
 @starting-style {
@@ -2014,6 +2014,10 @@ div.new-session-page__project-search {
 }
 
 @media (max-width: 768px) {
+  .new-session-page__welcome-hint {
+    anchor-name: --new-session-subtitle;
+  }
+
   .new-session-page__context-tray {
     order: -1;
     margin: 0 0 4px;
@@ -2058,12 +2062,43 @@ div.new-session-page__project-search {
   }
 
   .new-session-page__context-tray .new-session-page__picker-popover {
-    top: auto;
+    /* Cap the upward panel at the subtitle; keep short lists bottom-aligned. */
+    top: calc(anchor(--new-session-subtitle bottom) + 12px);
     bottom: anchor(--new-session-context-tray bottom);
     height: anchor-size(--new-session-context-tray height);
-    min-height: anchor-size(--new-session-context-tray height);
+    min-height: 0;
+    max-height: stretch;
+    align-self: end;
     justify-content: flex-end;
     border-radius: var(--new-session-tray-radius);
+  }
+
+  .new-session-page__context-tray .new-session-page__picker-panel {
+    flex: 0 1 auto;
+    min-height: 0;
+  }
+
+  .new-session-page__picker-popover .new-session-page__picker-root,
+  .new-session-page__picker-popover .new-session-page__environment-list {
+    flex: 0 1 auto;
+    min-height: 0;
+  }
+
+  .new-session-page__picker-popover .new-session-page__browser {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .new-session-page__picker-popover .new-session-page__browser-head,
+  .new-session-page__picker-popover .new-session-page__browser-actions {
+    flex: none;
+  }
+
+  .new-session-page__picker-popover .new-session-page__browser-list {
+    min-height: 0;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--text) 20%, transparent) transparent;
   }
 
   .new-session-page__context-tray
