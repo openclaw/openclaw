@@ -158,6 +158,7 @@ export function usePrefixRandomizedJourney() {
     const target: Array<{ step: number; kind: TurnKind; request: WireRequest; fork?: boolean }> =
       [];
     const seen: string[] = [];
+    const children = new Map<string, Array<{ step: number; request: WireRequest }>>();
     let step = -1;
     let ordinal = 0;
     const script = (request: WireRequest, thinkingEnabled: boolean): Reply => {
@@ -181,6 +182,11 @@ export function usePrefixRandomizedJourney() {
             };
       }
       if (!request.text.includes(`session=${TARGET}`)) {
+        // A spawned child: each of its requests must extend the child's previous one.
+        const child = /session=(agent:\S+?)[\s"\\]/.exec(request.text)?.[1];
+        if (child) {
+          children.set(child, [...(children.get(child) ?? []), { step, request }]);
+        }
         return { text: "child-done" };
       }
       target.push({ step, kind: journey[step] ?? "user", request });
@@ -451,6 +457,18 @@ export function usePrefixRandomizedJourney() {
             unexpected.push({ step: current.step, kind: current.kind, change });
           }
         }
+        for (const [child, requests] of children) {
+          for (let index = 1; index < requests.length; index++) {
+            const change = prefixChange(requests[index - 1]!.request, requests[index]!.request);
+            if (change) {
+              unexpected.push({
+                step: requests[index]!.step,
+                kind: "subagent",
+                change: `child ${child}: ${change}`,
+              });
+            }
+          }
+        }
         for (const [index, fork] of target.entries()) {
           const parent = fork.fork
             ? target.slice(index + 1).find((entry) => !entry.fork)
@@ -460,6 +478,9 @@ export function usePrefixRandomizedJourney() {
             unexpected.push({ step: fork.step, kind: fork.kind, change });
           }
         }
+        process.stdout.write(
+          `[prefix-random] ${api} seed=${seed} requests=${target.length} forks=${target.filter((entry) => entry.fork).length} children=${[...children.values()].map((requests) => requests.length).join(",")}\n`,
+        );
         expect(
           JSON.stringify(unexpected, null, 1),
           `seed=${seed} journey=${journey.join(",")} breaks=${JSON.stringify(unexpected)}`,
