@@ -1,4 +1,5 @@
 import {
+  isGoogleGemini31ProPreviewModel,
   isGoogleGemini3ProModel,
   isGoogleGemini3ThinkingLevelModel,
 } from "@openclaw/ai/internal/google-model-family";
@@ -48,7 +49,7 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
     case "low":
       return "LOW";
     case "medium":
-      return isPro ? "HIGH" : "MEDIUM";
+      return isPro && !isGoogleGemini31ProPreviewModel(params.modelId) ? "HIGH" : "MEDIUM";
     case "high":
     case "max":
     case "xhigh":

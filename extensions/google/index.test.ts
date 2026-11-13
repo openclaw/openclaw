@@ -310,7 +310,7 @@ describe("google provider plugin hooks", () => {
       const wrapped = provider.wrapStreamFn?.({
         provider: providerId,
         modelId: "gemini-3.1-pro-preview",
-        thinkingLevel: "high",
+        thinkingLevel: "medium",
         streamFn: capturedStream.streamFn,
       } as never);
 
@@ -328,7 +328,7 @@ describe("google provider plugin hooks", () => {
       expect(capturedPayload).toEqual({
         config: {
           thinkingConfig: {
-            thinkingLevel: "HIGH",
+            thinkingLevel: "MEDIUM",
           },
         },
       });
@@ -364,13 +364,17 @@ describe("google provider plugin hooks", () => {
     const gemini3Profile = resolveThinkingProfile({
       provider: "google",
       modelId: "gemini-3.1-pro-preview",
+      reasoning: true,
     } as never);
     const gemini25Profile = resolveThinkingProfile({
       provider: "google",
       modelId: "gemini-2.5-flash",
     } as never);
 
-    expect(gemini3Profile?.levels).toEqual(levels(["off", "low", "adaptive", "high"]));
+    expect(gemini3Profile).toMatchObject({
+      levels: levels(["off", "low", "medium", "adaptive", "high"]),
+      defaultLevel: "adaptive",
+    });
     expect(gemini25Profile?.levels).toEqual(
       levels(["off", "minimal", "low", "medium", "adaptive", "high"]),
     );

@@ -5,6 +5,12 @@ export function isGoogleGemini3ProModel(modelId: string): boolean {
   return /(?:^|\/)gemini-(?:3(?:\.\d+)?-pro|pro-latest)(?:-|$)/.test(normalized);
 }
 
+export function isGoogleGemini31ProPreviewModel(modelId: string): boolean {
+  return /(?:^|\/)gemini-3\.1-pro-preview(?:-customtools)?$/.test(
+    normalizeLowercaseStringOrEmpty(modelId),
+  );
+}
+
 export function isGoogleGemini3FlashModel(modelId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return /(?:^|\/)gemini-(?:3(?:\.\d+)?-flash|flash(?:-lite)?-latest)(?:-|$)/.test(normalized);
