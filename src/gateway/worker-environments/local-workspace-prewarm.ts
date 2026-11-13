@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { listAgentIds } from "../../agents/agent-scope-config.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
-import { listTemplatesAsync } from "../../agents/worktrees/template-registry-async.js";
+import { IDLE_GC_MS } from "../../agents/worktrees/retention.js";
 import { worktreeTemplateMutationKey } from "../../agents/worktrees/template-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -25,7 +25,7 @@ export async function prewarmLocalWorkspaceTemplates(params: {
     }
   };
   const env = process.env;
-  const { IDLE_GC_MS } = await import("../../agents/worktrees/service.js");
+  const { listTemplatesAsync } = await import("../../agents/worktrees/template-registry-async.js");
   const usedSince = Date.now() - IDLE_GC_MS;
   const templates = (await listTemplatesAsync(env, commitGuard)).filter(
     (record) => record.backend.startsWith("sandbox-") && record.lastUsedAt > usedSince,
