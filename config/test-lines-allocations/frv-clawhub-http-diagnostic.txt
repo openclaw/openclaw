@@ -1,2 +1,0 @@
-8
-# Exercise ClawHub HTTP failure classification through the isolated FRV observation worker.

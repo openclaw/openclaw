@@ -60,6 +60,7 @@ import {
 import { isConversationToolAllowed } from "./conversation-tool-policy-pipeline.js";
 import { applyDelegationCapability } from "./delegation-capability.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
+import { resolveGatewayExecAuthority } from "./execution-authority.js";
 import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
 import { buildHarnessHostRequester } from "./harness/host-requester.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
@@ -437,6 +438,8 @@ export function* assembleOpenClawCodingTools(
             execSession: sessionPermissionPolicy
               ? { permissionMode: sessionPermissionPolicy.mode }
               : undefined,
+            delegationExecAuthority: () =>
+              resolveGatewayExecAuthority(options, scheduledCoreTools, callableTools),
             execOverrides: {
               host: effectiveExecPolicy.host,
               mode: effectiveExecPolicy.mode,

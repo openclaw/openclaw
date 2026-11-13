@@ -125,9 +125,10 @@ send the prompt the Scribes tab would send; the
 settings are plain bullets, so set your schedule (`45 3 * * 0` weekly or
 `45 3 * * *` nightly) and IANA time zone there.
 
-The conversation creates the automation, targets itself, and ends with a
-`Scribe status: on — …` line. Each scheduled run receives the automation's run
-message, which you can edit on the Automations page. To fix a broken setup,
+The conversation creates the automation, which runs each time in a fresh
+session of that conversation, and ends with a `Scribe status: on — …` line.
+Each scheduled run receives the automation's run message, which you can edit on
+the Automations page. To fix a broken setup,
 use **Repair** on the Scribes tab. If the scribe's conversation is reset or
 removed, it loses access: start the scribe again from a new conversation.
 Conversation partitions are not reviewed.
@@ -138,5 +139,11 @@ substantial missing subjects, retires exact duplicates, supersedes explicitly
 replaced claims and status snapshots by their outcome, and folds durable
 outcomes into page State. The same skill runs as a claim consolidation review
 over other scopes when you ask for one: the claims on one hub or oversized page,
-or the claims about one subject since a date. Scribe runs only review the
-unlinked residue.
+or the claims about one subject since a date. A one-page review ends by
+reviewing that page against its type's layout. The default result is no
+change: a page with a current State and sections that fit its type only gets
+fixes such as a broken citation or a fact a newer claim contradicts.
+Restructuring or splitting a page needs a reason the report names, and dated
+sections and written Timelines are retired into State, claims and source notes
+without losing any citation. Scribe runs review the unlinked residue, retire up
+to 10 written Timelines, and review up to 5 pages, tracked on a checkpoint note.

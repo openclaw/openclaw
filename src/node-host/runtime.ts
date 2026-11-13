@@ -168,7 +168,7 @@ export async function prepareNodeHostRuntime(params?: {
   // cannot advertise or enable this command on the host's behalf.
   const claudePath =
     params?.enableAgentRuns === true && config.nodeHost?.agentRuns?.claude?.enabled === true
-      ? resolveExecutableTrustPathFromEnv("claude", pathEnv)
+      ? await resolveExecutableTrustPathFromEnv("claude", pathEnv)
       : null;
   let workerRunsEnabled =
     !commandAllowlist &&

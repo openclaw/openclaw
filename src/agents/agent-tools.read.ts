@@ -1083,24 +1083,18 @@ export function wrapReadToolWithSkillContent(
               options,
             ))
           : tool;
-      // Skill instructions are served whole. Some models still send paging arguments,
-      // so windows are dropped rather than rejected.
-      const instructionArgs: Record<string, unknown> = { ...record, path: normalizedPath };
-      for (const key of ["offset", "limit", "cursor"]) {
-        delete instructionArgs[key];
-      }
+      // Instructions that fit are served whole, ignoring stray paging arguments. Larger
+      // ones page through the normal read continuation, whose notice fits the budget.
+      const readArgs: Record<string, unknown> = { ...record, path: normalizedPath };
+      const { offset, limit, cursor, ...instructionArgs } = readArgs;
       try {
         const result = await instructionTool.execute(toolCallId, instructionArgs, signal, onUpdate);
         const details = result.details;
         const detailsKind = details.kind;
         if (detailsKind === "truncated") {
           resetDelivery();
-          const text =
-            "Skill instructions cannot be partially served: the whole document exceeds this call's read or model-context budget. Ask the operator to reduce the document or increase the model context.";
-          return {
-            content: [{ type: "text", text }],
-            details: { kind: "text", content: text },
-          };
+          const windowed = offset !== undefined || limit !== undefined || cursor !== undefined;
+          return windowed ? await instructionTool.execute(toolCallId, readArgs, signal) : result;
         }
         if (detailsKind !== "text") {
           resetDelivery();

@@ -75,7 +75,8 @@ describe("Claude model contracts", () => {
     expect(supportsClaudeFastMode({ id: "global.anthropic.claude-opus-5" })).toBe(true);
     expect(supportsClaudeFastMode({ id: "claude-opus-4.8" })).toBe(true);
     expect(supportsClaudeFastMode({ id: "claude-opus-4-7" })).toBe(false);
-    expect(supportsClaudeFastMode({ id: "claude-opus-50" })).toBe(false);
+    // Unknown Claude ids are offered fast mode; a rejection falls back to standard speed.
+    expect(supportsClaudeFastMode({ id: "claude-opus-50" })).toBe(true);
   });
 
   it("does not classify later numeric model versions as supported aliases", () => {

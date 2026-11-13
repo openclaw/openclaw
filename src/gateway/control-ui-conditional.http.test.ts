@@ -78,6 +78,9 @@ describe.each([
     await write("assets/selected.js.gz", gzipSync(assetBody));
     await write("assets/selected.js.br", brotliCompressSync(assetBody));
     await write("assets/cold.js", assetBody);
+    for (const name of ["get", "head", "forbidden"]) {
+      await write(`assets/cold-${name}-A1234567.js`, assetBody);
+    }
     for (const publicAsset of ["themes/absolutely.css", "sw.js"]) {
       await write(publicAsset, assetBody, modifiedAt);
     }
@@ -112,6 +115,43 @@ describe.each([
   });
 
   if (kind === "bundled" && basePath === "") {
+    it("skips absent sidecar work across cold HTTP representations", async () => {
+      const read = vi.spyOn(WorkerTaskPool.prototype, "run");
+      const list = vi.spyOn(fsSync.promises, "readdir");
+      for (const [name, method, accept, status, tasks] of [
+        ["get", "GET", "br, gzip", 200, 1],
+        ["head", "HEAD", "br, gzip", 200, 1],
+        ["forbidden", "GET", "br, gzip, identity;q=0", 406, 1],
+        ["missing", "GET", "br, gzip, identity;q=0", 404, 1],
+      ] as const) {
+        read.mockClear();
+        const { response, body } = await requestAsset(
+          `${baseUrl}/assets/cold-${name}-A1234567.js`,
+          method,
+          { "Accept-Encoding": accept },
+        );
+        expect(response.statusCode).toBe(status);
+        expect(response.headers["content-encoding"]).toBeUndefined();
+        if (status === 200) {
+          expect(response.headers.vary).toBe("Accept-Encoding");
+          expect(response.headers["content-length"]).toBe(String(assetBody.byteLength));
+          expect(body).toEqual(method === "GET" ? assetBody : Buffer.alloc(0));
+        }
+        expect(read).toHaveBeenCalledTimes(tasks);
+      }
+      expect(list).toHaveBeenCalledOnce();
+      read.mockClear();
+      expect(
+        (
+          await requestAsset(`${baseUrl}/assets/cold-get-A1234567.js`, "GET", {
+            "Accept-Encoding": "br, gzip",
+          })
+        ).body,
+      ).toEqual(assetBody);
+      expect(read).not.toHaveBeenCalled();
+      expect(list).toHaveBeenCalledOnce();
+    });
+
     it("keeps public content immutable across builds and revalidates changed versions", async () => {
       if (rootState.kind !== "bundled") {
         throw new Error("Expected bundled test root");

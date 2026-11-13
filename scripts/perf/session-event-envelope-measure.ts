@@ -237,7 +237,7 @@ const materializedRows = Array.from({ length: sessions }, (_, index) =>
 );
 const record = {
   entry: { sessionId: "synthetic-session", lifecycleRevision: "1" },
-  materialized: { row: materializedRows[0]! },
+  materialized: { row: materializedRows[0]!, publicationIdentity: materializedRows[0]! },
 };
 // The fixture implements exactly the owner-facing read operations; presentation is mocked above.
 const projection = {
@@ -321,6 +321,7 @@ function publish(
   key = `agent:main:stream-envelope-${index % sessions}`;
   record.entry.sessionId = `synthetic-session-${index % sessions}`;
   const source = materializedRows[index % sessions]!;
+  record.materialized.publicationIdentity = source;
   record.materialized.row = values["source-revisions"]
     ? freezeTrustedJsonSnapshot({
         ...source,

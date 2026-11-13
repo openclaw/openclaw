@@ -1,5 +1,93 @@
 # Native checkpoint pause comparison
 
+## Acquisition and synchronous reuse
+
+`--mode preparation --serial-turns --burst 1` measures the actual
+`prepareLocalSandboxWorkspace` caller, including `reuse.acquire`. It does not
+substitute a standalone `synchronize("projection")` operation. Each process reports
+first creation (or `first-reuse` when reopening an existing fixture), unchanged
+turns, one changed guest file, a subsequent unchanged turn, 200 mixed guest edits,
+and another unchanged turn. The diagnostics spans separate acquisition from
+nested reconciliation phases. These spans overlap; do not sum parent and child.
+
+For a simple generated serial fixture, the driver validates all accepted bytes,
+then restores only its own mutations through the real preparation owner outside
+measurement. `--reuse-fixture` can reopen that fixture in a fresh process without
+an upfront reconciliation. It rejects combinations with imported source,
+acceleration, owner switches, or restart scenarios. First reuse includes cold
+process/worker state; the OS page cache is not evicted. First creation is reported
+separately and is never pooled with reuse.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/local-workspace-checkpoint-measure.ts \
+  --source-root /owned-proof/base --mode preparation --serial-turns \
+  --output /owned-proof/fixture-62000 --files 62000 --file-bytes 17742 \
+  --requests 3 --burst 1 --report seed.json
+# Reopen serially in fresh processes with identical arguments:
+# --reuse-fixture --report AA1.json, AA2.json, then counterbalanced A/B arms.
+```
+
+Use 240,000 files of 17,742 bytes for a separate 4.26 GB scale diagnostic when
+capacity permits; this remains below the existing 4 GiB eligible-byte limit. Record the actual filesystem and host load. This serial mode
+uses host-written synthetic guest edits and no registered native runtime, so
+empty pause arrays do not establish native guest freeze latency. Its 10,001
+session rows exercise selected-session resolution; unrelated transcript bytes
+are not queried by this owner and need not be reseeded for this comparison.
+
+Run allocation separately with `--instrument allocation`. Each serial turn
+samples main-isolate allocation and a CPU profile only around the real owner call,
+before correctness reads or fixture reset. Start the CPU profiler before the heap
+sampler and stop the heap sampler first, so CPU-profiler setup and response
+serialization do not enter the allocation total. Raw `.heapprofile` and
+`.cpuprofile` artifacts are saved after both profilers stop. Allocation still
+includes small measurement bookkeeping and any overlapping main-isolate background
+work. The CPU profile includes sampler control calls; reported CPU counters bracket
+the owner call. Worker counters are reported where
+supported; unavailable V8 counters are null, not zero allocation. Process CPU
+includes Node workers but excludes native child processes; main CPU covers only
+the calling thread. A/A controls qualify host variation. A telemetry-only change
+has no expected latency speedup: compare attribution and accepted bytes, and
+report overhead relative to the controls.
+
+## Ordinary reconciliation
+
+Use `--mode reconcile --reconcile-target canonical` to export guest changes through
+`withLocalWorkspaceProjection(... synchronize("canonical"))`. Select `projection`
+to import host changes. Each request changes existing files, invokes that real
+owner once, verifies all changed bytes on both sides and checks a subsequent native
+guest read. The native guest uses the host workspace owner's UID/GID, so private
+imported files remain readable without adding DAC capabilities or changing file
+permissions. `--reconcile-changed-files 20000` exercises a substantial admitted delta
+inside a 62,000-file/1.1 GB workspace; its files retain their original size. The
+synthetic repeated text is compressible and is not an incident-content replay.
+
+The native engine, isolated fixture, source freezing, cleanup accounting and
+profiling instructions below apply unchanged. For example, after fixture seeding
+and subvolume qualification:
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/local-workspace-checkpoint-measure.ts \
+  --mode reconcile --reconcile-target canonical --reconcile-changed-files 20000 \
+  --native-turns --sandbox-backend podman \
+  --guest-image docker.io/library/node:24.22.1-trixie \
+  --output /owned-btrfs/reconcile --reuse-fixture --files 62000 --file-bytes 17742 \
+  --transcript-mib 12288 --requests 1 --burst 1 --report export-A1.json
+```
+
+Freeze the entire baseline and candidate source with `--freeze-source`, then run
+the same driver using `--source-root`; this includes the worker implementation.
+Measure export and import separately, with two fresh-process baseline controls
+followed by five counterbalanced pairs. The acceptance rule is identical accepted
+bytes, no remaining pause during staging/patch preparation, reduced paused time,
+and no unexplained 20% regression in total owner time, CPU or allocation. The
+`finalizationDistributionMs` field is the synchronization owner time; the command
+field additionally includes synthetic fixture mutation. Phase durations overlap.
+Compare `operationPauseDistributionMs` (all frozen intervals summed per owner call)
+and `operationMaxPauseDistributionMs` (the longest continuous interval per call).
+Each raw finalization records both. Per-interval percentiles alone are misleading
+when the two revisions pause a different number of times.
+An engine seam run qualifies owner ordering only, not native freeze latency.
+
 `local-workspace-checkpoint-measure.ts --mode turn-loop --native-turns` runs the
 real checkpoint owner against a native Podman guest. Use a disposable Linux rig,
 a task-private Podman store, and a local Node guest image. Put the output on btrfs
@@ -85,8 +173,37 @@ Run a separate `--instrument allocation` pass per source for sampled allocation
 and a CPU profile saved beside the report as `<report>.cpuprofile`. Native allocation
 passes also sample worker heap counters outside the CPU/latency window and report
 matched-thread allocation deltas, worker starts/exits, and unavailable or unmatched
-samples. Exited workers are not silently counted as zero allocation. Do not compare
-instrumented timings against the plain timing arms. Report aggregate process and
+samples. Exited workers are not silently counted as zero allocation.
+
+Serial allocation passes also sample existing Git workers identified by the
+runtime's diagnostic script/thread metadata (at most 16). Each worker starts its
+CPU profiler before its heap sampler, then stops heap sampling before the CPU
+profiler. Both use native runtime defaults. The qualified Node 24.22.1 APIs
+ignore option objects: worker heap sampling uses a 512 KiB interval, depth 16
+and no sampling flags. `sampledLiveAllocationBytes` covers allocations still live
+at capture, excludes collected objects/native memory, and is GC-sensitive; it
+is not total allocation or a forced-GC retained-heap measurement. Worker CPU
+profiling also uses the native default interval. Raw files include the phase and
+thread ID; reports retain script, source path, native worker CPU deltas, sampled
+live allocation and CPU sample counts. Main-isolate inspector sampling remains
+independently configured at 32 KiB with collected objects included.
+Profile windows include owner work and boundary/setup idle work; they exclude
+correctness reads and reset. CPU profile duration is elapsed coverage, not CPU
+consumption. Workers created during a window and exited workers are unmeasured;
+missing/failed profile values are null. First-use work may therefore lack worker
+coverage; check the post-import reuse's captured Git worker and hash counters
+before making an allocation claim. This adds no profiler work or awaits to timing
+mode. Main and worker samples have different boundaries and must stay separate.
+
+Supplemental `retainedMemory` collection runs after the measured work and, for
+serial preparation, after full correctness validation. It reports main memory after
+explicit GC alongside unforced native worker heap statistics. A worker can exit while synchronous validation delays its exit event;
+`ERR_WORKER_NOT_RUNNING` produces an explicit `unavailable: "worker-exited"`
+sample rather than zero. Other inspection errors still fail the run. The same
+scope applies to dedicated retention-mode reports; this tail is not an owner
+allocation or latency measurement.
+
+Do not compare instrumented timings against the plain timing arms. Report aggregate process and
 main-thread CPU separately, and retain raw samples so phase overlap and outliers
 remain inspectable.
 
@@ -249,3 +366,56 @@ probe retains syscall timings beside the report and verifies snapshot isolation.
 timings include `strace` overhead and qualify the primitive, not command latency.
 The probe removes its named source and snapshots; retain the small trace files
 with the report, then remove that task-owned probe directory.
+
+## Fingerprint reuse after a host import
+
+`--fingerprint-import --mode preparation --serial-turns --burst 1` measures
+real guest export, host import, and the immediately following reuse call. It
+requires a simple generated fixture with at least 200 files. Each arm starts
+with unchanged preparation calls, then makes 200 guest edits (20 deletions,
+20 additions, 160 content changes), exports them through the preparation owner,
+restores their original canonical bytes, imports those bytes through the same
+owner, and records `post-import-reuse` and `post-import-steady`.
+
+The harness checks each edited path after the owner returns. It validates every
+retained file byte/type and all deletions after the measured sequence. No
+whole-tree read or extra owner operation occurs between `host-import` and
+`post-import-reuse`. The import itself restores the fixture; later arms reopen
+the same original bytes. Record the sum of import and next reuse as well as
+each phase so moving work into import cannot masquerade as a gain.
+
+Freeze both sources with the flag before running:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/local-workspace-checkpoint-measure.ts \
+  --freeze-source /owned-proof/base --revision BASE --fingerprint-import
+node --import ./scripts/tsx.mjs scripts/perf/local-workspace-checkpoint-measure.ts \
+  --freeze-source /owned-proof/candidate --fingerprint-import
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/local-workspace-checkpoint-measure.ts \
+  --source-root /owned-proof/base --mode preparation --serial-turns \
+  --fingerprint-import --burst 1 --requests 3 --files 62000 --file-bytes 17742 \
+  --output /owned-proof/fixture-62000 --instrument timing --report seed.json
+```
+
+Use `--reuse-fixture` and a distinct report name for each subsequent arm. The
+240,000-file shape uses the same 17,742 bytes/file: 4,258,080,000 bytes, below
+the existing 4 GiB eligible-file limit. Do not change admission limits.
+
+The freeze step installs the same bounded observers in both proof capsules,
+leaving checkout sources unchanged. Each real Git-worker task owns in-memory
+counters; those counters travel on its existing reply and are forwarded to
+the benchmark. There are no per-file messages/logs, new awaits, filesystem
+effects, or hash-memo wrappers. The source manifest includes these overlays.
+`hashMetrics` records successful content-hash calls, logical bytes actually
+read by that helper, and accepted-node fingerprint hits/misses, both in total
+and by operation/action/target. It does not count main-isolate/native Git reads, failed
+partial reads, every filesystem syscall, or physical storage bytes.
+
+A probe count alone is insufficient: a probe can hash the entire tree when
+its fingerprint header names an earlier tree. Candidate counts should scale
+with the changed paths, including any ctime safety-window misses, rather than
+with all untouched files. Keep successful correctness and the direct hash/read
+counts as prerequisites to a latency claim. Report acquisition/owner wall,
+CPU, all samples, A/A controls, paired medians, and observed maxima. Run
+allocation sampling separately, retaining raw heap/CPU profiles and the
+existing corrected profiler ordering.

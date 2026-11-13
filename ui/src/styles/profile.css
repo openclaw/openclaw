@@ -93,7 +93,7 @@
 .profile-hero__name {
   max-width: 100%;
   overflow-wrap: anywhere;
-  font-size: calc(20px * var(--control-ui-text-scale));
+  font-size: 20px;
   font-weight: 650;
   line-height: 1.3;
   letter-spacing: -0.015em;

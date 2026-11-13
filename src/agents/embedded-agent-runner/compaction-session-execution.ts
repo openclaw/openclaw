@@ -31,6 +31,7 @@ import {
 } from "../agent-settings.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { isRealConversationMessage } from "../compaction-real-conversation.js";
+import { setCompactionSummaryRefusalMode } from "../compaction-summary-refusal.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers/thinking.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
@@ -45,6 +46,7 @@ import { type AgentSession, estimateTokens, SessionManager } from "../sessions/i
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { DefaultResourceLoader } from "../sessions/resource-loader.js";
 import { createAgentSession } from "../sessions/sdk.js";
+import { sessionManagerReadTranscriptBranch } from "../sessions/session-manager-view-types.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
 import { isSummaryTimeoutFailure, resolveCompactionFailure } from "./compact-reasons.js";
@@ -70,6 +72,7 @@ import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-d
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { estimateLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
 import { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
+import { readSessionSentTools } from "./session-prompt-state.js";
 import { collectRegisteredToolNames, toSessionToolAllowlist } from "./tool-name-allowlist.js";
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
@@ -155,11 +158,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       contextWindowTokens: contextTokenBudget,
       allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
       missingToolResultText: responsesApi ? "aborted" : undefined,
-      allowedToolNames,
       withCompactionPersistenceAsync:
         params.seedCompaction ?? accountingRecorder?.withCompactionPersistenceAsync,
     });
     compactionSessionManager = sessionManager;
+    setCompactionSummaryRefusalMode(sessionManager, params.summaryRefusal);
     const recordUsage = accountingRecorder?.recordUsage
       ? (usage: UsageLike) => {
           const normalized = normalizeUsage(usage);
@@ -214,8 +217,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       }),
     });
 
+    // Summary requests carry no tools; this session's tools only estimate the request the
+    // conversation sends after compaction, so prefer its sent definitions to the registry.
     const customTools = toToolDefinitions(
-      effectiveTools,
+      readSessionSentTools(sessionManager[sessionManagerReadTranscriptBranch]()) ?? effectiveTools,
       {
         agentId: sessionAgentId,
         config: params.config,
@@ -477,7 +482,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             compactionKind: "server-endpoint",
           });
         };
-        const serverResult = params.seedCompaction
+        // The refusal floor makes no model call, including a server-side compaction.
+        const skipServerCompaction = params.seedCompaction || params.summaryRefusal === "floor";
+        const serverAttempt = skipServerCompaction
           ? undefined
           : await attemptServerEndpointCompaction({
               trigger,
@@ -487,6 +494,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               sessionManager,
               extraParams: effectiveExtraParams,
               requestBudget: accountingRecorder?.requestBudget,
+              estimatedInputTokens: observedTokenCount,
               customInstructions: params.customInstructions,
               onUsage: recordUsage,
               onCompactionCommitted: recordServerCompaction,
@@ -499,6 +507,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 signal: params.abortSignal,
               },
             });
+        const serverResult = serverAttempt === "context-overflow" ? undefined : serverAttempt;
         const activeSession = session;
         // The resolved session budget can be smaller than the summarizer's model
         // window. Carry it into manual fitting when allowing larger replay artifacts.
@@ -526,7 +535,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 const requestState =
                   accountingRecorder?.pendingRequestState ??
                   (trigger === "overflow" ? ("unresolved" as const) : undefined);
-                if (trigger === "manual" && !manualRequestBudget) {
+                // Manual /compact owns its summary policy; only the refusal floor overrides it.
+                const manualSummary =
+                  trigger === "manual" && summaryOutputPolicy !== "deterministic";
+                if (manualSummary && !manualRequestBudget) {
                   return {
                     status: "completed" as const,
                     result: await activeSession.compact(params.customInstructions),
@@ -535,11 +547,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 return activeSession[agentSessionAutomaticCompaction](
                   params.customInstructions,
                   requestState,
-                  trigger === "manual" ? "none" : summaryOutputPolicy,
+                  manualSummary ? "none" : summaryOutputPolicy,
                   {
                     requestBudget: manualRequestBudget ?? accountingRecorder?.requestBudget,
                     requestFromEntryId: accountingRecorder?.requestFromEntryId,
                     pendingUserEntryId: accountingRecorder?.pendingUserEntryId,
+                    requestRequiresCompaction: accountingRecorder?.requestRequiresCompaction,
                     onSummaryReady: () => {
                       summaryReady = true;
                     },
@@ -562,7 +575,11 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             // The client watchdog starts here; refresh the delegated host watchdog with it.
             refreshCompactionWatchdogs();
             const outcome = await compactClient(
-              resolveEffectiveCompactionMode(params.config) === "default" ? undefined : "none",
+              params.summaryRefusal === "floor" || serverAttempt === "context-overflow"
+                ? "deterministic"
+                : resolveEffectiveCompactionMode(params.config) === "default"
+                  ? undefined
+                  : "none",
             ).catch(async (error: unknown) => {
               // Caller Stop, run timeout, and the outer host deadline abort params.abortSignal
               // (#133260, #159105, #130993); manual /compact reports its own failure.
@@ -723,5 +740,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     return fail(failure.reason, failure.error);
   } finally {
     setSessionModelUsageSink(compactionSessionManager, null);
+    setCompactionSummaryRefusalMode(compactionSessionManager, undefined);
   }
 }

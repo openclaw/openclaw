@@ -1,6 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ToolsCatalogResult } from "../../api/types.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
@@ -92,6 +92,8 @@ async function settlePage(page: { updateComplete: Promise<boolean> }) {
   await page.updateComplete;
 }
 
+// Keep cold detail-module transforms outside the short DOM assertion waits.
+beforeAll(() => Promise.all([import("./settings-view.tsx"), import("./catalog-detail.tsx")]));
 beforeEach(async () => {
   await i18n.setLocale("en");
 });

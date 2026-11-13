@@ -14,8 +14,6 @@ import {
   MAX_MEMBERS,
   MAX_OWNER_DEVICE_PEER_KEYS,
   MAX_OWNER_DEVICES,
-  MEMBER_ROLES,
-  type MemberRole,
   type SignedStatement,
   type UnixSeconds,
 } from "../statements/types.js";
@@ -50,10 +48,6 @@ export type WriteContext = { channel: Channel; now: UnixSeconds };
 
 function verifyOptions(state: AuthorityState, now: UnixSeconds): VerifyOptions {
   return { now, owners: ownerLookup(state, now) };
-}
-
-function roleRank(role: MemberRole): number {
-  return MEMBER_ROLES.indexOf(role);
 }
 
 // Mailbox policy (spec sections 6 and 7): through Discovery, only root-signed statements,
@@ -299,8 +293,8 @@ function addMember(
   if (pending.account_id !== target.account_id || !target.peer_keys.includes(pending.peer_key)) {
     return refuse(state, "target_mismatch", "approval does not match the pending redemption");
   }
-  if (roleRank(target.role) < roleRank(invite.cap.role)) {
-    return refuse(state, "target_mismatch", "approval grants more than the invite");
+  if (target.role !== invite.cap.role) {
+    return refuse(state, "target_mismatch", "approval's role differs from the invite's");
   }
   return applied(
     {

@@ -599,9 +599,11 @@ export function openConfirmDialog(
   text: string,
   confirmLabel: string,
   confirm: () => Promise<void>,
+  /** What confirming applies, shown below the text. */
+  detail?: Node,
 ) {
   const frame = dialogFrame(title);
-  frame.body.append(el("p", text, "scribe-dialog-blurb"));
+  frame.body.append(el("p", text, "scribe-dialog-blurb"), ...(detail ? [detail] : []));
   const submit = button(
     confirmLabel,
     () => {
@@ -626,4 +628,39 @@ export function openConfirmDialog(
   show(frame.dialog);
   submit.focus();
   return frame.dialog;
+}
+
+/**
+ * The lines that differ between two run messages, in order: lines only in `before` as removed,
+ * lines only in `after` as added. Unchanged lines are left out. Run messages are a few dozen
+ * lines, so a plain longest-common-subsequence table is enough.
+ */
+export function changedLines(before: string, after: string) {
+  const a = before.split("\n"),
+    b = after.split("\n");
+  const common = Array.from({ length: a.length + 1 }, () =>
+    Array.from({ length: b.length + 1 }, () => 0),
+  );
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      common[i]![j] =
+        a[i] === b[j]
+          ? common[i + 1]![j + 1]! + 1
+          : Math.max(common[i + 1]![j]!, common[i]![j + 1]!);
+    }
+  }
+  const lines: { kind: "removed" | "added"; text: string }[] = [];
+  let i = 0,
+    j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) {
+      i++;
+      j++;
+    } else if (i < a.length && (j === b.length || common[i + 1]![j]! >= common[i]![j + 1]!)) {
+      lines.push({ kind: "removed", text: a[i++]! });
+    } else {
+      lines.push({ kind: "added", text: b[j++]! });
+    }
+  }
+  return lines;
 }

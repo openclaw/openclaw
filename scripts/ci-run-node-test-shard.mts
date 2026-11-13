@@ -36,6 +36,7 @@ import {
 } from "./lib/vitest-outcome.mts";
 import {
   MAX_CI_VITEST_PLAN_CONCURRENCY,
+  resolveCiNodeTestResources,
   resolveCiVitestPlanConcurrency,
   runVitestPlans,
 } from "./lib/vitest-plan-scheduling.mts";
@@ -596,6 +597,18 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
         (baseEnv.GITHUB_RUN_ID ?? "").endsWith("0"))),
   );
   const observedRuntimes = new Set<string>();
+  const auditCliRoot = baseEnv.OPENCLAW_CI_TEST_AUDIT_CLI_DIR;
+  const observeAuditCli = Boolean(
+    auditCliRoot &&
+    baseEnv.GITHUB_EVENT_NAME === "schedule" &&
+    baseEnv.GITHUB_RUN_ATTEMPT === "1" &&
+    !plans.some(
+      (entry) =>
+        entry.kind === "group" &&
+        entry.plan.configs.includes("test/vitest/vitest.unit-fast.config.ts"),
+    ),
+  );
+  let observedAuditCli = false;
   const extraArgs = (entry: ShardPlan) =>
     [
       inheritedEnv,
@@ -604,6 +617,23 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       const value = parseJsonEnv(env, VITEST_EXTRA_ARGS_ENV_KEY, []);
       return isStringArray(value) ? value : [];
     });
+  // Invalid job settings must fail before runtime builds acquire artifact ownership.
+  // Historical targets use a workflow-owned adapter. Their Node
+  // contract must not import current target discovery or runtime policy code.
+  const runtimePolicy = baseEnv.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim() || "node";
+  const runtimeOwner =
+    runtimePolicy === "node" ? undefined : await import("./lib/ci-test-runtime.mts");
+  const policy = runtimeOwner?.resolveCiTestRuntimePolicy(baseEnv) ?? "node";
+  // Respect serial timing-sensitive bins and never clone cache slots that
+  // cannot receive a plan.
+  const requestedConcurrency =
+    options.concurrency === undefined
+      ? readPositiveEnvInt(
+          "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY",
+          baseEnv,
+          MAX_CI_VITEST_PLAN_CONCURRENCY,
+        )
+      : parsePositiveInt(options.concurrency, "Shard plan concurrency");
   const preparedBuildEnv: NodeJS.ProcessEnv = {};
   if (
     fileURLToPath(import.meta.url) === join(process.cwd(), "scripts/ci-run-node-test-shard.mts")
@@ -679,26 +709,13 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       }
     }
   }
-  // Historical targets use a workflow-owned adapter. Their Node
-  // contract must not import current target discovery or runtime policy code.
-  const runtimePolicy = baseEnv.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim() || "node";
-  const runtimeOwner =
-    runtimePolicy === "node" ? undefined : await import("./lib/ci-test-runtime.mts");
-  const policy = runtimeOwner?.resolveCiTestRuntimePolicy(baseEnv) ?? "node";
-  // Respect serial timing-sensitive bins and never clone cache slots that
-  // cannot receive a plan.
-  const requestedConcurrency =
-    options.concurrency === undefined
-      ? readPositiveEnvInt(
-          "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY",
-          baseEnv,
-          MAX_CI_VITEST_PLAN_CONCURRENCY,
-        )
-      : parsePositiveInt(options.concurrency, "Shard plan concurrency");
   const ci = isCiLikeEnv(baseEnv);
   const continueOnFailure = shouldContinueVitestFailures(baseEnv);
-  const hostResources = ci
+  const actualHostResources = ci
     ? { logicalCpuCount: os.availableParallelism(), totalMemoryBytes: os.totalmem() }
+    : null;
+  const hostResources = actualHostResources
+    ? resolveCiNodeTestResources(actualHostResources, baseEnv.OPENCLAW_NODE_TEST_CPU_BUDGET)
     : null;
   const exclusive = (entry: ShardPlan) =>
     entry.kind === "group" && entry.plan.configs.some(isExclusiveCiTestConfig);
@@ -857,8 +874,11 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       : undefined;
     if (hostResources) {
       console.log(
-        `[shard:resources] logicalCpuCount=${hostResources.logicalCpuCount} totalMemoryBytes=${hostResources.totalMemoryBytes} requested plans=${requestedConcurrency} admitted plans=${concurrency}`,
+        `[shard:resources] logicalCpuCount=${actualHostResources!.logicalCpuCount} totalMemoryBytes=${hostResources.totalMemoryBytes} requested plans=${requestedConcurrency} admitted plans=${concurrency}`,
       );
+      if (baseEnv.OPENCLAW_NODE_TEST_CPU_BUDGET) {
+        console.log(`[shard:cpu-budget] logicalCpuCount=${hostResources.logicalCpuCount}`);
+      }
       reportCiResourceSnapshot("start");
     }
     const clonedCacheSlots = clonePersistentCacheSlots(persistentCacheRoot, concurrency, policy);
@@ -972,18 +992,28 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
           }
           Object.assign(childEnv, selection.env, preparedBuildEnv);
           delete childEnv.OPENCLAW_VITEST_OBSERVATION_DIR;
-          if (
-            observe &&
-            !nativeBun &&
-            !observedRuntimes.has(runtime) &&
+          delete childEnv.OPENCLAW_VITEST_OBSERVATION_AUDIT_ONLY;
+          const auditCli =
+            observeAuditCli &&
+            !observedAuditCli &&
             selectedArgs.length === 1 &&
-            selectedArgs[0] === "test/vitest/vitest.unit-fast.config.ts"
+            selectedArgs[0] === "test/vitest/vitest.cli-process.config.ts" &&
+            selectedVitestArgs.length === 0;
+          if (
+            !nativeBun &&
+            (auditCli ||
+              (observe &&
+                !observedRuntimes.has(runtime) &&
+                selectedArgs.length === 1 &&
+                selectedArgs[0] === "test/vitest/vitest.unit-fast.config.ts"))
           ) {
             try {
-              mkdirSync(observationRoot!, { recursive: true });
-              childEnv.OPENCLAW_VITEST_OBSERVATION_DIR = mkdtempSync(
-                join(observationRoot!, `${runtime}-`),
-              );
+              const root = auditCli ? auditCliRoot! : observationRoot!;
+              mkdirSync(root, { recursive: true });
+              childEnv.OPENCLAW_VITEST_OBSERVATION_DIR = mkdtempSync(join(root, `${runtime}-`));
+              if (auditCli) {
+                childEnv.OPENCLAW_VITEST_OBSERVATION_AUDIT_ONLY = "1";
+              }
               // Runtime membership and native sharding are already decided. Adding
               // experimental flags before that boundary changes Bun eligibility.
               args = [
@@ -993,9 +1023,13 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
                 "--reporter=verbose",
                 ...(childEnv.GITHUB_ACTIONS === "true" ? ["--reporter=github-actions"] : []),
                 "--reporter=./scripts/lib/vitest-resource-reporter.mts",
-                "--experimental.recordDependencies",
+                ...(auditCli ? [] : ["--experimental.recordDependencies"]),
               ];
-              observedRuntimes.add(runtime);
+              if (auditCli) {
+                observedAuditCli = true;
+              } else {
+                observedRuntimes.add(runtime);
+              }
               try {
                 const { writeCiTestLaunchInputs } = await import("./lib/ci-test-launch-inputs.mts");
                 writeCiTestLaunchInputs({

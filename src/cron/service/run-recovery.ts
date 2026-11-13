@@ -1,6 +1,7 @@
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { getCronJobsStoreRevision } from "../store.js";
+import { listLiveCronRunReceiptIds } from "./run-queue.js";
 import { emitInterruptedCronRun } from "./run-recovery-events.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import type { CronServiceState } from "./state.js";
@@ -16,6 +17,8 @@ export async function recoverCronRuns(state: CronServiceState): Promise<Set<stri
       nowMs: state.deps.nowMs(),
       cronConfig: state.deps.cronConfig,
       defaultAgentId: state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+      // A cron reload's replacement starts while the previous owner's runs settle here.
+      liveReceiptIds: listLiveCronRunReceiptIds(state),
       failureRepairTimeoutMs: state.deps.failureRepairTimeoutMs,
     },
   });

@@ -56,12 +56,27 @@ export async function prepareHeapRigFixture({
     String(port),
   ]);
   if (gib > 0) {
-    await run("scripts/perf/session-resource-loader-fixture.mjs", [
-      "--root",
-      destination,
-      "--complete-gib",
-      String(gib),
-    ]);
+    let previousBytes = 0;
+    for (;;) {
+      // Pilot completion checkpoints each batch; 5000 also initializes every fixture session.
+      await run("scripts/perf/session-resource-loader-fixture.mjs", [
+        "--root",
+        destination,
+        "--complete-gib",
+        String(gib),
+        "--pilot-pairs",
+        "5000",
+      ]);
+      const { completion } = JSON.parse(
+        readFileSync(path.join(destination, "team-shape-summary.json"), "utf8"),
+      );
+      if (completion.completed) {
+        break;
+      }
+      const { finalBytes } = completion.lastRun;
+      assert(finalBytes > previousBytes, "Synthetic fixture completion made no progress");
+      previousBytes = finalBytes;
+    }
   }
   // Verification uses the outer rig config, after the generator closes its native owners.
   await run("scripts/perf/team-shape-fixture-verify.mjs", [sourceRoot]);

@@ -20,6 +20,12 @@ must perform (`disconnect`, `invalidate_tokens`, `cancel_runs`, `notify_owners`,
 | `tunnel`         | an authenticated device over the iroh tunnel                                                                             |
 | `mailbox`        | through Discovery                                                                                                        |
 
+The Gateway also runs the link ceremony (`linkClaw` and its first owner device) on
+`local_operator` for an administrator whose direct connection carries a verified personal
+identity (Tailscale, a trusted proxy, an enterprise principal), never for a shared token or
+password, a member or the tunnel. Every other `local_operator` write, re-bind and owner reset
+stay on direct loopback.
+
 ### Write rules
 
 | Write                                         | Function                                   | Allowed channels       | Notes                                                                                               |
@@ -30,7 +36,7 @@ must perform (`disconnect`, `invalidate_tokens`, `cancel_runs`, `notify_owners`,
 | Revocation                                    | `submitStatement`                          | any                    | removes keys listed at or before its `seq`, with every owner device they approved (no history kept) |
 | InviteCap + proof key                         | `registerInvite`                           | tunnel, local_operator | `secret_hash` must equal SHA-256(proof key); expires within a week; at most 100 per claw            |
 | InviteRedemption                              | `submitRedemption`                         | any (normally mailbox) | becomes **pending**, reserves the invite, admits nothing                                            |
-| Approve redemption                            | `submitStatement` (`add` with `invite_id`) | tunnel, local_operator | must match the pending account and peer key; role <= invite role                                    |
+| Approve redemption                            | `submitStatement` (`add` with `invite_id`) | tunnel, local_operator | must match the pending account and peer key; role equals invite role exactly                        |
 | Deny redemption                               | `submitStatement` (`deny_invite`)          | tunnel, local_operator | consumes the invite                                                                                 |
 
 Root supremacy: an R-signed statement is accepted wherever a device-signed one is, plus over
@@ -111,6 +117,8 @@ Not modeled here (Gateway work): pending-redemption expiry after 7 days, and per
 4. The Gateway verifies (`verifyInviteRedemption`): self-signature, invite match, expiry,
    proof, audience (account id or email asserted by OpenClaw ID). Result: **pending**.
 5. An owner approves (`add` with `invite_id`) or denies (`deny_invite`) **directly**.
+   Approval must name the invite's exact role; any different name is `target_mismatch`.
+   Roles are opaque names, not ranked privileges (see statements.md, "Statement types").
 
 The Gateway keeps an invite only while it can matter. `registerInvite` refuses a cap that has
 expired or expires more than a week from now, deletes spent records first, and refuses a new

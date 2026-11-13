@@ -64,7 +64,7 @@ const packageRoot = (() => {
 })();
 
 /** Positions are an observed flip call chain, not identities of the mutation producer. */
-export function projectLeaseDiagnosticFrames(stack: string, root: string | undefined): Projection {
+function projectLeaseDiagnosticFrames(stack: string, root: string | undefined): Projection {
   if (!root) {
     return { captured: false, notCapturedReason: "root-unresolved" };
   }

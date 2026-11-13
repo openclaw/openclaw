@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1268,6 +1269,74 @@ describe("ClawHub prepared publication", () => {
 });
 
 describe("original sealed ClawHub source", () => {
+  it("settles the native original CLI after dynamically loading FRV evidence", () => {
+    const f = originalPackedFixture();
+    const runId = f.request.inputs.full_release_validation_run_id;
+    const artifact = {
+      name: `full-release-validation-${runId}-1`,
+      expired: false,
+      workflow_run: { id: Number(runId) },
+    };
+    f.metadata.set(artifactsPath(Number(runId)), { artifacts: [artifact, artifact] });
+    const request = join(f.directory, "original-request.json");
+    const output = join(f.directory, "original-descriptor.json");
+    const preload = join(f.directory, "cli-io.mjs");
+    writeFileSync(request, JSON.stringify(f.request));
+    // Replace only external I/O: importing any release module here would finish
+    // its evaluation before the CLI and conceal the top-level-await cycle.
+    writeFileSync(
+      preload,
+      String.raw`import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const metadata = new Map(${JSON.stringify([...f.metadata])});
+const archives = new Map(${JSON.stringify([...f.archives].map(([id, bytes]) => [id, bytes.toString("base64")]))});
+function read(path) {
+  if (!metadata.has(path)) throw new Error("Unexpected CLI fixture request: " + path);
+  return metadata.get(path);
+}
+childProcess.execFileSync = (command, args) => {
+  if (command !== "gh" || args[0] !== "api") throw new Error("Unexpected CLI fixture command");
+  return JSON.stringify(read(args[1].replace("repos/openclaw/openclaw/", "")));
+};
+syncBuiltinESMExports();
+globalThis.fetch = async (input, init) => {
+  if (init?.method && init.method !== "GET") throw new Error("Unexpected CLI fixture write");
+  const url = new URL(input);
+  if (url.origin !== "https://api.github.com") throw new Error("Unexpected CLI fixture origin");
+  const path = url.pathname.replace("/repos/openclaw/openclaw/", "") + url.search;
+  const archive = /^actions\/artifacts\/(\d+)\/zip$/u.exec(path);
+  return archive ? new Response(Buffer.from(archives.get(Number(archive[1])), "base64"))
+    : Response.json(read(path));
+};
+`,
+    );
+    const result = spawnSync(
+      "node",
+      [
+        "--import",
+        preload,
+        "scripts/clawhub-prepared-artifact.mjs",
+        "original",
+        "--request",
+        request,
+        "--output",
+        output,
+      ],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...f.options.env },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `multiple release validation manifest artifacts found: ${runId}`,
+    );
+    expect(result.stderr).toContain("[clawhub-prepared-artifact] FAILED (exit 1)");
+    expect(existsSync(output)).toBe(false);
+  });
+
   it("resolves package directories without expanding a huge unrelated source subtree", async () => {
     const f = originalPackedFixture();
     const hugeTree = {
@@ -1530,6 +1599,45 @@ describe("original sealed ClawHub source", () => {
 });
 
 describe("ClawHub parent-requested recovery", () => {
+  it("retains accepted successor evidence when public readback fails", async () => {
+    const f = authenticatedParentRecoveryFixture("selected");
+    const fetchImpl = f.options.fetchImpl;
+    let accepted = false;
+    f.options.fetchImpl = async (input, init) => {
+      if (accepted && requestUrl(input).endsWith("/publication")) {
+        throw new Error("Registry observation interrupted");
+      }
+      const response = await fetchImpl(input, init);
+      if (init?.method === "POST") {
+        accepted = true;
+        return Response.json({ ...(await response.json()), publicationStatus: "pending" });
+      }
+      return response;
+    };
+    await expect(
+      recoverClawHubFromParent({
+        ...f.options,
+        evidenceClient: f.evidenceClient,
+      }),
+    ).rejects.toThrow("Registry observation interrupted");
+    const evidence = JSON.parse(
+      readFileSync(join(f.options.env.RUNNER_TEMP, "clawhub-postpublish", "evidence.json"), "utf8"),
+    );
+    expect(evidence).toMatchObject({
+      complete: false,
+      publicationAttempts: [
+        {
+          name: f.entry.name,
+          attemptId: "successor-1",
+          recoveredFromAttemptId: "attempt-1",
+          publicationStatus: "pending",
+        },
+        { name: "@openclaw/sibling", attemptId: "attempt-2" },
+      ],
+    });
+    expect(f.recoveryWrites).toEqual([f.entry.name]);
+  });
+
   it.each(["full", "selected"] as const)(
     "authenticates original FRV admission before %s parent recovery",
     async (mode) => {
@@ -1771,6 +1879,64 @@ describe("ClawHub detached postpublish verification", () => {
       if (noChild) {
         expect(result).toMatchObject({ outcome: "no-normal-clawhub-publication" });
       }
+    },
+  );
+
+  it.each([
+    { lane: "core", detached: false, deferred: false, tag: "latest", complete: false },
+    { lane: "explicit deferral", detached: false, deferred: true, tag: "latest", complete: false },
+    { lane: "empty detached lane", detached: true, deferred: false, tag: "latest", complete: true },
+    {
+      lane: "extended stable",
+      detached: false,
+      deferred: false,
+      tag: "extended-stable",
+      complete: true,
+    },
+  ])(
+    "records truthful postpublish completion for $lane",
+    async ({ detached, deferred, tag, complete }) => {
+      const f = retryFixture();
+      const root = mkdtempSync(join(tmpdir(), "clawhub-dispatch-"));
+      directories.push(root);
+      const workflow = readFileSync(join(process.cwd(), parentWorkflow), "utf8");
+      const writer = workflow.match(
+        /NORMAL_CLAWHUB_RUN_ID=.*node --input-type=module <<'NODE'\n([\s\S]*?)\n {10}NODE/u,
+      )?.[1];
+      if (!writer) {
+        throw new Error("release child dispatch writer not found");
+      }
+      const written = spawnSync(process.execPath, ["--input-type=module", "-e", writer], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          RUNNER_TEMP: root,
+          GITHUB_REPOSITORY: f.dispatch.repository,
+          GITHUB_RUN_ID: f.dispatch.parentRunId,
+          GITHUB_RUN_ATTEMPT: f.dispatch.parentRunAttempt,
+          GITHUB_REF_NAME: f.dispatch.toolingRef,
+          GITHUB_REF: f.dispatch.toolingFullRef,
+          GITHUB_WORKFLOW_SHA: f.dispatch.toolingSha,
+          TARGET_SHA: f.dispatch.candidateSha,
+          CLAWHUB_ONLY: String(detached),
+          DEFER_CLAWHUB: String(deferred),
+          RELEASE_NPM_DIST_TAG: tag,
+          NORMAL_CLAWHUB_RUN_ID: "",
+        },
+      });
+      expect(written.status, written.stderr).toBe(0);
+      replaceJsonArtifact(
+        f,
+        f.dispatchArtifact,
+        "dispatch.json",
+        JSON.parse(readFileSync(join(root, "openclaw-release-children/dispatch.json"), "utf8")),
+      );
+      expect(await verifyClawHubPostpublish(f.options)).toMatchObject({
+        complete,
+        outcome: complete ? "no-normal-clawhub-publication" : "clawhub-deferred",
+        packages: [],
+      });
+      expect(f.registryReads).toEqual([]);
     },
   );
 

@@ -4,6 +4,7 @@
 // as direct loopback, so it can never run a root ceremony (spec section 4).
 import type { Channel } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { GatewayClient } from "../server-methods/client-types.js";
+import { resolveAuthenticatedPersonalGatewayProfileId } from "../server-methods/gateway-personal-caller.js";
 
 /**
  * `local_operator` for an authenticated direct-loopback client, `tunnel` for a
@@ -24,4 +25,25 @@ export function resolveOpenClawIdClientPeerKey(
   client: Pick<GatewayClient, "internal"> | null | undefined,
 ): string | undefined {
   return client?.internal?.openclawIdPeerKey;
+}
+
+/**
+ * How a client may sign in with OpenClaw ID. The direct-loopback operator uses the popup
+ * (the issuer redirects to this machine). A connection whose profile comes from a verified
+ * personal identity (Tailscale Serve, a trusted proxy, an enterprise principal) uses the
+ * device grant. The sign-in only proves which account the browser holds; it grants nothing.
+ * Shared token or password connections, OpenClaw ID tunnel clients and host-bound ingress
+ * grants carry no personal identity of their own and cannot sign in.
+ */
+export function resolveOpenClawIdSignInRoute(
+  client: GatewayClient | null | undefined,
+): "popup" | "device" | null {
+  const channel = resolveOpenClawIdClientChannel(client);
+  if (channel === "local_operator") {
+    return "popup";
+  }
+  if (!client || channel === "tunnel" || client.internal?.remoteIngressPrincipal) {
+    return null;
+  }
+  return resolveAuthenticatedPersonalGatewayProfileId(client) ? "device" : null;
 }

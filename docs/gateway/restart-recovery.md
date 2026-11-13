@@ -172,6 +172,13 @@ behind that session at shutdown. These private limits are not included in chat
 history or model messages. The Gateway writes one marker per running root session or recorded yield wait,
 batched by session store, before aborting work. It uses the existing session-entry JSON in SQLite and needs
 no schema migration.
+
+Shutdown closes request admission and scheduled wakeups before writing markers.
+Accepted ingress inputs retain their live source authority until the markers are
+written and the session owner stops them for restart. A real grant revocation or
+permission change during that interval still cancels the affected work. At startup,
+queued inputs must regain current authority before they can execute.
+
 Crash recovery uses the nonterminal run marker committed with accepted plain
 chat input, before dispatch hooks or runtime start. The same commit records its
 writer identity; terminal settlement clears the run marker. Recovery is bounded
@@ -211,6 +218,11 @@ Startup opens external input after recovery discovery installs each session's
 admission wait. Recovery admission continues in the background: a fresh turn for
 a recovering session waits until its resume input and retained FIFO inputs own
 their ordinary queue slots. Other sessions in the same agent can proceed.
+Incoming session events wait before reserving their FIFO position, so they cannot
+block the recovery input that must precede them. A shutdown marker still resumes
+the interrupted work when shutdown left the session marked as killed or when a
+completed reply had background commands; an empty queued-input list does not
+discard that continuation.
 Stores prepared later install these waits before publishing database admission.
 This also applies when several logical agents share the same physical store. Database
 reads and writes retain their normal admission rules; recovery does not borrow
@@ -266,6 +278,20 @@ and `null` means its boolean status is unavailable. A zero effect count does not
 mean the full admissions join has settled: it also waits for source, subagent, and
 terminal-persistence cleanup.
 
+Agent database native closes taking at least 500 ms append phase durations to the
+existing clean-close receipt: WAL-maintenance stop, checkpoint, native close, and
+lease release. A per-database resource drain taking at least 500 ms also emits one
+`agent database close settled` line on the same logger, separating resource join,
+native executor join, and remaining native-owner cleanup. Executor join includes
+accepted work, native receipt phases, and subsequent shared-state cleanup; these durations overlap
+and should not be added together. Native receipt totals also include preparation
+and identity checks outside the named phases. Both lines carry the agent ID, thread ID, and a
+short hash of the captured database path for correlation without printing the path.
+Different aliases of a path can have different hashes. Fast closes retain their
+existing logging. These diagnostics identify a slow owner without changing its
+receipts, deadlines, checkpoints, or durability. For an updated Gateway, collect
+them at the handoff **after** deployment: the outgoing release runs shutdown.
+
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.
 Managed update handoffs keep their own stop handling.
@@ -283,9 +309,11 @@ close; the native shutdown watchdog kills the process if leaked handles keep it
 alive two seconds past the shutdown deadline. Its worker and main-thread fallback
 share one monotonic deadline, including worker startup time, and report retained
 cleanup owners before forcing exit. After a clean shutdown retires those
-watchdogs, the command waits ten seconds past its own final cleanup. If a leaked
-handle still keeps the process alive, the Gateway prints the active resource types
-to stderr. On Linux and macOS, a stop with exit status `0` then ends with `SIGTERM`,
+watchdogs, the Gateway command waits one second past its own final cleanup. If a
+leaked handle still keeps the process alive, it prints active resource and handle
+types to stderr, plus details for at most eight handles: stdout/stderr labels, TLS
+servername and remote address, or a child executable (without arguments). Endpoint
+names and executable strings are bounded to 255 characters and JSON escaped. On Linux and macOS, a stop with exit status `0` then ends with `SIGTERM`,
 which supervisors count as a clean stop. A non-zero status, which can be a
 supervisor restart instruction, and Windows keep the report only. A duplicate `SIGTERM` during shutdown is
 logged once and ignored. That signal exit is accepted, and the supervisor starts
@@ -624,7 +652,9 @@ includes dashboard/operator sessions; existing `sessions_yield` rules still
 determine which completion they await. Startup
 does not send a resume input or run the model for that wait. A fresh continuation
 of the surviving child delivers its completion through the ordinary requester
-handoff.
+handoff. Each parked session has one bounded startup log line with its agent,
+session key, and `yield-waiting` reason. The restart summary's `parked` count
+describes these retained waits, independently of conversation environment cleanup.
 
 A requester yielded for children that restart stopped keeps the ordinary root
 recovery path. Its single resume input reconciles the stopped children's work;

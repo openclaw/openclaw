@@ -8,7 +8,7 @@ export const MARKDOWN_PARSE_LIMIT = 40_000;
 export type MarkdownRenderOptions = {
   assistantTranscriptRoleHeaders?: boolean;
   codeBlockChrome?: "copy" | "none";
-  codeBlockInteraction?: "interactive" | "static";
+  codeBlockInteraction?: "interactive" | "wrap" | "static";
   fileLinks?: boolean;
   /** Selection cues accept query-bearing references without resolving or reading them. */
   documentFileLinks?: boolean | "select";

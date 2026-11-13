@@ -1,6 +1,47 @@
 /* Structure comes from the settings design language (settings.css). This file
    keeps the sessions-specific toolbar, table cells, and row drawer. */
 
+/* Let the table shrink into the remaining page height while keeping the
+   toolbar and pagination visible. Phone rows keep scrolling with the page. */
+@media not all and (max-width: 640px) {
+  openclaw-sessions-page {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+
+  openclaw-sessions-page > .content-header {
+    flex: 0 0 auto;
+  }
+
+  openclaw-sessions-page > .settings-workspace,
+  openclaw-sessions-page .settings-workspace__body,
+  openclaw-sessions-page .settings-page,
+  openclaw-sessions-page .settings-section,
+  openclaw-sessions-page .settings-group {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  openclaw-sessions-page > .settings-workspace,
+  openclaw-sessions-page .settings-workspace__body,
+  openclaw-sessions-page .settings-group {
+    display: flex;
+    flex-direction: column;
+  }
+
+  openclaw-sessions-page .settings-section__header,
+  openclaw-sessions-page .settings-group > :not(.data-table-container) {
+    flex-shrink: 0;
+  }
+
+  openclaw-sessions-page .data-table-container {
+    flex: 0 1 auto;
+    min-height: 0;
+  }
+}
+
 .sessions-error {
   color: var(--danger);
   font-size: var(--control-ui-text-sm);
@@ -9,7 +50,7 @@
 
 .sessions-hub-header .page-title {
   margin: 0;
-  font-size: calc(26px * var(--control-ui-text-scale));
+  font-size: 26px;
 }
 
 /* Applied filters tint the trigger; it is a status, not a pressed toggle. */
@@ -129,7 +170,7 @@
 
 .sessions-transcript-search__empty {
   color: var(--muted);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .sessions-transcript-search__summary,
@@ -175,14 +216,14 @@
 .sessions-transcript-search__result-header > strong {
   overflow: hidden;
   color: var(--text-strong);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .sessions-transcript-search__snippet {
   overflow-wrap: anywhere;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.45;
   white-space: pre-wrap;
 }
@@ -194,13 +235,6 @@
   font-size: var(--control-ui-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-@media (max-width: 768px), (pointer: coarse) {
-  .sessions-filter-popover__search input {
-    min-height: 44px;
-    padding-inline-end: 48px;
-  }
 }
 
 .session-filter-toggle-group {
@@ -394,7 +428,7 @@
 
 .oc-sheet .sessions-filter-popover__panel .session-filter-check__label {
   overflow: hidden;
-  font-size: var(--control-ui-text-lg);
+  font-size: 16px;
   font-weight: var(--control-ui-font-weight-normal);
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -551,23 +585,15 @@
   white-space: nowrap;
 }
 
+.session-key-cell__primary .session-link {
+  color: inherit;
+}
+
 .session-key-display-name,
 .session-detail-stat__value {
   min-width: 0;
   overflow: hidden;
   font-size: var(--control-ui-text-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* User label: plain tinted text, shrinkable so tight key columns ellipsize it. */
-.session-label-chip {
-  flex: 0 1 auto;
-  max-width: 140px;
-  overflow: hidden;
-  color: color-mix(in srgb, var(--accent-2) 65%, var(--text));
-  font-size: var(--control-ui-text-xs);
-  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -765,7 +791,7 @@ select.session-group-select {
 .session-details-panel__title {
   max-width: min(720px, 72vw);
   overflow: hidden;
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -838,7 +864,7 @@ select.session-group-select {
 
 @media (max-width: 768px) {
   .sessions-hub-header .page-title {
-    font-size: calc(22px * var(--control-ui-text-scale));
+    font-size: 22px;
   }
 
   .sessions-transcript-search__input {

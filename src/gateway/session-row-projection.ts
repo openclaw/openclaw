@@ -85,12 +85,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     isActive: () => !disposed && !topologyDirty,
     runAsOwner: inOwnerContext,
   });
-  const prepareRegistryFacts = (): Promise<void> | undefined =>
-    disposed
-      ? undefined
-      : !inOwnerContext(subagents.snapshotIdentity)
-        ? inOwnerContext(subagents.prepare)
-        : registryRead.prepare();
+  const prepareRegistryFacts = () => inOwnerContext(metadata.prepareRuntimeFacts);
   const placementFacts = createSessionRowPlacementProjection(
     params.placementFactsReader,
     () => (!disposed && topologyDirty ? topology() : prepareRegistryFacts()),
@@ -133,7 +128,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       void ensureMaterialized().catch(() => {});
     },
   });
-  const metadata = createSessionRowProjectionContext(subagents, childRows.invalidate);
+  const metadata = createSessionRowProjectionContext(subagents, {
+    state: () => ({ cfg, epoch, disposed }),
+    prepareRegistry: () => registryRead.prepare(),
+    invalidateChildren: childRows.invalidate,
+  });
   const backfill = createSessionRowProjectionBackfill({
     ready: ensureMaterialized,
     read: (id) => rows.get(id),

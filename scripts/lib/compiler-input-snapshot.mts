@@ -187,6 +187,7 @@ export class CompilerInputSnapshot {
     { files: string[]; roots: string[]; options: CompilerOptions }
   >();
   private topology?: TopologyEntry[];
+  private ancestors?: TopologyEntry[];
   private readonly namespaceDigests = new Map<string | undefined, string>();
   private generatorInputs?: string[];
   private readonly policy: CompilerInputPolicy;
@@ -357,8 +358,18 @@ export class CompilerInputSnapshot {
     // the local resolution namespace invalidate conservatively; unrelated byte
     // edits do not. Installed package contents are included, not just lockfiles.
     yield* visit(rootDir, fs.realpathSync.native(rootDir));
+    names.push(...this.ancestorTopology());
+    return names.toSorted((left, right) => (left.name < right.name ? -1 : 1));
+  }
+
+  private ancestorTopology() {
+    if (this.ancestors !== undefined) {
+      return this.ancestors;
+    }
     // An ancestor install can change fallback resolution without a checkout edit.
     // Capture its existence only; external packages are never snapshot byte inputs.
+    const names: TopologyEntry[] = [];
+    const rootDir = this.rootDir;
     let ancestor = path.dirname(path.resolve(rootDir));
     while (true) {
       const install = path.join(ancestor, "node_modules");
@@ -371,7 +382,8 @@ export class CompilerInputSnapshot {
       }
       ancestor = parent;
     }
-    return names.toSorted((left, right) => (left.name < right.name ? -1 : 1));
+    this.ancestors = names.toSorted((left, right) => (left.name < right.name ? -1 : 1));
+    return this.ancestors;
   }
 
   private namespace(outputRoot?: string) {
@@ -398,7 +410,9 @@ export class CompilerInputSnapshot {
   }
 
   private toolInputs() {
-    this.namespace();
+    if (this.policy.isGeneratorInput) {
+      this.namespace();
+    }
     this.generatorInputs ??= [
       ...new Set([
         ...this.policy.generatorInputs.filter((file) =>
@@ -461,7 +475,7 @@ export class CompilerInputSnapshot {
     resolutionFingerprint?: string,
   ) {
     const parsed = this.config(config);
-    const namespace = this.namespace(outputRoot);
+    const namespace = resolutionFingerprint === undefined ? this.namespace(outputRoot) : undefined;
     return digest(
       JSON.stringify(
         [
@@ -472,11 +486,7 @@ export class CompilerInputSnapshot {
                 "compiler-lookups",
                 resolutionFingerprint,
                 this.toolchainPaths(),
-                (this.topology ?? [])
-                  .filter(
-                    ({ id, name }) => path.isAbsolute(id) && name === `${id}:ancestor-install`,
-                  )
-                  .map(({ name }) => name),
+                this.ancestorTopology().map(({ name }) => name),
               ],
           outputRoot,
           this.toolchain(),

@@ -21,6 +21,8 @@ import { SUPPORTED_DESCRIPTOR_VERSIONS, SUPPORTED_STATEMENT_VERSIONS } from "../
  * How a write reached the Gateway.
  * - `tunnel`: from an authenticated device over the iroh tunnel (relayed or direct path).
  * - `local_operator`: authenticated **direct loopback** (never traffic from the tunnel child).
+ *   The Gateway also uses it for the link ceremony alone when an admin with a verified personal
+ *   identity runs it directly (never through the tunnel or the mailbox).
  * - `mailbox`: through Discovery's per-claw mailbox.
  */
 export type Channel = "tunnel" | "local_operator" | "mailbox";
@@ -124,7 +126,7 @@ export type AuthorityEvent =
   | { type: "cancel_runs"; account_id: string }
   | {
       type: "notify_owners";
-      event: "kit_used" | "redemption_pending" | "redemption_resolved";
+      event: "kit_used" | "redemption_pending" | "redemption_resolved" | "rebind";
       ref: string;
     }
   | { type: "publish_snapshot" };
@@ -188,7 +190,7 @@ export function certificateWindowError(
 }
 
 /**
- * "Make reachable" (spec section 4): pin R for good. Only over direct loopback,
+ * "Make reachable" (spec section 4): pin R for good. Only on the `local_operator` channel,
  * never over the tunnel, even though tunnel traffic reaches the Gateway on loopback.
  */
 export function linkClaw(

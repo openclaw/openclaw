@@ -49,6 +49,11 @@ import type {
   ToolSearchCatalogRef,
   ToolSearchToolContext,
 } from "./tool-search-types.js";
+import {
+  hasToolUsageRanking,
+  selectUsageRankedToolRows,
+  type ToolUsageRankingSnapshot,
+} from "./tool-usage-ranking.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 export { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME };
@@ -110,26 +115,47 @@ function renderCodeModeCatalogIndex(lines: readonly string[], total: number): st
   ].join("\n");
 }
 
-function formatCodeModeCatalogIndex(bindings: readonly CodeModeCatalogBinding[]): string {
+function formatCodeModeCatalogIndex(
+  bindings: readonly CodeModeCatalogBinding[],
+  usageRanking?: ToolUsageRankingSnapshot,
+): string {
   const priority = (entry: CodeModeCatalogBinding) =>
     entry.id === `openclaw:core:${entry.name}` && isCoreCodingSurfaceToolName(entry.name)
       ? 0
       : entry.output
         ? 1
         : 2;
-  const lines = bindings
+  const rows = bindings
     // Keep the same core file/shell contracts visible as Tool Search, even without
     // declared outputs. Otherwise catalog growth hides their input argument names.
     .toSorted((a, b) => priority(a) - priority(b) || a.callableName.localeCompare(b.callableName))
-    .map(
-      (entry) => `- ${entry.callableName} ${entry.input ?? "unknown"} -> ${entry.output ?? "?"}`,
-    );
+    .map((entry) => ({
+      id: entry.id,
+      line: `- ${entry.callableName} ${entry.input ?? "unknown"} -> ${entry.output ?? "?"}`,
+      pinned: priority(entry) === 0,
+    }));
+  const lines = rows.map((row) => row.line);
   if (lines.length === 0) {
     return "";
   }
   const fullIndex = renderCodeModeCatalogIndex(lines, lines.length);
   if (fullIndex.length <= MAX_CODE_MODE_CATALOG_INDEX_CHARS) {
     return fullIndex;
+  }
+  if (hasToolUsageRanking(usageRanking)) {
+    const selected = selectUsageRankedToolRows(
+      rows,
+      usageRanking,
+      MAX_CODE_MODE_CATALOG_INDEX_CHARS,
+      (included) =>
+        CODE_MODE_CATALOG_INDEX_HEADING.length +
+        2 +
+        codeModeCatalogIndexFooter(included, lines.length).length,
+    );
+    return renderCodeModeCatalogIndex(
+      selected.map((row) => row.line),
+      lines.length,
+    );
   }
 
   // Skip oversized entries instead of letting one blank the remaining index.
@@ -154,6 +180,7 @@ function formatCodeModeCatalogIndex(bindings: readonly CodeModeCatalogBinding[])
 export function buildCodeModeCatalogPrompt(
   ctx: CodeModeToolContext,
   catalog: readonly ToolSearchCatalogEntry[],
+  usageRanking?: ToolUsageRankingSnapshot,
 ): string {
   const namespacePrompt = describeCodeModeNamespacesForPrompt(catalog);
   // Native tools have schema-derived declarations too; keep remote schemas deferred.
@@ -193,7 +220,7 @@ export function buildCodeModeCatalogPrompt(
       .filter((entry) => entry.source !== "mcp")
       .map((entry) => compactToolSearchCatalogEntry(entry)),
   );
-  const catalogIndex = formatCodeModeCatalogIndex(bindings);
+  const catalogIndex = formatCodeModeCatalogIndex(bindings, usageRanking);
   // Only the effective core binding proves shell capability after client overrides.
   const shellTool = bindings.find((entry) => entry.id === "openclaw:core:exec");
   const shellGuidance = shellTool
@@ -234,7 +261,6 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     markCodeModePermissionChangeResult(result, signal);
     const controlResult = formatToolSearchControlResult(result, runtime, {
       terminalBatchStatus: result.status,
-      compact: true,
     });
     runtime?.sourceReplyCell.attach(controlResult, result.status);
     return recordCodeModeToolOutcome(

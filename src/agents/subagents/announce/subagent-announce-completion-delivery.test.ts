@@ -82,6 +82,7 @@ it("admits a requester continuation on the current generation after its producer
         onBeforeDispatch: async () => {
           entered.resolve();
           await resume.promise;
+          expect(sharedCallback()).toBe("shared");
         },
       }),
     );

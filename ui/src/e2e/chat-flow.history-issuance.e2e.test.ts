@@ -8,6 +8,7 @@ import {
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
+  waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -307,7 +308,11 @@ suite.define(() => {
     const failure = "History refresh failed.";
     const gateway = await installMockGateway(page, {
       subscriptionInitialHistory: false,
-      historyMessages: [chatMessage("assistant", marker, { timestamp: Date.now() })],
+      historyMessages: Array.from({ length: 50 }, (_, index) =>
+        chatMessage("assistant", index === 49 ? marker : `Retained history ${index}`, {
+          timestamp: Date.now() - 50 + index,
+        }),
+      ),
     });
     await page.goto(`${suite.server.baseUrl}chat`);
     const transcript = textInThread(page, marker);
@@ -325,6 +330,17 @@ suite.define(() => {
     await error.waitFor({ state: "visible", timeout: 5_000 });
     expect(await error.textContent()).toContain(failure);
     await transcript.waitFor({ state: "visible" });
+    await waitForChatScrollIdle(page);
+    const thread = page.locator(".chat-thread");
+    await error.hover();
+    const beforeWheel = await thread.evaluate((element) => element.scrollTop);
+    await page.mouse.wheel(0, -120);
+    await expect
+      .poll(() => thread.evaluate((element) => element.scrollTop))
+      .toBeLessThan(beforeWheel - 80);
+    await waitForChatScrollIdle(page);
+    await page.getByRole("button", { name: "Scroll to latest" }).click();
+    await waitForChatScrollIdle(page);
     const before = (await gateway.getRequests("chat.startup")).length;
     await error.getByRole("button", { name: "Retry" }).click();
     await gateway.waitForRequest("chat.startup", { after: before });
