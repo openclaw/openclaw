@@ -11,6 +11,7 @@ import type {
   OpenClawIdPublication,
   OpenClawIdStatusResult,
 } from "../lib/openclaw-id/types.ts";
+import { waitForControlUiFrameLayout } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createControlUiMockBootstrapConfig,
   defaultControlUiFeatureMethods,
@@ -134,13 +135,20 @@ suite.define(() => {
           await dialog.locator('input[type="checkbox"]').check();
           await dialog.getByRole("button", { name: "Continue", exact: true }).click();
           await gateway.waitForRequest("openclawId.authority", { match: { action: "commit" } });
-          const done = dialog.getByRole("button", { name: "Done", exact: true });
+          const done = dialog.locator("openclaw-modal-actions").getByRole("button", {
+            name: published ? "Done" : "Close",
+            exact: true,
+          });
           await done.waitFor();
           const glyphSizes = await dialog
             .locator("svg")
             .evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().height));
           expect.soft(glyphSizes.every((size) => size <= 32)).toBe(true);
           if (!published) {
+            expect(await dialog.getByRole("button", { name: "Done", exact: true }).count()).toBe(0);
+            await dialog
+              .getByRole("button", { name: /Remote access is not connected yet/ })
+              .click();
             await dialog
               .getByText("Remote access is not connected yet", { exact: false })
               .waitFor();
@@ -403,6 +411,8 @@ suite.define(() => {
                 await page.setViewportSize({ width, height: 900 });
                 for (const reducedMotion of ["no-preference", "reduce"] as const) {
                   await page.emulateMedia({ reducedMotion });
+                  // Resize repositions the open menu before publication changes its height.
+                  await waitForControlUiFrameLayout([menu]);
                   const before = await menu.boundingBox();
                   const motion =
                     reducedMotion === "no-preference"

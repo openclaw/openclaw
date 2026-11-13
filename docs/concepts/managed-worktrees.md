@@ -736,8 +736,12 @@ Maintenance works in small batches with a time budget, yields between batches, a
 The first cleanup pass starts with post-ready maintenance, after deferred startup
 settles and its grace period expires; later passes remain hourly. Restarting drops
 the in-memory directory cursor, but completed scratch deletions remain completed.
+Scratch visits the oldest-created managed worktrees first so a restarted pass does
+not spend its candidate budget repeatedly inspecting the newest, fresh scratch.
 The new owner evaluates only entries still present, with fresh custody and expiry
 checks and the same bounded budgets; no cleanup checkpoint file is needed.
+The 256-candidate limit counts files and directories inspected, not clones removed;
+large clones can instead exhaust the filesystem-entry budget.
 
 Scratch expiry applies only to the declared scratch roots. Clones placed directly
 under `.openclaw/<name>` or under a workspace path such as

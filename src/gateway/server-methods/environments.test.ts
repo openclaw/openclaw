@@ -447,7 +447,11 @@ it("logs best-effort forced teardown errors without failing the call", async () 
   expect(context.logGateway.warn).toHaveBeenCalledWith(
     "worker environment forced teardown cleanup failed: Error: provider stop remains pending",
   );
-  expect(forceDestroyEnvironment).toHaveBeenCalledExactlyOnceWith("worker-1", expect.any(Function));
+  expect(forceDestroyEnvironment).toHaveBeenCalledExactlyOnceWith(
+    "worker-1",
+    expect.any(Function),
+    expect.any(Function),
+  );
   expect(service.destroy).not.toHaveBeenCalled();
   expect(service.destroyUnattached).not.toHaveBeenCalled();
 });
