@@ -33,7 +33,11 @@ type LocalMutationScope = {
  * without an expected-owner parameter: the method's own guard (for example a config
  * baseHash) binds the effect, and owner identity is revalidated right before dispatch.
  */
-export type OwnerRequest = <R>(method: string, params: Record<string, unknown>) => Promise<R>;
+export type OwnerRequest = <R>(
+  method: string,
+  params: Record<string, unknown>,
+  options?: { expectFinal?: boolean },
+) => Promise<R>;
 
 class LocalStateOwnerError extends Error {
   constructor(
@@ -187,6 +191,7 @@ export async function runWithLocalStateOwner<T>(params: {
       gatewayMethod: string,
       gatewayInput: Record<string, unknown>,
       primary: boolean,
+      expectFinal = primary ? params.expectFinal : undefined,
     ): Promise<R> => {
       const port = listenerPort();
       const { callGateway, isGatewayClientRequestError } = await import("../gateway/call.js");
@@ -208,7 +213,7 @@ export async function runWithLocalStateOwner<T>(params: {
             ...(params.requiredCapabilities ?? []),
           ],
           timeoutMs: params.timeoutMs ?? 600_000,
-          expectFinal: primary ? params.expectFinal : undefined,
+          expectFinal,
           signal: controller.signal,
           scopes,
           onSignalAbort: primary ? params.onGatewaySignalAbort : undefined,
@@ -272,7 +277,8 @@ export async function runWithLocalStateOwner<T>(params: {
         env,
         signal: controller.signal,
         assertCurrent: assertTargetCurrent,
-        requestOwner: (ownerMethod, ownerInput) => requestGateway(ownerMethod, ownerInput, false),
+        requestOwner: (ownerMethod, ownerInput, options) =>
+          requestGateway(ownerMethod, ownerInput, false, options?.expectFinal),
       });
       assertTargetCurrent();
       return result;
