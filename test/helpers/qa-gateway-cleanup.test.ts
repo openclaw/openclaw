@@ -282,7 +282,16 @@ describe("QA gateway fixture error composition", () => {
       ).toBe(1);
       expect(cleaned).toEqual(["gateway", "bus"]);
       expect(providerUrl).toBeDefined();
-      await expect(fetch(`${providerUrl}/models`)).rejects.toThrow();
+      // Check the owned listener directly; an HTTP proxy can turn a refused connection into a 502 response.
+      const closedProvider = new URL(providerUrl!);
+      const socket = connect(Number(closedProvider.port), closedProvider.hostname);
+      try {
+        await expect(once(socket, "connect", { signal })).rejects.toMatchObject({
+          code: "ECONNREFUSED",
+        });
+      } finally {
+        socket.destroy();
+      }
       expect(written).toHaveLength(1);
       expect(written[0]?.status).toBe("fail");
       for (const message of [
