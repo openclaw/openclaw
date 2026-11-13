@@ -15,7 +15,7 @@ import {
   writeSessionEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { readTranscriptStorageRows } from "../config/sessions/session-accessor.sqlite-read.js";
-import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
@@ -57,37 +57,35 @@ it.for(["planning", "settlement"] as const)(
       Promise.resolve(),
     );
     const storage = await storagePreparation.preparations[0]!;
-    const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+    const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
     let overlapped = false;
-    const discovery = vi
-      .spyOn(targetDiscoveryLane.pool, "run")
-      .mockImplementation(async (...args) => {
-        const reply = await run(...args);
-        if (!overlapped) {
-          overlapped = true;
-          openOpenClawAgentDatabase({ agentId: "temporary-after" });
-          if (phase === "planning") {
-            await readAgentDeleteDatabaseRegistry({ env: state.env });
-          } else {
-            await withAgentDeletion(
-              temporary.agentId,
-              async (begin) => {
-                const deletion = await begin({
-                  agentId: temporary.agentId,
-                  agentDir: path.dirname(temporary.path),
-                  workspaceDir: state.statePath("temporary-workspace"),
-                  sessionsDir: state.statePath("agents", temporary.agentId, "sessions"),
-                });
-                await closeOpenClawAgentDatabaseByPathAsync(temporary.path, temporary.agentId);
-                rmSync(temporary.path);
-                await deletion.finish({ unregisterDatabases: true });
-              },
-              { env: state.env },
-            );
-          }
+    const discovery = vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
+      const reply = await run(...args);
+      if (!overlapped) {
+        overlapped = true;
+        openOpenClawAgentDatabase({ agentId: "temporary-after" });
+        if (phase === "planning") {
+          await readAgentDeleteDatabaseRegistry({ env: state.env });
+        } else {
+          await withAgentDeletion(
+            temporary.agentId,
+            async (begin) => {
+              const deletion = await begin({
+                agentId: temporary.agentId,
+                agentDir: path.dirname(temporary.path),
+                workspaceDir: state.statePath("temporary-workspace"),
+                sessionsDir: state.statePath("agents", temporary.agentId, "sessions"),
+              });
+              await closeOpenClawAgentDatabaseByPathAsync(temporary.path, temporary.agentId);
+              rmSync(temporary.path);
+              await deletion.finish({ unregisterDatabases: true });
+            },
+            { env: state.env },
+          );
         }
-        return reply;
-      });
+      }
+      return reply;
+    });
     let releasePrepared: (() => void) | undefined;
     try {
       const prepared = await prepareMissing(cfg, sessionKey);

@@ -125,13 +125,13 @@ export const transcriptSearchLane = createHistoryLane(
   "Session transcript search",
   SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
 );
-// List materialization and full-store snapshots keep independent readers.
-export const projectionLane = createHistoryLane("Session projection");
+// Store discovery, projections, and maintenance share readers independently of history and search.
+export const sessionStoreLane = createHistoryLane(
+  "Session store",
+  SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
+);
 // Compaction waits for host setup/hooks that can themselves read session projections.
 export const compactionLane = createHistoryLane("Session compaction");
-export const maintenanceLane = createHistoryLane("Session maintenance");
-// Cold discovery retains writer FIFO without waiting behind history's host writes.
-export const targetDiscoveryLane = createHistoryLane("Session target discovery");
 function createCostLane(name: string, kind: "read" | "refresh"): SessionCostWorkerLane {
   const lane: SessionCostWorkerLane = registerSessionTranscriptReaderLane(name, (closed) =>
     createUsageCostPool(kind, closed, (databases) => clearClosedDatabaseCustody(lane, databases)),
@@ -141,14 +141,7 @@ function createCostLane(name: string, kind: "read" | "refresh"): SessionCostWork
 
 export const costReadLane = createCostLane("Session usage read", "read");
 export const costRefreshLane = createCostLane("Session usage refresh", "refresh");
-const historyWorkerLanes = [
-  historyLane,
-  transcriptSearchLane,
-  projectionLane,
-  compactionLane,
-  maintenanceLane,
-  targetDiscoveryLane,
-];
+const historyWorkerLanes = [historyLane, transcriptSearchLane, sessionStoreLane, compactionLane];
 
 export const refreshDatabaseWorkerPressureSubscription =
   createStateWorkerMemoryPressureSubscription(
@@ -505,7 +498,7 @@ export async function prepareSessionStoreCandidatesInWorker(
 ) {
   const prepared =
     "config" in request ? { ...request, config: sessionDiscoveryConfig(request.config) } : request;
-  const lane = targetDiscoveryLane;
+  const lane = sessionStoreLane;
   clearDatabaseWorkerIdleRetirement(lane);
   lane.pending++;
   try {

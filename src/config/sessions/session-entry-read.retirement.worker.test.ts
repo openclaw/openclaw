@@ -8,7 +8,7 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { test } from "./session-entry-fixture.test-support.js";
 import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
-import { projectionLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 
 test.for(["refusal", "eviction"] as const)(
   "settles ordered exact-entry %s without waiting on the following writer",
@@ -23,10 +23,10 @@ test.for(["refusal", "eviction"] as const)(
     const writerSettled = createDeferredCore();
     let following: Promise<string> | undefined;
     let reads = 0;
-    const rotate = projectionLane.pool.rotate.bind(projectionLane.pool);
+    const rotate = sessionStoreLane.pool.rotate.bind(sessionStoreLane.pool);
     using mocks = new DisposableStack();
     mocks.use(
-      vi.spyOn(projectionLane.pool, "rotate").mockImplementation(() => {
+      vi.spyOn(sessionStoreLane.pool, "rotate").mockImplementation(() => {
         if (!isActiveStoreWriter(SQLITE_SESSION_WRITER_QUEUES, database.path)) {
           return rotate();
         }
@@ -34,30 +34,29 @@ test.for(["refusal", "eviction"] as const)(
         return Promise.race([writerSettled.promise, releaseCleanup.promise]);
       }),
     );
-    for (const { pool } of [projectionLane, targetDiscoveryLane]) {
-      const run = pool.run.bind(pool);
-      mocks.use(vi.spyOn(pool, "canCloseNativeResources").mockReturnValue(false));
-      mocks.use(
-        vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
-          const request = typeof input === "function" ? await input() : input;
-          if (request.kind !== "session-exact-entries") {
-            return run(request, controls);
-          }
-          reads += 1;
-          return settlement === "refusal"
-            ? { ok: false, error: { kind: "projection", sessionId: entry.sessionId } }
-            : {
-                ok: true,
-                value: {
-                  kind: "session-exact-entries",
-                  entries: [{ sessionKey, entry }],
-                  lifecycleTimestamps: {},
-                },
-                closedHistoryDatabase: request.database,
-              };
-        }),
-      );
-    }
+    const { pool } = sessionStoreLane;
+    const run = pool.run.bind(pool);
+    mocks.use(vi.spyOn(pool, "canCloseNativeResources").mockReturnValue(false));
+    mocks.use(
+      vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
+        const request = typeof input === "function" ? await input() : input;
+        if (request.kind !== "session-exact-entries") {
+          return run(request, controls);
+        }
+        reads += 1;
+        return settlement === "refusal"
+          ? { ok: false, error: { kind: "projection", sessionId: entry.sessionId } }
+          : {
+              ok: true,
+              value: {
+                kind: "session-exact-entries",
+                entries: [{ sessionKey, entry }],
+                lifecycleTimestamps: {},
+              },
+              closedHistoryDatabase: request.database,
+            };
+      }),
+    );
     const consume = vi.fn();
     const reading = withSessionEntriesFromStoresInWorker(
       [{ ...readInput, projection: "list" }],

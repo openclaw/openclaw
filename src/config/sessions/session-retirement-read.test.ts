@@ -18,7 +18,7 @@ import {
   captureSessionRetirementReader,
   withSessionRetirementReaders,
 } from "./session-retirement-read.js";
-import { maintenanceLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 
 const { createFixture } = setupLegacyMainSessionMigrationTests();
 const restorers: Array<() => void> = [];
@@ -152,32 +152,31 @@ it.each(["refusal", "eviction"] as const)(
     const writerSettled = createDeferredCore();
     const readFailure = new Error("Retirement reader failed after dispatch");
     let following: Promise<string> | undefined;
-    vi.spyOn(maintenanceLane.pool, "rotate").mockImplementation(() => {
+    vi.spyOn(sessionStoreLane.pool, "rotate").mockImplementation(() => {
       cleanupEntered.resolve();
       return Promise.race([writerSettled.promise, releaseCleanup.promise]);
     });
-    for (const { pool } of [maintenanceLane, targetDiscoveryLane]) {
-      const run = pool.run.bind(pool);
-      vi.spyOn(pool, "canCloseNativeResources").mockReturnValue(false);
-      vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
-        const request = typeof input === "function" ? await input() : input;
-        if (request.kind !== "session-retirement-read") {
-          return run(request, controls);
-        }
-        following = runOpenClawAgentWriteAdmission(fixture.options(), () => {
-          writerSettled.resolve();
-          return "following writer";
-        });
-        if (settlement === "refusal") {
-          throw readFailure;
-        }
-        return {
-          ok: true,
-          value: { kind: "session-retirement-read", result: { operation: "keys", keys: [key] } },
-          closedHistoryDatabase: request.database,
-        };
+    const { pool } = sessionStoreLane;
+    const run = pool.run.bind(pool);
+    vi.spyOn(pool, "canCloseNativeResources").mockReturnValue(false);
+    vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
+      const request = typeof input === "function" ? await input() : input;
+      if (request.kind !== "session-retirement-read") {
+        return run(request, controls);
+      }
+      following = runOpenClawAgentWriteAdmission(fixture.options(), () => {
+        writerSettled.resolve();
+        return "following writer";
       });
-    }
+      if (settlement === "refusal") {
+        throw readFailure;
+      }
+      return {
+        ok: true,
+        value: { kind: "session-retirement-read", result: { operation: "keys", keys: [key] } },
+        closedHistoryDatabase: request.database,
+      };
+    });
     const reading = fixture.list();
     try {
       const outcome = await Promise.race([

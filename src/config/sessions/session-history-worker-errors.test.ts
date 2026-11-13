@@ -20,7 +20,7 @@ import { readSessionHistoryPageInWorker } from "./session-history-worker-runtime
 import {
   historyLane,
   rotateDatabaseWorkers,
-  targetDiscoveryLane,
+  sessionStoreLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -146,7 +146,7 @@ beforeEach(() => {
 afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
-  await Promise.all([historyLane, targetDiscoveryLane].map((lane) => rotateDatabaseWorkers(lane)));
+  await Promise.all([historyLane, sessionStoreLane].map((lane) => rotateDatabaseWorkers(lane)));
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   expect(observed.nativeWorker).not.toHaveBeenCalled();

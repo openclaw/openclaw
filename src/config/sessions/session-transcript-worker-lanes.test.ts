@@ -18,9 +18,7 @@ import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write
 import { createSessionTranscriptHistoryPool } from "./session-transcript-read-pools.js";
 import {
   historyLane,
-  maintenanceLane,
-  projectionLane,
-  targetDiscoveryLane,
+  sessionStoreLane,
   transcriptSearchLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
@@ -61,7 +59,7 @@ const absent = { ok: true as const, value: false };
 it("retires idle readers during shutdown without interrupting a pending read", async () => {
   const request = input();
   observed.run.mockResolvedValue(absent);
-  await request.read(projectionLane);
+  await request.read(sessionStoreLane);
   const reply = createDeferredCore<unknown>();
   observed.run.mockReturnValueOnce(reply.promise);
   const reading = request.read();
@@ -76,7 +74,7 @@ it("retires idle readers during shutdown without interrupting a pending read", a
     await expect(reading).resolves.toBe(false);
     await vi.advanceTimersByTimeAsync(0);
     expect(observed.rotate).toHaveBeenCalledTimes(2);
-    expect([historyLane.native, projectionLane.native]).toEqual([false, false]);
+    expect([historyLane.native, sessionStoreLane.native]).toEqual([false, false]);
   } finally {
     reply.resolve(absent);
     await reading;
@@ -343,7 +341,7 @@ it("hands admitted read deadlines to the worker pool", async () => {
 it("dedupes independent lane prewarms while idle readers retire and regrow", async () => {
   const request = input();
   const warm = [historyLane, transcriptSearchLane];
-  const background = [projectionLane, maintenanceLane, targetDiscoveryLane];
+  const background = [sessionStoreLane];
   const lanes = [...warm, ...background];
   const prewarm = (lane: (typeof lanes)[number]) =>
     prewarmSessionHistoryWorker(request.database, lane);
@@ -353,25 +351,25 @@ it("dedupes independent lane prewarms while idle readers retire and regrow", asy
   }
   const preparing = lanes.map((lane) => Promise.all([prewarm(lane), prewarm(lane)]));
   try {
-    expect(observed.run).toHaveBeenCalledTimes(5);
+    expect(observed.run).toHaveBeenCalledTimes(3);
     expect(observed.run.mock.calls[0]?.[0]).toMatchObject({ kind: "prewarm" });
-    expect(lanes.map((lane) => lane.pending)).toEqual([1, 1, 1, 1, 1]);
+    expect(lanes.map((lane) => lane.pending)).toEqual([1, 1, 1]);
     replies[0]!.resolve(prewarmed);
     await preparing[0];
-    expect(lanes.map((lane) => lane.pending)).toEqual([0, 1, 1, 1, 1]);
+    expect(lanes.map((lane) => lane.pending)).toEqual([0, 1, 1]);
     replies.forEach((reply) => reply.resolve(prewarmed));
     await Promise.all(preparing);
-    expect(lanes.map((lane) => lane.pending)).toEqual([0, 0, 0, 0, 0]);
+    expect(lanes.map((lane) => lane.pending)).toEqual([0, 0, 0]);
     expect(observed.unregister).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(89_999);
     await Promise.all(lanes.map(prewarm));
-    expect(observed.run).toHaveBeenCalledTimes(5);
+    expect(observed.run).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(1);
     expect(lanes.filter((lane) => !isSessionHistoryWorkerCold(lane))).toEqual(warm);
-    expect(observed.rotate).toHaveBeenCalledTimes(3);
+    expect(observed.rotate).toHaveBeenCalledTimes(1);
     await Promise.all(warm.map(prewarm));
-    expect(observed.run).toHaveBeenCalledTimes(5);
+    expect(observed.run).toHaveBeenCalledTimes(3);
 
     observed.run.mockResolvedValue(absent);
     for (const lane of background) {
@@ -380,7 +378,7 @@ it("dedupes independent lane prewarms while idle readers retire and regrow", asy
     }
     await vi.advanceTimersByTimeAsync(209_999);
     await Promise.all(warm.map(prewarm));
-    expect(observed.run).toHaveBeenCalledTimes(8);
+    expect(observed.run).toHaveBeenCalledTimes(4);
     expect(lanes.filter((lane) => !isSessionHistoryWorkerCold(lane))).toEqual(warm);
     await vi.advanceTimersByTimeAsync(1);
     expect(lanes.every((lane) => isSessionHistoryWorkerCold(lane))).toBe(true);
@@ -388,7 +386,7 @@ it("dedupes independent lane prewarms while idle readers retire and regrow", asy
 
     observed.run.mockResolvedValue(prewarmed);
     await Promise.all(lanes.map(prewarm));
-    expect(observed.run).toHaveBeenCalledTimes(13);
+    expect(observed.run).toHaveBeenCalledTimes(7);
     expect(lanes.every((lane) => !isSessionHistoryWorkerCold(lane))).toBe(true);
   } finally {
     replies.forEach((reply) => reply.resolve(prewarmed));
@@ -424,7 +422,7 @@ it("reuses minute-spaced branch reads and retires after ninety idle seconds", as
     expect(observed.rotate).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(observed.rotate).toHaveBeenCalledOnce();
-    expect(isSessionHistoryWorkerCold(maintenanceLane)).toBe(true);
+    expect(isSessionHistoryWorkerCold(sessionStoreLane)).toBe(true);
   } finally {
     independentRead.mockRestore();
   }
@@ -432,8 +430,7 @@ it("reuses minute-spaced branch reads and retires after ninety idle seconds", as
 
 it.each([
   ["history", historyLane, 300_000, transcriptSearchLane],
-  ["projection", projectionLane, 90_000, targetDiscoveryLane],
-  ["maintenance", maintenanceLane, 90_000, targetDiscoveryLane],
+  ["store", sessionStoreLane, 90_000, sessionStoreLane],
 ] as const)(
   "keeps %s idle retirement anchored to reads across database cleanup",
   async (_name, lane, idleMs, siblingLane) => {
@@ -481,7 +478,7 @@ it("rearms idle retirement after expired and explicit native cleanup both fail",
   }
 });
 
-it.each([historyLane, maintenanceLane])(
+it.each([historyLane, sessionStoreLane])(
   "settles failed and revoked $name prewarms without rejecting callers",
   async (lane) => {
     const request = input();
@@ -517,9 +514,9 @@ it("maintenance cleanup preserves the independent foreground reader", async () =
         value: request.target,
       });
       await scope.readStoreTarget(request.targetInput);
-      await request.read(maintenanceLane);
+      await request.read(sessionStoreLane);
     },
-    maintenanceLane,
+    sessionStoreLane,
   );
   expect(observed.unregister).toHaveBeenCalledOnce();
   const retained = observed.resources.find((resource) => resource.agentId === "main");
@@ -681,7 +678,7 @@ it.each([
     const request = input();
     observed.run.mockResolvedValue(absent);
     const owners: SessionHistoryWorkerDatabase[] = [];
-    for (const lane of [historyLane, projectionLane, maintenanceLane]) {
+    for (const lane of [historyLane, sessionStoreLane]) {
       await withSessionHistoryWorkerDatabase(
         request.database,
         async (owner) => {
@@ -695,27 +692,20 @@ it.each([
     const resource = observed.resources[0]!;
     const retained = pending ? retainSessionHistoryWorkerDatabase(request.database) : undefined;
     const foreground = createDeferredCore();
-    const projection = createDeferredCore();
-    const maintenance = createDeferredCore();
+    const store = createDeferredCore();
     const cleanup = pending || !capable ? observed.rotate : observed.closeResources;
-    cleanup
-      .mockReturnValueOnce(foreground.promise)
-      .mockReturnValueOnce(projection.promise)
-      .mockReturnValueOnce(maintenance.promise);
+    cleanup.mockReturnValueOnce(foreground.promise).mockReturnValueOnce(store.promise);
     resource.revoke();
     retained?.release();
     for (const owner of owners) {
       expect(owner.assertCurrent).toThrow("revoked");
     }
     const closing = resource.close();
-    expect(cleanup).toHaveBeenCalledTimes(3);
+    expect(cleanup).toHaveBeenCalledTimes(2);
     foreground.resolve();
     await foreground.promise;
     expect(observed.unregister).not.toHaveBeenCalled();
-    projection.resolve();
-    await projection.promise;
-    expect(observed.unregister).not.toHaveBeenCalled();
-    maintenance.resolve();
+    store.resolve();
     await closing;
     expect(observed.unregister).toHaveBeenCalledTimes(1);
   },

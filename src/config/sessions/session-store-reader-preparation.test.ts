@@ -35,10 +35,10 @@ it("projects worker discovery config while retaining the host configuration owne
       session: { store: database.path },
       gateway: { port: 19471 },
     };
-    const run = preparation.targetDiscoveryLane.pool.run.bind(preparation.targetDiscoveryLane.pool);
+    const run = preparation.sessionStoreLane.pool.run.bind(preparation.sessionStoreLane.pool);
     const capturedConfigs: OpenClawConfig[] = [];
     const dispatch = vi
-      .spyOn(preparation.targetDiscoveryLane.pool, "run")
+      .spyOn(preparation.sessionStoreLane.pool, "run")
       .mockImplementation((prepare, options) =>
         run(async () => {
           const input = await (typeof prepare === "function" ? prepare() : prepare);

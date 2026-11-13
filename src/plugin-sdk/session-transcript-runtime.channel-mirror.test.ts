@@ -11,8 +11,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
   historyLane,
-  projectionLane,
-  targetDiscoveryLane,
+  sessionStoreLane,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readPluginNoticeData, type PluginNotice } from "../shared/plugin-notice.js";
@@ -373,12 +372,12 @@ describe("channel-final transcript mirrors", () => {
         return Promise.race([following, releaseRetirement.promise]);
       };
       const holdsWriter = () => isActiveStoreWriter(SQLITE_SESSION_WRITER_QUEUES, database.path);
-      const close = projectionLane.pool.closeResources;
+      const close = sessionStoreLane.pool.closeResources;
       const rotate = historyLane.pool.rotate.bind(historyLane.pool);
       const cleanup =
         phase === "entry cleanup"
           ? vi
-              .spyOn(projectionLane.pool, "closeResources")
+              .spyOn(sessionStoreLane.pool, "closeResources")
               .mockImplementation((key) => (holdsWriter() ? waitForWriter() : close(key)))
           : vi
               .spyOn(historyLane.pool, "rotate")
@@ -386,7 +385,7 @@ describe("channel-final transcript mirrors", () => {
       let refusedLatest = false;
       const reads =
         phase === "latest-message refusal"
-          ? [historyLane, targetDiscoveryLane].map(({ pool }) => {
+          ? [historyLane, sessionStoreLane].map(({ pool }) => {
               const run = pool.run.bind(pool);
               return vi.spyOn(pool, "run").mockImplementation(async (input, controls) => {
                 let latest = false;

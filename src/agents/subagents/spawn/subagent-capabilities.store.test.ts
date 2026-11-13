@@ -11,7 +11,7 @@ import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
 import * as sessionEntryReads from "../../../config/sessions/session-entry-read-runtime.js";
-import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { createDirectChatContext } from "../../../gateway/server-chat.agent-events.test-helpers.js";
 import {
@@ -342,8 +342,8 @@ describe("persisted subagent capability lookups", () => {
       expect(resolveCapabilities("agent:main:subagent:missing", { cfg, store }).depth).toBe(1);
     });
     let entryReads = 0;
-    const run = projectionLane.pool.run.bind(projectionLane.pool);
-    vi.spyOn(projectionLane.pool, "run").mockImplementation(async (input, controls) => {
+    const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+    vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (input, controls) => {
       const request = typeof input === "function" ? await input() : input;
       if (request.kind === "session-exact-entries") {
         entryReads += 1;

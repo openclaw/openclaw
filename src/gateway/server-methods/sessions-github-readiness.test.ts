@@ -20,8 +20,7 @@ import * as readCandidates from "../../config/sessions/session-store-read-candid
 import * as targetInventory from "../../config/sessions/session-store-target-inventory.js";
 import {
   historyLane,
-  projectionLane,
-  targetDiscoveryLane,
+  sessionStoreLane,
   rotateDatabaseWorkers,
 } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -691,7 +690,7 @@ it.each([
         await closeOpenClawAgentDatabasesAsync();
         // Agent close releases database handles but may retain qualified idle Workers.
         // Rotate the read lanes too: instrumentation must precede their next real imports.
-        for (const lane of [historyLane, projectionLane, targetDiscoveryLane]) {
+        for (const lane of [historyLane, sessionStoreLane]) {
           await rotateDatabaseWorkers(lane);
           expect(lane.native).toBe(false);
           expect(lane.pending).toBe(0);
