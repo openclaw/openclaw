@@ -18,6 +18,7 @@ import { mintBrowserScreencastToken } from "../screencast/tokens.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { getProfileLifecycle, isProfileOperationCurrent } from "../server-context.lifecycle.js";
 import { registerBrowserAgentActRoutes } from "./agent.act.js";
+import { registerBrowserOperatorInputRoutes } from "./agent.operator-input.js";
 import { createPlaywrightRouteRegistrar } from "./agent.playwright.js";
 import {
   browserNavigationPolicyForProfile,
@@ -155,6 +156,7 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
   });
   registerBrowserControlRoutes(app, ctx);
   registerBrowserAgentActRoutes(app, ctx);
+  registerBrowserOperatorInputRoutes(app, ctx);
   const register = createPlaywrightRouteRegistrar(app, ctx, "inspection");
 
   register("get", "/console", "console messages", (input) => {

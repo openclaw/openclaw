@@ -99,6 +99,10 @@ export function registerBackupCommand(program: Command) {
         "--target <dir>",
         "Fresh target directory; non-empty directories are refused",
       );
+      command.option(
+        "--postgres-connection-env <name>",
+        "Import PostgreSQL stores through the DSN in this environment variable, not the archived connection",
+      );
     }
     command
       .option("--json", "Output JSON", false)
@@ -111,6 +115,10 @@ export function registerBackupCommand(program: Command) {
                   [
                     "openclaw backup restore ~/Backups/latest.tar.gz --target ./restored-openclaw",
                     "Verify, then extract the whole archive into a fresh staging directory.",
+                  ],
+                  [
+                    "openclaw backup restore ~/Backups/latest.tar.gz --target ./restored-openclaw --postgres-connection-env STAGING_PG_DSN",
+                    "Rehearse a restore: import PostgreSQL stores into the server in $STAGING_PG_DSN.",
                   ],
                   [
                     "openclaw backup restore ~/Backups/latest.tar.gz --target ./restored-openclaw --json",

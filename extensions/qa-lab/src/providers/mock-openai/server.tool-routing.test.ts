@@ -74,6 +74,46 @@ async function startTurn(prompt: string, body: Record<string, unknown> = {}) {
   return { server, input, request, complete };
 }
 
+it("spawns the current silent worker and consumes its receipt across prompt updates", async () => {
+  const turn = await startTurn("Subagent terminal reply QA check: silent.");
+  const promptUpdate = makeUserInput(
+    "System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n## Skills\nUpdated QA skills.",
+  );
+  turn.input.unshift(makeUserInput("Subagent terminal reply QA check: visible."), {
+    role: "assistant",
+    content: [{ type: "output_text", text: "Visible child completed." }],
+  });
+  turn.input.push(
+    makeUserInput("OpenClaw runtime context:\nCurrent execution and subagent metadata."),
+    promptUpdate,
+  );
+  const call = outputToolCall(await turn.request(), "dispatch_action");
+  expect(callArgs(call)).toEqual({
+    id: "sessions_spawn",
+    args: {
+      task: "Subagent terminal reply QA worker: silent.",
+      label: "qa-terminal-silent",
+      thread: false,
+      mode: "run",
+    },
+  });
+  turn.input.push(
+    call,
+    makeToolOutputWithCallId(
+      outputToolCallId(call, "spawn"),
+      catalogResult("sessions_spawn", {
+        status: "accepted",
+        childSessionKey: "agent:qa:subagent:silent-child",
+        runId: "silent-child-run",
+      }),
+    ),
+    promptUpdate,
+  );
+  const acknowledged = await turn.request();
+  expect(outputItems(acknowledged).some((item) => item.type === "function_call")).toBe(false);
+  expect(outputText(acknowledged)).toBe("Worker started.");
+});
+
 it.each([
   {
     action: "upload-file",

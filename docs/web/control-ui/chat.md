@@ -1287,14 +1287,7 @@ view. References that change earlier Markdown can also reset the view.
 Completed lists also stay cached as later blocks arrive; loose or nested list
 continuations remain together until the list ends.
 
-Browser results for X and Twitter posts use a wider card with the author, handle,
-available post text, and preview image. **Open post** and **More actions** stay
-visible on touch screens. Text and social images reuse the anonymous page preview;
-when metadata is unavailable, the card keeps the post link and handle. It does
-not load an X embed script or require an X account.
-
-**Copy URL** in browser tab cards also works on plain HTTP connections where the
-browser does not provide its Clipboard API.
+Browser tool calls keep their normal expandable results without automatic page-preview cards. Visiting a page, including an X or Twitter post, does not add a card to the conversation. Links, media, and widgets deliberately included in the assistant’s reply remain visible.
 
 If the browser rejects a text clipboard write, starting another text or image
 copy cancels its delayed fallback. Code blocks replaced during streaming and

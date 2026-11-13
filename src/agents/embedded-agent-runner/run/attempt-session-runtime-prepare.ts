@@ -25,7 +25,10 @@ import {
 import { decayToolUsage } from "../../tool-usage.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import { log } from "../logger.js";
-import { declarePromptToolPin } from "../prompt-cache-observability.js";
+import {
+  declarePromptSystemPromptRebuild,
+  declarePromptToolPin,
+} from "../prompt-cache-observability.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
 import {
   retainEmbeddedSessionPromptState,
@@ -158,9 +161,10 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const promptStateLease = retainEmbeddedSessionPromptState(attempt.sessionId);
   resources.promptStateLease = promptStateLease;
   const sessionPromptState = promptStateLease.state;
+  // Every session pins its system prompt and tool definitions on every route; see
+  // prepareSessionSystemPrompt for the closed set of rebuild points.
   const usesSystemPromptSeries =
     !input.isRawModelRun && attempt.operation !== "settled-tool-finalization";
-  const pinsSystemPrompt = transcriptPolicy.pinnedSystemPrompt === true;
   const promptRouteKey = buildSystemPromptRouteKey({
     provider: attempt.provider,
     model: attempt.modelId,
@@ -243,16 +247,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
         );
       }),
     );
-  if (
-    usesSystemPromptSeries &&
-    beginSessionSystemPrompt({
-      state: sessionPromptState,
-      routeKey: promptRouteKey,
-      enabled: pinsSystemPrompt,
-      getEntries: () => sessionManager[sessionManagerReadTranscriptBranch](),
-    })
-  ) {
-    await retireSystemPromptUpdates();
+  if (usesSystemPromptSeries) {
+    beginSessionSystemPrompt(sessionPromptState);
   }
   const toolPolicyDigest = sha256Hex(
     stableStringify([
@@ -288,7 +284,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   let freshSystemPrompt = systemPromptText;
   let projectedSystemPrompt: string | undefined;
   const prepareSystemPromptUpdate: SystemPromptUpdatePreparation | undefined =
-    usesSystemPromptSeries && (pinsSystemPrompt || rankingEnabled)
+    usesSystemPromptSeries
       ? async (nextPrompt: string, freshlyRendered = false) => {
           let preparedPrompt = nextPrompt;
           let wasFreshlyRendered = freshlyRendered;
@@ -304,9 +300,6 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           if (wasFreshlyRendered || preparedPrompt !== projectedSystemPrompt) {
             freshSystemPrompt = preparedPrompt;
           }
-          if (!pinsSystemPrompt) {
-            return { systemPrompt: freshSystemPrompt };
-          }
           const prepared = prepareSessionSystemPrompt({
             state: sessionPromptState,
             routeKey: promptRouteKey,
@@ -317,6 +310,11 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           // Keep an attempt's restart visible through subsequent continuation preparations.
           if (prepared.restart || state.systemPromptSeries === undefined) {
             state.systemPromptSeries = prepared.seriesStatus;
+          }
+          // Only an allowed rebuild point may change the prompt within a session; a lost
+          // series ("new" on a known session) stays a reported prefix change.
+          if (prepared.restart && prepared.seriesStatus !== "restarted:new") {
+            declarePromptSystemPromptRebuild(attempt);
           }
           let restartRecorded = false;
           if (prepared.restart && resources.session) {
