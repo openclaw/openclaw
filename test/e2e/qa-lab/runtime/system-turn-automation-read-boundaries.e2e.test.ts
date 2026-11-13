@@ -351,6 +351,10 @@ it(
                   call("automations", "remove", { action: "remove", jobId: owned() });
                   break;
                 case 12:
+                  // Reject authority escalation before a deleted job can hide the failure as a read timeout.
+                  expect(outputs.get("remove")).toContain(
+                    "Other actions need the owner's authority",
+                  );
                   call("automations", "add", proofJob("Notice-created", "RUN-MARKER-X", 60_000));
                   break;
                 case 13:

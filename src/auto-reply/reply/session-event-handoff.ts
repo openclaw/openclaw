@@ -498,6 +498,7 @@ function enqueueSessionEventAttempt(
         },
         replyOptions: {
           sessionPrincipalTurn:
+            options.source !== "cron" &&
             !options.scheduledAutomation &&
             !isCronSessionKey(sessionKey) &&
             !hasSessionEventOriginatingCaller(target),
