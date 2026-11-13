@@ -51,15 +51,20 @@ session key, separated by account, originating chat, caller, and update ID.
 Even numerically identical ordinary and guest chat IDs never share a transcript.
 Each new guest interaction starts without prior conversational history.
 
-This first version is deliberately **text-only and tool-free**. The selected
-agent's model/configuration is retained, but workspace bootstrap context is
-omitted and tools are disabled for the turn. It does not expose personal memory,
-DM history, workspace files, or tool access as a side effect of mentioning the
-bot. This is a stricter per-turn policy, not an alternate privileged agent.
-Tool-enabled guest work needs a separately reviewed public-context contract.
-Use a public-safe agent configuration. Agent-level prompt extensions remain part
-of that configuration; audit any custom context-injection hooks before opting in.
-The live acceptance check must include the memory plugins enabled on your Gateway.
+This version is deliberately **text-only and tool-free**. The selected account
+agent and model are retained. The built-in OpenClaw runtime uses its isolated
+model-request path: no previous conversation history, workspace bootstrap files,
+bootstrap/prompt/memory-hook contributions, custom context-engine additions, or
+model-callable tools enter the request. Private compaction and memory-flush
+work are not run for this public turn. The explanatory public-context prompt is
+not the enforcement boundary.
+
+Strict isolation is currently qualified only for the **built-in OpenClaw runtime**.
+A configured native CLI or custom harness is refused before inference; OpenClaw
+does not silently change the agent, model, billing path, or runtime to make the
+request succeed. Configure the public agent's model to use the built-in runtime
+when testing this MVP. Tool-enabled or additional-runtime guest support is
+outside this version.
 
 ## Delivery and limits
 
@@ -68,7 +73,8 @@ Do not run a second poller for the same token. Guest updates are subscribed on
 both transports; when disabled they are acknowledged without execution.
 
 A request must contain text, be no more than five minutes old on arrival, and
-finish within a 60-second local budget. Telegram may expire the query sooner.
+finish within a 60-second local budget. These are OpenClaw resource bounds, not
+a documented Telegram query TTL or a guarantee that a query remains valid.
 Existing agent concurrency limits and the per-chat/caller Telegram lane apply.
 Only the first final reply is sent, in one `answerGuestQuery` article. Text longer
 than 4096 UTF-16 code units is truncated with an ellipsis without splitting a
@@ -82,7 +88,8 @@ the agent prompt, session key, or diagnostics. Guest API errors are reported
 without their potentially sensitive payloads.
 
 The normal update tracker and durable ingress owner handle duplicate updates and
-adoption. Before adoption, queued work can be retried safely; after adoption, a
+adoption. Dispatch failures before adoption retain their original error for the
+existing ingress retry classifier instead of being marked skipped. After adoption, a
 crash may lose the answer but does not intentionally replay it. Delivery is one
 logical answer attempt, not an exactly-once guarantee: an ambiguous network failure
 can mean the answer was posted. OpenClaw does not blindly resend it. The existing

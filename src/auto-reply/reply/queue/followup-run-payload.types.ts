@@ -158,6 +158,7 @@ export type FollowupRunPayload = {
   run: QueuedAgentRunParams & {
     scheduledAutomation?: ScheduledSessionAutomation;
     bootstrapContextMode?: GetReplyOptions["bootstrapContextMode"];
+    isolatedContext?: GetReplyOptions["isolatedContext"];
     internalEventExecution?: SessionEventExecution;
     /** Event origin retained after detaching from its occurrence: no channel-turn authority. */
     sessionEventOrigin?: { deliver?: false };

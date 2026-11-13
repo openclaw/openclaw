@@ -707,8 +707,8 @@ const ORIGINAL_TZ = process.env.TZ;
 let telegramTestState: OpenClawTestState;
 
 describe("createTelegramBot", () => {
-  it("registers guest updates independently of ordinary message handlers", () => {
-    createTelegramBot({ token: "test-token" });
+  it("registers guest updates independently of ordinary message handlers", async () => {
+    await createTelegramBot({ token: "test-token" });
     expect(getOnHandler("guest_message")).toBeTypeOf("function");
   });
   beforeAll(async () => {

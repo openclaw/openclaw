@@ -1,9 +1,11 @@
-import { Bot } from "grammy";
+import { Bot, type ApiClientOptions } from "grammy";
 import type { Update, UserFromGetMe } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getOrCreateAccountThrottler, releaseAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { normalizeTelegramBotInfo } from "./bot-info.js";
+import { asTelegramClientFetch } from "./client-fetch.js";
 import { TelegramConfigSchema } from "./config-schema.js";
 import { guestReplyText, registerTelegramGuestHandler } from "./guest.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
@@ -107,6 +109,85 @@ beforeEach(() => {
   });
 });
 describe("Telegram guest ingress and delivery", () => {
+  it.each(["allowed", "unauthorized", "revoked", "rebound"])(
+    "enforces %s access at the final transport boundary",
+    async (mode) => {
+      vi.useFakeTimers();
+      const token = "123:synthetic-" + mode;
+      const requests: Array<{ method: string; body: unknown }> = [];
+      const bot = new Bot(token, {
+        botInfo,
+        client: {
+          fetch: asTelegramClientFetch(
+            async (
+              input: Parameters<NonNullable<ApiClientOptions["fetch"]>>[0],
+              init?: Parameters<NonNullable<ApiClientOptions["fetch"]>>[1],
+            ) => {
+              if (typeof input !== "string" || typeof init?.body !== "string") {
+                throw new Error("Expected a grammY JSON POST");
+              }
+              requests.push({
+                method: input.split("/").at(-1)!,
+                body: JSON.parse(init.body),
+              });
+              const flood = (mode === "revoked" || mode === "rebound") && requests.length === 1;
+              return new Response(
+                JSON.stringify(
+                  flood
+                    ? {
+                        ok: false,
+                        error_code: 429,
+                        description: "Synthetic flood wait",
+                        parameters: { retry_after: 1 },
+                      }
+                    : { ok: true, result: { inline_message_id: "synthetic-result" } },
+                ),
+              );
+            },
+          ),
+        },
+      });
+      bot.api.config.use(getOrCreateAccountThrottler(token).transformer);
+      const handler = registerTelegramGuestHandler({
+        bot,
+        accountId: "alpha",
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      });
+      let work: Promise<void> | undefined;
+      try {
+        work = bot.handleUpdate(update(1, mode === "unauthorized" ? 99 : 42));
+        await vi.advanceTimersByTimeAsync(100);
+        if (mode === "revoked" || mode === "rebound") {
+          expect(requests).toHaveLength(1);
+          if (mode === "revoked") {
+            mocks.cfg.channels!.telegram!.accounts!.alpha!.guestMode!.allowFrom = [];
+          } else {
+            mocks.cfg.bindings![0]!.agentId = "beta-agent";
+          }
+          await vi.advanceTimersByTimeAsync(1_100);
+        }
+        await work;
+        expect(requests.map((request) => request.method)).toEqual(
+          mode === "unauthorized" ? [] : ["answerGuestQuery"],
+        );
+        if (mode === "allowed") {
+          expect(requests[0]?.body).toMatchObject({
+            guest_query_id: "synthetic-query",
+            result: { input_message_content: { message_text: "A rainbow is refracted sunlight." } },
+          });
+          expect(mocks.outcome).toHaveBeenLastCalledWith({ kind: "completed" });
+        } else {
+          expect(mocks.outcome).toHaveBeenLastCalledWith({ kind: "skipped" });
+        }
+      } finally {
+        handler.stop();
+        const release = releaseAccountThrottler(token);
+        await vi.runOnlyPendingTimersAsync();
+        await Promise.all([release, work?.catch(() => {})]);
+        vi.useRealTimers();
+      }
+    },
+  );
   it("treats a guest request from a two-person private chat as public context", async () => {
     const event = update();
     event.guest_message!.chat = { id: 100, type: "private", first_name: "Synthetic" };
@@ -134,6 +215,8 @@ describe("Telegram guest ingress and delivery", () => {
     expect(turn.replyOptions).toMatchObject({
       disableTools: true,
       bootstrapContextMode: "lightweight",
+      isolatedContext: true,
+      sourceReplyDeliveryMode: "automatic",
       disableBlockStreaming: true,
     });
     expect(JSON.stringify(turn)).not.toContain("synthetic-query");
@@ -216,17 +299,37 @@ describe("Telegram guest ingress and delivery", () => {
     expect(JSON.stringify(runtime.error.mock.calls)).not.toMatch(/synthetic-query|private payload/);
     expect(mocks.outcome).toHaveBeenLastCalledWith({ kind: "skipped" });
   });
-  it("passes durable adoption to the existing ingress owner before the API effect", async () => {
-    const adopted = vi.fn(async () => {});
+  it.each(["throw", "reported"])(
+    "preserves a %s pre-adoption failure for ingress",
+    async (mode) => {
+      const error = new Error("transient runtime preparation");
+      mocks.dispatch.mockImplementation(async ({ dispatcherOptions }) => {
+        if (mode === "throw") {
+          throw error;
+        }
+        dispatcherOptions.onError(error, { kind: "final" });
+      });
+      const { bot, api } = setup();
+      await bot.handleUpdate(update());
+      expect(api).not.toHaveBeenCalled();
+      expect(mocks.outcome).toHaveBeenLastCalledWith({ kind: "failed-retryable", error });
+    },
+  );
+  it("does not replay a dispatch failure after durable adoption", async () => {
     mocks.lifecycle = {
       abortSignal: new AbortController().signal,
-      onAdopted: adopted,
+      onAdopted: vi.fn(async () => {}),
       onDeferred: vi.fn(),
       onAbandoned: vi.fn(async () => {}),
     };
+    mocks.dispatch.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions.turnAdoptionLifecycle.onAdopted();
+      throw new Error("interrupted after adoption");
+    });
     const { bot, api } = setup();
     await bot.handleUpdate(update());
-    expect(adopted.mock.invocationCallOrder[0]).toBeLessThan(api.mock.invocationCallOrder[0]!);
+    expect(api).not.toHaveBeenCalled();
+    expect(mocks.outcome).toHaveBeenLastCalledWith({ kind: "skipped" });
   });
   it("ignores media and progress, emits one bounded final text", async () => {
     mocks.dispatch.mockImplementation(async ({ dispatcherOptions }) => {
@@ -247,6 +350,14 @@ describe("Telegram guest ingress and delivery", () => {
   });
   it("keeps opt-in explicit, rejects wildcard callers, and requests guest updates for both transports", () => {
     expect(TelegramConfigSchema.parse({}).guestMode).toBeUndefined();
+    const existing = TelegramConfigSchema.parse({
+      dmPolicy: "allowlist",
+      allowFrom: [42],
+      groups: { "-100": { requireMention: true } },
+    });
+    expect(existing.guestMode).toBeUndefined();
+    expect(existing.allowFrom).toEqual([42]);
+    expect(existing.groups?.["-100"]?.requireMention).toBe(true);
     expect(
       TelegramConfigSchema.safeParse({ guestMode: { enabled: true, allowFrom: ["*"] } }).success,
     ).toBe(false);

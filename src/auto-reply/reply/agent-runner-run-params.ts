@@ -193,7 +193,10 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     onUserMessagePersisted: params.notifyUserMessagePersisted,
     prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
     toolsAllow: turn.opts?.toolsAllow,
-    disableTools: turn.opts?.disableTools,
+    disableTools: turn.opts?.isolatedContext || turn.opts?.disableTools,
+    ...(turn.opts?.isolatedContext
+      ? { modelRun: true, promptMode: "none" as const, disableCompactionRecovery: true as const }
+      : {}),
     bootstrapContextMode: turn.opts?.bootstrapContextMode,
     bootstrapContextRunKind: params.bootstrapContextRunKind,
     images: params.currentTurnImages.images,

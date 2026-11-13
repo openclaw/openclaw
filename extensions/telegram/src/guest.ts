@@ -1,5 +1,5 @@
 import { AbortController as TelegramAbortController } from "abort-controller";
-import type { Bot, Context } from "grammy";
+import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -50,7 +50,7 @@ export function guestReplyText(text: string): string {
 
 /** Guest capabilities stay in this transport closure, never in prompts or session metadata. */
 export function registerTelegramGuestHandler(params: {
-  bot: Bot<Context>;
+  bot: Bot;
   accountId: string;
   runtime: RuntimeEnv;
   abortSignal?: AbortSignal;
@@ -112,7 +112,9 @@ export function registerTelegramGuestHandler(params: {
     });
     let attempted = false;
     let sent = false;
-    let failed = false;
+    let adopted = false;
+    let deliveryFailed = false;
+    let dispatchFailure: { error: unknown } | undefined;
     const suppressed = { visibleReplySent: false, suppression: { reason: "channel_transform" } };
     try {
       await dispatchReplyWithBufferedBlockDispatcher({
@@ -122,9 +124,20 @@ export function registerTelegramGuestHandler(params: {
           abortSignal: signal,
           disableTools: true,
           bootstrapContextMode: "lightweight",
+          isolatedContext: true,
+          sourceReplyDeliveryMode: "automatic",
           disableBlockStreaming: true,
           ...(lifecycle
-            ? { turnAdoptionLifecycle: { ...lifecycle, admission: "exclusive" as const } }
+            ? {
+                turnAdoptionLifecycle: {
+                  ...lifecycle,
+                  admission: "exclusive" as const,
+                  onAdopted: async () => {
+                    await lifecycle.onAdopted();
+                    adopted = true;
+                  },
+                },
+              }
             : {}),
         },
         dispatcherOptions: {
@@ -176,21 +189,30 @@ export function registerTelegramGuestHandler(params: {
               return result;
             } catch {
               // API errors may embed the query capability or foreign payload.
-              failed = true;
+              deliveryFailed = true;
               return { visibleReplySent: false, ambiguous: true };
             } finally {
               signal.removeEventListener("abort", abortApi);
             }
           },
-          onError: () => {
-            failed = true;
+          onError: (error) => {
+            dispatchFailure = { error };
           },
         },
       });
-    } catch {
-      failed = true;
+    } catch (error) {
+      dispatchFailure = { error };
     }
-    if (failed) {
+    if (dispatchFailure && !adopted && !attempted) {
+      // The ingress owner classifies retryability. Preserve its original error
+      // before adoption; a skipped outcome would permanently consume the request.
+      recordTelegramMessageProcessingResult({
+        kind: "failed-retryable",
+        error: dispatchFailure.error,
+      });
+      return;
+    }
+    if (deliveryFailed || dispatchFailure) {
       runtime.error?.("telegram guest request failed; no automatic answer retry was attempted");
     } else if (!sent) {
       runtime.log?.(
