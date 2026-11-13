@@ -825,6 +825,8 @@ describe("message tool group thread replies", () => {
         currentThreadTs: sourceThread,
       });
       const participant = { agentId: "reviewer", name: "Reviewer" };
+      const capturedAtCap = `**Reviewer**\n${"a".repeat(3_986)}`;
+      const replyOverCaptureCap = `${"a".repeat(3_986)}🥐tail Pass-through hook`;
       await withGroupThreadTurn(
         {
           turn: { ...participant, round: 1, messageId: "inbound-1" },
@@ -840,6 +842,7 @@ describe("message tool group thread replies", () => {
           await send({ message: "Original before hook" });
           await send({ message: "Other room before hook", target: "999" });
           await send({ message: "Pass-through hook" });
+          await send({ message: replyOverCaptureCap });
           await send({ message: "Cancelled by hook" });
           await send({ message: "Other room", target: "999" });
           await send({ message: "Other thread", target: "123", threadId: "99" });
@@ -870,6 +873,7 @@ describe("message tool group thread replies", () => {
         "**Reviewer**\nRewritten visible final",
         "Rewritten visible final",
         "**Reviewer**\nPass-through hook",
+        `**Reviewer**\n${replyOverCaptureCap}`,
         "Other room",
         "Other thread",
         "Top-level send",
@@ -883,6 +887,7 @@ describe("message tool group thread replies", () => {
         [{ text: "Final reply" }],
         [{ text: "**Reviewer**\nRewritten visible final" }],
         [{ text: "**Reviewer**\nPass-through hook" }],
+        [{ text: capturedAtCap }],
         [{ text: "NO_REPLY" }],
         [{ mediaUrl: "https://example.com/group-thread.png" }],
         [{ text: "Edited final" }],
