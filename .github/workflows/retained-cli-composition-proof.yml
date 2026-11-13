@@ -20,10 +20,8 @@ env:
   PUBLISHER_SHA: 514a224c6eab039a926e4c47b22bb42e51484408
   WORKFLOW_SHA: ${{ github.workflow_sha }}
   EXPECTED_WORKFLOW_SHA: ${{ inputs.workflow_ref }}
-  PREP_DIR: ${{ runner.temp }}/attribution-prep
   KOVA_REPOSITORY: openclaw/Kova
   KOVA_REF: 8c8764f443ecc703ec6d035fc322c2b0b3c9e96b
-  KOVA_HOME: ${{ runner.temp }}/attribution-home/kova
   OCM_VERSION: v0.2.48
   OCM_LINUX_X64_SHA256: d0bdb49d69fa8bf3c3487ff04f4be82126828876f81690afdc002c427e22c1ac
 jobs:
@@ -201,3 +199,6 @@ jobs:
           ${{ runner.temp }}/attribution-egress/beam-os/import-exit-*.txt
         if-no-files-found: error
         retention-days: 7
+    env:
+      PREP_DIR: ${{ runner.temp }}/attribution-prep
+      KOVA_HOME: ${{ runner.temp }}/attribution-home/kova
