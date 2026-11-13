@@ -42,6 +42,7 @@ modifications explicitly instead of relying on in-place mutation.
 | `timeoutMs`             | Per-handler asynchronous await budget. Expiry applies the hook's failure policy below; it does not cancel the handler or its side effects. Omit to use the runner's default, if any.                                                                  |
 | `eligibleTriggers`      | For `before_agent_reply` only, limits host dispatch to one or more of `cron`, `heartbeat`, or `user`.                                                                                                                                                 |
 | `eligibleDispatchKinds` | For `reply_dispatch` only, limits host dispatch to `agent`, `acp`, or both. Omit to handle all dispatch kinds.                                                                                                                                        |
+| `eligibleAgentIds`      | For `reply_payload_sending` and `message_sending` only, limits the hook to replies whose session belongs to one of these agent ids. Omit to govern all agents.                                                                                        |
 | `requiresToolAuthority` | For `before_prompt_build` only, runs the handler after the host finalizes the current turn's tool surface and supplies ephemeral `ctx.toolAuthority`. Use this for context retrieval that must follow tool policy.                                    |
 
 Trigger eligibility is enforced by the host before it invokes the handler. A
@@ -49,6 +50,13 @@ hook registered with `eligibleTriggers: ["heartbeat", "cron"]` is therefore
 inactive for user turns, including a recovered user turn. Omitted, empty,
 malformed, or partly unknown lists remain unrestricted, so the hook runs for
 those turns. Other hook kinds do not accept this option.
+
+Agent eligibility for `reply_payload_sending` and `message_sending` is read
+from the context `sessionKey`. The host skips the hook only when that key names a
+different agent; deliveries without an agent session key still run it. Telegram
+checks the same scope with the turn's session key before showing a live preview,
+so a policy plugin that declares `eligibleAgentIds` no longer disables previews
+for other agents.
 
 Operators can set hook budgets without patching plugin code:
 

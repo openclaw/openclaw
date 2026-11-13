@@ -59,6 +59,7 @@ export function addTestHook(params: {
   registrationId?: string;
   timeoutMs?: number;
   eligibleTriggers?: readonly PluginHookAgentTrigger[];
+  eligibleAgentIds?: readonly string[];
   requiresToolAuthority?: true;
   conversationAccessAllowed?: true;
 }) {
@@ -71,6 +72,7 @@ export function addTestHook(params: {
     ...(params.registrationId ? { registrationId: params.registrationId } : {}),
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
     ...(params.eligibleTriggers !== undefined ? { eligibleTriggers: params.eligibleTriggers } : {}),
+    ...(params.eligibleAgentIds !== undefined ? { eligibleAgentIds: params.eligibleAgentIds } : {}),
     ...(params.requiresToolAuthority ? { requiresToolAuthority: true } : {}),
     ...(params.conversationAccessAllowed ? { conversationAccessAllowed: true } : {}),
     source: "test",
