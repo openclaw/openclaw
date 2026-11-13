@@ -45,18 +45,27 @@ export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, 
           resolveStateDir(env),
           "openclaw-model-catalog-",
         );
-        return {
-          releaseResources: capture.release,
-          options: {
-            workerData: {
-              databaseEngineSelection: getDatabaseEngineSelection(),
-              sourceCaptureDirectory: capture.directory,
-              sourceCaptureManagedRoot: capture.managedRoot,
-            } satisfies PreparedModelCatalogWorkerData,
-            // Establish state/config before imported modules observe process.env.
-            env,
-          },
-        };
+        let handedOff = false;
+        try {
+          const prepared = {
+            releaseResources: capture.release,
+            options: {
+              workerData: {
+                databaseEngineSelection: getDatabaseEngineSelection(),
+                sourceCaptureDirectory: capture.directory,
+                sourceCaptureManagedRoot: capture.managedRoot,
+              } satisfies PreparedModelCatalogWorkerData,
+              // Establish state/config before imported modules observe process.env.
+              env,
+            },
+          };
+          handedOff = true;
+          return prepared;
+        } finally {
+          if (!handedOff) {
+            void capture.release();
+          }
+        }
       },
       validateResult,
     });

@@ -18,6 +18,18 @@ import type { resolveStartupInstallStatus } from "./update-install-status.js";
 import { runGatewayUpdateCheck, resolveCheckIntervalMs } from "./update-startup.js";
 import { getUpdateSchedule } from "./update-status-state.js";
 
+const CATALOG_REFRESH_FAILURE_MIN_MS = 1_000;
+const CATALOG_REFRESH_FAILURE_LIMIT = 3;
+
+/** Stop a failed catalog check from re-arming on a sub-second crash loop. */
+function nextCatalogRefreshFailureDelay(failures: number, requestedMs: number): number {
+  if (failures >= CATALOG_REFRESH_FAILURE_LIMIT) {
+    return REMOTE_MODEL_CATALOG_TTL_MS;
+  }
+  const requested = Number.isFinite(requestedMs) ? requestedMs : 0;
+  return Math.max(CATALOG_REFRESH_FAILURE_MIN_MS, Math.min(requested, REMOTE_MODEL_CATALOG_TTL_MS));
+}
+
 export function createGatewayUpdateCheck(params: {
   lifecycle: UpdateCheckLifecycle;
   getConfig: () => OpenClawConfig;
@@ -99,6 +111,7 @@ export function createGatewayUpdateCheck(params: {
       });
       lifecycle.signal.addEventListener("abort", () => stopConfigListener?.(), { once: true });
       lifecycle.schedule("update.check", check);
+      let catalogFailures = 0;
       lifecycle.schedule("update.remote-model-catalog", async () => {
         let nextCheckInMs = REMOTE_MODEL_CATALOG_TTL_MS;
         try {
@@ -112,19 +125,26 @@ export function createGatewayUpdateCheck(params: {
           nextCheckInMs =
             result.status === "fresh" ? result.nextCheckInMs : REMOTE_MODEL_CATALOG_TTL_MS;
           if (result.status === "error") {
+            catalogFailures += 1;
+            nextCheckInMs = nextCatalogRefreshFailureDelay(catalogFailures, nextCheckInMs);
             params.log.info(
               "remote model catalog refresh failed; next check in 6 hours, or run openclaw models refresh",
               { error: result.error },
             );
           } else if (result.status !== "disabled") {
             const state = await params.applyRemoteCatalogUpdate(lifecycle.signal);
+            catalogFailures = 0;
             if (state === "published") {
               params.log.info("remote model catalog applied");
             } else if (state === "superseded") {
               params.log.info("remote model catalog check superseded; deferred to the next check");
             }
+          } else {
+            catalogFailures = 0;
           }
         } catch (error) {
+          catalogFailures += 1;
+          nextCheckInMs = nextCatalogRefreshFailureDelay(catalogFailures, nextCheckInMs);
           if (!lifecycle.signal.aborted) {
             params.log.info("remote model catalog check failed", { error: String(error) });
           }
