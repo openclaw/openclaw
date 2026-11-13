@@ -24,7 +24,7 @@ jobs:
     env:
       LANE: preflight
       SAFE_PROOF: .artifacts/final-candidate-proof/preflight
-      PRIVATE_PROOF: ${{ runner.temp }}/final-candidate-proof/preflight
+      PRIVATE_PROOF: ${{ github.workspace }}/../final-candidate-private-proof/preflight
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
@@ -82,7 +82,7 @@ jobs:
     env:
       LANE: capacity
       SAFE_PROOF: .artifacts/final-candidate-proof/capacity
-      PRIVATE_PROOF: ${{ runner.temp }}/final-candidate-proof/capacity
+      PRIVATE_PROOF: ${{ github.workspace }}/../final-candidate-private-proof/capacity
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
