@@ -22,6 +22,7 @@ import {
   parseDiagnosticTraceparent,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
@@ -327,6 +328,18 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       });
       deviceCredentialMutationBarrier = barrier;
     }
+    let handlerStarted = false;
+    const responseOutcome = (failure: ErrorShape) => {
+      if (
+        handlerStarted &&
+        asOptionalRecord(failure.details)?.code === "OPERATOR_ACCESS_UNAVAILABLE"
+      ) {
+        failure.retryable = false;
+        failure.message =
+          "Gateway access policy is unavailable. The operation may have completed; check its status before retrying.";
+      }
+      return failure;
+    };
     try {
       const expectedProfileBinding =
         req.expectedProfileId === undefined
@@ -337,14 +350,30 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               }
             });
       const publishResponse = (
-        ok: boolean,
-        payload?: unknown,
-        error?: ErrorShape,
+        initialOk: boolean,
+        initialPayload?: unknown,
+        initialError?: ErrorShape,
         meta?: Record<string, unknown>,
       ) => {
-        if (!policyResponse?.pending && !hasCurrentClientAuthority()) {
-          diagnostics?.response("suppressed");
-          return;
+        let ok = initialOk;
+        let payload = initialPayload;
+        let error = initialError;
+        try {
+          if (!policyResponse?.pending && !hasCurrentClientAuthority()) {
+            diagnostics?.response("suppressed");
+            return;
+          }
+        } catch (cause) {
+          if (!isOperatorAuthorityUnavailable(cause)) {
+            throw cause;
+          }
+          // A policy outage may disclose only its identity-free failure, never the payload.
+          ok = false;
+          payload = undefined;
+          error = errorShapeFromError(ErrorCodes.UNAVAILABLE, cause);
+        }
+        if (error) {
+          error = responseOutcome(error);
         }
         try {
           let responseOk = ok;
@@ -447,8 +476,15 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         return true;
       };
       const respondWithAuthority: typeof respond = (ok, payload, error, meta) => {
-        if (hasCurrentRuntimeAuthority()) {
-          respond(ok, payload, error, meta);
+        try {
+          if (hasCurrentRuntimeAuthority()) {
+            respond(ok, payload, error, meta);
+          }
+        } catch (cause) {
+          if (!isOperatorAuthorityUnavailable(cause)) {
+            throw cause;
+          }
+          publishResponse(false, undefined, errorShapeFromError(ErrorCodes.UNAVAILABLE, cause));
         }
       };
       const policyResponse = registerGatewayPolicyResponse(
@@ -561,6 +597,9 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                   context,
                   ...(admission ? { admission } : {}),
                   requestEntry: entry,
+                  onHandlerStart: () => {
+                    handlerStarted = true;
+                  },
                   ...(signal ? { signal } : {}),
                 },
                 client,
@@ -617,6 +656,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           ? params.handler.nodeLifecycleDispatch.dispatch(req.method, dispatchRequest)
           : dispatchRequest();
       await requestDispatch;
+    } catch (error) {
+      if (!isOperatorAuthorityUnavailable(error)) {
+        throw error;
+      }
+      // Profile binding can fail before the ordinary response guard has been installed.
+      sendResponse({
+        type: "res",
+        id: req.id,
+        ok: false,
+        error: responseOutcome(errorShapeFromError(ErrorCodes.UNAVAILABLE, error)),
+      });
     } finally {
       try {
         releaseAuthority();
