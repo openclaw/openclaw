@@ -31,7 +31,7 @@ import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-fil
 import { serializeFileLogRecord, type FileLogMessagePart } from "./logger-file-message.js";
 import { fileLogTransport } from "./logger-file-transport.js";
 import { redactSecrets, redactSensitiveText } from "./redact.js";
-import { APPLIED_LOGGING_CONFIG_UNOWNED, loggingState } from "./state.js";
+import { APPLIED_LOGGING_CONFIG_UNOWNED, isFileLoggingSuppressed, loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
 import type { LoggerSettings } from "./types.js";
 export type { LoggerSettings } from "./types.js";
@@ -537,6 +537,9 @@ function buildLogger(): TsLogger<LogObj> {
     format: () => "",
     write: (logObj: LogObj) => {
       try {
+        if (isFileLoggingSuppressed()) {
+          return;
+        }
         const settings = getRuntimeSettings();
         if (settings.level === "silent") {
           return;

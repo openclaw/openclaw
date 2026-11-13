@@ -13,6 +13,10 @@ import {
   waitForSignalExitBarriers,
 } from "../cli/signal-exit-barrier.js";
 import { setVerbose } from "../global-state.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  setDiagnosticsEnabledForProcess,
+} from "../infra/diagnostic-events.js";
 import { logError, logInfo, logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -27,13 +31,14 @@ import {
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { applyLoggingConfig, resetLogger, setLoggerOverride } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
-import { loggingState } from "./state.js";
+import { loggingState, withoutFileLogging } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
 import {
   captureConsoleSnapshot,
   type ConsoleSnapshot,
   restoreConsoleSnapshot,
 } from "./test-helpers/console-snapshot.js";
+import { createDiagnosticLogRecordCapture } from "./test-helpers/diagnostic-log-capture.js";
 
 let snapshot: ConsoleSnapshot;
 const logPathTracker = createSuiteLogPathTracker("openclaw-log-");
@@ -71,6 +76,46 @@ afterAll(async () => {
 
 describe("enableConsoleCapture", () => {
   const secret = "sk-testsecret1234567890abcd";
+
+  it("keeps read-only diagnostics visible without suppressing unrelated file logs", async () => {
+    const logPath = tempLogPath();
+    setLoggerOverride({ level: "info", file: logPath });
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
+    const capture = createDiagnosticLogRecordCapture();
+    enableConsoleCapture();
+    const release = createDeferredCore();
+    const inspection = withoutFileLogging(async () => {
+      console.warn("read-only before await");
+      await release.promise;
+      console.warn("read-only after await");
+    });
+    try {
+      await testApi.flushFileLogQueueForTests();
+      expect(fs.existsSync(logPath)).toBe(false);
+      console.warn("unrelated operation");
+      release.resolve();
+      await inspection;
+      console.warn("after inspection");
+      await testApi.flushFileLogQueueForTests();
+      await capture.flush();
+      const content = fs.readFileSync(logPath, "utf8");
+      expect(content).toContain("unrelated operation");
+      expect(content).toContain("after inspection");
+      expect(content).not.toContain("read-only");
+      expect(consoleWarn).toHaveBeenCalledWith("read-only before await");
+      expect(consoleWarn).toHaveBeenCalledWith("read-only after await");
+      expect(capture.records.map((record) => record.message)).toEqual(
+        expect.arrayContaining(["read-only before await", "read-only after await"]),
+      );
+    } finally {
+      release.resolve();
+      await inspection;
+      capture.cleanup();
+      setDiagnosticsEnabledForProcess(diagnosticsEnabled);
+    }
+  });
 
   it.each([
     { source: "captured", active: true, suppressed: false },
