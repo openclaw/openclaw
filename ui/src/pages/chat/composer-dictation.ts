@@ -277,7 +277,11 @@ export class ComposerDictationOwner extends EventTarget {
     }
   };
 
-  private readonly handleWindowBlur = (): void => this.cancel();
+  // Losing the window interrupts capture but keeps dictated text in the draft.
+  private readonly handleWindowBlur = (): void => {
+    this.clearClickSuppression();
+    void this.finishActive();
+  };
 
   private canHold(): boolean {
     return (

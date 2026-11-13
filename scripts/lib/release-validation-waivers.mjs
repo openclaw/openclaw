@@ -35,6 +35,20 @@ export const RELEASE_VALIDATION_WAIVERS = [
       "that exception only; it does not measure or qualify the new candidate.",
   },
   {
+    targetVersion: "2026.11.4",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized a release-wide 2026.11.4 performance " +
+      "waiver on 2026-11-13 at 13:06 UTC, superseding the prior run-specific grant. " +
+      "Like 2026.11.2 and 2026.11.3, this matches the exact version, child role, " +
+      "and failed Kova job across all runs, attempts, and candidates for this release; " +
+      "it does not classify individual performance metrics within that job. " +
+      "Retain raw failures and reports. There is no not-run exemption. Other failed " +
+      "jobs, missing or cancelled evidence, and crash, correctness, isolation, " +
+      "data-integrity, and install/update gates remain blocking.",
+  },
+  {
     targetVersion: "2026.11.3",
     childRole: "productPerformance",
     jobName: "Kova mock provider performance",
