@@ -320,18 +320,29 @@ export function buildSlackProgressStreamChunks(params: {
 
 type SlackProgressCardState = "working" | "success" | "error";
 
-function joinRecentProgressRows(rows: readonly string[]): string {
-  const rendered: string[] = [];
+function recentProgressRowSections(rows: readonly SlackProgressText[]): (Block | KnownBlock)[] {
+  const rendered: SlackProgressText[] = [];
   let length = 0;
   for (const row of rows.toReversed()) {
-    const nextLength = length + row.length + (rendered.length > 0 ? 1 : 0);
+    const nextLength = length + row.text.length + (rendered.length > 0 ? 1 : 0);
     if (nextLength > SLACK_PROGRESS_FIELD_MAX) {
       break;
     }
-    rendered.push(row);
+    const previous = rendered.at(-1);
+    if (previous && previous.format === row.format) {
+      previous.text = `${row.text}\n${previous.text}`;
+    } else {
+      rendered.push({ ...row });
+    }
     length = nextLength;
   }
-  return rendered.toReversed().join("\n");
+  return rendered
+    .toReversed()
+    .map((row) =>
+      row.format === "plain"
+        ? progressTextSection(row)
+        : { type: "section", text: field(row.text) },
+    );
 }
 
 export function buildSlackProgressCardBlocks(params: {
@@ -399,38 +410,54 @@ export function buildSlackProgressCardBlocks(params: {
     params.state === "working" ? undefined : params.state === "success" ? "complete" : "error";
   const attention = lines.flatMap((line) => {
     const title = formatProgressAttentionTitle(line, finalStatus);
-    return title === undefined ? [] : [escapeSlackMrkdwn(title)];
+    return title === undefined
+      ? []
+      : [
+          line.kind === "approval"
+            ? { text: escapeSlackMrkdwn(title) }
+            : { text: title, format: "plain" as const },
+        ];
   });
-  const sections = [
-    planLines.map((line) => renderProgressCardText(line)).join("\n"),
-    joinRecentProgressRows(
-      lines
-        .filter((line) => line.kind !== "approval" && lineTaskStatus(line) !== "error")
-        .slice(-SLACK_MAX_BLOCKS)
-        .map((line) => {
-          if (line.kind === "item" && !line.toolName) {
-            return `_${renderProgressCardText(compactDetail(line.text, maxLineChars), "italic")}_`;
-          }
-          const detail = compactDetail(lineDetailParts(line).join(" · "), maxLineChars);
-          return escapeSlackMrkdwn(detail ? `${line.label} — ${detail}` : line.label);
-        }),
-    ),
-    // Attention has its own bounded section so activity truncation cannot hide it.
-    joinRecentProgressRows(attention),
-  ];
+  const activity = recentProgressRowSections(
+    lines
+      .filter((line) => line.kind !== "approval" && lineTaskStatus(line) !== "error")
+      .slice(-SLACK_MAX_BLOCKS)
+      .map((line) => {
+        if (line.kind === "item" && !line.toolName) {
+          return {
+            text: `_${renderProgressCardText(compactDetail(line.text, maxLineChars), "italic")}_`,
+          };
+        }
+        const detail = compactDetail(lineDetailParts(line).join(" · "), maxLineChars);
+        // Tool titles/details contain raw arguments, not authored Slack markup.
+        return {
+          text: detail ? `${line.label} — ${detail}` : line.label,
+          format: "plain" as const,
+        };
+      }),
+  );
   const title = params.title?.trim();
   const blocks: (Block | KnownBlock)[] = [
     // A failed turn may end without any error reply; the card is its only visible outcome.
     ...(params.state === "error" ? [progressTextSection({ text: "Failed", format: "plain" })] : []),
     ...(title ? [progressTextSection({ text: title, format: "plain" })] : []),
     ...[...narration].map(([text, format]) => progressTextSection({ text, format }, "italic")),
-    ...sections.filter(Boolean).map((text) => ({ type: "section" as const, text: field(text) })),
+    ...(planLines.length
+      ? [
+          {
+            type: "section" as const,
+            text: field(planLines.map((line) => renderProgressCardText(line)).join("\n")),
+          },
+        ]
+      : []),
   ];
+  const attentionBlocks = recentProgressRowSections(attention);
+  const trailingBlocks: (Block | KnownBlock)[] = [];
   if (params.detailed && footer) {
-    blocks.push({ type: "context", elements: [field(footer)] });
+    trailingBlocks.push({ type: "context", elements: [field(footer)] });
   }
   if (params.state !== "working" && params.sessionLinks?.length) {
-    blocks.push({
+    trailingBlocks.push({
       type: "actions",
       elements: params.sessionLinks.map((link, index) => ({
         type: "button" as const,
@@ -441,6 +468,16 @@ export function buildSlackProgressCardBlocks(params: {
       })),
     });
   }
+  // Mixed literal/authored attention and activity can occupy multiple blocks.
+  // Reserve the footer/links first, then retain newest attention before activity.
+  const capacity = Math.max(0, SLACK_MAX_BLOCKS - blocks.length - trailingBlocks.length);
+  const visibleAttention = attentionBlocks.slice(Math.max(0, attentionBlocks.length - capacity));
+  const available = capacity - visibleAttention.length;
+  blocks.push(
+    ...activity.slice(Math.max(0, activity.length - available)),
+    ...visibleAttention,
+    ...trailingBlocks,
+  );
   return blocks.slice(0, SLACK_MAX_BLOCKS);
 }
 

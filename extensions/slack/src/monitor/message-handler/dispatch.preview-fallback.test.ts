@@ -840,6 +840,31 @@ it.each(["all", "off"] as const)(
   },
 );
 
+it("keeps prepared read arguments literal in detailed Block Kit cards", async () => {
+  const draftStream = useDraftStream(true);
+  const filename = "/tmp/demo *literal* _under_ ~strike~ `ticks` & <@U123> report.txt";
+  mockedReplyOptionEvents = [{ kind: "tool_start", name: "read", args: { path: filename } }];
+  await dispatch({
+    accountConfig: progressAccount({ style: "card", toolProgress: true, nativeTaskCards: false }),
+  });
+  const payload = requireRecord(
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Verify JSON transport serialization, not cloning.
+    JSON.parse(JSON.stringify(mockRecord(draftStream.update))),
+    "serialized draft update",
+  );
+  expect(payload.blocks).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        type: "section",
+        text: { type: "plain_text", text: expect.stringContaining(filename), emoji: false },
+      }),
+    ]),
+  );
+  expect(payload.text).toContain("&lt;@U123&gt;");
+  expect(payload.text).toContain("&amp;");
+  expect(startSlackStreamMock).not.toHaveBeenCalled();
+});
+
 it("finalizes Block Kit work links with bounded labels and numbered fallbacks", async () => {
   const draftStream = useDraftStream(true);
   mockedReplyOptionEvents = [
