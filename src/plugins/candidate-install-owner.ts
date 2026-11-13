@@ -52,3 +52,36 @@ export function resolveImmutableInstallIdentity(
     install.installedAt ?? "",
   ]);
 }
+
+/** Returns the authoritative exact npm package behind a retained managed install. */
+function resolveNpmReinstallTarget(
+  origin: PluginOrigin,
+  installOwner: string | undefined,
+  installRecords: Readonly<Record<string, PluginInstallRecord>>,
+): { packageName: string; packageVersion: string } | undefined {
+  const install = installOwner ? installRecords[installOwner] : undefined;
+  if (
+    origin !== "global" ||
+    install?.source !== "npm" ||
+    !install.integrity ||
+    !install.resolvedName ||
+    !install.resolvedVersion
+  ) {
+    return undefined;
+  }
+  return {
+    packageName: install.resolvedName,
+    packageVersion: install.resolvedVersion,
+  };
+}
+
+export function resolveInstallMetadata(
+  origin: PluginOrigin,
+  installOwner: string | undefined,
+  installRecords: Readonly<Record<string, PluginInstallRecord>>,
+) {
+  return {
+    identity: resolveImmutableInstallIdentity(origin, installOwner, installRecords),
+    reinstall: resolveNpmReinstallTarget(origin, installOwner, installRecords),
+  };
+}
