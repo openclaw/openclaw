@@ -121,13 +121,14 @@ it.each(["admission", "preparation", "handler", "handler-response", "response"])
     const grant = new AbortController();
     let failing = true;
     let unavailable = phase === "admission";
+    const assertCurrent = () => {
+      grant.signal.throwIfAborted();
+      if (unavailable) throw new GatewayOperatorAccessUnavailableError();
+    };
     client.internal = {
       operatorAccessAuthority: {
         signal: grant.signal,
-        assertCurrent: () => {
-          grant.signal.throwIfAborted();
-          if (unavailable) throw new GatewayOperatorAccessUnavailableError();
-        },
+        assertCurrent,
       },
     };
     let effects = 0;
@@ -154,6 +155,7 @@ it.each(["admission", "preparation", "handler", "handler-response", "response"])
         methods: ["health"],
         loadHandlers: async () => {
           unavailable = failing && phase === "preparation";
+          assertCurrent();
           return { health: handler };
         },
       }),
