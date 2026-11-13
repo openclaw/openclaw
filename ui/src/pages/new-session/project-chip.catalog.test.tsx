@@ -117,10 +117,10 @@ it("keeps project search live through catalog reads and retires invalidated rows
   await waitForSolid(() => expect(rows()).toHaveLength(1));
   const alphaRow = rows()[0];
   expect(alphaRow?.textContent).toContain("Alpha project");
-  // Rows request the project's own icon by id and keep the book glyph until it loads.
+  // Rows request the project's own icon by id and keep folder-git-2 until it loads.
   const alphaIcon = alphaRow?.querySelector("openclaw-workspace-icon");
   expect(alphaIcon?.routeUrl).toMatch(/\/__openclaw__\/project-icon\/alpha$/);
-  expect(alphaIcon?.fallbackIcon).toBe("book");
+  expect(alphaIcon?.fallbackIcon).toBe("folderGit2");
   expect(view.container.querySelector('input[type="search"]')).toBe(input);
   expect(document.activeElement).toBe(input);
   type("");

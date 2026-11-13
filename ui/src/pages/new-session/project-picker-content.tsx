@@ -408,7 +408,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                       <ProjectIcon
                         context={props.params.context}
                         projectId={project().id}
-                        fallbackIcon="book"
+                        fallbackIcon="folderGit2"
                       />
                     );
                     return (
