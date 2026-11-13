@@ -98,6 +98,36 @@ export function rowKeys(
   return keys;
 }
 
+/**
+ * The flow starts at the first active row's virtual offset, which counts unmeasured rows at their
+ * estimates. Rows arriving before laid-out content would enter the flow at their real size in the
+ * frame the content already moved by an estimate's error, so they stay out of it, painted at their
+ * slots, until all of them are measured. Removes them from `active` and returns their keys; with
+ * nothing laid out, as after a jump, every row enters.
+ */
+export function hold(
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  active: number[],
+  predecessor: number | undefined,
+  keys: Set<string>,
+  measured: (indexes: readonly number[]) => boolean,
+): Set<string> {
+  const key = (index: number) => String(virtualizer.options.getItemKey(index));
+  const laidOut = active.findIndex((index) => {
+    const element = virtualizer.elementsCache.get(key(index));
+    return element?.isConnected === true && element.dataset.preparedRow !== "true";
+  });
+  if (laidOut <= 0 || measured(active.slice(0, laidOut))) {
+    return new Set();
+  }
+  const held = new Set(active.splice(0, laidOut).map(key));
+  // A measuring predecessor no longer borders the flow; it paints at its slot like them.
+  for (const row of predecessor === undefined ? held : [...held, key(predecessor)]) {
+    keys.add(row);
+  }
+  return held;
+}
+
 export function retainedKeys(
   preparedRowKeys: ReadonlySet<string>,
   rowIndexes: ReadonlyMap<string, number>,

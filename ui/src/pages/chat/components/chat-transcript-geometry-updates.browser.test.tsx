@@ -307,11 +307,15 @@ it.each([30, "estimate", "oversized"] as const)(
   },
 );
 
-it("keeps ordinary incoming rows in normal flow", async () => {
+it("admits an incoming row above the reader once it is measured", async () => {
   const { host, viewport } = await mountPane(false, 120, undefined, 500);
   scrollReader(viewport, 499);
   await Promise.resolve();
   flush();
+  expect(
+    requireElement(host, '.chat-virtual-row[data-index="2"]').hasAttribute("data-prepared-row"),
+  ).toBe(true);
+  await settleLayout();
   expect(
     requireElement(host, '.chat-virtual-row[data-index="2"]').hasAttribute("data-prepared-row"),
   ).toBe(false);

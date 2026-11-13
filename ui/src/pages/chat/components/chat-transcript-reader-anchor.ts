@@ -81,6 +81,8 @@ export class TranscriptReaderAnchor {
   // delivery. Its restoration already accounts for that delivery's rows.
   private ownedSinceDelivery = false;
   private readerContent: ReaderContent | null = null;
+  // A landed size before the flow moved its start, and scrollTop with it, this batch.
+  private flowMoved = false;
   private animatedRow: HTMLElement | null = null;
 
   constructor(
@@ -418,15 +420,56 @@ export class TranscriptReaderAnchor {
     const within = this.unlandedWithin.delete(key);
     const applied = this.unlanded.get(key);
     this.unlanded.delete(key);
-    const readerTop = instance.scrollOffset ?? 0;
-    const above = isAboveReader(
-      item.start,
-      item.size,
-      !instance.itemSizeCache.has(item.key),
-      readerTop,
-    );
+    // Rows in the flow moved the content after them when they were laid out; only one above
+    // the reader still owes that movement. Rows outside it change the flow's start (rows before
+    // it) or a gap holding their estimated slot, and so move what follows. Placement owners
+    // position by virtual geometry, as does a pane with no laid-out rows.
+    const element = instance.elementsCache.get(item.key);
+    const laidOut = (row: VirtualItem) => {
+      const candidate = instance.elementsCache.get(row.key);
+      return candidate?.isConnected === true && candidate.dataset.preparedRow !== "true";
+    };
+    const flowStart = instance.getVirtualItems().find(laidOut);
+    let above: boolean;
+    let moves = false;
+    if (owned || !flowStart) {
+      above = isAboveReader(
+        item.start,
+        item.size,
+        !instance.itemSizeCache.has(item.key),
+        instance.scrollOffset ?? 0,
+      );
+    } else if (element?.isConnected === true && element.dataset.preparedRow !== "true") {
+      // Virtual offsets can lag the flow after held corrections; a row laid out below the
+      // reader's edge moved nothing the reader sees.
+      const readerTop = this.host.scrollElement?.getBoundingClientRect().top ?? 0;
+      above =
+        element.getBoundingClientRect().top <= readerTop + 0.5 &&
+        isAboveReader(
+          item.start,
+          item.size,
+          !instance.itemSizeCache.has(item.key),
+          instance.scrollOffset ?? 0,
+        );
+    } else {
+      const next = instance.getVirtualItems().find((row) => row.index > item.index && laidOut(row));
+      const readerTop = this.host.scrollElement?.getBoundingClientRect().top ?? 0;
+      above =
+        item.index < flowStart.index ||
+        (next !== undefined &&
+          (instance.elementsCache.get(next.key)?.getBoundingClientRect().top ?? 0) <=
+            readerTop + 0.5);
+      moves = above;
+      this.flowMoved ||= above;
+    }
+    const held = this.holdsNativeOffset();
     if (applied === undefined) {
-      if (!above || owned || !this.holdsNativeOffset()) {
+      if (moves && !owned && !held && this.host.prependAnchor.messageKey === null) {
+        // The flow moves in this frame; virtual-core would defer its write while iOS scrolls.
+        this.owedScroll += delta;
+        return false;
+      }
+      if (!above || owned || !held) {
         // Prepend restores the measured bubble absolutely; relative compensation
         // can replay after its anchor retires during iOS's post-touch grace.
         return above && this.host.prependAnchor.messageKey === null;
@@ -437,7 +480,7 @@ export class TranscriptReaderAnchor {
     }
     const owed = within ? 0 : delta - applied;
     this.landedShift += applied;
-    if (this.holdsNativeOffset()) {
+    if (held) {
       this.columnShift += owed;
       this.landedShift += owed;
     } else {
@@ -446,8 +489,14 @@ export class TranscriptReaderAnchor {
     return false;
   };
 
-  /** Apply corrections collected while virtual-core landed a measurement batch. */
-  flush(): void {
+  /**
+   * Apply corrections collected while virtual-core landed a measurement batch. Returns whether a
+   * landed size moved the flow's start: its scroll adjustment is already written, so the flow
+   * must be redrawn in the same frame.
+   */
+  flush(): boolean {
+    const flowMoved = this.flowMoved;
+    this.flowMoved = false;
     const { virtualizer } = this.host;
     for (const [key, applied] of this.unlanded) {
       const row = virtualizer.elementsCache.get(key);
@@ -476,6 +525,7 @@ export class TranscriptReaderAnchor {
     }
     // Virtual-core notifies when its scrolling state ends.
     this.settle();
+    return flowMoved;
   }
 
   /** Fold a held column shift into scrollTop once native scrolling can be written again. */
