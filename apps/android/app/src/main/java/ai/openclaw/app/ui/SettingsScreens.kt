@@ -1656,8 +1656,9 @@ private fun GatewaySettingsScreen(
     )
   }
 
-  // Keep discovery available to the disclosed list, as in onboarding.
-  LaunchedEffect(Unit) { viewModel.startGatewayDiscovery() }
+  LaunchedEffect(viewModel) {
+    viewModel.loadGatewaySettings()
+  }
 
   fun connectGateway(useSetupCode: Boolean) {
     val plan =
@@ -1794,6 +1795,10 @@ private fun GatewaySettingsScreen(
     )
     SettingsDisclosureButton(text = nativeString("Discovered"), expanded = showDiscovery, onClick = { showDiscovery = !showDiscovery })
     if (showDiscovery) {
+      DisposableEffect(viewModel) {
+        val discovery = viewModel.startGatewayDiscovery()
+        onDispose { discovery.cancel() }
+      }
       ClawPanel(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
         if (discoveredGateways.isEmpty()) {
           Text(
