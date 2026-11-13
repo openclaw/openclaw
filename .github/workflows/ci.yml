@@ -3963,6 +3963,7 @@ jobs:
           CHECKOUT_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_CI_TEST_OBSERVATIONS_DIR: ${{ github.repository == 'openclaw/openclaw' && needs.preflight.outputs.frozen_target == 'false' && (github.event_name == 'schedule' || (github.event_name == 'pull_request' && endsWith(github.run_id, '0'))) && format('{0}/ci-test-observations', runner.temp) || '' }}
+          OPENCLAW_CI_TEST_AUDIT_CLI_DIR: ${{ github.repository == 'openclaw/openclaw' && needs.preflight.outputs.frozen_target == 'false' && github.event_name == 'schedule' && github.run_attempt == 1 && matrix.audit_cli_observations == true && format('{0}/ci-test-observations-audit-cli', runner.temp) || '' }}
           OPENCLAW_E2E_USE_PREBUILT_DIST: ${{ steps.node-test-runtime.outcome == 'success' && matrix.pretest_build_mode == 'private-qa' && '1' || '' }}
           OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ matrix.test_runtime_policy || 'node' }}
           FROZEN_TARGET: *frozen_target
@@ -4002,6 +4003,18 @@ jobs:
           path: |
             ${{ runner.temp }}/ci-test-observations/*/observations.json
             ${{ runner.temp }}/ci-test-observations/*/launch.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload CLI audit observations
+        if: ${{ always() && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.frozen_target == 'false' && github.event_name == 'schedule' && github.run_attempt == 1 && matrix.audit_cli_observations == true }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-test-observations-audit-cli-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
+          path: |
+            ${{ runner.temp }}/ci-test-observations-audit-cli/*/observations.json
+            ${{ runner.temp }}/ci-test-observations-audit-cli/*/launch.json
           if-no-files-found: ignore
           retention-days: 7
 

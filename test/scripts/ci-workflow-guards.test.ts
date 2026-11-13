@@ -519,6 +519,41 @@ describe("ci workflow guards", () => {
   });
 
   const ci = readCiWorkflow();
+  it("keeps CLI audit uploads separate and limited to first-attempt scheduled rows", () => {
+    const job = ci.jobs["checks-node-core-test-nondist-shard"];
+    const upload = requiredWorkflowStep(job.steps, "Upload CLI audit observations");
+    const run = requiredWorkflowStep(job.steps, "Run Node test shard");
+    for (const [eventName, repository, frozen, runAttempt, assigned, expected] of [
+      ["schedule", "openclaw/openclaw", "false", 1, true, true],
+      ["schedule", "openclaw/openclaw", "false", 2, true, false],
+      ["schedule", "openclaw/openclaw", "false", 1, false, false],
+      ["schedule", "openclaw/openclaw", "true", 1, true, false],
+      ["schedule", "example/fork", "false", 1, true, false],
+      ["pull_request", "openclaw/openclaw", "false", 1, true, false],
+    ] as const) {
+      const context = {
+        eventName,
+        repository,
+        runId: 100,
+        runAttempt,
+        preflightOutputs: { frozen_target: frozen },
+        matrix: { audit_cli_observations: assigned },
+      };
+      expect(evaluateWorkflowCondition(upload.if, context)).toBe(expected);
+      expect(
+        Boolean(evaluateWorkflowExpression(run.env.OPENCLAW_CI_TEST_AUDIT_CLI_DIR, context)),
+      ).toBe(expected);
+    }
+    expect(upload["continue-on-error"]).toBe(true);
+    expect(upload.with.name).toBe(
+      "ci-test-observations-audit-cli-${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}",
+    );
+    expect(upload.with.path.trim().split("\n")).toEqual([
+      "${{ runner.temp }}/ci-test-observations-audit-cli/*/observations.json",
+      "${{ runner.temp }}/ci-test-observations-audit-cli/*/launch.json",
+    ]);
+  });
+
   it("limits observation uploads to the sampled current-target CI cohort", () => {
     const job = ci.jobs["checks-node-core-test-nondist-shard"];
     const upload = requiredWorkflowStep(job.steps, "Upload adaptive CI observations");
