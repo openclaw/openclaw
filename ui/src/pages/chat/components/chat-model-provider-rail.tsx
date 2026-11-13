@@ -56,6 +56,7 @@ export function ChatModelProviderRail(props: {
     () => ({ active: props.active ?? null, onSelect: (id) => props.onSelect(id) }),
     () => items().map(({ id }) => ({ value: id, disabled: props.disabled })),
     () => root,
+    { revealActive: true },
   );
   const shift = (id: string) => {
     const current = drag();

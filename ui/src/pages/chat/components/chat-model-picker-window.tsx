@@ -23,6 +23,11 @@ export function createModelPickerWindow(
     items: [],
     height: 0,
   });
+  // Only the leading provider heading sticks; later sections keep their virtual offset.
+  const stickyHeading = () => {
+    const first = rows()[0];
+    return first?.startsWith("heading:") ? first : undefined;
+  };
   const itemKey = createMemo(() => {
     const source = rows();
     return (index: number) => source[index]!;
@@ -52,16 +57,13 @@ export function createModelPickerWindow(
       highlighted: highlighted(),
       shortcuts: shortcuts(),
       itemKey: itemKey(),
+      stickyHeading: stickyHeading(),
     }),
     (next) => {
       if (!next) {
         return;
       }
-      const pinned = new Set([
-        ...next.shortcuts,
-        next.highlighted,
-        ...next.rows.filter((key) => key.startsWith("heading:")),
-      ]);
+      const pinned = new Set([...next.shortcuts, next.highlighted, next.stickyHeading]);
       const pinnedIndexes = next.rows.flatMap((key, index) => (pinned.has(key) ? [index] : []));
       virtualizer.setOptions({
         ...virtualizer.options,
@@ -97,11 +99,12 @@ export function createModelPickerWindow(
         ref={(node) => (element = node)}
         class="chat-controls__model-virtual-row"
         data-index={items[props.rowKey]?.index}
-        data-chat-model-heading={props.rowKey.startsWith("heading:") ? "" : undefined}
+        data-chat-model-heading={props.rowKey === stickyHeading() ? "" : undefined}
         style={{
-          transform: props.rowKey.startsWith("heading:")
-            ? undefined
-            : `translateY(${items[props.rowKey]?.start ?? 0}px)`,
+          transform:
+            props.rowKey === stickyHeading()
+              ? undefined
+              : `translateY(${items[props.rowKey]?.start ?? 0}px)`,
         }}
       >
         {props.render()}

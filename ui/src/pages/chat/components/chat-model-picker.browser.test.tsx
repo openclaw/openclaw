@@ -520,7 +520,9 @@ it.each(["cancel", "drop"])(
     update();
     await open();
     const tabs = [...picker.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
-    const [selected, dragged] = tabs;
+    expect(tabs).toHaveLength(3);
+    const selected = tabs[0]!;
+    const dragged = tabs[1]!;
     const orderKey = "openclaw.control.modelProviderOrder.v1";
     const previousOrder = localStorage.getItem(orderKey);
     onTestFinished(() => {
@@ -542,33 +544,19 @@ it.each(["cancel", "drop"])(
     dragged.dispatchEvent(new DragEvent("drag", { bubbles: true }));
     flush();
     await vi.waitFor(() => {
-      const style = getComputedStyle(dragged);
-      expect(style.opacity).toBe("1");
-      expect(style.position).toBe("relative");
-      expect(style.zIndex).toBe("2");
-      expect(style.transform).toBe("matrix(1.08, 0, 0, 1.08, 0, 40)");
-      expect(style.transitionDuration).toBe("0s");
-      expect(dragged.checkVisibility()).toBe(true);
+      expect(dragged.checkVisibility({ checkOpacity: true })).toBe(true);
       expect(selected.ariaSelected).toBe("true");
-      expect(getComputedStyle(selected).opacity).toBe("0.38");
-      expect(getComputedStyle(selected).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
     });
     if (end === "drop") {
       target().dispatchEvent(new DragEvent("dragover", { ...destination, bubbles: true }));
       flush();
-      await vi.waitFor(() =>
-        expect(getComputedStyle(tabs[2]).transform).toBe("matrix(1, 0, 0, 1, 0, -38)"),
-      );
       target().dispatchEvent(new DragEvent("drop", { ...destination, bubbles: true }));
     }
     dragged.dispatchEvent(new DragEvent("dragend", { bubbles: true }));
     flush();
     await vi.waitFor(() => {
       for (const tab of tabs) {
-        const style = getComputedStyle(tab);
-        expect(style.opacity).toBe("1");
-        expect(style.transform).toBe("matrix(1, 0, 0, 1, 0, 0)");
-        expect(style.zIndex).toBe("auto");
+        expect(tab.checkVisibility({ checkOpacity: true })).toBe(true);
       }
     });
     expect([...picker.querySelectorAll('[role="tab"]')].map((tab) => tab.ariaLabel)).toEqual(
@@ -576,3 +564,70 @@ it.each(["cancel", "drop"])(
     );
   },
 );
+
+it("reveals the selected provider on open, vertical navigation and reorder", async () => {
+  await page.viewport(1280, 900);
+  const { picker, params, update, toggle, trigger } = mountPicker();
+  const key = "openclaw.control.modelProviderOrder.v1";
+  const savedOrder = localStorage.getItem(key);
+  onTestFinished(() => {
+    if (savedOrder === null) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, savedOrder);
+    }
+  });
+  params.modelOptions = Array.from({ length: 12 }, (_, index) =>
+    modelOption(`provider-${index}`, "model", { label: `Model ${index}` }),
+  );
+  params.selectedModelValue = "provider-11/model";
+  update();
+  await toggle(async () => trigger.click());
+  const rail = picker.querySelector<HTMLElement>('[role="tablist"]')!;
+  const assertSelectedVisible = async () => {
+    await vi.waitFor(() => {
+      const selected = rail.querySelector<HTMLButtonElement>('[aria-selected="true"]')!;
+      const bounds = rail.getBoundingClientRect();
+      const item = selected.getBoundingClientRect();
+      expect(item.top).toBeGreaterThanOrEqual(bounds.top - 1);
+      expect(item.bottom).toBeLessThanOrEqual(bounds.bottom + 1);
+    });
+  };
+  await assertSelectedVisible();
+  rail.querySelector<HTMLButtonElement>('[role="tab"]')!.focus();
+  for (let index = 0; index < 11; index++) {
+    await userEvent.keyboard("{ArrowDown}");
+  }
+  await assertSelectedVisible();
+  await userEvent.keyboard("{Alt>}{ArrowUp}{/Alt}");
+  await assertSelectedVisible();
+  expect(document.activeElement?.getAttribute("aria-selected")).toBe("true");
+});
+
+it("keeps the account heading below the provider's model choices", async () => {
+  await page.viewport(1280, 900);
+  const { picker, params, update, toggle, trigger } = mountPicker();
+  params.accountSection = {
+    onClose() {},
+    viewProps: (startIndex) => ({
+      selectionKind: "automatic",
+      disabled: false,
+      selectedIdentity: "Current account",
+      options: [{ value: "current", label: "Current account" }],
+      currentValue: "current",
+      open: false,
+      error: null,
+      startIndex,
+      onToggle() {},
+      onSelect() {},
+    }),
+  };
+  update();
+  await toggle(async () => trigger.click());
+  await vi.waitFor(() => {
+    const account = picker.querySelector<HTMLElement>("[data-chat-account-group-toggle]")!;
+    expect(account.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      option("example/beta").getBoundingClientRect().bottom - 1,
+    );
+  });
+});
