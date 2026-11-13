@@ -1,0 +1,2 @@
+# Regression coverage for renderer sandbox defaults, explicit opt-out, cross-policy reuse, and QA web launches.
+36
