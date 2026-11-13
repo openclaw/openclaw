@@ -65,6 +65,9 @@ export class TranscriptReaderAnchor {
   // Last laid-out row heights. A new row starts from its virtual size: the flow placed the rows
   // below it as though it had that size.
   private readonly heights = new WeakMap<Element, number>();
+  // Rows laid out in the flow at the last resize delivery: the content the reader has seen. A
+  // prepared row is measured outside the flow, so joining it reveals new content too.
+  private readonly laidOut = new WeakSet<Element>();
   // Corrections applied to native geometry before virtual-core measured the row.
   private readonly unlanded = new Map<string, number>();
   // Unlanded corrections made inside the reader's row. Its growth below the reader moves no
@@ -177,7 +180,7 @@ export class TranscriptReaderAnchor {
               item.end > (virtualizer.scrollOffset ?? 0) &&
               row?.dataset.preparedRow !== "true" &&
               row !== undefined &&
-              this.heights.has(row)
+              this.laidOut.has(row)
             );
           })?.index
         : undefined;
@@ -241,6 +244,14 @@ export class TranscriptReaderAnchor {
         const offset = element.scrollTop;
         this.shiftVirtual(-correction);
         this.scrollBy(correction, offset);
+      }
+    }
+    for (const item of virtualizer.getVirtualItems()) {
+      const row = virtualizer.elementsCache.get(item.key);
+      if (row?.dataset.preparedRow === "true") {
+        this.laidOut.delete(row);
+      } else if (row && this.heights.has(row)) {
+        this.laidOut.add(row);
       }
     }
     this.captureReaderContent(true);

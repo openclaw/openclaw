@@ -109,3 +109,95 @@ it.each(["settled", "scrolling", "start", "start-growth", "programmatic"] as con
     }
   },
 );
+
+// Scrolling up fast: a row prepared outside the flow joins it together with a newly mounted row
+// estimated far taller than it renders, both above the text the reader sees.
+it("keeps visible rows still when a prepared row joins the flow beside a new row", async () => {
+  const estimate = 240;
+  const offset = 5 * estimate + 100;
+  const viewport = document.body.appendChild(document.createElement("div"));
+  viewport.style.cssText = "height:600px;width:400px;overflow:auto;overflow-anchor:none";
+  const content = viewport.appendChild(document.createElement("div"));
+  content.style.cssText = "height:12000px;position:relative";
+  const column = content.appendChild(document.createElement("div"));
+  const row = (index: number, height: number) => {
+    const element = document.createElement("div");
+    element.style.height = `${height}px`;
+    element.dataset.index = String(index);
+    element.dataset.virtualRowKey = String(index);
+    return element;
+  };
+  // Row 7 is the text the reader sees, 400px below the top edge.
+  const columnTop = offset + 400;
+  column.style.cssText = `position:absolute;top:${columnTop}px;width:400px`;
+  const visible = column.appendChild(row(7, 35));
+  // Row 5 is measured while prepared off to the side, outside the flow.
+  const prepared = content.appendChild(row(5, 34));
+  prepared.dataset.preparedRow = "true";
+  prepared.dataset.preparingRow = "true";
+  prepared.style.cssText += ";position:absolute;top:0;width:400px;visibility:hidden";
+  viewport.scrollTop = offset;
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: 100,
+    estimateSize: () => estimate,
+    getItemKey: String,
+    getScrollElement: () => viewport,
+    initialRect: { width: 400, height: 600 },
+    initialOffset: offset,
+    overscan: 1,
+    scrollToFn: vi.fn(),
+    observeElementRect: vi.fn(),
+    observeElementOffset: vi.fn(),
+  });
+  virtualizer.scrollElement = viewport;
+  virtualizer.targetWindow = window;
+  virtualizer.elementsCache.set("5", prepared);
+  virtualizer.elementsCache.set("7", visible);
+  const anchor = new TranscriptReaderAnchor(
+    {
+      virtualizer,
+      layout: new TranscriptLayoutOwner(() => {}),
+      offsetState: new TranscriptOffsetState(),
+      renderer: { columnElement: column, queueAfterCommit: () => {} },
+      initialRange: { pending: false },
+      prependAnchor: { messageKey: null },
+      headerHeight: 0,
+      scrollElement: viewport,
+      contentElement: content,
+    },
+    () => {},
+  );
+  const observed = [prepared, visible];
+  onTestFinished(() => {
+    observed.forEach((element) => anchor.unobserve(element));
+    viewport.remove();
+  });
+  const delivered = (element: HTMLElement) =>
+    new Promise<void>((resolve) => {
+      const ready = new ResizeObserver(() => {
+        ready.disconnect();
+        resolve();
+      });
+      onTestFinished(() => ready.disconnect());
+      ready.observe(element);
+    });
+  anchor.observe(prepared);
+  anchor.observe(visible);
+  await delivered(visible);
+  const before = visible.getBoundingClientRect().top;
+
+  // The prepared row joins the flow and row 6 mounts between it and the reader. The column starts
+  // at row 5's virtual start, which counts row 6 at its estimate.
+  delete prepared.dataset.preparedRow;
+  delete prepared.dataset.preparingRow;
+  prepared.style.cssText = "height:34px";
+  const mounted = row(6, 34);
+  observed.push(mounted);
+  column.prepend(prepared, mounted);
+  column.style.top = `${columnTop - 34 - estimate}px`;
+  virtualizer.elementsCache.set("6", mounted);
+  anchor.observe(mounted);
+  await delivered(mounted);
+
+  expect(visible.getBoundingClientRect().top).toBe(before);
+});
