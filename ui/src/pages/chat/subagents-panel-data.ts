@@ -542,7 +542,6 @@ export class SubagentsPanelData {
                   );
                 })
                 .map(([, item]) => item),
-              [],
               new Map(),
             )
           : undefined;

@@ -43,6 +43,7 @@ function groupDependencies(group: MessageGroup): readonly unknown[] {
     group.replyCurrentSource?.key,
     group.replyCurrentSource?.message,
     group.visibleContent,
+    group.startsActivityGroup,
     group.timestamp,
     group.isStreaming,
     group.runId,

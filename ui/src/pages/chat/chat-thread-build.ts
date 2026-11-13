@@ -33,6 +33,7 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
+import { projectQuestionPrompts } from "./chat-question-placement.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
 import { hasHandoffToolCall, pendingSessionsYield } from "./chat-sessions-yield.ts";
 import {
@@ -49,7 +50,11 @@ import {
   prepareChatStreamOnset,
   type ChatThreadDisplayProps,
 } from "./chat-thread-display.ts";
-import { displayChatHistory, type ChatItemsFacts } from "./chat-thread-facts.ts";
+import {
+  displayChatHistory,
+  isHiddenChatCommentary,
+  type ChatItemsFacts,
+} from "./chat-thread-facts.ts";
 import {
   placeChatInputs,
   type ChatInputOrderState,
@@ -159,7 +164,7 @@ export function buildChatItems(
     mode !== "history" && props.persistCommentary === false && (props.runWorking || props.runActive)
       ? normalizeOptionalString(resolveProgress().runId)
       : undefined;
-  const history = displayChatHistory(props, activeCommentaryRunId);
+  const history = displayChatHistory(props);
   if (facts) {
     facts.history = history;
   }
@@ -205,6 +210,16 @@ export function buildChatItems(
   for (const [i, item] of historyItems.entries()) {
     const msg = item.message;
     const itemKey = item.key;
+    if (isHiddenChatCommentary(props, msg, activeCommentaryRunId)) {
+      items.push({
+        kind: "notice",
+        key: `activity-boundary:${itemKey}`,
+        text: "",
+        timestamp: rawMessageTimestamp(msg) ?? 0,
+        activityBoundary: true,
+      });
+      continue;
+    }
     const raw = asRecord(msg) ?? {};
     const marker = asRecord(raw["__openclaw"]);
     if (facts && msg === facts.probe) {
@@ -578,23 +593,7 @@ export function buildChatItems(
     }
   }
 
-  for (const prompt of props.questionPrompts ?? []) {
-    // Pending questions live in the composer dock. Their terminal summaries are
-    // timestamped transient projections, so keep their historical placement.
-    if (prompt.status === "pending") {
-      continue;
-    }
-    const questionItem: ChatItem = {
-      kind: "question",
-      key: `question:${prompt.id}`,
-      questionId: prompt.id,
-      startedAt: prompt.createdAtMs,
-    };
-    projections.push({
-      item: questionItem,
-      bounds: prompt.runId ? resolveProjectionBounds(prompt.runId) : undefined,
-    });
-  }
+  projections.push(...projectQuestionPrompts(props, resolveProjectionBounds));
 
   const visibleText = trimAccumulatedStreamPrefix(
     sanitizeStreamText(props.stream ?? ""),

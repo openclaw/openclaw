@@ -10,7 +10,7 @@ import { isActivityMessageGroup } from "./chat-turn-presentation.ts";
 
 export type ActivitySegment = { key: string; inline: boolean; groups: MessageGroup[] };
 
-function isInlineCommandCard(card: ToolCard): boolean {
+export function isInlineCommandCard(card: ToolCard): boolean {
   const call = unwrapToolCallForDisplay(card);
   const { kind } = resolveToolCallInput(call.name, asNullableRecord(call.args));
   return kind === "command" || kind === "read" || kind === "search";

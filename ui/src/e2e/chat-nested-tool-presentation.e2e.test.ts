@@ -40,10 +40,10 @@ async function expectCollapsed(work: Locator) {
   const summary = work.locator(":scope > .chat-activity-group__summary");
   expect(await summary.getAttribute("aria-expanded")).toBe("false");
   expect(await summary.locator(".chat-activity-group__label").textContent()).toBe(
-    "1 command · 1 read",
+    "Command execution · Read files · Some actions failed",
   );
   // The step completed and the agent replied, so its recovered child failure stays on its row.
-  expect(await summary.textContent()).not.toContain("failed");
+  expect(await summary.textContent()).toContain("Some actions failed");
   expect(await summary.textContent()).not.toContain("/workspace/README.md");
   expect(await work.textContent()).not.toContain("gh: command not found");
 }
@@ -115,15 +115,11 @@ suite.define(() => {
       expect(await work.textContent()).not.toContain("Sign in to GitHub");
       await summary.click();
       const activityBody = work.locator(".chat-activity-group__body");
-      expect(await activityBody.locator(".chat-tool-row").count()).toBe(1);
-      const wrapper = activityBody.locator(".chat-tool-msg-summary", {
-        hasText: "Start GitHub authentication",
-      });
-      await wrapper.waitFor();
-      expect(await wrapper.textContent()).not.toContain("failed");
-      await wrapper.click();
-      const children = activityBody.locator(".chat-tool-children");
-      const login = children.locator(".chat-tool-msg-summary", { hasText: "GitHub sign-in" });
+      expect(await activityBody.locator(".chat-tool-row").count()).toBe(2);
+      expect(
+        await activityBody.getByText("Start GitHub authentication", { exact: true }).count(),
+      ).toBe(0);
+      const login = activityBody.locator(".chat-tool-msg-summary", { hasText: "gh auth login" });
       await login.waitFor();
       await login.locator(".chat-tool-failure").waitFor();
       expect(await activityBody.getByText("gh: command not found").count()).toBe(0);
@@ -170,7 +166,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByText("Runtime checked.", { exact: true }).waitFor();
-      const call = page.locator(".chat-tool-msg-summary", { hasText: "Check runtime version" });
+      const call = page.locator(".chat-tool-msg-summary", { hasText: "node --version" });
       await call.waitFor();
       await call.click();
       const body = page.locator(".chat-tool-msg-body");

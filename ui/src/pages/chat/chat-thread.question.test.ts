@@ -32,12 +32,19 @@ function items(question: QuestionPrompt, runActive: boolean, messages: unknown[]
 
 afterEach(() => resetChatThreadState());
 
-it("keeps a pending question out of the message stream", () => {
-  const result = coalesceStreamRuns(items(prompt("pending"), true));
-  const run = result.find((item) => item.kind === "stream-run");
-
-  expect(run).toMatchObject({ kind: "stream-run", parts: [{ kind: "reading-indicator" }] });
-});
+it.each([
+  { blocking: undefined, sessionKey: "agent:main:main", inline: false },
+  { blocking: true, sessionKey: "agent:main:main", inline: true },
+  { blocking: true, sessionKey: "agent:main:dashboard:child", inline: false },
+])(
+  "places an attested blocking question in its own conversation: %j",
+  ({ blocking, sessionKey, inline }) => {
+    const result = coalesceStreamRuns(items({ ...prompt("pending"), blocking, sessionKey }, true));
+    const parts = result.flatMap((item) => (item.kind === "stream-run" ? item.parts : [item]));
+    expect(parts.some((item) => item.kind === "question")).toBe(inline);
+    expect(parts.some((item) => item.kind === "reading-indicator")).toBe(true);
+  },
+);
 
 it("keeps a terminal question between the surrounding transcript turns", () => {
   const result = items(prompt("answered"), false, [

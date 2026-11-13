@@ -8,6 +8,7 @@ export type ToolCardOptions = ToolRenderOptions & {
   onToggleExpanded: (id: string) => void;
   showApprovalReviews?: boolean;
   activityCards?: readonly ToolCard[];
+  executionCards?: readonly ToolCard[];
 };
 export type ToolCardProps = {
   card: ToolCard;

@@ -21,50 +21,59 @@ export function hasVisiblePreparedActivity(message: unknown): boolean {
 type ToolGroupOptions = {
   /** Calls of launches that opened a session in its own right, not a subagent. */
   ownSessionLaunches?: ReadonlySet<string>;
+  activityKeys?: ReadonlyMap<AgentActivityItem, string>;
 };
 
 export function describeToolGroup(
   items: readonly AgentActivityItem[],
   options: ToolGroupOptions = {},
 ) {
-  const summary = summarizeAgentActivity(items, options);
+  const scoped = options.activityKeys
+    ? items.map((item) => {
+        const key = options.activityKeys!.get(item);
+        return key ? { ...item, itemId: key, toolCallId: key } : item;
+      })
+    : items;
+  const current = [
+    ...new Map(
+      scoped
+        .filter((item) => !item.suppressChannelProgress)
+        .map((item) => [item.toolCallId ?? item.itemId, item]),
+    ).values(),
+  ];
+  const summary = summarizeAgentActivity(current, options);
+  const completed = summarizeAgentActivity(
+    current.filter((item) => item.status === "completed"),
+    options,
+  );
+  const completedKinds = new Set(
+    Object.entries(completed.counts)
+      .filter(([, count]) => count > 0)
+      .map(([kind]) => kind),
+  );
   const label = Object.entries(summary.counts)
     .filter(([, count]) => count > 0)
-    .map(([kind, count]) =>
-      t(`chat.toolCards.activity.${kind}${count === 1 ? "One" : "Many"}`, { count: String(count) }),
+    .map(([kind]) =>
+      t(`chat.toolCards.activity.${kind}${completedKinds.has(kind) ? "Summary" : "Pending"}`),
     )
     .join(" · ");
   const outcomes = Object.entries(summary.outcomes)
     .filter(([, count]) => count > 0)
-    .map(([kind, count]) => ({
+    .map(([kind]) => ({
       kind,
-      label: t(
-        kind === "skipped" ? "chat.toolCards.skippedCount" : `chat.toolCards.activity.${kind}`,
-        {
-          count: String(count),
-        },
-      ),
+      label: t(`chat.toolCards.activity.${kind}Summary`),
     }));
   return { total: summary.total, label, outcomes };
 }
 
-/**
- * Failed and skipped steps stay on their own rows: agents recover from routine
- * failures, and a run that ends in one reports it through its own error message.
- */
+/** The compact summary names the work and keeps non-success visible without counters. */
 export function summarizeToolGroup(
   items: readonly AgentActivityItem[],
   options: ToolGroupOptions = {},
 ): string {
   const summary = describeToolGroup(items, options);
   return (
-    [
-      summary.label,
-      ...summary.outcomes
-        .filter(({ kind }) => kind !== "failed" && kind !== "skipped")
-        .map(({ label }) => label),
-    ]
-      .filter(Boolean)
-      .join(" · ") || t("chat.toolCards.rawDetails")
+    [summary.label, ...summary.outcomes.map(({ label }) => label)].filter(Boolean).join(" · ") ||
+    t("chat.toolCards.rawDetails")
   );
 }

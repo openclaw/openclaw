@@ -24,6 +24,7 @@ export function InlineActivityGroupContent(
     rootGroups: new Map(props.state.cardGroups.map((group) => [group.card, group])),
     toolCardOverrides: props.state.toolCardOverrides,
     currentRunActivity: props.state.currentRunActivity,
+    visibleActivity: new Set(props.state.visibleActivity),
   }));
   const segments = createMemo(() => inlineActivitySegments(props.groups, source().rootGroups));
   return (

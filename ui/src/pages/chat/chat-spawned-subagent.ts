@@ -2,7 +2,8 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as text } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { ToolCard } from "../../lib/chat/chat-types.ts";
+import type { ToolCard, ToolCardOutcome } from "../../lib/chat/chat-types.ts";
+import { resolveToolCardOutcome } from "../../lib/chat/tool-cards.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -67,9 +68,54 @@ function readLaunch(card: LaunchCard) {
   return {
     label: text(args?.label),
     childKey,
+    result,
     ownSession:
       args?.visible === true || (childKey !== undefined && isDashboardSessionKey(childKey)),
   };
+}
+
+/** A launch receipt proves creation; the child roster separately owns its later work. */
+export function resolveSessionLaunchPresentation(
+  card: ToolCard,
+  outcome: ToolCardOutcome = resolveToolCardOutcome(card, undefined),
+  rows?: readonly GatewaySessionRow[],
+) {
+  const launch = readLaunch(card);
+  if (!launch) {
+    return null;
+  }
+  const { result } = launch;
+  const kind = launch.childKey
+    ? isDashboardSessionKey(launch.childKey)
+      ? "chat"
+      : "subagent"
+    : launch.ownSession
+      ? "chat"
+      : "subagent";
+  const row = launch.childKey
+    ? rows?.find((candidate) => areUiSessionKeysEquivalent(candidate.key, launch.childKey))
+    : undefined;
+  const phase =
+    outcome === "running"
+      ? "running"
+      : outcome === "skipped" ||
+          result?.status === "skipped" ||
+          result?.status === "cancelled" ||
+          result?.status === "interrupted"
+        ? "interrupted"
+        : outcome === "failed" || result?.status === "error" || result?.status === "failed"
+          ? "failed"
+          : outcome === "succeeded" &&
+              launch.childKey &&
+              (result?.status === "accepted" || result?.status === "created")
+            ? "succeeded"
+            : "unknown";
+  return {
+    kind,
+    label: launch.label ?? text(result?.label) ?? text(row?.label) ?? text(row?.displayName),
+    childKey: launch.childKey,
+    phase,
+  } as const;
 }
 
 /** The calls among `cards` that a count of subagents must leave out. */

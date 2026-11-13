@@ -553,7 +553,9 @@ export function joinActivityRuns(
         : undefined;
   const before = groupsOf(first);
   const after = groupsOf(next);
-  return before && after ? activityRun([...before, ...after]) : undefined;
+  return before && after && !after[0]?.startsActivityGroup
+    ? activityRun([...before, ...after])
+    : undefined;
 }
 
 /** Presentation-only rollup for tool groups separated by projected turn boundaries. */
@@ -576,6 +578,9 @@ export function coalesceActivityRuns(
   };
   for (const item of items) {
     if (item.kind === "group" && isActivityGroup(item)) {
+      if (item.startsActivityGroup) {
+        flush();
+      }
       groups.push(item);
       continue;
     }

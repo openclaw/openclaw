@@ -315,7 +315,7 @@ export function prepareGroupedMessage(
 
   const voiceTranscript = isProviderVoiceTranscript(message);
   const isToolShell = normalizedRole === "tool";
-  const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
+  const standaloneToolSource = isStandaloneToolMessageForDisplay(message);
 
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message) : [];
   // Nested cards moved under their parent must not leave empty message shells.
@@ -351,6 +351,8 @@ export function prepareGroupedMessage(
     visibleAttachments.length !== 0 ||
     assistantViewBlocks.length !== 0 ||
     inlineViewBlocks.length !== 0;
+  // Promoted execution containers keep their media on the original message surface.
+  const isStandaloneToolMessage = standaloneToolSource && (hasToolCards || !hasMediaContent);
   const clawHubCards = normalizedMessage.content.filter((item) => item.type === "clawhub");
   const templatePluginCards = normalizedMessage.content.filter(
     (item) => item.type === "template_plugin_install",

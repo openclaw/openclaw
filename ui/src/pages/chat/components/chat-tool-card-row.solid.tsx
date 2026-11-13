@@ -1,8 +1,6 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic } from "@solidjs/web";
-import { createMemo, Match, Show, Switch } from "solid-js";
+import { createMemo, For, Match, Show, Switch } from "solid-js";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
-import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
@@ -11,7 +9,6 @@ import {
   formatDistinctCollapsedToolSummaryText as distinctSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
-  resolveCollapsedToolArgumentPreview as toolArgumentPreview,
   resolveToolCardOutcome,
   type ToolCardOutput,
 } from "../../../lib/chat/tool-cards.ts";
@@ -20,7 +17,11 @@ import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
-import { resolveSpawnedSubagent, type SpawnedSubagent } from "../chat-spawned-subagent.ts";
+import {
+  resolveSessionLaunchPresentation,
+  resolveSpawnedSubagent,
+  type SpawnedSubagent,
+} from "../chat-spawned-subagent.ts";
 import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
@@ -30,7 +31,11 @@ import { ChatToolIcon, ToolIcon, syncToolDisclosureOverflow } from "./chat-tool-
 import type { ToolCardProps } from "./chat-tool-card-types.ts";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
-import { resolveToolRowVerb } from "./chat-tool-row-presentation.ts";
+import {
+  commandPreview,
+  resolveToolOperationLabel,
+  resolveToolRowVerb,
+} from "./chat-tool-row-presentation.ts";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -43,13 +48,6 @@ const TOOL_ROW_ICONS: Partial<Record<ToolCallView["kind"], string>> = {
   fetch: "globe",
 };
 
-function commandPreview(command: string): string {
-  return truncateUtf16Safe(
-    (stripShellPreamble(command).command || command).replace(/\s+/gu, " ").trim(),
-    200,
-  );
-}
-
 function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string | undefined) {
   if (displayDetail?.trim()) {
     return displayDetail;
@@ -59,44 +57,25 @@ function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string | unde
     : undefined;
 }
 
-function resolveCollapsedToolSummaryParts(card: ToolCard): { label: string; name?: string } {
-  const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  const displayDetail = display.detail?.trim();
-  // Message captions belong to the canonical publication, not the original tool input.
-  if (card.name.trim().toLowerCase() === "message") {
-    return { label: display.label, name: displayDetail || undefined };
-  }
-  const name = toolArgumentPreview(card.args) || displayDetail;
-  if (name) {
-    return { label: display.label, name };
-  }
-
-  return {
-    label: resolveCollapsedToolDetail(card, undefined) ?? display.label,
-  };
-}
-
 function resolveToolRowText(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome): string {
-  if (view.title) {
-    return view.title;
-  }
-  if (view.kind === "command" && view.command) {
-    return `$ ${commandPreview(view.command)}`;
-  }
   const verb = resolveToolRowVerb(view, outcome);
-  if (verb && view.target) {
-    return `${verb} ${view.target}`;
-  }
-  const summary = resolveCollapsedToolSummaryParts(card);
-  return [summary.label, summary.name].filter(Boolean).join(" ");
+  return verb && view.target ? `${verb} ${view.target}` : resolveToolOperationLabel(card, outcome);
 }
 
-function ToolRowLink(props: { kind: "file" | "subagent"; label: string; onOpen: () => void }) {
+function ToolRowLink(props: {
+  kind: "file" | "subagent";
+  label: string;
+  onOpen: () => void;
+  openLabel?: string;
+}) {
   return (
     <button
       class={`chat-tool-row__${props.kind}-link`}
       type="button"
-      title={t(props.kind === "file" ? "chat.toolCards.openFile" : "chat.toolCards.openSubagent")}
+      title={
+        props.openLabel ??
+        t(props.kind === "file" ? "chat.toolCards.openFile" : "chat.toolCards.openSubagent")
+      }
       onClick={(event) => {
         event.stopPropagation();
         props.onOpen();
@@ -107,35 +86,13 @@ function ToolRowLink(props: { kind: "file" | "subagent"; label: string; onOpen: 
   );
 }
 
-function ToolRowSummary(props: { card: ToolCard; toolLabel: string; running: boolean }) {
-  const summary = createMemo(() => resolveCollapsedToolSummaryParts(props.card));
-  const displayLabel = () => formatCollapsedToolSummaryText(summary().label) ?? summary().label;
-  const displayName = () => distinctSummaryText(summary().name, displayLabel());
-  return (
-    <>
-      <Show when={!displayName() || summary().label !== props.toolLabel}>
-        <span class={["chat-tool-msg-summary__label", { "text-shimmer": props.running }]}>
-          {displayLabel()}
-        </span>
-      </Show>
-      <Show when={displayName()}>
-        <span class={["chat-tool-msg-summary__names", { "text-shimmer": props.running }]}>
-          {displayName()}
-        </span>
-      </Show>
-    </>
-  );
-}
-
 function ToolRowContent(props: {
   card: ToolCard;
   view: ToolCallView;
   outcome: ToolCardOutcome;
   running: boolean;
-  toolLabel: string;
   workspaceFilePath: string | null;
   onOpenWorkspaceFile?: ToolRenderOptions["onOpenWorkspaceFile"];
-  inlineCommand?: boolean;
 }) {
   const verb = () => resolveToolRowVerb(props.view, props.outcome);
   const target = () =>
@@ -151,14 +108,11 @@ function ToolRowContent(props: {
   return (
     <Switch
       fallback={
-        <ToolRowSummary card={props.card} toolLabel={props.toolLabel} running={props.running} />
+        <span class={["chat-tool-row__title", { "text-shimmer": props.running }]}>
+          {resolveToolOperationLabel(props.card, props.outcome)}
+        </span>
       }
     >
-      <Match when={props.view.title && !props.inlineCommand}>
-        <span class={["chat-tool-row__title", { "text-shimmer": props.running }]}>
-          {props.view.title}
-        </span>
-      </Match>
       <Match when={props.view.kind === "command" && props.view.command}>
         <span class="chat-tool-row__prompt" aria-hidden="true">
           $
@@ -195,28 +149,48 @@ function ToolRowContent(props: {
   );
 }
 
-function SubagentRowContent(props: { subagent: SpawnedSubagent; onOpen?: () => void }) {
+function SessionLaunchRowContent(props: {
+  launch: NonNullable<ReturnType<typeof resolveSessionLaunchPresentation>>;
+  subagent: SpawnedSubagent | null;
+  onOpen?: () => void;
+}) {
   const state = () =>
-    props.subagent.session?.running
+    props.subagent?.session?.running
       ? t("chat.toolCards.subagentRunning")
-      : props.subagent.session?.ended === "failed"
+      : props.subagent?.session?.ended === "failed"
         ? t("chat.toolCards.failed")
-        : props.subagent.session?.ended === "stopped"
+        : props.subagent?.session?.ended === "stopped"
           ? t("chat.toolCards.subagentStopped")
-          : formatDurationCompact(props.subagent.session?.runtimeMs);
+          : formatDurationCompact(props.subagent?.session?.runtimeMs);
   return (
     <>
-      <Show
-        when={props.onOpen}
-        fallback={<span class="chat-tool-row__title">{props.subagent.label}</span>}
-      >
-        <ToolRowLink kind="subagent" label={props.subagent.label} onOpen={() => props.onOpen?.()} />
+      <span class="chat-tool-row__verb">
+        {t(`chat.toolCards.launch.${props.launch.kind}.${props.launch.phase}`)}
+      </span>
+      <Show when={props.launch.label}>
+        <Show
+          when={props.onOpen}
+          fallback={<span class="chat-tool-row__title">{props.launch.label}</span>}
+        >
+          <ToolRowLink
+            kind="subagent"
+            label={props.launch.label!}
+            openLabel={t(
+              props.launch.kind === "chat"
+                ? "chat.toolCards.openChildChat"
+                : "chat.toolCards.openSubagent",
+            )}
+            onOpen={() => props.onOpen?.()}
+          />
+        </Show>
       </Show>
       <Show when={state()}>
         <span
           class={[
             "chat-tool-row__subagent-state",
-            { "chat-tool-row__subagent-state--failed": props.subagent.session?.ended === "failed" },
+            {
+              "chat-tool-row__subagent-state--failed": props.subagent?.session?.ended === "failed",
+            },
           ]}
         >
           {state()}
@@ -249,14 +223,17 @@ export function ToolCardRow(props: ToolCardProps) {
   const subagent = createMemo(() =>
     resolveSpawnedSubagent(card(), props.options.subagents?.subagentSessions),
   );
+  const launch = createMemo(() =>
+    resolveSessionLaunchPresentation(card(), outcome(), props.options.subagents?.subagentSessions),
+  );
   const onOpenSubagent = () =>
     (subagent()?.session?.listed && props.options.subagents?.onOpenSubagent) ||
     props.options.subagents?.onOpenSession;
-  const canOpenSubagent = () => Boolean(subagent()?.session && onOpenSubagent());
+  const canOpenSubagent = () => Boolean(launch()?.childKey && onOpenSubagent());
   const handleOpenSubagent = () => {
-    const session = subagent()?.session;
-    if (session) {
-      onOpenSubagent()?.(session.key);
+    const childKey = launch()?.childKey;
+    if (childKey) {
+      onOpenSubagent()?.(childKey);
     }
   };
   const linkedRow = () => (workspaceFilePath() ? "file" : canOpenSubagent() ? "subagent" : null);
@@ -277,23 +254,22 @@ export function ToolCardRow(props: ToolCardProps) {
       </span>
       <span ref={(element) => (disclosureContent = element)} class="chat-tool-disclosure__content">
         <Show
-          when={subagent()}
+          when={launch()}
           fallback={
             <ToolRowContent
               card={card()}
               view={view()}
               outcome={outcome()}
               running={running()}
-              toolLabel={display().label}
               workspaceFilePath={workspaceFilePath()}
               onOpenWorkspaceFile={props.options.onOpenWorkspaceFile}
-              inlineCommand={inline()}
             />
           }
         >
           {(spawned) => (
-            <SubagentRowContent
-              subagent={spawned()}
+            <SessionLaunchRowContent
+              launch={spawned()}
+              subagent={subagent()}
               onOpen={canOpenSubagent() ? handleOpenSubagent : undefined}
             />
           )}
@@ -341,11 +317,7 @@ export function ToolCardRow(props: ToolCardProps) {
           class="chat-tool-row__toggle"
           type="button"
           aria-expanded={props.options.expanded ? "true" : "false"}
-          aria-label={
-            subagent()
-              ? `${display().label} ${subagent()!.label}`
-              : resolveToolRowText(card(), view(), outcome())
-          }
+          aria-label={resolveToolRowText(card(), view(), outcome())}
           onClick={toggle}
         />
       </Show>
@@ -482,6 +454,18 @@ export function ToolCardBody(
               </div>
             </details>
           </div>
+        </Show>
+        <Show when={props.options.executionCards?.length}>
+          <details class="chat-tool-wrapper-details">
+            <summary>{t("chat.toolCards.executionDetails")}</summary>
+            <For each={props.options.executionCards}>
+              {(execution) => (
+                <div class="chat-tool-msg-body">
+                  <ExpandedToolCardContent card={execution} options={props.options} />
+                </div>
+              )}
+            </For>
+          </details>
         </Show>
       </Show>
     </>

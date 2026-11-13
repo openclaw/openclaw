@@ -187,6 +187,12 @@ export type ChatThreadProps = Omit<
     onDismissPendingInput?: (inputId: string) => void;
     waitingApproval?: boolean;
     questionPrompts?: readonly QuestionPrompt[];
+    onGatewayQuestionChange?: () => void;
+    onGatewayQuestionSubmit?: (
+      id: string,
+      answers: Record<string, string[]>,
+    ) => void | Promise<void>;
+    onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
     sessions: SessionsListResult | null;
     senderAgentAvatars?: ReadonlyMap<string, string | null>;
     /** Configured main-session key; an agent's main source labels as the agent. */

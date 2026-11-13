@@ -10,6 +10,7 @@ import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
 import { createPendingSteerLookup } from "../chat-pending-inputs.ts";
 import { resolveTurnRecap, shouldRenderQueuedSendInThread } from "../chat-progress.ts";
+import { indexQuestionPrompts } from "../chat-question-placement.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
 import { groupReadsHandoffRoster, projectSubagentStatus } from "../chat-subagent-wait.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
@@ -45,7 +46,6 @@ import {
   resolveTranscriptParticipants,
 } from "./chat-transcript-identity.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
-import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 import {
   expandReplyTargetWork,
   projectTranscriptChain,
@@ -66,9 +66,6 @@ import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
 import { createTranscriptStreamSource } from "./chat-transcript-stream-source.ts";
 import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
-
-const questionIndexes = createTranscriptMemo<NonNullable<StreamGroupOptions["questionPrompts"]>>();
-const emptyQuestions: NonNullable<StreamGroupOptions["questionPrompts"]> = new Map();
 
 export function projectChatTranscript(
   props: ChatThreadProps,
@@ -197,13 +194,7 @@ export function projectChatTranscript(
     latestBrowserTabs: props.latestBrowserTabs,
     bubbleMode: props.chatBubbleMode,
   });
-  const questionPrompts = props.questionPrompts
-    ? questionIndexes(
-        props.questionPrompts,
-        [],
-        () => new Map(props.questionPrompts!.map((prompt) => [prompt.id, prompt])),
-      )
-    : emptyQuestions;
+  const questionPrompts = indexQuestionPrompts(props.questionPrompts);
   const toolExpanded = (id: string, card?: ToolCard) =>
     props.inlineCommands?.readInlineToolExpansion(expandedToolCards, id, card) ??
     expandedToolCards.get(id);
@@ -319,6 +310,9 @@ export function projectChatTranscript(
     onOpenSubagents: subagents.listed ? actions.onOpenSubagents : undefined,
     runOutputTokens,
     questionPrompts,
+    onGatewayQuestionChange: props.onGatewayQuestionChange,
+    onGatewayQuestionSubmit: props.onGatewayQuestionSubmit,
+    onGatewayQuestionSkip: props.onGatewayQuestionSkip,
   } satisfies StreamGroupOptions;
   const pendingSteerForMessage = createPendingSteerLookup(props.pendingInputs);
   const renderGroupOptions = (item: MessageGroup) => {
@@ -457,6 +451,9 @@ export function projectChatTranscript(
     props.retryAt,
     Boolean(props.waitingApproval),
     props.questionPrompts,
+    props.onGatewayQuestionChange,
+    props.onGatewayQuestionSubmit,
+    props.onGatewayQuestionSkip,
     state.asyncQuestionRevision,
     props.asyncQuestions?.historyKey,
     Boolean(props.autoExpandToolCalls),
@@ -546,7 +543,7 @@ export function projectChatTranscript(
     }
     if (item.kind === "stream-run" || item.kind === "question") {
       return item.kind === "question"
-        ? { kind: "stream", parts: [item], options: { questionPrompts } }
+        ? { kind: "stream", parts: [item], options: streamGroupOptions }
         : { kind: "stream", parts: item.parts, options: streamGroupOptions };
     }
     if (item.kind === "work-group") {

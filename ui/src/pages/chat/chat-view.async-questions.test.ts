@@ -8,7 +8,10 @@ import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { createComposerContainer } from "./chat-composer.test-support.ts";
+import {
+  createComposerContainer,
+  createComposerQuestionPrompt,
+} from "./chat-composer.test-support.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
@@ -339,6 +342,66 @@ it.each(["discard", "consumed"] as const)(
         disposeChatView(element);
         element.remove();
       }
+    }
+  },
+);
+
+it.each([true, false])(
+  "keeps the answer at its declared blocking boundary (%s)",
+  async (blocking) => {
+    const question = {
+      ...createComposerQuestionPrompt("blocking-choice", "Which audience?"),
+      sessionKey: "agent:main:main",
+      runId: "question-run",
+      blocking: true,
+    };
+    question.questions = question.questions.map((item) => ({ ...item, isOther: true }));
+    const submit = vi.fn(async (..._args: unknown[]) => true);
+    const props = chatProps({
+      messages: blocking
+        ? [
+            {
+              role: "assistant",
+              content: "Choose the audience before I continue.",
+              runId: "question-run",
+            },
+          ]
+        : [audience],
+      gatewayQuestionPrompts: blocking ? [question] : [],
+      onGatewayQuestionSubmit: async (id, answers) => {
+        await submit(id, answers);
+      },
+      onAsyncQuestionSubmit: submit,
+    });
+    renderChatPropsInto(container, props);
+    await waitForSolid(() => expect(other()).not.toBeNull());
+    expect(Boolean(dock())).toBe(!blocking);
+    expect(Boolean(container.querySelector(".agent-chat__composer-input-row"))).toBe(blocking);
+    const input = other()!;
+    input.value = "New contributors";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await waitForSolid(() =>
+      expect(
+        container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.disabled,
+      ).toBe(false),
+    );
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
+    await waitForSolid(() => expect(submit).toHaveBeenCalledOnce());
+    if (blocking) {
+      expect(submit).toHaveBeenCalledWith(question.id, { choice: ["New contributors"] });
+      question.status = "answered";
+      question.answers = { answers: { choice: ["New contributors"] } };
+      question.revision += 1;
+      props.gatewayQuestionPrompts = [question];
+      renderChatPropsInto(container, props);
+      await waitForSolid(() => expect(summaryText()).toContain("New contributors"));
+      expect(container.querySelector(".chat-question-panel")).toBeNull();
+    } else {
+      expect(submit).toHaveBeenCalledWith(
+        "> Which audience?\n\nNew contributors",
+        "audience",
+        undefined,
+      );
     }
   },
 );

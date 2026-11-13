@@ -1,8 +1,7 @@
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type { ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
-import { spawnedSubagentLabel } from "../chat-spawned-subagent.ts";
+import { resolveToolOperationLabel } from "./chat-tool-row-presentation.ts";
 
 export type ActivityHeadline = Pick<AgentActivityItem, "name" | "commandBearing"> & {
   key: string;
@@ -10,42 +9,33 @@ export type ActivityHeadline = Pick<AgentActivityItem, "name" | "commandBearing"
   status: AgentActivityItem["status"];
 };
 
-/** Reuse recorded nesting for the purpose without replacing a child's urgent outcome. */
+/** Select the recorded operation; execution containers never replace a child's action. */
 export function selectActivityHeadline(
   activity: readonly AgentActivityItem[],
-  cardGroups: readonly ToolCallGroup<ToolCard>[],
   preparedByCard: ReadonlyMap<ToolCard, AgentActivityItem>,
 ): ActivityHeadline | undefined {
   const latest = activity.at(-1);
   const urgent = latest?.status === "failed" || latest?.status === "blocked";
-  let operation = urgent
+  const operation = urgent
     ? latest
     : (activity.findLast((item) => item.status === "running") ?? latest);
   if (!operation) {
     return undefined;
   }
   const status = operation.status;
-  for (const root of cardGroups) {
-    const pending = [...root.children];
-    for (const child of pending) {
-      if (preparedByCard.get(child.card) === operation) {
-        const parent = preparedByCard.get(root.card);
-        if (parent && activity.includes(parent)) {
-          operation = parent;
-        }
-      }
-      pending.push(...child.children);
-    }
-  }
-  // A launched subagent is named by its label; its other launch settings are
-  // detail. A launch's call and result each carry a prepared item, so its card
-  // is found by call, not by which of the two the headline holds.
+  // The latest prepared outcome owns the headline even when the raw card lags.
   const callId = operation.toolCallId;
-  let subagentLabel: string | undefined;
+  let operationLabel: string | undefined;
   if (callId) {
-    for (const card of preparedByCard.keys()) {
-      subagentLabel = card.callId === callId ? spawnedSubagentLabel(card) : undefined;
-      if (subagentLabel) {
+    for (const [card, recorded] of preparedByCard) {
+      operationLabel =
+        recorded === operation
+          ? resolveToolOperationLabel(
+              card,
+              operation.status === "completed" ? "succeeded" : (operation.status ?? "unknown"),
+            )
+          : undefined;
+      if (operationLabel) {
         break;
       }
     }
@@ -53,10 +43,8 @@ export function selectActivityHeadline(
   return operation.title.trim()
     ? {
         key: operation.toolCallId ?? operation.itemId,
-        // Purpose and outcome are separate: uncertainty must not replace known intent.
         title:
-          subagentLabel ??
-          operation.meta ??
+          operationLabel ??
           (operation.status && operation.title === resolveToolDisplayIdentity(operation.name).label
             ? ""
             : operation.title),

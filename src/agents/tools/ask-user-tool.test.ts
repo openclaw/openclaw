@@ -294,6 +294,7 @@ describe("ask_user", () => {
         agentId: "main",
         sessionKey: "agent:main:main",
         runId: "run-main",
+        blocking: true,
         timeoutMs: 900_000,
       }),
       undefined,

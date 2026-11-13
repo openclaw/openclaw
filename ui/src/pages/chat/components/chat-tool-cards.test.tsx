@@ -336,9 +336,7 @@ it.each(["structured", "serialized"])("keeps %s captions out of collapsed rows",
   const container = await mountCard(card, { ...options, expanded: false });
 
   const summary = query(container, "button.chat-tool-msg-summary");
-  expect(textOf(container, ".chat-tool-msg-summary__label")).toBe(
-    shape === "serialized" ? "Message" : undefined,
-  );
+  expect(summary?.textContent).toContain("Message");
   expect(query(summary, ".chat-tool-msg-summary__icon")?.getAttribute("aria-label")).toBe(
     "message",
   );
@@ -656,11 +654,11 @@ it("keeps diagnostics inside expanded tool details", async () => {
       container,
     );
   await show();
-  expect(container.textContent).toContain("Sign in to GitHub");
+  expect(container.textContent).toContain("gh auth login");
   expect(container.textContent).not.toContain(diagnostic);
   expect(textOf(container, ".chat-tool-msg-summary")).toContain(outcome);
   expect(container.textContent).not.toContain(output);
-  expect(container.textContent).not.toContain("gh auth login");
+  expect(container.textContent).not.toContain("Sign in to GitHub");
   expect(query(container, ".chat-tool-msg-body")).toBeNull();
   query(container, ".chat-tool-msg-summary")?.click();
   await settleToolBridges(container);

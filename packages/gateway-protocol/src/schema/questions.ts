@@ -118,6 +118,8 @@ export const QuestionRecordSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
+  /** The requesting operation waits for this answer; omitted when unknown. */
+  blocking: Type.Optional(withSince("2026.11", Type.Boolean())),
   createdAtMs: Type.Integer({ minimum: 0 }),
   expiresAtMs: Type.Integer({ minimum: 0 }),
   status: QuestionStatusSchema,
@@ -131,6 +133,8 @@ export const QuestionRequestParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
+  /** The requesting operation waits for this answer; omitted when unknown. */
+  blocking: Type.Optional(withSince("2026.11", Type.Boolean())),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 

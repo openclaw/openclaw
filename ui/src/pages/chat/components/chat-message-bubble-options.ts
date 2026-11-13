@@ -16,8 +16,14 @@ import type { AssistantMessageDisclosure } from "./chat-message-text-preparation
 import type { ReplyLine } from "./chat-reply-attribution.ts";
 import type { ToolRenderOptions } from "./chat-tool-render-model.ts";
 
+export type ActivityOperationGroup = Omit<ToolCallGroup<ToolCard>, "children"> & {
+  children: ActivityOperationGroup[];
+  /** Recorded execution containers, available only in the operation inspector. */
+  executionCards?: readonly ToolCard[];
+};
+
 export type ActivityOperationProps = {
-  group: ToolCallGroup<ToolCard>;
+  group: ActivityOperationGroup;
   options: Omit<ToolRenderOptions, "messageKey"> &
     Pick<GroupedMessageOptions, "isToolExpanded" | "onToggleToolExpanded">;
   contexts: ReadonlyMap<ToolCard, { messageKey: string; disclosureId: string }>;

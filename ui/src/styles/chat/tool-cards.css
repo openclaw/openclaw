@@ -1022,12 +1022,6 @@
   font-weight: var(--control-ui-font-weight-semibold);
 }
 
-.chat-work-group__total {
-  flex: none;
-  white-space: nowrap;
-  color: var(--muted);
-}
-
 .chat-activity-group__label.chat-activity-group__label--live {
   color: inherit;
   text-overflow: ellipsis;
