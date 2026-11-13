@@ -1,0 +1,3 @@
+# Gateway start upgrade by copy and swap: generic-rebuild proof on every committed release
+# corpus plus the e2e start test that restores the corpus's encoded device-key marker.
+12
