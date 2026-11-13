@@ -13,7 +13,7 @@ enum DebugActions {
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false)
-        window.title = "Agent Events"
+        window.title = String(localized: "Agent Events")
         window.isReleasedWhenClosed = false
         window.isRestorable = false
         window.contentView = NSHostingView(rootView: AgentEventsWindow())
