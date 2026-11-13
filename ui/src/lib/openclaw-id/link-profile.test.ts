@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 const dialog = vi.hoisted(() => ({
   show: vi.fn(async () => ({ signedIn: {}, link: "linked" as const })),
 }));
+// mock-isolation: the dialog has its own tests; here it only records that a device sign-in began.
 vi.mock("../../components/openclaw-id/device-sign-in-dialog.tsx", () => ({
   showDeviceSignInDialog: dialog.show,
 }));

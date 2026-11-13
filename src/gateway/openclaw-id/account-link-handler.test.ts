@@ -106,7 +106,7 @@ async function call(client: unknown, params: Record<string, unknown>) {
     context: {
       getRuntimeConfig: () => config,
       getClientConnIds: (match: (candidate: unknown) => boolean) =>
-        new Set([...live].filter(match).map((client) => client.connId)),
+        new Set([...live].filter(match).map((current) => current.connId)),
     },
   } as unknown as GatewayRequestHandlerOptions);
   return reply!;
@@ -187,11 +187,11 @@ describe("openclawId.account linking", () => {
       action: "device_poll",
       state: (started.payload as { state: string }).state,
     });
-    const { idToken } = signedIn.payload as { idToken: string };
+    const held = (signedIn.payload as { idToken: string }).idToken;
     fetchMock.mockClear();
     store.link.mockClear();
 
-    expect(await call(personal, { action: "link_held", idToken })).toMatchObject({
+    expect(await call(personal, { action: "link_held", idToken: held })).toMatchObject({
       ok: true,
       payload: { account: { sub: "acct-owner" }, link: "linked" },
     });
@@ -203,7 +203,7 @@ describe("openclawId.account linking", () => {
     store.link.mockClear();
 
     // A token the issuer never sent here, with the same claims, falls back to a device code.
-    const forged = idToken.replace(/\.[^.]*$/, ".forged");
+    const forged = held.replace(/\.[^.]*$/, ".forged");
     expect((await call(personal, { action: "link_held", idToken: forged })).code).toBe(
       "sign_in_not_held",
     );
@@ -214,7 +214,9 @@ describe("openclawId.account linking", () => {
       authenticatedUserProfile: { profileId: "profile-other" },
     };
     live.add(other);
-    expect((await call(other, { action: "link_held", idToken })).code).toBe("sign_in_not_held");
+    expect((await call(other, { action: "link_held", idToken: held })).code).toBe(
+      "sign_in_not_held",
+    );
     live.delete(other);
     // Loopback, a connection without a personal profile, or one no longer live is refused.
     for (const client of [
@@ -222,7 +224,7 @@ describe("openclawId.account linking", () => {
       { ...personal, authenticatedUserProfile: undefined },
       { ...personal, connId: "conn-closed" },
     ]) {
-      expect((await call(client, { action: "link_held", idToken })).code).toBe(
+      expect((await call(client, { action: "link_held", idToken: held })).code).toBe(
         "not_personal_connection",
       );
     }
@@ -234,12 +236,12 @@ describe("openclawId.account linking", () => {
       signal: new AbortController().signal,
       assertCurrent: () => {},
     } as Awaited<ReturnType<typeof preparePersonalProfileAction>>);
-    expect((await call(personal, { action: "link_held", idToken })).code).toBe(
+    expect((await call(personal, { action: "link_held", idToken: held })).code).toBe(
       "not_personal_connection",
     );
     // With Labs off nothing is linked.
     config.gateway.openclawId.enabled = false;
-    expect((await call(personal, { action: "link_held", idToken })).ok).toBe(false);
+    expect((await call(personal, { action: "link_held", idToken: held })).ok).toBe(false);
     config.gateway.openclawId.enabled = true;
     expect(store.link).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
