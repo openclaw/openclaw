@@ -20,14 +20,17 @@ const fallback = {
 
 const rows = [
   { id: "known-model", object: "model" },
-  { id: "brand-new-model", object: "model" },
+  { id: "brand-new-model", object: "model", capabilities: { chat: true } },
 ];
 
 describe("live discovery unknown-model gate", () => {
-  it("publishes discovered models unchanged when no gate is supplied", () => {
-    const ids = buildOpenAICompatibleLiveModels(rows, fallback).map((m) => m.id);
+  it("requires a chat declaration for unfamiliar ids even without a provider gate", () => {
+    const ids = buildOpenAICompatibleLiveModels([...rows, { id: "unclassified" }], fallback)
+      .filter((m) => m.inference?.chat !== false)
+      .map((m) => m.id);
     expect(ids).toContain("known-model");
     expect(ids).toContain("brand-new-model");
+    expect(ids).not.toContain("unclassified");
   });
 
   it("drops only the ids the manifest does not publish when the gate rejects", () => {

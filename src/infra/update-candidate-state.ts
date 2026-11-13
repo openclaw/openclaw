@@ -280,6 +280,8 @@ export async function discoverUpdateStateSchemaInspectionInProcess(
     stagingRoot: string;
     onProgress?: (progress: UpdateStateInspectionProgress) => void;
     preserveSourceArtifacts?: boolean;
+    /** The stopped backup owner already captured this generation and verifies source stability. */
+    sharedDatabaseImage?: string;
   },
 ): Promise<UpdateStateSchemaInspectionPlan> {
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
@@ -296,14 +298,20 @@ export async function discoverUpdateStateSchemaInspectionInProcess(
     const result = await readUpdatePostgresState(input, files);
     plan = { files: result.files, sharedVersion: { path: shared, ...result.version } };
   } else {
-    const version = await withStateDatabaseSnapshot(
-      shared,
-      (location) => readSharedDatabaseVersion(location, shared, files, input),
-      input.stagingRoot,
-      input.onProgress,
-      input.preserveSourceArtifacts,
-    );
-    plan = { files: [...files], sharedVersion: { path: shared, ...version } };
+    const read = async (location: string) => ({
+      path: shared,
+      ...(await readSharedDatabaseVersion(location, shared, files, input)),
+    });
+    const sharedVersion = input.sharedDatabaseImage
+      ? await read(input.sharedDatabaseImage)
+      : await withStateDatabaseSnapshot(
+          shared,
+          read,
+          input.stagingRoot,
+          input.onProgress,
+          input.preserveSourceArtifacts,
+        );
+    plan = { files: [...files], sharedVersion };
   }
   await writeUpdateStateSchemaOwnership(input.stagingRoot, plan.files);
   return plan;
