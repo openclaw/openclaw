@@ -634,18 +634,6 @@ export async function resolveUpdateCommandTarget(
         }
       }
 
-      if (updateInstallKind === "package" && !opts.dryRun && !packageAlreadyCurrent) {
-        const diskShortfall = describePackageStagingShortfall(
-          packageInstallTarget?.packageRoot ? path.dirname(packageInstallTarget.packageRoot) : root,
-        );
-        if (diskShortfall) {
-          await refuseUpdate("preflight-insufficient-space", diskShortfall, [
-            { check: "disk-space", code: "preflight-insufficient-space", message: diskShortfall },
-          ]);
-          return undefined;
-        }
-      }
-
       const refusedSnapshot = await checkUpdateTargetSnapshotSpace({
         opts,
         updateInstallKind,
@@ -666,6 +654,18 @@ export async function resolveUpdateCommandTarget(
           refusedSnapshot.stderrTail ?? undefined,
         );
         return undefined;
+      }
+
+      if (updateInstallKind === "package" && !opts.dryRun && !packageAlreadyCurrent) {
+        const diskShortfall = describePackageStagingShortfall(
+          packageInstallTarget?.packageRoot ? path.dirname(packageInstallTarget.packageRoot) : root,
+        );
+        if (diskShortfall) {
+          await refuseUpdate("preflight-insufficient-space", diskShortfall, [
+            { check: "disk-space", code: "preflight-insufficient-space", message: diskShortfall },
+          ]);
+          return undefined;
+        }
       }
 
       return {

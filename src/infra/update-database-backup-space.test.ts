@@ -123,7 +123,7 @@ it.each([
       backupDirectory: f.directory,
     });
     expect(preflight.exitCode).toBe(1);
-    expect(preflight.stderrTail).toContain("snapshot-capacity-insufficient");
+    expect(preflight.stderrTail).toMatch(/^Update refused: Update database backup needs /u);
     await expect(
       createUpdateDatabaseBackupInProcess({ ...f, config, stopped: true }),
     ).rejects.toMatchObject({ name: "UpdateCaptureSpaceError" });

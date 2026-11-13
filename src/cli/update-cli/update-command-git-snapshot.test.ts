@@ -129,9 +129,7 @@ it.each(snapshotCases)(
           expect(errors).toContainEqual(
             expect.objectContaining({
               exitCode: 1,
-              stderrTail: expect.stringMatching(
-                /snapshot-capacity-insufficient[\s\S]*have not been migrated/,
-              ),
+              stderrTail: expect.stringMatching(/^Update refused: [\s\S]*have not been migrated/u),
             }),
           );
         } else {
