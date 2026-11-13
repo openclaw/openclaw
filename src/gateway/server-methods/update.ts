@@ -309,8 +309,11 @@ export const updateHandlers: GatewayRequestHandlers = {
       const explicitDevTarget = params.target
         ? devUpdateTargetFromGitTarget(params.target)
         : undefined;
-      let targetFailureReason =
-        explicitDevTarget && (installSurface.kind !== "git" || effectiveChannel !== "dev")
+      // A slot install updates with `openclaw update`; the in-place handoff would
+      // rewrite its service onto a slot that the next update deletes.
+      let targetFailureReason = process.env.OPENCLAW_RUNTIME_SLOT
+        ? "runtime-slot-cli-update"
+        : explicitDevTarget && (installSurface.kind !== "git" || effectiveChannel !== "dev")
           ? "unsupported-update-target"
           : explicitDevTarget && explicitDevTarget.upstreamRef !== status.git?.upstream
             ? "update-target-upstream-mismatch"

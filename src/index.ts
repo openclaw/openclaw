@@ -8,6 +8,7 @@ import {
   resolveOpenClawCompileCacheDirectory,
   resolveOpenClawCompileCacheRespawnEnv,
 } from "../node-compile-cache.mjs";
+import { redirectToCurrentRuntimeSlot } from "../runtime-slot-redirect.mjs";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { resolveCliDatabaseProcessRole } from "./cli/database-process-role.js";
 import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
@@ -29,6 +30,9 @@ const isMain = isMainModule({
   currentFile: fileURLToPath(import.meta.url),
 });
 if (isMain) {
+  await redirectToCurrentRuntimeSlot(fileURLToPath(new URL("../", import.meta.url)), {
+    gatewayRun: isForegroundGatewayRunArgv(process.argv),
+  });
   installDatabaseProcessRole(resolveCliDatabaseProcessRole(normalizeWindowsArgv(process.argv)));
 }
 const handledAdmission =

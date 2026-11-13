@@ -13,7 +13,6 @@ import {
   type SqliteReadOnlyWorkerScope,
 } from "../infra/sqlite-readonly-worker-context.js";
 import type { RetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
-import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { initialDoctorHealthContribution } from "./doctor-health-contributions-selection.test-support.js";
@@ -25,7 +24,6 @@ const { mocks } = await import("./doctor-health.test-support.js");
 
 const custody = vi.hoisted(() => ({
   note: vi.fn(),
-  census: vi.fn(),
   retireBroker: vi.fn<() => Promise<boolean>>(),
   activeNativeWork: false,
   activeWorkerPath: "",
@@ -35,9 +33,6 @@ const custody = vi.hoisted(() => ({
 vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../packages/terminal-core/src/note.js")>()),
   note: custody.note,
-}));
-vi.mock("../infra/openclaw-process-census.js", () => ({
-  inspectOtherOpenClawProcesses: custody.census,
 }));
 vi.mock("../infra/worker-native-lifecycle.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/worker-native-lifecycle.js")>();
@@ -71,7 +66,6 @@ const { materializeSharedStateDatabase } = useDoctorHealthFixture();
 afterEach(() => {
   vi.restoreAllMocks();
   custody.note.mockReset();
-  custody.census.mockReset();
   custody.retireBroker.mockReset();
   custody.activeNativeWork = false;
   custody.actualNativeSource = false;
@@ -111,7 +105,6 @@ it.each([
       const ownerPath = resolveGatewayStateOwnerPath(database);
       let ownerIdentity: Buffer | undefined;
       let doctorReaders: SqliteReadOnlyWorkerScope | undefined;
-      let brokerLive = false;
       let readSource: RetainedNativeWorkerSource | undefined;
       let checksFinished = false;
       const assertMaintenanceHeld = () => {
@@ -126,34 +119,18 @@ it.each([
         if (broker === "settlement-failed") {
           throw new Error("fixture broker could not settle native cleanup");
         }
-        // Native lifecycle tests cover real shared owners and SQLite locks. Here
-        // the census reflects their custody while exercising the complete Doctor flow.
+        // Native work that starts after Doctor's readers settle must still retain the runtime.
+        custody.activeNativeWork =
+          broker === "late-independent-thread" || broker === "independent-thread";
         if (broker === "independent-owner" || broker === "independent-thread") {
           return false;
         }
-        brokerLive = false;
         return true;
-      });
-      custody.census.mockImplementation(() => {
-        assertMaintenanceHeld();
-        const maintenance = getOpenClawDatabaseMaintenanceScope();
-        expect(maintenance?.ownsSchemaMaintenance).toBe(true);
-        maintenance!.assertAdmission();
-        custody.activeNativeWork =
-          broker === "late-independent-thread" || broker === "independent-thread";
-        return {
-          pids: readSource
-            ? readSource.hasActiveWorkers
-              ? [42423]
-              : []
-            : [...(doctorReaders?.active ? [42421] : []), ...(brokerLive ? [42422] : [])],
-        };
       });
       mocks.runContributions.mockImplementation(async (ctx) => {
         ownerIdentity = fs.readFileSync(ownerPath);
         doctorReaders = readOnlyWorkerScope.getStore();
         expect(doctorReaders?.active).toBe(true);
-        brokerLive = broker !== "independent-thread" && !realNativeSource;
         if (broker === "idle-read-pool") {
           const { executeExistingOpenClawStateRead } =
             await import("../state/openclaw-state-db-readonly.js");
@@ -196,25 +173,17 @@ it.each([
       const completed = runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
       if (broker === "settlement-failed") {
         await expect(completed).rejects.toThrow("fixture broker could not settle native cleanup");
-        expect(custody.census).not.toHaveBeenCalled();
         expect(fs.existsSync(artifact)).toBe(true);
         return;
       }
       await completed;
       const output = custody.note.mock.calls.map(([message]) => String(message)).join("\n");
-      expect(custody.census).toHaveBeenCalledOnce();
-      const retained =
-        broker !== "idle" && broker !== "idle-read-pool" && broker !== "idle-plugin-preparation";
+      // Only native work in this process retains the runtime; another process's broker
+      // does not, because no process census decides custody.
+      const retained = broker === "independent-thread" || broker === "late-independent-thread";
       expect(fs.existsSync(artifact)).toBe(retained);
       if (retained) {
-        expect(output).toContain(
-          broker === "independent-owner"
-            ? "PIDs: 42422"
-            : `independent native work in this process (PID: ${process.pid})`,
-        );
-        if (broker === "independent-owner") {
-          expect(brokerLive).toBe(true);
-        }
+        expect(output).toContain(`independent native work in this process (PID: ${process.pid})`);
         expect(output).toContain("let these holders finish, then rerun openclaw doctor --fix");
         expect(output).not.toContain("Removed abandoned updater runtime");
       } else {

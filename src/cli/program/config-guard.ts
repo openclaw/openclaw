@@ -307,7 +307,8 @@ export async function ensureConfigReady(params: {
     writeInvalidConfigCliJson(params.runtime, snapshot);
   }
   if (isPluginPackagingFailure && isGatewayStartup) {
-    params.runtime.exit(78);
+    // A runtime slot on trial exits 1 so the launcher can return to the previous slot.
+    params.runtime.exit(process.env.OPENCLAW_RUNTIME_TRIAL ? 1 : 78);
     return;
   }
   if (shouldOfferRecovery && !isPluginPackagingFailure) {

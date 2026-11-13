@@ -74,7 +74,8 @@ const CONFIG_ERROR_CODES = new Set([
   "MISSING_API_KEY",
   "MISSING_CREDENTIALS",
 ]);
-const EXIT_CONFIG_ERROR = 78;
+// A runtime slot on trial exits 1 so the launcher can return to the previous slot.
+const EXIT_CONFIG_ERROR = process.env.OPENCLAW_RUNTIME_TRIAL ? 1 : 78;
 
 const TRANSIENT_SQLITE_CODES = new Set([
   "SQLITE_BUSY",

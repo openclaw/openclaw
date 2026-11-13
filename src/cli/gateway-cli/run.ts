@@ -108,7 +108,9 @@ type GatewayRunLogger = Pick<ReturnType<typeof createSubsystemLogger>, "info" | 
  * (via RestartPreventExitStatus=78) stops restarting instead of entering a
  * restart storm that can render low-resource hosts unresponsive.
  */
-const EXIT_CONFIG_ERROR = 78;
+// A runtime slot on trial exits 1 instead, so the supervisor restarts the launcher
+// and it can return to the previous slot.
+const EXIT_CONFIG_ERROR = process.env.OPENCLAW_RUNTIME_TRIAL ? 1 : 78;
 
 async function readGatewayStartupConfig(
   startupTrace: ReturnType<typeof createGatewayCliStartupTrace>,

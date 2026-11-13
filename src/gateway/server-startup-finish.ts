@@ -394,6 +394,17 @@ export async function finishGatewayStartup(params: {
         ? "candidate gateway ready; autonomous sidecars suppressed"
         : "gateway ready",
     );
+    // A launcher-started slot on trial is now proven; the next start keeps it.
+    if (!opts.updateCanary && process.env.OPENCLAW_RUNTIME_SLOT) {
+      try {
+        const { confirmRuntimeSlot } = await import("../infra/runtime-slots.js");
+        if (confirmRuntimeSlot()) {
+          log.info("runtime slot confirmed");
+        }
+      } catch (error) {
+        log.warn(`runtime slot confirmation failed: ${String(error)}`);
+      }
+    }
   }
   finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
   if (opts.updateCanary) {

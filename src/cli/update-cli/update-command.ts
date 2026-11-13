@@ -61,6 +61,10 @@ export async function updateCommand(
       if (await tryRunImmutableUpdateCommand(inputOpts)) {
         return;
       }
+      const { tryRunRuntimeSlotUpdate } = await import("./update-slots.js");
+      if (await tryRunRuntimeSlotUpdate(inputOpts)) {
+        return;
+      }
       const { preparePostgresPoolForUpdate } = await import("../../infra/postgres-sync/pool.js");
       await preparePostgresPoolForUpdate("openclaw update repair");
       const { withRetainedUpdateRuntime } = await import("../../infra/update-retained-runtime.js");

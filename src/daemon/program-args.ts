@@ -5,6 +5,7 @@ import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { resolveBrewOpenClawPath } from "../infra/brew.js";
+import { mapRuntimeSlotPathToOrigin } from "../infra/runtime-slots.js";
 import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   buildGatewayDistEntrypointCandidates,
@@ -60,8 +61,8 @@ function buildNodeInstallEntrypointCandidates(root: string): string[] {
 }
 
 /** Node services must enter through the supervisor, including when repairing old definitions. */
-export function resolveNodeServiceEntrypoint(argv1 = process.argv[1]): Promise<string> {
-  return resolveCliEntrypointPathForService(argv1, "node");
+export async function resolveNodeServiceEntrypoint(argv1 = process.argv[1]): Promise<string> {
+  return mapRuntimeSlotPathToOrigin(await resolveCliEntrypointPathForService(argv1, "node"));
 }
 
 async function resolveCliEntrypointPathForService(
@@ -263,7 +264,9 @@ async function resolveCliProgramArguments(params: {
   const cliEntrypointPath =
     typeof params.cliEntrypoint === "object"
       ? params.cliEntrypoint.planned
-      : await resolveCliEntrypointPathForService(params.cliEntrypoint, params.service);
+      : mapRuntimeSlotPathToOrigin(
+          await resolveCliEntrypointPathForService(params.cliEntrypoint, params.service),
+        );
   return {
     programArguments: [
       runtimePath,

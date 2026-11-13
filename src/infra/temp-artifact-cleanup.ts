@@ -157,7 +157,9 @@ export async function maintainRetainedUpdateRuntimes(params: {
             );
             continue;
           }
-          const { inspectOtherOpenClawProcesses } = await import("./openclaw-process-census.js");
+          // A process census cannot prove an unknown holder absent, and refusing on it kept
+          // every runtime forever (#197195). An old updater that still runs here fails its
+          // own late reads and reports that failure; the registration above covers this one.
           const current = await fs.lstat(directory);
           if (
             current.dev !== before.dev ||
@@ -168,20 +170,6 @@ export async function maintainRetainedUpdateRuntimes(params: {
             throw new Error("directory identity or custody changed");
           }
           params.assertCurrent();
-          const census = inspectOtherOpenClawProcesses(directory);
-          if ("error" in census) {
-            throw new Error(census.error);
-          }
-          for (const warning of census.warnings ?? []) {
-            if (!messages.includes(warning)) {
-              messages.push(warning);
-            }
-          }
-          if (census.pids.length) {
-            throw new Error(
-              `other OpenClaw processes are still running (PIDs: ${census.pids.join(", ")}); let these holders finish, then rerun openclaw doctor --fix`,
-            );
-          }
           params.assertResourcesSettled?.(directory);
           params.assertCurrent();
           let failure: string | undefined;

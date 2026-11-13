@@ -4,10 +4,12 @@ import { fileURLToPath } from "node:url";
 import { format } from "node:util";
 import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { watchCliRespawnParent } from "../node-runtime-recovery.mjs";
+import { redirectToCurrentRuntimeSlot } from "../runtime-slot-redirect.mjs";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { resolveCliDatabaseProcessRole } from "./cli/database-process-role.js";
+import { isForegroundGatewayRunArgv } from "./cli/gateway-run-argv.js";
 import { tryOutputPrecomputedCommandHelp } from "./cli/precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
@@ -131,6 +133,9 @@ if (isEntryMain) {
 }
 
 async function runEntryMain(): Promise<void> {
+  await redirectToCurrentRuntimeSlot(fileURLToPath(new URL("../", import.meta.url)), {
+    gatewayRun: isForegroundGatewayRunArgv(process.argv),
+  });
   installDatabaseProcessRole(resolveCliDatabaseProcessRole(normalizeWindowsArgv(process.argv)));
   watchCliRespawnParent();
   if (isUpdateAdmissionInvocation(resolveCliArgvInvocation(process.argv))) {
