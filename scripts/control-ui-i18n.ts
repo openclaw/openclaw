@@ -18,6 +18,10 @@ import {
 } from "./lib/control-ui-i18n-catalog-values.ts";
 import { CONTROL_UI_LOCALE_ENTRIES, controlUiLanguageLabel } from "./lib/control-ui-i18n-config.ts";
 import {
+  refreshControlUiBuildCatalog,
+  readControlUiMemoryPin,
+} from "./lib/control-ui-i18n-storage.ts";
+import {
   compareStringArrays,
   createControlUiLocaleSyncPlan,
   extractTranslationPlaceholders,
@@ -769,6 +773,12 @@ async function syncLocale(
   const localeLabel = `${catalog.id}:${formatLocaleLabel(entry.locale, context)}`;
   const localeStartedAt = Date.now();
   const { sourceFlat, sourceHash, assetsDir } = catalog;
+  if (
+    readControlUiMemoryPin(assetsDir)?.files[entry.locale] &&
+    !existsSync(tmPath(entry, assetsDir))
+  ) {
+    throw new Error("Restore the pinned canonical memory before generating " + entry.locale);
+  }
   const tm = loadControlUiTranslationMemory(tmPath(entry, assetsDir));
   const existingMap = materializeControlUiLocaleCatalog(sourceFlat, tm);
   const existingFlat = flattenTranslations(existingMap);
@@ -890,6 +900,10 @@ async function syncLocale(
     }
   }
 
+  if (options.write && !options.checkOnly) {
+    refreshControlUiBuildCatalog(assetsDir, entry.locale);
+  }
+
   logProgress(
     `${localeLabel}: done changed=${changed} fallbacks=${artifacts.fallbackCount} elapsed=${formatDuration(Date.now() - localeStartedAt)}${!options.checkOnly && options.write && changed ? " wrote" : ""}`,
   );
@@ -965,6 +979,15 @@ async function main() {
   );
   const outcomes: SyncOutcome[] = [];
   for (const catalog of catalogs) {
+    // Offline check validates pinned build projections above; regeneration needs restore.
+    if (
+      args.command === "check" &&
+      catalog.id === "core" &&
+      readControlUiMemoryPin(catalog.assetsDir) &&
+      !existsSync(tmPath(entries[0]!, catalog.assetsDir))
+    ) {
+      continue;
+    }
     const refreshKeys = new Set([...args.refreshKeys].filter((key) => catalog.sourceFlat.has(key)));
     if (args.refreshKeys.size > 0 && refreshKeys.size === 0) {
       continue;

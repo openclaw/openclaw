@@ -79,7 +79,12 @@ const isRelevantRunNodePath = (
   ) {
     return false;
   }
-  if (/^ui\/src\/i18n\/\.i18n\/[^/]+\.tm\.jsonl$/u.test(normalizedPath)) {
+  if (
+    new RegExp(
+      "^ui/src/i18n/[.]i18n/(?:[^/]+[.](?:tm|catalog)[.]jsonl|memory-revision[.]json)$",
+      "u",
+    ).test(normalizedPath)
+  ) {
     return true;
   }
   if (runNodeConfigFiles.includes(normalizedPath)) {

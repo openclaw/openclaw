@@ -4,11 +4,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runnerImport, type Alias, type Plugin } from "vite";
 import {
-  loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
   setControlUiCatalogValue,
 } from "../../scripts/lib/control-ui-i18n-catalog-values.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "../../scripts/lib/control-ui-i18n-config.ts";
+import {
+  controlUiBuildMemoryPath,
+  loadControlUiBuildMemory,
+  CONTROL_UI_MEMORY_PIN,
+} from "../../scripts/lib/control-ui-i18n-storage.ts";
 import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import type { TranslationMap } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import {
@@ -91,10 +95,16 @@ async function loadControlUiLocaleCatalogPartition(
 ): Promise<ControlUiLocaleCatalogPartition> {
   // Source PRs omit generated memory until the post-merge refresh runs.
   // Existing empty or malformed memory stays fatal below so drift cannot hide.
-  if (!existsSync(memoryPath)) {
+  if (
+    !existsSync(controlUiBuildMemoryPath(memoryPath)) &&
+    !existsSync(path.join(path.dirname(memoryPath), CONTROL_UI_MEMORY_PIN))
+  ) {
     return partitionControlUiLocaleCatalog(sourceCatalog, startupKeys);
   }
-  const memory = loadControlUiTranslationMemory(memoryPath);
+  const memory = loadControlUiBuildMemory(memoryPath);
+  if (memory.size === 0 && !existsSync(controlUiBuildMemoryPath(memoryPath))) {
+    return partitionControlUiLocaleCatalog(sourceCatalog, startupKeys);
+  }
   if (memory.size === 0) {
     throw new Error(`Control UI ${locale} translation memory is missing or empty`);
   }
@@ -262,9 +272,14 @@ export function controlUiLocaleModulesPlugin(buildInputs?: Set<string>): Plugin 
           }
           // Vite turns watched files into imports during dev transforms. A source-only
           // locale has no memory file yet, so importing that path would fail.
-          if (existsSync(memoryPath)) {
-            this.addWatchFile(memoryPath);
-            buildInputs?.add(memoryPath);
+          for (const input of [
+            controlUiBuildMemoryPath(memoryPath),
+            path.join(i18nAssetsDir, CONTROL_UI_MEMORY_PIN),
+          ]) {
+            if (existsSync(input)) {
+              this.addWatchFile(input);
+              buildInputs?.add(input);
+            }
           }
           let partitionLoad = activeCache.partitionLoads.get(request.locale);
           if (!partitionLoad) {

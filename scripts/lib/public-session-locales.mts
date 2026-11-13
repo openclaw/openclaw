@@ -4,10 +4,14 @@ import type { TsdownPlugin } from "tsdown";
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from "../../src/shared/control-ui-locale.ts";
 import { PUBLIC_SESSION_COPY } from "../../src/shared/public-session-copy.ts";
 import {
-  loadControlUiTranslationMemory,
   materializePreparedControlUiLocaleCatalog,
   prepareControlUiCatalogSource,
 } from "./control-ui-i18n-catalog-values.ts";
+import {
+  controlUiBuildMemoryPath,
+  loadControlUiBuildMemory,
+  CONTROL_UI_MEMORY_PIN,
+} from "./control-ui-i18n-storage.ts";
 import { flattenTranslations } from "./control-ui-i18n-sync-plan.ts";
 
 const namespace = "publicReader.";
@@ -28,11 +32,14 @@ export function loadPublicSessionLocales(
       continue;
     }
     const memoryPath = path.join(rootDir, "ui/src/i18n/.i18n", locale + ".tm.jsonl");
-    const exists = fs.existsSync(memoryPath);
-    if (exists) {
-      recordInput?.(memoryPath);
+    const input = controlUiBuildMemoryPath(memoryPath);
+    const exists = fs.existsSync(input);
+    for (const file of [input, path.join(path.dirname(memoryPath), CONTROL_UI_MEMORY_PIN)]) {
+      if (fs.existsSync(file)) {
+        recordInput?.(file);
+      }
     }
-    const memory = loadControlUiTranslationMemory(memoryPath);
+    const memory = loadControlUiBuildMemory(memoryPath);
     if (exists && memory.size === 0) {
       throw new Error("Control UI " + locale + " translation memory is empty");
     }
