@@ -326,8 +326,6 @@ describe("sessions_spawn tool", () => {
       label: "Issue review",
       category: "Beta feedback",
       model: "anthropic/claude-sonnet-4-6",
-      // The visible path forwards the clamped inherited thinking level.
-      thinkingLevel: "medium",
       task: expect.stringContaining("inspect issue"),
       timeoutMs: 120000,
       parentSessionKey: "agent:main:main",

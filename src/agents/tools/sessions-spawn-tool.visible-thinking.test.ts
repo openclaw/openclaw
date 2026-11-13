@@ -90,7 +90,7 @@ describe("sessions_spawn visible child thinking", () => {
       callGateway: callGateway as never,
       // The prepared catalog carries no entry for this model, so runtime policy
       // alone has to clamp the inherited level.
-      loadModelCatalog: (async () => []) as never,
+      loadModelCatalog: (async () => ({ entries: [], routeVariants: [] })) as never,
       registerRun: vi.fn(),
       countActiveRuns: () => 0,
     });
@@ -131,7 +131,7 @@ describe("sessions_spawn visible child thinking", () => {
         },
       },
       callGateway: callGateway as never,
-      loadModelCatalog: (async () => []) as never,
+      loadModelCatalog: (async () => ({ entries: [], routeVariants: [] })) as never,
       registerRun: vi.fn(),
       countActiveRuns: () => 0,
     });
@@ -194,14 +194,16 @@ describe("sessions_spawn visible child thinking", () => {
       runStarted: true,
       runId: "run-visible",
     }));
-    const loadModelCatalog = vi.fn(async () => [
-      {
-        id: "demo-max",
-        provider: "demo",
-        reasoning: true,
-        thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
-      },
-    ]);
+    const aliasRow = {
+      id: "demo-max",
+      provider: "demo",
+      reasoning: true,
+      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+    };
+    const loadModelCatalog = vi.fn(async () => ({
+      entries: [aliasRow],
+      routeVariants: [aliasRow],
+    }));
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       requesterThinkingLevel: "max",
@@ -234,85 +236,6 @@ describe("sessions_spawn visible child thinking", () => {
         agentId: "main",
         model: "demo/demo-max@work",
         thinkingLevel: "max",
-      }),
-    );
-  });
-
-  // `sessions.create` grades an explicit `thinkingLevel` against the concrete
-  // runtime row it selects from `routeVariants`, not against the logical row.
-  // A clamp that reads logical rows only therefore disagrees with the validator
-  // in both directions: it keeps a level native selection rejects (creation
-  // fails where an omitted level used to succeed), and it drops a level the
-  // native row does support (silent downgrade).
-  // These cases use the flat row list a legacy array-returning loader yields.
-  // The prepared-snapshot shape (`entries` plus `routeVariants`) is pinned
-  // through real creation and persistence in
-  // `server.sessions.agent-model-catalog.test.ts`.
-  it.each([
-    {
-      name: "clamps down to the selected native runtime row (flat catalog)",
-      logicalEfforts: ["max"],
-      nativeEfforts: ["high"],
-      inherited: "max",
-      expected: "high",
-    },
-    {
-      name: "keeps effort the selected native runtime row supports (flat catalog)",
-      logicalEfforts: ["high"],
-      nativeEfforts: ["max"],
-      inherited: "max",
-      expected: "max",
-    },
-  ])("$name", async ({ logicalEfforts, nativeEfforts, inherited, expected }) => {
-    const callGateway = vi.fn(async () => ({
-      key: "agent:main:dashboard:child",
-      runStarted: true,
-      runId: "run-visible",
-    }));
-    const logical = {
-      id: "reasoner",
-      provider: "runtime-fixture",
-      name: "Reasoner",
-      reasoning: true,
-      compat: { supportedReasoningEfforts: logicalEfforts },
-    };
-    const native = {
-      ...logical,
-      nativeRuntime: "fixture-native",
-      compat: { supportedReasoningEfforts: nativeEfforts },
-    };
-    const loadModelCatalog = vi.fn(async () => [logical, native]);
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-      requesterThinkingLevel: inherited as never,
-      config: {
-        agents: {
-          defaults: {
-            model: { primary: "runtime-fixture/reasoner" },
-            models: {
-              "runtime-fixture/reasoner": { agentRuntime: { id: "fixture-native" } },
-            },
-          },
-          entries: { main: {} },
-        },
-      },
-      callGateway: callGateway as never,
-      loadModelCatalog: loadModelCatalog as never,
-      registerRun: vi.fn(),
-      countActiveRuns: () => 0,
-    });
-
-    await tool.execute(`visible-runtime-variant-flat-${expected}`, {
-      task: "inspect issue",
-      visible: true,
-    });
-
-    expect(callGateway).toHaveBeenCalledWith(
-      "sessions.create",
-      expect.objectContaining({
-        agentId: "main",
-        model: "runtime-fixture/reasoner",
-        thinkingLevel: expected,
       }),
     );
   });

@@ -1,10 +1,16 @@
 import type { ThinkLevel, ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadGatewayModelCatalogSnapshot } from "../../gateway/server-model-catalog.js";
+import { resolveAgentConfig } from "../agent-scope.js";
 import { findModelCatalogEntry } from "../model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../model-catalog-view.js";
-import type { ModelCatalogEntry } from "../model-catalog.types.js";
-import { splitModelRef } from "../subagents/spawn/subagent-spawn-plan.js";
+import type { ModelCatalogSnapshot } from "../model-catalog.types.js";
+import {
+  resolveSubagentModelAndThinkingPlan,
+  splitModelRef,
+} from "../subagents/spawn/subagent-spawn-plan.js";
+import { resolveRequesterPreferences } from "../subagents/spawn/subagent-spawn-requester-prefs.js";
 import {
   resolveCandidateThinkingLevel,
   resolveEffectiveAgentRuntime,
@@ -12,18 +18,13 @@ import {
 
 /**
  * `sessions.create` validates thinking against the concrete runtime row it
- * selects from `routeVariants`, so the clamp needs the whole snapshot. Loaders
- * that still answer with a bare row list stay supported: those rows serve as
- * both the logical catalog and its own route variants.
+ * selects from `routeVariants`, so the clamp needs the whole prepared snapshot
+ * rather than a bare row list.
  */
 export type VisibleChildModelCatalogLoader = (params: {
   agentId: string;
   getConfig: () => OpenClawConfig;
-}) => Promise<
-  | ModelCatalogEntry[]
-  | { entries: ModelCatalogEntry[]; routeVariants?: readonly ModelCatalogEntry[] }
-  | undefined
->;
+}) => Promise<ModelCatalogSnapshot | undefined>;
 
 /**
  * Reads the same prepared catalog generation `sessions.create` validates against,
@@ -35,24 +36,14 @@ async function loadVisibleChildThinkingCatalog(params: {
   loadModelCatalog?: VisibleChildModelCatalogLoader;
   agentId: string;
   cfg: OpenClawConfig;
-}): Promise<
-  { entries: ModelCatalogEntry[]; routeVariants: readonly ModelCatalogEntry[] } | undefined
-> {
+}): Promise<ModelCatalogSnapshot | undefined> {
   try {
-    const loaded = await (params.loadModelCatalog ?? loadGatewayModelCatalogSnapshot)({
-      agentId: params.agentId,
-      getConfig: () => params.cfg,
-    });
-    if (Array.isArray(loaded)) {
-      return { entries: loaded, routeVariants: loaded };
-    }
-    if (!Array.isArray(loaded?.entries)) {
-      return undefined;
-    }
-    return {
-      entries: loaded.entries,
-      routeVariants: Array.isArray(loaded.routeVariants) ? loaded.routeVariants : loaded.entries,
-    };
+    return (
+      (await (params.loadModelCatalog ?? loadGatewayModelCatalogSnapshot)({
+        agentId: params.agentId,
+        getConfig: () => params.cfg,
+      })) ?? undefined
+    );
   } catch {
     return undefined;
   }
@@ -60,31 +51,40 @@ async function loadVisibleChildThinkingCatalog(params: {
 
 /**
  * Mirrors Gateway's capability owner selection (`projectSessionsPatchEntry`):
- * the logical row identifies the model, then the concrete row for the runtime
- * that will own the child's turn supplies the thinking capabilities. Grading
- * against the logical row instead keeps levels the validator rejects (creation
- * fails where an omitted level used to succeed) and drops levels the selected
- * runtime does support.
+ * the logical row identifies the model and owns the configured reasoning
+ * policy, then the concrete row for the runtime that will own the child's turn
+ * supplies the thinking capabilities. Grading against the logical row instead
+ * keeps levels the validator rejects (creation fails where an omitted level
+ * used to succeed) and drops levels the selected runtime does support.
+ *
+ * The selected row carries only its own capabilities, so its `reasoning` flag
+ * cannot stand in for the logical policy: `sessions.create` grades with
+ * `logical.configuredReasoning ?? logical.reasoning` on top of the selected
+ * row. Returning that policy alongside the row keeps the clamp and the
+ * validator from disagreeing in either direction.
  */
 function selectVisibleChildThinkingCatalog(params: {
-  catalog: { entries: ModelCatalogEntry[]; routeVariants: readonly ModelCatalogEntry[] };
+  catalog: ModelCatalogSnapshot;
   provider: string;
   modelId: string;
   agentRuntime: string;
-}): ThinkingCatalogEntry[] {
+}): { catalog: ThinkingCatalogEntry[]; configuredReasoning?: boolean } {
   const logical = findModelCatalogEntry(params.catalog.entries, {
     provider: params.provider,
     modelId: params.modelId,
   });
   if (!logical) {
-    return params.catalog.entries;
+    return { catalog: params.catalog.entries };
   }
   const selected = selectModelCatalogRuntimeEntry({
     entry: logical,
     routeVariants: params.catalog.routeVariants,
     runtimeId: params.agentRuntime,
   }).entry;
-  return [selected];
+  return {
+    catalog: [selected],
+    configuredReasoning: logical.configuredReasoning ?? logical.reasoning,
+  };
 }
 
 /**
@@ -100,7 +100,7 @@ function selectVisibleChildThinkingCatalog(params: {
  * are invisible without the catalog, so an unreadable catalog or an
  * unsplittable model ref yields `undefined` and the field is omitted.
  */
-export async function resolveVisibleChildThinkingLevel(params: {
+async function resolveVisibleChildThinkingLevel(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
   resolvedModel: string;
@@ -133,19 +133,84 @@ export async function resolveVisibleChildThinkingLevel(params: {
     agentId: targetAgentId,
     sessionKey: pendingSessionKey,
   });
+  const graded = selectVisibleChildThinkingCatalog({
+    catalog: thinkingCatalog,
+    provider,
+    modelId: model,
+    agentRuntime,
+  });
   return resolveCandidateThinkingLevel({
     cfg,
     provider,
     modelId: model,
     level,
-    catalog: selectVisibleChildThinkingCatalog({
-      catalog: thinkingCatalog,
-      provider,
-      modelId: model,
-      agentRuntime,
-    }),
+    catalog: graded.catalog,
+    configuredReasoning: graded.configuredReasoning,
     agentId: targetAgentId,
     sessionKey: pendingSessionKey,
     agentRuntime,
   });
+}
+
+type VisibleRequesterPreferences = ReturnType<typeof resolveRequesterPreferences>;
+
+/** Requester facts the host forwards to a visible spawn; public callers omit them. */
+export type VisibleChildPlanOptions = {
+  requesterThinkingLevel?: VisibleRequesterPreferences["thinkingLevel"];
+  requesterThinkingExplicit?: boolean;
+  requesterModel?: VisibleRequesterPreferences["model"];
+  loadModelCatalog?: VisibleChildModelCatalogLoader;
+};
+
+/**
+ * Resolves the visible child's model plan together with the thinking level it is
+ * created with. Both answers read the same requester preferences and prepared
+ * catalog, so they are resolved once here and forwarded by the caller.
+ */
+export async function resolveVisibleChildModelPlan(params: {
+  cfg: OpenClawConfig;
+  requesterAgentId: string;
+  targetAgentId: string;
+  requesterEntry: SessionEntry | undefined;
+  modelOverride?: string;
+  workspaceDir?: string;
+  options?: VisibleChildPlanOptions;
+}) {
+  const { cfg, requesterAgentId, targetAgentId, requesterEntry, options } = params;
+  // Saved preferences carry the explicit-selection fact alongside the level, so
+  // resolve them once: separate lookups make it easy to forward one without the other.
+  let cachedPreferences: VisibleRequesterPreferences | undefined;
+  const saved = () =>
+    (cachedPreferences ??= resolveRequesterPreferences({ cfg, requesterAgentId, requesterEntry }));
+  const modelPlan = await resolveSubagentModelAndThinkingPlan({
+    cfg,
+    targetAgentId,
+    requesterAgentConfig: resolveAgentConfig(cfg, requesterAgentId),
+    targetAgentConfig: resolveAgentConfig(cfg, targetAgentId),
+    modelOverride: params.modelOverride,
+    workspaceDir: params.workspaceDir,
+    callerThinkingRaw: options?.requesterThinkingLevel ?? saved().thinkingLevel,
+    // An automatic parent tier must not become the child's explicit saved
+    // preference: hidden spawning forwards this provenance bit, and an
+    // unselected child keeps its own model default.
+    callerThinkingExplicit:
+      options?.requesterThinkingLevel !== undefined
+        ? options.requesterThinkingExplicit
+        : saved().thinkingExplicit,
+    inheritedModel:
+      targetAgentId === requesterAgentId ? (options?.requesterModel ?? saved().model) : undefined,
+  });
+  if (modelPlan.status === "error") {
+    return modelPlan;
+  }
+  return {
+    ...modelPlan,
+    thinkingLevel: await resolveVisibleChildThinkingLevel({
+      cfg,
+      targetAgentId,
+      resolvedModel: modelPlan.resolvedModel,
+      level: modelPlan.initialSessionPatch.thinkingLevel,
+      loadModelCatalog: options?.loadModelCatalog,
+    }),
+  };
 }

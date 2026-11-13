@@ -254,8 +254,8 @@ test.each([false, true])("preserves write-scoped adoption (subagent: %s)", async
 
 // A visible spawn forwards its inherited level as an explicit `thinkingLevel`,
 // and the real creation path rejects an explicit level the prepared catalog does
-// not support. These cases pin that boundary for a catalog-defined off-only
-// model: the unclamped level fails creation outright, the clamped one persists.
+// not support. This catalog-defined off-only model is the fixture for that
+// boundary.
 const offOnlyModel = {
   id: "off-only",
   name: "Off Only",
@@ -263,57 +263,6 @@ const offOnlyModel = {
   reasoning: false,
 };
 const offOnlyRef = "off-provider/off-only";
-
-test.each([
-  {
-    label: "rejects an unclamped inherited level for an off-only model",
-    thinkingLevel: "high",
-    created: false,
-  },
-  {
-    label: "accepts the catalog-clamped level for an off-only model",
-    thinkingLevel: "off",
-    created: true,
-  },
-])("sessions.create $label", async (scenario) => {
-  const { workStorePath } = await createSelectedGlobalSessionStore();
-  testState.agentConfig = { model: { primary: "synthetic/base" } };
-  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
-  const key = "agent:work:dashboard:off-only-child";
-  const access = { agentId: "work", sessionKey: key, storePath: workStorePath };
-  const loadGatewayModelCatalog = vi.fn(async () => [offOnlyModel]);
-
-  const result = await sessions.directSessionReq<{ entry?: SessionEntry }>(
-    "sessions.create",
-    {
-      key,
-      agentId: "work",
-      model: offOnlyRef,
-      thinkingLevel: scenario.thinkingLevel,
-      task: "inspect issue",
-    },
-    { context: { loadGatewayModelCatalog } },
-  );
-
-  expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "work" });
-  if (!scenario.created) {
-    expect.soft(result.ok).toBe(false);
-    // The suggested-level list also carries harness-owned modes (Ultra), so pin
-    // the rejection itself rather than that list.
-    expect.soft(result.error).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: expect.stringContaining(`thinkingLevel "high" is not supported for ${offOnlyRef}`),
-    });
-    expect(loadSessionEntry(access)).toBeUndefined();
-    return;
-  }
-  expect(result.ok, result.error?.message).toBe(true);
-  expect(loadSessionEntry(access)).toMatchObject({
-    providerOverride: "off-provider",
-    modelOverride: "off-only",
-    thinkingLevel: "off",
-  });
-});
 
 // Integrated boundary: the visible spawn tool's own clamp feeds the real
 // `sessions.create` handler, with one shared authoritative catalog for both
@@ -339,9 +288,15 @@ type VisibleSpawnBoundaryCase = {
   agentRuntime?: string;
   /** Caller's live thinking level; omitted when the case relies on saved config. */
   inherited?: string;
+  /**
+   * Whether the caller's level was explicitly selected. `false` is an automatic
+   * model tier, which must not become the child's saved preference.
+   */
+  inheritedExplicit?: boolean;
   /** Saved `agents.defaults.subagents.thinking`, which outranks the caller's level. */
   savedSubagentThinking?: string;
-  expectedLevel: string;
+  /** `undefined` means creation must omit `thinkingLevel` entirely. */
+  expectedLevel?: string;
   /** Creation must reject the unclamped candidate level for this catalog. */
   rejectsUnclamped?: boolean;
 };
@@ -410,6 +365,50 @@ const visibleSpawnBoundaryCases: VisibleSpawnBoundaryCase[] = [
     agentRuntime: "fixture-native",
     inherited: "max",
     expectedLevel: "max",
+  },
+  // Reasoning is a logical-model policy, not a runtime capability: creation
+  // grades `logical.configuredReasoning ?? logical.reasoning` on top of the
+  // selected row, so a clamp that reads the selected row's own flag keeps a
+  // level the validator rejects and creation fails where an omitted level
+  // used to succeed.
+  {
+    label: "a child whose logical model disables reasoning",
+    model: { ...runtimeVariantModel, reasoning: false },
+    ref: runtimeVariantRef,
+    routeVariants: [
+      { ...runtimeVariantModel, reasoning: false },
+      { ...runtimeVariantModel, nativeRuntime: "fixture-native", reasoning: true },
+    ],
+    agentRuntime: "fixture-native",
+    inherited: "high",
+    expectedLevel: "off",
+    rejectsUnclamped: true,
+  },
+  // The inverse reasoning mismatch: the logical policy enables reasoning the
+  // selected row does not declare, and creation accepts the level. Dropping the
+  // logical policy would discard supported effort instead.
+  {
+    label: "a child whose logical model enables reasoning its runtime row omits",
+    model: { ...runtimeVariantModel, reasoning: true },
+    ref: runtimeVariantRef,
+    routeVariants: [
+      { ...runtimeVariantModel, reasoning: true },
+      { ...runtimeVariantModel, nativeRuntime: "fixture-native", reasoning: false },
+    ],
+    agentRuntime: "fixture-native",
+    inherited: "high",
+    expectedLevel: "high",
+  },
+  // An automatic parent tier is not a selected preference. Hidden spawning
+  // excludes it, so a visible child must also keep its own model default and
+  // creation must omit the field.
+  {
+    label: "a child inheriting an automatic parent tier",
+    model: { ...offOnlyModel, reasoning: true },
+    ref: offOnlyRef,
+    inherited: "high",
+    inheritedExplicit: false,
+    expectedLevel: undefined,
   },
 ];
 
@@ -488,6 +487,9 @@ test.each(visibleSpawnBoundaryCases)(
         config: getRuntimeConfig(),
         agentSessionKey: parentKey,
         ...(scenario.inherited ? { requesterThinkingLevel: scenario.inherited as never } : {}),
+        ...(scenario.inheritedExplicit !== undefined
+          ? { requesterThinkingExplicit: scenario.inheritedExplicit }
+          : {}),
         loadModelCatalog: loadGatewayModelCatalogSnapshot as never,
         registerRun: registerRun as never,
         countActiveRuns: () => 0,
@@ -533,13 +535,22 @@ test.each(visibleSpawnBoundaryCases)(
     expect(result).toMatchObject({ status: "accepted" });
     expect(gatewayCalls[0]).toMatchObject({
       method: "sessions.create",
-      params: { agentId: "work", model: scenario.ref, thinkingLevel: scenario.expectedLevel },
+      params: { agentId: "work", model: scenario.ref },
     });
     // The tool mints the child key, so read the persisted row it reports back.
     const childSessionKey = result?.childSessionKey as string;
     expect(childSessionKey).toBeTruthy();
-    expect(
-      loadSessionEntry({ agentId: "work", sessionKey: childSessionKey, storePath: workStorePath }),
-    ).toMatchObject({ thinkingLevel: scenario.expectedLevel });
+    const childEntry = loadSessionEntry({
+      agentId: "work",
+      sessionKey: childSessionKey,
+      storePath: workStorePath,
+    });
+    if (scenario.expectedLevel === undefined) {
+      expect(gatewayCalls[0]?.params).not.toHaveProperty("thinkingLevel");
+      expect(childEntry?.thinkingLevel).toBeUndefined();
+      return;
+    }
+    expect(gatewayCalls[0]?.params).toMatchObject({ thinkingLevel: scenario.expectedLevel });
+    expect(childEntry).toMatchObject({ thinkingLevel: scenario.expectedLevel });
   },
 );

@@ -23,7 +23,7 @@ import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
-import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
+import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { prepareNativeDelegatedToolPolicy } from "../delegated-tool-policy.js";
@@ -46,14 +46,8 @@ import {
   resolveSubagentAgentGatewayTimeoutMs,
 } from "../subagents/spawn/subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
-import {
-  resolveConfiguredSubagentRunTimeoutSeconds,
-  resolveSubagentModelAndThinkingPlan,
-} from "../subagents/spawn/subagent-spawn-plan.js";
-import {
-  resolveRequesterPreferences,
-  resolveSubagentCyberAccessProgram,
-} from "../subagents/spawn/subagent-spawn-requester-prefs.js";
+import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagents/spawn/subagent-spawn-plan.js";
+import { resolveSubagentCyberAccessProgram } from "../subagents/spawn/subagent-spawn-requester-prefs.js";
 import { buildSubagentTaskMessage } from "../subagents/spawn/subagent-system-prompt.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { validateName } from "../worktrees/name.js";
@@ -72,7 +66,7 @@ import {
   summarizeVisibleSessionSpawnError,
 } from "./sessions-spawn-visible-cleanup.js";
 import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
-import { resolveVisibleChildThinkingLevel } from "./sessions-spawn-visible-thinking.js";
+import { resolveVisibleChildModelPlan } from "./sessions-spawn-visible-thinking.js";
 import {
   correctedVisibleSpawnCall,
   SessionsSpawnPlacementSchema,
@@ -308,26 +302,19 @@ export async function maybeSpawnVisibleSession(
     };
   }
 
-  const modelPlan = await resolveSubagentModelAndThinkingPlan({
+  const modelPlan = await resolveVisibleChildModelPlan({
     cfg,
+    requesterAgentId,
     targetAgentId,
-    requesterAgentConfig: resolveAgentConfig(cfg, requesterAgentId),
-    targetAgentConfig: resolveAgentConfig(cfg, targetAgentId),
+    requesterEntry,
     modelOverride,
     workspaceDir: spawnedWorkspaceDir,
-    callerThinkingRaw:
-      params.options?.requesterThinkingLevel ??
-      resolveRequesterPreferences({ cfg, requesterAgentId, requesterEntry }).thinkingLevel,
-    inheritedModel:
-      targetAgentId === requesterAgentId
-        ? (params.options?.requesterModel ??
-          resolveRequesterPreferences({ cfg, requesterAgentId, requesterEntry }).model)
-        : undefined,
+    options: params.options,
   });
   if (modelPlan.status === "error") {
     return { status: "error", error: modelPlan.error };
   }
-  const { resolvedModel, inheritedModel, initialSessionPatch } = modelPlan;
+  const { resolvedModel, inheritedModel, initialSessionPatch, thinkingLevel } = modelPlan;
   const cyberAccessProgram = resolveSubagentCyberAccessProgram({
     cfg,
     requesterAgentId,
@@ -391,13 +378,6 @@ export async function maybeSpawnVisibleSession(
         throw new ToolInputError("Public ingress work requires an immediate isolated child.");
       }
     }
-    const resolvedThinkingLevel = await resolveVisibleChildThinkingLevel({
-      cfg,
-      targetAgentId,
-      resolvedModel,
-      level: initialSessionPatch.thinkingLevel,
-      loadModelCatalog: params.options?.loadModelCatalog,
-    });
     const gatewayCall = params.options?.callGateway ?? callInProcessGatewayTool;
     const createGatewayCall: InProcessGatewayCaller =
       params.options?.callGateway ??
@@ -460,7 +440,7 @@ export async function maybeSpawnVisibleSession(
         // sessions.create persists the group under the legacy wire field `category`.
         ...(group ? { category: group } : {}),
         model: resolvedModelRef,
-        ...(resolvedThinkingLevel ? { thinkingLevel: resolvedThinkingLevel } : {}),
+        ...(thinkingLevel ? { thinkingLevel } : {}),
         ...(cyberAccessProgram !== undefined ? { cyberAccessProgram } : {}),
         ...(placement ? { titleSource } : taskMessage ? { task: taskMessage } : {}),
         timeoutMs:
