@@ -149,6 +149,9 @@ func configureSocketTimeouts(_ fd: Int32, timeoutMs: Int) throws {
     }
 }
 
+/// A received frame that is not valid UTF-8; unlike a clean close, the peer is owed an error.
+struct SocketLineEncodingError: Error {}
+
 func readLineFromSocket(_ fd: Int32, maxBytes: Int) throws -> String? {
     // Foundation can wait for the full requested byte count on sockets. POSIX
     // recv returns short JSONL frames; the socket timeout bounds idle peers.
@@ -173,7 +176,10 @@ func readLineFromSocket(_ fd: Int32, maxBytes: Int) throws -> String? {
         }
     }
     guard !buffer.isEmpty else { return nil }
-    return String(data: buffer.prefix { $0 != 0x0A }, encoding: .utf8)
+    guard let line = String(data: buffer.prefix { $0 != 0x0A }, encoding: .utf8) else {
+        throw SocketLineEncodingError()
+    }
+    return line
 }
 
 func timingSafeHexStringEquals(_ lhs: String, _ rhs: String) -> Bool {
