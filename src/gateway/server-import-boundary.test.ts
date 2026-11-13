@@ -9,6 +9,8 @@ const repoRoot = path.resolve(import.meta.dirname, "../..");
 const graph = createRuntimeImportGraph(
   repoRoot,
   [
+    "src/gateway/call.ts",
+    "src/gateway/config-get-response.ts",
     "src/gateway/method-scopes.ts",
     "src/gateway/server-cron.ts",
     "src/gateway/worker-environments/worker-exec-approval.ts",
@@ -83,6 +85,13 @@ console.log("prewarm-cold-selection-ok");`,
         expect(result.stdout).toContain("prewarm-cold-selection-ok");
       },
     );
+  });
+
+  it.each([
+    ["src/gateway/call.ts", "src/gateway/method-scopes.ts"],
+    ["src/gateway/config-get-response.ts", "src/config/runtime-schema.ts"],
+  ])("loads %s without the demand-only %s", (entry, deferred) => {
+    expect(collectStaticValueImports(entry)).not.toContain(path.normalize(deferred));
   });
 
   it("prepares worker exec approvals without loading model completion", () => {
