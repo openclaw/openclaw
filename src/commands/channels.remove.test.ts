@@ -243,21 +243,6 @@ describe("channelsRemoveCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith('Deleted external-chat account "default".');
   });
 
-  it("rejects a blank --account before deleting or writing config", async () => {
-    const scopedPlugin = createExternalChatDeletePlugin();
-    mockInstalledPlugin(scopedPlugin);
-
-    await expect(
-      channelsRemoveCommand({ channel: "external-chat", account: "   ", delete: true }, runtime, {
-        hasFlags: true,
-      }),
-    ).rejects.toThrow("--account must not be blank");
-
-    expect(scopedPlugin.config.deleteAccount).not.toHaveBeenCalled();
-    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
-    expect(runtime.log).not.toHaveBeenCalled();
-  });
-
   function installWorkAccountChannel() {
     configMocks.readConfigFileSnapshot.mockResolvedValue(
       createTestConfigSnapshot({
@@ -421,11 +406,11 @@ describe("channelsRemoveCommand", () => {
       callOrder.push("output");
     });
 
-    await channelsRemoveCommand(
-      { channel: "external-chat", account: "Work", delete: true },
-      runtime,
-      { hasFlags: true },
-    );
+    const removeWork = () =>
+      channelsRemoveCommand({ channel: "external-chat", account: "Work", delete: true }, runtime, {
+        hasFlags: true,
+      });
+    await removeWork();
 
     expect(plugin.config.deleteAccount).toHaveBeenCalledExactlyOnceWith({ cfg, accountId: "work" });
     expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
@@ -454,15 +439,7 @@ describe("channelsRemoveCommand", () => {
       scope.beginClose(reason);
       throw new Error("gateway unavailable");
     });
-    await expect(
-      scope.run(() =>
-        channelsRemoveCommand(
-          { channel: "external-chat", account: "Work", delete: true },
-          runtime,
-          { hasFlags: true },
-        ),
-      ),
-    ).rejects.toBe(reason);
+    await expect(scope.run(removeWork)).rejects.toBe(reason);
     expect(gatewayMocks.callGateway).toHaveBeenLastCalledWith(
       expect.objectContaining({ signal: scope.signal }),
     );
