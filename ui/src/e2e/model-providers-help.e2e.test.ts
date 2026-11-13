@@ -162,7 +162,9 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
         await helpButton.click();
         await expect.poll(tooltipIsOpen).toBe(true);
         await expect.poll(() => tooltip.textContent()).toContain("short background tasks");
-        await expect.poll(() => tooltip.textContent()).toContain("primary model provider");
+        await expect
+          .poll(() => tooltip.textContent())
+          .toContain("provider’s recommended small model");
         if (recordVisuals) {
           const labelBox = await utilityLabel.boundingBox();
           const tooltipBox = await tooltipBody.boundingBox();

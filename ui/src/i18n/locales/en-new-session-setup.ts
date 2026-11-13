@@ -159,7 +159,7 @@ const enNewSessionSetup = {
     nativeTerminalHint:
       "Starts the native CLI on the selected device using its own account and configuration. This doesn’t create an OpenClaw session.",
     nativeTerminalHintTooltip:
-      "Opens the native CLI on this device with its own account and settings—not an OpenClaw session.",
+      "Opens the native CLI on the selected device with its own account and settings—not an OpenClaw session.",
     chooseNativeHost: "Choose a device for the native CLI",
     nativeHostsUnavailable:
       "No native CLI is available. Install it on this computer or connect a device with CLI access, then reconnect to the Gateway.",

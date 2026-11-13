@@ -71,7 +71,7 @@ export function SettingsDetailsRow(props: {
   title: JSX.Element;
   description?: JSX.Element;
   control?: JSX.Element;
-  /** Names the chevron for assistive tech and its tooltip, for example "Connection details". */
+  /** Names the chevron for assistive tech, for example "Connection details". */
   detailsLabel: string;
   /** False hides the chevron while there is nothing to show. */
   hasDetails?: boolean;
