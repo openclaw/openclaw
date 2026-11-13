@@ -394,7 +394,14 @@ async function readBulkAdvisoryJson(response, maxBytes, options = {}) {
   if (!text.trim()) {
     throw new Error("Bulk advisory response body was empty");
   }
-  const body = JSON.parse(text);
+  let body;
+  try {
+    body = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`Invalid bulk advisory response: not valid JSON (${error.message})`, {
+      cause: error,
+    });
+  }
   validateBulkAdvisoryResponse(body);
   return body;
 }
