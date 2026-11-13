@@ -41,6 +41,9 @@
  * Baseline overlays the custody owner. --reuse-scratch-order reuses only a completed
  * synthetic fixture between serial arms, rebuilding removed clones outside timing.
  * Acceptance: 0 -> 6 clone removals, 256 total entries, fresh scratch unchanged.
+ * Worker offload comparisons include worker startup in the whole-pass measurements.
+ * Overlay scratch-cleanup.ts for the baseline: both arms must remove all six
+ * clones, and main CPU/allocation must fall without worsening loop tails.
  * Reuse the prior physical pressure qualification; do not interpret accelerated
  * scheduler time or these clone-shaped trees as Git or btrfs throughput evidence.
  * Seed a large isolated DB with generateTeamShapeFixture from team-shape-fixture.ts,
@@ -460,6 +463,11 @@ try {
     inspector.connect();
     await inspector.post("Profiler.enable");
     await inspector.post("Profiler.start");
+    await inspector.post("HeapProfiler.startSampling", {
+      samplingInterval: 4096,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
+    });
   }
   sampleKernel();
   kernelTimer = setInterval(sampleKernel, 1_000);
@@ -512,6 +520,10 @@ try {
       path.join(output, "cpu.cpuprofile"),
       JSON.stringify((await inspector.post("Profiler.stop")).profile),
     );
+    fs.writeFileSync(
+      path.join(output, "allocation.heapprofile"),
+      JSON.stringify((await inspector.post("HeapProfiler.stopSampling")).profile),
+    );
     inspector.disconnect();
   }
   if (!observeMs && !scratchOrder) {
@@ -556,6 +568,9 @@ try {
     "src/gateway/worktree-maintenance.ts",
     "src/gateway/scratch-maintenance-custody.ts",
     "src/infra/host-io-pressure.ts",
+    "src/infra/scratch-cleanup.ts",
+    "src/infra/scratch-cleanup-tree.ts",
+    "src/infra/fs-safe-copy.worker.ts",
   ]) {
     const original = baseline && path.join(baseline, relative);
     digest.update(
@@ -587,7 +602,9 @@ try {
       : undefined,
     scratchRemaining:
       scratchClones && fs.existsSync(scratchRoot)
-        ? fs.readdirSync(scratchRoot).filter((name) => name.startsWith("clone-")).length
+        ? fs
+            .readdirSync(scratchRoot, { withFileTypes: true })
+            .filter((entry) => entry.isDirectory()).length
         : 0,
     injectedPsiTrace: values["psi-trace"],
     pressureProbeReads,

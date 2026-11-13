@@ -36,9 +36,8 @@ Live readiness and graphics inspection are available through `browser doctor --d
 ## Browser panel in the Control UI
 
 The Browser panel follows the current session's latest successful browser tab,
-including its profile and host or node. Opening a browser preview card selects
-that card's browser and tab. This does not change `browser.defaultProfile` or
-another session's selection. Without a session browser target, the panel uses
+including its profile and host or node. This does not change
+`browser.defaultProfile` or another session's selection. Without a session browser target, the panel uses
 the configured default routing.
 
 The chat side panel shows only this session's tabs: tabs its agent or panel
@@ -82,15 +81,11 @@ After an established stream disconnects, the panel refreshes its screenshot
 and retries the stream automatically after a short delay. Annotation and
 inspection keep their captured image until you return to interaction mode.
 
-Preview cards appear only for HTTP(S) page URLs when OpenClaw can identify the
-browser's route. Blank or internal pages remain ordinary tool results. Tab
-actions without a page URL still update the Browser panel's selection. Sandbox
-browser results remain available to the agent but do not open a host-browser preview.
-Repeated opens of the same page in one chat activity group share one preview card
-for the same browser profile and host or node. The card opens the most recently
-used tab; different page URLs or browser routes stay separate. Long URLs that
-may have been shortened in tool metadata keep separate tab cards to avoid hiding
-different pages. Expand the tool activity to inspect every original call and result.
+Browser tool calls appear in chat as ordinary expandable tool results; they do
+not add page-preview cards. Tab actions without a page URL still update the
+Browser panel's selection. Sandbox browser results remain available to the agent
+but do not select a host browser. Expand the tool activity to inspect every
+original call and result.
 
 The panel's address bar opens web addresses and searches everything else.
 An `http(s)://` URL, or a host with a dot, a port, `localhost` or an IPv6
@@ -109,9 +104,8 @@ allowed address, or refresh after a temporary lookup failure. Blocked URLs stay
 hidden; displaying a tab title does not grant access to its contents.
 
 Following a historical tab never starts a stopped managed browser: a fresh
-launch cannot contain that tab. The panel shows **Start browser** instead, and
-preview cards keep their title and URL without a thumbnail when that target
-is unavailable. Click **Start browser** to launch the browser and show its current tabs.
+launch cannot contain that tab. The panel shows **Start browser** instead.
+Click **Start browser** to launch the browser and show its current tabs.
 
 For local `attachOnly` CDP profiles on macOS and Linux, direct preview screenshots
 preserve the active Chrome tab when OpenClaw can verify that the attached browser

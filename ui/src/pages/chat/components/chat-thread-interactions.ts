@@ -9,7 +9,6 @@ import type {
 } from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
-import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button-state.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
@@ -160,7 +159,6 @@ export type ChatThreadProps = Omit<
     toolMessages: unknown[];
     /** Existing pane owner, forwarded into the transcript's detached render root. */
     toolMessageSource?: ChatToolMessageSource;
-    latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
     guardianNotices?: ChatGuardianNotice[];
     streamSegments: ChatStreamSegment[];
     reasoning?: import("../tool-stream-contract.ts").ChatReasoning | null;

@@ -29,7 +29,6 @@ import {
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { selectActivityHeadline } from "./chat-activity-headline-selection.ts";
 import { ChatActivityHeadline } from "./chat-activity-headline.solid.tsx";
-import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import {
   ActivityOperation,
   descendantCards,
@@ -41,7 +40,6 @@ import type {
 } from "./chat-message-bubble-options.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
-import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
 import { ToolReviewOutcome } from "./chat-tool-outcome-summary.solid.tsx";
 
 function isStandaloneActivity(card: ToolCard): boolean {
@@ -247,7 +245,6 @@ export function ActivityGroupBody(props: {
   options: NativeMessageGroupOptions;
   renderEntries: ActivityEntries;
   inline?: boolean;
-  segmented?: boolean;
   liveBubble?: boolean;
 }) {
   let disclosureContent: HTMLSpanElement | undefined;
@@ -324,9 +321,6 @@ export function ActivityGroupBody(props: {
           {(_visible) => props.renderEntries(overrides, groups)}
         </Show>
       </div>
-      <Show when={!props.segmented && (!props.options.bubbleMode || state().activityExpanded)}>
-        <BrowserTabPreviews previews={selectBrowserTabPreviews(props.groups, props.options)} />
-      </Show>
     </div>
   );
 }
@@ -470,12 +464,7 @@ function ActivityOperationSegments(props: ActivityGroupContentProps & { state: A
                   fallback={
                     <Show when={prepared()}>
                       {(state) => (
-                        <ActivityGroupBody
-                          {...props}
-                          state={state()}
-                          renderEntries={entries}
-                          segmented
-                        />
+                        <ActivityGroupBody {...props} state={state()} renderEntries={entries} />
                       )}
                     </Show>
                   }
@@ -489,7 +478,6 @@ function ActivityOperationSegments(props: ActivityGroupContentProps & { state: A
           );
         }}
       </For>
-      <BrowserTabPreviews previews={selectBrowserTabPreviews(props.groups, props.options)} />
     </>
   );
 }

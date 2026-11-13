@@ -471,7 +471,7 @@ describe("transcript projection", () => {
         type: "toolCall",
         id: toolCallId,
         name: "read",
-        arguments: {},
+        arguments: { path: `${id}.txt` },
       })),
       activity,
     };
@@ -492,15 +492,15 @@ describe("transcript projection", () => {
     view.draw();
     await view.settle();
     await vi.dynamicImportSettled();
-    await waitForSolid(() => expect(liveLabels()).toEqual(["Latest operation…"]));
+    await waitForSolid(() => expect(liveLabels()).toEqual(["Reading Latest operation.txt…"]));
     props.messages = props.messages.map((message) =>
       message === latest ? { ...latest, runId: "peer" } : message,
     );
     view.draw();
-    expect(liveLabels()).toEqual(["Earlier operation…"]);
+    expect(liveLabels()).toEqual([]);
     props.runId = "peer";
     view.draw();
-    expect(liveLabels()).toEqual(["Latest operation…"]);
+    expect(liveLabels()).toEqual(["Reading Latest operation.txt…"]);
     props.runActive = false;
     view.draw();
     expect(liveLabels()).toEqual([]);
