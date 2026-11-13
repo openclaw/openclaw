@@ -1,5 +1,7 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import {
   filterStringEntries,
   normalizeOptionalString,
@@ -267,6 +269,7 @@ async function editDoc(
   maxBytes: number,
   imageReadTimeoutMs: number,
   logger?: Logger,
+  mediaAccess?: OutboundMediaAccess,
 ) {
   const docToken = params.doc_token;
   const target =
@@ -339,6 +342,7 @@ async function editDoc(
         const upload = await resolveDocxUploadInput({
           url,
           maxBytes,
+          mediaAccess,
           remoteReadTimeoutMs: imageReadTimeoutMs,
         });
         await uploadImageToDocx(client, blockId, upload, docToken);
@@ -681,6 +685,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     createExecute(ctx, cfg) {
       const defaultAccountId = ctx.agentAccountId;
       const mediaLocalRoots = resolveDocToolLocalRoots(ctx);
+      const mediaAccess = resolveOutboundMediaAccessForConfig(cfg);
       const trustedRequesterOpenId =
         ctx.messageChannel === "feishu"
           ? normalizeOptionalString(ctx.requesterSenderId)
@@ -709,7 +714,9 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           case "write":
           case "append":
           case "insert":
-            return json(await editDoc(client, p, mediaMaxBytes, imageReadTimeoutMs, api.logger));
+            return json(
+              await editDoc(client, p, mediaMaxBytes, imageReadTimeoutMs, api.logger, mediaAccess),
+            );
           case "create":
             return json(await createDoc(client, p, trustedRequesterOpenId));
           case "list_blocks": {
@@ -762,6 +769,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
               filePath: p.file_path,
               maxBytes: mediaMaxBytes,
               localRoots: mediaLocalRoots,
+              mediaAccess,
               fileName: p.filename,
               ...(p.action === "upload_image"
                 ? { image: p.image, remoteReadTimeoutMs: imageReadTimeoutMs }

@@ -12,6 +12,7 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import { saveMediaBuffer, saveMediaSource } from "openclaw/plugin-sdk/media-store";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,
@@ -225,6 +226,7 @@ export async function handleQaInbound(params: {
         ...message,
         mediaUrls,
         mediaLocalRoots,
+        mediaAccess: resolveOutboundMediaAccessForConfig(config),
       });
     } else {
       await sendQaChannelText(message);

@@ -4,6 +4,7 @@ import { uploadFile } from "../tlon-api.js";
 import { uploadImageFromUrl } from "./upload.js";
 
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+  buildOutboundMediaLoadOptions: () => ({}),
   MAX_IMAGE_BYTES: 6 * 1024 * 1024,
   readRemoteMediaBuffer: vi.fn(),
 }));

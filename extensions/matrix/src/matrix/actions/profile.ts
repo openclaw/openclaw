@@ -1,3 +1,5 @@
+import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import { getMatrixRuntime } from "../../runtime.js";
 import { syncMatrixOwnProfile, type MatrixProfileSyncResult } from "../profile.js";
 import { withResolvedActionClient } from "./client.js";
@@ -19,7 +21,14 @@ export async function updateMatrixOwnProfile(
       displayName: opts.displayName,
       avatarUrl: opts.avatarUrl,
       avatarPath: opts.avatarPath,
-      loadAvatarFromUrl: async (url, maxBytes) => await runtime.media.loadWebMedia(url, maxBytes),
+      loadAvatarFromUrl: async (url, maxBytes) =>
+        await runtime.media.loadWebMedia(
+          url,
+          buildOutboundMediaLoadOptions({
+            maxBytes,
+            mediaAccess: resolveOutboundMediaAccessForConfig(opts.cfg),
+          }),
+        ),
       loadAvatarFromPath: async (path, maxBytes) =>
         await runtime.media.loadWebMedia(path, {
           maxBytes,

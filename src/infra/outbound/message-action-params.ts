@@ -17,6 +17,7 @@ import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-byte
 import {
   buildOutboundMediaLoadOptions,
   resolveOutboundMediaAccess,
+  resolveOutboundMediaAccessForConfig,
   resolveOutboundMediaLocalRoots,
   type OutboundMediaAccess,
   type OutboundMediaReadFile,
@@ -537,11 +538,11 @@ export async function hydrateAttachmentParamsForAction(params: {
         optimizeImages,
       });
     }
-    // Apply only the operator deny list; web_fetch's private-network opt-ins stay out of attachments.
-    const blockedHostnames = params.cfg.tools?.web?.fetch?.ssrfPolicy?.blockedHostnames;
+    // The sandbox branch builds its own options, so apply the configured deny list for both here.
+    const blockedHostnames = resolveOutboundMediaAccessForConfig(params.cfg)?.blockedHostnames;
     const media = await loadWebMedia(mediaSource, {
       ...mediaOptions,
-      ...(blockedHostnames?.length ? { ssrfPolicy: { blockedHostnames } } : {}),
+      ...(blockedHostnames ? { ssrfPolicy: { blockedHostnames: [...blockedHostnames] } } : {}),
     });
     params.args.buffer = media.buffer.toString("base64");
     if (!contentTypeParam && media.contentType) {

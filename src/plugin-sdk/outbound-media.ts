@@ -6,7 +6,10 @@ import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "../medi
 import type { PluginStateKeyedStore } from "./plugin-state-runtime.js";
 import { loadWebMedia } from "./web-media.js";
 
-export { resolveOutboundMediaAccess } from "../media/load-options.js";
+export {
+  resolveOutboundMediaAccess,
+  resolveOutboundMediaAccessForConfig,
+} from "../media/load-options.js";
 
 /** Media loading policy used before plugin media is handed to channel delivery. */
 export type OutboundMediaLoadOptions = {
