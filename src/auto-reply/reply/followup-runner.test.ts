@@ -526,6 +526,32 @@ describe("createFollowupRunner", () => {
     expect(typing.markRunComplete).toHaveBeenCalledOnce();
   });
 
+  it("records the causal failure on an internal event when revoked input is denied", async () => {
+    const failure = new Error("original operator role changed");
+    const onFailed = vi.fn();
+    turn.queued.run.internalEventExecution = {
+      onFailed,
+      onStarted: vi.fn(),
+      onTerminal: vi.fn(),
+    };
+    turn.queued.operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "guest",
+      scopes: ["operator.write"],
+      assertCurrent: () => {
+        throw failure;
+      },
+    });
+    state.admit.mockRejectedValueOnce(failure);
+
+    await expect(
+      createRunner({ typing, typingMode: "never" })(turn.queued),
+    ).resolves.toBeUndefined();
+
+    expect(state.execute).not.toHaveBeenCalled();
+    expect(onFailed).toHaveBeenCalledWith(failure);
+    expect(typing.markRunComplete).toHaveBeenCalledOnce();
+  });
+
   it("does not replay a settled execution after progress presentation fails", async () => {
     const failure = new Error("progress presentation failed");
     const execution = createSettledExecution();

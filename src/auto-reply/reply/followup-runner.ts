@@ -401,9 +401,15 @@ export function createFollowupRunner(
       }
       if (operatorAuthorityLost) {
         // Revoked input is terminal; retrying it would hold the queue indefinitely.
+        // Preserve the original failure through the existing session-event outcome so a
+        // denied continuation records a safe, actionable cause instead of a generic
+        // abandonment, while keeping the terminal denial settlement-once semantics.
         disposition = { kind: "consumed" };
-        completion = { kind: "aborted" };
-        defaultRuntime.error?.("followup queue: canceled input after loss of operator authority");
+        queued.run.internalEventExecution?.onFailed?.(error);
+        completion = { kind: "failed", error: formatErrorMessage(error) };
+        defaultRuntime.error?.(
+          `followup queue: canceled input after loss of operator authority: ${formatErrorMessage(error)}`,
+        );
       } else if (
         (queued.run.internalEventExecution &&
           (executionEntered ||
