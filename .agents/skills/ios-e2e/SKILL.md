@@ -29,7 +29,7 @@ Two values recur:
 ## Drive the UI
 
 1. `mobilebuildmcp ui-automation snapshot-ui --style minimal` lists tappable targets as `ref|action|role|label|value|id`. Text that is not a control (chat bubbles, row titles) appears only with `--output json`.
-2. Act on a ref with `tap`, `type-text`, `long-press` (`--duration` is in milliseconds), `swipe` or `gesture`. Wait with `wait-for-ui`: `--predicate exists --label '…' --role button` for an element, `--predicate textContains --text '…'` for text. A wait selector that matches several elements fails; add `--role` or `--identifier`.
+2. Act on a ref with `tap`, `type-text`, `long-press` (`--duration` is in milliseconds), `swipe` or `gesture`. Wait with `wait-for-ui`: `--predicate exists --label '…' --role button` for an element, `--predicate textContains --text '…'` for text. A wait selector that matches several elements fails; add `--role` or `--identifier`. Keep `--timeout-ms` under 30000: the daemon ends any request after 30 s with `DAEMON_TRANSPORT_FAILED`; repeat the wait for longer.
 3. Refs belong to one snapshot; take a fresh one after every screen change.
 4. See the screen: `mobilebuildmcp simulator screenshot`, then read the printed JPEG.
 

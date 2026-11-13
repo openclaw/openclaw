@@ -143,8 +143,9 @@ function ref(pattern: RegExp): string {
   return row?.split("|")[0]?.trim() || fail(`no element matches ${pattern} on screen.`);
 }
 const tap = (pattern: RegExp) => ui(["tap", "--element-ref", ref(pattern)]);
+// The MobileBuildMCP daemon ends any request after 30 s, so each wait stays below that.
 const waitFor = (selector: string[], options: { quiet?: boolean } = {}) =>
-  ui(["wait-for-ui", "--predicate", "exists", ...selector, "--timeout-ms", "60000"], options);
+  ui(["wait-for-ui", "--predicate", "exists", ...selector, "--timeout-ms", "25000"], options);
 
 run("xcrun", [
   "simctl",
@@ -153,6 +154,11 @@ run("xcrun", [
   udid,
   bundleId,
   "--openclaw-reset-onboarding",
+  // The selectors below match English labels; a reused simulator may run another language.
+  "-AppleLanguages",
+  "(en)",
+  "-AppleLocale",
+  "en_US",
 ]);
 waitFor(["--label", "Continue", "--role", "button"]);
 tap(/\|Continue\|/);
