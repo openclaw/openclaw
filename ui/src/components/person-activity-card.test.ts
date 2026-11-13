@@ -161,12 +161,11 @@ it("exposes the activity link while presence is offline", () => {
     sessionData: data([session("one", 1)]),
   });
   expect(card("status")?.textContent).toContain("Offline");
-  expect(card("facts")).toBeNull();
   const link = getQueriesForElement(container).getByRole("link", { name: "View activity" });
   expect(link.getAttribute("href")).toBe("/ui/activity/alice");
 });
 
-it("localizes connection and session labels without replacing the focused link", async () => {
+it("localizes session labels without replacing the focused link", async () => {
   const restoreI18n = captureI18nStateForTesting();
   try {
     await i18n.setLocale("en");
@@ -176,16 +175,16 @@ it("localizes connection and session labels without replacing the focused link",
     });
     flush();
     const link = links()[0]!;
-    const labels = () => [card("facts dd > span")?.textContent, card("session-name")?.textContent];
-    expect(labels()).toEqual(["Web app", "Automation: Daily check"]);
+    const title = () => card("session-name")?.textContent;
+    expect(title()).toBe("Automation: Daily check");
     link.focus();
-    for (const [locale, connection, title] of [
-      ["de", "Web-App", "Automatisierung: Daily check"],
-      ["en", "Web app", "Automation: Daily check"],
+    for (const [locale, localized] of [
+      ["de", "Automatisierung: Daily check"],
+      ["en", "Automation: Daily check"],
     ] as const) {
       await i18n.setLocale(locale);
       flush();
-      expect(labels()).toEqual([connection, title]);
+      expect(title()).toBe(localized);
       expect(links()[0]).toBe(link);
       expect(document.activeElement).toBe(link);
     }

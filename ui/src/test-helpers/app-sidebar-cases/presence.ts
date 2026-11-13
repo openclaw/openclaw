@@ -144,14 +144,13 @@ describe("AppSidebar viewer presence", () => {
     await activityReady;
     await settleLitElement(sidebar);
     const offlineCard = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
-    expect(
-      offlineCard.querySelector(".person-activity-card__status--offline")?.textContent?.trim(),
-    ).toBe("Offline");
-    expect(offlineCard.querySelector("dl")).toBeNull();
+    expect(offlineCard.querySelector(".person-activity-card__status")?.textContent?.trim()).toBe(
+      "Offline",
+    );
     const recent = offlineCard.querySelector("section")!;
     expect(recent.querySelector("h3")?.textContent).toBe("Recent sessions");
     expect(recent.querySelector("a")?.getAttribute("href")).toBe(`/chat/main/${ownerId}`);
-    expect(offlineCard.querySelector("footer a")?.getAttribute("href")).toBe(
+    expect(offlineCard.querySelector(".person-activity-card__activity")?.getAttribute("href")).toBe(
       `/activity/${ownerId}`,
     );
     bobButton.click();

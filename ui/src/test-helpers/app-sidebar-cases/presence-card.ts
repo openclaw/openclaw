@@ -53,7 +53,7 @@ it("AppSidebar person activity card projects authorized facts and keeps links st
   const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
   sidebar.connected = true;
   await selectSidebarView(sidebar, "online");
-  // Expected label, family, platform, mode, client ID, misleading host; duplicate tabs collapse.
+  // Withheld label, family, platform, mode, client ID, misleading host.
   const devices: [string, string | undefined, string, string, string?, string?][] = [
     ["Mac · Web app", "Mac", "MacIntel", "webchat"],
     ["Mac · Web app", "Mac", "MacIntel", "webchat"],
@@ -97,16 +97,12 @@ it("AppSidebar person activity card projects authorized facts and keeps links st
   sessions.publishList({ result });
   await activityQuery?.refresh();
   await settleLitElement(sidebar);
-  expect(view.all("dt")).toHaveLength(2);
   expect(view.text(".person-activity-card__status")?.trim()).toBe("Online");
-  const facts = view.all("dd");
-  expect([...facts[0]!.querySelectorAll("span")].map((node) => node.textContent)).toEqual(
-    [...new Set(devices.map(([label]) => label))].toSorted((a, b) =>
-      a === b ? 0 : a < b ? -1 : 1,
-    ),
-  );
-  expect(facts[0]?.querySelector("small")?.textContent).toBe("Reported time zone: Europe/Paris");
-  expect(facts[1]?.textContent?.trim()).toBe("Activity unavailable");
+  expect(view.text(".person-activity-card__clock")).toContain("Europe/Paris");
+  // Connection details belong to the Activity page.
+  for (const [label] of devices) {
+    expect(card.textContent).not.toContain(label);
+  }
   const sections = view.all("section");
   expect(sections[0]?.querySelectorAll("a")).toHaveLength(1);
   expect(sections[0]?.textContent).toContain("Visible 0");

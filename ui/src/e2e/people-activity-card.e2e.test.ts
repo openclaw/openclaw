@@ -131,27 +131,6 @@ function scenario(recentSessionLabel = recentLabel) {
   };
 }
 
-async function expectInlineLastActivity(card: Locator) {
-  const positions = await card
-    .locator(".person-activity-card__facts dd")
-    .last()
-    .evaluate((value) => {
-      const time = value.querySelector("time");
-      const text = document.createTreeWalker(value, NodeFilter.SHOW_TEXT);
-      let suffix = text.nextNode();
-      while (suffix && suffix.textContent?.trim() !== "ago") {
-        suffix = text.nextNode();
-      }
-      if (!time || !suffix) {
-        throw new Error("Expected last activity duration and suffix");
-      }
-      const range = document.createRange();
-      range.selectNodeContents(suffix);
-      return { time: time.getBoundingClientRect().top, suffix: range.getBoundingClientRect().top };
-    });
-  expect(Math.abs(positions.time - positions.suffix)).toBeLessThan(2);
-}
-
 async function expectMultilineTitle(title: Locator) {
   const layout = await title.evaluate((element) => {
     const style = getComputedStyle(element);
@@ -203,7 +182,6 @@ suite.define(() => {
       await link(card, "View activity").focus();
       await expectText(card.locator(".person-activity-card__status"), "Idle");
       await expectText(card, "Online for");
-      await expectText(card, "Last interaction");
       for (const [personId, activity] of [
         ["alice", "idle"],
         ["bob", "active"],
@@ -252,8 +230,6 @@ suite.define(() => {
         card,
         "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
       );
-      await expectText(card, "Mac · macOS 27.0.0 · App");
-      await expectText(card, "Activity unavailable");
       await expectAttribute(link(card, "View activity"), "href", "/activity/gateway-owner");
       await expectText(onlinePerson(page, "example-person"), "Example person");
       await expectAttribute(
@@ -321,7 +297,7 @@ suite.define(() => {
         await expectCount(row.getByRole("button", { name: "Actions for Alice", exact: true }), 1);
         await person.hover();
         await card.waitFor({ state: "visible" });
-        await expectText(card, "Reported time zone: Europe/Paris");
+        await expectText(card.locator(".person-activity-card__clock"), "Europe/Paris");
         await expect
           .poll(() => card.locator("a").allTextContents())
           .toEqual(
@@ -332,7 +308,6 @@ suite.define(() => {
             ),
           );
         expect(await card.innerHTML()).not.toContain("agent:private:hidden");
-        await expectInlineLastActivity(card);
         const bounds = await row.boundingBox();
         const cardBounds = await card.boundingBox();
         if (!bounds || !cardBounds) {
@@ -448,7 +423,6 @@ suite.define(() => {
         await recent.focus();
         expect(await computedStyleProperty(recentTitle, "text-indent")).toBe("0px");
         await expectMultilineTitle(recentTitle);
-        await expectInlineLastActivity(card);
         await session.tap();
         await expect.poll(() => page.url()).toContain("/dashboard/");
         await pollCount(card).toBe(0);
