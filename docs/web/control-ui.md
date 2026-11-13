@@ -141,16 +141,22 @@ Reloading or leaving the app does not preserve this in-memory draft.
 ## Choose a session workspace
 
 Open **Workspace** on New session to choose a saved project, a recent folder, or
-a repository URL. Long lists show the search field immediately; search remains
-available from the magnifying-glass button on shorter lists and stays visible
-while you scroll.
+a repository URL. The search/paste field opens immediately, even on short lists.
+The **Open project** group offers **Browse folders** and, when permitted,
+**Search GitHub**. GitHub search is disabled until a name has at least two characters.
+Administrators can choose **Manage projects** after the opening choices. Removing
+a saved project requires confirmation and affects the shared Gateway catalog; it
+keeps the checkout, files, sessions, and history. Built-in workspaces cannot be removed.
 
 Saved repositories show a repository icon and their `org/repo` identity when the
 Gateway provides it. Search matches both that identity and the project display
 name, so repositories from different organizations are easier to distinguish.
 The **Local projects** section filters the Gateway’s saved project catalog immediately;
-it does not scan the filesystem. GitHub search results appear separately, without
-repeating repositories already shown as local matches. If no local project matches,
+it does not scan the filesystem or send a GitHub request while you type. Choose
+**Search GitHub** or press **Enter** with a plain-text query to search remotely.
+Pasting a Git URL and pressing **Enter** still selects that repository directly.
+GitHub search results appear separately, without repeating repositories already
+shown as local matches. If no local project matches,
 the picker says so explicitly. Selecting a repository also shows its identity in
 the workspace control.
 Session-only connections receive the same read-safe repository identity for

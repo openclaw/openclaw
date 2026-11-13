@@ -1619,3 +1619,19 @@ div.new-session-page__project-search {
     visibility: hidden;
   }
 }
+.project-picker__saved-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.project-picker__saved-row > .session-menu__item {
+  flex: 1;
+  min-width: 0;
+}
+
+.project-picker__remove-button {
+  flex: none;
+  margin-inline-end: 8px;
+  font-size: var(--control-ui-text-sm);
+}
