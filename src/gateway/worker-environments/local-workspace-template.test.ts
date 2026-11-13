@@ -458,11 +458,11 @@ function prewarmFixture() {
   };
   const prepare = (signal: AbortSignal) =>
     prewarmLocalWorkspaceTemplates({ getConfig: () => config, signal });
-  const env = { ...process.env };
+  const prewarmEnv = { ...process.env };
   const seed = async (signal: AbortSignal) => {
     const templateRoot = path.join(state, "worktree-projections");
     await fs.mkdir(templateRoot);
-    await withWorktreeAllocationLease({ env, signal }, (guard) =>
+    await withWorktreeAllocationLease({ env: prewarmEnv, signal }, (guard) =>
       cloneLocalWorkspaceTemplate({
         source,
         repoRoot: source,
@@ -471,14 +471,14 @@ function prewarmFixture() {
         destination: path.join(templateRoot, "prior-session"),
         temporaryRoot: templateRoot,
         templateRoot,
-        env,
+        env: prewarmEnv,
         sandbox,
         guard: { ...guard, signal: guard.signal ?? signal },
       }),
     );
     mocks.install.mockClear();
   };
-  return { state, config, env, prepare, seed };
+  return { state, config, env: prewarmEnv, prepare, seed };
 }
 
 function holdInstall() {
