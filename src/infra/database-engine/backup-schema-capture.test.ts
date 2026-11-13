@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
@@ -183,11 +183,19 @@ it.skipIf(!connection).each(["before", "after"] as const)(
     withSeededWorkboard(async ({ state, client, namespace, namespaces, storeId, anchorPath }) => {
       assert(connection);
       const prefix = `${anchorPath}.pre-startup-migration-`;
-      const directory = `${prefix}${phase}.postgres.bak`;
+      const captureId = randomUUID();
+      const directory = `${prefix}${captureId}.postgres.bak`;
       await fs.mkdir(directory);
       await fs.copyFile(anchorPath, path.join(directory, "anchor.sqlite"));
       const gate = await crashCaptureAtCommit(
-        { connection, namespace, storeId, directory, phase },
+        {
+          connection,
+          namespace,
+          storeId,
+          directory,
+          phase,
+          prune: { directoryPrefix: prefix, captureId },
+        },
         state.env,
       );
       namespaces.add(gate.namespace);
@@ -212,7 +220,16 @@ it.skipIf(!connection).each(["before", "after"] as const)(
             [gate.namespace],
           )
         ).rows,
-      ).toEqual([{ note: JSON.stringify({ openclawCapture: directory }) }]);
+      ).toEqual([
+        {
+          note: JSON.stringify({
+            openclawCapture: {
+              prefixHash: createHash("sha256").update(prefix).digest("hex"),
+              captureId,
+            },
+          }),
+        },
+      ]);
       expect(
         (
           await client.query(
@@ -290,12 +307,16 @@ it.skipIf(!connection)(
   () =>
     withSeededWorkboard(async ({ state, client, namespaces, storeId, anchorPath, config }) => {
       const prefix = `${anchorPath}.pre-startup-migration-`;
-      const capture = async (directory: string) => {
+      const capture = async (
+        directory: string,
+        prune?: { directoryPrefix: string; captureId: string },
+      ) => {
         const manifest = await capturePostgresBackup({
           sourcePath: anchorPath,
           directory,
           profile: "exact",
           carrier: "postgres-schema",
+          ...(prune ? { prune } : {}),
           config,
           assertCurrent() {},
         });
@@ -303,15 +324,44 @@ it.skipIf(!connection)(
         namespaces.add(manifest.schema);
         return manifest.schema;
       };
-      const removed = `${prefix}${randomUUID()}.postgres.bak`;
-      const kept = `${prefix}${randomUUID()}.postgres.bak`;
+      const removedId = randomUUID();
+      const keptId = randomUUID();
+      const removed = `${prefix}${removedId}.postgres.bak`;
+      const kept = `${prefix}${keptId}.postgres.bak`;
       const update = state.path("update.databases", "workboard.sqlite.postgres");
       await fs.mkdir(path.dirname(update));
       const schemas = {
-        removed: await capture(removed),
-        kept: await capture(kept),
+        removed: await capture(removed, { directoryPrefix: prefix, captureId: removedId }),
+        kept: await capture(kept, { directoryPrefix: prefix, captureId: keptId }),
         update: await capture(update),
       };
+      // Schema comments are readable across roles even without schema grants.
+      assert(connection);
+      const observerRole = `oc_capture_reader_${randomUUID().replaceAll("-", "")}`;
+      await client.query(`CREATE ROLE "${observerRole}" LOGIN`);
+      const observerUrl = new URL(connection);
+      observerUrl.username = observerRole;
+      observerUrl.password = "";
+      const observer = new Client({ connectionString: observerUrl.toString() });
+      try {
+        await observer.connect();
+        const note = (
+          await observer.query<{ note: string }>(
+            "SELECT obj_description(oid, 'pg_namespace') AS note FROM pg_namespace WHERE nspname = $1",
+            [schemas.removed],
+          )
+        ).rows[0]!.note;
+        expect(note).not.toContain(path.dirname(anchorPath));
+        expect(JSON.parse(note)).toEqual({
+          openclawCapture: {
+            prefixHash: createHash("sha256").update(prefix).digest("hex"),
+            captureId: removedId,
+          },
+        });
+      } finally {
+        await observer.end();
+        await client.query(`DROP ROLE "${observerRole}"`);
+      }
       // A store restored from a capture lives in an unmarked restore_ namespace.
       const restored = await preparePostgresRestore({
         directory: kept,
@@ -379,7 +429,12 @@ it.skipIf(!connection)(
     try {
       await admin.query(`CREATE ROLE "${runtime}" LOGIN; CREATE ROLE "${foreign}" NOLOGIN`);
       for (const [owner, schema] of Object.entries(schemas)) {
-        const marker = JSON.stringify({ openclawCapture: `${prefix}${randomUUID()}.postgres.bak` });
+        const marker = JSON.stringify({
+          openclawCapture: {
+            prefixHash: createHash("sha256").update(prefix).digest("hex"),
+            captureId: randomUUID(),
+          },
+        });
         await admin.query(`CREATE SCHEMA "${schema}" AUTHORIZATION "${owner}";
         CREATE TABLE "${schema}".openclaw_schema_meta (store_id text);
         ALTER TABLE "${schema}".openclaw_schema_meta OWNER TO "${owner}";

@@ -10,6 +10,7 @@ type CaptureInput = {
   namespace: string;
   storeId: string;
   directory: string;
+  prune: { directoryPrefix: string; captureId: string };
   phase: "before" | "after";
 };
 type CaptureGate = { namespace: string; backendPid: number };
@@ -104,6 +105,7 @@ async function captureUntilCommit(input: CaptureInput) {
       descriptor,
       anchor: { engine: "postgres", storeId: input.storeId, namespace: input.namespace },
       directory: input.directory,
+      prune: input.prune,
       assertCurrent() {},
     });
     throw new Error("Capture returned without reaching its commit gate");

@@ -96,6 +96,8 @@ export async function capturePostgresBackupInWorker(params: {
   gitIdentity?: GitBackupIdentity;
   /** Keep an exact capture on its server; omit it for the portable SQLite export. */
   carrier?: "postgres-schema";
+  /** Doctor owns local directory retention; other captures retire through their manifest. */
+  prune?: { directoryPrefix: string; captureId: string };
 }): Promise<PostgresExportEnvelope> {
   const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
   params.assertCurrent();

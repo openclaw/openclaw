@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Client } from "pg";
 import type { PortDescriptor } from "../infra/database-engine/port-descriptor.js";
 import {
@@ -157,10 +158,20 @@ export async function capturePostgresSchema(params: {
   descriptor: PortDescriptor;
   anchor: Anchor;
   directory: string;
+  prune?: { directoryPrefix: string; captureId: string };
   assertCurrent: () => void;
 }): Promise<PostgresExportEnvelope> {
   const { client, descriptor, anchor } = params;
   const schema = `restore_${randomUUID().replaceAll("-", "")}`;
+  // Schema comments are visible across database roles. Keep local custody paths private.
+  const marker = params.prune
+    ? JSON.stringify({
+        openclawCapture: {
+          prefixHash: createHash("sha256").update(params.prune.directoryPrefix).digest("hex"),
+          captureId: params.prune.captureId,
+        },
+      })
+    : undefined;
   try {
     params.assertCurrent();
     const verification = await materializeDatabasePort({
@@ -172,7 +183,7 @@ export async function capturePostgresSchema(params: {
         ...descriptor,
         postgresPostData: (namespace) =>
           `${descriptor.postgresPostData?.(namespace) ?? ""}\n;\n` +
-          `COMMENT ON SCHEMA "${namespace}" IS ${client.escapeLiteral(JSON.stringify({ openclawCapture: params.directory }))}`,
+          (marker ? `COMMENT ON SCHEMA "${namespace}" IS ${client.escapeLiteral(marker)}` : ""),
       },
       storeId: anchor.storeId,
       assertCurrent: params.assertCurrent,
@@ -281,6 +292,7 @@ export async function pruneOrphanedPostgresCaptures(
     "SELECT nspname AS schema, obj_description(oid, 'pg_namespace') AS note FROM pg_namespace WHERE nspname ~ '^restore_[a-f0-9]{32}$' AND pg_has_role(nspowner, 'USAGE') AND obj_description(oid, 'pg_namespace') IS NOT NULL",
   );
   const dropped: string[] = [];
+  const prefixHash = createHash("sha256").update(params.directoryPrefix).digest("hex");
   for (const { schema, note } of marked.rows) {
     let marker: unknown;
     try {
@@ -288,15 +300,18 @@ export async function pruneOrphanedPostgresCaptures(
     } catch {
       continue;
     }
-    const directory =
-      marker && typeof marker === "object" && "openclawCapture" in marker
-        ? marker.openclawCapture
-        : undefined;
+    const capture = isRecord(marker) ? marker.openclawCapture : undefined;
     if (
-      typeof directory !== "string" ||
-      !directory.startsWith(params.directoryPrefix) ||
-      (await fs.lstat(directory).catch(ignoreMissingPath))
+      !isRecord(capture) ||
+      capture.prefixHash !== prefixHash ||
+      typeof capture.captureId !== "string" ||
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(capture.captureId)
     ) {
+      continue;
+    }
+    // Only a generated ID may extend the trusted local prefix; comments never select a path.
+    const directory = `${params.directoryPrefix}${capture.captureId}.postgres.bak`;
+    if (await fs.lstat(directory).catch(ignoreMissingPath)) {
       continue;
     }
     const meta = await client.query<{ store_id: string }>(

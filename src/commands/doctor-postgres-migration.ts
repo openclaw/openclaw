@@ -14,7 +14,8 @@ export async function backupDoctorPostgresMigration(
   maintenance: { assertAdmission(): void },
 ): Promise<{ changes: string[]; generation?: string }> {
   const prefix = `${sourcePath}.pre-startup-migration-`;
-  const directory = `${prefix}${randomUUID()}.postgres.bak`;
+  const captureId = randomUUID();
+  const directory = `${prefix}${captureId}.postgres.bak`;
   const config = { database: { engine: "postgres" as const, postgres: input } };
   maintenance.assertAdmission();
   // Server captures outlive the setting; drop the ones whose backup was removed.
@@ -27,7 +28,9 @@ export async function backupDoctorPostgresMigration(
     sourcePath,
     directory,
     profile: "exact",
-    ...(input.serverRecoveryCaptures ? { carrier: "postgres-schema" as const } : {}),
+    ...(input.serverRecoveryCaptures
+      ? { carrier: "postgres-schema" as const, prune: { directoryPrefix: prefix, captureId } }
+      : {}),
     config,
     assertCurrent: () => maintenance.assertAdmission(),
   });
