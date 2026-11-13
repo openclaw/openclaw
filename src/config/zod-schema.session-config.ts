@@ -100,7 +100,7 @@ export const SessionSchema = z
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               path: [key],
-              message: "invalid size (use b, kb, mb, gb, tb)",
+              message: "invalid size (use b, kb, mb, gb, tb, KiB, MiB, GiB, TiB)",
             });
           }
         }
