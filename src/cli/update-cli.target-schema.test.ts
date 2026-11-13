@@ -403,14 +403,14 @@ describe("update-cli", () => {
 
     expect(packageInstall()?.[0]).toBeUndefined();
     expect(cli.listUpdateRuns({ limit: 1 })[0]?.reason).toBe("preflight-node-runtime-incompatible");
+    // The terminal shows one instruction; the saved report keeps the full diagnostic.
     expect(runtime.log).toHaveBeenCalledWith(
-      `Failing check node-runtime (node-runtime-preflight); key engines.node: Required: openclaw@9999.0.0 Node >=999.0.0; detected: Node ${process.versions.node} at ${process.execPath}
-Failing check node-runtime (node-runtime-preflight); key engines.node: Update install root: ${await fs.realpath(root)}
-Failing check node-runtime (node-runtime-preflight); key engines.node: Update binary: ${path.join(root, "openclaw.mjs")}
-Failing check node-runtime (node-runtime-preflight); key engines.node: Gateway install root: unresolved
-Failing check node-runtime (node-runtime-preflight); key engines.node: ${runtimeRecovery.expectedPlainRecovery("9999.0.0", "999.0.0", "absent", undefined, root)}
-Updater Node ${process.versions.node} at ${process.execPath}.
-PATH Node: not found.`,
+      expect.stringContaining(
+        `Update refused: openclaw@9999.0.0 needs Node >=999.0.0, but this updater runs Node ${process.versions.node} at ${process.execPath}.`,
+      ),
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("Failing check node-runtime"),
     );
     expect(cli.fetchNpmPackageTargetStatus).toHaveBeenCalledOnce();
   });
