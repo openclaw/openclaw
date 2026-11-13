@@ -134,9 +134,13 @@ async function renderSummary(
   return container.querySelector<HTMLElement>(".chat-activity-group__summary");
 }
 
-it.each(["activity", "work"] as const)(
-  "keeps parallel tool activity expandable without hover text (%s)",
-  async (kind) => {
+it.each([
+  { kind: "activity", prepareHistory: true },
+  { kind: "work", prepareHistory: true },
+  { kind: "activity", prepareHistory: false },
+] as const)(
+  "keeps parallel tool activity expandable without hover text ($kind, prepared=$prepareHistory)",
+  async ({ kind, prepareHistory }) => {
     const messages = [
       createAssistantMessage(
         [
@@ -150,7 +154,7 @@ it.each(["activity", "work"] as const)(
     ];
     const onToggle = vi.fn();
     const activity = await renderSummary(messages, kind, {
-      prepareHistory: true,
+      prepareHistory,
       messageGroup: true,
       onToggle,
     });
@@ -312,11 +316,34 @@ it.each([
   );
 });
 
-it("renders a prepared outcome with no raw tool blocks through transcript grouping", async () => {
-  const message = createAssistantMessage([], { activity: [preparedOutcome("blocked")] });
-  const { container, draw } = mountGroup([message]);
+it.each([
+  { source: "prepared outcome", expected: "Blocked" },
+  { source: "paginated shell results", expected: "Ran commands" },
+  { source: "recorded code inputs", expected: "Ran code" },
+])("renders $source through transcript grouping", async ({ source, expected }) => {
+  const messages =
+    source === "prepared outcome"
+      ? [createAssistantMessage([], { activity: [preparedOutcome("blocked")] })]
+      : attachHistoryActivity(
+          prepareChatHistoryFixture(
+            [0, 1].map((index) => {
+              const id = `call-${index}`;
+              return source === "paginated shell results"
+                ? createToolResultMessage(id, "bash", [{ type: "text", text: "ok" }], {
+                    runId: "result-page",
+                    isError: false,
+                    details: { status: "completed", exitCode: 0 },
+                  })
+                : createAssistantMessage([
+                    createToolCall(id, "exec", { code: "return 1;" }),
+                    createToolResultBlock(id, "exec", "1", { isError: false }),
+                  ]);
+            }),
+          ),
+        ).messages;
+  const { container, draw } = mountGroup(messages);
   await draw();
-  expect(container.textContent).toContain("Blocked");
+  expect(container.textContent).toContain(expected);
   expect(container.querySelector(".chat-bubble")).toBeNull();
 });
 
@@ -375,47 +402,77 @@ it("keeps recorded child operations visible beside their execution's missing per
   ).toBeNull();
 });
 
-it.each(["live receipt", "history projection"])(
-  "retires a live execution row hidden by its %s after publishing nested activity",
-  async (projection) => {
-    const runId = "live-nested";
-    const draw = async (hidden: boolean) => {
-      const message = createAssistantMessage(
-        [createToolCall("live-exec", "exec", { code: "await tools.ls({path: '.'})" }, { runId })],
-        {
-          runId,
-          __openclawToolStreamLive: true,
-          __openclawToolStreamItemEnded: hidden,
-          activity:
-            hidden && projection === "history projection"
-              ? []
-              : [
-                  {
-                    itemId: "tool:live-exec",
-                    toolCallId: "live-exec",
-                    name: "exec",
-                    kind: "tool",
-                    title: "Exec",
-                    phase: hidden ? "end" : "start",
-                    status: hidden ? "completed" : "running",
-                    hideFromChannelProgress: hidden,
-                  },
-                ],
-        },
-      );
-      messageRoot.render(
-        createToolGroup("before-narration", [createMessageEntry("live-exec", message)]),
-        { ...visibleTools, runActive: true, activityRunId: runId },
-      );
-      await settleToolBridges(summaryContainer);
-    };
-    await draw(false);
-    expect(summaryContainer.textContent).toContain("Running code");
-    await draw(true);
-    expect(summaryContainer.querySelector(".chat-activity-group__summary")).toBeNull();
-    expect(summaryContainer.textContent).not.toContain("Executed code");
+it.each([
+  { projection: "live receipt", name: "exec", args: { code: "await tools.ls({path: '.'})" } },
+  { projection: "history projection", name: "exec", args: { code: "await tools.ls({path: '.'})" } },
+  { projection: "live receipt", name: "process", args: { action: "poll", sessionId: "check" } },
+  {
+    projection: "history projection",
+    name: "process",
+    args: { action: "poll", sessionId: "check" },
   },
-);
+  {
+    projection: "history projection with media",
+    name: "process",
+    args: { action: "poll", sessionId: "check" },
+    media: true,
+  },
+])("retires a live $name row hidden by its $projection", async (testCase) => {
+  const { projection, name, args } = testCase;
+  const media = "media" in testCase;
+  const runId = "live-nested";
+  const draw = async (hidden: boolean, expanded = false) => {
+    const content = [createToolCall("live-exec", name, args, { runId })];
+    const message = createAssistantMessage(
+      media
+        ? [...content, { type: "image", data: "cG5n", mimeType: "image/png", alt: "Poll preview" }]
+        : content,
+      {
+        runId,
+        __openclawToolStreamLive: true,
+        __openclawToolStreamItemEnded: hidden,
+        activity:
+          hidden && projection.startsWith("history projection")
+            ? []
+            : [
+                {
+                  itemId: "tool:live-exec",
+                  toolCallId: "live-exec",
+                  name,
+                  kind: "tool",
+                  title: name === "exec" ? "Exec" : "Process",
+                  phase: hidden ? "end" : "start",
+                  status: hidden ? "completed" : "running",
+                  hideFromChannelProgress: hidden,
+                },
+              ],
+      },
+    );
+    messageRoot.render(
+      createToolGroup("before-narration", [createMessageEntry("live-exec", message)]),
+      {
+        ...visibleTools,
+        runActive: true,
+        activityRunId: runId,
+        isToolMessageExpanded: () => expanded,
+        isToolExpanded: () => expanded,
+      },
+    );
+    await settleToolBridges(summaryContainer);
+  };
+  await draw(false);
+  expect(summaryContainer.textContent).toContain(name === "exec" ? "Running code" : "Process");
+  for (const expanded of [false, true]) {
+    await draw(true, expanded);
+    expect(summaryContainer.querySelector(".chat-activity-group__summary")).toBeNull();
+    expect(summaryContainer.querySelector(".chat-tool-row")).toBeNull();
+    if (media) {
+      expect(summaryContainer.querySelector<HTMLImageElement>(".chat-message-image")?.src).toBe(
+        "data:image/png;base64,cG5n",
+      );
+    }
+  }
+});
 
 it("preserves prepared-only outcomes and an open group when a permission row arrives", async () => {
   const first = createMessageEntry(

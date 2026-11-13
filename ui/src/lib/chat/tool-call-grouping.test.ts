@@ -73,10 +73,32 @@ describe("summarizeToolGroup", () => {
     ).toBe("Attempted actions · Blocked · Outcome unknown");
   });
 
-  it("keeps the diagnostic disclosure label when all prepared work is quiet", () => {
+  it("names a recorded command execution independently of success", () => {
+    const command = prepared("command", "Exec", { name: "exec", status: "failed" });
+    expect(summarizeToolGroup([command])).toBe("Attempted commands");
+    const executedCommands = new Set(["command"]);
+    expect(summarizeToolGroup([command], { executedCommands })).toBe("Ran commands");
+    for (const status of ["blocked", "skipped"] as const) {
+      expect(summarizeToolGroup([{ ...command, status }], { executedCommands })).toContain(
+        "Attempted commands",
+      );
+    }
+  });
+
+  it("keeps code executions distinct from shell commands", () => {
+    const code = prepared("code", "Exec", { name: "exec" });
+    const command = prepared("shell", "Exec", { name: "exec" });
+    const codeExecutions = new Set(["code"]);
+    expect(summarizeToolGroup([code, command], { codeExecutions })).toBe("Ran code, ran commands");
+    expect(summarizeToolGroup([{ ...code, status: "failed" }], { codeExecutions })).toBe(
+      "Code execution",
+    );
+  });
+
+  it("has no activity label when all prepared work is quiet", () => {
     expect(summarizeToolGroup([])).toBe(
       summarizeToolGroup([prepared("quiet", "Wait", { hideFromChannelProgress: true })]),
     );
-    expect(summarizeToolGroup([])).not.toBe("");
+    expect(summarizeToolGroup([])).toBe("");
   });
 });

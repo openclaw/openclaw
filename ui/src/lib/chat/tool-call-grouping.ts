@@ -23,6 +23,10 @@ type ToolGroupOptions = {
   /** Calls of launches that opened a session in its own right, not a subagent. */
   ownSessionLaunches?: ReadonlySet<string>;
   activityKeys?: ReadonlyMap<AgentActivityItem, string>;
+  /** Canonical command results with an exit code prove execution, including nonzero exits. */
+  executedCommands?: ReadonlySet<string>;
+  /** Executions with source but no shell command have their own factual category. */
+  codeExecutions?: ReadonlySet<string>;
 };
 
 export function describeToolGroup(
@@ -43,8 +47,21 @@ export function describeToolGroup(
     ).values(),
   ];
   const summary = summarizeAgentActivity(current, options);
+  const code = current.filter(
+    (item) =>
+      !item.hideFromChannelProgress && options.codeExecutions?.has(item.toolCallId ?? item.itemId),
+  );
+  const codeIds = new Set(code.map((item) => item.toolCallId ?? item.itemId));
+  const ordinary = current.filter((item) => !codeIds.has(item.toolCallId ?? item.itemId));
+  const counts = { code: code.length, ...summarizeAgentActivity(ordinary, options).counts };
   const completed = summarizeAgentActivity(
-    current.filter((item) => item.status === "completed"),
+    ordinary.filter(
+      (item) =>
+        item.status === "completed" ||
+        (item.status !== "blocked" &&
+          item.status !== "skipped" &&
+          options.executedCommands?.has(item.toolCallId ?? item.itemId)),
+    ),
     options,
   );
   const completedKinds = new Set(
@@ -52,7 +69,18 @@ export function describeToolGroup(
       .filter(([, count]) => count > 0)
       .map(([kind]) => kind),
   );
-  const otherTools = summary.counts.other
+  if (
+    code.some(
+      (item) =>
+        item.status === "completed" ||
+        (item.status !== "blocked" &&
+          item.status !== "skipped" &&
+          options.executedCommands?.has(item.toolCallId ?? item.itemId)),
+    )
+  ) {
+    completedKinds.add("code");
+  }
+  const otherTools = counts.other
     ? [
         ...new Set(
           current.flatMap((item) =>
@@ -65,10 +93,15 @@ export function describeToolGroup(
         ),
       ]
     : [];
-  const label = Object.entries(summary.counts)
+  const label = Object.entries(counts)
     .filter(([, count]) => count > 0)
     .map(([kind], index) => {
       const continuation = index > 0 ? "Continuation" : "";
+      if (kind === "code") {
+        return t(
+          `chat.toolCards.${completedKinds.has(kind) ? "executedCode" : "codeExecution"}${continuation}`,
+        );
+      }
       return kind === "other" && otherTools.length
         ? t(`chat.toolCards.activity.calledTools${continuation}`, { tools: otherTools.join(", ") })
         : t(
@@ -93,8 +126,5 @@ export function summarizeToolGroup(
   options: ToolGroupOptions = {},
 ): string {
   const summary = describeToolGroup(items, options);
-  return (
-    [summary.label, ...summary.outcomes.map(({ label }) => label)].filter(Boolean).join(" · ") ||
-    t("chat.toolCards.rawDetails")
-  );
+  return [summary.label, ...summary.outcomes.map(({ label }) => label)].filter(Boolean).join(" · ");
 }

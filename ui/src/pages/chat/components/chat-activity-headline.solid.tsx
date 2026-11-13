@@ -29,7 +29,10 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
     scope: string;
     key: string | undefined;
     shownAt: number;
-    held: boolean;
+    candidate: string | undefined;
+    candidateAt: number;
+    pendingAt: number | undefined;
+    nextAt: number | undefined;
     active: boolean;
   }>((previous) => {
     tick();
@@ -38,14 +41,25 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
     const current = props.activity;
     const now = Date.now();
     const held = previous?.key ? resolve(previous.key) : undefined;
+    const candidateAt =
+      previous?.scope === scope && previous.candidate === current?.key ? previous.candidateAt : now;
+    const pendingAt = previous?.scope === scope ? (previous.pendingAt ?? now) : now;
+    // Give transient replacements time to settle, but keep advancing during a
+    // continuous burst. The displayed operation's outcome always refreshes immediately.
+    const nextAt = Math.max(
+      (previous?.shownAt ?? now) + 1_000,
+      Math.min(candidateAt + 200, pendingAt + 1_000),
+    );
     const keep = Boolean(
       active &&
       previous?.active &&
       previous.scope === scope &&
       held !== undefined &&
-      current?.status === "running" &&
+      current !== undefined &&
+      current.status !== "failed" &&
+      current.status !== "blocked" &&
       held.key !== current.key &&
-      now - previous.shownAt < 1_000,
+      now < nextAt,
     );
     return {
       scope,
@@ -54,13 +68,19 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
         keep || (previous?.scope === scope && previous.key === current?.key)
           ? (previous?.shownAt ?? now)
           : now,
-      held: keep,
+      candidate: current?.key,
+      candidateAt,
+      pendingAt: keep ? pendingAt : undefined,
+      nextAt: keep ? nextAt : undefined,
       active,
     };
   });
   createInterval(
     () => advance((value) => value + 1),
-    () => (selection().held ? Math.max(1, selection().shownAt + 1_000 - Date.now()) : undefined),
+    () => {
+      const nextAt = selection().nextAt;
+      return nextAt === undefined ? undefined : Math.max(1, nextAt - Date.now());
+    },
   );
   const shown = createMemo<ActivityHeadline | undefined>((previous) => {
     if (!presented()) {

@@ -45,13 +45,9 @@ export function isActivityMessageGroup(group: MessageGroup, bubbleMode = false):
     bubbleMode ||
     group.messages.length > 1 ||
     cards.length > 1 ||
-    // Even a lone retired execution must pass through activity projection.
-    // Rendering it as a raw card would resurrect the container above narration.
-    (cards.some(
-      (card) =>
-        normalizeLowercaseStringOrEmpty(card.name) === "exec" &&
-        !normalizeLowercaseStringOrEmpty(asRecord(card.args)?.command),
-    ) &&
+    // Even a lone retired activity must pass through its visibility projection.
+    // Rendering it as a raw card would resurrect routine work above narration.
+    (cards.length > 0 &&
       group.messages.some(
         ({ message }) =>
           Array.isArray(asRecord(message)?.activity) && !hasVisiblePreparedActivity(message),

@@ -22,7 +22,7 @@ import {
   resolveSpawnedSubagent,
   type SpawnedSubagent,
 } from "../chat-spawned-subagent.ts";
-import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
+import { HighlightedCommand, shellCommandPreview } from "./chat-command-highlight.solid.tsx";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import type { GroupedMessagePresentation } from "./chat-message-bubble-presentation.ts";
@@ -31,11 +31,7 @@ import { ChatToolIcon, ToolIcon, syncToolDisclosureOverflow } from "./chat-tool-
 import type { ToolCardProps } from "./chat-tool-card-types.ts";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
-import {
-  commandPreview,
-  resolveToolOperationLabel,
-  resolveToolRowVerb,
-} from "./chat-tool-row-presentation.ts";
+import { resolveToolOperationLabel, resolveToolRowVerb } from "./chat-tool-row-presentation.ts";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -59,7 +55,14 @@ function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string | unde
 
 function resolveToolRowText(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome): string {
   const verb = resolveToolRowVerb(view, outcome);
-  return verb && view.target ? `${verb} ${view.target}` : resolveToolOperationLabel(card, outcome);
+  return verb && view.target
+    ? `${verb} ${view.target}`
+    : resolveToolOperationLabel(
+        card,
+        outcome,
+        undefined,
+        resolveToolDisplay({ name: card.name, args: card.args, detailMode: "raw" }).detail,
+      );
 }
 
 function ToolRowLink(props: {
@@ -109,7 +112,7 @@ function ToolRowContent(props: {
     <Switch
       fallback={
         <span class={["chat-tool-row__title", { "text-shimmer": props.running }]}>
-          {resolveToolOperationLabel(props.card, props.outcome)}
+          {resolveToolRowText(props.card, props.view, props.outcome)}
         </span>
       }
     >
@@ -118,7 +121,7 @@ function ToolRowContent(props: {
           $
         </span>
         <code class={["chat-tool-row__cmd", { "text-shimmer": props.running }]}>
-          <HighlightedCommand command={commandPreview(props.view.command!)} />
+          <HighlightedCommand command={shellCommandPreview(props.view.command!)} />
         </code>
       </Match>
       <Match when={verb() && props.view.target}>

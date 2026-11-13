@@ -40,6 +40,7 @@ export function selectActivityHeadline(
                 card,
                 operation.status === "completed" ? "succeeded" : (operation.status ?? "unknown"),
                 addressed,
+                operation.meta,
               )
           : undefined;
       if (operationLabel) {

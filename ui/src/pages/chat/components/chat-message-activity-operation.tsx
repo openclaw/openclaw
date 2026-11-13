@@ -70,11 +70,15 @@ export function projectActivityOperations(
       call.name.trim().toLowerCase() === "exec" &&
       !(typeof args?.command === "string" && args.command.trim());
     const visibleChildren = group.children.some((child) => visible.has(child));
-    if (execution && group.children.length > 0 && !visibleChildren && !showOutcome) {
+    if (
+      !showOutcome &&
+      ((execution && group.children.length > 0 && !visibleChildren) ||
+        (target === groups && !visible.has(group)))
+    ) {
       const children = descendantCards(group);
       if (!children.some((card) => retainsOwnOutcome(card, prepared.get(card)))) {
-        // A known routine subtree, such as polling, must not reappear as its wrapper.
-        // Include every card so the ordinary message renderer cannot restore the children.
+        // Routine work stays hidden even after its wrapper is retired. Include every
+        // card so the ordinary message renderer cannot restore the subtree.
         hidden.add(group.card);
         for (const card of children) {
           hidden.add(card);

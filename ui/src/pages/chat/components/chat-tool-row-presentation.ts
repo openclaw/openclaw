@@ -1,12 +1,11 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
-import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
 import type { ToolCallView } from "../../../lib/chat/tool-call-view.ts";
-import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { resolveSessionLaunchPresentation } from "../chat-spawned-subagent.ts";
@@ -54,10 +53,7 @@ export function resolveToolRowVerb(
 }
 
 export function commandPreview(command: string): string {
-  return truncateUtf16Safe(
-    (stripShellPreamble(command).command || command).replace(/\s+/gu, " ").trim(),
-    200,
-  );
+  return truncateUtf16Safe(command.replace(/\s+/gu, " ").trim(), 200);
 }
 
 /** The title describes recorded action and target; authored purpose stays in input details. */
@@ -65,6 +61,7 @@ export function resolveToolOperationLabel(
   card: ToolCard,
   outcome: ToolCardOutcome,
   addressed?: { name?: string },
+  detail = card.activity?.meta,
 ): string {
   const launch = resolveSessionLaunchPresentation(card, outcome);
   if (launch) {
@@ -88,10 +85,16 @@ export function resolveToolOperationLabel(
     );
   }
   const verb = resolveToolRowVerb(input, outcome);
-  if (verb && input.path) {
-    return `${verb} ${pathDisplayName(input.path)}`;
+  const target =
+    input.kind === "fetch"
+      ? input.url
+      : input.kind === "search" && input.pattern
+        ? input.pattern
+        : input.path && pathDisplayName(input.path);
+  if (verb && target) {
+    return `${verb} ${target}`;
   }
-  const display = resolveToolDisplay({ name: call.name, args: call.args, detailMode: "raw" });
+  const display = resolveToolDisplayIdentity(call.name);
   const name = call.name.trim().toLowerCase();
   const sessionLabel =
     name === "sessions_history"
@@ -109,7 +112,7 @@ export function resolveToolOperationLabel(
         : undefined;
   return [
     sessionLabel ? t(`chat.toolCards.${sessionLabel}`) : display.label,
-    addressed ? addressed.name : display.detail,
+    addressed ? addressed.name : detail,
   ]
     .filter(Boolean)
     .join(" ");

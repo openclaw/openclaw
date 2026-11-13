@@ -3,6 +3,7 @@ import type { JSX } from "@solidjs/web";
 import { dynamic } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
+import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
 import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -19,7 +20,8 @@ import {
   summarizeToolGroup,
   readPreparedActivity,
 } from "../../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
+import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIcon } from "../../../lib/chat/tool-display-icon.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -162,13 +164,64 @@ export function prepareActivityGroup(
   const activityBodyId = `activity-body-${fnv1aUtf16(activityKey).toString(16)}`;
   const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
   const ownLaunches = ownSessionLaunchCalls(cards);
-  const groupSummaryLabel = summarizeToolGroup(visibleActivity, {
+  const summaryByCard = new Map(preparedByCard);
+  // Older/raw-only pages still have canonical call and result facts, but no prepared labels.
+  const summaryActivity = visibleActivity.length
+    ? visibleActivity
+    : cardGroups.map(({ card }) => {
+        const call = unwrapToolCallForDisplay(card);
+        const outcome = resolveToolCardOutcome(card, opts.runActive);
+        const item: ReturnType<typeof readPreparedActivity>[number] = {
+          itemId: card.id,
+          toolCallId: card.callId,
+          name: call.name,
+          title: resolveToolDisplayIdentity(call.name).label,
+          kind: "tool",
+          phase: card.completed ? "end" : "start",
+          status:
+            outcome === "succeeded"
+              ? "completed"
+              : outcome === "unrecorded" || outcome === "unknown"
+                ? undefined
+                : outcome,
+        };
+        activityKeys.set(
+          item,
+          JSON.stringify([cardRuns.get(card), card.callId ?? toolContexts.get(card)!.disclosureId]),
+        );
+        summaryByCard.set(card, item);
+        return item;
+      });
+  const codeExecutions = new Set<string>();
+  const executedCommands = new Set<string>();
+  for (const card of cards) {
+    const item = summaryByCard.get(card);
+    const call = unwrapToolCallForDisplay(card);
+    const args = asNullableRecord(call.args);
+    if (!item || resolveToolCallInput(call.name, args).kind !== "command") {
+      continue;
+    }
+    const key = activityKeys.get(item)!;
+    if (
+      call.name.trim().toLowerCase() === "exec" &&
+      !(typeof args?.command === "string" && args.command.trim()) &&
+      [args?.code, args?.input].some((code) => typeof code === "string" && code.trim())
+    ) {
+      codeExecutions.add(key);
+    }
+    if (card.exitCode !== undefined) {
+      executedCommands.add(key);
+    }
+  }
+  const groupSummaryLabel = summarizeToolGroup(summaryActivity, {
     ownSessionLaunches: new Set(
-      activity
+      summaryActivity
         .filter((item) => ownLaunches.has(item.toolCallId ?? item.itemId))
         .map((item) => activityKeys.get(item)!),
     ),
     activityKeys,
+    executedCommands,
+    codeExecutions,
   });
   const toolCardOverrides = new Map<ToolCard, ActivityOperationProps | null>();
   const approvalReviews = cards.flatMap((card) => readToolApprovalReviews(card.details));
@@ -201,14 +254,15 @@ export function prepareActivityGroup(
     approvalReviews.length === 0 &&
     cardGroups.length === 1 &&
     step !== undefined &&
-    step.children.length > 0 &&
-    visibleCalls.size === 1 &&
-    (stepActivity?.status === "completed" || stepActivity?.status === "failed") &&
-    visibleCalls.has(stepActivity.toolCallId ?? stepActivity.itemId);
+    (visibleActivity.length === 0 ||
+      (step.children.length > 0 &&
+        visibleCalls.size === 1 &&
+        (stepActivity?.status === "completed" || stepActivity?.status === "failed") &&
+        visibleCalls.has(stepActivity.toolCallId ?? stepActivity.itemId)));
+  for (const card of projection?.hidden ?? []) {
+    toolCardOverrides.set(card, null);
+  }
   if (!source && (activityExpanded || soleStep || opts.inlineCommands)) {
-    for (const card of projection!.hidden) {
-      toolCardOverrides.set(card, null);
-    }
     for (const group of cardGroups) {
       for (const card of descendantCards(group)) {
         toolCardOverrides.set(card, null);
@@ -228,12 +282,18 @@ export function prepareActivityGroup(
     preparedByCard,
     activityKeys,
     headline,
-    resolveHeadline: (key: string) =>
-      selectActivityHeadline(
-        currentActivity.filter((item) => (item.toolCallId ?? item.itemId) === key),
+    resolveHeadline: (key: string) => {
+      // A displayed operation keeps its current outcome when its execution
+      // container disappears from the visual group after children arrive.
+      const recorded = activity.findLast(
+        (item) => activeRunActivity.has(item) && (item.toolCallId ?? item.itemId) === key,
+      );
+      return selectActivityHeadline(
+        recorded ? [recorded] : [],
         preparedByCard,
         opts.subagents?.subagentSessions,
-      ),
+      );
+    },
     groupSummaryLabel,
     visibleActivity,
     unmatchedActivity: [
@@ -585,19 +645,32 @@ export function ActivityGroupContent(props: ActivityGroupContentProps) {
   const body = () => (
     <Show
       when={
-        state()!.unmatchedActivity.length > 0 ||
-        state()!.cardGroups.some((group) => isStandaloneActivity(group.card))
+        state()!.cardGroups.length > 0 ||
+        state()!.visibleActivity.length > 0 ||
+        state()!.reviewOutcome ||
+        state()!.approvalReviews.length > 0
       }
-      fallback={
-        <Show
-          when={props.options.inlineCommands}
-          fallback={<ActivityGroupBody {...props} state={state()!} />}
-        >
-          <InlineContent {...props} state={state()!} />
-        </Show>
-      }
+      fallback={props.renderEntries(
+        () => state()!.toolCardOverrides,
+        () => props.groups,
+      )}
     >
-      <ActivityOperationSegments {...props} state={state()!} />
+      <Show
+        when={
+          state()!.unmatchedActivity.length > 0 ||
+          state()!.cardGroups.some((group) => isStandaloneActivity(group.card))
+        }
+        fallback={
+          <Show
+            when={props.options.inlineCommands}
+            fallback={<ActivityGroupBody {...props} state={state()!} />}
+          >
+            <InlineContent {...props} state={state()!} />
+          </Show>
+        }
+      >
+        <ActivityOperationSegments {...props} state={state()!} />
+      </Show>
     </Show>
   );
 
