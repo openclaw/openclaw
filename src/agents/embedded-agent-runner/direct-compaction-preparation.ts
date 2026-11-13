@@ -13,7 +13,11 @@ import {
 } from "../../plugins/provider-auth-authority.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
+import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
+import { resolveSkillSnapshotExecutionFileHost } from "../../skills/runtime/skill-snapshot-provenance.js";
 import { resolveUserPath } from "../../utils.js";
+import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import {
   isCompactionSummaryRefusal,
@@ -318,6 +322,43 @@ export async function prepareDirectCompactionAttempt(
   const sandboxAgentId =
     params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined);
   const assertCurrent = () => params.abortSignal?.throwIfAborted();
+  let skillsSnapshot = params.skillsSnapshot;
+  if (
+    skillsSnapshot &&
+    skillsSnapshot.resolvedSkills === undefined &&
+    (skillsSnapshot.prompt.trim() ||
+      skillsSnapshot.discoverySkills?.length ||
+      skillsSnapshot.librarySelections?.length)
+  ) {
+    // Persistence intentionally drops runtime catalogs. Restore them before sandbox
+    // selection and delivery, while already-prepared turns keep their exact snapshot.
+    const persistedSnapshot = skillsSnapshot;
+    const skillRoots = persistedSnapshot.skillRoots;
+    const { snapshot } = await resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir:
+        skillRoots?.agentWorkspaceDir ??
+        (params.config && hasAgentRosterProperty(params.config)
+          ? resolveAgentWorkspaceDir(params.config, sessionAgentId)
+          : (params.bootstrapWorkspaceDir ?? resolvedWorkspace)),
+      executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
+      executionWorkspaceFileHost: resolveSkillSnapshotExecutionFileHost(skillsSnapshot),
+      config: params.config ?? {},
+      agentId: sessionAgentId,
+      existingSnapshot: skillsSnapshot,
+      skillFilter: skillsSnapshot.skillFilter,
+      skillOverrides: skillsSnapshot.skillOverrides,
+      resolveEligibility: () => ({
+        nodeSkills: persistedSnapshot.nodeSkillsEligibility,
+        remote: getRemoteSkillEligibility({
+          advertiseExecNode: persistedSnapshot.nodeSkillsEligibility?.canExec === true,
+        }),
+      }),
+      watch: false,
+      assertCurrent,
+    });
+    skillsSnapshot = snapshot;
+  }
+  assertCurrent();
   const sandbox =
     params.sandbox === undefined
       ? await withSandboxRuntimeStatusInWorker(
@@ -330,6 +371,7 @@ export async function prepareDirectCompactionAttempt(
               execOverrides: params.execOverrides,
               sessionKey: sandboxSessionKey,
               workspaceDir: resolvedWorkspace,
+              skillsSnapshot,
               assertCurrent,
               preparedRuntimeStatus,
             }),
@@ -358,7 +400,7 @@ export async function prepareDirectCompactionAttempt(
     return {
       ok: true as const,
       value: {
-        params,
+        params: { ...params, skillsSnapshot },
         diagId,
         trigger,
         attempt,

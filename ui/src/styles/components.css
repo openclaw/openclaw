@@ -2848,20 +2848,209 @@ select.data-table-pagination__size {
   display: none;
 }
 
-.cmd-palette {
+/* One card: the panel sits on a sunken dock that shares its edge and radius.
+   The panel's rounded bottom ends inside the dock, which holds the mode switch and keys. */
+.cmd-palette-stack {
+  --composer-attached-surface: color-mix(
+    in srgb,
+    var(--chat-composer-surface) 60%,
+    var(--background, var(--bg))
+  );
   display: flex;
   flex-direction: column;
   width: 100%;
-  max-height: calc(100dvh - min(20dvh, 160px) - 24px);
+  /* The visible canvas, so a phone keyboard shortens the results and the dock stays in view. */
+  max-height: calc(var(--shell-canvas-height, 100dvh) - var(--cmd-palette-top) - 24px);
   overflow: hidden;
+  border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  /* The palette keeps the dialog's superellipse, as on main; engines without it draw round. */
+  corner-shape: superellipse(1.5);
+  background:
+    linear-gradient(var(--composer-attached-surface), var(--composer-attached-surface)),
+    var(--bg-content, var(--bg));
+}
+
+.cmd-palette__dock {
+  display: flex;
+  flex: 0 0 var(--cmd-palette-dock-height);
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  /* Inset as far from the side as from the top and bottom, so the tab is concentric with
+     the card; the keys end on the list's own right margin. */
+  padding-inline: 10px 18px;
+}
+
+.cmd-palette__mode-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.cmd-palette__mode {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 32px;
+  /* The icon lands under the list's row icons and the field's text. */
+  padding: 0 11px 0 8px;
+  /* Concentric with the card: its radius minus the dock's 10px inset. */
+  border-radius: calc(10px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: var(--control-ui-font-weight-normal);
+  white-space: nowrap;
+  transition:
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.cmd-palette__mode svg {
+  width: 15px;
+  height: 15px;
+}
+
+.cmd-palette__mode:hover:not([aria-selected="true"], :disabled) {
+  color: var(--text-strong);
+}
+
+/* Tabs, not buttons: the selected one is a quiet tint of the dock, with no edge or lift. */
+.cmd-palette__mode[aria-selected="true"] {
+  background: color-mix(in srgb, var(--text-strong) 7%, transparent);
+  color: var(--text-strong);
+}
+
+.cmd-palette__keys {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 18px;
+  min-width: 0;
+  margin-inline-start: auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* The first-open palette shows these keys before the palette sheet loads. */
+.cmd-palette__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.cmd-palette__hint .shortcut-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  /* Outlined keycaps, so a key never reads as the filled, selected tab beside it. */
+  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+  border-radius: calc(6px * var(--openclaw-corner-radius-scale));
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: var(--control-ui-font-weight-semibold);
+  line-height: 1;
+}
+
+/* A phone has no keys to teach; the switch takes the whole dock. */
+@media (max-width: 560px) {
+  /* 8px on every side of the taller tabs keeps them concentric. */
+  .cmd-palette__dock {
+    padding-inline: 8px;
+  }
+
+  .cmd-palette__keys {
+    display: none;
+  }
+
+  .cmd-palette__mode-tabs {
+    display: flex;
+    flex: 1;
+  }
+
+  .cmd-palette__mode {
+    flex: 1;
+    height: 40px;
+    border-radius: calc(12px * var(--openclaw-corner-radius-scale));
+  }
+}
+
+/* One surface in both modes, the composer's, so switching never changes the card.
+   These values repeat .agent-chat__input for the first open, before its sheet loads. */
+.cmd-palette {
+  --chat-composer-min-height: 0px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  /* Fills the card while its height glides, so the dock stays at the bottom. */
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  corner-shape: var(--chat-composer-corner-shape);
+  background:
+    linear-gradient(var(--chat-composer-surface), var(--chat-composer-surface)),
+    var(--bg-content, var(--bg));
+}
+
+.cmd-palette--prompt {
+  --chat-composer-min-height: 112px;
+  min-height: var(--chat-composer-min-height);
+}
+
+/* Outranks the composer's own frame: the card floats above the page, the panel sits in it. */
+:root[data-theme-mode] .cmd-palette-overlay .cmd-palette-stack {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--text-strong) 9%, transparent),
+    var(--overlay-modal-shadow);
+}
+
+:root[data-theme-mode] .cmd-palette-overlay .cmd-palette {
+  /* The composer never shrinks; this panel must, so a short card keeps its dock. */
+  flex-shrink: 1;
+  /* Matches the card it sits in; the chat composer itself stays round. */
+  corner-shape: superellipse(1.5);
+  border: 0;
+  /* A short, soft lift: the panel rests on the dock rather than floating over it. */
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--text-strong) 6%, transparent),
+    0 1px 2px rgb(0 0 0 / 4%),
+    0 3px 8px rgb(0 0 0 / 4%);
+}
+
+/* A light page sits close to the panel, so the dock needs one more step to read as sunken. */
+:root[data-theme-mode="light"] .cmd-palette-overlay .cmd-palette-stack {
+  --composer-attached-surface: color-mix(
+    in srgb,
+    var(--text-strong) 4%,
+    color-mix(in srgb, var(--chat-composer-surface) 60%, var(--background, var(--bg)))
+  );
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 6%),
+    var(--overlay-modal-shadow);
 }
 
 .cmd-palette__entry {
-  --cmd-palette-actions-width: 170px;
   position: relative;
   flex: 0 0 auto;
   min-width: 0;
-  padding: 14px 5px 14px 18px;
+  padding: 14px 4px 14px 18px;
+}
+
+/* The field keeps its inset across modes, so the caret never shifts on Tab. */
+.cmd-palette--prompt .cmd-palette__entry {
+  padding-bottom: 0;
 }
 
 .cmd-palette__input-scroll {
@@ -2877,37 +3066,49 @@ select.data-table-pagination__size {
   display: block;
   width: 100%;
   min-width: 0;
-  height: 24px;
-  min-height: 24px;
-  max-height: 66px;
+  --cmd-palette-input-size: var(--chat-composer-editor-size, var(--control-ui-text-md));
+  --cmd-palette-input-line: calc(var(--cmd-palette-input-size) * 1.5);
+  --control-ui-touch-input-size: var(--cmd-palette-input-size);
+  height: var(--cmd-palette-input-line);
+  min-height: var(--cmd-palette-input-line);
+  max-height: calc(var(--cmd-palette-input-line) * 3);
   margin: 0;
-  padding: 0 calc(var(--cmd-palette-actions-width) + 20px) 0 0;
+  padding: 0 10px 0 0;
   resize: none;
   overflow-y: hidden;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
   font-family: inherit;
-  font-size: 15px;
-  line-height: 22px;
+  font-size: var(--cmd-palette-input-size);
+  line-height: var(--cmd-palette-input-line);
   background: transparent;
   border: 0;
   border-radius: 0;
   box-shadow: none;
-  color: var(--text);
+  color: var(--text-strong);
   outline: none;
+}
+
+/* Both modes write at the composer's size; Compose grows to eight lines, then scrolls. */
+.cmd-palette--prompt .cmd-palette__input {
+  max-height: min(calc(var(--cmd-palette-input-line) * 8), 35dvh);
+}
+
+.cmd-palette__input[aria-busy="true"] {
+  color: var(--muted);
 }
 
 .cmd-palette__input::placeholder {
   color: var(--muted);
 }
 
-/* Fades cover only text, never the native far-right scrollbar or actions. */
+/* Fades cover only text, never the native far-right scrollbar. */
 .cmd-palette__input-scroll::before,
 .cmd-palette__input-scroll::after {
   content: "";
   position: absolute;
   left: 0;
-  right: calc(var(--cmd-palette-actions-width) + 30px);
+  right: 10px;
   z-index: 1;
   height: 10px;
   pointer-events: none;
@@ -2916,27 +3117,17 @@ select.data-table-pagination__size {
 
 .cmd-palette__input-scroll::before {
   top: 0;
-  background: linear-gradient(to bottom, var(--card), transparent);
+  background: linear-gradient(to bottom, var(--chat-composer-surface), transparent);
 }
 
 .cmd-palette__input-scroll::after {
   bottom: 0;
-  background: linear-gradient(to top, var(--card), transparent);
+  background: linear-gradient(to top, var(--chat-composer-surface), transparent);
 }
 
 .cmd-palette__entry[data-scroll-fade-top] .cmd-palette__input-scroll::before,
 .cmd-palette__entry[data-scroll-fade-bottom] .cmd-palette__input-scroll::after {
   opacity: 1;
-}
-
-.cmd-palette__input-actions {
-  position: absolute;
-  top: 10px;
-  right: 18px;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 .cmd-palette__empty {
