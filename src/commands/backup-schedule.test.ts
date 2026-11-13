@@ -597,7 +597,12 @@ describe("scheduled backups", () => {
     expect(removes.map((call) => call[2])).toEqual([{ id: "git-job" }]);
     // An admitted removal keeps its reply: the mutation RPC carries no abort signal.
     for (const call of removes) {
-      expect(call[3]).not.toHaveProperty("signal");
+      expect(call[3]).toBeUndefined();
     }
+    // The remaining schedule is never removed and the acknowledgement reports the
+    // interruption instead of a false "Scheduled backups disabled."
+    expect(defaultRuntime.log).toHaveBeenCalledWith(
+      "Scheduled backups disabled before completion: 1 schedule(s) not reached (interrupted).",
+    );
   });
 });

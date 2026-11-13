@@ -215,6 +215,7 @@ export async function backupDisableCommand(
     return { removed: false };
   }
   const signal = getAsyncWorkSignal();
+  let removedCount = 0;
   for (const job of existing) {
     if (signal?.aborted) {
       break;
@@ -222,6 +223,13 @@ export async function backupDisableCommand(
     // An admitted removal keeps its reply: cancellation stops the next request,
     // never aborts a schedule whose removal may already have settled.
     await callGatewayFromCli("cron.remove", options, { id: job.id });
+    removedCount++;
+  }
+  if (removedCount < existing.length) {
+    runtime.log(
+      `${label} disabled before completion: ${existing.length - removedCount} schedule(s) not reached (interrupted).`,
+    );
+    return { removed: true };
   }
   runtime.log(`${label} disabled.`);
   return { removed: true };
