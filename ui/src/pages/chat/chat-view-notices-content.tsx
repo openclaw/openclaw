@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, children, createMemo } from "solid-js";
 import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
@@ -302,6 +302,8 @@ function ChatErrorNotice(props: {
   error: string;
   detail?: unknown;
   action?: JSX.Element;
+  /** Offer bug reporting: only for a failure its source could not explain. */
+  reportable?: boolean;
   displayError?: string;
   tone?: "danger" | "warn";
   summary?: string;
@@ -314,11 +316,10 @@ function ChatErrorNotice(props: {
   // Keep an expanded diagnostic stable across unrelated session refreshes.
   const toast = createMemo(
     () => {
-      const message =
-        props.summary ??
-        (props.detail === undefined
-          ? displayError().trim().split(/\r?\n/u)[0]?.trim() || props.error
-          : props.error);
+      // A raw failure can span lines: the title keeps the first, the details keep the rest.
+      const visible =
+        props.detail === undefined ? displayError() : formatWebUiIconErrorText(props.error);
+      const message = props.summary ?? (visible.trim().split(/\r?\n/u)[0]?.trim() || props.error);
       // Offer details only when they add something beyond the visible message.
       const diagnostic = displayError().trim();
       return {
@@ -337,18 +338,23 @@ function ChatErrorNotice(props: {
         previous.severity === next.severity,
     },
   );
+  const recovery = children(() => props.action);
   // The toast reads its action for presence and rendering; retain one DOM slot.
   const actions = (
-    <div class="stack chat-error__actions">
-      {props.action}
-      <ReportIssueLink />
+    <div
+      class={["row", "chat-error__actions", { "chat-error__actions--report": props.reportable }]}
+    >
+      {recovery()}
+      <Show when={props.reportable}>
+        <ReportIssueLink />
+      </Show>
     </div>
   );
   return (
     <ToastNotice
       class="chat-error"
       toast={toast()}
-      action={actions}
+      action={recovery.toArray().length > 0 || props.reportable ? actions : undefined}
       onDismiss={props.onDismiss}
       dismissLabel={t("chat.actions.dismissError")}
       detailAction={
@@ -374,6 +380,7 @@ export function ChatTopbarNoticesContent(props: ChatViewNoticesProps) {
           <ChatErrorNotice
             error={error()}
             detail={props.errorDetail}
+            reportable={props.errorDetail !== undefined}
             onDismiss={props.onDismissError}
           />
         )}
@@ -428,6 +435,7 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
             <ChatErrorNotice
               error={error().summary}
               action={refresh}
+              reportable={!contention() && error().kind !== "auth_refresh"}
               onDismiss={props.onDismissRunError}
               tone={contention() ? "warn" : "danger"}
               summary={
@@ -560,6 +568,7 @@ export function ChatPlacementStartupNotice(props: {
               </button>
             </Show>
           }
+          reportable={!props.status?.discardAndReload}
           displayError={displayError()}
           summary={props.status?.discardAndReload ? displayError() : t("chat.errorStartSummary")}
         />

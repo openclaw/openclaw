@@ -303,8 +303,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       ];
     } catch (error) {
       if (this.collaboration.addOperation === operation && this.isConnectionScopeCurrent(scope)) {
-        scope.state.chatError = formatUiError(error);
-        scope.state.lastError = scope.state.chatError;
+        scope.state.setRecoverableChatError(formatUiError(error), error);
       }
     } finally {
       if (this.collaboration.addOperation === operation) {
@@ -390,8 +389,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
             previousEditDraft.mentions ?? [],
           );
         }
-        scope.state.chatError = formatUiError(error);
-        scope.state.lastError = scope.state.chatError;
+        scope.state.setRecoverableChatError(formatUiError(error), error);
       }
     } finally {
       if (isCurrentTarget()) {

@@ -587,10 +587,57 @@ it("offers a static issue form without including error text or diagnostics", asy
     expect(link?.target).toBe("_blank");
   });
   const destination = container.querySelector<HTMLAnchorElement>("a.report-issue-link")!.href;
-  publish({ error: "Another synthetic error with private user content", errorDetail: undefined });
+  publish({
+    error: "Another synthetic error with private user content",
+    errorDetail: new Error("Another synthetic error with private user content"),
+  });
   await waitForSolid(() => {
     expect(container.querySelector<HTMLAnchorElement>("a.report-issue-link")?.href).toBe(
       destination,
     );
   });
+});
+
+it("offers bug reporting only for failures the source could not explain", async () => {
+  const topbar = publishedNotices<TopbarProps>(renderChatTopbarNotices, {
+    error: "Couldn’t save the previous draft. Keep this tab open or copy it before reloading.",
+  });
+  await waitForElement(topbar.container, ".chat-error", "explained error");
+  // Without a raw failure attached there is no action slot: only the message and dismiss.
+  expect(topbar.container.querySelector(".chat-error__actions")).toBeNull();
+  expect(topbar.container.querySelector(".app-toast--action")).toBeNull();
+
+  const composer = publishedComposer({
+    connected: true,
+    onRefresh: () => {},
+    runError: { kind: "auth_refresh", summary: "Synthetic sign-in failure" },
+  });
+  await waitForElement(composer.container, ".chat-error__refresh", "recovery");
+  expect(composer.container.querySelector("a.report-issue-link")).toBeNull();
+  composer.publish({
+    messages: [],
+    connected: true,
+    onRefresh: () => {},
+    runError: { kind: "state_contention", summary: "Synthetic busy failure" },
+  });
+  await waitForSolid(() =>
+    expect(composer.container.querySelector(".chat-error__refresh")?.textContent).toBe(
+      t("chat.checkStatus"),
+    ),
+  );
+  expect(composer.container.querySelector("a.report-issue-link")).toBeNull();
+  composer.publish({
+    messages: [],
+    connected: true,
+    onRefresh: () => {},
+    runError: { summary: "Synthetic unexplained failure" },
+  });
+  // Recovery leads; reporting follows it.
+  await waitForSolid(() =>
+    expect(
+      composer.container
+        .querySelector(".chat-error__refresh")
+        ?.nextElementSibling?.matches("a.report-issue-link"),
+    ).toBe(true),
+  );
 });
