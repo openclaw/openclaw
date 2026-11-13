@@ -254,6 +254,14 @@ renames. Filesystem discovery still checks for additions and deletions on every
 scan. Existing projections convert one at a time during reconciliation; database
 open does not rewrite their inventories.
 
+The hourly maintenance job owns manifest cleanup; archive-triggered passes do
+not repeat the global scan. Cleanup records pending work in the existing
+machine-state table when the workspace writer prepares content or changes a
+manifest reference. Two sweep epochs retain the preparation grace period; a
+completed sweep settles that work only if no later write needs another epoch. Unchanged maintenance passes skip the
+reachability scan, including after restart. Interrupted sweeps remain pending,
+and databases without the marker receive an initial sweep cycle.
+
 Archive preparation compares live sandbox files with that accepted tree in the
 filesystem worker. If Git already preserves every accepted file and directory,
 cleanup needs no separate workspace overlay. Ignored files and empty directories
@@ -674,7 +682,7 @@ and publication receipts. Recover any pending publication there using its origin
 request identity. This also keeps each conversation's historical file references
 associated with the source that produced them.
 
-Archiving a session returns after its archive state and publication are committed, preserving the conversation and worktree binding. After sending the response, the Gateway wakes background maintenance to snapshot and remove the checkout. The response does not wait for Git or the worktree allocation lease. A failed metadata write leaves the checkout untouched. If cleanup cannot finish safely, the session stays archived and its files remain available for a later cleanup pass. Hourly garbage collection also picks up automatically archived sessions. Cleanup holds the session lifecycle mutation only while admitting its registry claim and publishing the removed checkout. Git runs outside that mutation. Unarchiving before cleanup starts keeps the existing checkout; during cleanup, unarchive reports that removal is in progress and asks you to retry after it settles. An incomplete deletion requires recovery of its preserved snapshot before unarchive.
+Archiving a session returns after its archive state and publication are committed, preserving the conversation and worktree binding. After sending the response, a newly archived session with a bound checkout wakes background maintenance to snapshot and remove it. Repeating an archive or archiving a session without a checkout does not start another worktree pass. The response does not wait for Git or the worktree allocation lease. A failed metadata write leaves the checkout untouched. If cleanup cannot finish safely, the session stays archived and its files remain available for a later cleanup pass. Hourly garbage collection also picks up automatically archived sessions. Cleanup holds the session lifecycle mutation only while admitting its registry claim and publishing the removed checkout. Git runs outside that mutation. Unarchiving before cleanup starts keeps the existing checkout; during cleanup, unarchive reports that removal is in progress and asks you to retry after it settles. An incomplete deletion requires recovery of its preserved snapshot before unarchive.
 
 Slow archive requests log request-owned phase durations, including snapshot reads,
 projection, runtime selection, archive placement checks, commit, cron effects, and
