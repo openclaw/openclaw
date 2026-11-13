@@ -224,14 +224,16 @@ it.each([
         },
       });
       const progressRows =
-        filler === "long-tool-turn"
-          ? index === ids.length - 1
-            ? 50
-            : 0
-          : filler === "tool-progress"
-            ? 1
-            : 0;
-      for (let row = 0; index > 0 && row < progressRows; row++) {
+        index === 0
+          ? 0
+          : filler === "long-tool-turn"
+            ? index === ids.length - 1
+              ? 50
+              : 0
+            : filler === "tool-progress"
+              ? 1
+              : 0;
+      for (let row = 0; row < progressRows; row++) {
         await append({ role: "assistant", content: "Checking", stopReason: "toolUse" });
       }
       await append(answer(`answer ${messageId}`));
