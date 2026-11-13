@@ -336,7 +336,7 @@ it("serializes pinned resources, rewrites references, executes support bytes, an
       `
 const fs = require('node:fs'), path = require('node:path'), cp = require('node:child_process'), crypto = require('node:crypto');
 let input = ''; process.stdin.on('data', b => input += b); process.stdin.on('end', () => {
- const promptPath = process.argv[process.argv.indexOf('--append-system-prompt-file') + 1];
+ const promptPath = process.argv[process.argv.indexOf('--system-prompt-file') + 1];
  const prompt = fs.readFileSync(promptPath, 'utf8');
  const skillPath = prompt.split('<location>')[1].split('</location>')[0];
  const dir = path.dirname(skillPath), script = path.join(dir, 'scripts/check.sh');

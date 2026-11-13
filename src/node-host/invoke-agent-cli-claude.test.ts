@@ -477,10 +477,10 @@ process.stdout.write(JSON.stringify({
     },
   );
 
-  it("streams stdin-driven stdout and cleans up a node-local system prompt file", async () => {
+  it("streams stdin-driven stdout and cleans up a node-local replacement system prompt file", async () => {
     const executable = await executableScript(`
 const fs = require("node:fs");
-const promptFlag = process.argv.indexOf("--append-system-prompt-file");
+const promptFlag = process.argv.indexOf("--system-prompt-file");
 const promptPath = process.argv[promptFlag + 1];
 const systemPrompt = fs.readFileSync(promptPath, "utf8");
 let input = "";
@@ -488,7 +488,7 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", () => {
   process.stdout.write(JSON.stringify({ type: "result", session_id: "node-session", result: input }) + "\\n");
-  process.stderr.write("node stderr\\nprompt=" + promptPath + "\\ncontent=" + systemPrompt);
+  process.stderr.write(process.argv.join(" ") + "\\nprompt=" + promptPath + "\\ncontent=" + systemPrompt);
 });`);
     const calls: Calls = [];
     const result = await runCommand(
@@ -500,7 +500,7 @@ process.stdin.on("end", () => {
     const progress = progressText(calls);
     expect(progress).toContain('"session_id":"node-session"');
     expect(progress).toContain("hello from gateway");
-    expect(result.stderr).toContain("node stderr");
+    expect(result.stderr).not.toContain("--append-system-prompt");
     expect(result.stderr).toContain("content=node system prompt");
     const promptPath = result.stderr.match(/^prompt=(.+)$/mu)?.[1];
     expect(promptPath).toBeTruthy();
@@ -511,7 +511,7 @@ process.stdin.on("end", () => {
     "retains prompt artifacts and command success after %s certification",
     async (reason, { signal }) => {
       const executable = await executableScript(
-        'process.stderr.write(process.argv[process.argv.indexOf("--append-system-prompt-file") + 1]);',
+        'process.stderr.write(process.argv[process.argv.indexOf("--system-prompt-file") + 1]);',
       );
       const certification: ProcessExtinctionResult =
         reason === "job-unavailable"
@@ -619,7 +619,7 @@ await awaitRelease(${JSON.stringify(marker)}, "read");
 writeFileSync(${JSON.stringify(marker)}, readFileSync(process.argv[1], "utf8"));`;
         const executable = await executableScript(`
 const { spawn } = require("node:child_process");
-const prompt = process.argv[process.argv.indexOf("--append-system-prompt-file") + 1];
+const prompt = process.argv[process.argv.indexOf("--system-prompt-file") + 1];
 const child = spawn(process.execPath, ["--input-type=module", "-e",
   ${JSON.stringify(descendant)}, prompt
 ], { stdio: ["ignore", "ignore", "ignore", 3] });

@@ -77,7 +77,9 @@ export async function runClaudeCliNodeCommand(params: {
       promptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-claude-prompt-"));
       const promptPath = path.join(promptDir, "system-prompt.md");
       await fs.writeFile(promptPath, systemPrompt, { mode: 0o600 });
-      argv = [...argv, "--append-system-prompt-file", promptPath];
+      // Replace Claude Code's default prompt, as Gateway-local agent turns do, so the
+      // agent does not run under Claude Code's identity and coding-CLI guidance.
+      argv = [...argv, "--system-prompt-file", promptPath];
     }
     if (params.signal?.aborted) {
       return cancelledResult();
