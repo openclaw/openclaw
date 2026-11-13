@@ -1,3 +1,5 @@
 # Same-name-tag branch-identity controls: real-Git mainline/literal/detached
 # checkouts for the dev-install badge resolver (#192034).
-70
+# Whitespace-suffixed checkout root control: real-Git toplevel comparison for
+# the dev-install badge resolver, plus two absorbed main test-line drift lines.
+81

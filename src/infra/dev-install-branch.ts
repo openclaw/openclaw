@@ -27,7 +27,8 @@ async function detectDevInstallGitBranch(packageRoot: string | null): Promise<st
   // itself a git toplevel counts as a source checkout. A package install
   // nested inside an unrelated repo must not surface that repo's branch.
   const rootReal = await fs.realpath(root).catch(() => root);
-  const top = topRes.stdout.trim();
+  // Git appends one LF; other trailing whitespace can belong to the checkout path.
+  const top = topRes.stdout.replace(/\n$/, "");
   if (!top || path.resolve(top) !== path.resolve(rootReal)) {
     return null;
   }

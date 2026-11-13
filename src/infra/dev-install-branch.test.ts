@@ -142,4 +142,15 @@ describe("resolveDevInstallGitBranch with real git checkouts", () => {
     await git("checkout", "-q", "--detach", "HEAD");
     expect(await resolveBranchRealGit(repo)).toBeNull();
   });
+
+  // Win32 path APIs cannot address a directory whose name ends in whitespace.
+  it.skipIf(process.platform === "win32")(
+    "returns the branch for a checkout whose root ends in whitespace",
+    async () => {
+      const { repo, git } = await makeRepo("whitespace ");
+      await git("branch", "feat/dev-branch-badge");
+      await git("checkout", "-q", "feat/dev-branch-badge");
+      expect(await resolveBranchRealGit(repo)).toBe("feat/dev-branch-badge");
+    },
+  );
 });
