@@ -21,24 +21,39 @@ const preparedModelRuntimePluginGenerationScope =
     Symbol.for("openclaw.preparedModelRuntimePluginGenerationScope"),
   );
 
+type BorrowedRuntimeSnapshot = { snapshot: PreparedModelRuntimeSnapshot | undefined };
+
+function readBorrowedRuntimeSnapshot(this: BorrowedRuntimeSnapshot) {
+  return this.snapshot;
+}
+
+/** Native async resources retain the clearable borrow, never its caller's lexical context. */
+export function createPreparedModelRuntimeSnapshotBorrow(snapshot: PreparedModelRuntimeSnapshot) {
+  const borrowed: BorrowedRuntimeSnapshot = { snapshot };
+  return {
+    read: readBorrowedRuntimeSnapshot.bind(borrowed),
+    close: () => {
+      borrowed.snapshot = undefined;
+    },
+  };
+}
+
 /** Borrow authority closes before the retained generation begins asynchronous disposal. */
 export function scopePreparedModelRuntimeLease(lease: PreparedModelRuntimeLease) {
-  let open = true;
+  const borrow = createPreparedModelRuntimeSnapshotBorrow(lease.snapshot);
   let disposal: Promise<void> | undefined;
   return {
     ...lease,
     [Symbol.asyncDispose]() {
-      open = false;
+      borrow.close();
       return (disposal ??= lease[Symbol.asyncDispose]());
     },
     run<T>(run: () => T): T {
-      if (!open) {
+      if (borrow.read() === undefined) {
         throw new Error("Captured reply runtime lease is closed");
       }
       return lease.run(() =>
-        withPreparedModelRuntimePluginGenerationScope(lease.pluginGeneration, run, () =>
-          open ? lease.snapshot : undefined,
-        ),
+        withPreparedModelRuntimePluginGenerationScope(lease.pluginGeneration, run, borrow.read),
       );
     },
   };

@@ -46,6 +46,7 @@ import {
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelFallbackAvailability } from "../model-selection-config.js";
 import {
+  createPreparedModelRuntimeSnapshotBorrow,
   getPreparedModelRuntimePluginGeneration,
   runOutsidePreparedModelRuntimePluginGenerationScope,
   withPreparedModelRuntimePluginGenerationScope,
@@ -370,7 +371,9 @@ async function runEmbeddedAgentForSession(
           preparedRuntimeResource = preparedModelRuntimeLease;
           startupStages.mark("prepared-runtime");
           const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
-          let preparedLeaseActive = true;
+          const preparedSnapshotBorrow = createPreparedModelRuntimeSnapshotBorrow(
+            preparedModelRuntimeOwnerSnapshot,
+          );
           try {
             throwIfAborted();
             if (
@@ -587,7 +590,7 @@ async function runEmbeddedAgentForSession(
               ? await withPreparedModelRuntimePluginGenerationScope(
                   preparedModelRuntimeLease.pluginGeneration,
                   runWithPreparedRuntime,
-                  () => (preparedLeaseActive ? preparedModelRuntimeOwnerSnapshot : undefined),
+                  preparedSnapshotBorrow.read,
                 )
               : await runWithPreparedRuntime();
           } finally {
@@ -598,7 +601,7 @@ async function runEmbeddedAgentForSession(
               );
               void initialWriterCleanup.catch(() => {});
             }
-            preparedLeaseActive = false;
+            preparedSnapshotBorrow.close();
           }
         };
         // The lane reports its existing result while this owner retains actual cleanup work.

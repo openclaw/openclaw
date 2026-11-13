@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { execNodeEvalSync } from "../test-utils/node-process.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   createCatalogAttemptReporter,
@@ -85,4 +86,29 @@ describe("catalog attempt status publication", () => {
       unregister();
     }
   });
+});
+
+it("keeps retained catalog status readable without retaining acquisition callbacks", () => {
+  const output = execNodeEvalSync(
+    `import assert from "node:assert/strict";
+     import { expectCollected } from ${JSON.stringify(new URL("../test-utils/retention.ts", import.meta.url).href)};
+     import { createCatalogAttemptReporter } from ${JSON.stringify(new URL("./prepared-model-runtime.publication-events.ts", import.meta.url).href)};
+     class Acquisition { active = true; }
+     function publish() {
+       const acquisition = new Acquisition();
+       const reporter = createCatalogAttemptReporter({},
+         { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
+         () => true, () => assert.ok(acquisition.active));
+       reporter.setPending(["synthetic"]);
+       const catalog = reporter.withRefreshStatus({ entries: [], routeVariants: [] });
+       return { catalog, acquisition: new WeakRef(acquisition) };
+     }
+     const retained = publish();
+     await expectCollected(retained.acquisition);
+     assert.deepEqual(retained.catalog.pendingProviders, ["synthetic"]);
+     assert.equal(retained.catalog.refreshFailed, undefined);
+     console.log("Acquisition released; status retained");`,
+    { imports: ["./scripts/tsx.mjs"], execArgv: ["--expose-gc"], timeout: 10_000 },
+  );
+  expect(output.trim()).toBe("Acquisition released; status retained");
 });

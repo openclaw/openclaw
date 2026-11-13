@@ -345,28 +345,35 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     },
   });
   const pluginRefresh = captureAgentPluginRuntimeRefresh();
-  const preparedSessionTarget =
+  const preparedSessionTargetBinding =
     (!sessionManager || params.sessionPersistence === "detached") &&
     resolvedSessionTarget?.agentId &&
     resolvedSessionTarget.sessionId &&
     resolvedSessionTarget.sessionKey &&
     resolvedSessionTarget.storePath
+      ? captureSessionTranscriptTargetBinding({
+          ...resolvedSessionTarget,
+          agentId: resolvedSessionTarget.agentId,
+          sessionId: resolvedSessionTarget.sessionId,
+          sessionKey: resolvedSessionTarget.sessionKey,
+          storePath: resolvedSessionTarget.storePath,
+        })
+      : undefined;
+  using preparedSessionTargetScope = preparedSessionTargetBinding
+    ? createPreparedSessionTargetAssertion({
+        runId: params.runId,
+        sessionId,
+        sessionPromptState,
+        selectedPromptTarget,
+        isAttemptCurrent: attemptControls.isAttemptCurrent,
+        assertActiveRun,
+      })
+    : undefined;
+  const preparedSessionTarget =
+    preparedSessionTargetBinding && preparedSessionTargetScope
       ? {
-          target: captureSessionTranscriptTargetBinding({
-            ...resolvedSessionTarget,
-            agentId: resolvedSessionTarget.agentId,
-            sessionId: resolvedSessionTarget.sessionId,
-            sessionKey: resolvedSessionTarget.sessionKey,
-            storePath: resolvedSessionTarget.storePath,
-          }),
-          assertCurrent: createPreparedSessionTargetAssertion({
-            runId: params.runId,
-            sessionId,
-            sessionPromptState,
-            selectedPromptTarget,
-            isAttemptCurrent: () => attemptControls.isAttemptCurrent(),
-            assertActiveRun,
-          }),
+          target: preparedSessionTargetBinding,
+          assertCurrent: preparedSessionTargetScope.assertCurrent,
         }
       : undefined;
   const attemptParams: EmbeddedRunAttemptInternalParams & {
