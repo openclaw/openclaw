@@ -1,8 +1,10 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import {
   resolveExplicitSessionStorePathForScope,
   resolveSessionStorePathCore,
 } from "../../config/sessions/paths.js";
+import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
@@ -74,7 +76,7 @@ export async function prepareReplySourceInput(
   options: InternalGetReplyOptions | undefined,
 ): Promise<{ options: InternalGetReplyOptions; input?: SessionControllerInput; created: boolean }> {
   const prepared = { ...options };
-  const sessionKey = ctx.SessionKey?.trim() || ctx.CommandTargetSessionKey?.trim();
+  const sourceSessionKey = ctx.SessionKey?.trim() || ctx.CommandTargetSessionKey?.trim();
   const existing = readReplySourceInput(prepared);
   if (existing) {
     const signal = existing.claim?.operation?.abortSignal ?? existing.abortSignal;
@@ -84,12 +86,27 @@ export async function prepareReplySourceInput(
         : signal;
     return { options: bindReplySourceInput(prepared, existing), input: existing, created: false };
   }
-  if (!sessionKey) {
+  if (!sourceSessionKey) {
     return { options: prepared, created: false };
   }
-  const agentId = resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId });
+  const agentId = resolveSessionAgentId({
+    sessionKey: sourceSessionKey,
+    config: cfg,
+    fallbackAgentId: ctx.AgentId,
+  });
+  // Reserve the persisted identity used by initialization, not its transport spelling.
+  const sessionKey = canonicalizeMainSessionAlias({
+    cfg,
+    agentId,
+    sessionKey: resolveSessionKey(
+      cfg.session?.scope ?? "per-sender",
+      { ...ctx, SessionKey: sourceSessionKey },
+      cfg.session?.mainKey,
+      agentId,
+    ),
+  });
   const storePath =
-    resolveExplicitSessionStorePathForScope({ agentId, sessionKey }) ??
+    resolveExplicitSessionStorePathForScope({ agentId, sessionKey: sourceSessionKey }) ??
     resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const policy = resolveQueueSettingsCore({ cfg, channel: ctx.Provider ?? ctx.Surface });
   // Ambient events may not preempt a user turn. Full directive
@@ -114,6 +131,7 @@ export async function prepareReplySourceInput(
     target: captureSessionTarget({
       storeScope: storePath,
       sessionKey,
+      aliases: [sourceSessionKey],
       agentId,
       incarnation: options?.expectedExistingSessionId,
     }),

@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   claimSessionControllerTask,
@@ -109,6 +110,39 @@ it("moves the native continuation itself, preserving custody and target backlog"
   const claim = tryClaimSessionControllerTask(input)!;
   expect(claim.inputs).toEqual([input]);
   releaseSessionControllerClaim(claim);
+});
+
+it.each([
+  ["agent:main:main:thread:$MixedCaseEvent", "agent:main:main:thread:$mixedcaseevent"],
+  [
+    "agent:main:matrix:channel:!MixedCase:server:thread:$Event",
+    "agent:main:matrix:channel:!MixedCase:server:thread:$Event",
+  ],
+])("captures the initialized identity for %s", async (sourceKey, expectedKey) => {
+  const ctx = { SessionKey: sourceKey, Provider: "matrix" };
+  const source = await prepare(ctx);
+  const sessionKey = resolveSessionKey("per-sender", ctx, "main", "main");
+  expect(sessionKey).toBe(expectedKey);
+  expect(source.input?.mailbox.owner.target?.sessionKey).toBe(expectedKey);
+  expect(() =>
+    retargetReplySourceForExecution({
+      ctx,
+      options: source.options,
+      sessionKey,
+      storePath: target.storeScope,
+      agentId: "main",
+    }),
+  ).not.toThrow();
+  expect(() =>
+    retargetReplySourceForExecution({
+      ctx,
+      options: source.options,
+      sessionKey: "agent:main:unrelated",
+      storePath: target.storeScope,
+      agentId: "main",
+    }),
+  ).toThrow("Reply execution target differs from its captured source");
+  retireUnadoptedReplySource(source.input);
 });
 
 it("does not invent a mailbox for a sessionless source", async () => {
