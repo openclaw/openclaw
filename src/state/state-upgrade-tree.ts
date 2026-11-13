@@ -94,7 +94,13 @@ export function withRecoveredSource<T>(pathname: string, read: (readable: string
       const copy = path.join(dir, path.basename(pathname));
       fs.copyFileSync(pathname, copy);
       fs.copyFileSync(journal, `${copy}-journal`);
-      openNodeSqliteDatabase(copy).close();
+      // The first read on a writable connection rolls the journal back.
+      const db = openNodeSqliteDatabase(copy);
+      try {
+        db.prepare("SELECT count(*) FROM sqlite_master").get();
+      } finally {
+        db.close();
+      }
       return read(copy);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
