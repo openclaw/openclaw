@@ -107,7 +107,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sandboxSessionKey,
     sessionAgentId,
   } = input.setup;
-  const { catalogToolHookContext, effectiveTools, toolSearchRunPlan } = input.toolCatalog;
+  const { catalogToolHookContext, effectiveTools } = input.toolCatalog;
   const { clientTools, uncompactedEffectiveTools } = input.bundleTools;
   const {
     codeModeControlsEnabledForRun,
@@ -141,7 +141,6 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           resources.sessionManager = manager;
           resources.ownsSessionManager = manager !== attempt.sessionManager;
         },
-        replayAllowedToolNames: toolSearchRunPlan.replayAllowedToolNames,
         resolveActiveContextEnginePluginId: input.resolveActiveContextEnginePluginId,
         withOwnedTranscriptWrite: sessionLock.withOwnedTranscriptWrite,
       }),
