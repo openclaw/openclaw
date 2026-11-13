@@ -20,9 +20,7 @@ describe("resolveGlobalSingleton", () => {
     const absent = Symbol("absent-owner");
     await resetGlobalSingletonLifecycleState(absent);
     expect(readGlobalSingleton(absent)).toBeUndefined();
-    const oldReset = vi.fn();
-    const currentReset = vi.fn();
-    const otherReset = vi.fn();
+    const [oldReset, currentReset, otherReset] = [vi.fn(), vi.fn(), vi.fn()];
     register(oldReset);
     register(currentReset);
     register(otherReset, TEST_MAP_KEY);
@@ -35,9 +33,7 @@ describe("resolveGlobalSingleton", () => {
 
   it("propagates the registered owner's cleanup failure", async () => {
     const error = new Error("owner cleanup failed");
-    register(async () => {
-      throw error;
-    });
+    register(() => Promise.reject(error));
     await expect(resetGlobalSingletonLifecycleState(TEST_KEY)).rejects.toBe(error);
     register(() => {});
   });
