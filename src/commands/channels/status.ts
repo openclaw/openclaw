@@ -101,15 +101,14 @@ export async function channelsStatusCommand(
       } else {
         writeRuntimeJson(runtime, payload);
       }
-      if (unhealthyAccounts.length > 0) {
-        runtime.exit(1);
-      }
-      return;
+    } else {
+      const { formatGatewayChannelsStatusLines } = await import("./status.runtime.js");
+      signal?.throwIfAborted();
+      runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
     }
-    const { formatGatewayChannelsStatusLines } = await import("./status.runtime.js");
-    signal?.throwIfAborted();
-    runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
     if (unhealthyAccounts.length > 0) {
+      // The reason goes to stderr in both modes: the JSON payload carries the
+      // same detail, but the exit code alone does not say which account failed.
       for (const account of unhealthyAccounts) {
         runtime.error(unhealthyHelpers!.formatUnhealthyChannelAccount(account));
       }
