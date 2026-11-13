@@ -126,6 +126,43 @@ it("source manifests are deterministic, content-private, and produce overlap-awa
     ),
   ).toThrow(/encoded data was not valid/);
   expect(await readdir(scratch)).toEqual([]);
+  // BUG-392: a malformed JSON row reports its physical line (blank lines counted), not the in-row parser position.
+  // The diagnostic must not echo the row: manifests carry private payloads (message text, author fields).
+  const PRIVATE_MARKER = "PRIVATE_LEAK_MARKER_9f3c";
+  const malformedInput = `\n\n{bad "${PRIVATE_MARKER}" json}\n`;
+  const malformedManifest = path.join(dir, "malformed.manifest.jsonl");
+  await writeFile(malformedManifest, malformedInput);
+  for (const { args, diagnostic } of [
+    {
+      args: [
+        "snapshot",
+        ...flags({
+          provider: "discord",
+          "source-key": "discord:guild:channel",
+          input: "-",
+          output: "-",
+          "coverage-start": at("000"),
+          "coverage-end": at("010"),
+        }),
+      ],
+      diagnostic: /-:3: line is not valid JSON/,
+    },
+    {
+      args: ["plan", "--current", malformedManifest],
+      diagnostic: /malformed\.manifest\.jsonl:3: line is not valid JSON/,
+    },
+  ]) {
+    let malformedError: unknown;
+    try {
+      run(manifestScript, args, { ...options, input: malformedInput });
+    } catch (e) {
+      malformedError = e;
+    }
+    const message =
+      malformedError instanceof Error ? malformedError.message : String(malformedError);
+    expect.soft(message).toMatch(diagnostic);
+    expect.soft(message).not.toMatch(PRIVATE_MARKER);
+  }
   const invalidManifest = path.join(dir, "invalid.manifest.jsonl");
   await writeFile(
     invalidManifest,

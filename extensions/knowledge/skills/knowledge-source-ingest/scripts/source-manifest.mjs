@@ -160,11 +160,18 @@ async function snapshot() {
     );
     const insert = database.prepare("INSERT INTO items(id,sha256,occurred_at) VALUES(?,?,?)");
     let count = 0;
+    let physicalLine = 0;
     for await (const line of lines(input)) {
+      physicalLine++;
       if (!line.trim()) {
         continue;
       }
-      const row = JSON.parse(line);
+      let row;
+      try {
+        row = JSON.parse(line);
+      } catch {
+        throw new Error(`${input}:${physicalLine}: line is not valid JSON`);
+      }
       if (!row || typeof row.id !== "string" || !row.id.length) {
         throw new Error("Item " + (count + 1) + " has no stable string id");
       }
@@ -209,15 +216,22 @@ async function snapshot() {
 async function loadManifest(filename, database, manifestIndex, role) {
   let header = null;
   let count = 0;
+  let physicalLine = 0;
   const insert = database.prepare(
     "INSERT INTO manifest_items(role,manifest_index,manifest_observed,manifest_fraction,id,sha256,occurred_at) VALUES(?,?,?,?,?,?,?)",
   );
   database.exec("BEGIN");
   for await (const line of lines(filename)) {
+    physicalLine++;
     if (!line.trim()) {
       continue;
     }
-    const row = JSON.parse(line);
+    let row;
+    try {
+      row = JSON.parse(line);
+    } catch {
+      throw new Error(`${filename}:${physicalLine}: line is not valid JSON`);
+    }
     if (!header) {
       if (
         row.format !== FORMAT ||
