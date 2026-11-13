@@ -407,7 +407,7 @@ describe("Browser panel streaming", () => {
     "keeps an input's policy error visible through %s while frames stream",
     async (work) => {
       const { controller, resizes } = setup(async (request) => {
-        if (request.path === "/act" && request.body?.kind === "press") {
+        if (request.path === "/operator/input") {
           throw new GatewayRequestError({
             code: "INVALID_REQUEST",
             message: "browser navigation blocked by policy",
