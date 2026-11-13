@@ -13,6 +13,7 @@ import {
   resolveInstalledRuntimeImageRecipe,
 } from "../../scripts/compose-installed-runtime.mts";
 import { verifyInstalledRuntimeImageInputs } from "../../scripts/lib/installed-runtime-image-inputs.mjs";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 
 const repo = fileURLToPath(new URL("../../", import.meta.url));
 const runtimeCommit = execFileSync("git", ["rev-parse", "HEAD"], {
@@ -340,6 +341,50 @@ afterEach(async () => {
   }
 });
 describe("offline installed runtime composition", () => {
+  it("reuses composition import edges while checking the actual post-prune closure", async () => {
+    const { root, options } = await fixture();
+    await write(path.join(root, "package"), "dist/entry.js", 'import "./leaf.mjs";\n');
+    await write(path.join(root, "package"), "dist/leaf.mjs", "export {};\n");
+    await tar.create({ cwd: root, file: options.package, gzip: true }, ["package"]);
+    const archive = await fs.readFile(options.package);
+    const receipt = JSON.parse(await fs.readFile(options.packageReceipt, "utf8"));
+    await fs.writeFile(
+      options.packageReceipt,
+      JSON.stringify({ ...receipt, sha256: digest(archive), bytes: archive.length }),
+    );
+    const result = await composeInstalledRuntime(options);
+    const app = path.join(options.outputDir, "app");
+    const graphPath = path.join(app, ".runtime-bootstrap/package-dist-imports.json");
+    expect(JSON.parse(await fs.readFile(graphPath, "utf8"))).toEqual([
+      { importerPath: "dist/entry.js", importedPath: "dist/leaf.mjs" },
+    ]);
+    const rows = (await fs.readFile(result.manifest.path, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(rows).toContainEqual(
+      expect.objectContaining({
+        path: "app/.runtime-bootstrap/package-dist-imports.json",
+        sha256: digest(await fs.readFile(graphPath)),
+      }),
+    );
+    const check = () =>
+      spawnSync(
+        process.execPath,
+        [path.join(repo, "scripts/check-package-dist-imports.mjs"), app, "--imports", graphPath],
+        { encoding: "utf8" },
+      );
+    expect(check().status).toBe(0);
+    await fs.rm(path.join(app, "dist/leaf.mjs"));
+    const missing = check();
+    expect(missing.status, missing.stderr).toBe(1);
+    expect(missing.stderr).toContain("dist/entry.js imports missing dist/leaf.mjs");
+    await fs.rm(path.join(app, "dist/entry.js"));
+    expect(check().status).toBe(0);
+    await fs.rm(graphPath);
+    expect(check().status).not.toBe(0);
+  });
+
   it("accepts transported symlink permission representation without changing source facts", async () => {
     const { deps, options } = await fixture(undefined, undefined, true);
     const original = await fs.readFile(options.dependencyManifest, "utf8");
@@ -631,6 +676,44 @@ describe("offline installed runtime composition", () => {
           "dist/extensions/demo/package.json",
         ]),
       );
+      const manifestPath = path.join(app, "package.json");
+      const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+      manifest.exports = { "./plugin-sdk/demo": "./dist/plugin-sdk/demo.js" };
+      await fs.writeFile(manifestPath, JSON.stringify(manifest));
+      const sdkFiles = {
+        "dist/plugin-sdk/demo.js": "export const singleton = {};\n",
+        "dist/plugin-sdk/private.js": "export const privateValue = true;\n",
+        "dist/extensions/demo/.setup/session-binding.mjs":
+          'export { singleton } from "openclaw/plugin-sdk/demo";\n' +
+          'export const loadPrivate = () => import("openclaw/plugin-sdk/private");\n',
+        "dist/extensions/demo/catalog-page.worker.js":
+          'export { singleton } from "openclaw/plugin-sdk/demo";\n',
+      };
+      for (const [file, contents] of Object.entries(sdkFiles)) {
+        await write(app, file, contents);
+      }
+      const inventoryPath = path.join(app, "dist/postinstall-inventory.json");
+      const inventory = JSON.parse(await fs.readFile(inventoryPath, "utf8"));
+      await fs.writeFile(inventoryPath, JSON.stringify([...inventory, ...Object.keys(sdkFiles)]));
+      const nativeImport = (cwd: string) =>
+        spawnSync(
+          resolveTestNodeExecPath(),
+          [
+            "--input-type=module",
+            "-e",
+            `
+import assert from "node:assert/strict";
+import { singleton } from "./dist/plugin-sdk/demo.js";
+import * as setup from "./dist/extensions/demo/.setup/session-binding.mjs";
+import * as worker from "./dist/extensions/demo/catalog-page.worker.js";
+assert.equal(setup.singleton, singleton);
+assert.equal(worker.singleton, singleton);
+await assert.rejects(setup.loadPrivate(), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
+`,
+          ],
+          { cwd, encoding: "utf8" },
+        );
+      expect(nativeImport(app).stderr).toContain("ERR_MODULE_NOT_FOUND");
       await write(app, "dist/stale.js", "obsolete");
       const finalize = () =>
         spawnSync(
@@ -652,6 +735,11 @@ describe("offline installed runtime composition", () => {
       }
       const finalized = finalize();
       expect(finalized.status, finalized.stderr).toBe(0);
+      const relocated = path.join(options.outputDir, "relocated");
+      await fs.rename(app, relocated);
+      const imported = nativeImport(relocated);
+      expect(imported.status, imported.stderr).toBe(0);
+      await fs.rename(relocated, app);
       await expect(fs.access(path.join(app, ".openclaw-lifecycle-pending"))).rejects.toThrow();
       await expect(fs.access(path.join(app, "dist/stale.js"))).rejects.toThrow();
       expect(

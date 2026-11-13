@@ -1,10 +1,12 @@
 import { createMemo, Show, useContext } from "solid-js";
-import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
+import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
+import type { ProviderPresentation } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
+import { Tooltip } from "../../../components/solid/tooltip.tsx";
 import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../components/tooltip.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { keyboardHintsVisible } from "../../../lib/reactive/keyboard-hints.ts";
 import {
   formatModelContextMeta,
@@ -14,7 +16,6 @@ import {
   type ChatModelPickerOptionProps,
   type ChatModelPickerTargetOptionProps,
 } from "./chat-model-picker-options.ts";
-import { handleModelOptionMouseEnter } from "./chat-model-picker-search-view.ts";
 import { ChatModelSearchContext, type ChatModelSearchRow } from "./chat-model-picker-search.ts";
 
 function ModelShortcut(props: { rowKey: string }) {
@@ -32,8 +33,28 @@ function ModelShortcut(props: { rowKey: string }) {
   );
 }
 
-export function ChatModelProviderIcon(props: { provider: string }) {
-  return <ProviderBrandIcon provider={props.provider} class="chat-controls__provider-icon" />;
+export function ChatModelProviderIcon(props: {
+  provider: string;
+  presentation?: ProviderPresentation;
+}) {
+  return (
+    <ProviderBrandIcon
+      provider={props.provider}
+      presentation={props.presentation}
+      class="chat-controls__provider-icon"
+    />
+  );
+}
+
+export function ChatModelTargetIcon() {
+  return (
+    <span
+      class="chat-controls__provider-icon provider-brand-icon provider-brand-icon--fallback"
+      aria-hidden="true"
+    >
+      ›
+    </span>
+  );
 }
 
 type ModelPresentationProps = Omit<ChatModelPickerOptionProps, "onSelect" | "index">;
@@ -106,10 +127,17 @@ export function modelOptionSearchRow(
   return {
     key: modelPickerOptionKey(options.entry),
     name: formatModelLabel(options.entry).toLocaleLowerCase(),
-    keywords: [options.entry.isDefault ? defaultLabel : "", runtimeLabel]
+    keywords: [
+      options.entry.isDefault ? defaultLabel : "",
+      runtimeLabel,
+      options.entry.agentRuntimeId,
+    ]
       .join(" ")
       .toLocaleLowerCase(),
-    providerLabel: providerDisplayLabel(options.entry.provider).toLocaleLowerCase(),
+    providerLabel: defaultProviderLabel(
+      options.entry.provider,
+      options.entry.presentation,
+    ).toLocaleLowerCase(),
     reference: options.entry.value,
     selected,
     hasShortcut: !selected,
@@ -122,6 +150,8 @@ type OptionPresentation = ReturnType<ReturnType<typeof createOptionPresentation>
 function ModelOptionButton(
   props: ChatModelPickerOptionProps & { presentation: OptionPresentation },
 ) {
+  const providerDisplayLabel = (provider: string) =>
+    defaultProviderLabel(provider, props.entry.presentation);
   const search = useContext(ChatModelSearchContext);
   const defaultLabel = createMemo(() =>
     props.entry.isDefault ? t("chat.modelControls.default") : "",
@@ -149,7 +179,11 @@ function ModelOptionButton(
       data-chat-model-runtime={props.entry.agentRuntime ?? undefined}
       data-chat-model-default={props.entry.isDefault ? "true" : undefined}
       data-chat-model-index={props.index}
-      data-chat-model-keywords={[defaultLabel(), props.presentation.runtimeLabel]
+      data-chat-model-keywords={[
+        defaultLabel(),
+        props.presentation.runtimeLabel,
+        props.entry.agentRuntimeId,
+      ]
         .filter(Boolean)
         .join(" ")
         .toLocaleLowerCase()}
@@ -162,7 +196,6 @@ function ModelOptionButton(
       aria-setsize={search?.row(key())?.size}
       hidden={hidden()}
       aria-selected={props.presentation.selected ? "true" : "false"}
-      title={props.presentation.accessibleStatus || undefined}
       aria-label={[
         props.presentation.modelLabel,
         props.presentation.runtimeLabel,
@@ -179,7 +212,6 @@ function ModelOptionButton(
         )
       }
       data-chat-model-setup={props.presentation.onModelSetup ? "true" : undefined}
-      onMouseEnter={handleModelOptionMouseEnter}
       onClick={(event) => {
         // Auth-gated rows lead to setup rather than trapping a click on a disabled model.
         if (props.entry.disabled && !props.presentation.resetsPin) {
@@ -191,7 +223,10 @@ function ModelOptionButton(
       }}
     >
       <span class="chat-controls__model-option-provider">
-        <ChatModelProviderIcon provider={props.entry.provider} />
+        <ChatModelProviderIcon
+          provider={props.entry.provider}
+          presentation={props.entry.presentation}
+        />
       </span>
       <span class="chat-controls__model-option-copy">
         <span class="chat-controls__model-option-title">
@@ -200,9 +235,6 @@ function ModelOptionButton(
             <span class="chat-controls__model-state-label chat-controls__model-state-label--default">
               {defaultLabel()}
             </span>
-          </Show>
-          <Show when={props.presentation.modelMeta}>
-            <span class="chat-controls__model-option-meta">{props.presentation.modelMeta}</span>
           </Show>
           <Show when={props.presentation.needsAuth}>
             <span class="chat-controls__model-option-auth-warning" data-chat-model-auth-warning>
@@ -214,6 +246,9 @@ function ModelOptionButton(
             <span class="chat-controls__model-chat-only-info" aria-hidden="true">
               <Icon name="info" />
             </span>
+          </Show>
+          <Show when={props.presentation.modelMeta}>
+            <span class="chat-controls__model-option-meta">{props.presentation.modelMeta}</span>
           </Show>
         </span>
       </span>
@@ -231,14 +266,14 @@ function ModelOptionButton(
 export function ChatModelPickerOption(props: ChatModelPickerOptionProps) {
   const presentation = createOptionPresentation(props);
   return (
-    <Show
-      when={presentation().detail}
-      fallback={<ModelOptionButton {...props} presentation={presentation()} />}
+    <Tooltip
+      class="chat-controls__model-tooltip"
+      content={[presentation().modelLabel, presentation().detail].filter(Boolean).join(". ")}
+      delay={800}
+      describe={Boolean(presentation().detail)}
     >
-      <openclaw-tooltip prop:content={presentation().detail}>
-        <ModelOptionButton {...props} presentation={presentation()} />
-      </openclaw-tooltip>
-    </Show>
+      <ModelOptionButton {...props} presentation={presentation()} />
+    </Tooltip>
   );
 }
 
@@ -269,14 +304,13 @@ export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionPr
       aria-selected="false"
       type="button"
       disabled={props.disabled}
-      onMouseEnter={handleModelOptionMouseEnter}
       onClick={(event) => props.onSelect(props.groupId, props.entry.value, event)}
     >
       <span
         class="chat-controls__model-option-provider chat-controls__target-icon"
         aria-hidden="true"
       >
-        <Icon name="terminal" />
+        <ChatModelTargetIcon />
       </span>
       <span class="chat-controls__model-option-copy">
         <span class="chat-controls__model-option-title">

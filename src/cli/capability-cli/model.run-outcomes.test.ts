@@ -82,6 +82,7 @@ it.each([
   "reads bounded prompts through %s %s from %s without printing the input",
   async (root, transport, source) =>
     withOpenClawTestState({}, async (state) => {
+      const { runtime } = mocks;
       const prompt = `  private UTF-8: café\n${"x".repeat(1_048_548)}🦞\n`;
       expect(Buffer.byteLength(prompt)).toBe(1_048_576);
       await state.writeText("prompt.txt", prompt);
@@ -108,21 +109,13 @@ it.each([
           modelRun: true,
         });
       }
-      expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({ ok: true }),
-        2,
-      );
-      expect(
-        JSON.stringify([
-          mocks.runtime.log.mock.calls,
-          mocks.runtime.error.mock.calls,
-          mocks.runtime.writeJson.mock.calls,
-        ]),
-      ).not.toContain("private UTF-8");
+      expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ ok: true }), 2);
+      const calls = [runtime.log, runtime.error, runtime.writeJson].map((fn) => fn.mock.calls);
+      expect(JSON.stringify(calls)).not.toContain("private UTF-8");
     }),
 );
 
-it.each(["missing", "empty", "oversized", "traversal", "symlink", "conflict"])(
+it.each(["missing", "empty", "invalid-utf8", "oversized", "traversal", "symlink", "conflict"])(
   "rejects %s prompt files before inference",
   async (scenario) =>
     withOpenClawTestState({}, async (state) => {
@@ -130,7 +123,11 @@ it.each(["missing", "empty", "oversized", "traversal", "symlink", "conflict"])(
       await fs.mkdir(dir);
       await fs.writeFile(state.path("private.txt"), "outside private prompt");
       const content =
-        scenario === "empty" ? " \n" : "x".repeat(scenario === "oversized" ? 1_048_577 : 1);
+        scenario === "invalid-utf8"
+          ? Buffer.from([0xc3, 0x28])
+          : scenario === "empty"
+            ? " \n"
+            : "x".repeat(scenario === "oversized" ? 1_048_577 : 1);
       if (scenario === "symlink") {
         await fs.symlink(state.root, path.join(dir, "alias"), "junction");
       } else if (scenario !== "missing") {
@@ -156,6 +153,9 @@ it.each(["missing", "empty", "oversized", "traversal", "symlink", "conflict"])(
       expect(mocks.acquire).not.toHaveBeenCalled();
       expect(mocks.callGateway).not.toHaveBeenCalled();
       expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+      if (scenario === "invalid-utf8") {
+        expect(mocks.runtime.error).toHaveBeenCalledWith("--prompt-file must be valid UTF-8.");
+      }
     }),
 );
 

@@ -39,51 +39,13 @@ export function canCleanupLegacyManagedHandoff(
 }
 
 export const MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX = "openclaw-update-run-handoff-";
-const MANAGED_SERVICE_UPDATE_HANDOFF_STALE_TTL_MS = 24 * 60 * 60_000;
-
-export async function cleanupStaleManagedServiceUpdateHandoffs(params?: {
-  tmpDir?: string;
-  nowMs?: number;
-  ttlMs?: number;
-}): Promise<number> {
-  const tmpDir = params?.tmpDir ?? os.tmpdir();
-  const nowMs = params?.nowMs ?? Date.now();
-  const ttlMs = params?.ttlMs ?? MANAGED_SERVICE_UPDATE_HANDOFF_STALE_TTL_MS;
-  let entries: Array<{ name: string; isDirectory: () => boolean }>;
-  try {
-    entries = await fs.readdir(tmpDir, { withFileTypes: true });
-  } catch {
-    return 0;
-  }
-
-  let removed = 0;
-  for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-    if (
-      !entry.isDirectory() ||
-      !entry.name.startsWith(MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX)
-    ) {
-      continue;
-    }
-    const dir = path.join(tmpDir, entry.name);
-    try {
-      const stats = await fs.stat(dir);
-      if (nowMs - stats.mtimeMs < ttlMs) {
-        continue;
-      }
-      await fs.rm(dir, { recursive: true, force: true });
-      removed += 1;
-    } catch {
-      // Best effort cleanup only.
-    }
-  }
-  return removed;
-}
 
 export async function inspectManagedHandoffRepairFacts(
   previous: ManagedHandoffLease,
   discovered: DiscoveredRepairFacts,
   retained?: ManagedHandoffRepairFacts,
   familyExited = false,
+  processState?: (identity: ManagedHandoffLease["helper"]) => "live" | "dead" | "unknown",
 ): Promise<ManagedHandoffRepairFacts> {
   const facts = {
     runIds: [...new Set([...(retained?.runIds ?? []), ...discovered.runIds])],
@@ -91,7 +53,12 @@ export async function inspectManagedHandoffRepairFacts(
     timeoutMs: Math.max(retained?.timeoutMs ?? 0, discovered.timeoutMs ?? 0) || null,
   };
   const grace = Math.max(45 * 60_000, facts.timeoutMs ?? 0);
-  if (!familyExited && Date.now() - previous.updatedAt < grace) {
+  const ownersExited =
+    processState &&
+    [previous.helper, previous.executor, ...(discovered.drivers ?? [])].every(
+      (owner) => processState(owner) === "dead",
+    );
+  if (!familyExited && !ownersExited && Date.now() - previous.updatedAt < grace) {
     throw new Error(
       `Handoff was last recorded at ${new Date(previous.updatedAt).toISOString()}; its recovery grace ends at ${new Date(previous.updatedAt + grace).toISOString()}. Retry openclaw update repair then.`,
     );
@@ -221,6 +188,8 @@ export async function readManagedHandoffRepairFacts(
   }));
   for (const run of runs) {
     if (
+      // Child leases are owned by their run; adoption drops a dead updater from the drivers.
+      run.runId === lease.owner ||
       recordedUpdateRunDrivers(run).some((driver) =>
         owners.some((owner) => sameUpdateRunDriver(driver, owner)),
       )

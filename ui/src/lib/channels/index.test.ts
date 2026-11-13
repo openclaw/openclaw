@@ -267,8 +267,8 @@ describe("channels controller WhatsApp logout", () => {
       expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(1);
       expect(channels.state).toMatchObject({
         whatsappLoginMessage: cleared
-          ? "Logged out."
-          : "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
+          ? "Signed out."
+          : "No saved WhatsApp session was cleared. It may already be gone or need manual cleanup.",
         whatsappLoginQrDataUrl: cleared ? null : "data:image/png;base64,current-qr",
         whatsappLoginConnected: cleared ? null : true,
         whatsappBusy: false,
@@ -367,7 +367,7 @@ describe("channels controller DM pairing", () => {
     await expect(channels.dismissPairing(pairingTarget)).resolves.toBe(true);
     expect(request).toHaveBeenCalledWith("channels.pairing.dismiss", pairingTarget);
     expect(channels.state.pairingSnapshot?.requests).toEqual([]);
-    expect(channels.state.pairingBusyRequestId).toBeNull();
+    expect(channels.state.pairingBusy).toBeNull();
   });
 
   it("keeps the row resolved when refresh fails and blocks polling during mutation", async () => {
@@ -387,7 +387,7 @@ describe("channels controller DM pairing", () => {
     await channels.refreshPairing();
 
     const approval = channels.approvePairing(approvalParams);
-    await vi.waitFor(() => expect(channels.state.pairingBusyRequestId).toBe("request-1"));
+    await vi.waitFor(() => expect(channels.state.pairingBusy?.requestId).toBe("request-1"));
     await channels.refreshPairing();
     expect(listCount).toBe(1);
 
@@ -488,7 +488,7 @@ describe("channels controller DM pairing", () => {
     channels.state.pairingSnapshot = pendingPairing;
 
     const pendingApproval = channels.approvePairing(approvalParams);
-    await vi.waitFor(() => expect(channels.state.pairingBusyRequestId).toBe("request-1"));
+    await vi.waitFor(() => expect(channels.state.pairingBusy?.requestId).toBe("request-1"));
     setScopes(["operator.pairing", "operator.read"]);
     channels.state.pairingSnapshot = pendingPairing;
 

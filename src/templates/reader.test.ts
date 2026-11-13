@@ -1,5 +1,5 @@
 import { link, realpath, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, assert, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildTemplateAddPlan } from "./lifecycle.js";
@@ -15,7 +15,7 @@ function expectReadError(
   expect(result.ok).toBe(false);
   expect(result.diagnostics).toContainEqual(expect.objectContaining({ code }));
 }
-function jsonFailure(code: string, message: unknown) {
+function readFailure(code: string, message: unknown) {
   return { ok: false, diagnostics: [{ level: "error", code, phase: "parse", path: "$", message }] };
 }
 const manifestJson = JSON.stringify({
@@ -25,41 +25,35 @@ const manifestJson = JSON.stringify({
 const packageJson = JSON.stringify({
   name: "reader-package",
   version: "1.0.0",
-  openclaw: { template: "openclaw.template.json" },
+  description: "Café",
+  openclaw: { template: "CLAW.md" },
 });
 
-async function jsonSource(kind: "package" | "manifest") {
-  const root = tempDirs.make("openclaw-template-json-");
-  const manifestPath = join(root, "openclaw.template.json");
+async function sourceFixture(kind: "package" | "manifest") {
+  const root = tempDirs.make("openclaw-template-source-");
+  const manifestPath = join(root, "CLAW.md");
   const packagePath = join(root, "package.json");
-  await writeFile(manifestPath, manifestJson);
+  const manifest = ["---", manifestJson, "---", ""].join("\n");
+  await writeFile(manifestPath, manifest);
   await writeFile(packagePath, packageJson);
   return {
     path: kind === "package" ? packagePath : manifestPath,
     source: kind === "package" ? root : manifestPath,
-    json: kind === "package" ? packageJson : manifestJson,
+    text: kind === "package" ? packageJson : manifest,
   };
 }
 
 describe("Template source reader", () => {
-  it.each(["package", "manifest"] as const)(
-    "rejects malformed UTF-8 %s JSON without selecting replacement-decoded data",
-    async (kind) => {
-      const { path, source, json } = await jsonSource(kind);
-      const content =
-        kind === "package" ? json.replace("openclaw.template.json", "café.json") : json;
-      if (kind === "package") {
-        // Replacement decoding must not silently select a different manifest.
-        await writeFile(join(dirname(path), "caf�.json"), manifestJson);
-        await writeFile(join(dirname(path), "café.json"), manifestJson);
-      }
-      await writeFile(path, Buffer.from(content, "latin1"));
-
-      expect(await readTemplateManifestFile(source)).toMatchObject(
-        jsonFailure("invalid_json", expect.stringMatching(/must be valid UTF-8/)),
-      );
-
-      await writeFile(path, content, "utf8");
+  it.each([
+    { kind: "package", code: "invalid_json" },
+    { kind: "manifest", code: "invalid_template_markdown_utf8" },
+  ] as const)(
+    "rejects malformed UTF-8 $kind bytes without replacement decoding",
+    async ({ kind, code }) => {
+      const { path, source, text } = await sourceFixture(kind);
+      await writeFile(path, Buffer.from(text, "latin1"));
+      expectReadError(await readTemplateManifestFile(source), code);
+      await writeFile(path, text, "utf8");
       expect(await readTemplateManifestFile(source)).toMatchObject({
         ok: true,
         manifest: { agent: { name: "Café" } },
@@ -67,43 +61,37 @@ describe("Template source reader", () => {
     },
   );
 
-  it.each(["package", "manifest"] as const)(
-    "reports BOM-prefixed %s JSON at its source path",
-    async (kind) => {
-      const { path, source, json } = await jsonSource(kind);
-      await writeFile(path, `\uFEFF${json}`);
-
-      expect(await readTemplateManifestFile(source)).toEqual(
-        jsonFailure(
-          "invalid_json",
-          expect.stringContaining(`Could not parse ${await realpath(path)}:`),
-        ),
-      );
-    },
-  );
+  it("reports BOM-prefixed package JSON at its source path", async () => {
+    const { path, source, text } = await sourceFixture("package");
+    await writeFile(path, "\uFEFF" + text);
+    expect(await readTemplateManifestFile(source)).toEqual(
+      readFailure(
+        "invalid_json",
+        expect.stringContaining("Could not parse " + (await realpath(path)) + ":"),
+      ),
+    );
+  });
 
   it.each([
     { kind: "package", maxBytes: 256 * 1024, code: "package_read_failed_too_large" },
     { kind: "manifest", maxBytes: 1024 * 1024, code: "read_failed_too_large" },
   ] as const)("keeps the distinct $kind byte limit", async ({ kind, maxBytes, code }) => {
-    const { path, source, json: text } = await jsonSource(kind);
-    const json = Buffer.from(text);
-    const raw = Buffer.concat([json, Buffer.alloc(maxBytes - json.length, 0x20)]);
+    const { path, source, text } = await sourceFixture(kind);
+    const bytes = Buffer.from(text);
+    const raw = Buffer.concat([bytes, Buffer.alloc(maxBytes - bytes.length, 0x20)]);
     await writeFile(path, raw);
-
     expect(await readTemplateManifestFile(source)).toMatchObject({
       ok: true,
       manifest: { agent: { id: "reader-agent", name: "Café" } },
     });
-
     await writeFile(path, Buffer.concat([raw, Buffer.from(" ")]));
     expect(await readTemplateManifestFile(source)).toEqual(
-      jsonFailure(code, `${await realpath(path)} exceeds ${maxBytes} bytes.`),
+      readFailure(code, (await realpath(path)) + " exceeds " + maxBytes + " bytes."),
     );
   });
 
   it("binds package whitespace bytes even when identity and byte length are unchanged", async () => {
-    const { path: packagePath, source } = await jsonSource("package");
+    const { path: packagePath, source } = await sourceFixture("package");
     await writeFile(packagePath, `${packageJson}\n`);
     const first = await readTemplateManifestFile(source);
     await writeFile(packagePath, `${packageJson} `);

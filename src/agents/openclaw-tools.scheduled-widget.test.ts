@@ -114,8 +114,23 @@ it("pins from a recovered turn that keeps the session's inline widget catalog", 
     "board.widget.put",
     expect.objectContaining({ sessionKey: agentSessionKey, name: "status" }),
   );
-  expect(pinned.content[0]).toMatchObject({ text: expect.stringContaining('"status": "pinned"') });
+  expect(pinned.content[0]).toMatchObject({ text: expect.stringContaining('"status":"pinned"') });
   await expect(recovered!.execute("inline-call", call)).rejects.toThrow(
     "no connected client can show inline widgets this turn; set pin=true",
   );
 });
+
+it.each([undefined, []] as Array<string[] | undefined>)(
+  "pins scheduled widgets without borrowing remembered inline capability (current: %j)",
+  (clientCaps) => {
+    expectPinnedOnlySchema(
+      createOpenClawTools({
+        agentSessionKey: "agent:main:dashboard:scheduled",
+        gatewayCallerScheduled: true,
+        runtimeToolAllowlist: ["*"],
+        listingClientCaps: ["inline-widgets"],
+        clientCaps,
+      }),
+    );
+  },
+);

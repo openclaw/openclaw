@@ -76,23 +76,23 @@ describe("readResponseText", () => {
     expectDecoded(bytes, contentType, "café 日本"),
   );
 
-  it("uses document metadata when there is no byte-order mark or declared charset", async () => {
-    const text = '<meta charset="iso-8859-1"><p>café</p>';
-    await expectDecoded(Buffer.from(text, "latin1"), "text/html", text);
-  });
-
   it.each([
-    [
-      '<?xml version="1.0" encoding="utf-16"?><rss><title>café</title></rss>',
-      "application/rss+xml",
-    ],
-    ['<meta charset="UTF-16LE"><p>café</p>', "text/html"],
-    [
-      '<meta http-equiv="Content-Type" content="text/html; charset=utf-16"><p>café</p>',
-      "text/html",
-    ],
-  ])("decodes ASCII-compatible documents declaring UTF-16 as UTF-8: %s", (body, contentType) =>
-    expectDecoded(new TextEncoder().encode(body), contentType, body),
+    ['<meta charset="iso-8859-1"><p>café</p>', "latin1"],
+    ['<meta name="description" content="<!--"><meta charset="windows-1252"><p>café</p>', "latin1"],
+    ...[
+      '<!-- <meta charset="windows-1252"> -->',
+      '<!-- <meta charset="windows-1252"> --!>',
+      '<!-- <meta http-equiv="Content-Type" content="text/html; charset=windows-1252"> -->',
+      '<!-- <?xml version="1.0" encoding="windows-1252"?> -->',
+    ].map((comment) => [`${comment}<meta charset="utf-8"><p>café 日本 😀</p>`] as const),
+    ['<!-- <meta charset="windows-1252">' + " ".repeat(4096) + "café -->"],
+    ['<?xml encoding="utf-16"?><rss>café</rss>', "utf8", "application/rss+xml"],
+    ['<meta charset="UTF-16LE"><p>café</p>'],
+    ['<meta http-equiv="Content-Type" content="text/html; charset=utf-16"><p>café</p>'],
+  ] as const)(
+    "decodes active metadata, not comments: %s",
+    (text, encoding = "utf8", type?: string) =>
+      expectDecoded(Buffer.from(text, encoding), type ?? "text/html", text),
   );
 
   it("keeps truncated fallback charset decoding isolated between responses", async () => {

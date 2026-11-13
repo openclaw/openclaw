@@ -4,6 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
+import { fnv1aUtf16 } from "../../../../src/shared/fnv1a.js";
 import { markdownVisibleText } from "../../components/markdown-visible-text.ts";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
@@ -21,7 +22,6 @@ import {
   extractToolPreview,
   type CanvasToolPreview,
 } from "../../lib/chat/tool-cards.ts";
-import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 import { stripThinkingTags } from "../../lib/strip-thinking-tags.ts";
 import { phraseQueryPattern } from "../../lib/text-match.ts";
 import {
@@ -369,7 +369,7 @@ export function persistedMessageEntryId(message: unknown): string | null {
     : (id ?? null);
 }
 
-function transcriptMessageSourceKey(message: unknown): string | null {
+export function transcriptMessageSourceKey(message: unknown): string | null {
   // Send identity outranks transcript ids: the same submit is re-projected with
   // different id/seq metadata across the pending -> history handoff, and a key
   // change there remounts the bubble (visible flicker).
@@ -471,6 +471,7 @@ export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unk
   return buildLocalUserMessage({
     text: item.text,
     workContext: item.workContext,
+    appContext: item.appContext,
     mentions: item.mentions,
     attachments: item.attachments,
     createdAt: item.createdAt,
@@ -545,6 +546,21 @@ export function insertionIndexesForBounds(
     minimum: afterIndex + 1,
     maximum: beforeIndex >= 0 ? beforeIndex : items.length,
   };
+}
+
+export function appendActiveRunItem(
+  items: ChatItem[],
+  bounds: TurnInsertionBounds | undefined,
+  item: Extract<ChatItem, { kind: "stream" | "reading-indicator" }>,
+): void {
+  // Queued custody is a ceiling for the whole live response, not just its text.
+  // Moving its working indicator past that ceiling splits and remeasures the run.
+  if (bounds) {
+    const { maximum } = insertionIndexesForBounds(items, bounds);
+    items.splice(maximum, 0, item);
+  } else {
+    items.push(item);
+  }
 }
 
 export function insertChatItemsByTimestamp(items: ChatItem[], inserts: ChatProjection[]): void {

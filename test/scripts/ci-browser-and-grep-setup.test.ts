@@ -9,6 +9,31 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const ripgrep = parse(readFileSync(".github/actions/setup-ripgrep/action.yml", "utf8"));
 const browser = parse(readFileSync(".github/actions/setup-playwright-chromium/action.yml", "utf8"));
 
+it.each([
+  ["ci", "security-fast", "Check main push ratchets and protocol additions", ".ci-harness"],
+  [
+    "openclaw-npm-preflight",
+    "check_openclaw_npm",
+    "Check source, test types, and architecture",
+    ".release-harness",
+  ],
+])("provisions ripgrep before %s database inventory", (workflow, job, check, harness) => {
+  const steps = parse(readFileSync(`.github/workflows/${workflow}.yml`, "utf8")).jobs[job].steps;
+  const install = steps.findIndex(
+    (step: { uses?: string }) => step.uses === `./${harness}/.github/actions/setup-ripgrep`,
+  );
+  expect(install).toBeGreaterThanOrEqual(0);
+  expect(install).toBeLessThan(steps.findIndex((step: { name?: string }) => step.name === check));
+  if (harness === ".release-harness") {
+    const checkout = steps.find(
+      (step: { with?: { path?: string } }) => step.with?.path === harness,
+    );
+    expect(checkout.with["sparse-checkout"].split(/\s+/u)).toContain(
+      ".github/actions/setup-ripgrep",
+    );
+  }
+});
+
 describe.skipIf(process.platform === "win32")("CI browser and grep setup", () => {
   it.each([true, false])("reuses runner rg=%s and refuses corrupt downloads", (installed) => {
     const root = tempDirs.make("openclaw-grep-setup-");

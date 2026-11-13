@@ -26,7 +26,7 @@ const envEntry = entry("SERVICE_URL", "https://service.test");
 const secretEntry = entry("SERVICE_API_KEY", ["api.example.com"]);
 const longNameSecretEntry = {
   ...secretEntry,
-  name: "REUTERS_OUTLOOK_CALENDAR_ICS_PRODUCTION_ACCESS_TOKEN",
+  name: "EXAMPLE_PARTNER_CALENDAR_ICS_PRODUCTION_ACCESS_TOKEN",
 };
 
 async function tableBodyContrast(page: Page): Promise<number> {
@@ -85,13 +85,13 @@ async function openStore(
   return gateway;
 }
 
-async function openDialog(page: Page, label: string) {
+async function openDialog(page: Page, label: string, title = label) {
   await button(page, label).click();
-  return modal(page, label);
+  return modal(page, title);
 }
 
 async function rowAction(page: Page, name: string, action: "edit" | "delete") {
-  const row = page.getByRole("row", { name: new RegExp(name, "u") });
+  const row = page.getByRole("listitem", { name: new RegExp(name, "u") });
   await button(row, `Actions: ${name}`).click();
   await row.locator(`.oc-menu-item[data-value="${action}"]`).click();
   return row;
@@ -104,14 +104,14 @@ suite.define(() => {
         "secrets.store.set",
         "secrets.store.delete",
       ]);
-      const row = page.getByRole("row", { name: secretEntry.name });
+      const row = page.getByRole("listitem", { name: secretEntry.name });
       const trigger = row.getByRole("button", { name: `Actions: ${secretEntry.name}` });
       await trigger.waitFor({ state: "visible" });
       await row.hover();
       await page.evaluate(() => document.fonts.ready);
       const [buttonBox, tableBox] = await Promise.all([
         trigger.boundingBox(),
-        page.locator(".secrets-store__table-wrap").boundingBox(),
+        page.locator(".secrets-store__list").boundingBox(),
       ]);
       if (!buttonBox || !tableBox) {
         throw new Error("Expected row actions and table to have layout boxes");
@@ -126,21 +126,9 @@ suite.define(() => {
   ])("contains long secret names (phone: $phone)", async ({ width, height, phone }) => {
     await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
       await openStore(page, { list: { entries: [longNameSecretEntry] } });
-      const row = page.getByRole("row", { name: longNameSecretEntry.name });
+      const row = page.getByRole("listitem", { name: longNameSecretEntry.name });
       const name = row.locator(".secrets-store__name");
-      if (phone) {
-        expect(await name.textContent()).toBe(longNameSecretEntry.name);
-      } else {
-        expect(await name.getAttribute("title")).toBe(longNameSecretEntry.name);
-        const [nameBox, accessBox] = await Promise.all([
-          name.boundingBox(),
-          row.locator(".secrets-store__mode").boundingBox(),
-        ]);
-        if (!nameBox || !accessBox) {
-          throw new Error("Expected Name and Access cells to have layout boxes");
-        }
-        expect(nameBox.x + nameBox.width).toBeLessThanOrEqual(accessBox.x);
-      }
+      expect(await name.textContent()).toBe(longNameSecretEntry.name);
       const layout = await name.evaluate((element) => {
         const style = getComputedStyle(element);
         const text = document.createRange();
@@ -156,16 +144,11 @@ suite.define(() => {
       });
       expect(layout).toMatchObject(
         phone
-          ? { overflowWrap: "anywhere", whiteSpace: "normal", fitsHorizontally: true, wraps: true }
-          : {
-              overflowX: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              fitsHorizontally: false,
-            },
+          ? { overflowWrap: "anywhere", fitsHorizontally: true, wraps: true }
+          : { overflowWrap: "anywhere", fitsHorizontally: true },
       );
       if (phone) {
-        for (const selector of ["html", ".secrets-store__table-wrap", ".secrets-store__table"]) {
+        for (const selector of ["html", ".secrets-store__list"]) {
           const fits = await page.locator(selector).evaluate((element) => {
             const box = element.getBoundingClientRect();
             return (
@@ -197,14 +180,14 @@ suite.define(() => {
         await button(dialog, "Cancel").click();
       }
       await rowAction(page, "SERVICE_API_KEY", "edit");
-      await reject(modal(page, "Edit"));
+      await reject(modal(page, "Edit secret"));
 
-      const protectedBulk = await openDialog(page, "Bulk Add");
+      const protectedBulk = await openDialog(page, "Bulk add");
       await bulkValue(protectedBulk).fill("EMPTY_API_KEY=\nEMPTY_ENV=");
       await protectedBulk.getByText("1 protected secret detected").waitFor();
       await reject(protectedBulk, "EMPTY_API_KEY: Enter a value.");
 
-      const secret = await openDialog(page, "Add");
+      const secret = await openDialog(page, "Add", "Add secret");
       await field(secret, "Name").fill("SERVICE_API_KEY");
       await field(secret, "Value").fill("super-secret-material");
       await secret.locator('textarea[name="allowed-hosts"]').fill("api.example.com");
@@ -215,16 +198,16 @@ suite.define(() => {
       );
       expect(await page.content()).not.toContain("super-secret-material");
 
-      const addEnv = await openDialog(page, "Add");
+      const addEnv = await openDialog(page, "Add", "Add secret");
       await field(addEnv, "Name").fill("EMPTY_ENV");
       await addEnv.getByText(/The agent can print, transmit, or persist it/u).waitFor();
       await button(addEnv, "Save").click();
       await notice(
         page,
-        "Saved EMPTY_ENV as Agent-readable environment. It is available to Gateway-hosted agent commands from the next run.",
+        "Saved EMPTY_ENV as Agent-readable environment. It is available to Gateway-hosted agent commands from the next reply.",
       );
 
-      const envBulk = await openDialog(page, "Bulk Add");
+      const envBulk = await openDialog(page, "Bulk add");
       await bulkValue(envBulk).fill("EMPTY_BULK_ENV=");
       await envBulk.getByText("0 protected secrets detected").waitFor();
       await bulkValue(envBulk).fill('BULK_PRIVATE_KEY="line one\nline two"\nEMPTY_BULK_ENV=');
@@ -232,7 +215,7 @@ suite.define(() => {
       await button(envBulk, "Save").click();
       await notice(
         page,
-        "Saved 2 entries (1 protected, 1 agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next run.",
+        "Saved 2 entries (1 protected, 1 agent-readable). Protected secrets need a SecretRef or enabled destination-bound Gateway egress; agent-readable environment values reach Gateway-hosted agent commands from the next reply.",
       );
 
       expect((await gateway.getRequests("secrets.store.set")).map(({ params }) => params)).toEqual([
@@ -259,7 +242,7 @@ suite.define(() => {
         });
         const deletions = () => gateway.getRequests("secrets.store.delete");
         const entryRow = await rowAction(page, "SERVICE_URL", "delete");
-        const confirmation = modal(page, "Delete");
+        const confirmation = modal(page, "Delete SERVICE_URL?");
         await confirmation.getByText("Delete SERVICE_URL?", { exact: true }).waitFor();
         const original = await gatewayIdentity(page);
         expect(original.clientInstanceId).toBeDefined();
@@ -291,7 +274,7 @@ suite.define(() => {
         if (replace) {
           await page
             .getByRole("alert")
-            .getByText("The secret was not deleted. Reload the list and try again.", {
+            .getByText("Couldn’t delete the secret. Reload the list and try again.", {
               exact: true,
             })
             .waitFor();

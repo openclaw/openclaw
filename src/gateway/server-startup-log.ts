@@ -12,6 +12,7 @@ import {
 import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatGatewayNodePrefixStartupWarning } from "../daemon/node-version-prefix.js";
 import {
   inspectGatewayServiceInstallationDrift,
   summarizeGatewayServiceLayout,
@@ -63,7 +64,7 @@ export async function logGatewayStartup(params: {
   params.log.info(
     `http server listening (${formatReadyDetails(params.loadedPluginIds, startupDurationLabel)})`,
   );
-  params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
+  params.log.info(`log file: ${(await getResolvedLoggerSettings()).file}`);
   params.log.info(
     "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; direct state writes from another process while this Gateway owns state are unsupported.",
   );
@@ -93,6 +94,17 @@ export async function logGatewayStartup(params: {
     }
   } catch {
     // Optional PATH/package inspection must never prevent Gateway startup.
+  }
+  try {
+    const packageRoot = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
+    const nodePrefixSkew = packageRoot
+      ? formatGatewayNodePrefixStartupWarning({ nodePath: process.execPath, packageRoot })
+      : undefined;
+    if (nodePrefixSkew) {
+      params.log.warn(nodePrefixSkew);
+    }
+  } catch {
+    // Version-prefix detection must never prevent Gateway startup.
   }
   const sqliteLibrary = ensureSqliteLibrarySelected();
   params.log.info(

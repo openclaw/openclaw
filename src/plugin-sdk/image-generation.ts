@@ -28,10 +28,12 @@ export type {
   ImageGenerationSourceImage,
 } from "../image-generation/asset-types.js";
 export type {
-  ImageGenerationOpenAIBackground,
-  ImageGenerationOutputFormat,
   ImageGenerationProvider,
   ImageGenerationProviderConfiguredContext,
   ImageGenerationRequest,
+} from "../image-generation/provider-types.js";
+export type {
+  ImageGenerationOpenAIBackground,
+  ImageGenerationOutputFormat,
   ImageGenerationResult,
 } from "../image-generation/types.js";

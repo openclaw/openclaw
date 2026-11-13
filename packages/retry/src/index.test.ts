@@ -230,7 +230,6 @@ it.each([
   [50, 250, 1_000, 0, 250],
 ])("Retry-After case %#", async (hint, min, max, jitter, expected) => {
   const sleep = vi.fn(async (_ms: number) => undefined);
-  const run = retry.createRetryRunner({ sleep });
   const options: retry.RetryOptions = {
     attempts: 2,
     minDelayMs: min,
@@ -238,8 +237,9 @@ it.each([
     jitter,
     random: () => 0,
     retryAfterMs: () => hint,
+    sleep,
   };
-  await expect(run(createRetryOperation(), options)).resolves.toBe("ok");
+  await expect(retry.retryAsync(createRetryOperation(), options)).resolves.toBe("ok");
   expect(sleep).toHaveBeenCalledExactlyOnceWith(expected);
 });
 

@@ -1,2 +1,0 @@
-# Real exec/systemd launch with a protected store secret, replacing the refusal test.
-6

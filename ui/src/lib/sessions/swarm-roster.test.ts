@@ -152,7 +152,7 @@ function fixture(
     emit,
     async start(changes: Partial<Params> = {}) {
       update(changes);
-      await tick(250);
+      await tick();
     },
     async boot() {
       await fetchDescriptor();
@@ -531,9 +531,14 @@ describe("SwarmRosterHydrator", () => {
     const f = fixture({ parent, list: () => children.promise });
     await f.start();
     expect(f.hydrator.rows).toEqual([parent]);
+    expect(f.hydrator.childrenUnavailable).toBe(false);
     children.reject(new Error("Child details temporarily unavailable"));
     await tick();
     expect(f.hydrator.rows).toEqual([parent]);
+    expect(f.hydrator.childrenUnavailable).toBe(true);
+    f.list.mockResolvedValue(result([]));
+    await tick(1_000);
+    expect(f.hydrator.childrenUnavailable).toBe(false);
   });
   it.each(["missing", "denied"])(
     "does not restore a %s parent after late child completion",

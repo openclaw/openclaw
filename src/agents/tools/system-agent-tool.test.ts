@@ -162,7 +162,7 @@ describe("openclaw tool", () => {
       secret,
     });
     expect(toolText(result)).toContain("needs-approval");
-    expect(toolText(result)).not.toContain(secret);
+    expect(toolText(result)).not.toContain(secret.trim());
     expect(proposalRef.operation).toEqual({
       kind: "config-set-ref",
       path: "models.providers.openai.apiKey",

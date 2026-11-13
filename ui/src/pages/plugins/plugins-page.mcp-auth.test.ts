@@ -54,6 +54,7 @@ async function setup(handlers: Record<string, () => unknown>, advertiseMcpLogin 
   const result = createResult(createPlugin({ enabled: true, state: "enabled" }));
   const route = fixture.route("/settings/plugins/workboard", result);
   const mounted = await fixture.mount("/settings/plugins/workboard", result);
+  await vi.dynamicImportSettled();
   await waitForSolid(() =>
     expect(mounted.page.querySelector(".plugin-capabilities")).not.toBeNull(),
   );
@@ -152,7 +153,7 @@ it("reports a confirmation that cannot open and keeps the account connected", as
   signOutButton(page)!.click();
   await waitForSolid(() =>
     expect(page.querySelector('[role="alert"]')?.textContent).toContain(
-      "Sign-out could not open. Your account is still connected; try again.",
+      "Couldn’t open sign-out. Your account is still signed in. Try again.",
     ),
   );
   expect(calls("mcp.authLogout")).toHaveLength(0);

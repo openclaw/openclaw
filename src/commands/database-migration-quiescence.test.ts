@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import type { GatewayMigrationQuiescenceScope } from "./database-migration-quiescence.js";
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
   alive: vi.fn(),
   start: vi.fn(),
+  workerUrl: undefined as URL | undefined,
 }));
 // mock-isolation: drive suspension replies and failures without contacting a real Gateway.
 vi.mock("../gateway/call.js", () => ({ callGateway: mocks.rpc }));
@@ -34,8 +36,28 @@ vi.mock("../infra/gateway-lock-process.js", () => ({
   readGatewayLockProcessStartTime: mocks.start,
 }));
 // mock-isolation: the synthetic owner PID must not probe or depend on a host process.
-vi.mock("../shared/pid-alive.js", () => ({ isPidAlive: mocks.alive }));
+vi.mock("../shared/pid-alive.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../shared/pid-alive.js")>();
+  return {
+    ...actual,
+    isPidAlive: (pid: number) => (pid === 1234 ? mocks.alive(pid) : actual.isPidAlive(pid)),
+  };
+});
+// mock-isolation: substitute only the child executable; process settlement and lease renewal stay real.
+vi.mock("../infra/runtime-worker-url.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/runtime-worker-url.js")>();
+  return {
+    ...actual,
+    resolveRuntimeWorkerUrl: (...args: Parameters<typeof actual.resolveRuntimeWorkerUrl>) =>
+      mocks.workerUrl ?? actual.resolveRuntimeWorkerUrl(...args),
+    resolveRuntimeWorkerArgv: (...args: Parameters<typeof actual.resolveRuntimeWorkerArgv>) =>
+      mocks.workerUrl ? [fileURLToPath(mocks.workerUrl)] : actual.resolveRuntimeWorkerArgv(...args),
+  };
+});
 
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { isPidAlive } from "../shared/pid-alive.js";
+import { createDatabaseMigrationFilesystemBackup } from "./database-migration-filesystem-backup.js";
 import { withGatewayMigrationQuiescence } from "./database-migration-quiescence.js";
 
 let directory: string;
@@ -78,6 +100,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-29T00:00:00Z"));
   vi.resetAllMocks();
+  mocks.workerUrl = undefined;
   directory = fs.mkdtempSync(path.join(os.tmpdir(), "migration-quiescence-"));
   ownerPath = path.join(directory, "owner.lock");
   const configPath = path.join(directory, "openclaw.json");
@@ -112,6 +135,93 @@ afterEach(() => {
 });
 
 describe("borrowed Gateway migration quiescence", () => {
+  it.each(["complete", "renewal-failure"] as const)(
+    "keeps renewal responsive and joins a blocked archive child: %s",
+    async (outcome) => {
+      const readyPath = path.join(directory, "archive-child.ready");
+      const releasePath = path.join(directory, "archive-child.release");
+      const output = path.join(directory, "filesystem.tar.gz");
+      const script = path.join(directory, "blocked-archive.mjs");
+      fs.writeFileSync(
+        script,
+        `import fs from 'node:fs';
+let input='';
+for await (const chunk of process.stdin) input+=chunk;
+const request=JSON.parse(input);
+fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid));
+const deadline=Date.now()+10000;
+// Block this child's event loop like synchronous SQLite/NFS work.
+while (!fs.existsSync(${JSON.stringify(releasePath)})) {
+  if (Date.now()>=deadline) process.exit(2);
+}
+fs.writeFileSync(request.output, 'private archive fixture');
+process.stdout.write(JSON.stringify({archivePath:request.output,verified:true}));
+`,
+      );
+      mocks.workerUrl = pathToFileURL(script);
+      const ready = Promise.withResolvers<void>();
+      const watcher = fs.watch(directory, () => {
+        if (fs.existsSync(readyPath)) {
+          ready.resolve();
+        }
+      });
+      const operation = run(async (scope) => {
+        const capture = createDatabaseMigrationFilesystemBackup({
+          output,
+          stateDir: directory,
+          config: {},
+          env: process.env,
+          signal: scope.signal,
+        });
+        const settled = capture.then(
+          () => ({ ok: true as const }),
+          (error: unknown) => ({ ok: false as const, error }),
+        );
+        try {
+          await awaitGateBeforeSettlement(
+            ready.promise,
+            capture,
+            "Archive child exited before readiness",
+          );
+          const childPid = Number(fs.readFileSync(readyPath, "utf8"));
+          await vi.advanceTimersByTimeAsync(130_000);
+          scope.assertCurrent();
+          expect(scope.expiresAtMs).toBeGreaterThan(Date.now());
+          expect(
+            mocks.rpc.mock.calls.filter(([call]) => call.method === "gateway.suspend.prepare"),
+          ).toHaveLength(5);
+          if (outcome === "renewal-failure") {
+            vi.useRealTimers();
+            mocks.rpc.mockRejectedValue(new Error("renewal transport unavailable"));
+            await expect(scope.revalidate()).rejects.toThrow("renewal transport unavailable");
+            expect(scope.signal.aborted).toBe(true);
+            expect((await settled).ok).toBe(false);
+            expect(isPidAlive(childPid)).toBe(false);
+            expect(fs.existsSync(output)).toBe(false);
+            scope.assertCurrent();
+          } else {
+            fs.writeFileSync(releasePath, "release");
+            expect(await settled).toEqual({ ok: true });
+            expect(isPidAlive(childPid)).toBe(false);
+            expect(fs.readFileSync(output, "utf8")).toBe("private archive fixture");
+          }
+        } finally {
+          fs.writeFileSync(releasePath, "release");
+          await settled;
+        }
+      });
+      try {
+        if (outcome === "renewal-failure") {
+          await expect(operation).rejects.toThrow("renewal transport unavailable");
+        } else {
+          await operation;
+        }
+      } finally {
+        watcher.close();
+      }
+    },
+  );
+
   it("renews only the existing suspension, keeps source inputs unchanged and exposes latest expiry", async () => {
     const bytes = fs.readFileSync(ownerPath);
     const before = fs.statSync(ownerPath, { bigint: true });

@@ -1,4 +1,5 @@
 // Core legacy config normalizers for shipped keys retired outside the rule table.
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -6,6 +7,8 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
+import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
+import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
 import { resolveDiscoveredChannelSetupPromotionSurface } from "../../../channels/plugins/setup-promotion-discovery.js";
 import { resolveSingleAccountPromotion } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
@@ -29,6 +32,7 @@ import {
 } from "./legacy-config-migrations.runtime.models.refs.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 import { normalizeLegacyMistralModelCost } from "./legacy-mistral-model-cost.js";
+import { normalizeKnownModelRef } from "./legacy-model-ref-normalization.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 import { modelEntryWithRuntimePolicy } from "./legacy-runtime-model-policy.js";
 import { migrateLegacyRuntimeModelRef } from "./legacy-runtime-model-providers.js";
@@ -89,6 +93,9 @@ type ModelDefinitionEntry = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]["models"]
 >[number];
 
+type LegacyRuntimeRefMigration = NonNullable<ReturnType<typeof migrateLegacyRuntimeModelRef>>;
+type LegacyRuntimeRefMigrator = (modelRef: string) => LegacyRuntimeRefMigration | null;
+
 function migrateUnblockedLegacyRuntimeModelRef(
   modelRef: string,
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
@@ -96,6 +103,190 @@ function migrateUnblockedLegacyRuntimeModelRef(
   return isBlockedLegacyCodexModelRef({ modelRef, blockedModelIdentities })
     ? null
     : migrateLegacyRuntimeModelRef(modelRef);
+}
+
+function* agentScopes(
+  agents: unknown,
+): Generator<[path: string, agent: Record<string, unknown>, agentId?: string]> {
+  if (!isRecord(agents)) {
+    return;
+  }
+  if (isRecord(agents.defaults)) {
+    yield ["agents.defaults", agents.defaults];
+  }
+  for (const [key, entry] of Array.isArray(agents.list) ? agents.list.entries() : []) {
+    if (isRecord(entry)) {
+      const id = normalizeOptionalString(entry.id);
+      yield [id ? `agents.list.${sanitizeForLog(id)}` : `agents.list[${key}]`, entry, id];
+    }
+  }
+  for (const [id, entry] of Object.entries(isRecord(agents.entries) ? agents.entries : {})) {
+    if (isRecord(entry)) {
+      yield [`agents.entries.${sanitizeForLog(id)}`, entry, id];
+    }
+  }
+}
+
+function* runtimePins(
+  cfg: OpenClawConfig,
+): Generator<{ path: string; provider: string | undefined; runtime: unknown }> {
+  for (const [path, agent] of agentScopes(cfg.agents)) {
+    for (const [ref, entry] of Object.entries(isRecord(agent.models) ? agent.models : {})) {
+      yield {
+        path: `${path}.models.${sanitizeForLog(ref)}`,
+        provider: parseModelCatalogRef(ref.trim())?.provider,
+        runtime:
+          isRecord(entry) && isRecord(entry.agentRuntime) ? entry.agentRuntime.id : undefined,
+      };
+    }
+  }
+  for (const [providerId, provider] of modelProviders(cfg)) {
+    const path = `models.providers.${sanitizeForLog(providerId)}`;
+    const id = normalizeProviderId(providerId);
+    yield {
+      path,
+      provider: id,
+      runtime: isRecord(provider.agentRuntime) ? provider.agentRuntime.id : undefined,
+    };
+    for (const [index, model] of providerModels(provider)) {
+      yield {
+        path: `${path}.models[${index}]`,
+        provider: id,
+        runtime: isRecord(model.agentRuntime) ? model.agentRuntime.id : undefined,
+      };
+    }
+  }
+}
+
+/**
+ * Legacy CLI refs still select their CLI runtime as written. Migration moves them onto the
+ * canonical provider with an exact runtime pin, which outranks provider-wide, wildcard, and bare
+ * model pins. When config already routes that provider's models (or bare model keys) to another
+ * runtime, the operator runs both routes side by side and the rewrite could silently move one
+ * onto the other, changing billing. A scope that runs the same model both directly and through
+ * the legacy CLI ref keeps both routes too (see routeGroups). Retain the authored refs and say why.
+ */
+function retainConflictingLegacyCliProviders(
+  cfg: OpenClawConfig,
+  blockedModelIdentities: ReadonlySet<LegacyCodexModelIdentity> | undefined,
+  warnings: string[],
+): ReadonlySet<string> {
+  const migrate = (ref: string) =>
+    migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities);
+  const legacy = new Map<string, { ref: string; migrated: LegacyRuntimeRefMigration }>();
+  rewriteModelRefs(cfg, "config", [], (ref) => {
+    const migrated = migrate(ref);
+    if (migrated?.cli && !legacy.has(migrated.legacyProvider)) {
+      legacy.set(migrated.legacyProvider, { ref, migrated });
+    }
+    return null;
+  });
+  const retained = new Set<string>();
+  for (const { ref, migrated } of legacy.values()) {
+    for (const pin of runtimePins(cfg)) {
+      const runtime = normalizeOptionalLowercaseString(pin.runtime);
+      if (
+        runtime &&
+        runtime !== "auto" &&
+        runtime !== migrated.runtime &&
+        (pin.provider === undefined || pin.provider === migrated.provider)
+      ) {
+        retained.add(migrated.legacyProvider);
+        warnings.push(
+          `Kept legacy ${migrated.legacyProvider}/* model refs: ${pin.path} routes models to the ${sanitizeForLog(runtime)} runtime, and rewriting ${sanitizeForLog(ref)} to ${sanitizeForLog(migrated.ref)} could switch a route between ${sanitizeForLog(runtime)} and ${migrated.runtime}. Both routes keep working as configured.`,
+        );
+        break;
+      }
+    }
+  }
+  for (const { path, agentId, groups } of routeGroups(cfg.agents, migrate)) {
+    for (const refs of groups) {
+      for (const ref of refs) {
+        const migrated = migrate(ref);
+        if (!migrated?.cli || retained.has(migrated.legacyProvider)) {
+          continue;
+        }
+        const canonicalRuntime = normalizeOptionalLowercaseString(
+          resolveModelRuntimePolicy({
+            config: cfg,
+            provider: migrated.provider,
+            modelId: migrated.model,
+            agentId,
+          }).policy?.id,
+        );
+        if (
+          canonicalRuntime === migrated.runtime ||
+          !refs.some((other) => !migrate(other) && canonicalModelRef(other) === migrated.ref)
+        ) {
+          continue;
+        }
+        retained.add(migrated.legacyProvider);
+        warnings.push(
+          `Kept legacy ${migrated.legacyProvider}/* model refs: ${path} selects ${sanitizeForLog(migrated.ref)} both directly and through ${migrated.runtime}; rewriting would move both routes onto ${migrated.runtime}. Both routes keep working as configured.`,
+        );
+      }
+    }
+  }
+  return retained;
+}
+
+function canonicalModelRef(ref: string): string {
+  const { model } = splitTrailingAuthProfile(ref.trim());
+  return normalizeKnownModelRef(model) ?? model;
+}
+
+function stringRefs(values: unknown[]): string[] {
+  return values.filter((ref): ref is string => typeof ref === "string");
+}
+
+function selectionRefs(owner: unknown): string[] {
+  const model = isRecord(owner) ? owner.model : undefined;
+  return stringRefs(
+    isRecord(model)
+      ? [model.primary, ...(Array.isArray(model.fallbacks) ? model.fallbacks : [])]
+      : [model],
+  );
+}
+
+const SELECTION_OWNERS = ["", "heartbeat", "subagents"] as const;
+
+/**
+ * Refs whose runtime one migration pin decides. Migration pins a CLI ref's runtime on the
+ * canonical ref in its scope's model map. That pin reaches every selection the scope runs,
+ * including selections inherited from defaults, and a defaults pin reaches every agent. An
+ * allowlist naming both spellings also requests both routes, as does a model map whose
+ * canonical key the scope selects or allows; canonical map keys alone are metadata, and
+ * legacy entries alone are a sign-in seed, so both still migrate.
+ */
+function* routeGroups(
+  agents: unknown,
+  migrate: LegacyRuntimeRefMigrator,
+): Generator<{ path: string; agentId?: string; groups: string[][] }> {
+  const defaults = isRecord(agents) && isRecord(agents.defaults) ? agents.defaults : undefined;
+  const selections = (agent: Record<string, unknown> | undefined) =>
+    SELECTION_OWNERS.map((key) => selectionRefs(key ? agent?.[key] : agent));
+  const inherited = selections(defaults);
+  const inheritedLegacy = inherited.flat().filter((ref) => migrate(ref));
+  for (const [path, agent, agentId] of agentScopes(agents)) {
+    const isDefaults = agent === defaults;
+    const effective = selections(agent).flatMap((refs, index) =>
+      refs.length || isDefaults ? refs : inherited[index]!,
+    );
+    const rawAllow = isRecord(agent.modelPolicy) ? agent.modelPolicy.allow : undefined;
+    const allow = stringRefs(Array.isArray(rawAllow) ? rawAllow : []);
+    const direct = new Set([...effective, ...allow].map(canonicalModelRef));
+    yield {
+      path,
+      agentId,
+      groups: [
+        isDefaults ? effective : [...effective, ...inheritedLegacy],
+        Object.keys(isRecord(agent.models) ? agent.models : {}).filter(
+          (ref) => migrate(ref) || direct.has(canonicalModelRef(ref)),
+        ),
+        allow,
+      ],
+    };
+  }
 }
 
 function mergeModelEntry(legacyEntry: unknown, currentEntry: unknown): unknown {
@@ -112,17 +303,12 @@ function migrateCodexCliRuntimePolicy(raw: unknown): boolean {
   return true;
 }
 
-function createRuntimeModelRefRewriter(
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
-) {
+function createRuntimeModelRefRewriter(migrate: LegacyRuntimeRefMigrator) {
   const selected: SelectedRuntimeRef[] = [];
   return {
     selected,
     rewrite: (ref: unknown) => {
-      const migrated =
-        typeof ref === "string"
-          ? migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities)
-          : null;
+      const migrated = typeof ref === "string" ? migrate(ref) : null;
       if (migrated) {
         selected.push({ ref: migrated.ref, runtime: migrated.runtime });
       }
@@ -133,9 +319,9 @@ function createRuntimeModelRefRewriter(
 
 function migrateRuntimeSelection(
   owner: Record<string, unknown>,
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+  migrate: LegacyRuntimeRefMigrator,
 ): SelectedRuntimeRef[] {
-  const { rewrite, selected } = createRuntimeModelRefRewriter(blockedModelIdentities);
+  const { rewrite, selected } = createRuntimeModelRefRewriter(migrate);
   const model = owner.model;
   if (typeof model === "string") {
     owner.model = rewrite(model);
@@ -176,22 +362,22 @@ function migrateRuntimeAgent(
   agent: Record<string, unknown>,
   path: string,
   changes: string[],
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+  migrate: LegacyRuntimeRefMigrator,
 ): void {
-  const selected = migrateRuntimeSelection(agent, blockedModelIdentities);
+  const selected = migrateRuntimeSelection(agent, migrate);
   if (selected.length) {
     changes.push(
       `Moved ${path}.model legacy runtime primary refs to provider references and selected ${selected[0]!.runtime} runtime.`,
     );
   }
   const policy = isRecord(agent.modelPolicy) ? agent.modelPolicy : undefined;
-  const { rewrite, selected: policyRefs } = createRuntimeModelRefRewriter(blockedModelIdentities);
+  const { rewrite, selected: policyRefs } = createRuntimeModelRefRewriter(migrate);
   const allow = Array.isArray(policy?.allow) ? policy.allow.map(rewrite) : undefined;
   if (isRecord(agent.models)) {
     const models: Record<string, unknown> = {};
     const legacy: Array<SelectedRuntimeRef & { entry: unknown }> = [];
     for (const [ref, entry] of Object.entries(agent.models)) {
-      const migrated = migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities);
+      const migrated = migrate(ref);
       if (migrated) {
         legacy.push({ ref: migrated.ref, runtime: migrated.runtime, entry });
       } else {
@@ -218,7 +404,7 @@ function migrateRuntimeAgent(
     if (!isRecord(execution)) {
       continue;
     }
-    const refs = migrateRuntimeSelection(execution, blockedModelIdentities);
+    const refs = migrateRuntimeSelection(execution, migrate);
     if (refs.length) {
       ensureSelectedModelRuntimePolicies(agent, refs);
       changes.push(`Moved ${path}.${key}.model to provider references with model runtime policy.`);
@@ -241,6 +427,7 @@ function migrateRuntimeAgent(
 export function normalizeLegacyRuntimeModelRefs(
   cfg: OpenClawConfigWithLegacyRoster,
   changes: string[],
+  warnings: string[],
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
 ): OpenClawConfigWithLegacyRoster {
   const next = cloneConfigWithResolutionFacts(cfg);
@@ -259,35 +446,16 @@ export function normalizeLegacyRuntimeModelRefs(
       }
     }
   }
-  const agents = next.agents;
-  if (isRecord(agents)) {
-    if (isRecord(agents.defaults)) {
-      migrateRuntimeAgent(agents.defaults, "agents.defaults", changes, blockedModelIdentities);
-    }
-    for (const [key, entry] of Array.isArray(agents.list) ? agents.list.entries() : []) {
-      if (isRecord(entry)) {
-        const id = normalizeOptionalString(entry.id);
-        migrateRuntimeAgent(
-          entry,
-          id ? `agents.list.${sanitizeForLog(id)}` : `agents.list[${key}]`,
-          changes,
-          blockedModelIdentities,
-        );
-      }
-    }
-    for (const [id, entry] of Object.entries(isRecord(agents.entries) ? agents.entries : {})) {
-      if (isRecord(entry)) {
-        migrateRuntimeAgent(
-          entry,
-          `agents.entries.${sanitizeForLog(id)}`,
-          changes,
-          blockedModelIdentities,
-        );
-      }
-    }
+  const retained = retainConflictingLegacyCliProviders(next, blockedModelIdentities, warnings);
+  const migrate: LegacyRuntimeRefMigrator = (ref) => {
+    const migrated = migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities);
+    return migrated && !retained.has(migrated.legacyProvider) ? migrated : null;
+  };
+  for (const [path, agent] of agentScopes(next.agents)) {
+    migrateRuntimeAgent(agent, path, changes, migrate);
   }
   const rewritten = rewriteModelRefs(next, "config", changes, (ref) => {
-    const migrated = migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities);
+    const migrated = migrate(ref);
     return migrated &&
       ["codex-cli", "claude-cli", "google-gemini-cli"].includes(migrated.legacyProvider)
       ? migrated.ref

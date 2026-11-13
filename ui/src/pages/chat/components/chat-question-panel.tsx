@@ -9,11 +9,13 @@ import {
 } from "solid-js";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { nextRadio } from "../../../components/solid/radio-navigation.ts";
 import { SessionLink } from "../../../components/solid/session-link.tsx";
 import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
+import { focusProgrammatically } from "../../../lib/programmatic-focus.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -79,7 +81,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
   createPendingFocus(focusTarget, {
     requested: ([isCollapsed], previous) =>
       !isCollapsed && (previous !== undefined || initialModel.autoFocus !== false),
-    focus: () => panel?.focus({ preventScroll: true }),
+    focus: () => panel && focusProgrammatically(panel, { preventScroll: true }),
   });
   const setCollapsed = (value: boolean) => {
     if (props.panel.onCollapsedChange) {
@@ -88,7 +90,9 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
       setUncontrolledCollapsed(value);
       // Controlled callers own their destination (for example, the chat composer).
       if (value) {
-        onSettled(() => expandButton?.focus({ preventScroll: true }));
+        onSettled(
+          () => expandButton && focusProgrammatically(expandButton, { preventScroll: true }),
+        );
       }
     }
   };
@@ -221,27 +225,18 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
     }
     if (
       event.target instanceof HTMLButtonElement &&
-      event.target.getAttribute("role") === "radio" &&
-      ["ArrowDown", "ArrowLeft", "ArrowRight", "ArrowUp", "End", "Home"].includes(event.key)
+      event.target.getAttribute("role") === "radio"
     ) {
-      event.preventDefault();
-      const index = Number(event.target.dataset.optionIndex ?? "0");
-      const next =
-        event.key === "Home"
-          ? 0
-          : event.key === "End"
-            ? item.options.length - 1
-            : event.key === "ArrowLeft" || event.key === "ArrowUp"
-              ? (index - 1 + item.options.length) % item.options.length
-              : (index + 1) % item.options.length;
-      const option = item.options[next];
-      if (!option) {
+      const radios = item.options.flatMap((_, index) => optionAt(index) ?? []);
+      const next = nextRadio(event, radios);
+      const option = next && item.options[Number(next.dataset.optionIndex)];
+      if (option) {
+        event.preventDefault();
+        toggleOption(item, option.value ?? option.label, false);
+        // The same option node survives selection; focus need not wait for rendering.
+        next.focus({ preventScroll: true });
         return;
       }
-      toggleOption(item, option.value ?? option.label, false);
-      // The same option node survives selection; focus need not wait for rendering.
-      optionAt(next)?.focus({ preventScroll: true });
-      return;
     }
     const index = Number(event.key) - 1;
     const option = optionAt(index);

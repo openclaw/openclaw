@@ -2,7 +2,7 @@
   --openclaw-modal-width: 440px;
 }
 
-.agent-create-dialog {
+.oc-dialog.agent-create-dialog {
   display: grid;
   width: 100%;
   height: min(540px, calc(100dvh - 48px));
@@ -10,45 +10,6 @@
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
   color: var(--text);
-}
-
-.agent-create-dialog__header {
-  display: flex;
-  min-height: 54px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px var(--overlay-modal-padding);
-  border-bottom: 1px solid var(--border);
-}
-
-.agent-create-dialog__header h2 {
-  margin: 0;
-  font-size: var(--overlay-modal-title-size);
-  font-weight: 600;
-}
-
-.agent-create-dialog__close {
-  display: grid;
-  width: var(--overlay-modal-close-size);
-  height: var(--overlay-modal-close-size);
-  flex: 0 0 auto;
-  place-items: center;
-  border: 0;
-  border-radius: var(--menu-item-radius);
-  background: transparent;
-  color: var(--muted);
-}
-
-.agent-create-dialog__close:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.agent-create-dialog__body {
-  min-height: 0;
-  overflow: auto;
-  padding: 16px;
 }
 
 .agent-create-dialog__preview {
@@ -95,7 +56,6 @@
 .agent-create-dialog .avatar-picker__tabs {
   justify-content: center;
   padding: 4px 0 8px;
-  border-bottom: 0;
 }
 
 .agent-create-dialog .avatar-picker__grid {
@@ -105,21 +65,7 @@
   padding: 8px 20px;
 }
 
-.agent-create-dialog__error {
-  margin: 10px 0 0;
-  color: var(--danger);
-  font-size: 12px;
-}
-
-.agent-create-dialog__actions {
-  padding: 12px 16px;
-}
-
 @media (max-width: 560px) {
-  .agent-create-dialog__body {
-    padding: 12px;
-  }
-
   .agent-create-dialog .avatar-picker__grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
     padding: 8px 10px;

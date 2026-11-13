@@ -6,18 +6,25 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
-import { runAgentEndSideEffectsAsync } from "../agents/harness/agent-end-side-effects.js";
+import { awaitAgentEndSideEffects } from "../agents/harness/agent-end-side-effects.js";
 import { createReadTool } from "../agents/sessions/tools/read.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
+import { startPluginServices } from "../plugins/services.test-support.js";
 import * as admission from "../process/gateway-work-admission.js";
 import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
+import { workshopPluginConfig } from "../skills/test-support/workshop-config.test-support.js";
+import { activateWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -32,6 +39,29 @@ afterEach(async () => {
   vi.useRealTimers();
   admission.resetGatewayWorkAdmission();
 });
+
+/**
+ * Loads the skill-workshop plugin and starts its maintenance service on a Gateway scheduler
+ * whose host timer the test fires, so `settle` returns once scheduled maintenance finished.
+ */
+async function startWorkshopService(config: OpenClawConfig, { service = true } = {}) {
+  const plugin = await activateWorkshopPluginForTest(config);
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const services = service
+    ? await startPluginServices({ registry: plugin.registry, config, scheduler })
+    : undefined;
+  return {
+    settle: async () => {
+      await clock.wake();
+    },
+    stop: async () => {
+      await services?.stop();
+      await scheduler.stop();
+      plugin.reset();
+    },
+  };
+}
 
 async function dispatch(config: OpenClawConfig, method: string, params: Record<string, unknown>) {
   const respond = vi.fn<GatewayRequestOptions["respond"]>();
@@ -107,15 +137,14 @@ it("L6/Y1/Y2: Gateway usage protects read skills, and post-turn cleanup is daily
       ...createGatewayMaintenanceStateForTest(),
       getRuntimeConfig: () => config,
     });
-  // Observe the real returned lifetime without replacing the detached work implementation.
-  const detached = vi.spyOn(admission, "runWithGatewayDetachedWorkContinuation");
+  let workshop: Awaited<ReturnType<typeof startWorkshopService>> | undefined;
   async function finishTurn(cfg = config, targetAgentId = agentId) {
-    const before = detached.mock.results.length;
     setRuntimeConfigSnapshot(cfg);
-    await runAgentEndSideEffectsAsync({
+    await awaitAgentEndSideEffects({
       event: { messages: [], success: true },
       ctx: {
         config: cfg,
+        agentId: targetAgentId,
         runId: "maintenance-turn",
         sessionKey: `agent:${targetAgentId}:main`,
         workspaceDir: state.workspaceDir,
@@ -129,11 +158,7 @@ it("L6/Y1/Y2: Gateway usage protects read skills, and post-turn cleanup is daily
         },
       },
     });
-    for (const result of detached.mock.results.slice(before)) {
-      if (result.type === "return") {
-        await result.value;
-      }
-    }
+    await workshop?.settle();
   }
   try {
     await state.writeConfig(config);
@@ -170,6 +195,7 @@ it("L6/Y1/Y2: Gateway usage protects read skills, and post-turn cleanup is daily
         }),
       ],
     });
+    workshop = await startWorkshopService(config);
     // Advancing only Date makes real on-disk ctime old too, without mocking fs.stat.
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(now);
@@ -202,10 +228,7 @@ it("L6/Y1/Y2: Gateway usage protects read skills, and post-turn cleanup is daily
     });
     await timers.stopPeriodicTasks();
     timers = start();
-    await finishTurn({
-      ...config,
-      skills: { ...config.skills, workshop: { autonomous: { mode: "off" } } },
-    });
+    await finishTurn(workshopPluginConfig({ autonomous: { mode: "off" } }, config));
     expect(await fs.readFile(path.join(root, "stale", "SKILL.md"), "utf8")).toContain(
       "stale procedure",
     );
@@ -244,6 +267,7 @@ it("L6/Y1/Y2: Gateway usage protects read skills, and post-turn cleanup is daily
     await finishTurn();
     await expect(fs.stat(path.join(root, "next-pass"))).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
+    await workshop?.stop();
     await timers?.stopPeriodicTasks();
     await timers?.skillUsageCleanup();
     await closeSkillsWatchers(true);
@@ -279,13 +303,17 @@ it.each([
       },
     },
     ...(reason === "tool-denied" ? { tools: { deny: ["skill_workshop"] } } : {}),
-    plugins: { allow: ["skill-workshop"] },
-    skills: { load: { watch: false }, workshop: { autonomous: { mode: "auto" } } },
+    plugins: {
+      allow: ["skill-workshop"],
+      entries: { "skill-workshop": { config: { autonomous: { mode: "auto" } } } },
+    },
+    meta: { migrations: { skillWorkshopPlugin: true } },
+    skills: { load: { watch: false } },
   };
   let timers:
     | { stopPeriodicTasks: () => Promise<void>; skillUsageCleanup: () => Promise<void> }
     | undefined;
-  const detached = vi.spyOn(admission, "runWithGatewayDetachedWorkContinuation");
+  let workshop: Awaited<ReturnType<typeof startWorkshopService>> | undefined;
   try {
     await state.writeConfig(config);
     await fs.mkdir(path.dirname(file), { recursive: true });
@@ -297,9 +325,13 @@ it.each([
       reason === "learning-off" || reason === "learning-propose"
         ? {
             ...config,
-            skills: {
-              ...config.skills,
-              workshop: { autonomous: { mode: reason === "learning-off" ? "off" : "propose" } },
+            plugins: {
+              ...config.plugins,
+              entries: {
+                "skill-workshop": {
+                  config: { autonomous: { mode: reason === "learning-off" ? "off" : "propose" } },
+                },
+              },
             },
           }
         : config,
@@ -310,10 +342,13 @@ it.each([
         getRuntimeConfig: () => config,
       });
     }
-    await runAgentEndSideEffectsAsync({
+    // An untracked process is not a Gateway: the plugin loads, but its service never starts.
+    workshop = await startWorkshopService(config, { service: reason !== "untracked" });
+    await awaitAgentEndSideEffects({
       event: { messages: [], success: true },
       ctx: {
         config,
+        agentId,
         runId: agentId,
         sessionKey: `agent:${agentId}:main`,
         workspaceDir: state.workspaceDir,
@@ -326,16 +361,13 @@ it.each([
         },
       },
     });
-    for (const result of detached.mock.results) {
-      if (result.type === "return") {
-        await result.value;
-      }
-    }
+    await workshop.settle();
     expect(await fs.readFile(file, "utf8")).toBe(content);
     await expect(
       fs.stat(path.join(path.dirname(path.dirname(file)), ".archive")),
     ).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
+    await workshop?.stop();
     await timers?.stopPeriodicTasks();
     await timers?.skillUsageCleanup();
     vi.useRealTimers();
@@ -386,7 +418,7 @@ it("Y3: daily maintenance diets one oversized learned skill as a restorable cura
   let timers:
     | { stopPeriodicTasks: () => Promise<void>; skillUsageCleanup: () => Promise<void> }
     | undefined;
-  const detached = vi.spyOn(admission, "runWithGatewayDetachedWorkContinuation");
+  let workshop: Awaited<ReturnType<typeof startWorkshopService>> | undefined;
   try {
     await withServer(
       (request, response) => {
@@ -429,10 +461,12 @@ it("Y3: daily maintenance diets one oversized learned skill as a restorable cura
           ...createGatewayMaintenanceStateForTest(),
           getRuntimeConfig: () => config,
         });
-        await runAgentEndSideEffectsAsync({
+        workshop = await startWorkshopService(config);
+        await awaitAgentEndSideEffects({
           event: { messages: [], success: true },
           ctx: {
             config,
+            agentId,
             runId: "diet-turn",
             sessionKey: `agent:${agentId}:main`,
             workspaceDir: state.workspaceDir,
@@ -446,11 +480,7 @@ it("Y3: daily maintenance diets one oversized learned skill as a restorable cura
             },
           },
         });
-        for (const result of detached.mock.results) {
-          if (result.type === "return") {
-            await result.value;
-          }
-        }
+        await workshop.settle();
         expect(requests).toHaveLength(2);
         expect(await fs.readFile(file, "utf8")).toBe(
           `---\nname: deploy\ndescription: Deploy staging builds\n---\n\n${slim}\n`,
@@ -489,6 +519,7 @@ it("Y3: daily maintenance diets one oversized learned skill as a restorable cura
       },
     );
   } finally {
+    await workshop?.stop();
     await timers?.stopPeriodicTasks();
     await timers?.skillUsageCleanup();
     await closeSkillsWatchers(true);

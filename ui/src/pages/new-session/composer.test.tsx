@@ -33,7 +33,7 @@ function getComposerTextarea(composer: HTMLElement): HTMLTextAreaElement {
 function createDragEvent(type: string, files: File[] = [], types = ["Files"]): Event {
   const event = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperty(event, "dataTransfer", {
-    value: { files, types },
+    value: { files, types, getData: () => "" },
   });
   return event;
 }
@@ -63,7 +63,7 @@ const skill = (name: string) => ({
   name,
   description: name,
   source: "skill" as const,
-  skillModelVisible: true,
+  skillReferenceable: true,
 });
 
 const skillEntry = (name: string) => ({
@@ -72,7 +72,7 @@ const skillEntry = (name: string) => ({
   name,
   scope: "both" as const,
   source: "skill" as const,
-  skillModelVisible: true,
+  skillReferenceable: true,
   textAliases: [`/${name}`],
 });
 
@@ -337,7 +337,7 @@ describe("new-session composer keyboard submission", () => {
     flush();
     expect(composer.querySelector(".skill-menu")).toBeNull();
 
-    enter(textarea);
+    enter(getComposerTextarea(composer));
     expect(onSubmit).toHaveBeenCalledOnce();
   });
 
@@ -382,22 +382,18 @@ describe("new-session composer keyboard submission", () => {
       vi.spyOn(navigator, "userAgent", "get").mockReturnValue(mobile ? "Android" : "Windows");
     });
     it.each([
-      ["Enter", false, false, false, false],
-      ["Ctrl+Enter in Enter mode", false, true, false, false],
-      ["Meta+Enter in Enter mode", false, false, true, false],
-      ["Ctrl+Enter in modifier mode", true, true, false, false],
-      ["Meta+Enter in modifier mode", true, false, true, false],
-      ["Meta+Shift+Enter in Enter mode", false, false, true, true],
-      ["Ctrl+Shift+Enter in modifier mode", true, true, false, true],
-    ] as const)("handles %s", (_label, requiresModifier, ctrlKey, metaKey, background) => {
+      ["Enter", false, {}, false],
+      ["Ctrl+Enter in Enter mode", false, { ctrlKey: true }, true],
+      ["Meta+Enter in Enter mode", false, { metaKey: true }, true],
+      ["Ctrl+Enter in modifier mode", true, { ctrlKey: true }, false],
+      ["Meta+Enter in modifier mode", true, { metaKey: true }, false],
+      ["Meta+Shift+Enter in Enter mode", false, { metaKey: true, shiftKey: true }, true],
+      ["Ctrl+Shift+Enter in modifier mode", true, { ctrlKey: true, shiftKey: true }, true],
+    ] as const)("handles %s", (_label, requiresModifier, keys, background) => {
       const onSubmit = vi.fn();
       const onBackgroundSubmit = vi.fn();
       const { composer } = renderComposer({ onSubmit, onBackgroundSubmit, requiresModifier });
-      const event = enter(getComposerTextarea(composer), {
-        ctrlKey,
-        metaKey,
-        shiftKey: background,
-      });
+      const event = enter(getComposerTextarea(composer), keys);
       expect(event.defaultPrevented).toBe(!mobile);
       expect(background ? onBackgroundSubmit : onSubmit).toHaveBeenCalledTimes(mobile ? 0 : 1);
       expect(background ? onSubmit : onBackgroundSubmit).not.toHaveBeenCalled();
@@ -407,6 +403,13 @@ describe("new-session composer keyboard submission", () => {
         expect(onBackgroundSubmit).not.toHaveBeenCalled();
       }
     });
+  });
+
+  it("starts normally on modified Enter when background start is unavailable", () => {
+    const onSubmit = vi.fn();
+    const { composer } = renderComposer({ onSubmit });
+    enter(getComposerTextarea(composer), { metaKey: true });
+    expect(onSubmit).toHaveBeenCalledOnce();
   });
 
   it("keeps an IME confirmation Enter from starting a session", () => {
@@ -694,26 +697,6 @@ describe("new-session composer attachment drops", () => {
     const switches = composer.querySelectorAll<HTMLButtonElement>('[role="switch"]');
 
     expect(switches).toHaveLength(0);
-  });
-
-  it("lets one draft pill replace page-level incognito", () => {
-    const onVisibilityChange = vi.fn();
-    const { composer } = renderComposer({
-      draftAvailable: true,
-      visibility: "draft",
-      onVisibilityChange,
-    });
-    const draftPill = composer.querySelector<HTMLButtonElement>('[role="switch"]');
-    const visibleDraftButtons = Array.from(
-      composer.querySelectorAll<HTMLButtonElement>(".agent-chat__composer-footer button"),
-    ).filter((button) => button.textContent?.trim() === "Draft");
-
-    expect(draftPill?.textContent).toContain("Draft");
-    expect(draftPill?.getAttribute("aria-checked")).toBe("true");
-    expect(visibleDraftButtons).toEqual([draftPill]);
-
-    draftPill?.click();
-    expect(onVisibilityChange).toHaveBeenCalledWith("normal");
   });
 
   it("adds a dropped file through the shared attachment handling", async () => {

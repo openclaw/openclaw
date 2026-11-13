@@ -15,6 +15,8 @@ import type {
 export type ControlUiRegistration<T> = {
   key: `${string}/${string}`;
   pluginId: string;
+  /** Host-admitted passive SVG data URL from the owning plugin manifest. */
+  panelIcon?: string;
   value: T;
   host: ControlUiHost;
   signal: AbortSignal;

@@ -11,6 +11,16 @@ title: "Integrity, troubleshooting, and recovery"
 
 Gateway process owns every OpenClaw database and its state. In-process writer receipts invalidate cached rows across workers and handles; use direct reads when cache cannot be covered. Never add runtime foreign-commit probes (`PRAGMA data_version`, version observations, foreign-observation scopes); remove when touched. Outside writers, including CLI, Doctor, cron, plugin children: must use Gateway or hold exclusive ownership while Gateway stopped. Preserve live-authority checks at effect boundaries and consistent snapshots for multi-statement reads.
 
+Process lock guards consume retained custody and immediate in-process revocation.
+The heartbeat worker verifies lock bytes and physical identity; manual removal or
+replacement is detected on its next observation, not by reopening both sidecars
+at every effect. Peers cannot reclaim a live process's exclusive-create lock.
+Overdue verification refuses work until asynchronous renewal recovers, without
+synchronous filesystem recovery on the Gateway thread. Offline schema custody
+and selected-path alias checks retain their separate physical checks.
+Native handle and recorded-lease cleanup prepare a fresh worker observation of
+their captured owner before choosing ordinary settlement or loss recovery.
+
 Shared-state SQLite workers load operation handlers by domain on first use. A
 session operation does not initialize unrelated cron, secrets, transcript, or
 update handlers. The worker backend still owns database handles, write admission,
@@ -41,46 +51,66 @@ inode, and birthtime with `fstat`, not SQL. Migration/repair owners publish new
 facts after their DDL. Doctor migrations, repairs, and explicit verification retain
 their required checks; ordinary current-schema opens follow the policy below.
 
-A clean-close seal whose schema identity changed also takes bounded admission on
-an otherwise current agent database. The writable owner repairs canonical
+Cold shared-state readiness readers adopt the seal's catalog before consuming
+its completed validation facts. Startup's `database-readiness` diagnostics report
+`statePreflightMs` and `agentPreflightMs` separately; the existing schema counters
+cover agent inspections only. `stateSealCount`, `stateIntegrityCheckCount`, and
+`stateIntegrityMs` distinguish reuse from a required state integrity and foreign-key
+check. State preflight time also includes reader startup, schema and ownership
+inspection, target registry reads, and cleanup.
+
+Any rejected clean-close seal takes bounded admission on an otherwise current
+agent database; its rejection reason is diagnostic, not evidence of corruption.
+The writable owner repairs canonical
 non-unique indexes transactionally, verifies the touched tables, and validates
 the whole schema before admission. Unique-index changes, pending column repairs,
 and other noncanonical schema differences retain the full gate. Explicit FULL
-checks and corruption refusals are unchanged. This applies to Doctor/update opens
-as well as Gateway startup: admission records `deferred/pending`, logs repaired
-index names, and leaves full verification owed without minting a verification
-timestamp or clean-close seal.
+checks and corruption refusals are unchanged. Ordinary runtime and Doctor/update
+opens record `deferred/pending`, log repaired index names, and leave full verification
+owed without minting a verification timestamp or clean-close seal. Gateway startup
+can defer verification only for an exact read-ready schema with a live background
+verifier; pending schema/index repair retains foreground verification.
 
-On Linux, a separate process, such as a CLI `agent exec` run while the Gateway
+Full admission can also repair a missing or drifted canonical unique index that
+backs a foreign key. Physical integrity checks run first. If SQLite then reports
+an exact foreign-key schema mismatch and the repair plan restores a canonical
+unique index on that parent table, the owner repairs the indexes transactionally
+and repeats the complete required integrity check before admission. Duplicate
+parent keys, actual orphaned children, and unresolved schema mismatches refuse
+admission and roll back the repair. A successful QUICK check still does not mint
+a FULL verification receipt.
+
+On Linux, macOS, and Windows, a separate process, such as a CLI `agent exec` run while the Gateway
 holds the same agent database, reuses the Gateway's completed admission. The peer
 must hold a lease on the exact path, have finished admission, still match its
-recorded PID and start time, and carry the same lease provenance (boot, PID
-namespace, build, and file inode), so a file replaced at that path is checked again.
-Outside the bounded admission policy described below, aliases, live
-unfinished admissions, and platforms without lease provenance still
-run the full check. A dead owner with matching provenance, including an interrupted
-admission without a known FULL requirement, takes a quick check plus foreign-key
-and canonical schema/index checks.
-SQLite WAL recovery preserves committed writes without a full index scan on the
-admission path. Previously revoked validation, mismatched provenance or a replaced
-file, and recorded corruption retain full verification or refusal. An unclean close
-without a surviving lease is `no-proof`: it takes bounded admission and leaves full
-verification owed to the next Gateway's background check. A failed crash-recovery quick check also runs
-the full check before admission. Crash-recovery quick admission records a distinct
-quick receipt. After successful checkpoint and final native close, the existing
-owner can seal that receipt so the next ordinary restart also skips the full scan.
-It never supplies a full-integrity receipt; Doctor and explicit verification retain
-their policy. Ordinary maintenance QUICK checks do not mint this recovery receipt.
-Known validation, file, or seal refusals and explicit FULL policy are recorded in
-the existing lease admission status before verification, so another process death
-cannot downgrade that requirement. Successful admission replaces the pending status.
-The borrowing process never checked the file
-itself, so if it closes last it leaves the next opener to verify instead of writing
-a seal.
+recorded PID and start time, and carry the same lease provenance (host, boot,
+platform, build, and file inode; Linux also binds its PID namespace), so a file replaced at that path is checked again.
+Aliases, unfinished admissions, and missing lease provenance cannot lend a
+peer's proof; a current-schema opener instead uses bounded admission. Dead leases
+are reclaimed without revoking this process's
+admitted physical-file facts: SQLite WAL recovery handles interrupted writes.
+A cold open without a matching seal uses bounded header/schema admission and
+leaves full verification to Gateway startup or explicit Doctor verification.
+Missing or mismatched dead-owner provenance does not establish corruption.
 
-Shared-state fast-path admission on Linux trusts a live Gateway that owns the
+Native worker loss still revokes its generation and authority. Reopening or
+refreshing a retained connection after lifecycle revocation uses
+bounded admission for a current schema. It does not run a whole-file quick or
+full check or mint a verification receipt or clean-close seal. Optional timing
+and diagnostic collection do not change this policy. Recorded corruption still
+refuses admission, and
+migrations, noncanonical schema changes, and explicit FULL verification retain
+their checks. Older crash-recovery quick receipts remain readable until their
+existing expiry; new crash admissions do not create them.
+
+The borrowing process never checked the file itself, so if it closes last it
+leaves the next opener to verify instead of writing a seal. Live-peer provenance
+still binds macOS `kern.bootsessionuuid` or Windows `LastBootUpTime`; unknown
+provenance cannot lend a live peer's admission.
+
+Shared-state fast-path admission on Linux, macOS, and Windows trusts a live Gateway that owns the
 exact file: after startup admission and listening, its owner lease publishes
-provenance binding the host, boot, PID namespace, build, and inode. A different
+provenance binding the host, boot, platform, build, and inode, plus Linux's PID namespace. A different
 process with matching provenance and a live owner PID/start time skips only its
 whole-file integrity scan; schema, version, and legacy-repair checks still run,
 and the borrower records no verification or clean-close seal. Corruption can
@@ -115,8 +145,8 @@ refresh. Owner-controlled FTS and vector replacements republish that receipt
 after commit when they preserve the admitted table contracts. Rollback cannot
 publish a replacement receipt. Changed settings, other in-process DDL, or a
 missing or invalid seal take the ordinary memory schema admission path. An
-unclean shutdown still requires integrity verification. Imported-row backfills
-still run.
+unclean shutdown leaves full verification to startup's background owner;
+ordinary current-schema admission remains bounded. Imported-row backfills still run.
 
 At startup, admission accepts the seal only when its JSON parses, its short
 checksum matches, and all of the following match the current database: device,
@@ -164,8 +194,10 @@ catalog retains seal reuse without validation SQL; adding requirements alone doe
 not invalidate seals whose catalogs already satisfy them.
 
 Legacy seals containing only a combined identity hash remain reusable when that
-hash matches the current runtime/library tuple. A mismatch requires one full
-validation. The next clean close writes decomposed identity components, so later
+hash matches the current runtime/library tuple. A mismatch takes bounded admission
+for a current agent schema and leaves full
+verification to the startup owner. The next clean close writes decomposed identity
+components, so later
 runtime/library-only updates reuse the original full-verification timestamp. Managed drain followed by an
 interrupt uses ordinary close and can publish a seal once its writers settle.
 Forced termination before successful close cannot certify the database.
@@ -175,15 +207,28 @@ receipt can precede that same agent's final `written` receipt: idle retained dat
 handles still hold leases even when no agent work is running. The final handle must
 release its lease after checkpoint and native close before certifying the seal.
 An `active-leases` receipt means this handle closed; peers prevent seal publication,
-not the close itself.
+not the close itself. Its message includes the first blocking lease's ID and process
+ID; structured fields also include its path, process start time, and opened time.
 Each worker coalesces unchanged outcomes for its 128 most recently observed database
-paths. Changed outcomes still log after commit; rollback cannot suppress the next
+paths. Changed outcomes or blocking leases still log after commit; rollback cannot suppress the next
 committed receipt. This diagnostic history does not change handle retention or seal checks.
-At the next full integrity gate, `no-proof` means no seal was found. Rejected seals
+At the next admission, `no-proof` means no seal was found. Rejected seals
 report `malformed-proof`, `expired-proof`, `file-mismatch`, or `journal-present`;
 incompatible identities report `feature-mismatch`, `schema-mismatch`, or
 `policy-mismatch`. A simultaneous runtime change cannot mask those mismatches.
 Legacy seals report `identity-mismatch` when their combined identity differs.
+
+Shared-state startup reports the admission owner's refusal as
+`stateIntegrityReason` on `cli.bootstrap.admission.database-readiness` whenever
+it runs integrity verification. `schema-mismatch` can follow a clean shutdown:
+canonical SQL changes, including same-version additive columns, change the seal
+identity even when the numeric schema version stays unchanged. The first startup
+under that schema verifies the database; a successful runtime open and clean
+close publishes compatible proof for subsequent restarts. Read-only preflight
+does not reseal the database, so repeating preflight alone repeats verification.
+`startup-not-ready` means no refusal was recorded but reusable startup admission
+was unavailable; `maintenance` identifies explicit maintenance inspection.
+These diagnostics do not weaken integrity checks or change the seal lifetime.
 
 Worker admission checks current authority after lease cleanup and before opening
 the native agent database. A refusal at that boundary releases its unopened lease
@@ -202,24 +247,34 @@ preflight, or integrity verification. It also avoids a post-ready verification
 scan. Without a reusable seal, Gateway startup admits an exact current agent
 schema through SQLite's native recovery, schema/owner checks, and bounded
 page-count/freelist-count sanity checks. It then runs full integrity and foreign-key
-verification in a read-only child, with at most two background scans at once.
-Readiness, session reads, and ordinary writes do not wait for that scan.
+verification in a read-only child at low OS process priority, with at most two
+background scans at once. Runtime admission uses that same Gateway owner when
+it accepts a physical file without a full-verification receipt.
+Readiness, session reads, and ordinary writes do not wait for that scan. Startup
+that requires schema/index repair has no background verifier and retains its
+foreground check, including when it reuses an already open connection. Requests
+waiting for writable preparation receive a retryable verification/preparation-in-progress
+response after one second; the Gateway's preparation continues independently.
 Killing a writer, changing the file externally, changing its
 schema identity, or restoring a different physical file prevents seal reuse.
 The seven-day limit is checked on admission; it does not introduce a daily
 runtime scan or a new timer. Already admitted physical databases do not queue
-another post-ready integrity scan; Doctor and explicit verification remain available.
+another post-ready integrity scan. The Gateway retains completed and inconclusive
+attempts by shared-state scope and physical file, so replacing a worker does not
+restart a scan. Replacing the physical file creates a new verification obligation;
+Doctor and explicit verification remain available.
 
-Doctor, update, and other ordinary agent-database callers also use bounded
-admission for a current schema when the reason is `no-proof` or `schema-mismatch`:
-a missing or outdated schema seal alone is not corruption evidence. Canonical
-non-unique indexes can be repaired under this admission. Their default QUICK maintenance policy
-does not add a whole-file scan on reopen. Admission records `deferred` / `pending`,
-without a full-verification receipt or seal, so the next Gateway startup still
-owes background verification. Explicit FULL checks, process-death recovery,
-stale-lease-full, revoked validation, and other rejected seals retain their required
-verification. Required scans from synchronous agent openers run in the integrity
-child; diagnostics report worker time rather than `integrityCheckSyncMs`.
+Doctor, update, and other ordinary agent-database callers use bounded admission
+for a current schema regardless of a missing, expired, malformed, or mismatched
+seal, lease history, or lifecycle revocation. Canonical non-unique indexes can be
+repaired under this admission. The default QUICK maintenance policy does not add
+a whole-file scan on reopen. Admission records `deferred` / `pending`, without a
+full-verification receipt or seal. A running Gateway schedules the owed verification;
+standalone callers leave it to the next Gateway startup. Explicit FULL verification,
+pending migrations, and noncanonical
+schema changes retain their required checks. Required scans from synchronous agent
+openers run in the integrity child; diagnostics report worker time rather than
+`integrityCheckSyncMs`.
 
 Bounded admission is not a full integrity verdict and cannot publish a
 clean-close seal. A successful background check publishes the actual verification
@@ -229,7 +284,12 @@ failed in readiness/status, and records a durable quarantine decision. Stop the
 Gateway and run `openclaw doctor --fix` before retrying. The quarantine survives
 later file writes and restarts until Doctor clears it after verification. A
 cancelled or inconclusive scan logs its failure and supplies no verification or
-seal; it does not declare corruption. Shutdown cancels and joins the native reader.
+seal; it does not declare corruption or retry on every reopen. The next Gateway
+startup or explicit verification can try again. Shutdown cancels and joins the
+native reader. SQLite's full check has no resumable cursor in the current binding:
+an interrupted check must restart from the beginning. Low process priority is not
+an I/O bandwidth limit; the bounded concurrency and inspection deadline do not
+provide page-level pacing or resumability.
 
 This policy accepts the interval between bounded admission and a background
 corruption finding: previously untouched damaged pages can exist while ordinary
@@ -243,8 +303,9 @@ maintenance also invalidates it before checkpointing or rewriting a database.
 The seal is an allowed small sidecar, published only after successful close.
 Acceptance is atomic: a partial payload cannot supply admitted facts.
 Publication uses a plain file write with a checksum: it needs no temporary-file
-rename or `fsync` protocol. A torn write fails parsing or checksum validation and
-falls back to a full check. If a crash loses the unlink but preserves a database
+rename or `fsync` protocol. A torn write fails parsing or checksum validation; a
+current agent schema then
+takes bounded admission and leaves full verification to startup. If a crash loses the unlink but preserves a database
 write, nonempty WAL or changed file metadata rejects the old seal. If power loss
 loses both unlink and the database write, the database remains at the sealed
 state and that seal is still correct.
@@ -273,9 +334,9 @@ integrity coverage follows the policy below; recovery backups and restart seal
 requirements remain unchanged. Standalone Doctor's version prelude revokes prior agent proof
 before checking the live source, then preserves that receipt through its
 committed version and additive schema phases. Only a full source verification
-can satisfy a later runtime full-integrity gate; a quick migration still owes
-that full check. Ordinary post-migration `no-proof` opens use bounded admission
-and leave it to Gateway background verification. Updater backups verify private
+supplies full-verification facts; a quick migration leaves full verification
+owed. Ordinary post-migration opens use bounded admission and leave the scan to
+Gateway background verification. Updater backups verify private
 images and do not supply a live full source receipt; inline quick migrations also
 retain that verification obligation.
 A separate Doctor invocation continues to inspect current bytes. These are
@@ -298,18 +359,18 @@ owner and grant for the normal lease duration. A fence lasting longer than that
 duration produces a Doctor warning; a replaced owner still refuses settlement.
 Rollback releases the fence and restores ordinary expiry handling.
 
-| When                                                                                                               | Check                                                                                                                                                                                                                            |
-| ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Startup with a matching, recent clean-close seal                                                                   | Match checksum, schema identity, file metadata, and empty journals; reuse admitted facts without startup or post-ready scans                                                                                                     |
-| Gateway agent startup without a reusable seal                                                                      | Native WAL recovery, exact schema/owner and bounded header sanity before admission; full integrity and foreign-key checks in the background, with immediate refusal on proven corruption                                         |
-| Shared-state startup, migration, repair, or update canary                                                          | Retain foreground validation and required integrity checks                                                                                                                                                                       |
-| Doctor/update agent open with no seal or an outdated schema seal; current schema and only non-unique index repairs | Bounded schema/owner and header admission; record pending verification, publish no seal, and defer full verification to the Gateway's background check. Explicit FULL policy retains its scan in the integrity child             |
-| Same-process reopen or new worker                                                                                  | Reuse live file-bound admission, including bounded admission after `checkpoint-incomplete`; retain current ownership and durable quarantine-row checks. A changed identity or foreign writer prevents local proof reuse          |
-| Another live process already admitted the same file                                                                | On Linux, reuse that admission instead of a full scan when the peer's PID, start time, and lease provenance (including inode) still match; schema and index checks still run, and the borrower cannot publish a clean-close seal |
-| Shared-state fast path while a live Gateway holds the file                                                         | On Linux, trust the live Gateway owner when PID, start time, and exact-file provenance match; skip only the integrity scan, retain schema, version, and legacy-repair checks, and never publish a clean-close seal               |
-| Before a migration or other same-version repair                                                                    | Run whole-database quick integrity, full integrity of affected tables, and existing foreign-key, role, schema, and index checks; `--full-integrity-check` requests full database integrity                                       |
-| After a migration or repair                                                                                        | Verify changes and publish committed facts through the existing owner                                                                                                                                                            |
-| Explicit verification, Doctor recovery, and compaction                                                             | Retain full checks before accepting or rewriting the database; ordinary Doctor migrations use the migration policy above                                                                                                         |
+| When                                                                                             | Check                                                                                                                                                                                                                                                             |
+| ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Startup with a matching, recent clean-close seal                                                 | Match checksum, schema identity, file metadata, and empty journals; reuse admitted facts without startup or post-ready scans                                                                                                                                      |
+| Gateway agent startup with an exact read-ready schema and no reusable seal                       | Native WAL recovery, exact schema/owner and bounded header sanity before admission; full integrity and foreign-key checks in the background, with immediate refusal on proven corruption                                                                          |
+| Shared-state startup, agent startup requiring schema/index repair, migration, or update canary   | Retain foreground validation and required integrity checks                                                                                                                                                                                                        |
+| Ordinary current-schema agent open/refresh without reusable proof; only non-unique index repairs | Bounded schema/owner and header admission; record pending verification, publish no seal, and defer full verification to the Gateway's background check. Explicit FULL policy retains its scan in the integrity child                                              |
+| Same-process reopen or new worker                                                                | Reuse live file-bound admission, including bounded admission after `checkpoint-incomplete`; retain current ownership and durable quarantine-row checks. A changed identity or foreign writer prevents local proof reuse; current-schema admission remains bounded |
+| Another live process already admitted the same file                                              | On Linux, macOS, and Windows, reuse that admission instead of a full scan when the peer's PID, start time, and lease provenance (including inode) still match; schema and index checks still run, and the borrower cannot publish a clean-close seal              |
+| Shared-state fast path while a live Gateway holds the file                                       | On Linux, macOS, and Windows, trust the live Gateway owner when PID, start time, and exact-file provenance match; skip only the integrity scan, retain schema, version, and legacy-repair checks, and never publish a clean-close seal                            |
+| Before a migration or other same-version repair                                                  | Run whole-database quick integrity, full integrity of affected tables, and existing foreign-key, role, schema, and index checks; `--full-integrity-check` requests full database integrity                                                                        |
+| After a migration or repair                                                                      | Verify changes and publish committed facts through the existing owner                                                                                                                                                                                             |
+| Explicit verification, Doctor recovery, and compaction                                           | Retain full checks before accepting or rewriting the database; ordinary Doctor migrations use the migration policy above                                                                                                                                          |
 
 The migration default does not compare every untouched index with its table.
 An index/table mismatch outside the declared migration scope therefore needs
@@ -399,12 +460,14 @@ This proof does not require the persisted clean-close seal. Peer leases
 with matching process ID and start time do not consume or block publication of
 that seal; each handle retains its own lease until cleanup finishes.
 Explicit invalidation revokes shared runtime proof as well as durable metadata,
-including stale admission and unsettled Worker cleanup. A successful native close
+including unsettled Worker cleanup. Reclaiming a dead lease alone does not revoke
+these facts. A successful native close
 with a reader-blocked checkpoint keeps verification unsealed and preserves live
 runtime proof. A later last writer can certify that verification after a completed
 checkpoint and native close; failed close or uncertain storage errors revoke both.
-The first open in a new process still requires matching clean-close metadata or
-the admission gate. Idle close within the same process preserves admitted facts.
+The first open in a new process requires matching clean-close metadata or
+bounded current-schema admission. Idle close within the same process preserves
+admitted facts.
 Opening an existing agent file and its initial integrity and schema preparation
 belong to the physical owner. Concurrent callers join that preparation;
 cancelling one caller ends only its wait. Each caller must still pass its own
@@ -412,13 +475,14 @@ authority checks before using the prepared database. First-use creation retains
 its caller's creation claim, and native worker loss still invalidates the old
 generation's authority.
 Cleanup workers and native agent execution workers borrow that proof under their
-existing writer admission. Cleanup workers return new verification to the Gateway
-after they finish.
+existing writer admission. Cleanup workers return admitted schema facts to the
+Gateway after they finish;
+bounded admission does not create a full-verification receipt.
 Reclamation retains one Worker connection per database, so alternating agents
 reuse their admitted handles. Requests still share the archive FIFO. Each Worker
 retires after 30 idle minutes, on database close, or when idle under critical
 memory pressure; failed cleanup retains its original lease until settlement.
-Integrity revocation and update behavior are unchanged.
+Retirement revokes worker authority without requiring another whole-file scan.
 During a one-way Gateway shutdown drain, idle native execution and retained
 reclamation connections close immediately. Active executions close when their
 final borrower releases them; active reclamation requests settle before closing.
@@ -459,7 +523,9 @@ Required subagent cleanup remains tracked by its Gateway during drain, including
 child-session deletion, before database dependencies retire. Ordinary RPC
 admission stays closed; cleanup retains its original Gateway and session generation.
 Cleanup that needs another connection uses ordinary admission and invalidates
-the seal before writing again. A forced exit during a write still requires the admission gate.
+the seal before writing again. After a forced exit during a write, SQLite WAL
+recovery and bounded admission
+precede startup's background verification.
 This changes no schema, update, or rollback contract.
 
 Native execution workers reuse physical proof held by the admission owner, including
@@ -493,9 +559,9 @@ Database replacement, quarantine, and failed admission discard applicable
 verification. Ordinary native close can preserve it in the clean-close seal.
 Doctor maintenance discards remembered runtime verification after
 draining agent connections and before raw maintenance can run. Pending migrations
-still run full checks, and required-index
-repairs verify their result before committing, then publish the new admitted
-facts. Ownership and current write authority are never borrowed from the
+retain their required checks, and required-index repairs verify their result before
+committing, then publish the new admitted facts. Ownership and current write
+authority are never borrowed from the
 integrity result.
 
 Shared-state runtime opens and automatic startup preparation converge supported
@@ -519,14 +585,38 @@ Version, schema shape, agent registry, and deletion-journal facts share one read
 transaction without copying unrelated payloads. This permits SQLite SHM read
 marks; it does not grant migration or repair authority. Default and explicit
 artifact-preserving inspections retain their private snapshots, and an inherited
-snapshot or startup/Doctor admission keeps its existing owner.
+snapshot or Doctor admission keeps its existing owner.
 
-Private snapshots remain necessary for artifact-preserving inspection without a reusable seal, incomplete WAL families whose inspection would create source sidecars, and rollback journals requiring private recovery. Those cases use the existing snapshot owner and deadline; ordinary inspection errors do not trigger a full-copy fallback. A matching clean-close seal permits startup to read the unchanged, checkpointed source directly. Other live files use native SQLite reads; immutable reads require a sealed source or a verified private or explicit consolidated copy. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file.
+Gateway startup reads the live shared-state database through read-only connections,
+including WAL recovery after an unclean stop. Admission retains the physical database identity;
+each synchronous operation uses its own SQLite read transaction. Config recovery,
+plugin discovery, and schema checks do not copy the whole database or retain a
+private image for the process lifetime. SQLite may create or update WAL/SHM
+coordination files. This does not authorize stored-row writes, migrations, or
+repair; the existing schema, ownership, and publication checks still apply.
 
-Startup config-health and plugin-metadata reads verify clean-close proof while
-holding physical custody in their isolated reader. They keep custody through
-native close, without creating WAL sidecars or copying unrelated state. Missing
-proof or competing custody retains the existing private snapshot path.
+A hot rollback journal on a DELETE-journal filesystem is the recovery exception.
+SQLite must write to recover that journal before it can read ownership records.
+Startup detects SQLite's recovery-required refusal and uses a private recovery
+copy for admission and records that selection. After config validation and startup
+guards pass, existing schema custody protects the ownership check and canonical
+journal recovery. The source database and journal must still match the admitted
+files. The copy is removed before startup continues. Healthy DELETE databases and
+WAL databases use live readers. The exception does not authorize recovery writes
+to externally owned source databases.
+
+Current Gateway owner lease reads use the existing native read-only connection
+even when the recorded owner is dead or unverifiable. Reading committed ownership
+does not require write authority. A raw SQLite hot-journal recovery refusal keeps
+the private recovery path; explicit artifact-preserving admission remains unchanged.
+
+Private snapshots remain necessary for offline artifact-preserving inspection,
+including incomplete WAL families and rollback journals requiring private recovery.
+Those consumers keep source DB/WAL/SHM unchanged and release their private copy
+when inspection drains. Immutable reads require a sealed source or a verified
+private or explicit consolidated copy; they cannot read live WAL state.
+`openclaw database preflight` performs the release-local shape comparison for an
+explicit copied file.
 
 Concurrent asynchronous requests for the same physical live database share one
 snapshot operation. When the current runtime already owns an open SQLite
@@ -536,6 +626,15 @@ lease, and cancellation detaches only that caller while the shared operation and
 remaining leases keep their original owner and cleanup authority.
 
 Shared-state reads capture their source and lifecycle authority before queuing.
+Read-only state inspections in one `doctor` or `update` process share a retained
+private image while the source's main file and WAL are unchanged, instead of copying
+the database for each schema, lease, or single-row read. Inside these processes a
+one-shot child seeds the image, so no retained child outlives the read that needed
+it. A commit, a replaced file, or a rollback journal retires the image, and the
+process retires it before finishing. A failed removal of a retired image logs a
+warning and stays with the exit retry and the Gateway sweep. The Gateway itself never
+holds one.
+
 An explicitly inherited snapshot keeps its original bytes. A fresh
 artifact-preserving copy checks the admitted physical file key at each main-file
 open and refuses changed identity rather than following a replacement. Requests
@@ -627,6 +726,11 @@ Private snapshot files remain temporary artifacts: the creator registers cleanup
 before copying and publishes the finished copy by rename. Graceful shutdown
 drains existing shutdown owners and joins snapshot workers before cleanup. Cleanup
 keeps every token until copied data is removed, so partial removal remains recoverable.
+Large private payloads are truncated in steps of at most 64 MiB before unlinking.
+Asynchronous cleanup awaits truncation on the same retained descriptor while
+holding exclusive custody. This bounds the data released by one filesystem call
+and avoids blocking the Gateway thread. It does not bound deferred filesystem
+metadata work: btrfs can process delayed references in a later transaction commit.
 Readers created after a runtime module reload retain the original snapshot cleanup
 owner. Shutdown joins in-flight snapshot consumers across reloads, active readers
 still prevent removal, and failed cleanup retains its custody.
@@ -634,42 +738,39 @@ When the native directory creator confirms that it refused an allocation before
 creating a directory, the original staging-root error is reported and existing
 snapshot lifetimes can still retire. Lost replies and incomplete cleanup retain
 their original cleanup custody.
-Native termination and hard kills can skip that drain. Each staging directory holds
-an open SQLite transaction as its lifetime token. Reclamation obtains exclusive
-tokens for the parent and every nested worker before inspecting or removing the
-copy, independent of PID namespaces. Worker admission checks the parent's token;
-retirement is committed before handles close so a late worker cannot restart it.
-The Gateway schedules abandoned-copy reclamation after startup, once foreground
-root work is idle, then revisits every 15 minutes after a completed pass. Each
-pass yields to foreground work and rechecks ownership and age, so copies skipped
-as recent or over budget can become eligible without restarting the Gateway.
-Snapshot allocation only creates and registers its own token;
-neither synchronous nor asynchronous allocation waits for a reclamation pass.
-Reclamation runs in a SQLite worker, keeping directory traversal and removal off
-the Gateway event loop, and logs the copied-data byte count. Concurrent cleanup
-requests for one root share a pass. Reclamation requires verifiable inactive
-owner and worker tokens, applies a 15-minute grace period to current staging
-directories, and uses a 512 MiB copied-byte budget per pass. The first reclaimed
-directory may exceed that budget, after the same ownership and age checks; the
-pass then stops, so oversized interrupted copies can make progress one at a time.
-Recognized payloads include fs-safe's `.fs-safe-<UUID>.tmp` publication files left
-by interrupted copies, including those inside nested staging directories.
-Active, recent, over-budget, or
-structurally unknown directories remain untouched. Shutdown and the existing
-reclamation deadline stop at directory boundaries, after removal and token
-release settle together. Reclamation worker failures warn without preventing
-later snapshot allocation.
-Legacy directories use a 24-hour age threshold, including legacy children under a
-current parent. Updaters also mark staging for a selected installation as legacy-compatible
-before launching workers that may predate tokens. Current workers fence admission
-inside an existing legacy parent, including the intervening `openclaw` cache
-directory created by released workers. Reclamation understands both generations
-in that layout and applies the same token and age rules to inner staging directories.
-A read-only scan checks all legacy activity before token I/O; validation
-repeats under locks before deletion. Copies that are still too recent keep their existing timestamps.
-Coordination files do not count as copied data or legacy activity. Live or unverified tokens, recent legacy copies,
-unknown contents, and symlinks are left alone with a warning. Primary databases
-and backups are never reclaimed by this owner.
+Each staging directory holds an open SQLite transaction as its lifetime token.
+Cleanup obtains exclusive tokens for the parent and nested workers before removing
+payloads, independent of PID namespaces. Worker admission checks the parent's
+token; retirement is committed before handles close so a late worker cannot
+restart it. Updaters retain legacy-compatible token handling for released workers.
+Primary databases and backups are never removed by this owner.
+
+New snapshots use an installation-specific namespace under the cache root,
+derived from the resolved state-directory path. Delayed Gateway maintenance
+reclaims abandoned snapshots there, starting after the startup reconnect window
+and then hourly. The streaming scan yields between entries, so retained copies
+do not starve later entries. Retirement requires 15 minutes without payload
+activity plus exclusive ownership of every nested SQLite token.
+Live readers and creators prevent deletion even when the files are old. A crash
+or `SIGKILL` releases native locks, allowing a later pass to recover a leftover
+journal and retire the incomplete copy. Maintenance reports removed bytes and
+retained directories; missing tokens, unknown layouts and legacy workers are
+retained for operator inspection.
+
+The same pass also visits sibling `sqlite-<hash>` namespaces and
+`openclaw-sqlite-readonly-v2-*` directories directly under the shared cache
+parent. Earlier Doctor and triage runs, and older releases, staged copies there.
+Those copies are retired only after 24 hours without activity anywhere in their
+tree, because another installation may own them, and they still need exclusive
+ownership of every nested token. Unreadable roots are counted as retained, and
+namespace directories are never removed.
+
+Copies without a lifetime token, pre-token legacy layouts, unknown layouts and
+updater-owned temporary roots still require explicit offline operator
+maintenance. Primary databases and published backups remain outside this sweep.
+Deletion runs in the native worker, in steps of at most 64 MiB; delayed filesystem
+metadata work can still affect other traffic on the same filesystem. Snapshot
+allocation, fresh maintenance and rollback never invoke or await the sweep.
 
 Schema-only agent inspections during Doctor and restart checks read metadata in
 a child process, within one SQLite read transaction, without copying the whole
@@ -825,9 +926,11 @@ Live snapshots use the online-backup worker. Artifact-preserving scopes and sync
 
 Without a reusable seal, full startup readiness checks agent ownership,
 integrity, foreign keys, and schema in one fresh read-only transaction in a
-disposable child. Complete WAL families
+disposable child. Complete WAL families, closed WAL databases without sidecars,
 and rollback-mode databases without journals do not need a full private copy.
-Empty files, incomplete WAL families, rollback recovery, and artifact-preserving
+Live Gateway admission lets SQLite create empty WAL coordination files; it still
+performs the full integrity check when no reusable seal exists.
+Empty files, partial WAL families, rollback recovery, and artifact-preserving
 scopes retain private snapshot inspection. The parent waits
 for native close before accepting the result or releasing its scope. The source
 database and WAL remain unchanged; native WAL readers may update SHM read marks.
@@ -917,14 +1020,18 @@ only an `agentId` and omit `sessionKey`. Pending preparation returns a retryable
 startup refusal. Failed inspection keeps refusing delivery with the recorded
 repair guidance after startup work settles.
 
-Deferred startup retries classified SQLite lock failures during opening or session
-migration up to four attempts with cancellable backoff. Each retry checks deletion
+Deferred startup uses one contention policy for SQLite locks and typed worker
+overload during deletion checks, opening (including required integrity checks),
+session migration, and runtime publication, up to four attempts with cancellable
+backoff. Each preparation retry checks deletion
 status and the original database file identity again; migration retries retain the
 completed opening, and publication retries do not repeat migration. Corruption,
 incompatible schemas, changed file identities, and mixed cleanup failures remain
-terminal. If locks persist through the retry budget, the agent remains degraded
-with `database locked by another process` and guidance to close competing processes
-and restart the Gateway. There is no periodic or on-demand in-process admission
+terminal. If contention persists through the retry budget, the agent remains
+degraded with guidance to let competing work finish and restart the Gateway;
+worker overload does not require Doctor or database repair. Deferred preflight
+failures preserve their original refusal and recovery guidance. There is no
+periodic or on-demand in-process admission
 retry after exhaustion; a new Gateway startup retries admission. No schema or
 configuration changes are required.
 
@@ -1252,6 +1359,11 @@ SQLite handles writer contention directly with a zero busy timeout; maintenance
 does not wait on a separate coordination database. Explicit synchronous
 checkpoint and close operations retain their synchronous contract. These changes
 require no state migration.
+
+Shared-state retirement, including an agent worker's shared-state borrow, uses a
+zero busy timeout for its final checkpoint. Peer readers can keep their snapshot
+and WAL without delaying retirement by the normal write timeout. Clean-close proof
+still requires a completed checkpoint, native close, and empty journals.
 
 The warning includes observed WAL and database sizes, checkpointed and total WAL
 frames, the last observed complete checkpoint, the consecutive blocked count,

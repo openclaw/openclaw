@@ -18,7 +18,7 @@ openclaw config set mcp.apps.enabled true --strict-json
 
 Restart the Gateway after changing this setting. When enabled, OpenClaw starts a sandbox-only HTTP(S) listener on the Gateway port plus one (for the default Gateway, `18790`). The Control UI loads Apps from that separate origin; the listener never serves Control UI, authenticated Gateway routes, or user data.
 
-Direct Gateway connections need access to both ports. If a reverse proxy or TLS terminator exposes the Control UI, give Apps a dedicated public origin and proxy only that origin to the sandbox listener:
+Direct Gateway connections need access to both ports. The macOS app's Remote over SSH mode forwards the default sandbox port alongside the Gateway port. If a reverse proxy or TLS terminator exposes the Control UI, give Apps a dedicated public origin and proxy only that origin to the sandbox listener:
 
 ```json5
 {
@@ -78,6 +78,8 @@ A server advertises entrypoints on its normal tool descriptor:
 ```
 
 Global and thread entrypoint tools accept `{}`. File entrypoints declare extensions with a leading dot, such as `.stl`, and receive the selected file's name and host-issued resource URI. The host supplies the initial tool result to the app; the app should render that result instead of repeating the opening tool call.
+
+In Control UI conversations, expanding an App opens it in the existing side panel so the transcript and message composer stay usable. Closing the panel returns the same App inline without reloading its canvas. Narrow layouts use the conversation’s existing mobile panel. Expanded tabs use the owning plugin or MCP server name, with the installed plugin’s portable icon when available. Otherwise, they use advertised App/server artwork or a generic App icon. Ordinary Review panels, board widgets, and standalone App windows keep their own display behavior.
 
 App resource metadata can declare supported and preferred display modes. Apps must inspect the actual host capabilities before using an extension: a standalone channel window does not have every capability of a connected Control UI conversation. Do not infer file, messaging, or model-context authority from a successful MCP connection alone.
 

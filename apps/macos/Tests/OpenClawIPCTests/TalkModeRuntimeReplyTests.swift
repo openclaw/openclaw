@@ -402,7 +402,7 @@ private func withTalkReplyFixture(
 extension TalkModeRuntime {
     fileprivate func _test_enableForReply() async {
         self.isEnabled = true
-        await self.commitTalkConfig(self.fetchTalkConfig(), locale: "en-US")
+        await self.commitTalkConfig(self.fetchTalkConfig())
     }
 }
 

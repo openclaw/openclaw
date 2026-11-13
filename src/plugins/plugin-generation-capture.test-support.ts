@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import * as fsSafeAdvanced from "@openclaw/fs-safe/advanced";
-import { expect, vi, type MockInstance } from "vitest";
+import { vi, type MockInstance } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import { writeArtifacts } from "./public-surface.test-support.js";
@@ -9,7 +10,7 @@ export type Artifact = ReturnType<typeof capturePluginGenerationArtifact>;
 export type Cache = ReturnType<typeof createPluginCache>;
 
 export const expectBytes = (filename: string, bytes: Buffer) => {
-  expect(fs.readFileSync(filename)).toEqual(bytes);
+  expectBytesEqual(fs.readFileSync(filename), bytes, filename);
 };
 
 export const readText = (filename: string) => fs.readFileSync(filename, "utf8");

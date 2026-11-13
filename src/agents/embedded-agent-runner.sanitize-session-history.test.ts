@@ -555,9 +555,13 @@ describe("sanitizeSessionHistory", () => {
     expect(assistantContent(sanitized)).toEqual([text("Pong")]);
     expect(roles(sanitized)).toEqual(["user", "assistant", "user", "user"]);
     expect(JSON.stringify(sanitized)).not.toContain("assistant copied inbound metadata omitted");
-    const validated = await validateAnthropic(sanitized);
-    expect(roles(validated)).toEqual(["user", "assistant", "user"]);
-    expect((validated[2] as UserMessage).content).toEqual([text("First"), text("Second")]);
+    // Every route keeps runtime context append-only, so the Messages API keeps both user turns.
+    expect(roles(await validateAnthropic(sanitized))).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "user",
+    ]);
   });
 
   it("strips completed Qwen reasoning but preserves the current tool-call continuation", async () => {

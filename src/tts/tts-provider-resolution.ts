@@ -15,13 +15,14 @@ import {
   listSpeechProviders,
   normalizeSpeechProviderId,
 } from "./provider-registry.js";
-import type { SpeechProviderConfig } from "./provider-types.js";
 import { withSpeakerSelectionCompat } from "./speaker.js";
+import type { SpeechProviderConfig } from "./tts-runtime-types.js";
 import {
   DEFAULT_TTS_TIMEOUT_MS,
   asProviderConfig,
   normalizeConfiguredSpeechProviderId,
   readTtsPrefs as readPrefs,
+  readTtsPrefsAsync,
   resolveTtsPersonaFromPrefs,
   type ResolvedTtsConfig,
   type TtsProviderPreference,
@@ -354,9 +355,14 @@ export async function resolveTtsProviderAsync(
   config: ResolvedTtsConfig,
   prefsPath: string,
   registry: TtsProviderRegistry = defaultProviderRegistry,
-  prefs = readPrefs(prefsPath),
+  prefs?: Awaited<ReturnType<typeof readTtsPrefsAsync>>,
 ): Promise<TtsProvider> {
-  const preferred = resolvePreferredTtsProvider(config, prefsPath, registry, prefs);
+  const preferred = resolvePreferredTtsProvider(
+    config,
+    prefsPath,
+    registry,
+    prefs ?? (await readTtsPrefsAsync(prefsPath)),
+  );
   if (preferred) {
     return preferred;
   }

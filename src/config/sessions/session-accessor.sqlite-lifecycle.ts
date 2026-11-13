@@ -199,6 +199,7 @@ async function resetSessionEntryLifecycleForMaintenance(
                 target: params.target,
                 prepared: targetSnapshot,
                 nextEntry,
+                creationOperation: params.creationOperation,
                 resetBoundary: params.resetBoundary,
               });
               recordCommit(transactionDb);

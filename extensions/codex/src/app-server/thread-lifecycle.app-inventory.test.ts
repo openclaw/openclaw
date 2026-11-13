@@ -209,7 +209,7 @@ describe("Codex app inventory across physical process restart", () => {
             return { data: [], errors: [] };
           }
           if (method === "config/read") {
-            return { config: currentConfig, layers: [] };
+            return { config: currentConfig, origins: {}, layers: [] };
           }
           if (method === "config/batchWrite") {
             throw new Error("App admission must not mutate saved native settings");

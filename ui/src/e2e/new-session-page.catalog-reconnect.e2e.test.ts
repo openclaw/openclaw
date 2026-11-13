@@ -111,6 +111,7 @@ suite.define(() => {
     ).at(0);
     expect(catalogRequest?.params).toEqual({ agentId: "roboclaw", metadataOnly: true });
     await page.locator('[data-chat-model-select="true"]').click();
+    await page.locator('[data-chat-model-provider-toggle="target:cliAgents"]').click();
     const cliGroup = page.locator('[data-chat-model-target-group="cliAgents"]');
     await expect.poll(() => cliGroup.isVisible()).toBe(true);
     await pollLocatorText(cliGroup).toContain("Claude Code");
@@ -156,6 +157,7 @@ suite.define(() => {
       )
       .toMatchObject({ params: { agentId: "main", metadataOnly: true } });
     await page.locator('[data-chat-model-select="true"]').click();
+    await page.locator('[data-chat-model-provider-toggle="target:cliAgents"]').click();
     const cliGroup = page.locator('[data-chat-model-target-group="cliAgents"]');
     await expect.poll(() => cliGroup.isVisible()).toBe(true);
     await pollLocatorText(cliGroup).toContain("CLI agents");
@@ -356,7 +358,7 @@ suite.define(() => {
     await page.locator(".new-session-page__message").fill("keep this draft");
     await button(page, "Start in terminal").click();
     await expect
-      .poll(() => page.locator(".new-session-page__alert-message").textContent())
+      .poll(() => page.locator(".new-session-page__alert .callout__content").textContent())
       .toBe(serverMessage);
     expect(await page.locator(".new-session-page__message").inputValue()).toBe("keep this draft");
     expect(await page.locator(".new-session-page__scroll").getAttribute("aria-busy")).toBe("false");

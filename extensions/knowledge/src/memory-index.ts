@@ -1,4 +1,6 @@
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { LoadedRecord } from "./model.js";
+import type { GateEntry } from "./recall-gate.js";
 
 /** Character budget for the rendered standing index (about 1k tokens). */
 const MEMORY_INDEX_MAX_CHARS = 4_000;
@@ -46,7 +48,7 @@ export function promptLabel(value: unknown, max: number): string | null {
   if (!flat || MARKUP.test(flat) || INSTRUCTION_LIKE.test(flat)) {
     return null;
   }
-  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
+  return flat.length > max ? `${truncateUtf16Safe(flat, max - 1).trimEnd()}…` : flat;
 }
 
 type Page = {
@@ -164,6 +166,31 @@ function collect(records: readonly LoadedRecord[], asOf: number) {
     }
   }
   return { pages: [...pages.values()], unfiled, claims, relationships };
+}
+
+/** Every indexable page as a recall-gate entry, most connected first. Uses the
+ * same labels as the standing index; a title that reads like an instruction or
+ * carries markup is left out. */
+export function buildGateEntries(records: readonly LoadedRecord[], asOf: number): GateEntry[] {
+  const weight = (p: Page) => (TYPE_WEIGHT[p.record.type] ?? 1) * Math.log2(2 + p.links);
+  return collect(records, asOf)
+    .pages.toSorted((a, b) => weight(b) - weight(a) || a.record.id.localeCompare(b.record.id))
+    .flatMap(({ record }) => {
+      const label = promptLabel(record.title, TITLE_MAX);
+      if (!label) {
+        return [];
+      }
+      const key = handle(record);
+      const aka = key && key !== record.title ? ` [aka ${key}]` : "";
+      return [
+        {
+          id: record.id,
+          line: `${record.type}: ${label}${aka}`,
+          label,
+          ...(key ? { handle: key } : {}),
+        },
+      ];
+    });
 }
 
 /** Deterministic standing index of an owner-private vault as of `asOf` (ms).

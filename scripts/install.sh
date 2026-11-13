@@ -21,6 +21,10 @@ fi
 
 set -euo pipefail
 
+# Distros with user private groups (Ubuntu, Fedora) default to umask 002; the
+# installed runtime must not be group-writable or owned-path checks refuse it.
+umask go-w
+
 # BEGIN GENERATED UPDATE NETWORK BUDGET
 # Source: src/infra/update-network-budget.ts; regenerate: node scripts/generate-update-network-budget.mjs
 UPDATE_NETWORK_TIMEOUT_SECONDS=300
@@ -77,7 +81,7 @@ NODE_24_MIN_MINOR=16
 NODE_24_MIN_PATCH=0
 NODE_26_MIN_MINOR=1
 NODE_26_MIN_PATCH=0
-NODE_SUPPORTED_VERSION_LABEL="24.22.1+ or 26.12.1+"
+NODE_SUPPORTED_VERSION_LABEL="24.16.0+ on 24.x or 26.1.0+"
 
 ORIGINAL_PATH="${PATH:-}"
 
@@ -1270,7 +1274,7 @@ Options:
   --bun-path <absolute path>          Use an existing OpenClaw Bun fork executable
   --beta                               Use beta if available, else latest
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw)
-  --no-git-update                      Skip git pull for existing checkout
+  --no-git-update                     Skip rebasing local main (Git fetches can still occur)
   --no-onboard                          Skip onboarding (non-interactive)
   --no-prompt                           Disable prompts (required in CI/automation)
   --verify                              Run a post-install smoke verify
@@ -1595,8 +1599,8 @@ node_version_is_supported() {
     node_version_components_are_supported "$major" "$minor" "$patch"
 }
 
-# Fallback covers latest and extended-stable until both defaults publish relaxed engines.
-NODE_PACKAGE_ENGINE=">=24.22.1 <25 || >=26.12.1"
+# Unknown package metadata must not trigger a download for a recommendation alone.
+NODE_PACKAGE_ENGINE=">=24.16.0 <25 || >=26.1.0"
 
 node_components_satisfy_package_engine() {
     local major="$1" minor="$2" patch="$3" range="$4"
@@ -1987,10 +1991,6 @@ ensure_macos_default_node_active() {
         return 0
     fi
 
-    local active_path active_version
-    active_path="$(command -v node 2>/dev/null || echo "not found")"
-    active_version="$(node -v 2>/dev/null || echo "missing")"
-
     if [[ -z "$brew_node_prefix" || ! -x "${brew_node_prefix}/bin/node" ]]; then
         ui_error "Homebrew ${NODE_BREW_FORMULA} is not installed on disk"
         echo "The previous 'brew install' step appears to have failed."
@@ -1998,9 +1998,9 @@ ensure_macos_default_node_active() {
         return 1
     fi
 
-    ui_error "Node.js v${NODE_DEFAULT_MAJOR} was installed but this shell is using ${active_version} (${active_path})"
-    echo "Add this to your shell profile and restart shell:"
-    echo "  export PATH=\"${brew_node_prefix}/bin:\$PATH\""
+    # Homebrew's node is first on PATH here, so a rejected runtime is a stale keg, not a shadowing one.
+    ui_error "Homebrew ${NODE_BREW_FORMULA} $(node -v 2>/dev/null || echo "missing") does not meet OpenClaw's Node.js requirement (${NODE_PACKAGE_ENGINE})"
+    echo "Run 'brew update && brew upgrade ${NODE_BREW_FORMULA}', then rerun the installer."
     return 1
 }
 
@@ -2128,6 +2128,7 @@ check_node() {
         NODE_VERSION="$(node_major_version || true)"
         if node_binary_is_supported node; then
             ui_success "Node.js v$(node -v | cut -d'v' -f2) found"
+            warn_node_security_patch "$(node -v)"
             print_active_node_paths || true
             return 0
         else
@@ -2716,12 +2717,13 @@ warn_shell_path_missing_dir() {
         managed_node_bin=""
         managed_node_home_form=""
     fi
-    local shell_name="${SHELL:-}" quoted_dir fish_dir
+    local shell_name="${SHELL:-}" quoted_dir fish_dir quote_escape="'\\''"
     shell_name="${shell_name##*/}"
     # Keep path bytes literal, including history expansion in interactive Bash.
     quoted_dir="${managed_node_bin:-$dir}"
     fish_dir="$quoted_dir"
-    quoted_dir="${quoted_dir//\'/\'\\\'\'}"
+    # Bash 3.2 reinterprets inline quote escapes in pattern replacements.
+    quoted_dir="${quoted_dir//\'/$quote_escape}"
     quoted_dir="'$quoted_dir'"
     fish_dir="${fish_dir//\\/\\\\}"
     fish_dir="${fish_dir//\"/\\\"}"

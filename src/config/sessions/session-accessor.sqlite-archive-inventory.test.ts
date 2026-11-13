@@ -1,7 +1,16 @@
+import fs from "node:fs";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
-import { listTranscriptArchivesFromDatabase } from "./session-accessor.sqlite-archive-read.js";
+import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
+import {
+  listTranscriptArchiveIdentitiesFromDatabase,
+  listTranscriptArchivesFromDatabase,
+} from "./session-accessor.sqlite-archive-read.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SQLite archive inventory", () => {
   let db: DatabaseSync;
@@ -87,4 +96,49 @@ describe("SQLite archive inventory", () => {
       expect(read("main")).toEqual(main);
     },
   );
+
+  // /proc/self/io counts every pread SQLite issues, including page-cache hits.
+  it.runIf(fs.existsSync("/proc/self/io"))("lists usage identities without reading blobs", () => {
+    const file = path.join(tempDirs.make("openclaw-archive-inventory-"), "agent.sqlite");
+    const writer = new DatabaseSync(file);
+    ensureSessionTranscriptArchiveSchema(writer);
+    const names = Array.from({ length: 64 }, (_, index) => `s${index}.jsonl.deleted.zst`);
+    const insert = writer.prepare(
+      `INSERT INTO session_transcript_archives (session_id, generation, session_key, reason,
+         encoding, archive_blob, archive_sha256, archive_name, created_at)
+       VALUES (?, 'g', ?, 'deleted', 'zstd', ?, ?, ?, ?)`,
+    );
+    names.forEach((name, index) =>
+      insert.run(
+        `s${index}`,
+        `agent:main:s${index}`,
+        new Uint8Array(256 * 1024),
+        "0".repeat(64),
+        name,
+        index,
+      ),
+    );
+    writer.close();
+    const reader = new DatabaseSync(file, { readOnly: true });
+    const readBytes = () =>
+      Number(/^rchar: (\d+)$/m.exec(fs.readFileSync("/proc/self/io", "utf8"))![1]);
+    try {
+      const before = readBytes();
+      const archives = listTranscriptArchiveIdentitiesFromDatabase(
+        { db: reader, agentId: "main" },
+        names,
+      );
+      expect(readBytes() - before).toBeLessThan((names.length * 256 * 1024) / 32);
+      expect(archives).toContainEqual({
+        archiveName: names[3],
+        sessionId: "s3",
+        sessionKey: "agent:main:s3",
+        agentId: "main",
+      });
+      expect(archives).toHaveLength(names.length);
+    } finally {
+      clearNodeSqliteKyselyCacheForDatabase(reader);
+      reader.close();
+    }
+  });
 });

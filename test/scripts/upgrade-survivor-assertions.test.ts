@@ -32,6 +32,51 @@ const testBashExecPath = process.platform === "darwin" ? "/bin/bash" : "bash";
 
 const ASSERTIONS_PATH = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
 
+it.each(["(params) {", "(e) {", "(e){"])(
+  "injects the upgrade deadline into a built plugin owner %s",
+  (signature) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-deadline-"));
+    try {
+      const dist = join(root, "dist");
+      mkdirSync(dist);
+      writeFileSync(
+        join(dist, "update-command-plugins-fixture.mjs"),
+        `export async function updatePluginsAfterCoreUpdate${signature} return "uninterrupted"; }`,
+      );
+      const error = "Update finalization timed out in plugins after 15000ms";
+      writeFileSync(
+        join(dist, "writer.mjs"),
+        `function mutateConfigFileWithRetry() { throw new Error(${JSON.stringify(error)}); }
+export { mutateConfigFileWithRetry as write };`,
+      );
+      execFileSync(testNodeExecPath, [
+        "scripts/e2e/lib/upgrade-survivor/abandoned-update.mjs",
+        "deadline-hook",
+        root,
+        root,
+      ]);
+      const driver = join(root, "driver.mjs");
+      writeFileSync(
+        driver,
+        `import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+globalThis.setTimeout = callback => queueMicrotask(callback);
+await import(pathToFileURL(${JSON.stringify(join(root, "repair-deadline-hook.mjs"))}).href);
+const { updatePluginsAfterCoreUpdate } = await import(pathToFileURL(${JSON.stringify(join(dist, "update-command-plugins-fixture.mjs"))}).href);
+await assert.rejects(updatePluginsAfterCoreUpdate({ configWriteOptions: {} }), { message: ${JSON.stringify(error)} });`,
+      );
+      execFileSync(testNodeExecPath, [driver, "update", "repair"]);
+      expect(JSON.parse(readFileSync(join(root, "deadline-write-refused.json"), "utf8"))).toEqual({
+        phase: "plugins",
+        deadlineMs: 15_000,
+        refused: true,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
+
 function selectFrozenUpgradeOracle(
   root: string,
   version: string,
@@ -753,12 +798,13 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
     writeSharedRuntimeCaches(stateDir);
     writeJson(join(matrixInstallDir, "package.json"), {
       name: "@openclaw/matrix",
+      version: "2026.11.5-beta.1",
     });
     writeJson(join(stateDir, "plugins", "installs.json"), {
       installRecords: {
         matrix: {
           source: "clawhub",
-          spec: "clawhub:@openclaw/matrix",
+          spec: "clawhub:@openclaw/matrix@beta",
           installPath: matrixInstallDir,
           clawhubPackage: "@openclaw/matrix",
           clawhubChannel: "official",
@@ -772,16 +818,21 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
       acceptedIntents: ["configured-plugin-installs"],
     });
 
-    execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "assert-state"], {
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_TEST_WORKSPACE_DIR: workspace,
-        OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
-        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "configured-plugin-installs",
-      },
-      stdio: "pipe",
-    });
+    for (const args of [
+      ["assert-baseline-plugin", "2026.11.5-beta.1", "matrix", "beta"],
+      ["assert-state"],
+    ]) {
+      execFileSync(testNodeExecPath, [ASSERTIONS_PATH, ...args], {
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+          OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "configured-plugin-installs",
+        },
+        stdio: "pipe",
+      });
+    }
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
@@ -1333,9 +1384,9 @@ publishDiagnostics(artifacts, destination, value => value, "passed");`,
             writeFileSync(
               join(binDir, "openclaw"),
               `#!/usr/bin/env node
-const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 assert.deepEqual(process.argv.slice(2), ["transcripts", "path", "2026-07-01/design-review", "--dir"]);
 const root = process.env.OPENCLAW_STATE_DIR;
 const sessionDir = path.join(root, "transcripts", "2026-07-01", "design-review");
@@ -1362,12 +1413,6 @@ process.stdout.write(sessionDir + "\\n");
       }),
     ) as string[];
 
-    expect(scenarios).toContain("base");
-    expect(scenarios).toContain("codex-allowlist-survival");
-    expect(scenarios).toContain("mobile-pairing-reconnect");
-    expect(scenarios).toContain("acpx-openclaw-tools-bridge");
-    expect(scenarios).toContain("prerelease-plugin-registry");
-    expect(scenarios).toContain("sqlite-volume");
     expect(scenarios).toEqual(UPGRADE_SURVIVOR_ASSERTION_SCENARIOS);
     expect(new Set(scenarios).size).toBe(scenarios.length);
   });
@@ -1387,6 +1432,28 @@ process.stdout.write(sessionDir + "\\n");
     );
     expect(() => run({ mode: "tools", codeTimeoutMs: 5000 }, "baseline")).toThrow(/legacy timeout/);
     expect(() => run({ mode: "tools" })).not.toThrow();
+  });
+
+  it("requires the pre-split skill_workshop allowlist to gain skill_library once", () => {
+    const run = (config: unknown, stage: "baseline" | "survival" = "survival") =>
+      assertConfig({
+        acceptedIntents: ["skill-library-split"],
+        baselineVersion: "2026.10.9",
+        config,
+        scenario: "base",
+        stage,
+      });
+    const marker = { migrations: { skillLibraryToolSplit: true } };
+    expect(() => run({ tools: { allow: ["read", "skill_workshop"] } }, "baseline")).not.toThrow();
+    expect(() =>
+      run({ meta: marker, tools: { allow: ["read", "skill_workshop", "skill_library"] } }),
+    ).not.toThrow();
+    expect(() => run({ meta: marker, tools: { allow: ["read", "skill_workshop"] } })).toThrow(
+      /exactly once/,
+    );
+    expect(() => run({ tools: { allow: ["read", "skill_workshop", "skill_library"] } })).toThrow(
+      /marker/,
+    );
   });
 
   it("allows token rotation and requires each reconnect to use the newest stored token", () => {
@@ -1990,7 +2057,7 @@ process.stdout.write(sessionDir + "\\n");
         writeFileSync(
           join(bin, "openclaw"),
           `#!${testNodeExecPath}
-const fs = require("node:fs");
+import fs from "node:fs";
 const method = process.argv[4];
 const params = JSON.parse(process.argv[process.argv.indexOf("--params") + 1]);
 const outcome = process.env.PROBE_OUTCOME;
@@ -2104,7 +2171,8 @@ process.stdout.write(JSON.stringify(result));
     ).toThrow(/retained retired sessionFile metadata/);
   });
 
-  it("rejects ClawHub npm-pack installs outside the managed extensions root", () => {
+  it("accepts ClawHub npm-pack installs only inside the managed extensions root", () => {
+    expect(() => assertConfiguredPluginState()).not.toThrow();
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-outside-"));
     try {
       expect(() =>

@@ -192,9 +192,11 @@ These features are disabled by default. Configure them under
   as failed. OpenClaw does not resend it because the earlier process may already
   have reached the channel.
 - Live transcript sends both sides' final lines to the requester in batches,
-  at most once per `live.minIntervalMs` (default 5000).
-  Each batch's position is saved before it is sent, so a call that survives a
-  restart continues with new lines only and never repeats an earlier batch.
+  at most once per `live.minIntervalMs` (default 5000). Within a running call,
+  each final entry is batched once, including caller lines finalized after a reply.
+  Queued lines follow transcript timestamp order. Each batch's position is saved
+  before sending. Restart recovery still uses that position: a late line inserted
+  before it across a restart may be skipped, or an earlier reply repeated.
 - With realtime voice enabled and `inboundPolicy: "allowlist"`, callbacks from a
   number called within `callbacks.windowMinutes` (default 60) are also accepted.
   They are linked to the original outbound call and take a message for the owner

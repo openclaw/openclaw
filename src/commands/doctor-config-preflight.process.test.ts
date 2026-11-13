@@ -626,7 +626,8 @@ describe("Doctor repair followed by gateway readiness", () => {
         const backupNames = fs
           .readdirSync(path.dirname(databasePath))
           .filter(
-            (name) => name.startsWith("openclaw.sqlite.doctor-cron-") && name.endsWith(".bak"),
+            (name) =>
+              name.startsWith("openclaw.sqlite.pre-startup-migration-") && name.endsWith(".bak"),
           );
         expect(backupNames.length).toBeGreaterThan(0);
         readDatabase(

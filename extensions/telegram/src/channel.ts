@@ -94,7 +94,7 @@ import { createTelegramOutboundAdapter, resolveTelegramSend } from "./outbound-a
 import { parseTelegramThreadId } from "./outbound-params.js";
 import type { TelegramProbe } from "./probe.js";
 import * as probeModule from "./probe.js";
-import { isTelegramTextOnlyChannelData } from "./prompt-context-projection.js";
+import { telegramDurableFinalPolicy } from "./prompt-context-projection.js";
 import { resolveTelegramStartupProbeTimeoutMs } from "./request-timeouts.js";
 import { getTelegramRuntime } from "./runtime.js";
 import { telegramSecurityAdapter } from "./security.js";
@@ -109,7 +109,7 @@ import { telegramSetupWizard } from "./setup-surface.js";
 import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { normalizeTelegramChatId, parseTelegramTarget } from "./targets.js";
-import { telegramThreadBindingLifecycle } from "./thread-bindings-channel.js";
+import { telegramThreadBindingSupport } from "./thread-bindings-channel.js";
 import { buildTelegramThreadingToolContext } from "./threading-tool-context.js";
 import { resolveTelegramToken } from "./token.js";
 import {
@@ -205,7 +205,7 @@ const telegramMessageAdapter = createChannelMessageAdapterFromOutbound<OpenClawC
 });
 telegramMessageAdapter.durableFinal = {
   ...telegramMessageAdapter.durableFinal,
-  isTextOnlyChannelData: isTelegramTextOnlyChannelData,
+  ...telegramDurableFinalPolicy,
 };
 
 function normalizeTelegramAcpConversationId(conversationId: string, parentConversationId?: string) {
@@ -425,7 +425,7 @@ export const telegramPlugin = createChatChannelPlugin({
         const entryTarget = parseTelegramTarget(entryTo);
         return entryTarget.chatId !== requesterTarget.chatId;
       },
-      ...telegramThreadBindingLifecycle,
+      ...telegramThreadBindingSupport,
     },
     groups: {
       resolveRequireMention: resolveTelegramGroupRequireMention,

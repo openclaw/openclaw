@@ -9,23 +9,27 @@ import {
 
 type SearchMatch = { row: ChatModelSearchRow; rank: number };
 
+const normalizeSearch = (value: string) => value.toLocaleLowerCase().normalize("NFC");
+
 function modelMatchRank(row: ChatModelSearchRow, query: string): number | null {
-  if (row.name.startsWith(query)) {
+  const name = normalizeSearch(row.name);
+  if (name.startsWith(query)) {
     return 0;
   }
-  if (row.name.includes(query)) {
+  if (name.includes(query)) {
     return 1;
   }
-  if (row.keywords?.includes(query)) {
+  if (row.keywords && normalizeSearch(row.keywords).includes(query)) {
     return 2;
   }
-  if (row.providerLabel.startsWith(query)) {
+  const providerLabel = normalizeSearch(row.providerLabel);
+  if (providerLabel.startsWith(query)) {
     return 3;
   }
-  if (row.providerLabel.includes(query)) {
+  if (providerLabel.includes(query)) {
     return 4;
   }
-  return row.reference.toLocaleLowerCase().includes(query) ? 5 : null;
+  return normalizeSearch(row.reference).includes(query) ? 5 : null;
 }
 
 /** The retained lazy panel owns ranking and disclosure; input/shortcut admission stays eager. */
@@ -42,31 +46,31 @@ export function createChatModelSearchView(
   // Selection resets provider defaults; catalog refreshes retain each surviving choice.
   const [disclosure, updateDisclosure] = createStore<{
     active: string | undefined;
-    groups: Record<string, { open?: boolean; more: boolean }>;
+    selected?: string;
+    groups: Record<string, { more: boolean }>;
   }>(
     (draft) => {
       const current = scope();
       const selectionChanged = draft.active !== current.active;
       draft.active = current.active;
+      if (selectionChanged || !current.providers.includes(draft.selected ?? "")) {
+        draft.selected = current.active ?? current.providers[0];
+      }
       for (const provider of Object.keys(draft.groups)) {
         if (!current.providers.includes(provider)) {
           delete draft.groups[provider];
         }
       }
       for (const provider of current.providers) {
-        const group = (draft.groups[provider] ??= { more: false });
-        if (selectionChanged) {
-          delete group.open;
-        }
+        draft.groups[provider] ??= { more: false };
       }
     },
     { active: undefined, groups: {} },
   );
-  const providerOpen = (provider: string) =>
-    disclosure.groups[provider]?.open ?? disclosure.active === provider;
+  const providerOpen = (provider: string) => disclosure.selected === provider;
   const matches = createMemo(
     () => {
-      const term = query().trim().toLocaleLowerCase();
+      const term = normalizeSearch(query().trim());
       const buckets: ChatModelSearchRow[][] = [[], [], [], [], [], []];
       for (const row of read().rows) {
         const score = term
@@ -151,9 +155,8 @@ export function createChatModelSearchView(
       return rowStates[key] ?? { hidden: true, rank: undefined, shortcut: undefined };
     },
     toggleProvider(provider: string) {
-      const next = !providerOpen(provider);
       updateDisclosure((draft) => {
-        draft.groups[provider]!.open = next;
+        draft.selected = provider;
       });
     },
     expandMore(provider: string, event: MouseEvent) {
@@ -184,16 +187,6 @@ export function createChatModelSearchView(
   };
   search.bindView(view);
   return view;
-}
-
-export function handleModelOptionMouseEnter(event: MouseEvent): void {
-  const state = chatModelSearchState(event.currentTarget);
-  if (event.currentTarget instanceof HTMLButtonElement) {
-    const key = event.currentTarget.dataset.chatModelKey;
-    if (key) {
-      state?.view?.highlight(key);
-    }
-  }
 }
 
 export function updateModelSearch(input: HTMLInputElement): void {

@@ -6,53 +6,57 @@ import type {
   WorkerEnvironmentStartStatus,
 } from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { SecretRef } from "../config/types.secrets.js";
-import type { ImageGenerationProvider } from "../image-generation/types.js";
-import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
-import type { MusicGenerationProvider } from "../music-generation/types.js";
+import type { ImageGenerationProvider } from "../image-generation/provider-types.js";
+import type { MediaUnderstandingProvider } from "../media-understanding/provider-types.js";
+import type { MusicGenerationProvider } from "../music-generation/provider-types.js";
 import type { SpawnResult } from "../process/exec.js";
 import type {
-  RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderConfiguredContext,
-  RealtimeTranscriptionProviderId,
   RealtimeTranscriptionProviderResolveConfigContext,
-  RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCreateRequest,
+} from "../realtime-transcription/provider-contexts.js";
+import type {
+  RealtimeTranscriptionProviderConfig,
+  RealtimeTranscriptionProviderId,
+  RealtimeTranscriptionSession,
 } from "../realtime-transcription/provider-types.js";
+import type {
+  RealtimeVoiceBrowserSessionCreateRequest,
+  RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceProviderConfiguredContext,
+  RealtimeVoiceProviderResolveConfigContext,
+} from "../talk/provider-contexts.js";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBrowserSession,
-  RealtimeVoiceBrowserSessionCreateRequest,
-  RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
-  RealtimeVoiceProviderConfiguredContext,
   RealtimeVoiceProviderId,
-  RealtimeVoiceProviderResolveConfigContext,
 } from "../talk/provider-types.js";
 import type { TranscriptSourceProvider as TranscriptsSourceProviderCapability } from "../transcripts/provider-types.js";
 import type {
   SpeechDirectiveTokenParseContext,
-  SpeechDirectiveTokenParseResult,
   SpeechProviderConfiguredContext,
-  SpeechProviderConfig,
   SpeechProviderResolveConfigContext,
   SpeechProviderResolveTalkConfigContext,
   SpeechProviderResolveTalkOverridesContext,
   SpeechListVoicesRequest,
   SpeechProviderPrepareSynthesisContext,
-  SpeechProviderPreparedSynthesis,
-  SpeechProviderId,
   SpeechSynthesisRequest,
   SpeechSynthesisStreamRequest,
   SpeechTelephonySynthesisRequest,
-  SpeechVoiceOption,
 } from "../tts/provider-types.js";
 import type {
+  SpeechDirectiveTokenParseResult,
+  SpeechProviderConfig,
+  SpeechProviderPreparedSynthesis,
+  SpeechProviderId,
+  SpeechVoiceOption,
   SpeechSynthesisResult,
   SpeechSynthesisStreamResult,
   SpeechTelephonySynthesisResult,
 } from "../tts/tts-runtime-types.js";
-import type { VideoGenerationProvider } from "../video-generation/types.js";
+import type { VideoGenerationProvider } from "../video-generation/provider-types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 import type {
   WorkerRetentionObservation,
@@ -320,6 +324,17 @@ export type WorkerRecipePreparation = {
   ignoredPropertiesNote?: string;
   note?: string;
   phaseDurationsMs?: {
+    retainedGit?: number;
+    retainedManifest?: number;
+    inspection?: number;
+    seedPreparation?: number;
+    seedTransfer?: number;
+    seedVerification?: number;
+    seedCheckout?: number;
+    seedManifest?: number;
+    gitUpdate?: number;
+    toolchainPreparation?: number;
+    preparedManifest?: number;
     onCreate?: number;
     updateContent?: number;
     detectedInstall?: number;
@@ -442,8 +457,9 @@ export type WorkerProvider = {
         /** Verify an already enrolled allocation without transferring, running setup, or capturing it. */
         inspectPreparedWorkspace?: (transport: {
           runScript: (script: string, signal: AbortSignal) => Promise<string>;
+          recordRecipePreparation?: (value: WorkerRecipePreparation) => Promise<void>;
         }) => Promise<void>;
-        /** Bound to this provision attempt; retained callbacks reject after it closes. */
+        /** Bound to this preparation attempt; retained callbacks reject after it closes. */
         prepare: (transport: {
           runScript: (script: string, signal: AbortSignal) => Promise<string>;
           /** Render using this provider command's remaining budget before repository code runs. */
@@ -474,6 +490,15 @@ export type WorkerProvider = {
       };
     },
   ) => Promise<WorkerLease>;
+  /**
+   * Refresh an available, unbound enrolled worker through the same project preparation owner.
+   * Never allocate, capture, or enroll. Honor project authority and settle commands on abort.
+   * Core publishes the refreshed prepared workspace before binding it to a session.
+   */
+  refreshPreparedProject?: (
+    lease: { leaseId: string; profile: WorkerProfile },
+    project: NonNullable<NonNullable<Parameters<WorkerProvider["provision"]>[2]>["project"]>,
+  ) => Promise<void>;
   /** Provider-owned transport for repository lifecycle commands on an enrolled lease. */
   runSetupCommand?: (
     lease: { leaseId: string; profile: WorkerProfile },
@@ -486,6 +511,23 @@ export type WorkerProvider = {
       signal?: AbortSignal;
     },
   ) => Promise<SpawnResult | undefined>;
+  /**
+   * Restart only the same enrolled node on this dedicated lease after proving its
+   * process is absent. A live process owns reconnect. Never allocate, install, pair,
+   * change repository contents, or replay input. Settle commands on cancellation.
+   */
+  resumeNode?: (request: {
+    leaseId: string;
+    profile: WorkerProfile;
+    deviceId: string;
+    nodeBootstrapSha256: string;
+    openclawVersion: string;
+    /** Saved preparation target, not the profile's current default. */
+    platform: string;
+    signal: AbortSignal;
+    /** Required live owner authority; call after awaits and immediately before effects. */
+    assertCurrent: () => void;
+  }) => Promise<void>;
   /**
    * Prepare without allocating, renewing, enrolling, or changing a provider resource. The
    * returned operation carries prepared facts; core records allocation intent before calling it.

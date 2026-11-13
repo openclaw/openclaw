@@ -227,9 +227,9 @@ export class PlaywrightDiffScreenshotter {
             const maxScaleForPixels = Math.sqrt(params.image.maxPixels / (cssWidth * cssHeight));
             const reducedScale = Math.max(
               1,
-              Math.round(Math.min(currentScale, maxScaleForPixels) * 100) / 100,
+              Math.floor(Math.min(currentScale, maxScaleForPixels) * 100) / 100,
             );
-            if (reducedScale < currentScale - 0.01 && attempt < maxRetries) {
+            if (reducedScale < currentScale && attempt < maxRetries) {
               await page.close().catch(() => {});
               page = undefined;
               currentScale = reducedScale;

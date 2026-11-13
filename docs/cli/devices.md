@@ -10,6 +10,19 @@ title: "Devices"
 
 Manage device pairing requests and device-scoped tokens.
 
+## Browser-code pairing
+
+A browser's **Cancel** action withdraws its pending pairing-code request on the
+Gateway. A withdrawn code cannot be approved. If approval has already completed,
+Cancel reports that outcome instead; it does not revoke the paired device. If the
+request record has expired or is already absent, Cancel cannot confirm a withdrawal.
+
+Browser-code pairing does not verify a person's identity, so it is unavailable
+when `gateway.roles` is configured. Use the Gateway's identity-aware sign-in,
+or ask an administrator which sign-in method is supported. Enabling roles while
+a code is pending also prevents approval of that code. This restriction applies
+only to browser-code pairing, not other sign-in or device-pairing methods.
+
 ## Doctor pairing findings
 
 A pending first-time request or a request for more access is an operator decision,
@@ -49,6 +62,8 @@ openclaw devices list --json
 For a pending request on an already-paired device, the output shows requested access next to the device's current approved access, so scope/role upgrades are visible instead of looking like a lost pairing.
 
 Paired device display names use this precedence: operator label (`operatorLabel` from `devices rename`), then client `displayName`, then `clientId`, then `deviceId`. Node approval notices printed by `devices` commands use the operator label when one is set.
+
+Browsers that connect through [OpenClaw ID](/concepts/experimental-features#openclaw-id-remote-access) are marked `(OpenClaw ID)` (`managedBy: "openclaw-id"` in `--json`). Their access belongs to OpenClaw ID membership, so manage them on the **Access** page instead.
 
 ### `openclaw devices approve [requestId] [--latest]`
 
@@ -141,7 +156,7 @@ then `gateway.publicOrigin` precedes discovery for freshly provisioned workers.
 For other deployment prerequisites, see
 [Gateway deployments that cannot host nodes](/nodes/node-host#gateway-deployments-that-cannot-host-nodes).
 Plaintext LAN pairing can use a setup code directly instead of an HTTP join URL.
-See [Connect a machine](/cli/connect).
+See [Connect a device](/cli/connect).
 
 ### `openclaw devices remove <deviceId>`
 
@@ -220,6 +235,7 @@ A non-admin paired-device caller can revoke only its **own** device token. Revok
 - Removing a device or revoking its node token also clears node runtime state. A worker cleanup error does not keep affected connections authorized or open.
 - For operator tokens, the CLI first reads the pairing list, then requests pairing plus the target token's scopes (or explicit rotate scopes). If the target is not visible, it requests admin access for cross-device management. A narrowed token does not inherit a broader device approval baseline; the caller must already be authorized for the requested scopes.
 - For paired-device token sessions, cross-device management (`remove`, `rename`, `rotate`, `revoke`) is self-only unless the caller has `operator.admin`.
+- While OpenClaw ID is on, `remove` and `revoke` refuse a browser that connects through OpenClaw ID, including one that signed out: "This browser connects through OpenClaw ID. Manage access on the Access page." Removing it as a device would be undone by its next sign-in. Remove the person on the **Access** page, or your own owner browser under **Your devices** in the account menu, to end its access. `clear` keeps these browsers and reports how many it kept. Nodes, local browsers and every other pairing are unaffected. With OpenClaw ID off, these browsers are ordinary devices again.
 - Token rotation returns a new token (sensitive) — treat it like a secret.
 - If pairing scope is unavailable on local loopback and no explicit `--url` is passed, `list` can read local pairing state. Approval never writes around a running Gateway: use an authorized device or shared Gateway credentials, or stop the Gateway through its service owner and rerun the exact approval command. When the local Gateway is stopped, `list` reads the existing state and `approve` holds exclusive offline ownership through the write and cleanup. Explicit URLs and uncertain request outcomes never replay locally.
 

@@ -11,7 +11,6 @@ import { findOverlayParent } from "../../../components/overlay-lifecycle.ts";
 import { hasProviderBrandIcon } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
-import "../../../components/tooltip.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
@@ -186,22 +185,15 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
           aria-busy={params.triggerLoading ? "true" : "false"}
           aria-disabled={params.disabled ? "true" : "false"}
           aria-description={params.disabledReason}
-          title={params.disabledReason?.trim() || undefined}
         >
-          {state().modelToolsUnavailable ? (
-            <openclaw-tooltip prop:content={t("chat.modelControls.chatOnlyHelp")}>
-              <span class="chat-controls__model-capability-badge" aria-hidden="true">
-                <Icon name="alertTriangle" />
-                <span>{t("chat.modelControls.chatOnly")}</span>
-              </span>
-            </openclaw-tooltip>
-          ) : undefined}
           {!params.triggerLoading &&
           !params.triggerStatusLabel &&
           state().triggerModelOption &&
-          hasProviderBrandIcon(state().triggerModelOption!.provider) ? (
+          (state().triggerModelOption!.presentation ||
+            hasProviderBrandIcon(state().triggerModelOption!.provider)) ? (
             <ProviderBrandIcon
               provider={state().triggerModelOption!.provider}
+              presentation={state().triggerModelOption!.presentation}
               class="chat-controls__trigger-provider-icon"
             />
           ) : undefined}

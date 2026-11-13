@@ -65,7 +65,10 @@ const changes: SkillWorkshopChange[] = [
     createdAtMs: timestamp - 1000,
   },
 ];
-const config = { skills: { workshop: { autonomous: { mode: "auto" } } } };
+const config = {
+  plugins: { entries: { "skill-workshop": { config: { autonomous: { mode: "auto" } } } } },
+  meta: { migrations: { skillWorkshopPlugin: true } },
+};
 const methodResponses = {
   "agents.list": {
     agents: [
@@ -290,7 +293,9 @@ suite.define(() => {
       await page.getByRole("button", { name: "Off", exact: true }).click();
       const patch = await gateway.waitForRequest("config.patch");
       expect(patch.params).toMatchObject({
-        raw: JSON.stringify({ skills: { workshop: { autonomous: { mode: "off" } } } }),
+        raw: JSON.stringify({
+          plugins: { entries: { "skill-workshop": { config: { autonomous: { mode: "off" } } } } },
+        }),
         baseHash: "workshop-contract-config",
         note: "Disable Skill Workshop learning",
       });

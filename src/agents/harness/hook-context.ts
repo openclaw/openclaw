@@ -5,6 +5,7 @@ import {
   assertMemoryAudienceCurrent,
   assertMemoryAudienceSession,
 } from "../../plugins/memory-audience.js";
+import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
 
 /**
  * Only stable run/session/model facts are forwarded to plugin hooks; config remains a local
@@ -21,11 +22,30 @@ export type AgentHarnessHookContext = Omit<
   config?: OpenClawConfig;
 };
 
-export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHookAgentContext {
-  const { memoryAudience } = params;
-  if (memoryAudience) {
-    assertMemoryAudienceSession(memoryAudience, params.sessionKey);
+/**
+ * Bind a host-minted audience to its session and pair it with its currentness guard.
+ * The host derives the guard from the audience, so hooks never receive one without it.
+ * Every runner's hook context takes these fields from here, so the rule has one owner.
+ */
+export function buildAgentHookMemoryAudienceFields(
+  memoryAudience: MemoryAudience | undefined,
+  sessionKey: string | undefined,
+): Pick<PluginHookAgentContext, "memoryAudience" | "assertMemoryAudienceCurrent"> {
+  if (!memoryAudience) {
+    return {};
   }
+  assertMemoryAudienceSession(memoryAudience, sessionKey);
+  return {
+    memoryAudience,
+    assertMemoryAudienceCurrent: () => assertMemoryAudienceCurrent(memoryAudience),
+  };
+}
+
+export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHookAgentContext {
+  const memoryAudienceFields = buildAgentHookMemoryAudienceFields(
+    params.memoryAudience,
+    params.sessionKey,
+  );
   return {
     ...(params.runId ? { runId: params.runId } : {}),
     ...(params.trace ? { trace: params.trace } : {}),
@@ -33,13 +53,7 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-    // The host derives the audience guard from the audience, so hooks never receive one without it.
-    ...(memoryAudience
-      ? {
-          memoryAudience,
-          assertMemoryAudienceCurrent: () => assertMemoryAudienceCurrent(memoryAudience),
-        }
-      : {}),
+    ...memoryAudienceFields,
     ...(params.sandboxed !== undefined ? { sandboxed: params.sandboxed } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     ...(params.modelProviderId ? { modelProviderId: params.modelProviderId } : {}),
@@ -51,6 +65,14 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.channel ? { channel: params.channel } : {}),
     ...(params.trigger ? { trigger: params.trigger } : {}),
     ...(params.toolNames ? { toolNames: Object.freeze([...params.toolNames]) } : {}),
+    ...(params.completedTurn
+      ? {
+          completedTurn: Object.freeze({
+            sessionId: params.completedTurn.sessionId,
+            entryId: params.completedTurn.entryId,
+          }),
+        }
+      : {}),
     ...(params.inputProvenance ? { inputProvenance: params.inputProvenance } : {}),
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.contextTokenBudget ? { contextTokenBudget: params.contextTokenBudget } : {}),

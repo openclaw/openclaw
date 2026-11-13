@@ -17,8 +17,10 @@ import { prepareSessionGenerationFacts } from "../config/sessions/session-delive
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../gateway/operator-role-enforcement.js";
 import { resolveCreatorSandbox } from "../gateway/operator-role-policy.js";
 import { decodeGatewayOperatorRecoverySource } from "../gateway/operator-run-recovery-source.codec.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import { bindScheduledExecutionContext } from "./execution-context-registry.js";
 import {
@@ -120,7 +122,10 @@ export async function checkRequesterOwner(
         } catch {
           return false;
         }
-        return !current.gateway?.roles || requester.profileId === GATEWAY_OWNER_PROFILE_ID;
+        return (
+          !isNamedOperatorRoleEnforcementEnabled(current) ||
+          requester.profileId === GATEWAY_OWNER_PROFILE_ID
+        );
       });
     }
     case "unknown":
@@ -143,7 +148,8 @@ type ScheduledParentLink = Readonly<{
 export function scheduledParentLinkOf(job: CronStoredJob): ScheduledParentLink | undefined {
   if (job.operatorSource) {
     try {
-      return decodeGatewayOperatorRecoverySource(job.operatorSource.source);
+      const source = decodeGatewayOperatorRecoverySource(job.operatorSource.source);
+      return source.kind === "gateway" ? job.sourceConversation : source;
     } catch {
       return undefined;
     }
@@ -345,9 +351,7 @@ export async function admitScheduledOccurrence(
     return unadmittedScheduledOccurrence(error instanceof Error ? error.message : String(error));
   }
   const operatorSourceRequester =
-    !("error" in principal) &&
-    principal.kind === "parent" &&
-    principal.requester.kind === "operator-source";
+    params.trigger === "cron" && !("error" in principal) && job.operatorSource !== undefined;
   return {
     ...(pause ? { pause } : {}),
     ...(childParent ? { childParent } : {}),
@@ -366,7 +370,12 @@ export async function admitScheduledOccurrence(
             toolsAllow: run.toolsAllow,
           },
           parentRow,
-          operatorSourceRequester ? run.operatorAuthority !== undefined : requesterOwner?.owner,
+          operatorSourceRequester
+            ? run.operatorAuthority !== undefined &&
+                (job.operatorSource?.source.kind === "gateway"
+                  ? operatorScopeSatisfied("operator.admin", run.operatorAuthority.scopes)
+                  : run.operatorAuthority.openclawIdPrincipal?.kind !== "member")
+            : requesterOwner?.owner,
         );
         result = buildScheduledExecutionContext(job, facts);
       } catch (error) {

@@ -1,6 +1,8 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { pathForSession } from "../app-session-path-builder.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
@@ -213,6 +215,24 @@ suite.define(() => {
           await page.getByText(transcript, { exact: true }).waitFor();
           await gateway.waitForRequest("sessions.resolve");
           await gateway.waitForRequest("chat.startup");
+          if (outcome === "moved") {
+            await gateway.resolveDeferred("chat.startup", {
+              messages: [{ role: "assistant", content: transcript }],
+              sessionInfo: {
+                ...row,
+                displayName: "Live snapshot conversation",
+                label: "Live snapshot conversation",
+                updatedAt: 2,
+              },
+            });
+            await page
+              .locator(".chat-pane-cache__pane--active")
+              .getByText("Live snapshot conversation", { exact: true })
+              .filter({ visible: true })
+              .first()
+              .waitFor();
+            expect(new URL(page.url()).pathname).toBe(`/chat/main/${reference}`);
+          }
           if (captureUiProof) {
             await page.screenshot({ path: path.join(suite.artifactDir, `cached-${outcome}.png`) });
           }
@@ -237,21 +257,59 @@ suite.define(() => {
                     : {}),
                 };
           await gateway.setMethodResponse("sessions.resolve", resolution);
+          const preReleasePathname = new URL(page.url()).pathname;
           await gateway.resolveDeferred("sessions.resolve", resolution);
           if (outcome === "deleted") {
             await page.locator(".session-route-not-found").waitFor();
             expect(await page.getByText(transcript, { exact: true }).count()).toBe(0);
           } else if (outcome === "moved" || outcome === "mismatch") {
-            await page.waitForURL(
-              (url) =>
-                url.pathname.startsWith(`/chat/${movedAgent}/`) && !url.pathname.includes(id),
+            const targetPath = pathForSession(
+              "chat",
+              movedAgent,
+              movedKey,
+              new URL(suite.server.baseUrl).pathname,
+              { displayName: row.displayName },
             );
-            await page.waitForFunction((key) => {
-              const pane = document.querySelector(".chat-pane-cache__pane--visible");
-              return pane && Reflect.get(pane, "sessionKey") === key;
-            }, movedKey);
+            const routeFacts = (url: URL) => ({
+              expectedAgentPathMatches: url.pathname.startsWith(`/chat/${movedAgent}/`),
+              expectedCanonicalPathMatches: url.pathname === targetPath,
+              originalDashedIdPresent: url.pathname.includes(id),
+              matchesPreReleasePath: url.pathname === preReleasePathname,
+            });
+            let urlChecksUpTo32 = 0;
+            let lastUrlCheck: ReturnType<typeof routeFacts> | null = null;
+            try {
+              await page.waitForURL((url) => {
+                urlChecksUpTo32 = Math.min(urlChecksUpTo32 + 1, 32);
+                lastUrlCheck = routeFacts(url);
+                return url.pathname === targetPath;
+              });
+            } catch (error) {
+              recordControlUiE2eFailureFacts(page, {
+                snapshotRoute: {
+                  outcome,
+                  resolutionReleaseReturned: true,
+                  urlChecksUpTo32,
+                  lastUrlCheck,
+                  atFailure: routeFacts(new URL(page.url())),
+                },
+              });
+              throw error;
+            }
+            // Parked route presentations retain selected panes until their owner retires.
+            const paneSelector = '.chat-pane-cache__pane--active[aria-hidden="false"]:not([inert])';
+            await page.waitForFunction(
+              ({ key, selector }) =>
+                [...document.querySelectorAll(selector)].some(
+                  (pane) =>
+                    pane.checkVisibility({ visibilityProperty: true }) &&
+                    Reflect.get(pane, "sessionKey") === key,
+                ),
+              { key: movedKey, selector: paneSelector },
+            );
             await page
-              .locator(".chat-pane-cache__pane--visible")
+              .locator(paneSelector)
+              .filter({ visible: true })
               .getByText(transcript, { exact: true })
               .waitFor({ state: "hidden" });
           } else {

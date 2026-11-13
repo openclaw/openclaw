@@ -145,6 +145,47 @@ it.each(["directory", "file", "alias", "install-record"] as const)(
   },
 );
 
+it("repairs a package with normalized data without overwriting retained bytes", async () => {
+  const f = await fixture();
+  const manifest = {
+    name: "demo",
+    type: "module",
+    openclaw: { extensions: ["./index.mjs"] },
+    dependencies: { vendor: "1.0.0" },
+  };
+  await write(path.join(f.plugin, "package.json"), manifest);
+  await write(path.join(f.copiedPlugin, "package.json"), manifest);
+  const vendor = path.join(f.plugin, "node_modules", "vendor");
+  await writeTree(vendor, {
+    "package.json": { name: "vendor", type: "module", main: "value.js" },
+    "value.js": 'export default "sibling-ready";',
+  });
+  const assetRoot = path.join(f.root, "assets");
+  await writeTree(assetRoot, { "package.json": {}, "config.txt": "original asset" });
+  const source = path.join(assetRoot, "config.txt");
+  await fs.symlink(source, path.join(vendor, "config.txt"));
+  const entry = 'import value from "./node_modules/vendor/value.js"; console.log(value);';
+  await fs.writeFile(f.sourceEntry, entry);
+  await fs.writeFile(f.copiedEntry, entry);
+  const copiedVendor = path.join(f.copiedPlugin, "node_modules", "vendor");
+  const copiedAsset = path.join(copiedVendor, "config.txt");
+  expect((await f.repair()).copiedFiles).toBeGreaterThan(0);
+  expect((await fs.lstat(copiedAsset)).isFile()).toBe(true);
+  await expectOutput(f.run);
+
+  await fs.writeFile(copiedAsset, "private changes");
+  await fs.unlink(path.join(copiedVendor, "value.js"));
+  expect((await f.repair()).copiedFiles).toBeGreaterThan(0);
+  expect(await fs.readFile(copiedAsset, "utf8")).toBe("private changes");
+  await fs.unlink(path.join(copiedVendor, "value.js"));
+  await fs.unlink(copiedAsset);
+  expect((await f.repair()).copiedFiles).toBeGreaterThan(0);
+  expect((await fs.lstat(copiedAsset)).isFile()).toBe(true);
+  await fs.writeFile(copiedAsset, "another private change");
+  expect(await fs.readFile(source, "utf8")).toBe("original asset");
+  await expectOutput(f.run);
+});
+
 it.each(["runtime", "doctor"] as const)(
   "completes the %s entry with transformed runtime syntax at line 1203",
   async (surface) => {

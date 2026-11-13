@@ -150,7 +150,7 @@ describe("SDK credential migration", () => {
         openOpenClawAgentDatabase({ agentId: "main", env: state.env, path: databasePath });
         await closeOpenClawAgentDatabaseByPathAsync(databasePath);
         unregisterOpenClawAgentDatabase({ agentId: "main", env: state.env, path: databasePath });
-        inspectLegacyAgentDir(legacyDir); // Materialize WAL sidecars before taking the snapshot.
+        await inspectLegacyAgentDir(legacyDir);
         const before = snapshotFiles(legacyDir);
         const cfg = { agents: { entries: { worker: {} } }, plugins: { enabled: false } };
         await state.writeConfig(cfg);

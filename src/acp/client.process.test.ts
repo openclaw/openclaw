@@ -21,7 +21,7 @@ type ServerMode = "handshake-failure" | "SIGTERM" | "exit-0" | "quit-7" | "eof-p
 
 afterEach(() => fixture.cleanup());
 
-function runCase(mode: ServerMode, code = 0, diagnostic?: string) {
+function runCase(mode: ServerMode, code = 0, diagnostic?: string, signal?: "SIGINT" | "SIGTERM") {
   return fixture.run(async () => {
     const handshake = mode === "handshake-failure";
     const dir = fixture.createTempDir("openclaw-acp-client-process-test-");
@@ -36,12 +36,14 @@ function runCase(mode: ServerMode, code = 0, diagnostic?: string) {
 const fs = require("node:fs");
 const readline = require("node:readline");
 const mode = ${JSON.stringify(mode)};
+const cancel = ${JSON.stringify(signal)};
 const send = (payload) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...payload }) + "\\n");
 fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
 let pendingPromptReply;
 if (mode === "handshake-failure" || mode === "quit-7" || mode === "eof-pending") {
   process.on("SIGTERM", () => {
     fs.writeFileSync(${JSON.stringify(termFile)}, "SIGTERM");
+    if (cancel) process.exit(0);
     if (mode === "quit-7") process.exit(7);
     pendingPromptReply?.();
     pendingPromptReply = undefined;
@@ -53,10 +55,9 @@ lines.on("line", (line) => {
   const reply = (payload) => send({ id, ...payload });
   const endTurn = () => reply({ result: { stopReason: "end_turn" } });
   if (method === "initialize") {
-    reply({ result: {
-      protocolVersion: params.protocolVersion, agentCapabilities: { loadSession: false },
-    } });
+    reply({ result: { protocolVersion: params.protocolVersion, agentCapabilities: { loadSession: false } } });
   } else if (method === "session/new") {
+    if (cancel) { process.kill(process.ppid, cancel); return; }
     reply(mode === "handshake-failure" ? { error: ${JSON.stringify(handshakeError)} }
       : { result: { sessionId: "process-status-fixture" } });
   } else if (method === "session/prompt") {
@@ -66,10 +67,7 @@ lines.on("line", (line) => {
     else if (mode === "eof-pending") {
       pendingPromptReply = endTurn;
       const content = { type: "text", text: "fixture awaiting terminal EOF" };
-      send({ method: "session/update", params: {
-          sessionId: "process-status-fixture",
-          update: { sessionUpdate: "agent_message_chunk", content },
-        } });
+      send({ method: "session/update", params: { sessionId: "process-status-fixture", update: { sessionUpdate: "agent_message_chunk", content } } });
     } else endTurn();
   }
 });
@@ -140,14 +138,16 @@ setInterval(() => {}, 60_000);
       },
     });
     expect(result, `${stderr.text()}\n${stdout.text()}`).toBe(code);
-    if (handshake) {
+    if (handshake && !signal) {
       const error = JSON.parse(stdout.text().match(/ACP_CLIENT_ERROR:(.*)/)?.[1] ?? "null");
       expect(error).toMatchObject({ name: "RequestError", ...handshakeError, serverAlive: false });
+    } else if (signal) {
+      expect(stdout.text()).not.toMatch(/OpenClaw ACP client|> /);
     } else {
       expect(await readFile(promptFile, "utf8")).toBe("status marker");
       expect(stdout.text()).toContain(`Agent exited with ${diagnostic}`);
     }
-    if (clientQuits || (handshake && process.platform !== "win32")) {
+    if (clientQuits || signal || (handshake && process.platform !== "win32")) {
       expect(await readFile(termFile, "utf8")).toBe("SIGTERM");
     }
     if (eof) {
@@ -159,9 +159,9 @@ setInterval(() => {}, 60_000);
   });
 }
 
-it(
-  "force-kills the spawned ACP server when the handshake fails",
-  () => runCase("handshake-failure"),
+it.each(process.platform === "win32" ? [undefined] : ([undefined, "SIGINT"] as const))(
+  "joins the spawned ACP server after handshake failure or %s",
+  (signal) => runCase("handshake-failure", signal ? 130 : 0, undefined, signal),
   20_000,
 );
 

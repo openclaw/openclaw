@@ -148,12 +148,12 @@ export function applySessionMessagePayload(
   );
   if (incoming.role === "assistant" && projection.messages.includes(message)) {
     prunePersistedAssistantStreamSegments(state, message);
-    // Terminal persistence can precede the run's final event. Keyed commentary
-    // replaces only its segment, so it must leave a later reply stream intact.
+    // Terminal rows replace the live tail; keyed commentary replaces only its segment.
     if (
       assistantOwnerRunId &&
       (runActive === false ||
-        (normalizeSessionProjectionRunId(event.runId) === assistantOwnerRunId &&
+        ((normalizeSessionProjectionRunId(event.runId) === assistantOwnerRunId ||
+          incoming.idempotencyKey === `cli-assistant:${assistantOwnerRunId}`) &&
           !readAssistantStreamSegmentIdentity(message)))
     ) {
       state.chatStream = null;

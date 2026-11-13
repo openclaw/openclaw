@@ -6,9 +6,16 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { SessionGitHubActionResultSchema } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
+import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js";
+import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
 import { createRequesterPublicationFixture } from "./github-publication-requester.test-support.js";
 import {
@@ -18,6 +25,8 @@ import {
   SESSION_ID,
   SESSION_KEY,
 } from "./github-publication.test-support.js";
+import { prepareAdmission } from "./mcp-http-request.test-support.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 
 const mocks = githubPublicationTestMocks();
 const headCommit = "a".repeat(40);
@@ -206,6 +215,39 @@ describe("actions on the imported original PR", () => {
     creatorEmail: "publication-guest@example.test",
     sandbox: "required",
     realWorktree: true,
+  });
+
+  it("refuses native read-only edit of the bound PR without a selected linked account", async () => {
+    const f = await fixture();
+    const runId = randomUUID();
+    const admission = prepareAdmission(runId, "source-less-native-read-control");
+    const work = new AsyncWorkScope();
+    try {
+      const admitted = await admission.admit("gateway", runId);
+      const context = createDirectChatContext({
+        ...f.maintainerSource.context,
+        githubPublicationService: f.coordinator,
+        trackExecution: work.track.bind(work),
+      });
+      bindGatewayContextResolver(admitted, () => context);
+      const caller = createAdmittedGatewayToolCallerIdentity({
+        admittedRunContext: admitted,
+        agentId: "main",
+        sessionKey: SESSION_KEY,
+      });
+      expect(caller?.operatorAuthority).toBeUndefined();
+      expect(caller?.requesterOrigin).toBeUndefined();
+      await expect(
+        withGatewayToolCallerIdentity(caller, () =>
+          createGitHubPublishTool().execute("native-read-control", { action: "edit" }),
+        ),
+      ).rejects.toThrow("verified linked GitHub account");
+      expect(f.writes).toEqual([]);
+      expect(f.externalWrites).toEqual([]);
+    } finally {
+      admission.close();
+      await work.drain();
+    }
   });
 
   it.each(["guest", "admin"] as const)(
@@ -409,6 +451,7 @@ describe("actions on the imported original PR", () => {
     ["edit", "head"],
     ["edit", "title"],
     ["request_review", "requester"],
+    ["request_review", "requester and transport"],
     ["request_review", "head"],
     ["request_review", "closed"],
     ["request_review", "author"],
@@ -417,8 +460,11 @@ describe("actions on the imported original PR", () => {
     let reads = 0;
     f.onRead(async (endpoint) => {
       if (endpoint.endsWith("/pulls/7") && ++reads === 2) {
-        if (change === "requester") {
+        if (change === "requester" || change === "requester and transport") {
           await f.revoke();
+          if (change === "requester and transport") {
+            throw new Error("Synthetic GitHub read failure");
+          }
         }
         if (change === "head") {
           f.state.head.sha = "f".repeat(40);
@@ -440,7 +486,7 @@ describe("actions on the imported original PR", () => {
         ...(action === "edit" ? { title: "Requested title", expectedTitle: "Original title" } : {}),
       }),
     ).rejects.toThrow(
-      change === "requester"
+      change === "requester" || change === "requester and transport"
         ? /role changed/
         : change === "head"
           ? /head changed/

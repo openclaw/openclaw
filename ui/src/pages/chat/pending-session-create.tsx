@@ -1,9 +1,9 @@
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
-import { buildAgentOnboardingGreeting } from "../../../../src/shared/agent-onboarding.js";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
 import type { GatewayStatusProps } from "../../components/gateway-status.ts";
+import { ImageLightboxItemView } from "../../components/image-lightbox.tsx";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
@@ -15,13 +15,10 @@ import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { CreationComposer } from "../new-session/creation-composer-render.tsx";
 import { NewSessionBody } from "../new-session/draft-body.solid.tsx";
-import { ChatAvatar } from "./chat-avatar-view.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
-import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
-import { MessageMarkdown } from "./components/chat-message-text-view.tsx";
-import { ChatPaneHeader, ChatPaneIncognitoNotice } from "./components/chat-pane-header.tsx";
+import { ChatPaneHeader } from "./components/chat-pane-header.tsx";
 import type { ChatPaneHeaderProps } from "./components/chat-pane-header.types.ts";
 import { ChatPaneMobileHeader } from "./components/chat-pane-mobile-header.tsx";
 import { ChatWorkingIndicator } from "./components/chat-working-indicator.tsx";
@@ -204,29 +201,6 @@ function PendingSessionCreateContent(
             : undefined,
         renderDraft: () => (
           <div class="new-session-page__starting chat-thread-inner">
-            <Show when={creatingAgent}>
-              {/* The shared greeting is a presentation preview; only the Gateway persists it. */}
-              <div class="chat-group assistant">
-                <ChatAvatar
-                  role="assistant"
-                  assistant={{
-                    agentId,
-                    name: displayName ?? t("agentChip.newAgent"),
-                    avatar: null,
-                  }}
-                />
-                <div class="chat-group-messages">
-                  <div class="chat-bubble chat-bubble--first">
-                    <MessageMarkdown
-                      markdown={buildAgentOnboardingGreeting(displayName)}
-                      messageKey={`${composerId}-greeting`}
-                      options={{ role: "assistant", isStreaming: false }}
-                      markdownOptions={{ codeBlockChrome: "none" }}
-                    />
-                  </div>
-                </div>
-              </div>
-            </Show>
             <div class="chat-group assistant chat-group--working">
               <div class="chat-group-messages">
                 <ChatWorkingIndicator
@@ -243,6 +217,7 @@ function PendingSessionCreateContent(
       composer: {
         paneId: composerId,
         sessionKey: props.sessionKey,
+        incognito: isIncognitoSessionKey(props.sessionKey),
         currentAgentId: agentId,
         assistantName:
           displayName ?? agent?.identity?.name ?? agent?.name ?? t("agentChip.newAgent"),
@@ -300,9 +275,6 @@ function PendingSessionCreateContent(
                 </button>
               }
             />
-            <Show when={view().header.incognito}>
-              <ChatPaneIncognitoNotice />
-            </Show>
           </Show>
         </div>
         <section class="chat" data-region="main" aria-busy={view().submitting ? "true" : "false"}>
@@ -328,7 +300,7 @@ function PendingSessionCreateContent(
           </div>
         </section>
       </div>
-      <ChatImageLightbox
+      <ImageLightboxItemView
         item={(() => {
           imageRevision();
           return image;

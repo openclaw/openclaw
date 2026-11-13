@@ -20,7 +20,7 @@ Matrix supports native threads for both automatic replies and message-tool sends
 - `"per-user"` (default): all DM rooms with the same routed peer share one session.
 - `"per-room"`: each Matrix DM room gets its own session key, even for the same peer.
 
-Explicit conversation bindings always win over `sessionScope`; bound rooms and threads keep their chosen target session.
+Explicit conversation bindings always win over `sessionScope`; bound rooms and threads keep their chosen target session. Bindings to ordinary OpenClaw sessions remain ordinary when stored bindings reload, without acquiring ACP lifecycle semantics. Idle and maximum-age expiry still apply.
 
 ### Reply threading (`threadReplies`)
 

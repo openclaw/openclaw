@@ -84,6 +84,7 @@ export type BackupCreateOptions = {
   output?: string;
   dryRun?: boolean;
   includeWorkspace?: boolean;
+  excludeWorktreeTemplates?: boolean;
   onlyConfig?: boolean;
   verify?: boolean;
   json?: boolean;
@@ -106,6 +107,7 @@ export type BackupCreateResult = {
   archivePath: string;
   dryRun: boolean;
   includeWorkspace: boolean;
+  excludeWorktreeTemplates?: boolean;
   onlyConfig: boolean;
   localCompanion?: boolean;
   verified: boolean;
@@ -208,6 +210,7 @@ function buildManifest(
     nodeVersion: process.version,
     options: {
       includeWorkspace: result.includeWorkspace,
+      ...(result.excludeWorktreeTemplates ? { excludeWorktreeTemplates: true } : {}),
       onlyConfig: result.onlyConfig,
     },
     paths: {
@@ -304,7 +307,14 @@ async function createBackupArchiveInScope(
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
   const plan =
-    preparedPlan ?? (await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs }));
+    preparedPlan ??
+    (await resolveBackupPlanFromDisk({
+      includeWorkspace,
+      excludeWorktreeTemplates: opts.excludeWorktreeTemplates,
+      localCompanion: opts.localCompanion,
+      onlyConfig,
+      nowMs,
+    }));
   const selection = plan.databaseSelection;
   if (!preparedPlan && opts.localCompanion) {
     if (
@@ -368,6 +378,7 @@ async function createBackupArchiveInScope(
     archivePath: outputPath,
     dryRun: Boolean(opts.dryRun),
     includeWorkspace,
+    ...(opts.excludeWorktreeTemplates ? { excludeWorktreeTemplates: true } : {}),
     onlyConfig,
     ...(opts.localCompanion ? { localCompanion: true } : {}),
     verified: false,
@@ -443,10 +454,13 @@ async function createBackupArchiveInScope(
     }
     const clientDirectories = new Set(
       inventory.coreDatabases
-        .filter((database) => database.role === "client" && database.identity)
+        .filter(
+          (database) =>
+            (database.role === "client" || database.role === "services") && database.identity,
+        )
         .map((database) => path.dirname(database.sourcePath)),
     );
-    // Emit private client directories before snapshots create implicit tar parents.
+    // Emit private store directories before snapshots create implicit tar parents.
     const requiredSourcePaths = new Set([
       ...clientDirectories,
       ...sourcePathRemaps.keys(),

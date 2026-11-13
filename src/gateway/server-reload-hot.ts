@@ -86,9 +86,10 @@ export function createGatewayReloadHandlers(
 
   const applyHotReload = async (
     plan: GatewayReloadPlan,
-    nextConfig: OpenClawConfig,
+    preparedConfig: OpenClawConfig,
     publication?: GatewayHotReloadPublication,
   ): Promise<GatewayHotReloadApplication> => {
+    let nextConfig = preparedConfig;
     publication?.assertInvokerOwned?.();
     assertIrreversibleReloadPlanHasRecoveryOwner(plan, restartRecoveryAvailable);
     const isCurrent = () => !isRestartRetryStopped() && (publication?.isCurrent?.() ?? true);
@@ -253,7 +254,6 @@ export function createGatewayReloadHandlers(
     let releasePreparedModelRuntimeDrain: (() => void) | undefined;
     let recoveryRestartScheduled = false;
     const laneConcurrency = resolveGatewayLaneConcurrency(nextConfig);
-    // Use one candidate env snapshot before publication and through later channel starts.
     const shouldSkipChannelRestart = isChannelStartupSuppressedByEnvironment(candidateEnv);
     const channelReloadTargets = () =>
       new Set<ChannelKind>([...channelsToRestart, ...restartChannelAccounts.keys()]);
@@ -267,14 +267,14 @@ export function createGatewayReloadHandlers(
         if (plan.restartCron) {
           assertCronReloadCurrent();
         }
-        // Plugin publication can reject its prepared registry. Keep config and
-        // secret rollback available until that selection succeeds.
+        // Keep config/secret rollback until the prepared plugin registry is accepted.
         publication?.assertInvokerOwned?.();
         if (runtime) {
           runtime.publish();
           params.setState(nextState);
           runtimeCommitted = true;
         }
+        nextConfig = publication ? getRuntimeConfig() : nextConfig;
         if (modelRuntime.required) {
           // Retire model/auth inputs together so requests cannot mix generations.
           preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
@@ -383,7 +383,11 @@ export function createGatewayReloadHandlers(
         preparedModelRuntimeReplacementGateId,
         err ?? new Error(`prepared model runtime replacement stopped during ${surface}`),
       );
-      if (plan.pluginLifecycle && !reloadPlanNeedsRecovery(remainingPlan)) {
+      if (
+        plan.pluginLifecycle &&
+        !reloadPlanNeedsRecovery(remainingPlan) &&
+        !(err instanceof PluginRuntimeApplicationError && err.details.runtimeRestorationFailed)
+      ) {
         throw new PluginRuntimeApplicationError(
           `Plugin runtime application failed during ${surface}: ${formatErrorMessage(err)}`,
           {
@@ -524,6 +528,15 @@ export function createGatewayReloadHandlers(
         return "applied-restart-required";
       }
       try {
+        if (
+          !runtimeCommitted &&
+          error instanceof PluginRuntimeApplicationError &&
+          error.details.runtimeRestorationFailed &&
+          isReloadOwnerActive()
+        ) {
+          // Preserve the failed operation while the existing restart owner restores reply dispatch.
+          scheduleRecoveryRestart("model/reply runtime restoration", error);
+        }
         if (
           runtimeCommitted &&
           error instanceof PluginRuntimeApplicationError &&

@@ -4,6 +4,7 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createConfigRouteContext, mountConfigPage } from "./config-page.test-support.ts";
+import { configRouteData } from "./route-data.ts";
 
 const formModule = vi.hoisted(() => ({
   requested: vi.fn(),
@@ -113,13 +114,38 @@ it("progressively opens Advanced after visiting Infrastructure", async () => {
 
   view.update({ pageId: "advanced" });
   await waitForSolid(() => {
-    expect(view.page.querySelectorAll('[id^="config-section-part"]')).toHaveLength(1);
+    expect(view.page.querySelectorAll('[id^="config-section-part"]')).toHaveLength(0);
     expect(view.page.querySelector('[aria-busy="true"]')).not.toBeNull();
   });
 
   nextTask.resolve();
   await waitForSolid(() => {
     expect(view.page.querySelectorAll('[id^="config-section-part"]')).toHaveLength(8);
+    expect(view.page.querySelector('[aria-busy="true"]')).toBeNull();
+  });
+
+  const retained = view.page.querySelector("#config-section-part7");
+  view.update({
+    routeData: configRouteData({
+      pathname: "/settings/advanced",
+      search: "",
+      hash: "#config-section-part7",
+    }),
+  });
+  await waitForSolid(() => expect(view.page.querySelector("#config-section-part7")).toBe(retained));
+
+  view.update({ pageId: "infrastructure" });
+  vi.stubGlobal("scheduler", { yield: () => new Promise<void>(() => {}) });
+  view.update({
+    pageId: "advanced",
+    routeData: configRouteData({
+      pathname: "/settings/advanced",
+      search: "",
+      hash: "#config-section-part7",
+    }),
+  });
+  await waitForSolid(() => {
+    expect(view.page.querySelector("#config-section-part7")).not.toBeNull();
     expect(view.page.querySelector('[aria-busy="true"]')).toBeNull();
   });
 });

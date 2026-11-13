@@ -21,9 +21,10 @@ const program = {
 };
 
 describe("standalone fixed code generation", () => {
-  it.skipIf(process.platform === "win32").each(["//#region", "//"])(
+  it.skipIf(process.platform === "win32").each(["//#region", "//", "//!"])(
     "captures remaining static programs (%s)",
     (label) => {
+      const marker = label === "//!" ? label : `${label} `;
       const root = fs.realpathSync(dirs.make("standalone-capture-"));
       const runtimeRoot = path.join(root, "runtime");
       const dist = path.join(runtimeRoot, "dist");
@@ -38,7 +39,7 @@ describe("standalone fixed code generation", () => {
         fs.writeFileSync(
           filename,
           `import { compileFunction } from "node:vm";
-${label} ${owner}
+${marker}${owner}
 const SOURCE${index} = "const offset = ${index + 1};";
 export const run = compileFunction(\`\${SOURCE${index}}\nreturn value + offset + ${index};\`, ["value"]);`,
         );
@@ -46,7 +47,7 @@ export const run = compileFunction(\`\${SOURCE${index}}\nreturn value + offset +
       });
       fs.writeFileSync(
         path.join(dist, "workspace-manifest-script.runtime-fixture.mjs"),
-        `${label} src/gateway/worker-environments/workspace-manifest-script.runtime.ts\nexport function run() { return 99; }\n`,
+        `${marker}src/gateway/worker-environments/workspace-manifest-script.runtime.ts\nexport function run() { return 99; }\n`,
       );
       const receiver = path.join(dist, "worker/workspace-rsync-receiver.mjs");
       fs.writeFileSync(
@@ -54,7 +55,7 @@ export const run = compileFunction(\`\${SOURCE${index}}\nreturn value + offset +
         `import { compileFunction } from "node:vm";
 const REMOTE_WORKSPACE_ACCEPTED_RSYNC_RECEIVER_JS = "return 41;";
 const REMOTE_WORKSPACE_RSYNC_RECEIVER_JS = "return 42;";
-${label} src/worker/workspace-rsync-receiver.ts
+${marker}src/worker/workspace-rsync-receiver.ts
 export const select = (accepted) => compileFunction(accepted ? REMOTE_WORKSPACE_ACCEPTED_RSYNC_RECEIVER_JS : REMOTE_WORKSPACE_RSYNC_RECEIVER_JS, ["require"]);`,
       );
       const driver = path.join(root, "capture.mjs");

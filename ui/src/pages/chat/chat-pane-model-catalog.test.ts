@@ -44,7 +44,6 @@ import {
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
 
 beforeEach(installModelPickerLayout);
 
@@ -316,10 +315,10 @@ describe("chat pane composer controls", () => {
       expect(state.chatModelCatalogError).toContain("Previous runtime preparation failed");
       expect(state.chatModelCatalog).toEqual(retained ? cachedModels : []);
       const failureLabel = retained
-        ? "Some models could not be refreshed. Open Models to try again."
+        ? "Couldn’t refresh some models. Open Models to try again."
         : "Models unavailable";
       await menuReady(container);
-      expandModelProviders(container);
+
       expect(container.textContent).toContain(failureLabel);
 
       const refresh =
@@ -354,7 +353,7 @@ describe("chat pane composer controls", () => {
       request.mockResolvedValueOnce({ models: cachedModels });
       await refreshChatModelCatalogOnDemand(state);
       flush();
-      expandModelProviders(container);
+
       expect(container.textContent).toContain("Cached Model");
       expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     },

@@ -13,6 +13,8 @@ import {
 import type { PostgresCatalogFact } from "./postgres-catalog.js";
 import {
   admitPostgresCapabilities,
+  getAdmittedPostgresSchema,
+  postgresSchemaHash,
   readPostgresSchema,
   recordPostgresSchema,
   verifyPostgresSchema,
@@ -43,9 +45,36 @@ export function admitPostgresPhysicalFacts(params: {
   schema?: StoreSchema;
   recordSchema?: boolean;
   preserveSchemaSeal?: boolean;
+  requireSealedSchema?: boolean;
 }): PostgresPhysicalFacts {
   const retained = getPostgresPhysicalFacts(params.db);
   if (retained) {
+    if (
+      retained.version !== params.version ||
+      retained.storeId !== params.storeId ||
+      retained.namespace !== params.namespace ||
+      retained.store !== params.store
+    ) {
+      throw new Error(`PostgreSQL metadata identity or version mismatch. ${recovery}`);
+    }
+    if (params.requireSealedSchema) {
+      const schema = params.schema;
+      const admitted = getAdmittedPostgresSchema(params.db);
+      // Dynamic extensions belong to the installed schema, not the caller's base definition.
+      if (
+        !schema ||
+        !retained.schemaHash ||
+        retained.schemaHash !==
+          postgresSchemaHash(
+            { ...schema, searchExtensions: admitted?.searchExtensions },
+            retained.catalog,
+          )
+      ) {
+        throw new Error(
+          `Read-only PostgreSQL admission requires a matching schema seal. ${recovery}`,
+        );
+      }
+    }
     return retained;
   }
   const capabilities = admitPostgresCapabilities(params.db);
@@ -59,17 +88,19 @@ export function admitPostgresPhysicalFacts(params: {
   if (row.version !== params.version || row.store_id !== params.storeId) {
     throw new Error(`PostgreSQL metadata identity or version mismatch. ${recovery}`);
   }
+  let schemaHash: string | undefined;
   if (params.schema) {
     const schema = withPostgresSearchExtensions(params.schema, snapshot);
     if (params.recordSchema) {
-      recordPostgresSchema(params.db, params.namespace, schema, snapshot);
+      schemaHash = recordPostgresSchema(params.db, params.namespace, schema, snapshot);
     } else {
-      verifyPostgresSchema(
+      schemaHash = verifyPostgresSchema(
         params.db,
         params.namespace,
         schema,
         snapshot,
         params.preserveSchemaSeal,
+        params.requireSealedSchema,
       );
     }
     retainPostgresSchema(params.db, schema);
@@ -81,6 +112,7 @@ export function admitPostgresPhysicalFacts(params: {
     namespace: params.namespace,
     storeId: row.store_id,
     version: row.version,
+    schemaHash,
     capabilities,
     catalog,
   };
@@ -92,11 +124,13 @@ export function publishPostgresSearchExtensionFacts(
   db: PostgresSqlConnection,
   facts: PostgresPhysicalFacts,
   catalog: readonly PostgresCatalogFact[],
+  schema: StoreSchema,
 ): void {
   publishSqliteDatabaseAdmission(db, admissionKey, {
     ...facts,
     admissionId: randomUUID(),
     catalog,
+    schemaHash: postgresSchemaHash(schema, catalog),
   });
 }
 
