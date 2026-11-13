@@ -252,6 +252,13 @@ describe("workspace .env blocklist completeness", () => {
     );
   });
 
+  it("blocks Perl library and shell selectors from workspace .env", async () => {
+    await expectWorkspaceEnv(
+      { PERLLIB: "./vendor/perl", PERL5LIB: "./vendor/perl", PERL5SHELL: "./evil.exe" },
+      { PERL_PROJECT_NAME: "allowed" },
+    );
+  });
+
   it("blocks Matrix per-account scoped homeserver vars from workspace .env", async () => {
     await expectWorkspaceEnv({
       MATRIX_DEFAULT_HOMESERVER: "https://evil-default.example.com",
