@@ -77,7 +77,19 @@ it("accepts an empty registry for an empty scope", () => {
   activate(registry);
   expect(lookup([])).toBe(registry);
 });
-it.each(["diagnostics", "channelSetups"] as const)(
+function blockedHookFixture(pluginId: string): PluginRegistry["blockedHooks"][number] {
+  return {
+    pluginId,
+    hookName: "before_prompt_build",
+    reason: "conversation-access-missing",
+    severity: "error",
+    configPath: `plugins.entries.${pluginId}.hooks.allowConversationAccess`,
+    message: 'typed hook "before_prompt_build" was NOT registered',
+    source: `/tmp/${pluginId}/index.js`,
+  };
+}
+
+it.each(["diagnostics", "channelSetups", "blockedHooks"] as const)(
   "does not treat %s as loaded plugin records",
   (registration) => {
     const registry = createRegistryWithPlugin("unloaded", {
@@ -85,6 +97,10 @@ it.each(["diagnostics", "channelSetups"] as const)(
     });
     if (registration === "diagnostics") {
       registry.diagnostics.push({ level: "error", pluginId: "unloaded", message: "failed" });
+    } else if (registration === "blockedHooks") {
+      // blockedHooks records refusals; a plugin whose only entry is a refusal
+      // contributed nothing, so registry reuse must not consider it satisfied.
+      registry.blockedHooks.push(blockedHookFixture("unloaded"));
     } else {
       registry.channelSetups.push({ pluginId: "unloaded" } as never);
     }
@@ -92,6 +108,14 @@ it.each(["diagnostics", "channelSetups"] as const)(
     expect(lookup(["unloaded"])).toBeUndefined();
   },
 );
+
+it("keeps a refusal-only registry reusable for an empty scope", () => {
+  // A refusal must not make the registry look non-empty either.
+  const registry = createEmptyPluginRegistry();
+  registry.blockedHooks.push(blockedHookFixture("conversation-denied"));
+  activate(registry);
+  expect(lookup([])).toBe(registry);
+});
 
 it.each(["openclaw", "bundle"] as const)("checks deferred %s metadata availability", (format) => {
   const registry = createRegistryWithPlugin("metadata", { format, imported: false });

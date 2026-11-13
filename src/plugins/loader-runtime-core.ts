@@ -26,7 +26,6 @@ import {
   warnAboutUntrackedLoadedPlugins,
   warnWhenAllowlistIsOpen,
 } from "./loader-provenance.js";
-import { formatPluginFailureSummary } from "./loader-records.js";
 import { samePluginLoadInput } from "./loader-registration-config.js";
 import {
   loadRuntimePluginCandidate,
@@ -46,6 +45,7 @@ import {
   maybeThrowOnPluginLoadError,
   resolveAuthorizedDreamingSidecar,
 } from "./loader-shared.js";
+import { emitPluginStartupSummaries } from "./loader-startup-summaries.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import {
   loadPluginManifestRegistryCore,
@@ -405,6 +405,9 @@ export function* loadOpenClawPluginsSteps(
     });
     const inputs = new Map<string, PluginLoadInput>();
     const retained = new Map<string, PluginRegistry["plugins"][number]>();
+    // The registry retention selected per plugin. A predecessor borrower and its lender
+    // can both list the same record, so refusal facts must come from this source only.
+    const retainedSources = new Map<string, PluginRegistry>();
     const lendingConfig =
       options.borrowRegistry &&
       getPluginRegistryGatewayOwner(options.borrowRegistry)?.current() === options.borrowRegistry
@@ -526,6 +529,7 @@ export function* loadOpenClawPluginsSteps(
             : samePluginLoadInput(retention.input.config.input, preparedConfig.input)
         ) {
           retained.set(manifest.id, retention.record);
+          retainedSources.set(manifest.id, retention.registry);
           if (retention.registry === options.borrowRegistry) {
             markPluginRecordBorrowed(registry, retention.record);
           }
@@ -539,6 +543,13 @@ export function* loadOpenClawPluginsSteps(
           const record = entry.pluginId && retained.get(entry.pluginId);
           return record && source.plugins.includes(record);
         }) ?? []),
+      );
+    }
+    // Copy each retained plugin's refusals once, from the selected source. Repeat entries
+    // within that source are distinct registrations and are kept as-is.
+    for (const [pluginId, source] of retainedSources) {
+      registry.blockedHooks.push(
+        ...source.blockedHooks.filter((entry) => entry.pluginId === pluginId),
       );
     }
     const selectedMiddlewareOwnerManifests = new Map<
@@ -693,16 +704,7 @@ export function* loadOpenClawPluginsSteps(
       options.previousRegistry,
       replacedIds,
     );
-    if (context.shouldActivate && options.mode !== "validate") {
-      const failedPlugins = registry.plugins.filter((plugin) => plugin.failedAt != null);
-      if (failedPlugins.length > 0) {
-        logger.warn(
-          `[plugins] ${failedPlugins.length} plugin(s) failed to initialize (${formatPluginFailureSummary(
-            failedPlugins,
-          )}). Run 'openclaw plugins inspect <id> --runtime --json' for runtime diagnostics and 'openclaw plugins list' for registry state. After fixing plugin code or load paths, run 'openclaw plugins reload <id>' to retry.`,
-        );
-      }
-    }
+    emitPluginStartupSummaries(registry, logger, context, options.mode);
     // Presence of this identity also admits immutable private-registry policy caching.
     getPluginRuntimeLoadContextState(registry)!.loaderCacheIdentity = loaderCacheIdentity;
     if (context.shouldActivate) {

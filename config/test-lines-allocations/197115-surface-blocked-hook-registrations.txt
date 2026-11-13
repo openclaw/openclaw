@@ -1,0 +1,6 @@
+# Regression coverage for surfacing blocked plugin hook registrations in loader, status, health, and
+# plugin inspection output, plus the extracted conversation-access loader test helpers.
+# Round 2 adds the Gateway-shape (activate:false + runtimeSideEffects:true) loader summary case and
+# the CLI diagnostic-suppression case.
+# Exact net growth for PR #197115.
+402
