@@ -694,20 +694,46 @@ private struct InlineImageList: View {
 
     var body: some View {
         ForEach(self.images, id: \.id) { item in
-            if let img = item.image {
-                OpenClawPlatformImageFactory.image(img)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxHeight: 260)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
-            } else {
-                Text(item.label.isEmpty ? "Image" : item.label)
-                    .font(OpenClawChatTypography.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            InlineImageView(item: item)
+        }
+    }
+}
+
+@MainActor
+private struct InlineImageView: View {
+    let item: ChatMarkdownPreprocessor.InlineImage
+    @StateObject private var decoded: DecodedImage
+
+    init(item: ChatMarkdownPreprocessor.InlineImage) {
+        self.item = item
+        // StateObject's autoclosure runs once per mounted image identity, not
+        // once per view initialization. Removal releases the decoded image;
+        // a changed source gets a new identity and cannot reuse stale pixels.
+        self._decoded = StateObject(wrappedValue: DecodedImage(item: item))
+    }
+
+    var body: some View {
+        if let image = self.decoded.image {
+            OpenClawPlatformImageFactory.image(image)
+                .resizable()
+                .scaledToFit()
+                .frame(maxHeight: 260)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+        } else {
+            Text(self.item.label.isEmpty ? "Image" : self.item.label)
+                .font(OpenClawChatTypography.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private final class DecodedImage: ObservableObject {
+        let image: OpenClawPlatformImage?
+
+        init(item: ChatMarkdownPreprocessor.InlineImage) {
+            self.image = item.decode()
         }
     }
 }
