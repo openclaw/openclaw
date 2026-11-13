@@ -9,6 +9,7 @@ import {
 } from "../agents/agent-scope-config.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { ExitError } from "../runtime.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
 import { registerSkillsCli } from "./skills-cli.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
@@ -159,6 +160,19 @@ function installedCalendar(targetDir = "/tmp/workspace/skills/calendar") {
 }
 
 describe("skills cli commands", () => {
+  it.each(["check --json", "info calendar"])("keeps interrupted %s quiet", async (args) => {
+    const work = new AsyncWorkScope();
+    mocks.gateway.mockImplementation(async (options) => {
+      work.beginClose();
+      options.signal?.throwIfAborted();
+      return mocks.report;
+    });
+    await work.run(() => run(args));
+    expect(stdout).toEqual([]);
+    expect(errors).toEqual([]);
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["install skills-sh/invalid", "Invalid skills.sh skill reference: skills-sh/invalid", false],
     ["update", "Provide a skill slug or use --all.", false],
