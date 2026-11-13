@@ -181,7 +181,6 @@ describe("restart health", () => {
     const snapshot = await waitForRunningGateway({
       expectedVersion: "2026.10.4",
       expectedBuildId: "candidate-build",
-      requirePluginHealth: false,
       requireChannelHealth: false,
       timeoutMs: 1_800_000,
       delayMs: 30_000,
@@ -221,7 +220,6 @@ describe("restart health", () => {
     const snapshot = await waitForRunningGateway({
       expectedVersion: "2026.10.6",
       expectedBuildId: "candidate-build",
-      requirePluginHealth: false,
       requireChannelHealth: false,
       timeoutMs: 1_800_000,
       delayMs: 30_000,
@@ -237,19 +235,19 @@ describe("restart health", () => {
   it.each([
     {
       label: "matching HTTP identity",
-      requirePluginHealth: false,
+      requireChannelHealth: false,
       build: "candidate-build",
       outcome: "healthy",
     },
     {
       label: "HTTP build mismatch",
-      requirePluginHealth: false,
+      requireChannelHealth: false,
       build: "old-build",
       outcome: "build-id-mismatch",
     },
     {
-      label: "strict plugin check",
-      requirePluginHealth: true,
+      label: "strict channel check",
+      requireChannelHealth: true,
       build: "candidate-build",
       outcome: "auth-rejected",
     },
@@ -273,8 +271,7 @@ describe("restart health", () => {
     const snapshot = await waitForRunningGateway({
       expectedVersion: "2026.10.8",
       expectedBuildId: "candidate-build",
-      requirePluginHealth: scenario.requirePluginHealth,
-      requireChannelHealth: false,
+      requireChannelHealth: scenario.requireChannelHealth,
       timeoutMs: 1_800_000,
       delayMs: 30_000,
     });
@@ -441,7 +438,7 @@ describe("restart health", () => {
   });
 
   it.each([true, false])(
-    "checks expected-version plugin health (activated=%s)",
+    "reports plugin load errors without failing Gateway health (activated=%s)",
     async (activated) => {
       const pluginError = {
         id: "telegram",
@@ -477,8 +474,8 @@ describe("restart health", () => {
         expectedVersion: "2026.4.24",
       });
 
-      expect(snapshot.healthy).toBe(!activated);
-      expect(snapshot.waitOutcome).toBe(activated ? "plugin-errors" : "healthy");
+      expect(snapshot.healthy).toBe(true);
+      expect(snapshot.waitOutcome).toBe("healthy");
       expect(snapshot.elapsedMs).toBe(0);
       expect(snapshot.gatewayVersion).toBe("2026.4.24");
       expect(snapshot.expectedVersion).toBe("2026.4.24");

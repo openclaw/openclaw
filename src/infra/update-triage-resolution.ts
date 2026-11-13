@@ -2,10 +2,6 @@ import { resolveGatewayRestartProbeContext } from "../cli/daemon-cli/restart-hea
 import { verifyPreviousGatewayForUpdate } from "../cli/update-cli/update-command-verification.js";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
-import {
-  formatDeferredPluginMigration,
-  readDeferredPluginMigrationsAsync,
-} from "./deferred-plugin-migrations.js";
 import { formatErrorMessage } from "./errors.js";
 import { compareSemverStrings } from "./npm-registry-spec.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
@@ -91,10 +87,9 @@ function unresolved(message: string, stop = true, nextStep = nextUpdate): Update
   return { ok: false, score: -1, summary, ...(stop ? { stopReason: summary } : {}) };
 }
 
-async function validateTriagePendingRecovery(
-  installRoot: string,
-  env: NodeJS.ProcessEnv,
-): Promise<UpdateRepairValidation | undefined> {
+// Pending plugin migrations are notices retried by the next start or update, not
+// an unresolved core update.
+function validateTriagePendingRecovery(installRoot: string): UpdateRepairValidation | undefined {
   try {
     assertNoPendingPackageActivation(resolveUpdateInstallRoot(installRoot));
   } catch (error) {
@@ -104,10 +99,7 @@ async function validateTriagePendingRecovery(
       nextRepair,
     );
   }
-  const warnings = (await readDeferredPluginMigrationsAsync({ env })).map((pending) =>
-    formatDeferredPluginMigration(pending, env),
-  );
-  return warnings.length > 0 ? unresolved(warnings.join(" "), true, nextRepair) : undefined;
+  return undefined;
 }
 
 /** Resolve the attributed blocker without rewriting the updater's historical outcome. */
@@ -121,8 +113,7 @@ export async function validateTriageUpdateResolution(params: {
 }): Promise<UpdateRepairValidation> {
   const { failure, installRoot, env, signal } = params;
   signal.throwIfAborted();
-  const recoveryFailure = await validateTriagePendingRecovery(installRoot, env);
-  signal.throwIfAborted();
+  const recoveryFailure = validateTriagePendingRecovery(installRoot);
   if (recoveryFailure) {
     return recoveryFailure;
   }
@@ -273,10 +264,6 @@ export async function validateTriageUpdateResolution(params: {
     opts: {},
     signal,
     expectedVersion: installedVersion,
-    requirePluginHealth:
-      reason === "plugin-errors" ||
-      reason === "post-update-plugins" ||
-      (failure && "result" in failure && failure.result.postUpdate?.plugins?.status === "error"),
   });
   signal.throwIfAborted();
   if (!serviceVerified) {

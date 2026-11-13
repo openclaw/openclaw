@@ -41,22 +41,22 @@ vi.mock("../../daemon/systemd-stop-policy.js", async (actual) => ({
 // predicates, so a diagnostic client cannot accidentally stand in for local control.
 describe("restart verifier local control identity", () => {
   it.each([
-    { mode: "token", requirePluginHealth: true, host: "127.0.0.1" },
-    { mode: "password", requirePluginHealth: true, host: "127.0.0.1" },
-    { mode: "none", requirePluginHealth: true, host: "127.0.0.1" },
-    { mode: "token", requirePluginHealth: false, host: "127.0.0.1" },
-    { mode: "trusted-proxy", requirePluginHealth: false, host: "127.0.0.1" },
-    { mode: "token", requirePluginHealth: false, host: "0.0.0.0" },
+    { mode: "token", channelFailure: true, host: "127.0.0.1" },
+    { mode: "password", channelFailure: true, host: "127.0.0.1" },
+    { mode: "none", channelFailure: true, host: "127.0.0.1" },
+    { mode: "token", channelFailure: false, host: "127.0.0.1" },
+    { mode: "trusted-proxy", channelFailure: false, host: "127.0.0.1" },
+    { mode: "token", channelFailure: false, host: "0.0.0.0" },
     ...(["token", "password", "none", "trusted-proxy"] as const).map((mode) => ({
       mode,
-      requirePluginHealth: false,
+      channelFailure: false,
       host: "127.0.0.1",
       drain: true,
     })),
   ] as const)(
-    "local control on $host with $mode auth (drain=$drain, requirePluginHealth=$requirePluginHealth)",
+    "local control on $host with $mode auth (drain=$drain, channelFailure=$channelFailure)",
     async (scenario) => {
-      const { mode, requirePluginHealth, host } = scenario;
+      const { mode, channelFailure, host } = scenario;
       const drain = "drain" in scenario && scenario.drain;
       const paired = drain && mode === "trusted-proxy";
       await withOpenClawTestState(
@@ -209,7 +209,7 @@ describe("restart verifier local control identity", () => {
                     },
                   ],
                 },
-                channels: requirePluginHealth
+                channels: channelFailure
                   ? { fixture: { probe: { ok: false, error: "fixture channel failure" } } }
                   : {},
               });
@@ -296,13 +296,13 @@ describe("restart verifier local control identity", () => {
               probeHosts: ["127.0.0.1"],
               expectedVersion: "2026.8.1",
               expectedBuildId: "fixture-build",
-              requirePluginHealth,
               attempts: 0,
               delayMs: 1,
             });
             expect(result).toMatchObject({
-              healthy: !requirePluginHealth,
-              waitOutcome: requirePluginHealth ? "plugin-errors" : "healthy",
+              // Plugin load errors are notices; only the channel failure is unhealthy.
+              healthy: !channelFailure,
+              waitOutcome: channelFailure ? "channel-errors" : "healthy",
               gatewayVersion: "2026.8.1",
               gatewayBuildId: "fixture-build",
               activatedPluginErrors: [{ id: "fixture-plugin", error: "fixture load failure" }],
@@ -313,7 +313,7 @@ describe("restart verifier local control identity", () => {
                   detail: "Fixture entry missing",
                 },
               ],
-              ...(requirePluginHealth
+              ...(channelFailure
                 ? { channelProbeErrors: [{ id: "fixture", error: "fixture channel failure" }] }
                 : {}),
             });

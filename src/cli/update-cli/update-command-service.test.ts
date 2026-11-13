@@ -341,9 +341,6 @@ describe("maybeRestartService", () => {
             }),
           ]);
           expect(result.summary).toContain("plugin failures need a retry");
-          expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
-            expect.objectContaining({ requirePluginHealth: false }),
-          );
         }
         expect(onVerified).toHaveBeenCalledOnce();
       }

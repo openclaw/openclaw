@@ -91,7 +91,6 @@ export async function waitForImmutableGateway(params: {
         return result("still-starting");
       case "version-mismatch":
       case "build-id-mismatch":
-      case "plugin-errors":
       case "channel-errors":
       case "stopped-free":
         return result("failed");
@@ -160,7 +159,6 @@ export async function waitForImmutableGateway(params: {
         probeContext: context,
         expectedVersion: version,
         expectedBuildId: buildId,
-        requirePluginHealth: true,
         requireChannelHealth: false,
       };
       waited = await waitForGatewayHealthyRestart({

@@ -112,7 +112,7 @@ describe("shared restart observation deadline", () => {
         service,
         port: 18789,
         deadline,
-        requirePluginHealth: false,
+        requireOwnedListener: true,
         waitForMissingService: phase === "legacy-owner" ? false : undefined,
       }).catch((error: unknown) => error);
       await entered.promise;
@@ -165,7 +165,7 @@ describe("shared restart observation deadline", () => {
         service,
         port: 18789,
         deadline,
-        requirePluginHealth: false,
+        requireOwnedListener: true,
       });
       expect(settled).toMatchObject({ healthy: true, waitOutcome: "healthy", elapsedMs: 0 });
       const entered = createDeferred();
@@ -231,7 +231,7 @@ describe("shared restart observation deadline", () => {
             deadlineOutcome: "snapshot",
             probeTimeoutMs: 5_000,
             requireRunningService: true,
-            requirePluginHealth: false,
+            requireOwnedListener: true,
           });
         } else {
           const observed = await observeUpdateGatewayReadiness({

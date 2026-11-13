@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
-import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { resolveInstallationTarget } from "../infra/installation-target-context.js";
 import { readPackageVersion } from "../infra/package-json.js";
 import { readRestartSentinelReadOnly, writeRestartSentinel } from "../infra/restart-sentinel.js";
@@ -158,10 +157,9 @@ describe("triage --run", () => {
     },
   );
 
-  it.each(["failed", "succeeded with migration", "101 previews"])(
+  it.each(["failed", "101 previews"])(
     "keeps update recovery unresolved without a restart sentinel: %s",
     async (outcome) => {
-      const pendingMigration = outcome.includes("migration");
       const targetVersion = await installationVersion();
       const run = packageRun(targetVersion);
       recordUpdateRunStep(run.runId, {
@@ -171,25 +169,6 @@ describe("triage --run", () => {
         detail: "Doctor could not enter maintenance.",
       });
       finishUpdateRun(run.runId, { status: "failed", reason: "finalize:doctor" });
-      if (pendingMigration) {
-        await recordDeferredPluginMigrations({
-          pending: [
-            {
-              pluginId: "codex",
-              reason: "The plugin has not reported completion of its retained state migration.",
-              command: "openclaw doctor --fix",
-              requiresStateMigration: true,
-            },
-          ],
-        });
-      }
-      if (outcome === "succeeded with migration") {
-        const completed = packageRun(targetVersion);
-        finishUpdateRun(completed.runId, {
-          status: "succeeded",
-          after: { version: targetVersion },
-        });
-      }
       if (outcome === "101 previews") {
         vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1);
         for (let index = 0; index < 101; index += 1) {
@@ -202,9 +181,6 @@ describe("triage --run", () => {
       expect(output()).toContain("Embedded repair unrepaired:");
       expect(output()).toContain("openclaw update repair");
       expect(output()).not.toContain("already resolved");
-      if (pendingMigration) {
-        expect(output()).toContain('Plugin "codex" data/settings upgrade is unfinished');
-      }
       expect(getUpdateRun(run.runId)?.status).toBe("failed");
       expect(await readRestartSentinelReadOnly()).toBeNull();
       expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();

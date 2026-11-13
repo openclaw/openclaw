@@ -179,24 +179,25 @@ describe("resolveGatewayProbeSnapshot", () => {
     },
   );
 
-  it.each(["plugin-errors", "probe-failed"])(
-    "does not claim current local health from %s",
-    async (observation) => {
-      mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue({
-        healthy: true,
-        waitOutcome: "healthy",
-        ...(observation === "plugin-errors"
-          ? { activatedPluginErrors: ["fixture plugin failed"] }
-          : {}),
-      });
-      mocks.probeGateway.mockResolvedValue({
-        ...unreachableProbe(),
-        ok: observation !== "probe-failed",
-      });
-      const result = await resolveGatewayProbeSnapshot();
-      expect(result.localGatewayHealthy).toBe(false);
-    },
-  );
+  it.each([
+    { observation: "plugin-errors", healthy: true },
+    { observation: "probe-failed", healthy: false },
+  ])("reports local health with $observation", async ({ observation, healthy }) => {
+    mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue({
+      healthy: true,
+      waitOutcome: "healthy",
+      // Plugin load errors are notices; the Gateway still serves.
+      ...(observation === "plugin-errors"
+        ? { activatedPluginErrors: ["fixture plugin failed"] }
+        : {}),
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ...unreachableProbe(),
+      ok: observation !== "probe-failed",
+    });
+    const result = await resolveGatewayProbeSnapshot();
+    expect(result.localGatewayHealthy).toBe(healthy);
+  });
 
   it.each([true, false])(
     "uses bounded local fallback with explicit credentials=%s",

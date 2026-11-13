@@ -36,6 +36,7 @@ type StatusDegradationSummary = Pick<
   StatusSummary,
   | "degradedSecretOwners"
   | "degradedPlugins"
+  | "failedPlugins"
   | "startupMigrationWarning"
   | "modelReasoningWarning"
   | "installationReplacementWarning"
@@ -87,6 +88,13 @@ function buildStatusDegradationRows(
     addWarning(
       "Degraded plugins",
       `${plugins.length} configured-unavailable · ${plugins.map((plugin) => plugin.pluginId).join(", ")}`,
+    );
+  }
+  const failed = summary.failedPlugins ?? [];
+  if (failed.length > 0) {
+    addWarning(
+      "Plugins not loaded",
+      `${failed.join(", ")} · data kept; retried on next start · run ${formatCliCommand("openclaw doctor")}`,
     );
   }
   const reload = summary.pluginReload;
