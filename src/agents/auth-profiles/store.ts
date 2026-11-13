@@ -63,7 +63,6 @@ import {
   captureAuthProfileStoreScope,
   getScopedAuthProfileEnv,
   getScopedSharedAuthStore,
-  getWorkerAuthProfileWrites,
   isEnvOnlyAuthProfileRuntime,
   resolveRuntimeAuthProfileAgentDir,
 } from "./runtime-scope.js";
@@ -101,10 +100,7 @@ import {
   restoreOwnedRuntimeAuthProfileStoreSnapshot,
   type OwnedRuntimeAuthProfileStoreSnapshotEntry,
 } from "./runtime-snapshots.js";
-import {
-  prepareScopedSharedAuthProfileCredentialRead,
-  prepareScopedSharedAuthProfileStore,
-} from "./shared-store-scope.js";
+import { prepareScopedSharedAuthProfileStore } from "./shared-store-scope.js";
 import { loadPersistedAuthProfileStoreFromRows } from "./sqlite-read.js";
 import {
   deletePersistedAuthProfileStoreRaw,
@@ -177,6 +173,7 @@ export {
   getScopedSharedAuthStore,
   isEnvOnlyAuthProfileRuntime,
   resolveRuntimeAuthProfileAgentDir,
+  resolveRuntimeAuthProfileLoadOptions,
 };
 
 export function applyScopedAuthReadThrough(store: AuthProfileStore): AuthProfileStore {
@@ -1122,61 +1119,6 @@ export function createAuthProfileStoreRuntime(
     );
   }
 
-  /** Retain credential ownership after the temporary worker-read scope is disposed. */
-  async function prepareAuthProfileCredentialRead(params: {
-    agentDir?: string;
-    profileId: string;
-    store: AuthProfileStore;
-  }): Promise<(() => AuthProfileStore["profiles"][string] | undefined) | null> {
-    // Catalog workers return published facts; only the host retains authority for effects.
-    if (isEnvOnlyAuthProfileRuntime() || getWorkerAuthProfileWrites()) {
-      return null;
-    }
-    return withPreparedAuthProfileStoreReads(
-      params.agentDir,
-      { readOnly: true, profileId: params.profileId },
-      async (reads) => {
-        let requestedPath: string | undefined;
-        const prepare = async (agentDir: string | undefined) => {
-          let readCurrent: AuthProfileReadOwner["readCurrentCredential"];
-          await reads.readStore(agentDir, {
-            ...reads.options,
-            onReadOwner: (owner) => {
-              requestedPath ??= owner.databasePath;
-              readCurrent = owner.readCurrentCredential;
-            },
-          });
-          if (!readCurrent) {
-            throw new Error("Auth profile credential authority was not prepared");
-          }
-          return readCurrent;
-        };
-        const requested = await prepare(reads.effectiveAgentDir);
-        const scopedSharedStore = reads.runInCapturedScope(getScopedSharedAuthStore);
-        let inherited: typeof requested | undefined;
-        if (scopedSharedStore) {
-          inherited = await prepareScopedSharedAuthProfileCredentialRead(
-            reads.env,
-            params.profileId,
-          );
-        } else if (reads.effectiveAgentDir) {
-          const inheritedAgentDir = reads.options.inheritedAuthDir;
-          const inheritedPath = inheritedAgentDir
-            ? resolveAgentAuthPath(inheritedAgentDir)
-            : await reads.sharedPath();
-          if (requestedPath !== inheritedPath) {
-            inherited = await prepare(inheritedAgentDir);
-          }
-        }
-        // Keep the absent local dependency: a later local insert shadows shared credentials.
-        const readCurrent = () => requested() ?? inherited?.();
-        return readCurrent() || params.store.runtimePersistedProfileIds?.includes(params.profileId)
-          ? readCurrent
-          : null;
-      },
-    );
-  }
-
   /** Resolve persisted ownership from worker-prepared rows, including inherited OAuth. */
   async function resolvePersistedAuthProfileOwnerAgentDirAsync(params: {
     agentDir?: string;
@@ -1717,7 +1659,6 @@ export function createAuthProfileStoreRuntime(
     saveAuthProfileStoreIfPersistenceSnapshotMatches,
     findPersistedAuthProfileCredential,
     findPersistedAuthProfileCredentialAsync,
-    prepareAuthProfileCredentialRead,
     resolvePersistedAuthProfileOwnerAgentDirAsync,
     prepareAuthProfileProvider,
   };
