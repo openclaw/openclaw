@@ -357,14 +357,15 @@ export class EmbeddedBlockChunker {
       removedFenceInfoLength += removedLength;
     }
     const tables = findTableSpans(source, fenceSpans, maxChars, !force);
-    const unbreakableSpans = scanUnbreakableSpans(source, fenceSpans, hardMaxChars).map((span) => {
+    const unbreakableSpans = scanUnbreakableSpans(source, fenceSpans, hardMaxChars);
+    for (const span of unbreakableSpans) {
       const boundary = source.slice(0, span.start).match(/(?:\n[\t ]*)+$/)?.[0] ?? "";
       // Keep a fitting link's paragraph boundary in the delivered text, not just
       // its source metadata, when link protection moves the preferred cut.
-      return boundary && span.end - span.start + boundary.length <= hardMaxChars
-        ? { ...span, start: span.start - boundary.length }
-        : span;
-    });
+      if (boundary && span.end - span.start + boundary.length <= hardMaxChars) {
+        span.start -= boundary.length;
+      }
+    }
     const unsafe =
       tables.length > 0 || unbreakableSpans.length > 0
         ? mergeOverlappingBreakSpans([...fenceSpans, ...tables, ...unbreakableSpans])

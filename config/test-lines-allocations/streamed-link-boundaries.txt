@@ -1,0 +1,4 @@
+# Preserve regressions for streamed Markdown links, explicit transport ceilings,
+# and paragraph/source-boundary interactions after native chunker reconciliation.
+# The PR adds 419 net test lines; 19 exceed the ordinary 400-line allowance.
+19
