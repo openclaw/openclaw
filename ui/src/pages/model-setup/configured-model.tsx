@@ -150,7 +150,7 @@ export function ConfiguredModel(
     const detail = configuredCandidate()?.detail.trim();
     return !detail || configuredCandidate()?.kind === "existing-model"
       ? name
-      : detail.toLowerCase().includes(name.toLowerCase())
+      : detail.normalize("NFC").toLowerCase().includes(name.normalize("NFC").toLowerCase())
         ? detail
         : `${name} · ${detail}`;
   };

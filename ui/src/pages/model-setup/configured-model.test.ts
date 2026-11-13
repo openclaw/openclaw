@@ -117,6 +117,34 @@ describe("ConfiguredModel", () => {
     expect(text(container)).not.toContain("service is running and reachable");
   });
 
+  it("treats NFD model details as matching the NFC configured name", () => {
+    const nfcName = "crème-brûlée";
+    const nfdName = nfcName.normalize("NFD");
+    const nfdDetail = `Running ${nfdName} on device`;
+    const result: SystemAgentSetupDetectResult = {
+      candidates: [
+        {
+          kind: "provider-auto:custom",
+          brandId: "custom",
+          label: "Custom",
+          detail: nfdDetail,
+          modelRef: `custom/${nfcName}`,
+          recommended: false,
+          credentials: true,
+        },
+      ],
+      manualProviders: [],
+      prepareOptions: [],
+      workspace: "/tmp/workspace",
+      configuredModel: `custom/${nfcName}`,
+      setupComplete: true,
+    };
+    const { container } = mount(result);
+
+    expect(text(container)).toContain(nfdDetail);
+    expect(text(container)).not.toContain(`${nfcName} ·`);
+  });
+
   it("updates the provider and model to the successful verification result", () => {
     const { container, setVerify } = mount(
       {
