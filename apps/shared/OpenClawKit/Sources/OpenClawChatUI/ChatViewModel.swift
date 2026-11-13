@@ -667,7 +667,12 @@ public final class OpenClawChatViewModel {
 
     @discardableResult
     public func resumeFromForeground() -> Task<Void, Never> {
-        Task { await self.refreshRunStateAfterForeground() }
+        // Reconcile wall-clock expiry before presenting controls, even if a sleeping task has not resumed yet.
+        let now = Date()
+        for model in self.questionCards where model.localExpiryDelay(at: now) == 0 {
+            self.expireQuestionIfNeeded(model, at: now)
+        }
+        return Task { await self.refreshRunStateAfterForeground() }
     }
 
     public func abort() {
