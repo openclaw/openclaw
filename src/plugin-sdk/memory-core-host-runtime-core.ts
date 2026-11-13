@@ -11,7 +11,11 @@ export {
 } from "../agents/tools/common.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export { resolveCronStyleNow } from "../agents/current-time.js";
-export { resolveConfiguredAgentId, resolveDefaultAgentId } from "../agents/agent-scope.js";
+export {
+  resolveAgentOperationAgentId,
+  resolveConfiguredAgentId,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 export { listAgentIds, resolveSessionAgentIds } from "./agent-scope-runtime.js";
 export {
   resolveMemorySearchConfig,
