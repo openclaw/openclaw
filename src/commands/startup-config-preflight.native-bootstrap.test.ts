@@ -218,6 +218,8 @@ it.each([
   ["offline-maintenance", "native-bootstrap"],
   ["schema-lease", "webhook-completion-read"],
   ["offline-maintenance", "webhook-completion-read"],
+  ["schema-lease", "after-webhook-completion-read"],
+  ["offline-maintenance", "after-webhook-completion-read"],
 ] as const)("handles a foreign %s held before %s", async (holder, stage) => {
   await withOpenClawTestState({ label: `gateway-foreign-${holder}` }, async (state) => {
     await state.writeConfig({ gateway: { mode: "local" }, plugins: { enabled: false } });
@@ -243,7 +245,14 @@ it.each([
         ) {
           foreignOwner = (await holdForeignStateOwner(databasePath, holder, stop.signal)).exited;
         }
-        return await run();
+        const result = await run();
+        if (
+          stage === "after-webhook-completion-read" &&
+          name === "doctor.config-preflight.webhook-completion-read"
+        ) {
+          foreignOwner = (await holdForeignStateOwner(databasePath, holder, stop.signal)).exited;
+        }
+        return result;
       },
     });
     try {
