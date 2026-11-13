@@ -68,6 +68,30 @@ export function window(log: ProbeLog, from: number, to: number): ProbeLog {
 
 const isRow = (key: string) => key !== "composer";
 
+type Edges = [number, number];
+
+/**
+ * How far a row moved between two recorded positions. A row that kept its height moved as a whole,
+ * wherever it sits, including a long reply spanning the screen. When the height changed, read an
+ * edge the reader can see: the top when it is on screen in both, else the bottom. Replies grow
+ * taller than the screen; their off-screen top can move thousands of points while the visible text
+ * holds still. Undefined when the height changed and neither edge is visible in both.
+ */
+function visibleShift(before: Edges, after: Edges, visibleBottom: number) {
+  const top = after[0] - before[0];
+  if (Math.abs(after[1] - before[1] - top) <= STILL_PT) {
+    return top;
+  }
+  const onScreen = (y: number) => y >= 0 && y <= visibleBottom;
+  if (onScreen(before[0]) && onScreen(after[0])) {
+    return top;
+  }
+  if (onScreen(before[1]) && onScreen(after[1])) {
+    return after[1] - before[1];
+  }
+  return undefined;
+}
+
 /**
  * How tagged rows moved between consecutive recorded frames. Any downward step counts as backward
  * motion. A key in `aliases` continues the key it maps to (the final message row replacing the
@@ -78,44 +102,54 @@ export function motion(
   options: { aliases?: Record<string, string> } = {},
 ): { teleports: number; backwardPt: number; largestStepPt: number; maxDriftPt: number } {
   const aliases = options.aliases ?? {};
-  const top = (frame: ProbeFrame) => {
-    const tops = new Map<string, number>();
+  const rows = (frame: ProbeFrame) => {
+    const edges = new Map<string, Edges>();
     const replaced = new Set(
       Object.keys(frame.f).flatMap((key) => (aliases[key] ? [aliases[key]] : [])),
     );
-    for (const [key, [minY]] of Object.entries(frame.f)) {
+    for (const [key, rect] of Object.entries(frame.f)) {
       if (isRow(key) && !replaced.has(key)) {
-        tops.set(aliases[key] ?? key, minY);
+        edges.set(aliases[key] ?? key, rect);
       }
     }
-    return tops;
+    return edges;
   };
   let teleports = 0;
   let backwardPt = 0;
   let largestStepPt = 0;
   let maxDriftPt = 0;
-  const firstSeen = new Map<string, number>();
-  let previous: Map<string, number> | undefined;
+  const firstSeen = new Map<string, Edges>();
+  let previous: Map<string, Edges> | undefined;
   for (const frame of frames) {
-    const current = top(frame);
-    for (const [key, y] of current) {
-      if (!firstSeen.has(key)) {
-        firstSeen.set(key, y);
-      }
-      maxDriftPt = Math.max(maxDriftPt, Math.abs(y - (firstSeen.get(key) ?? y)));
+    // Rows below the composer's top are hidden behind it.
+    const visibleBottom = frame.f.composer?.[0] ?? Number.POSITIVE_INFINITY;
+    const current = rows(frame);
+    for (const [key, edges] of current) {
+      const first = firstSeen.get(key) ?? edges;
+      firstSeen.set(key, first);
+      maxDriftPt = Math.max(maxDriftPt, Math.abs(visibleShift(first, edges, visibleBottom) ?? 0));
     }
     if (previous) {
       let stepBackward = 0;
-      for (const [key, y] of current) {
+      for (const [key, edges] of current) {
         const before = previous.get(key);
-        if (before === undefined) {
+        if (!before) {
           continue;
         }
-        const dy = y - before;
-        largestStepPt = Math.max(largestStepPt, Math.abs(dy));
-        if (Math.abs(dy) > TELEPORT_PT) {
+        // A jump moves both edges; a reply finishing or growing moves only one.
+        const top = edges[0] - before[0];
+        const bottom = edges[1] - before[1];
+        if (
+          Math.sign(top) === Math.sign(bottom) &&
+          Math.min(Math.abs(top), Math.abs(bottom)) > TELEPORT_PT
+        ) {
           teleports += 1;
         }
+        const dy = visibleShift(before, edges, visibleBottom);
+        if (dy === undefined) {
+          continue;
+        }
+        largestStepPt = Math.max(largestStepPt, Math.abs(dy));
         if (dy > STILL_PT) {
           stepBackward = Math.max(stepBackward, dy);
         }
