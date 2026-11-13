@@ -30,6 +30,12 @@ export async function searchProjectedSessionTranscripts(params: {
   const projection = requireSessionRowProjection(params.context);
   let searchIdentities: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>> | undefined;
   type SelectedScope = {
+    witness?: {
+      revision: object;
+      cfg: typeof projection.state.cfg;
+      identities: object | undefined;
+      audience: string;
+    };
     stores: Map<string, { target: SessionStoreTarget; rows: Map<string, SelectionRow> }>;
     count: number;
   };
@@ -42,6 +48,32 @@ export async function searchProjectedSessionTranscripts(params: {
       now: Date.now(),
       searchIdentities,
     });
+    const state = projection.state;
+    // Reuse only within this request, after reacquiring current viewer authority.
+    // Invitations and clock/runtime-dependent scopes still reselect every row.
+    const witness =
+      presentation.sharing.sessionCap !== "invited" &&
+      !params.scope.search &&
+      !params.scope.spawnedBy &&
+      !params.scope.activeOnly &&
+      params.scope.activeMinutes === undefined
+        ? {
+            revision: state.revision,
+            cfg: state.cfg,
+            identities: state.rowContext.identityProjection?.revision,
+            audience: presentation.sharing.getCacheKey(),
+          }
+        : undefined;
+    if (
+      witness &&
+      previous?.witness &&
+      witness.revision === previous.witness.revision &&
+      witness.cfg === previous.witness.cfg &&
+      witness.identities === previous.witness.identities &&
+      witness.audience === previous.witness.audience
+    ) {
+      return { ...previous, presentation, unchanged: true };
+    }
     const { entries } = withAgentRosterFactsBatch(prepared.cfg, () =>
       // Transcript search consumes membership, not the list's owner-facet presentation.
       filterSessionEntries(filters, undefined, false),
@@ -72,6 +104,7 @@ export async function searchProjectedSessionTranscripts(params: {
       stores.set(row.storeTarget.storePath, store);
     }
     return {
+      witness,
       stores,
       count,
       presentation,

@@ -22,6 +22,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as sessionListFilters from "../session-list-filters.js";
 import { retainSessionListForegroundWork } from "../session-projection-work.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import {
@@ -508,6 +509,14 @@ test("search prepares the full scope and rechecks visibility while materializing
       ok: true,
       payload: { results: [{ sessionKey: key }], sessions: [{ key }] },
     });
+    // A stable archived scope should not enumerate every row after both read awaits.
+    const selections = vi.spyOn(sessionListFilters, "filterSessionEntries");
+    expect(await search(context, client, params)).toMatchObject({
+      ok: true,
+      payload: { results: [{ sessionKey: key }], sessions: [{ key }] },
+    });
+    expect(selections).toHaveBeenCalledTimes(1);
+    selections.mockRestore();
     const projection = expectDefined(getSessionRowProjection(context), "search projection");
     const prepare = projection.withPreparedExactRows.bind(projection);
     vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(
