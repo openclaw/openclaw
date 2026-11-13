@@ -14,9 +14,15 @@ type NpmPackageTargetStatus = {
   version: string | null;
   nodeEngine: string | null;
   schemaVersions?: OpenClawSchemaVersions;
+  /** The package's own unpacked bytes (`dist.unpackedSize`), without its dependencies. */
+  unpackedSize?: number;
   error?: string;
   versionMissing?: boolean;
 };
+
+function readUnpackedSize(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
 
 export type NpmMetadataCommandRunner = (
   argv: string[],
@@ -59,10 +65,14 @@ function parseNpmPackageTargetMetadata(
       ? { schemaVersions: rec["openclaw.schemaVersions"] }
       : rec.openclaw,
   });
+  const unpackedSize = readUnpackedSize(
+    rec["dist.unpackedSize"] ?? (isRecord(rec.dist) ? rec.dist.unpackedSize : undefined),
+  );
   return {
     version: toOptionalTrimmedString(rec.version),
     nodeEngine,
     ...(schemaVersions ? { schemaVersions } : {}),
+    ...(unpackedSize ? { unpackedSize } : {}),
   };
 }
 
@@ -164,15 +174,18 @@ export async function fetchNpmPackageTargetStatus(params: {
         version?: unknown;
         engines?: { node?: unknown };
         openclaw?: { schemaVersions?: unknown };
+        dist?: { unpackedSize?: unknown };
       }>(params);
       const schemaVersions = parsePackageOpenClawSchemaVersions({
         ...json,
         name: params.packageName ?? PUBLIC_NPM_PACKAGE_NAME,
       });
+      const unpackedSize = readUnpackedSize(json.dist?.unpackedSize);
       return {
         version: toOptionalTrimmedString(json.version),
         nodeEngine: toOptionalTrimmedString(json.engines?.node),
         ...(schemaVersions ? { schemaVersions } : {}),
+        ...(unpackedSize ? { unpackedSize } : {}),
       };
     }
     const runCommand = params.runCommand ?? runCommandWithTimeout;
@@ -185,6 +198,7 @@ export async function fetchNpmPackageTargetStatus(params: {
         "version",
         "engines.node",
         "openclaw.schemaVersions",
+        "dist.unpackedSize",
         "--json",
         "--global",
       ],

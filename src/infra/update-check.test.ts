@@ -134,6 +134,20 @@ it.each([
   },
 );
 
+it("reads the target's unpacked size from both metadata readers", async () => {
+  mockHttp.intercept({
+    url: "https://registry.npmjs.org/openclaw/2026.11.9",
+    reply: { json: { name: "openclaw", version: "2026.11.9", dist: { unpackedSize: 275525970 } } },
+  });
+  const registry = await fetchNpmPackageTargetStatus({ target: "2026.11.9" });
+  const npm = await fetchNpmPackageTargetStatus({
+    target: "2026.11.9",
+    runCommand: async () => commandResult({ version: "2026.11.9", "dist.unpackedSize": 275525970 }),
+  });
+  expect(registry.unpackedSize).toBe(275525970);
+  expect(npm.unpackedSize).toBe(275525970);
+});
+
 it("normalizes npm 12 singleton-array metadata", async () => {
   const schemaVersions = { state: 3, agent: 11 };
   const runCommand = async () =>

@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 
-// A package update stages a second install (about 660 MiB in 2026.11) plus npm's
-// tarball cache and temp files on the install volume.
-const PACKAGE_UPDATE_STAGING_BYTES = 1024 * 1024 * 1024;
+// Measured for openclaw 2026.11.3 (dist.unpackedSize 263 MiB): a fresh global install with its
+// dependencies took 662 MiB (2.5x) and npm's cache 490 MiB (1.9x), so a stage needs about 4.4x.
+const PACKAGE_UPDATE_STAGING_TENTHS = 44;
 
 function finiteNonNegativeNumber(value: unknown): number | null {
   const numberValue = Number(value);
@@ -72,12 +72,15 @@ export function formatDiskSpaceBytes(bytes: number): string {
 }
 
 /** One refusal line when the install volume cannot hold a staged package update. */
-export function describePackageStagingShortfall(targetPath: string): string | null {
+export function describePackageStagingShortfall(
+  targetPath: string,
+  unpackedSize: number,
+): string | null {
+  const required = Math.ceil((unpackedSize * PACKAGE_UPDATE_STAGING_TENTHS) / 10);
   const snapshot = tryReadDiskSpace(targetPath);
   // Unmeasurable space is not a shortfall; the install's own ENOSPC handling still applies.
-  if (!snapshot || snapshot.availableBytes >= PACKAGE_UPDATE_STAGING_BYTES) {
+  if (!snapshot || snapshot.availableBytes >= required) {
     return null;
   }
-  const missing = PACKAGE_UPDATE_STAGING_BYTES - snapshot.availableBytes;
-  return `Update refused: ${formatDiskSpaceBytes(snapshot.availableBytes)} free on the volume holding ${snapshot.checkedPath}; a package update needs about ${formatDiskSpaceBytes(PACKAGE_UPDATE_STAGING_BYTES)}. Free ${formatDiskSpaceBytes(missing)} there, then retry openclaw update. No changes were made.`;
+  return `Update refused: ${formatDiskSpaceBytes(snapshot.availableBytes)} free on the volume holding ${snapshot.checkedPath}; this package update needs about ${formatDiskSpaceBytes(required)}. Free ${formatDiskSpaceBytes(required - snapshot.availableBytes)} there, then retry openclaw update. No changes were made.`;
 }

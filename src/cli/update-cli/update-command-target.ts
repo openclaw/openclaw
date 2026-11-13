@@ -330,6 +330,7 @@ export async function resolveUpdateCommandTarget(
       let packageAlreadyCurrent = false;
       let packageTargetSchemaVersions: OpenClawSchemaVersions | undefined;
       let packageRuntimeTarget: Parameters<typeof resolvePackageRuntimePreflight>[0]["target"];
+      let packageUnpackedSize: number | undefined;
       let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
       let managedServiceNodeRunner: string | undefined;
       let packageUpdateNodeRunner: string | undefined;
@@ -565,6 +566,7 @@ export async function resolveUpdateCommandTarget(
               return undefined;
             }
             packageTargetSchemaVersions = targetMetadata.schemaVersions;
+            packageUnpackedSize = targetMetadata.unpackedSize;
             // Keep the selected version and its metadata together when a dist-tag moves.
             packageRuntimeTarget = {
               version: targetVersion,
@@ -656,9 +658,16 @@ export async function resolveUpdateCommandTarget(
         return undefined;
       }
 
-      if (updateInstallKind === "package" && !opts.dryRun && !packageAlreadyCurrent) {
+      // Registry metadata without dist.unpackedSize (mirrors, older registries) skips this check.
+      if (
+        updateInstallKind === "package" &&
+        !opts.dryRun &&
+        !packageAlreadyCurrent &&
+        packageUnpackedSize
+      ) {
         const diskShortfall = describePackageStagingShortfall(
           packageInstallTarget?.packageRoot ? path.dirname(packageInstallTarget.packageRoot) : root,
+          packageUnpackedSize,
         );
         if (diskShortfall) {
           await refuseUpdate("preflight-insufficient-space", diskShortfall, [

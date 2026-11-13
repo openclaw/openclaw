@@ -1053,8 +1053,9 @@ changes nothing. The saved report keeps the details.
   `git rev-parse --path-format=absolute` instead of failing. The updater looks
   for Git next to its Node first, then in system directories such as
   `/usr/bin`, so the refusal names the Git it found.
-- **Disk (package installs):** about 1 GiB free on the volume that holds the
-  global package directory, for the staged install and npm's cache. The state
+- **Disk (package installs):** the install volume must hold about 4.4 times the
+  target's registry `dist.unpackedSize` (the package, its dependencies and npm's
+  cache). Registries that omit `dist.unpackedSize` skip this check. The state
   snapshot has its own measured check.
 
 Every attempt ends with one update run record. Its `cause` is one of `none`,

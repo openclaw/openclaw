@@ -42,6 +42,11 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
 
   it("refuses a package update whose install volume cannot hold the staged package", async () => {
     await f.mockPackageInstallAtCaseDir();
+    vi.mocked(f.fetchNpmPackageTargetStatus).mockImplementation(async ({ target }) => ({
+      version: /^\d/u.test(target) ? target : "9999.0.0",
+      nodeEngine: ">=22.19.0",
+      unpackedSize: 100 * 1024 * 1024,
+    }));
     diskSpace(256);
 
     await expect(f.updateCommand({ yes: true, json: true })).rejects.toMatchObject({ code: 1 });

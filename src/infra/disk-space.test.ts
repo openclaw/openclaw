@@ -40,16 +40,17 @@ describe("disk-space helpers", () => {
     }
   });
 
-  it("refuses package staging below 1 GiB with the amount to free", () => {
+  it("refuses package staging sized from the target's unpacked size", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-disk-space-"));
     try {
       const statfs = vi.spyOn(fs, "statfsSync");
+      const unpacked = 100 * 1024 * 1024;
       statfs.mockReturnValue(statfsFixture({ bavail: 256, bsize: 1024 * 1024 }));
-      expect(describePackageStagingShortfall(tempDir)).toBe(
-        `Update refused: 256 MiB free on the volume holding ${tempDir}; a package update needs about 1.0 GiB. Free 768 MiB there, then retry openclaw update. No changes were made.`,
+      expect(describePackageStagingShortfall(tempDir, unpacked)).toBe(
+        `Update refused: 256 MiB free on the volume holding ${tempDir}; this package update needs about 440 MiB. Free 184 MiB there, then retry openclaw update. No changes were made.`,
       );
-      statfs.mockReturnValue(statfsFixture({ bavail: 1024, bsize: 1024 * 1024 }));
-      expect(describePackageStagingShortfall(tempDir)).toBeNull();
+      statfs.mockReturnValue(statfsFixture({ bavail: 440, bsize: 1024 * 1024 }));
+      expect(describePackageStagingShortfall(tempDir, unpacked)).toBeNull();
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
