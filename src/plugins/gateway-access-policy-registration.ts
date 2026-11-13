@@ -28,10 +28,17 @@ export function assertBoundGatewayAccessDecision(
   if (!instance || !instance.acceptingCalls || instance.owner?.revoked) {
     return assertCurrent();
   }
-  const scope = pluginInvocationContext.getStore();
-  // enter() performs this lookup even for an active call: closed scopes must refuse.
-  scope?.lookup(instance);
-  assertOperatorAccessDecision(decision, assertCurrent, scope, pluginInstanceInvocation.getStore());
+  return runOutsideReleasedPluginInvocationScope(() => {
+    const scope = pluginInvocationContext.getStore();
+    // Live scopes still admit the caller before sharing a policy decision.
+    scope?.lookup(instance);
+    assertOperatorAccessDecision(
+      decision,
+      assertCurrent,
+      scope,
+      pluginInstanceInvocation.getStore(),
+    );
+  });
 }
 
 // Native AbortSignal composition stores internal WeakRefs. Recursively proxying
