@@ -14,7 +14,6 @@ import { prepareConfiguredModelAliases } from "./prepared-model-runtime.configur
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 import { buildAgentHarnessBasePrompt } from "./system-prompt-harness-base.js";
-import * as systemPrompt from "./system-prompt.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 vi.mock("../tts/tts-settings.js", async (importOriginal) => ({
@@ -190,6 +189,45 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(prompt.includes("Toggle /reasoning")).toBe(enabled);
     expect(prompt.includes("/status shows when enabled.")).toBe(enabled);
   });
+
+  it.each([
+    { toolNames: ["exec"] },
+    { toolNames: ["exec", "openclaw"] },
+    { toolNames: ["exec", "gateway", "openclaw"] },
+    { toolNames: ["gateway", "openclaw"] },
+  ])(
+    "distinguishes component work from supervised maintenance with tools $toolNames",
+    async ({ toolNames }) => {
+      const config: OpenClawConfig = { commands: { restart: false } };
+      const prompts = [
+        await buildPrompt({ config, toolNames }),
+        buildAgentHarnessBasePrompt({ config, toolNames }),
+      ];
+      for (const prompt of prompts) {
+        expect(prompt).toContain(
+          "maintenance tools, not exec or detached jobs, for updates, installation replacement, or service stop/restart",
+        );
+        expect(prompt).not.toContain("for installation changes or service control");
+        expect(prompt).toContain("the Gateway must retain a working restart path before it stops");
+        expect(prompt).toContain(
+          "If runtime admission refuses, report the concrete blocker; do not bypass owner/operator authorization or retry the denied operation through exec",
+        );
+        expect(prompt.includes("perform the work with `gateway`: update.run")).toBe(
+          toolNames.includes("gateway"),
+        );
+        if (toolNames.includes("exec")) {
+          expect(prompt).toContain(
+            "For explicitly authorized non-disruptive component builds (such as `pnpm build:iroh`), dependency work, or repairs with no dedicated maintenance action, use exec under normal permissions and approvals",
+          );
+          expect(prompt).toContain(
+            "Do not refuse solely because the work is on the Gateway host or no maintenance action exists",
+          );
+        } else {
+          expect(prompt).not.toContain("use exec under normal permissions and approvals");
+        }
+      }
+    },
+  );
 
   it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
     "does not recommend disabled update or restart commands with tools $toolNames",
@@ -415,7 +453,6 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     { name: "absent", config: undefined },
     { name: "empty", config: {} },
   ])("preserves owner display semantics with $name config", async ({ config }) => {
-    const render = vi.spyOn(systemPrompt, "buildAgentSystemPrompt");
     const prompt = await buildPrompt({
       config,
       ownerNumbers: ["owner-a"],
@@ -423,17 +460,12 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       ownerDisplaySecret: "caller-secret", // pragma: allowlist secret
     });
 
-    expect(render).toHaveBeenCalledTimes(1);
-    const renderParams = render.mock.calls[0]?.[0];
-    expect(Object.hasOwn(renderParams ?? {}, "ownerDisplay")).toBe(true);
-    expect(Object.hasOwn(renderParams ?? {}, "ownerDisplaySecret")).toBe(true);
-    expect(renderParams?.ownerDisplay).toBe(config ? "raw" : "hash");
-    expect(renderParams?.ownerDisplaySecret).toBe(config ? undefined : "caller-secret");
-    expect(prompt).toMatch(
+    expect(prompt).toContain(
       config
-        ? /Allowlisted senders: owner-a\. Allowlisted != owner\./
-        : /Allowlisted senders: [a-f0-9]{12}\. Allowlisted != owner\./,
+        ? "Allowlisted senders: owner-a. Allowlisted != owner."
+        : "Allowlisted senders: 5e50de41a7a7. Allowlisted != owner.",
     );
+    expect(prompt).not.toContain("caller-secret");
   });
 
   const prefer = { subagents: { delegationMode: "prefer" as const } };
