@@ -550,6 +550,12 @@ export async function upgradeStateDirectory(params: {
     if (!planWritten) {
       // Nothing live changed; the next start retries from scratch.
       fs.rmSync(workDir, { recursive: true, force: true });
+      if (isMachineFailure(error)) {
+        throw new Error(
+          `State upgrade to ${VERSION} stopped: ${(error as Error).message}. Nothing in ${stateDir} was changed. Free disk space (about the size of the state directory) and start the Gateway again.`,
+          { cause: error },
+        );
+      }
     }
     throw error;
   }
