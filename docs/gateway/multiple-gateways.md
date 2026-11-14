@@ -147,6 +147,83 @@ openclaw --profile rescue browser status
 - `doctor --deep` also reports when a recognizable service definition or native service manager could not be inspected. Restore inspection access and rerun Doctor; an incomplete scan does not prove that no other service exists. Inspection warnings never authorize service cleanup.
 - `gateway probe` warning text such as `multiple reachable gateway identities detected` is expected in two cases. You intentionally run more than one isolated gateway, or OpenClaw cannot prove that reachable check targets are the same gateway. An SSH tunnel, proxy URL, or configured remote URL to the same gateway is one gateway with multiple transports, even when transport ports differ.
 
+## Windows notes
+
+Two Gateways on one Windows host work, but Windows adds a few behaviors that are
+easy to miss and expensive to diagnose.
+
+### Launch the second Gateway from a clean environment
+
+Prefer the named-profile workflow for the second instance:
+
+```bat
+openclaw --profile ops gateway --port 19789
+```
+
+A launcher that starts from a shell inside the first Gateway's process inherits
+`OPENCLAW_PROFILE`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`,
+`OPENCLAW_GATEWAY_PORT`, and the `OPENCLAW_SERVICE_*` variables. Keeping them
+starts the first instance's config, state, and port a second time, and the child
+loses to state-directory ownership or the busy port.
+
+If one launcher must start both instances, pin separate paths and a separate
+base port for the second one:
+
+```bat
+set "OPENCLAW_STATE_DIR=C:\Users\<you>\.openclaw-ops"
+set "OPENCLAW_CONFIG_PATH=C:\Users\<you>\.openclaw-ops\openclaw.json"
+set "OPENCLAW_GATEWAY_PORT=19789"
+"<node.exe>" "<openclaw>\dist\index.js" gateway
+```
+
+Symptom to recognize: the second instance's startup log names the first
+instance's state directory, or it refuses to start because that directory is
+already owned.
+
+### A copied config also copies `gateway.tailscale.mode`
+
+If one instance sets `gateway.tailscale.mode: "serve"`, a copied config gives the
+second instance the same mode. Port 443 is already bound by the first instance,
+so the second exits with code 78. Set `gateway.tailscale.mode: "off"` on every
+instance that must not publish itself.
+
+### npm installs require Node `>=24.22.1 <25 || >=26.12.1`
+
+The published package declares that engines range. A version manager without a
+matching shim fails the install even when a suitable runtime is already on disk.
+Unpack a portable Node in range, point the launcher at that `node.exe`, and
+install into a dedicated prefix:
+
+```bat
+npm i -g --prefix "D:\Program Files\openclaw" openclaw
+```
+
+### Scheduled-task ACLs block non-elevated changes
+
+A task registered from an elevated shell grants the interactive user read-only
+access (`FR`). Reading still works, but changing or disabling it fails with
+*Access is denied* / `0x80070005`:
+
+```powershell
+(Get-ScheduledTask -TaskName 'OpenClaw Gateway').Actions   # works
+Disable-ScheduledTask -TaskName 'OpenClaw Gateway'         # denied
+```
+
+Either register the task under the account and integrity level that will manage
+it later, keep an elevated shell for task changes, or leave a no-op launcher at
+the task's target path as a documented soft-disable (the task starts, logs, and
+exits `0`).
+
+### A 200 on `/` does not prove token isolation
+
+The UI and health endpoints answer before RPC authentication, so every reachable
+port looks up even when the token is wrong. Prove isolation with an authenticated
+RPC call in both directions; a foreign token must be rejected:
+
+```powershell
+openclaw gateway call health --url ws://127.0.0.1:18800 --token <token-of-other-instance> --json
+```
+
 ## Related
 
 - [Gateway runbook](/gateway)
