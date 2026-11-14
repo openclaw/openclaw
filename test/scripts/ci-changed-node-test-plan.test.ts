@@ -632,7 +632,6 @@ describe("CI changed Node test plan", () => {
         "test/scripts/pr-merge-admission.test.ts",
         "test/scripts/pr-merge-outcome.test.ts",
         "test/scripts/pr-merge-prior-ci-artifact-build.test.ts",
-        "test/scripts/pr-merge-prior-ci.test.ts",
         "test/scripts/pr-merge-receipt.test.ts",
         "test/scripts/pr-merge-recovery.test.ts",
         "test/scripts/pr-worktree-interruption.test.ts",
@@ -689,7 +688,6 @@ describe("CI changed Node test plan", () => {
     (runnerBackend) => {
       const targets = [
         "test/scripts/pr-merge-prior-ci-artifact-build.test.ts",
-        "test/scripts/pr-merge-prior-ci.test.ts",
       ];
       const changedPaths = ["scripts/pr-lib/merge-prior-ci.mjs"];
       const options = {

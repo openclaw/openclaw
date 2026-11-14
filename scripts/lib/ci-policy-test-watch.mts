@@ -788,7 +788,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   ...[
-    "src/config/sessions/session-accessor.sqlite-participants.test.ts",
     "src/config/sessions/session-logical-entry-read.worker.test.ts",
     "src/gateway/session-activity-summaries.retry.test.ts",
   ].map((testFile): PolicyTestWatch => ({
@@ -1416,7 +1415,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "test/scripts/pr-merge-hosted.test.ts",
     "test/scripts/pr-merge-legacy-recovery.test.ts",
     "test/scripts/pr-merge-prior-ci-artifact-build.test.ts",
-    "test/scripts/pr-merge-prior-ci.test.ts",
     "test/scripts/pr-merge-qualified-refusal.test.ts",
     "test/scripts/pr-publication.test.ts",
     "test/scripts/pr-wrappers.test.ts",

@@ -2180,7 +2180,6 @@
     "src/agents/cli-runner.fault-sequences.e2e.test.ts": 5,
     "src/agents/embedded-agent-runner.e2e.test.ts": 5,
     "src/agents/embedded-agent-runner.run-embedded-agent.auth-profile-rotation.e2e.test.ts": 11,
-    "src/agents/embedded-agent-runner.run-embedded-agent.fault-sequences.e2e.test.ts": 3,
     "src/agents/model-fallback.reply-entry.e2e.test.ts": 3,
     "src/agents/model-fallback.run-embedded.e2e.test.ts": 9,
     "src/agents/sandbox-agent-config.agent-specific-sandbox-config.e2e.test.ts": 3,
@@ -2776,7 +2775,6 @@
           "OPENCLAW_VITEST_MAX_WORKERS": "2"
         },
         "includePatterns": [
-          "extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts",
           "extensions/telegram/src/polling-session.test.ts"
         ],
         "pretestBuildMode": "runtime",
@@ -4176,11 +4174,9 @@
       "ui/src/e2e/native-gateway-health.e2e.test.ts": 2,
       "ui/src/e2e/native-link-routing.e2e.test.ts": 19,
       "ui/src/e2e/native-nav-responsive-layout.e2e.test.ts": 23,
-      "ui/src/e2e/native-nav-sidebar-toggle.e2e.test.ts": 69,
       "ui/src/e2e/native-notifications-loading.e2e.test.ts": 19,
       "ui/src/e2e/native-page-header-clearance.e2e.test.ts": 28,
       "ui/src/e2e/native-plugin-navigation.e2e.test.ts": 19,
-      "ui/src/e2e/native-plugin-ui.e2e.test.ts": 55,
       "ui/src/e2e/native-report-widget.e2e.test.ts": 6,
       "ui/src/e2e/native-session-discovery-settings.e2e.test.ts": 5,
       "ui/src/e2e/native-session-sidebar.e2e.test.ts": 9,
@@ -4451,7 +4447,6 @@
       "ui/src/e2e/subagent-task-notice.e2e.test.ts": 13,
       "ui/src/e2e/subagents-panel-nesting.e2e.test.ts": 18,
       "ui/src/e2e/subagents-panel.e2e.test.ts": 46,
-      "ui/src/e2e/systems-workspace.e2e.test.ts": 70,
       "ui/src/e2e/task-activity-overview.e2e.test.ts": 4,
       "ui/src/e2e/task-command-detail.e2e.test.ts": 3,
       "ui/src/e2e/task-panel-full-message.e2e.test.ts": 2,
