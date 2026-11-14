@@ -47,12 +47,19 @@ it("selects the target session profile for internal command deliveries only", ()
       disableTools: false,
       bootstrapPromptWarningSignaturesSeen: [],
     });
-  // A turn without qualified provenance (a hidden spawn task) withholds the sender gate only;
-  // the session's selection, which keys its prompt series, is the same on every turn.
+  // An unqualified turn in a session people talk to keeps the personal file out of the request.
+  expect(run()).toMatchObject({
+    bootstrapUserProfileId: undefined,
+    sessionUserProfileId: undefined,
+  });
+  // A spawned session's turns all start inside the Gateway: its hidden task (no provenance) keys
+  // the prompt series on the same selection as its later sessions_send turns.
+  params.sessionEntry = { ...params.sessionEntry!, spawnedBy: "agent:main:parent" };
   expect(run()).toMatchObject({
     bootstrapUserProfileId: undefined,
     sessionUserProfileId: "selected-human",
   });
+  params.sessionEntry = { ...params.sessionEntry, spawnedBy: undefined };
   for (const sourceTool of ["subagent_settle", "subagent_announce", "sessions_send"]) {
     params.opts.inputProvenance = { kind: "inter_session", sourceTool };
     expect(run()).toMatchObject({

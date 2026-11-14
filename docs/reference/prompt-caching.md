@@ -657,8 +657,10 @@ The session prompt rebuilds only at these points:
 - A model or provider switch, including a change of API, base URL, agent
   harness, tool surface (direct tools, tool search, or Code Mode), or the
   session's selected personal profile. The selection is a session fact (its
-  assigned owner or authenticated creator); the current turn's sender or input
-  origin never changes it.
+  assigned owner or authenticated creator). In a spawned session, every turn
+  keys on it, so a hidden subagent task and later `sessions_send` turns share
+  one prompt series. In other sessions, a turn whose sender does not qualify
+  rebuilds without the personal file, so that file never reaches its request.
 
 These are also the operator refresh points: use `/compact` or `/new` to make the
 model see a fully re-rendered prompt.

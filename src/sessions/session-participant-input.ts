@@ -38,7 +38,7 @@ export function isSessionPersonalBootstrapTurn(ctx: SessionParticipantInputConte
     // Isolated cron sessions keep shared defaults; wakes in other sessions keep their selection.
     return !isCronSessionKey(ctx.SessionKey);
   }
-  // Unqualified external turns are told to withhold the session's personal instructions.
+  // Unqualified external turns must still omit the overlay and restart the prompt series.
   return (
     (!ctx.InputProvenance || ctx.InputProvenance.kind === "external_user") &&
     Boolean(ctx[sessionParticipantInput]?.length)
@@ -46,20 +46,22 @@ export function isSessionPersonalBootstrapTurn(ctx: SessionParticipantInputConte
 }
 
 /**
- * Personal profiles for one turn. sessionUserProfileId is the session's selected human, a
- * session fact that keys its prompt series; isolated cron sessions keep shared defaults.
- * bootstrapUserProfileId repeats the selection only when this turn's sender qualifies.
+ * Personal profiles for one turn. bootstrapUserProfileId is the session's selected human when this
+ * turn's sender qualifies. sessionUserProfileId keys the session's prompt series and renders its
+ * personal USER.md: the same selection, except on an unqualified turn in a session people talk to,
+ * which keeps the personal file out of that request. A spawned session's turns all come from inside
+ * the Gateway (its task, sessions_send, handoffs), so its series keeps the selection on every turn.
+ * Isolated cron sessions keep shared defaults.
  */
 export function resolveTurnPersonalProfiles(
   sessionKey: string | undefined,
-  entry: Parameters<typeof sessionPersonalProfileId>[0],
+  entry: (Parameters<typeof sessionPersonalProfileId>[0] & { spawnedBy?: string }) | undefined,
   senderQualifies: boolean,
 ): { bootstrapUserProfileId?: string; sessionUserProfileId?: string } {
+  const selected = isCronSessionKey(sessionKey) ? undefined : sessionPersonalProfileId(entry);
   return {
     bootstrapUserProfileId: senderQualifies ? sessionPersonalProfileId(entry) : undefined,
-    sessionUserProfileId: isCronSessionKey(sessionKey)
-      ? undefined
-      : sessionPersonalProfileId(entry),
+    sessionUserProfileId: senderQualifies || entry?.spawnedBy ? selected : undefined,
   };
 }
 
