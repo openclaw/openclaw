@@ -42,6 +42,11 @@ export function runWithSessionMcpToolCallAuthority<T>(
   return assertCurrent ? callAuthorities.run(assertCurrent, run) : run();
 }
 
+/** Autonomous agent work must not retain the dispatching tool call's grant. */
+export function runOutsideSessionMcpToolCallAuthority<T>(run: () => T): T {
+  return callAuthorities.exit(run);
+}
+
 /**
  * Binds a configured-server request to the loopback caller's grant: it is
  * rechecked at the request boundary, including after reconnection or catalog
