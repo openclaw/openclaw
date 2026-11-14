@@ -1,7 +1,9 @@
 /** Operation-owned delivery and successor fences share one barrier registration path. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "../auto-reply/reply/reply-dispatcher.types.js";
+import { diagnosticLogger as diag } from "../logging/diagnostic-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { notifyListeners } from "../shared/listeners.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   type ReplyOperation,
@@ -233,9 +235,13 @@ export function flushReplyOperationAfterClear(operation: ReplyOperation, session
     return;
   }
   controllerStorage.afterClearByOperation.delete(operation);
-  for (const callback of state.callbacks) {
-    callback(sessionId);
-  }
+  // A failed observer must not skip later resource releases or strand owner settlement.
+  // Those resources retain their own custody until their actual cleanup completes.
+  notifyListeners(state.callbacks, sessionId, (error) => {
+    diag.warn(
+      `reply operation after-clear callback failed: sessionKey=${operation.key} error=${String(error)}`,
+    );
+  });
 }
 
 export function registerFollowupAdmissionBarrier(

@@ -19,6 +19,7 @@ import {
   API_KEY_EXPIRED_ERROR_CODE,
   ERROR_DETAILS_HINT,
   ERROR_PREFIX_RE,
+  renderSessionRolloverFailureSummary,
 } from "./assistant-request-failure-copy.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
 import {
@@ -318,6 +319,10 @@ export function renderSanitizedUserFacingText(
     return shouldRewriteRawPayloadWithoutErrorContext(trimmed)
       ? formatRawAssistantErrorForUi(trimmed)
       : sanitized;
+  }
+  const rollover = renderSessionRolloverFailureSummary(trimmed);
+  if (rollover) {
+    return rollover;
   }
   for (const format of [
     formatCommandErrorForUser,
