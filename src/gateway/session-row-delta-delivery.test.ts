@@ -76,7 +76,7 @@ it("prepares unchanged frozen fields once across row revisions and delivery hist
             ...(event === 6 || (index === 1 && event === 7) ? { lastAssistantMessage } : {}),
           };
           expect(delivery.rows?.wire[0]).toMatchObject({ set, remove: [] });
-          expect(JSON.parse(delivery.rows!.encoded[0]!).set).toEqual(set);
+          expect(delivery.rows!.encoded[0]).toBe(stringify(delivery.rows!.wire[0]));
         }
         owner.deliver(delivery);
         deliveries++;

@@ -206,7 +206,11 @@ export class ConnectionSessionRows {
         // Each serialized member needs at least `"":0,` (five bytes), plus the outer braces.
         if (patchBytes < 5 * fields.fieldCount + 1 || patchBytes < fullRowByteLength(row, header)) {
           result = { ...patchHeader, ...delta.patch };
-          encoding = `${prefix},${delta.json.slice(1)}`;
+          encoding = delta.encodings.get(prefix);
+          if (encoding === undefined) {
+            encoding = `${prefix},${delta.json.slice(1)}`;
+            delta.encodings.set(prefix, encoding);
+          }
         }
       }
       encoded.push(encoding);

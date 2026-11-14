@@ -10,6 +10,7 @@ type SessionRowDelta = {
   patch: { set: Record<string, unknown>; remove: string[] };
   json: string;
   utf8Bytes: number;
+  encodings: Map<string, string>;
 };
 
 const preparedRows = new WeakMap<object, SessionRowDeltaFields>();
@@ -142,7 +143,12 @@ export function createSessionRowDeltaDiffer() {
     }
     const patch = { set, remove };
     const json = JSON.stringify(patch);
-    const delta = { patch, json, utf8Bytes: Buffer.byteLength(json) };
+    const delta = {
+      patch,
+      json,
+      utf8Bytes: Buffer.byteLength(json),
+      encodings: new Map<string, string>(),
+    };
     if (!next) {
       next = new WeakMap();
       pairs.set(previous, next);
