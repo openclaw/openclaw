@@ -80,7 +80,7 @@ export function createDirtyDirectoryWatch(directory: string, depth = 2) {
         onHealth: (health) => {
           if (health.state === "unavailable") {
             dirty = "all";
-            retryAt = Date.now() + WATCH_RETRY_MS;
+            retryAt = performance.now() + WATCH_RETRY_MS;
           }
         },
       });
@@ -91,7 +91,7 @@ export function createDirtyDirectoryWatch(directory: string, depth = 2) {
     })()
       .catch(() => {
         dirty = "all";
-        retryAt = Date.now() + WATCH_RETRY_MS;
+        retryAt = performance.now() + WATCH_RETRY_MS;
       })
       .finally(() => {
         starting = undefined;
@@ -104,7 +104,7 @@ export function createDirtyDirectoryWatch(directory: string, depth = 2) {
       lastReadAt = performance.now();
       const state = subscription?.health().state;
       if (closed || starting || !subscription || state === "unavailable" || state === "closed") {
-        if (!closed && !starting && Date.now() >= retryAt) {
+        if (!closed && !starting && performance.now() >= retryAt) {
           start();
         }
         return "all";
