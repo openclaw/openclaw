@@ -612,6 +612,23 @@ describe("handleDirList", () => {
     expect(r.entries[1]!.size).toBeGreaterThan(0);
   });
 
+  it.each([0.5, 1.5])("advances fractional page sizes (%s) to completion", async (maxEntries) => {
+    await seed(["a.txt", "b.txt"]);
+
+    const first = await list({ path: at(), maxEntries });
+    expect(first).toMatchObject({
+      entries: [{ name: "a.txt" }],
+      truncated: true,
+      nextPageToken: "1",
+    });
+    const last = await list({ path: at(), maxEntries, pageToken: first.nextPageToken });
+    expect(last).toMatchObject({
+      entries: [{ name: "b.txt" }],
+      truncated: false,
+      nextPageToken: undefined,
+    });
+  });
+
   it.each([
     ["partial token", "1next", "f-0.txt", "1"],
     ["plus-signed token", "+01", "f-1.txt", "2"],
