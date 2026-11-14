@@ -12,6 +12,7 @@ import {
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
@@ -25,6 +26,7 @@ import {
   runCodexAppServerAttempt,
   setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
+  tempDir,
 } from "./run-attempt-test-harness.js";
 
 function callTool(
@@ -50,6 +52,38 @@ function callTool(
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
+  it.each([
+    ["recovered dashboard turn", "agent:main:dashboard:recovered", "main_session_restart_recovery"],
+    ["subagent turn", "agent:main:subagent:child", undefined],
+  ])("prepares hosted search policy for a %s", async (_name, sessionKey, sourceTool) => {
+    // Policy for these keys reads the stored session envelope. Restart recovery runs before
+    // the Gateway projection serves a just-rewritten row, and a subagent spawned from a CLI
+    // parent starts inside that parent's retained read scope, so policy prepares its own facts.
+    vi.stubEnv("OPENCLAW_STATE_DIR", `${tempDir}/state`);
+    const harness = createStartedThreadHarness();
+    const params = Object.assign(createTestParams(), {
+      sessionKey,
+      sandboxSessionKey: sessionKey,
+      config: {},
+      ...(sourceTool
+        ? {
+            inputProvenance: {
+              kind: "internal_system" as const,
+              sourceSessionKey: sessionKey,
+              sourceTool,
+            },
+          }
+        : {}),
+    });
+    setCodexTestModelSupportsTools(params, true);
+    setCodexTestToolFactory(params, () => [createRuntimeDynamicTool("message")]);
+    setRuntimeConfigSnapshot(params.config);
+    const run = runCodexAppServerAttempt(params);
+    await run.waitForTurnAccepted();
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+  });
+
   it("retains a required command as one native pending call until terminal collection", async () => {
     const command = createRequiredExecRuntimeContract();
     const harness = createStartedThreadHarness();

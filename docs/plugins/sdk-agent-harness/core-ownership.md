@@ -196,6 +196,14 @@ harness. The operator can switch the session to the embedded runtime or upgrade
 the harness. Channel `/btw` side questions with a restrictive direct policy are
 rejected by core and are not covered by this declaration.
 
+A harness that resolves hosted `web_search` availability itself should await
+`resolveWebSearchToolPolicyAsync(...)` from `openclaw/plugin-sdk/agent-harness`.
+It prepares the stored session facts that policy reads, so the result does not
+depend on the Gateway's session projection, which can lag during startup and
+restart recovery. The synchronous `resolveWebSearchToolPolicy` reads only
+already-prepared facts and can throw `Session capability metadata requires
+worker preparation`.
+
 For a known, actionable refusal, `AgentHarnessPreflightError` accepts an optional
 `userMessage`. Core renders this owner-authored public copy across chat surfaces
 without a verbose setting or generic retry/reset advice. Keep technical context

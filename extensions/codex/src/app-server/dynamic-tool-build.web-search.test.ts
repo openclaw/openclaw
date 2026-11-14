@@ -42,7 +42,7 @@ describe("Codex app-server dynamic tool search policy", () => {
       isAvailable: () => true,
     });
     hoisted.normalizeAgentRuntimeTools.mockClear();
-    hoisted.resolveWebSearchToolPolicy.mockClear();
+    hoisted.resolveWebSearchToolPolicyAsync.mockClear();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-search-tools-"));
   });
 
@@ -206,7 +206,7 @@ describe("Codex app-server dynamic tool search policy", () => {
     expect(persistent).toHaveBeenCalledExactlyOnceWith(testCase.persistent);
     expect(allowed).toHaveBeenCalledExactlyOnceWith(testCase.allowed);
     if (testCase.skipsPolicyLookup) {
-      expect(hoisted.resolveWebSearchToolPolicy).not.toHaveBeenCalled();
+      expect(hoisted.resolveWebSearchToolPolicyAsync).not.toHaveBeenCalled();
     }
   });
 
