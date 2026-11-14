@@ -16,5 +16,5 @@ export function readHostFreeMemoryBytes(): number {
 /** Defer optional background work before consuming the last 20% of a process limit. */
 export function isConstrainedProcessLowOnMemory(): boolean {
   const limit = process.constrainedMemory();
-  return limit > 0 && process.availableMemory() <= limit * 0.2;
+  return Number.isSafeInteger(limit) && limit > 0 && process.availableMemory() <= limit * 0.2;
 }
