@@ -7,18 +7,19 @@ import { SettingsStatus, SettingsToggle } from "../../components/solid/settings-
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import {
-  computeSkillMissing,
-  computeSkillReasons,
-  isSkillAvailable,
-} from "../../lib/skills-shared.ts";
+import { computeSkillMissing, computeSkillReasons } from "../../lib/skills-shared.ts";
 import {
   skillApiKeyReplaceable,
   storedSkillApiKeySource,
 } from "../../lib/skills/api-key-source.ts";
 import type { ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 import { MarkdownContent, SkillReaderDialog } from "./skill-reader-dialog.tsx";
-import { verdictForSkill, verdictStatus } from "./skill-status.tsx";
+import {
+  classifySkillInventoryStatus,
+  SKILL_INVENTORY_STATUS,
+  verdictForSkill,
+  verdictStatus,
+} from "./skill-status.tsx";
 import type { SkillDetailTab, SkillsProps } from "./view-types.ts";
 
 export function SkillDetail(props: {
@@ -61,6 +62,9 @@ export function SkillDetail(props: {
   });
   const missing = createMemo(() => computeSkillMissing(props.skill));
   const reasons = createMemo(() => computeSkillReasons(props.skill));
+  const inventoryStatus = createMemo(
+    () => SKILL_INVENTORY_STATUS[classifySkillInventoryStatus(props.skill)],
+  );
   const verdict = createMemo(() => verdictForSkill(props.skill, props.view.state.clawhubVerdicts));
   const detailTab = (): SkillDetailTab =>
     props.view.state.skillsDetailTab === "card" && props.skill.skillCard?.present
@@ -162,16 +166,7 @@ export function SkillDetail(props: {
         </Show>
         <div class="oc-dialog__rows">
           <div class="oc-dialog__row">
-            <SettingsStatus
-              kind={props.skill.disabled ? "muted" : isSkillAvailable(props.skill) ? "ok" : "warn"}
-              label={t(
-                props.skill.disabled
-                  ? "skillsPage.tabs.disabled"
-                  : isSkillAvailable(props.skill)
-                    ? "skillsPage.tabs.ready"
-                    : "skillsPage.tabs.needsSetup",
-              )}
-            />
+            <SettingsStatus kind={inventoryStatus().tone} label={t(inventoryStatus().labelKey)} />
             <SettingsToggle
               checked={!props.skill.disabled}
               saving={toggleSaving()}
