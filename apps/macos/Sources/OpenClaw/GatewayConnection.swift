@@ -257,7 +257,12 @@ actor GatewayConnection: Observable {
     /// that epoch prevents delayed pushes from entering a replacement socket.
     private(set) var socketGenerationState = GatewaySocketGenerationState()
 
-    private var subscribers: [UUID: AsyncStream<PushDelivery>.Continuation] = [:]
+    private struct Subscriber {
+        let continuation: AsyncStream<PushDelivery>.Continuation
+        let matches: @Sendable (EventFrame) -> Bool
+    }
+
+    private var subscribers: [UUID: Subscriber] = [:]
     #if DEBUG
     private var subscriberWaitersForTesting: [CheckedContinuation<Void, Never>] = []
     #endif
@@ -1390,7 +1395,10 @@ extension GatewayConnection {
         return self.cachedGatewayVersion()
     }
 
-    func subscribe(bufferingNewest: Int = 100) -> AsyncStream<PushDelivery> {
+    func subscribe(
+        bufferingNewest: Int = 100,
+        matching: @escaping @Sendable (EventFrame) -> Bool = { _ in true }) -> AsyncStream<PushDelivery>
+    {
         let id = UUID()
         let snapshot = self.lastSnapshot
         let connection = self
@@ -1398,7 +1406,7 @@ extension GatewayConnection {
             if let snapshot, let delivery = self.makePushDelivery(.snapshot(snapshot)) {
                 continuation.yield(delivery)
             }
-            self.subscribers[id] = continuation
+            self.subscribers[id] = Subscriber(continuation: continuation, matches: matching)
             #if DEBUG
             let waiters = self.subscriberWaitersForTesting
             self.subscriberWaitersForTesting.removeAll()
@@ -1463,8 +1471,8 @@ extension GatewayConnection {
             currentOwner: { [weak self] in
                 self?.publicationIsCurrent(lease, connected: false) == true
             })
-        for continuation in self.subscribers.values {
-            continuation.yield(delivery)
+        for subscriber in self.subscribers.values {
+            subscriber.continuation.yield(delivery)
         }
     }
 
@@ -1488,8 +1496,11 @@ extension GatewayConnection {
             }
         }
         guard let delivery = self.makePushDelivery(push) else { return }
-        for (_, continuation) in self.subscribers {
-            continuation.yield(delivery)
+        for subscriber in self.subscribers.values {
+            // Filter only server events, before buffering. Snapshots, sequence gaps,
+            // and route/disconnect publications retain their delivery contracts.
+            if case let .event(event) = push, !subscriber.matches(event) { continue }
+            subscriber.continuation.yield(delivery)
         }
         if case .event = push, let socketGeneration = self.socketGenerationState.activeGeneration {
             for (id, continuation) in self.realtimeTalkSubscribers[socketGeneration] ?? [:] {
