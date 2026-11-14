@@ -41,6 +41,7 @@ import { defaultRuntime, ExitError } from "../../runtime.js";
 import { withArtifactPreservingStateReads } from "../../state/artifact-preserving-state-reads.js";
 import { VERSION } from "../../version.js";
 import { measureGatewayBootstrapStep } from "../startup-trace.js";
+import { automaticallyCleanUpdateRecovery } from "./automatic-cleanup.js";
 import {
   captureTargetDatabaseSchemaContext,
   formatSchemaRefusalLines,
@@ -300,8 +301,14 @@ export async function updateMigrateCommand(
       receipt.deferredInspectionCheckIds = capture.deferredInspectionCheckIds;
       receipt.warnings = capture.warnings;
     });
-    const migrated = await measure("schema-verification", () => prepareDoctorDatabasePreflight());
-    if (hasSchemaRefusal(migrated) || migrated.pendingMigrations?.length) {
+    const migrated = await measure("schema-verification", () =>
+      prepareDoctorDatabasePreflight({ verifyCurrentSchemaShape: true }),
+    );
+    if (
+      hasSchemaRefusal(migrated) ||
+      migrated.pendingMigrations?.length ||
+      migrated.agentRefusals?.length
+    ) {
       throw new Error(
         "Doctor did not complete the candidate database migrations; the recovery backup was retained.",
       );
@@ -478,6 +485,7 @@ export async function updateFinishCommand(backupRoot: string): Promise<void> {
       ? []
       : [`Backup cleanup remains pending at ${receipt.backup.directory}; retry update finish.`]),
   ];
+  const cleanupDiagnostics: string[] = [];
   // Cleanup retires rollback originals only after a later update succeeds. Starting the
   // run at migration keeps originals from this update's own Doctor run protected; a
   // receipt without its start time cannot prove that ordering and is not recorded.
@@ -585,6 +593,11 @@ export async function updateFinishCommand(backupRoot: string): Promise<void> {
           warnings.push("Deferred Doctor inspections remain pending; retry update finish.");
         }
       }
+      const cleanup = await automaticallyCleanUpdateRecovery(receipt.runId, process.env);
+      cleanupDiagnostics.push(...(cleanup?.diagnostics ?? []));
+      if (cleanup?.advisory) {
+        warnings.push(cleanup.advisory.message);
+      }
     } catch (error) {
       if (hasCommandProcessCleanupError(error)) {
         throw error;
@@ -597,6 +610,7 @@ export async function updateFinishCommand(backupRoot: string): Promise<void> {
   defaultRuntime.writeJson({
     status: receipt.status,
     receipt: file,
+    ...(cleanupDiagnostics.length > 0 ? { diagnostics: cleanupDiagnostics } : {}),
     ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
   });
 }

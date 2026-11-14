@@ -24,6 +24,7 @@ import { renderSidebarMenuAction } from "../app-sidebar-dropdown.tsx";
 import { showConfirmDialog } from "../confirm-dialog.ts";
 import { Icon, type IconName } from "../solid/icon.tsx";
 import type { MenuEntry } from "../solid/menu.tsx";
+import { StrokeIcon } from "../solid/stroke-icon.tsx";
 import { clawNameFromHostname } from "./claw-name.ts";
 
 registerEnglishCatalog(registerOpenClawIdEnglish);
@@ -41,9 +42,12 @@ export function openClawIdMenuIdentity(status: OpenClawIdStatusResult) {
   const identity = status.connection;
   if (status.channel === "tunnel") {
     if (identity?.kind === "member") {
-      const role = t(
-        identity.role === "viewer" ? "openclawId.roleViewer" : "openclawId.roleOperator",
-      );
+      const role =
+        identity.role === "operator"
+          ? t("openclawId.roleOperator")
+          : identity.role === "viewer"
+            ? t("openclawId.roleViewer")
+            : identity.role;
       return {
         name: identity.email || t("openclawId.accountFallback"),
         detail: t("openclawId.memberRoleOnClaw", {
@@ -64,7 +68,20 @@ export function openClawIdMenuIdentity(status: OpenClawIdStatusResult) {
       detail: email ? `${email} · ${t("openclawId.ownerRole")}` : t("openclawId.ownerRole"),
     };
   }
-  if (openClawIdAccount()) {
+  const account = openClawIdAccount();
+  if (status.accountSignIn === "device") {
+    // A personal sign-in already names the person; this browser's OpenClaw ID (verified by
+    // the Gateway when it was issued) is shown beside it and grants nothing here.
+    return account
+      ? {
+          name: account.name || account.email || t("openclawId.accountFallback"),
+          detail: account.email
+            ? `${account.email} · ${t("openclawId.menuTitle")}`
+            : t("openclawId.menuTitle"),
+        }
+      : null;
+  }
+  if (account) {
     // Browser storage never supplies the displayed profile; only this RPC does.
     const email = identity?.kind === "local" ? identity.accountEmail : null;
     const name = identity?.kind === "local" ? identity.accountName : null;
@@ -115,10 +132,15 @@ function statusRow(
   };
 }
 
-// Make reachable is offered only after loopback sign-in.
+// Make reachable is offered after sign-in to the loopback operator or an admin with a
+// verified personal identity; another person on a personal sign-in is told it needs an admin.
 function makeReachableBlocker(status: OpenClawIdStatusResult): string | undefined {
-  if (status.channel !== "local_operator") {
-    return t("openclawId.makeReachableLocalOnly");
+  if (!status.remoteAccessSetup) {
+    return t(
+      status.accountSignIn === "device"
+        ? "openclawId.makeReachableAdminOnly"
+        : "openclawId.makeReachableLocalOnly",
+    );
   }
   return status.services.loaderDomain ? undefined : t("openclawId.needsLoaderDomain");
 }
@@ -165,23 +187,24 @@ function keyAttentionEntries(
 }
 
 /**
- * Status and actions for the single OpenClaw ID section; Access lives in Pages. `publication`
- * is the owner-only publication state (`openclawId.people`), read on this computer.
+ * One claw card, followed by its account actions. `publication` is the owner-only
+ * publication state (`openclawId.people`), read on this computer; a personal admin's comes
+ * with its status.
  */
 export function openClawIdMenuEntries(
   status: OpenClawIdStatusResult | null,
   publication?: OpenClawIdPublication | null,
+  copied: () => boolean = () => false,
 ): MenuEntry[] {
   if (!status || status.status.state === "off") {
     return [];
   }
   if (status.channel !== "tunnel" && !openClawIdAccount()) {
-    const blocker =
-      status.channel !== "local_operator"
-        ? t("openclawId.signInLocalOnly")
-        : !status.services.clientId
-          ? t("openclawId.signInUnconfigured")
-          : undefined;
+    const blocker = !status.accountSignIn
+      ? t("openclawId.signInLocalOnly")
+      : !status.services.clientId
+        ? t("openclawId.signInUnconfigured")
+        : undefined;
     return [
       {
         id: SIGN_IN,
@@ -193,23 +216,37 @@ export function openClawIdMenuEntries(
             {...attributes}
             type="button"
             role="button"
-            class="btn sidebar-openclaw-id__sign-in"
-            title={blocker}
+            class="oc-menu-item sidebar-openclaw-id__card sidebar-openclaw-id__status sidebar-openclaw-id__sign-in"
+            aria-description={blocker}
             disabled={attributes["aria-disabled"] === "true"}
           >
-            {t("openclawId.signIn")}
+            <span class="nav-item__icon" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="m10 17 5-5-5-5M15 12H3M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+              </svg>
+            </span>
+            <span class="sidebar-openclaw-id__lines">
+              <span>{t("openclawId.signIn")}</span>
+              {blocker ? <span class="sidebar-openclaw-id__detail">{blocker}</span> : undefined}
+            </span>
+            {!blocker ? (
+              <span class="oc-menu-item__details">
+                <Icon name="arrowRight" />
+              </span>
+            ) : undefined}
           </button>
         ),
       },
     ];
   }
-  const entries: MenuEntry[] = [
-    {
-      kind: "content",
-      id: "openclaw-id-title",
-      content: <div class="sidebar-customize-menu__title">{t("openclawId.menuTitle")}</div>,
-    },
-  ];
+  const card: MenuEntry[] = [];
   if (status.channel === "tunnel") {
     const connection = status.connection;
     const detail =
@@ -225,46 +262,108 @@ export function openClawIdMenuEntries(
                 t("openclawId.accountFallback"),
             })
           : null;
-    entries.push(statusRow("encrypted", t("openclawId.encryptedConnection"), "lock", detail));
+    card.push(statusRow("encrypted", t("openclawId.encryptedConnection"), "lock", detail));
   } else if (status.link.linked && status.link.hostname && openClawIdAccount()) {
     const local = status.channel === "local_operator";
-    const attention = local ? keyAttentionEntries(status, publication) : [];
-    if (status.status.state !== "keys_refused") {
-      entries.push(
-        statusRow(
-          "reachable",
-          t("openclawId.remoteAccessOn"),
-          "radio",
-          status.link.hostname,
-          status.status.tunnel?.relayOnline === true,
+    if (local && status.status.state !== "keys_refused") {
+      card.push({
+        id: COPY_LINK,
+        label: t("openclawId.copyRemoteLink"),
+        closeOnSelect: false,
+        class: "sidebar-openclaw-id__card sidebar-openclaw-id__linked",
+        attributes: {
+          "aria-description": status.link.hostname,
+          get "data-copied"() {
+            return copied() ? "true" : undefined;
+          },
+        },
+        content: (
+          <span class="sidebar-openclaw-id__linked-content">
+            <span class="nav-item__icon" aria-hidden="true">
+              <Icon name="radio" />
+            </span>
+            <span class="sidebar-openclaw-id__label">{t("openclawId.remoteAccessOn")}</span>
+            <span class="sidebar-openclaw-id__trailing">
+              <span
+                class="sidebar-openclaw-id__pill"
+                data-online={status.status.tunnel?.relayOnline === true ? "true" : "false"}
+              >
+                {t(
+                  status.status.tunnel?.relayOnline === true
+                    ? "openclawId.online"
+                    : "openclawId.offline",
+                )}
+              </span>
+              <span class="sidebar-openclaw-id__copy" aria-hidden="true">
+                <span class="sidebar-openclaw-id__copy-a">
+                  <Icon name="copy" />
+                </span>
+                <span class="sidebar-openclaw-id__copy-b">
+                  <Icon name="check" />
+                </span>
+              </span>
+            </span>
+            <span class="sidebar-openclaw-id__detail">{status.link.hostname}</span>
+          </span>
         ),
-      );
-    }
-    entries.push(...attention);
-    if (local) {
-      entries.push(renderSidebarMenuAction(COPY_LINK, t("openclawId.copyRemoteLink"), "link"));
-      entries.push(renderSidebarMenuAction(MOVE_KEYS, t("openclawId.moveToNewKeys"), "key"));
+      });
+    } else {
+      if (status.status.state !== "keys_refused") {
+        card.push(
+          statusRow(
+            "reachable",
+            t("openclawId.remoteAccessOn"),
+            "radio",
+            status.link.hostname,
+            status.status.tunnel?.relayOnline === true,
+          ),
+        );
+      }
+      if (local) {
+        card.push(renderSidebarMenuAction(COPY_LINK, t("openclawId.copyRemoteLink"), "link"));
+      }
     }
   } else {
     const blocker = makeReachableBlocker(status);
-    entries.push(
+    card.push(
       renderSidebarMenuAction(MAKE_REACHABLE, t("openclawId.makeReachable"), "radio", {
         disabled: Boolean(blocker),
         title: blocker,
+        details: <Icon name="arrowRight" />,
       }),
     );
   }
+  const entries: MenuEntry[] = [
+    {
+      kind: "group",
+      id: "openclaw-id-card",
+      class:
+        status.channel === "local_operator" &&
+        status.link.linked &&
+        status.status.state !== "keys_refused"
+          ? undefined
+          : "sidebar-openclaw-id__card",
+      items: card,
+    },
+  ];
+  if (status.channel === "local_operator" && status.link.linked && openClawIdAccount()) {
+    entries.push(...keyAttentionEntries(status, publication));
+    entries.push(renderSidebarMenuAction(MOVE_KEYS, t("openclawId.moveToNewKeys"), "key"));
+  } else if (
+    status.remoteAccessSetup === "personal_admin" &&
+    status.link.linked &&
+    openClawIdAccount()
+  ) {
+    // Moving to new keys stays on the computer that runs this claw; publishing them does not.
+    entries.push(...keyAttentionEntries(status, publication ?? status.publication));
+  }
   if (status.owner && status.link.linked && (status.channel === "tunnel" || openClawIdAccount())) {
-    entries.push(
-      renderSidebarMenuAction(DEVICES, t("openclawId.yourDevices"), "monitor", {
-        details: <span class="sidebar-openclaw-id__count">{status.ownerDeviceCount ?? 0}</span>,
-      }),
-    );
+    entries.push(renderSidebarMenuAction(DEVICES, t("openclawId.yourDevices"), "monitor"));
   }
   return entries;
 }
 
-/** Sign-out follows Settings; remote sessions use the loader's actual mechanism. */
+/** Sign-out is the final account action; remote sessions use the loader's actual mechanism. */
 export function openClawIdSignOutEntries(status: OpenClawIdStatusResult | null): MenuEntry[] {
   if (!status || status.status.state === "off") {
     return [];
@@ -272,9 +371,23 @@ export function openClawIdSignOutEntries(status: OpenClawIdStatusResult | null):
   const available =
     status.channel === "tunnel"
       ? Boolean(navigator.serviceWorker?.controller)
-      : status.channel === "local_operator" && Boolean(openClawIdAccount());
+      : Boolean(status.accountSignIn && openClawIdAccount());
   return available
-    ? [renderSidebarMenuAction(SIGN_OUT, t("openclawId.signOut"), "arrowRight")]
+    ? [
+        {
+          id: SIGN_OUT,
+          label: t("openclawId.signOut"),
+          class: "sidebar-customize-menu__item",
+          icon: (
+            <span class="nav-item__icon" aria-hidden="true">
+              <StrokeIcon>
+                <path d="m16 17 5-5-5-5M21 12H9M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              </StrokeIcon>
+            </span>
+          ),
+          content: <span class="sidebar-customize-menu__text">{t("openclawId.signOut")}</span>,
+        },
+      ]
     : [];
 }
 
@@ -289,13 +402,19 @@ function openDialog(open: () => Promise<unknown>, context: OpenClawIdErrorContex
   );
 }
 
-// Opens Make reachable, with the link code taken from the account when signed in.
-function startMakeReachable(client: GatewayBrowserClient, loaderDomain: string) {
+// Opens Make reachable, with the link code taken from the account when signed in. A personal
+// admin's setup also links that account to their profile.
+function startMakeReachable(
+  client: GatewayBrowserClient,
+  loaderDomain: string,
+  status: OpenClawIdStatusResult,
+) {
   openDialog(async () =>
     (await import("./make-reachable-dialog.tsx")).showMakeReachableDialog({
       client,
       loaderDomain,
       signedIn: openClawIdAccount(),
+      linkProfile: status.remoteAccessSetup === "personal_admin",
     }),
   );
 }
@@ -315,7 +434,7 @@ function offerMakeReachable(
     severity: "info",
     message: t("openclawId.reachOffer", { account }),
     actionLabel: t("openclawId.makeReachable"),
-    onAction: () => startMakeReachable(client, loaderDomain),
+    onAction: () => startMakeReachable(client, loaderDomain, status),
     durationMs: 30_000,
   });
 }
@@ -323,6 +442,11 @@ function offerMakeReachable(
 // The browser's sign-in, for actions only the operator on this computer may run.
 function localSignedIn(status: OpenClawIdStatusResult): OpenClawIdSignedIn | null {
   return status.channel === "local_operator" ? openClawIdAccount() : null;
+}
+
+// The browser's sign-in, for actions anyone who may turn on remote access may run.
+function setupSignedIn(status: OpenClawIdStatusResult): OpenClawIdSignedIn | null {
+  return status.remoteAccessSetup ? openClawIdAccount() : null;
 }
 
 /**
@@ -337,6 +461,7 @@ export function selectOpenClawIdMenuValue(
     client: GatewayBrowserClient | null | undefined;
     basePath: string;
     onKeysChanged?: () => void;
+    onLinkCopied?: () => void;
   },
 ): boolean {
   if (!value.startsWith(VALUE_PREFIX) || !context.status || context.status.status.state === "off") {
@@ -348,12 +473,15 @@ export function selectOpenClawIdMenuValue(
       (await import("./owner-devices-dialog.tsx")).showOwnerDevicesDialog({ client }),
     );
   } else if (value === COPY_LINK && status?.channel === "local_operator" && status.link.hostname) {
-    void copyToClipboard(`https://${status.link.hostname}`).then((copied) =>
+    void copyToClipboard(`https://${status.link.hostname}`).then((copied) => {
+      if (copied) {
+        context.onLinkCopied?.();
+      }
       showToast({
         severity: copied ? "success" : "error",
         message: t(copied ? "openclawId.remoteLinkCopied" : "openclawId.remoteLinkCopyFailed"),
-      }),
-    );
+      });
+    });
   } else if (value === SIGN_OUT) {
     if (status?.channel === "tunnel") {
       openDialog(signOutOfRemoteOpenClawId, "signOut");
@@ -369,7 +497,16 @@ export function selectOpenClawIdMenuValue(
         }
       }, "signOut");
     }
-  } else if (value === SIGN_IN && client) {
+  } else if (value === SIGN_IN && client && status.accountSignIn === "device") {
+    openDialog(
+      async () =>
+        (await import("./device-sign-in-dialog.tsx")).showDeviceSignInDialog({
+          client,
+          basePath: context.basePath,
+        }),
+      "signIn",
+    );
+  } else if (value === SIGN_IN && client && status.accountSignIn === "popup") {
     signInWithOpenClawId({ client, basePath: context.basePath }).then(
       (signedIn) =>
         offerMakeReachable(client, status, signedIn.email ?? t("openclawId.accountFallback")),
@@ -381,7 +518,7 @@ export function selectOpenClawIdMenuValue(
         }),
     );
   } else if (value === MAKE_REACHABLE && client && status?.services.loaderDomain) {
-    startMakeReachable(client, status.services.loaderDomain);
+    startMakeReachable(client, status.services.loaderDomain, status);
   } else if (value === MOVE_KEYS && client && status.link.hostname) {
     const signedIn = localSignedIn(status);
     const hostname = status.link.hostname;
@@ -397,7 +534,7 @@ export function selectOpenClawIdMenuValue(
       });
     }
   } else if (value === PUBLISH_KEYS && client) {
-    const signedIn = localSignedIn(status);
+    const signedIn = setupSignedIn(status);
     if (signedIn) {
       openDialog(async () => {
         const { publishWithLinkCode } = await import("../../lib/openclaw-id/rebind.ts");

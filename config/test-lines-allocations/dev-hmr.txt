@@ -1,2 +1,0 @@
-# Exercise native and opt-in polling backends through the existing Vite watcher fixture.
-1

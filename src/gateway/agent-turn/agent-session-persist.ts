@@ -29,6 +29,7 @@ import { recordSessionCreated } from "../../sessions/session-created.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { errorShapeFromError } from "../error-shape.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import {
   assertExpectedExistingSession,
@@ -274,10 +275,10 @@ export async function persistAgentSessionPhase(
       }
       patchBuild = await params.buildSessionPatch(entryForPatch);
       if (
-        resetReason &&
-        (patchBuild.automaticResetReason !== resetReason ||
-          freshEntry?.sessionId !== params.entry?.sessionId ||
-          freshEntry?.lifecycleRevision !== params.entry?.lifecycleRevision)
+        patchBuild.automaticResetReason !== resetReason ||
+        (resetReason &&
+          (freshEntry?.sessionId !== params.entry?.sessionId ||
+            freshEntry?.lifecycleRevision !== params.entry?.lifecycleRevision))
       ) {
         rejectMutation(ErrorCodes.UNAVAILABLE, "Session changed before automatic reset. Retry.");
       }
@@ -308,7 +309,7 @@ export async function persistAgentSessionPhase(
       const delegatedCreation =
         !freshEntry &&
         !params.creation.actor &&
-        params.cfg.gateway?.roles &&
+        isNamedOperatorRoleEnforcementEnabled(params.cfg) &&
         operatorRoleActor?.kind === "operator"
           ? {
               ...params.creation,

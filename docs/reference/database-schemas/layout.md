@@ -192,6 +192,10 @@ Payload version 1 records the recap text, generation time, session ID and lifecy
 
 The latest recap survives restart and archival. Deleting the session removes it; reset or replacement makes the prior lifecycle's recap unusable. Incognito sessions do not persist or generate this cache. A shared, bounded Gateway queue deduplicates generation across viewers, retains the previous recap on failure, and uses only the configured utility route. Disabling that route stops new generation. Removing or ignoring the optional field is a rollback path that leaves session and transcript data intact; removing the feature does not require reversing a database migration.
 
+### Scheduled run parent receipts
+
+A child-placement scheduled run stores one optional, private `scheduledMemoryParent` object in its `:run:` row's existing `session_nodes.entry_json`. It records the parent session the occurrence was admitted against (key, session ID, lifecycle revision) and the occurrence's admitted owner bit, so sessions the run spawns resolve memory through that parent. Only cron run preparation writes it; it adds no SQL table, column, or schema-version change. See [scheduled run parent receipts](/reference/database-schemas/storage-changes#scheduled-run-parent-receipts) for its writer, lifetime, and upgrade and downgrade behavior.
+
 ### User-turn model prompt projections
 
 Stored user messages may include the optional private field
@@ -826,3 +830,24 @@ written. Subsequent preparation, activation, and recovery reject unsupported
 generations before drain. Status and preview do not adopt the policy or migrate
 the control database. The inventory does not enable collection, disk-space
 reclamation, or host-maintenance deletion.
+
+### Usage-ranked tool index
+
+Agent schema 42 adds `agent_tool_usage(tool_id, score, updated_at)` in the
+executing agent's database. It stores only aggregate successful-call scores and
+last-success timestamps. The existing `cache_entries` owner holds import coverage
+boundaries and a reset generation; it does not retain per-call IDs or payloads.
+
+The opt-in Labs feature reads at prompt boundaries. Run admission and accumulated
+counts share the existing transcript actor's transaction and authority grant when
+the transcript uses the executing agent's canonical database. Other transcript
+stores and late completions use the existing run-settlement writer. Tool-only
+mutations declare an empty session write scope, preserving unrelated session
+facts. Inactive rows expire after 90 days; reads exclude them
+and usage writes prune them. Reset fences pending batches, and agent retirement
+removes the counters. Incognito sessions never record usage. Schema migration
+creates an empty table, with SQLite scoped backup/rollback and PostgreSQL parity;
+it does not automatically scan or import existing transcripts.
+
+See [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
+for authenticated inspection, explicit transcript import, reset, and privacy.

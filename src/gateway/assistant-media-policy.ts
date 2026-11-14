@@ -22,6 +22,7 @@ import { captureResidentUserProfileAccess } from "../state/user-profile-list.js"
 import { applyHttpOperatorRoleScopeCeiling, resolveHttpProfile } from "./http-auth-user-profile.js";
 import type { AuthorizedControlUiReadRequest } from "./http-auth-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { createProfileSessionEntryFilter } from "./session-sharing.js";
 import type { GatewaySessionEntryRead } from "./session-utils.js";
@@ -277,7 +278,7 @@ function resolvePreparedAssistantMediaPolicy(
         ) {
           return undefined;
         }
-      } else if (!profileId && config.gateway?.roles) {
+      } else if (!profileId && isNamedOperatorRoleEnforcementEnabled(config)) {
         return undefined;
       }
     }

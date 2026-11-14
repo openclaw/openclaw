@@ -61,7 +61,10 @@ describe("readClawHubRecommendations", () => {
       { value: [], expected: [] },
       { value: [plugin, skill, plugin], expected: [plugin, skill, plugin] },
       { value: [plugin, skill, plugin, skill], expected: [] },
-      { value: [{ ...plugin, official: false }], expected: [] },
+      // Plugin cards carry the registry's official flag; skill cards stay official-only.
+      { value: [{ ...plugin, official: false }], expected: [{ ...plugin, official: false }] },
+      { value: [{ ...plugin, official: "yes" }], expected: [] },
+      { value: [{ ...skill, official: false }], expected: [] },
       { value: [{ ...plugin, extra: true }], expected: [] },
       { value: [{ ...skill, skillRef: "@another/calendar" }], expected: [] },
     ];

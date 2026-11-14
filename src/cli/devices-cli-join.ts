@@ -3,21 +3,28 @@ import type { DevicePairSetupCodeResult } from "../../packages/gateway-protocol/
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import { defaultRuntime } from "../runtime.js";
+import { readUnlessAborted } from "./devices-cli-gateway.js";
 import { callGatewayFromCliWithTransport } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 
 export async function runDevicesJoinCodeCommand(opts: GatewayRpcOpts): Promise<void> {
-  const result = await callGatewayFromCliWithTransport<DevicePairSetupCodeResult>(
-    "device.pair.setupCode",
-    opts,
-    { bootstrapProfile: "node", includeQr: false, joinUrl: true },
-    {
-      label: "Devices device.pair.setupCode",
-      defaultTimeoutMs: 10_000,
-      scopes: [ADMIN_SCOPE],
-      sharedStateMode: "read-only",
-    },
+  const result = await readUnlessAborted((signal) =>
+    callGatewayFromCliWithTransport<DevicePairSetupCodeResult>(
+      "device.pair.setupCode",
+      opts,
+      { bootstrapProfile: "node", includeQr: false, joinUrl: true },
+      {
+        label: "Devices device.pair.setupCode",
+        defaultTimeoutMs: 10_000,
+        scopes: [ADMIN_SCOPE],
+        sharedStateMode: "read-only",
+        signal,
+      },
+    ),
   );
+  if (!result) {
+    return;
+  }
   const joinUrl = normalizeOptionalString(result.joinUrl);
   if (!joinUrl) {
     throw new Error("Gateway did not return a device join URL.");

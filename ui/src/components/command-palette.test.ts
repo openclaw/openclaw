@@ -54,7 +54,7 @@ function catalogRequest(catalogs: Record<string, unknown>) {
 }
 
 function expectActive(palette: Parameters<typeof paletteInput>[0], row: Element | null) {
-  expect(palette.querySelector('[aria-selected="true"]')).toBe(row);
+  expect(palette.querySelector('[role="option"][aria-selected="true"]')).toBe(row);
   expect(
     document.getElementById(paletteInput(palette).getAttribute("aria-activedescendant")!),
   ).toBe(row);
@@ -260,49 +260,38 @@ describe("CommandPalette search", () => {
     },
   );
 
-  it("keeps the current mode between 50 and 60 Unicode code points", async () => {
-    const character = "🦞";
-    const list = vi.fn(async () => null);
-    const { palette, query } = await mountSearch({ methods: ["sessions.search"] }, list);
-    await searchPalette(palette, character.repeat(59));
-    expect(list).toHaveBeenCalledOnce();
-    const input = paletteInput(palette);
-    for (const length of [60, 59, 51, 55, 60]) {
-      setInputValue(input, " " + character.repeat(length) + " ");
+  it.each([false, true])(
+    "moves a long query to Compose until Search is chosen (IME: %s)",
+    async (ime) => {
+      const list = vi.fn(async () => null);
+      const { palette } = await mountSearch({ methods: ["sessions.search"] }, list);
+      const query =
+        "Search for this full sentence without starting a background session.\nKeep searching.";
+      await openPalette(palette);
+      const input = paletteInput(palette);
+      if (ime) {
+        input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      }
+      setInputValue(input, query);
+      if (ime) {
+        await palette.updateComplete;
+        expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
+        input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+      }
       await settlePalette(palette);
       expectPalettePromptMode(palette);
-      expect(list).toHaveBeenCalledOnce();
-    }
-    for (const key of ["ArrowUp", "ArrowDown"]) {
-      expect(pressKey(input, key, { cancelable: true }).defaultPrevented).toBe(false);
-    }
-    expect(pressKey(input, "Enter", { cancelable: true }).defaultPrevented).toBe(true);
-    expect(palette.onNavigate).not.toHaveBeenCalled();
-    expect(palette.onSelectSession).not.toHaveBeenCalled();
-    expect(input.value).toBe(" " + character.repeat(60) + " ");
-    setInputValue(input, " " + character.repeat(50) + " ");
-    await settlePalette(palette);
-    expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
-    expect(list).toHaveBeenLastCalledWith(
-      expect.objectContaining({ search: character.repeat(50) }),
-    );
-    setInputValue(input, character.repeat(59));
-    await settlePalette(palette);
-    expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
-    expect(list).toHaveBeenCalledTimes(3);
-    setInputValue(input, character.repeat(60));
-    await palette.updateComplete;
-    expectPalettePromptMode(palette);
-    setInputValue(input, "");
-    await palette.updateComplete;
-    expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
-    palette.togglePalette();
-    await palette.updateComplete;
-    await searchPalette(palette, character.repeat(55));
-    expect(input.isConnected).toBe(false);
-    expect(query(".cmd-palette__input")?.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
-    expect(list).toHaveBeenCalledTimes(4);
-  });
+      expect(list).not.toHaveBeenCalled();
+
+      pressKey(input, "Tab", { cancelable: true });
+      setInputValue(input, query + " Still searching.");
+      await settlePalette(palette);
+      expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
+      expect(list).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ search: query + " Still searching." }),
+      );
+      expect(palette.querySelector(".cmd-palette__create")).toBeNull();
+    },
+  );
   it("waits for two characters before searching sessions", async () => {
     const list = vi.fn(async () => createSessionResult("agent:main:test", "Test"));
     const { palette, query } = await mountSearch({ methods: ["sessions.search"] }, list);
@@ -380,7 +369,7 @@ describe("CommandPalette search", () => {
     for (const expectedIndex of [1, 2, 0]) {
       pressKey(paletteInput(palette), "ArrowDown");
       await palette.updateComplete;
-      expect(query('[aria-selected="true"]')).toBe(items[expectedIndex]);
+      expect(query('[role="option"][aria-selected="true"]')).toBe(items[expectedIndex]);
     }
   });
 
@@ -461,14 +450,14 @@ describe("CommandPalette search", () => {
         pressKey(input, "ArrowDown");
         await palette.updateComplete;
       }
-      const fallbackSelection = query('[aria-selected="true"]')?.textContent;
+      const fallbackSelection = query('[role="option"][aria-selected="true"]')?.textContent;
 
       setConnected(false);
       setConnected(true);
       await palette.updateComplete;
       await settlePalette(palette);
       expect(list).toHaveBeenCalledTimes(3);
-      const active = query('[aria-selected="true"]');
+      const active = query('[role="option"][aria-selected="true"]');
       expect(active?.textContent).toEqual(
         interaction === "retain" ? sessionText : fallbackSelection,
       );
@@ -511,7 +500,7 @@ describe("CommandPalette search", () => {
       pressKey(input, "ArrowDown");
       await palette.updateComplete;
     }
-    expect(query('[aria-selected="true"]')?.textContent).toContain("Review Charlie");
+    expect(query('[role="option"][aria-selected="true"]')?.textContent).toContain("Review Charlie");
     refresh.resolve({
       ...roster,
       agents: roster.agents.slice(2),
@@ -539,10 +528,10 @@ describe("CommandPalette search", () => {
     await searchPalette(palette, "needle");
     pressKey(paletteInput(palette), "ArrowDown");
     await palette.updateComplete;
-    expect(query('[aria-selected="true"]')?.textContent).toContain("Needle Bravo");
+    expect(query('[role="option"][aria-selected="true"]')?.textContent).toContain("Needle Bravo");
   });
 
-  it("shows a chat search failure for plugins and retries after shortening a prompt", async () => {
+  it("shows a chat search failure and retries after returning from Compose", async () => {
     const query = "plugins";
     const list = vi
       .fn<ApplicationContext["sessions"]["list"]>()
@@ -557,12 +546,14 @@ describe("CommandPalette search", () => {
     expect(findPaletteOption(palette, "Plugins")).toBeDefined();
 
     const input = paletteInput(palette);
+    pressKey(input, "Tab", { cancelable: true });
     setInputValue(input, `${query}\nExplain what needs to be repaired in a new session.`);
     await settlePalette(palette);
     expectPalettePromptMode(palette);
     expect(list).toHaveBeenCalledOnce();
 
     setInputValue(input, "zz");
+    pressKey(input, "Tab", { cancelable: true });
     await palette.updateComplete;
     expect(palette.textContent).not.toContain("Couldn’t search sessions");
     await settlePalette(palette);

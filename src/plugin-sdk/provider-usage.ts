@@ -280,11 +280,6 @@ export type {
 
 // Registration uses the pure auth/format helpers below. Provider request code loads
 // only on fetch; the shared HTTP owner still bounds requests and response bodies.
-export const fetchClaudeUsage: typeof import("../infra/provider-usage.fetch.claude.js").fetchClaudeUsage =
-  createLazyRuntimeMethod(
-    () => import("../infra/provider-usage.fetch.claude.js"),
-    (runtime) => runtime.fetchClaudeUsage,
-  );
 export const fetchCodexUsage: typeof import("../infra/provider-usage.fetch.codex.js").fetchCodexUsage =
   createLazyRuntimeMethod(
     () => import("../infra/provider-usage.fetch.codex.js"),
@@ -315,4 +310,6 @@ export {
   buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
   fetchJson,
+  fetchUsageJson,
+  readUsageJson,
 } from "../infra/provider-usage.fetch.shared.js";

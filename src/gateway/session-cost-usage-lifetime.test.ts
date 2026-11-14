@@ -151,10 +151,16 @@ it.for(["discovery", "pricing", "scan admission"])(
           },
         );
       } else if (phase === "pricing") {
-        vi.spyOn(modelPricing, "prepareModelPricingContext").mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-        });
+        seedUsage("stop-during-pricing");
+        const prepare = modelPricing.prepareModelPricingContext;
+        vi.spyOn(modelPricing, "prepareModelPricingContext").mockImplementationOnce(
+          async (...args) => {
+            const result = await prepare(...args);
+            entered.resolve();
+            await release.promise;
+            return result;
+          },
+        );
       } else {
         seedUsage("stop-during-scan");
         const prepare = pricing.prepareUsageCostPricing;

@@ -231,6 +231,30 @@ or demand for certainty before dispatch. Existing release gates still apply.
   deterministic failure buys little; fix it instead. When a fresh parent is
   needed, include the known fixes and get it running without optional delays.
 
+### Optional broad CI discovery alongside initial FRV
+
+Adaptive PR testing can leave failures for broader coverage to discover. To
+reduce repeated FRV cycles, consider this lightweight repair pass while the
+initial FRV runs; it is not a prerequisite, checklist, or release gate.
+
+1. **Check existing broad CI first.** Inspect recent scheduled `CI` and
+   `Plugin Prerelease` results, noting their SHAs and coverage. Use their failures
+   as a head start for diagnosis, not as proof that a different release
+   candidate passes or fails. Keep unrelated main-only repairs off the
+   release’s critical path.
+2. **Run one broad discovery pass when useful.** Prefer the initial FRV’s own
+   CI and plugin children when they already cover the candidate. If coverage
+   is missing or a separate repair revision needs checking, consider full-tier
+   CI and the complete plugin test inventory on that selected revision. Run
+   discovery and focused fixes alongside the initial FRV, not before it, so
+   FRV can also uncover package, upgrade, live-provider, and other non-CI
+   failures. Avoid duplicating active children or broad-running after each fix.
+
+Let independent diagnostics finish, group the known failures, and verify
+repairs with the affected tests or shards. Feed release-relevant fixes into
+the next candidate under the existing intake and evidence rules; this advice
+neither authorizes unrelated changes nor makes diagnostic runs release proof.
+
 ## Deferred CI recovery
 
 Release validation does not pause CI or supporting workflows. The legacy
@@ -416,6 +440,12 @@ until their dependent enforcement changes land.
   against the current publish gate.
 
 ## Preflight
+
+Before dispatch, run `pnpm check:test-mock-exports --base <frozen-sha>` in the
+exact candidate checkout with frozen dependencies and approved isolation. A
+failure blocks dispatch; any candidate change requires a fresh check. FRV repeats
+the same guard before child fanout. Keep candidate execution outside trusted
+admission tooling.
 
 Before full matrix dispatch, run both `pnpm ui:i18n:check` and
 `pnpm native:i18n:check` against the frozen trusted target in approved isolation.

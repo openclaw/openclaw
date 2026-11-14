@@ -44,7 +44,7 @@ export function createEngineTranscript(messages: number) {
 }
 
 /** Browser-local sampling excludes the driver's polling delay from boot readiness. */
-function installEngineBootReadiness() {
+function installEngineBootReadiness(transcriptSelector = ".chat-virtual-row .chat-text") {
   const milestones = { transcriptMs: 0, composerMs: 0, readyMs: 0 };
   Reflect.set(window, "__engineBootReadiness", milestones);
   const sample = () => {
@@ -52,7 +52,7 @@ function installEngineBootReadiness() {
     const input = pane?.querySelector<HTMLTextAreaElement>(
       ".agent-chat__composer-combobox textarea",
     );
-    const rows = pane?.querySelectorAll(".chat-virtual-row .chat-text") ?? [];
+    const rows = pane?.querySelectorAll(transcriptSelector) ?? [];
     if (
       !milestones.transcriptMs &&
       Reflect.get(pane ?? {}, "transcriptReady") === true &&
@@ -72,7 +72,11 @@ function installEngineBootReadiness() {
   requestAnimationFrame(sample);
 }
 
-export function engineProbeInitScript(streaming = false, gatewayLatencyMs = 0) {
+export function engineProbeInitScript(
+  streaming = false,
+  gatewayLatencyMs = 0,
+  transcriptSelector?: string,
+) {
   return `;if (window === window.top && location.protocol !== "about:") {
     ${createColdLoadProbeInitScript({
       ownerProbes: false,
@@ -81,7 +85,7 @@ export function engineProbeInitScript(streaming = false, gatewayLatencyMs = 0) {
       frameGapMs: 0,
       events: [],
     })}
-    ;(() => { const __name = (fn) => fn; (${installEngineBootReadiness.toString()})(); })();
+    ;(() => { const __name = (fn) => fn; (${installEngineBootReadiness.toString()})(${JSON.stringify(transcriptSelector)}); })();
     ${streaming ? createStreamingReplyProbeInitScript() : ""}
   }`;
 }

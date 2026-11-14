@@ -186,6 +186,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   providerUsage?: ProviderUsageDisplayProps;
   contextGateway?: ApplicationGateway;
   onOpenContext?: () => void;
+  /** Opens a process's output in this pane's Processes panel; absent where the pane has none. */
+  onOpenProcesses?: (instanceId?: string) => void;
   /** Present only when this viewer may compact the session; the context popover offers it. */
   onCompact?: () => void | Promise<unknown>;
   compactionStatus?: CompactionStatus | null;

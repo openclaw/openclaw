@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import * as tar from "tar";
@@ -12,7 +11,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
-import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { deleteTestEnvValue, resolveTestTempRoot, setTestEnvValue } from "../test-utils/env.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { buildBackupArchivePath } from "./backup-archive-path-policy.js";
@@ -33,7 +32,7 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 
-const systemTempRoot = os.tmpdir();
+const systemTempRoot = resolveTestTempRoot();
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -229,7 +228,7 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
   it(
     "copies undeclared hardlinks and sidecars as opaque bytes",
     hardlinkCase(async ({ state, ownerPath, aliasPath }) => {
-      const scratchRoot = os.tmpdir();
+      const scratchRoot = state.path("scratch");
       onTestFinished(async () => {
         for (const root of [state.root, scratchRoot]) {
           await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });

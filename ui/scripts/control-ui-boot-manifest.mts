@@ -5,7 +5,6 @@
 // warm routes, and keeps fetched modules reachable from what each route requested.
 import fs from "node:fs";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
@@ -227,7 +226,9 @@ function partitionBootKeys(routes: Record<"new" | "chat", Set<string>>) {
 }
 
 async function main(): Promise<void> {
-  const distDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-control-ui-boot-"));
+  const artifactRoot = path.join(repoRoot, ".artifacts");
+  fs.mkdirSync(artifactRoot, { recursive: true });
+  const distDir = fs.mkdtempSync(path.join(artifactRoot, "control-ui-boot-"));
   try {
     const config = controlUiViteConfig({ outDir: distDir });
     const graph: BootCaptureGraph = {
@@ -238,6 +239,9 @@ async function main(): Promise<void> {
     };
     await build({
       ...config,
+      // This fixture is root-mounted. Root import-map keys and targets as well
+      // as entry links so canonical /chat/main reloads use the same asset URLs.
+      base: "/",
       configFile: false,
       root: path.join(repoRoot, "ui"),
       plugins: [

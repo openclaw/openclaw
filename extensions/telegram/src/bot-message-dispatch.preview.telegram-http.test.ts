@@ -82,6 +82,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
   it.each([
     ["partial", ""],
     ["block", ""],
+    ["progress", ""],
     ["partial", "[bot] "],
     ["block", "[bot] "],
   ] as const)(
@@ -99,8 +100,9 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
           dispatcher.sendBlockReply({ text: chunk, textMode: "delta" });
           await dispatcher.waitForIdle();
           dispatcher.sendBlockReply({ text: first, textMode: "delta" });
-          await dispatcher.waitForIdle();
-          expect(http.texts()).toEqual([(prefix + first + chunk + first).trimEnd()]);
+          const streamed = mode === "progress" ? [] : [(prefix + first + chunk + first).trimEnd()];
+          expect((await dispatcher.waitForIdle())?.anyVisibleDelivered).toBe(streamed.length > 0);
+          expect(http.texts()).toEqual(streamed);
           dispatcher.sendFinalReply({ text: finalText });
           dispatcher.sendFinalReply({ text: "Separate status." });
           return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
@@ -438,6 +440,37 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     },
   );
   it.each([false, true])(
+    "never makes disabled reply controls clickable (rich=%s)",
+    async (richMessages) => {
+      await runTurn(async () => undefined, {
+        mode: "off",
+        telegramCfg: { richMessages },
+        finalReply: {
+          text: "Choose an environment.",
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  { label: "Deploy", value: "env|prod" },
+                  { label: "✓ Staging", value: "env|staging", disabled: true },
+                ],
+              },
+            ],
+          },
+        },
+      });
+      const answer = [...visibleMessages].find(([id]) => visibleMarkup.has(id));
+      const deploy = { text: "Deploy", callback_data: "env|prod" };
+      // Native disabled buttons follow the rich-message opt-in; plain accounts keep the label as text.
+      expect(answer && visibleMarkup.get(answer[0])).toEqual({
+        inline_keyboard: [richMessages ? [deploy, { text: "✓ Staging", disabled: {} }] : [deploy]],
+      });
+      expect(answer?.[1].includes("Staging")).toBe(!richMessages);
+      expect(JSON.stringify(calls)).not.toContain("env|staging");
+    },
+  );
+  it.each([false, true])(
     "retires lazy partials only on new tool starts (update=%s)",
     async (update) => {
       const answer = "The first result is ready, and the remaining work is still running.";
@@ -569,7 +602,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
         await http.waitForContaining("failed", "editMessageText");
         const card = http.texts()[0] ?? "";
         expect(card.match(/Exec/gu)).toHaveLength(1);
-        assertContains(card, "🛠️ Exec", "failed");
+        assertContains(card, "🛠️ <b>Exec</b>", "failed");
       },
       {
         mode: "progress",
@@ -597,9 +630,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
         async (options, channelOptions) => {
           const beforeEmpty = calls.length;
           expect(await channelOptions?.onToolResult?.({ text: " \n " })).toBe(false);
-          expect(calls.slice(beforeEmpty).filter((call) => call.method === "sendMessage")).toEqual(
-            [],
-          );
+          expect(calls.slice(beforeEmpty).map((call) => call.method)).not.toContain("sendMessage");
           if (mode === "progress") {
             // A preamble replaces reasoning rows, so verify token updates before it arrives.
             await options?.onReasoningProgress?.({ progressTokens: 50 });

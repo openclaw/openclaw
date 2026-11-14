@@ -1,4 +1,5 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   formatErrorMessage,
   readErrorName,
@@ -730,10 +731,13 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
             this.providerUnavailableReason ?? "No embedding provider available (FTS-only mode)",
         });
       }
+      const signal = getAsyncWorkSignal();
       try {
-        await this.probeEmbeddingProvider(this.provider, this.providerRuntime);
+        await this.probeEmbeddingProvider(this.provider, this.providerRuntime, signal);
         return this.cacheProbeResult({ ok: true });
       } catch (err) {
+        // Ctrl+C stops the check; it must not be remembered as a provider failure.
+        signal?.throwIfAborted();
         const message = formatErrorMessage(err);
         return this.cacheProbeResult({ ok: false, error: message });
       }

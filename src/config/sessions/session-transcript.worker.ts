@@ -28,21 +28,9 @@ import type {
 
 type TranscriptReply = SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues>;
 
-const startup:
-  | { databaseEngineSelection?: DatabaseEngineSelection; prewarmHistory?: true }
-  | undefined = workerData;
+const startup: { databaseEngineSelection?: DatabaseEngineSelection } | undefined = workerData;
 if (startup?.databaseEngineSelection) {
   installDatabaseEngineSelection(startup.databaseEngineSelection);
-}
-
-// Pool tasks can choose any idle worker, including one created first for a light read.
-if (startup?.prewarmHistory) {
-  await Promise.all([
-    import("../../gateway/session-history-worker-reader.js"),
-    import("../../gateway/chat-history-page-kernel.js"),
-    import("../../gateway/chat-history-response-page.js"),
-    import("../../gateway/session-history-snapshot.js"),
-  ]);
 }
 
 let releaseReadValidation:
@@ -177,6 +165,13 @@ serveOwnedWorkerTasks(
         };
       }
       if (request.kind === "prewarm") {
+        // Only explicit presentation preparation pays for the history graph.
+        await Promise.all([
+          import("../../gateway/session-history-worker-reader.js"),
+          import("../../gateway/chat-history-page-kernel.js"),
+          import("../../gateway/chat-history-response-page.js"),
+          import("../../gateway/session-history-snapshot.js"),
+        ]);
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
         const opened = withOpenClawAgentDatabaseReadOnly(() => undefined, {
@@ -618,6 +613,7 @@ serveOwnedWorkerTasks(
             };
           }
           if (
+            request.kind === "compaction-source" ||
             request.kind === "transcript-hydration" ||
             request.kind === "transcript-maintenance" ||
             request.kind === "current-turn-entry" ||
@@ -685,9 +681,8 @@ serveOwnedWorkerTasks(
             : undefined;
       const deflated = value.kind === "rpc" ? value.page.encodedMessagesDeflate : undefined;
       const activity = value.kind === "rpc" ? value.page.encodedResponse?.activity : undefined;
-      return [body?.buffer, deflated?.buffer, activity?.buffer].filter(
-        (buffer) => buffer !== undefined,
-      );
+      const buffers = [body?.buffer, deflated?.buffer, activity?.buffer];
+      return buffers.filter((buffer) => buffer !== undefined);
     },
     closeResource: (key) => {
       const request = decodeAgentDatabaseReaderRequest(key);

@@ -723,7 +723,7 @@ it.skipIf(process.platform === "win32")(
         ...args
       ) {
         const result = yield* gate(...args);
-        diagnostics = args[3];
+        diagnostics = args[3]?.diagnostics;
         return result;
       });
       const reopened = openOpenClawAgentDatabase(options);

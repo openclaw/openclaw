@@ -130,6 +130,51 @@ Setup checklist:
 
 For local-first with a hosted safety net, swap `primary`/`fallbacks` order and keep the same `providers` block and `models.mode: "merge"`.
 
+### Non-interactive hybrid setup
+
+Onboarding configures one provider per run: the `--custom-*` flags only take effect when the resolved auth choice is `custom-api-key` and are silently ignored next to a hosted `--auth-choice`. To script a hosted primary with a local fallback, onboard with the hosted provider first, then add the local server to config:
+
+```bash
+# 1. Onboard with the hosted provider (example: HuggingFace router)
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --auth-choice huggingface-api-key \
+  --huggingface-api-key "$HF_TOKEN"
+```
+
+Write the local provider to `./local-provider.patch.json5`:
+
+```json5
+{
+  models: {
+    providers: {
+      local: {
+        baseUrl: "http://<host-lan-or-tailnet-ip>:8080/v1",
+        api: "openai-completions",
+        apiKey: "local",
+        models: [{ id: "my-model", name: "Local model", input: ["text"] }],
+      },
+    },
+  },
+}
+```
+
+```bash
+# 2. Add the local server as a second provider
+openclaw config patch --file ./local-provider.patch.json5
+
+# 3. Wire the fallback
+openclaw models fallbacks add "local/my-model"
+```
+
+When the Gateway runs in a container, run steps 2–3 from the host through the container-aware CLI (`openclaw --container <name> ...`) once it is up — the running gateway locks the config file. The container only sees files mounted into it, so pipe the host patch file in via stdin rather than pointing `--file` at a host path:
+
+```bash
+openclaw --container <name> config patch --stdin < ./local-provider.patch.json5
+openclaw --container <name> models fallbacks add "local/my-model"
+```
+
+See [Podman](/install/podman#reaching-model-servers-on-the-host) for the `baseUrl` choice.
+
 OpenClaw fallbacks switch models per turn on provider errors. For per-request routing that keeps small prompts on the local model and sends only oversized ones to a hosted model, see [Hybrid inference](/providers/llmman#hybrid-inference) with llmman.
 
 ### Regional hosting / data routing
@@ -187,6 +232,10 @@ Add `--custom-api-key` if the server requires authentication. Discovery uses tha
 ```
 
 Custom/local provider entries trust their exact configured `baseUrl` origin for guarded model requests, including loopback, LAN, tailnet, and private DNS hosts. Metadata, link-local, and local-use NAT64 (`64:ff9b:1::/48`) origins remain blocked without explicit opt-in. Requests to other private origins still need `models.providers.<id>.request.allowPrivateNetwork: true`. Set the trust flag to `false` to opt out of exact-origin trust.
+
+<Note>
+With rootless Podman's default pasta networking, `host.docker.internal` / `host.containers.internal` (from `--add-host ...:host-gateway` or a Quadlet `AddHost`) normally resolve to the link-local address `169.254.1.2`. If your alias resolves to a link-local address, requests to a `baseUrl` built on it stay blocked even though it is the configured origin. Use the host's LAN or tailnet IP as the `baseUrl` instead, or set `models.providers.<id>.request.allowPrivateNetwork: true`. Check the alias address inside the container; other network backends and custom Podman settings can map it to a different range. See [Podman](/install/podman#reaching-model-servers-on-the-host).
+</Note>
 
 `models.providers.<id>.models[].id` is provider-local - do not include the provider prefix. For an MLX server started with `mlx_lm.server --model mlx-community/Qwen3-30B-A3B-6bit`:
 

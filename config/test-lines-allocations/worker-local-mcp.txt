@@ -1,3 +1,0 @@
-# Gateway admission, supervisor policy withdrawal and retained-worker launch races.
-# Includes real MCP server request counts, stale answers, Code Mode results and the app bridge fallback.
-1019

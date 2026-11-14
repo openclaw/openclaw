@@ -1,2 +1,0 @@
-# Node ID freshness: real bridge rejection/rotation, SQLite restart/concurrency, routing-invalid trust retention, preview-target rejoin, refusal diagnostics, and affected native callers.
-776

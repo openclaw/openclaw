@@ -1,2 +1,0 @@
-# Regression for the native page-census callback honoring mobile scroll padding.
-80

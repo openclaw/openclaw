@@ -1,8 +1,12 @@
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
+import {
+  canonicalizePersistedUserMessageMedia,
+  readPersistedMediaFacts,
+} from "../../media/media-facts.js";
 import { normalizeTranscriptJsonValue } from "./transcript-json-normalize.js";
-import { cloneTranscriptEnvelope } from "./transcript-json.js";
+import { cloneTranscriptEnvelope, isOwnedTranscriptPayload } from "./transcript-json.js";
 
 it.each(["exec", "wait"])("shares admitted %s payloads across envelope copies", (toolName) => {
   const message = {
@@ -23,6 +27,39 @@ it.each(["exec", "wait"])("shares admitted %s payloads across envelope copies", 
   expect(Object.isFrozen(persisted)).toBe(false);
   expect(Object.isFrozen(persisted.content[0])).toBe(true);
   expect(message).not.toHaveProperty("__openclaw");
+});
+
+it("shares admitted payloads across media canonicalization and normalization", () => {
+  const message = {
+    role: "toolResult",
+    toolName: "exec",
+    toolCallId: "canonical-media-call",
+    content: [{ type: "text", text: "retained output" }],
+    details: { nested: { values: ["retained details"] } },
+    MediaPath: "/media/owned.png",
+    MediaType: "image/png",
+  };
+  normalizeTranscriptJsonValue({ message }, "");
+  const originalBytes = JSON.stringify(message);
+  expect(isOwnedTranscriptPayload(message)).toBe(true);
+
+  const canonical = canonicalizePersistedUserMessageMedia(message).message;
+  const canonicalBytes = JSON.stringify(canonical);
+  expect(canonical).not.toBe(message);
+  expect(Object.isFrozen(canonical)).toBe(false);
+  expect(isOwnedTranscriptPayload(canonical)).toBe(false);
+
+  const persisted = normalizeTranscriptJsonValue(canonical, "") as typeof canonical;
+  expect(persisted.content).toBe(message.content);
+  expect(persisted.details).toBe(message.details);
+  expect(Object.isFrozen(persisted)).toBe(false);
+  expect(JSON.stringify(persisted)).toBe(canonicalBytes);
+  expect(readPersistedMediaFacts(persisted)).toEqual([
+    expect.objectContaining({ path: "/media/owned.png", contentType: "image/png", kind: "image" }),
+  ]);
+  expect(persisted).not.toHaveProperty("MediaPath");
+  expect(persisted).not.toHaveProperty("MediaType");
+  expect(JSON.stringify(message)).toBe(originalBytes);
 });
 
 it("does not admit arbitrary frozen payloads when copying an envelope", () => {

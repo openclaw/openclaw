@@ -1,2 +1,0 @@
-# Gateway-role restored-home regression: CLI one-shot admission hides this failure.
-67

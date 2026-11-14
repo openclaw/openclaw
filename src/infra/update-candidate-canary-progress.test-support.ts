@@ -135,6 +135,7 @@ export function registerCanaryProgressWorkerTests(
             expect(beforeInventory).toBeDefined();
             const pressure = channel("openclaw.memory.critical");
             expect(pressure.hasSubscribers).toBe(true);
+            elapsed += 1_000;
             // Retirement removes idle actors synchronously; following writes join their cleanup.
             pressure.publish({});
             pressurePublished = true;
@@ -199,8 +200,11 @@ export function registerCanaryProgressWorkerTests(
           : undefined;
       if (deadline) {
         run.deadline = deadline;
-        vi.spyOn(performance, "now").mockImplementation(() => clock() + elapsed);
       }
+      using _ =
+        deadline || outcome === "reopened"
+          ? vi.spyOn(performance, "now").mockImplementation(() => clock() + elapsed)
+          : undefined;
       let commits = 0;
       admission.beforeGrant = (stage) => {
         // Initial admission warms the writer before streamed snapshot receipts.

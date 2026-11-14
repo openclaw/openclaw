@@ -63,14 +63,30 @@ describe("Templates Gateway contract", () => {
         ...catalogEntry,
         version: coordinate.version,
         workspaceFiles: 2,
-        skills: 0,
+        skills: 1,
         plugins: 1,
         mcpServers: 0,
         scheduledJobs: 0,
         contents: {
           instructions: [{ name: "AGENTS.md", source: "AGENTS.md", excerpt: "Purpose" }],
-          skills: [{ name: "research", version: "1", excerpt: "Research" }],
-          integrations: [{ name: "lobster", kind: "plugin", version: "1" }],
+          skills: [
+            {
+              name: "research",
+              source: "clawhub",
+              ref: "research",
+              version: "1.0.0",
+              excerpt: "Research",
+            },
+          ],
+          integrations: [
+            {
+              name: "lobster",
+              kind: "plugin",
+              source: "clawhub",
+              ref: "lobster",
+              version: "1.0.0",
+            },
+          ],
           automations: [],
         },
       },
@@ -84,6 +100,7 @@ describe("Templates Gateway contract", () => {
       acknowledgeSkillWarnings: [
         {
           actionId: "skill:@community/triage",
+          source: "clawhub",
           ref: "@community/triage",
           reviewToken: "sha256:reviewed-skill",
           acknowledgeRiskWarning,
@@ -149,7 +166,7 @@ describe("Templates Gateway contract", () => {
     });
   });
 
-  it("requires exact plugin artifact integrity in an install review", () => {
+  it("validates registry integrity and bundled plugin digests by source", () => {
     const grants = {
       hooks: {
         allowPromptInjection: { effective: false },
@@ -159,6 +176,7 @@ describe("Templates Gateway contract", () => {
     const pluginReview = {
       actionId: "plugin:@openclaw/lobster",
       pluginId: "lobster",
+      source: "clawhub",
       ref: "@openclaw/lobster",
       version: "2026.9.7",
       ownerAction: "install",
@@ -185,6 +203,64 @@ describe("Templates Gateway contract", () => {
     const { integrity: _integrity, ...withoutIntegrity } = pluginReview;
     rejectPlan({ ...plan, pluginReviews: [withoutIntegrity] });
     rejectPlan({ ...plan, pluginReviews: [{ ...pluginReview, integrity: "sha256-not-a-digest" }] });
+    const { ref: _ref, version: _version, integrity: _artifact, ...shared } = pluginReview;
+    const bundled = {
+      ...shared,
+      source: "bundled",
+      path: "plugins/lobster",
+      digest: `sha256:${"a".repeat(64)}`,
+    };
+    checkPlan({ ...basePlan, pluginReviews: [bundled] });
+    rejectPlan({ ...basePlan, pluginReviews: [{ ...bundled, digest: pluginReview.integrity }] });
+  });
+
+  it("accepts bundled skill warning acknowledgements with native hexadecimal digests", () => {
+    const artifact = {
+      source: "bundled",
+      path: "skills/research",
+      name: "research",
+      digest: "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    };
+    const review = {
+      ...artifact,
+      actionId: "skill:skills/research",
+      riskWarning: "Review bundled scripts",
+      reviewToken: "sha256:reviewed-skill",
+    };
+    const acknowledge = (digest: string) => ({
+      source: coordinate,
+      acknowledgeSkillWarnings: [
+        {
+          actionId: review.actionId,
+          source: artifact.source,
+          path: artifact.path,
+          digest,
+          reviewToken: review.reviewToken,
+          acknowledgeRiskWarning: true,
+        },
+      ],
+    });
+    addApply.accepts(acknowledge(artifact.digest));
+    checkPlan({
+      ...basePlan,
+      skillReviews: [review],
+      actions: [
+        {
+          kind: "skill",
+          id: review.actionId,
+          action: "install",
+          blocked: false,
+          effect: { type: "skill-package", desired: artifact },
+        },
+      ],
+    });
+    for (const digest of [
+      "sha256-short",
+      `sha256-${"A".repeat(43)}=`,
+      `sha256:${"g".repeat(64)}`,
+    ]) {
+      addApply.rejects(acknowledge(digest));
+    }
   });
 
   it("admits bounded access and schedule disclosures without cron prompts", () => {
@@ -193,6 +269,7 @@ describe("Templates Gateway contract", () => {
       action: "schedule",
       blocked: false,
       proposed: {
+        enabled: false,
         schedule: { cron: "0 9 * * *", timezone: "UTC" },
         session: "isolated",
         delivery: "last-channel",
@@ -248,6 +325,7 @@ describe("Templates Gateway contract", () => {
       ...scheduledJob,
       action: "change",
       current: {
+        enabled: true,
         schedule: { cron: "0 8 * * *", timezone: "UTC" },
         session: "main",
         delivery: "none",
@@ -265,6 +343,9 @@ describe("Templates Gateway contract", () => {
       scheduledJobs: { ...plan.scheduledJobs, jobs: [updatedJob] },
     };
     checkPlan(updatePlan);
+    rejectPlan(
+      withJob({ ...updatedJob, proposed: { ...scheduledJob.proposed, enabled: "false" } }),
+    );
     rejectPlan(
       withJob({ ...updatedJob, proposed: { ...scheduledJob.proposed, message: undefined } }),
     );

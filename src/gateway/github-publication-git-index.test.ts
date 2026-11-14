@@ -212,18 +212,25 @@ describe("GitHub publication index update", () => {
         if (argv.includes("fetch")) {
           fetches++;
         }
-        return await runPublicationCommand(
-          argv.map((arg) => arg.replace("https://github.com/example/project.git", url)),
-          {
+        const args = argv.map((arg) => arg.replace("https://github.com/example/project.git", url));
+        if (mode === "contents" && argv.includes("--stdin")) {
+          // A concurrent preparation has already completed this captured content batch.
+          const hydrated = await runPublicationCommand(args, {
             ...options,
-            env: {
-              ...options?.env,
-              GIT_ALLOW_PROTOCOL: allowFetch ? "file" : "",
-              GIT_TRACE_PACKET: packets,
-              GIT_TRACE_PACK_ACCESS: accesses,
-            },
+            env: { ...options?.env, GIT_ALLOW_PROTOCOL: "file" },
+          });
+          expect(hydrated.code).toBe(0);
+          await fs.writeFile(packets, "");
+        }
+        return await runPublicationCommand(args, {
+          ...options,
+          env: {
+            ...options?.env,
+            GIT_ALLOW_PROTOCOL: allowFetch ? "file" : "",
+            GIT_TRACE_PACKET: packets,
+            GIT_TRACE_PACK_ACCESS: accesses,
           },
-        );
+        });
       };
       const prepare = (sha: string, contents = false) =>
         requireGitHubPublicationCommit(
@@ -255,6 +262,9 @@ describe("GitHub publication index update", () => {
           (file) => file.endsWith(".pack") && !previousPacks.has(file),
         );
         expect(fetches).toBe(mode === "trees" ? 2 : 1);
+        if (mode === "contents") {
+          expect(await fs.readFile(packets, "utf8")).not.toMatch(/>\s+want [0-9a-f]{40}/u);
+        }
         expect(packs).toHaveLength(fetches);
         for (const pack of packs) {
           await expect(
@@ -270,6 +280,9 @@ describe("GitHub publication index update", () => {
       allowFetch = true;
       await prepare(f.headCommit);
       expect(fetches).toBe(1);
+      expect(await git(clone, ["rev-parse", `refs/openclaw/fetched/${f.headCommit}`])).toBe(
+        f.headCommit,
+      );
       const trace = await fs.readFile(packets, "utf8");
       expect(trace).toContain(`fetch> have ${f.previousHead}`);
       if (mode !== "uncached" && mode !== "unregistered") {

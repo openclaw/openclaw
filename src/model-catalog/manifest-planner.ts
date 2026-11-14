@@ -19,6 +19,7 @@ type ManifestModelCatalogPlugin = {
   providerEndpoints?: readonly import("../plugins/manifest-types.js").PluginManifestProviderEndpoint[];
   id: string;
   providers?: readonly string[];
+  contracts?: { readonly decisionProviders?: readonly string[] };
   modelCatalog?: Pick<
     ModelCatalog,
     "providers" | "aliases" | "suppressions" | "discovery" | "runtimeAugment"
@@ -311,8 +312,13 @@ export function planManifestModelCatalogRows(params: {
   };
 }
 
+// Matches manifest catalog normalization: Decision-only providers own their rows too.
 function buildOwnedProviderSet(plugin: ManifestModelCatalogPlugin): ReadonlySet<string> {
-  return new Set((plugin.providers ?? []).map(normalizeModelCatalogProviderId).filter(Boolean));
+  return new Set(
+    [...(plugin.providers ?? []), ...(plugin.contracts?.decisionProviders ?? [])]
+      .map(normalizeModelCatalogProviderId)
+      .filter(Boolean),
+  );
 }
 
 export function buildModelCatalogProviderAliasTargets(

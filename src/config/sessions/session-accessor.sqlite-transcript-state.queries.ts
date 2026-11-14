@@ -132,21 +132,32 @@ export function selectTranscriptAppendParentIdentity(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
   sessionId: string,
 ) {
-  return getSessionKysely(database.db)
-    .selectFrom("transcript_event_identities as ti")
-    .innerJoin("transcript_events as te", (join) =>
-      join.onRef("te.session_id", "=", "ti.session_id").onRef("te.seq", "=", "ti.seq"),
-    )
-    .select([
-      "ti.event_type",
-      projectTranscriptNavigationSql(
-        database.db,
-        transcriptEventNavigationSql(database.db, "te"),
-      ).as("event_json"),
-    ])
-    .where("ti.session_id", "=", sessionId)
-    .orderBy("ti.seq", "desc")
-    .limit(1);
+  return (
+    getSessionKysely(database.db)
+      .selectFrom("transcript_event_identities as ti")
+      .innerJoin("transcript_events as te", (join) =>
+        join.onRef("te.session_id", "=", "ti.session_id").onRef("te.seq", "=", "ti.seq"),
+      )
+      .select([
+        "ti.event_type",
+        projectTranscriptNavigationSql(
+          database.db,
+          transcriptEventNavigationSql(database.db, "te"),
+        ).as("event_json"),
+      ])
+      .where("ti.session_id", "=", sessionId)
+      // Select the latest sequence first: max() is a single index probe without table
+      // statistics. ORDER BY ... LIMIT let a database lacking transcript_events stats drive
+      // the join from every event and project each payload before the sort (seconds on
+      // long sessions, under the transcript writer lock).
+      .where("ti.seq", "=", (eb) =>
+        eb
+          .selectFrom("transcript_event_identities")
+          .select((inner) => inner.fn.max<number>("seq").as("seq"))
+          .where("session_id", "=", sessionId),
+      )
+      .limit(1)
+  );
 }
 
 export function returningTranscriptMutationAuthority(

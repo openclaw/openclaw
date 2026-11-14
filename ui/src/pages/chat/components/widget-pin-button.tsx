@@ -1,13 +1,13 @@
 import { createErrorBoundary } from "@solidjs/signals";
 import { action, createMemo, createOptimistic, createSignal, refresh } from "solid-js";
 import { IconButton } from "../../../components/solid/icon-button.tsx";
-import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
+import { registerChatToolWidgetsEnglish } from "../../../i18n/locales/en-chat-tool-widgets.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import { projectBoardWidgetNames } from "../../../lib/reactive/board-pins.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
 
-registerEnglishCatalog(registerChatToolLabelsEnglish);
+registerEnglishCatalog(registerChatToolWidgetsEnglish);
 
 export type WidgetPinTarget = {
   board: BoardProvider;

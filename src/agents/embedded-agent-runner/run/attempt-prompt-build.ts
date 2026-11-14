@@ -240,11 +240,22 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   const authorizedHookResult =
     preserveExactPrompt || !hookRunner || !attempt.toolAuthorityFingerprint || !assertHostActive
       ? undefined
-      : await hookRunner.runAuthorizedPromptBuild(promptEvent, hookCtx, {
-          toolAuthorityFingerprint: attempt.toolAuthorityFingerprint,
-          activeToolNames: callableToolNames,
-          assertHostActive,
-        });
+      : await hookRunner.runAuthorizedPromptBuild(
+          {
+            ...promptEvent,
+            // The embedded runner owns its transcript; there is no native binding to invalidate.
+            continuity:
+              promptBuildMessages.length > 0
+                ? { state: "resumed", history: "included" }
+                : { state: "fresh", history: "none" },
+          },
+          hookCtx,
+          {
+            toolAuthorityFingerprint: attempt.toolAuthorityFingerprint,
+            activeToolNames: callableToolNames,
+            assertHostActive,
+          },
+        );
   const promptBeforeResolvedToolFinalization = effectivePrompt;
   effectivePrompt = applyResolvedToolPromptFinalizer({
     prompt: effectivePrompt,

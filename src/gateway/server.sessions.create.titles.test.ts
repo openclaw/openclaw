@@ -392,6 +392,7 @@ test("creates a two-word worktree name before an initial turn can generate its t
     const entry = readEntry(storePath, key);
     expect(entry?.worktree?.branch).toBe(branch);
   } finally {
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     await cleanupWorktree(context, storePath, key);
   }
 });

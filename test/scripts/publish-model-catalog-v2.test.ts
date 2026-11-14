@@ -357,6 +357,9 @@ describe("publish model catalog v2", () => {
     expect(parsePublishModelCatalogArgs(["--out", "v1.json", "--out-v2", "v2.json"])).toEqual({
       dryRun: false,
       pricing: false,
+      skipOversizedV1: false,
+      allowShrink: false,
+      previous: {},
       out: "v1.json",
       outV2: "v2.json",
     });

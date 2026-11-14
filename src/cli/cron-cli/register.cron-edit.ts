@@ -8,6 +8,7 @@ import type { CronJob } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
@@ -40,6 +41,7 @@ import {
   parseCronStringOption,
   warnIfCronSchedulerDisabled,
   requireCronJobId,
+  callCronReadFromCli,
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
 import { readCronPayloadScript, readCronTriggerScript } from "./trigger-options.js";
@@ -62,7 +64,7 @@ type CronEditOptions = GatewayRpcOpts &
 
 async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<CronJobForEdit> {
   try {
-    return (await callGatewayFromCli("cron.get", opts, { id })) as CronJobForEdit;
+    return (await callCronReadFromCli("cron.get", opts, { id })) as CronJobForEdit;
   } catch (error) {
     if (!isUnknownCronGetMethodError(error)) {
       throw error;
@@ -97,6 +99,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--clear-session-key", "Unset session key", false)
       .option("--clear-pacing", "Remove dynamic-cadence bounds", false)
       .option("--clear-active-hours", "Remove the entire execution window", false)
+      .option("--clear-access", "Remove the per-job Access selection", false)
       .option("--clear-idle-only", "Remove the per-job idle-only policy", false)
       .option("--clear-trigger", "Remove the condition trigger", false)
       .option(
@@ -534,11 +537,9 @@ export function registerCronEditCommand(cron: Command) {
             if (commandEnv) {
               // Diagnostics are best effort; an unavailable snapshot must not block a patch.
               const existing = (await readExistingCronJob().catch(() => undefined))?.payload;
-              if (existing?.kind === "command") {
-                droppedEnvKeys = Object.keys(existing.env ?? {}).filter(
-                  (key) => !Object.hasOwn(commandEnv, key),
-                );
-              }
+              getAsyncWorkSignal()?.throwIfAborted();
+              const stored = existing?.kind === "command" ? Object.keys(existing.env ?? {}) : [];
+              droppedEnvKeys = stored.filter((key) => !Object.hasOwn(commandEnv, key));
             }
           } else if (payloadKind === "script") {
             payload = { kind: "script" };

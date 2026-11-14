@@ -1,2 +1,0 @@
-62
-# Deterministic owner/transport proof keeps PostgreSQL admission errors at its deadline while preserving early timeouts, host closure, and caller cancellation.

@@ -36,7 +36,7 @@ import {
 import { resolvePluginRegistrationPlan } from "./loader-registration-plan.js";
 import {
   type AuthorizedDreamingSidecar,
-  detailPluginStartupTrace,
+  recordPluginStartupDiagnostics,
   preparePluginLoadRecord,
   prepareRuntimePluginConfig,
   type PreparedPluginConfig,
@@ -705,23 +705,15 @@ export function* loadRuntimePluginCandidate(params: {
     });
     failed = true;
   } finally {
-    const elapsed = performance.now() - beforeModuleLoad;
-    const registerMs =
-      beforeRegister === undefined ? undefined : performance.now() - beforeRegister;
-    detailPluginStartupTrace(params.options.startupTrace, record.id, [
-      ["configValidationMs", configValidationMs],
-      ["artifactPreparationMs", artifactPreparationMs],
-      ["loadMs", moduleLoadMs || elapsed],
-      ["modulePreparationMs", modulePreparationMs],
-      ["loadFailedCount", failed && beforeRegister === undefined ? 1 : 0],
-      ...(registerMs === undefined
-        ? []
-        : ([
-            ["registerMs", registerMs],
-            ["loadAndRegisterMs", elapsed],
-            ["registerFailedCount", failed ? 1 : 0],
-          ] as const)),
-    ]);
+    recordPluginStartupDiagnostics(params, record, {
+      beforeModuleLoad,
+      beforeRegister,
+      configValidationMs,
+      artifactPreparationMs,
+      moduleLoadMs,
+      modulePreparationMs,
+      failed,
+    });
   }
 }
 

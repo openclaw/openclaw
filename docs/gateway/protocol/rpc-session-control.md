@@ -75,7 +75,7 @@ checked after preparation and at the write boundary.
 
 GitHub publication options read independent account status and publication receipts concurrently. Cold receipt reads load the publication reader without initializing unrelated shared-state commands. The response still checks current session access and personal account authority after those reads settle. A publication that failed before capturing its workspace snapshot remains visible without waiting for pull-request discovery; there is no accepted snapshot to compare with published work. Recovery reads branch-list facts without waiting for pull-request diff statistics or check rollups. Successful commit/tree coverage proofs are reused for up to 90 seconds for the same repository, head, accepted snapshot, and credential scope; each read still checks current session access and the current pull-request candidates.
 
-Automatic System GitHub publication recovery stops after three failed attempts
+Automatic publication recovery for the shared agent account stops after three failed attempts
 in one Gateway process.
 A publication older than one hour gets one final recovery attempt, including
 after a Gateway restart. If the outcome remains unconfirmed, the Gateway records

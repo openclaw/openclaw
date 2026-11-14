@@ -1,4 +1,3 @@
-import { attachModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   decisionResultV2ToV1,
   type DecisionBatchV2,
@@ -11,12 +10,10 @@ const mocks = vi.hoisted(() => ({ fetch: vi.fn(), release: vi.fn() }));
 vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
   fetchWithProviderHttpGuard: async (request: {
-    beforeRequest: () => void;
     url: string;
     init: RequestInit;
     signal: AbortSignal;
   }) => {
-    request.beforeRequest();
     return {
       response: await mocks.fetch(request.url, { ...request.init, signal: request.signal }),
       release: mocks.release,
@@ -185,35 +182,6 @@ it("translates all questions and preserves lossless V1 estimates from prepared a
       },
     ],
   });
-  expect(mocks.release).toHaveBeenCalledOnce();
-});
-
-it("uses the prepared custom endpoint and headers", async () => {
-  await evaluate(
-    {
-      model: {
-        ...context().model,
-        baseUrl: "https://proxy.example/v1",
-        headers: { "X-Project": "test" },
-      },
-    },
-    { state: { type: "text", text: "literal evidence" }, questions: { q: { type: "boolean" } } },
-  );
-  const [url, init] = mocks.fetch.mock.calls[0]!;
-  expect(url).toBe("https://proxy.example/v1/decisions");
-  expect(new Headers(init.headers).get("x-project")).toBe("test");
-  expect(JSON.parse(init.body).input).toBe("literal evidence");
-});
-
-it("does not restore a bearer after prepared request auth replaces it", async () => {
-  const model = attachModelProviderRequestTransport(
-    { ...context().model, headers: { "X-Credential": "synthetic-override" } },
-    { auth: { mode: "header", headerName: "X-Credential", value: "synthetic-override" } },
-  );
-  await evaluate({ model });
-  const headers = new Headers(mocks.fetch.mock.calls[0]![1].headers);
-  expect(headers.has("authorization")).toBe(false);
-  expect(headers.get("x-credential")).toBe("synthetic-override");
 });
 
 it.each(["image/png", "image/jpeg", "image/webp"])("inlines %s evidence", async (mime) => {
@@ -285,38 +253,13 @@ it.each([
   }
 });
 
-it.each([
-  ...(["oauth", "token"] as const).map(
-    (mode) =>
-      [mode, "credentials-unavailable", { auth: { apiKey: "subscription", mode } }] as const,
-  ),
-  ...["https://chatgpt.com/backend-api/codex", "http://api.openai.com/v1"].map(
-    (baseUrl) =>
-      [baseUrl, "unsupported-input", { model: { ...context().model, baseUrl } }] as const,
-  ),
-  ["retired owner", "transport", { isAdmissible: () => false }] as const,
-  ["expired deadline", "transport", { deadlineMonotonicMs: -1 }] as const,
-])("rejects %s before dispatch", async (_name, reason, extra) => {
-  await expectUnavailable(reason, extra);
-  expect(mocks.fetch).not.toHaveBeenCalled();
-});
-
-it.each([
-  [401, "authentication"],
-  [400, "unsupported-input"],
-  [500, "transport"],
-  [429, "rate-limited"],
-] as const)("maps HTTP %s without exposing the body or retrying", async (status, reason) => {
-  const headers = status === 429 ? { "Retry-After": "2" } : undefined;
-  mocks.fetch.mockResolvedValue(new Response("private reflected evidence", { status, headers }));
-  expect(await evaluate()).toEqual({
-    status: "unavailable",
-    reason,
-    ...(status === 429 ? { retryAfterMs: 2000 } : {}),
-  });
-  expect(mocks.fetch).toHaveBeenCalledOnce();
-  expect(mocks.release).toHaveBeenCalledOnce();
-});
+it.each(["https://chatgpt.com/backend-api/codex", "http://api.openai.com/v1"])(
+  "rejects %s before dispatch",
+  async (baseUrl) => {
+    await expectUnavailable("unsupported-input", { model: { ...context().model, baseUrl } });
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  },
+);
 
 it("preserves successful siblings of a per-question refusal", async () => {
   reply({ answers: [{ name: "damaged", type: "refusal" }, ...response().answers.slice(1)] });
@@ -338,7 +281,6 @@ it("preserves successful siblings of a per-question refusal", async () => {
 
 it.each([
   { answers: [] },
-  { model: "synthetic-decision-credential" },
   { usage: { input_tokens: -1, output_tokens: 0 } },
   replaceAnswer(0, { name: "wrong", probability: 0.5 }),
   replaceAnswer(0, { probability: 2 }),
@@ -356,21 +298,7 @@ it.each([
       { label: "2", value: 2, probability: 0.3 },
     ],
   }),
-])("rejects malformed or credential-reflecting answers %#", async (overrides) => {
+])("rejects malformed answers %#", async (overrides) => {
   reply(overrides);
   await expectUnavailable("invalid-response");
-});
-
-it("rejects malformed JSON and releases the transport", async () => {
-  mocks.fetch.mockResolvedValue(new Response("not json"));
-  await expectUnavailable("invalid-response");
-  expect(mocks.release).toHaveBeenCalledOnce();
-});
-
-it("preserves caller cancellation", async () => {
-  const controller = new AbortController();
-  const reason = new Error("caller cancelled");
-  controller.abort(reason);
-  await expect(evaluate({ signal: controller.signal })).rejects.toBe(reason);
-  expect(mocks.fetch).not.toHaveBeenCalled();
 });

@@ -10,6 +10,7 @@ import {
   releaseSessionFilePreviewGrant,
   sessionFilePreviewBinding,
 } from "../artifact-download-grants.js";
+import { usesClawSandbox } from "../sandbox-view.js";
 import {
   analyzeSessionHtmlPreview,
   analyzeSessionHtmlPreviewCss,
@@ -124,6 +125,11 @@ export async function respondSessionFilePreview({
     } satisfies SessionsFilesPreviewResult);
     return;
   }
+  // Relative resources load from the Gateway sandbox listener, which a claw-loader sandbox cannot reach.
+  if (usesClawSandbox(options.client)) {
+    unsupported();
+    return;
+  }
   const resources = new Map<string, { ref: string; mimeType: string; digest: string }>();
   for (const [ref, asset] of loaded) {
     const path = paths.paths.get(ref)!;
@@ -164,10 +170,14 @@ export async function respondSessionFilePreview({
   onGrantCreated();
   try {
     assertCurrent();
+    const sandboxOrigin =
+      options.client?.remoteControlUiIngress?.sandboxOrigin ??
+      options.context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
     options.respond(true, {
       status: "ready",
       html: params.html,
       omitted: omitted.size,
+      ...(sandboxOrigin ? { sandboxOrigin: new URL(sandboxOrigin).origin } : {}),
       previewId: grant.previewId,
       sandboxPath: grant.sandboxPath,
     } satisfies SessionsFilesPreviewResult);

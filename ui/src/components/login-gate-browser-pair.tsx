@@ -38,7 +38,7 @@ export function LoginGateBrowserPairCard(props: {
   });
   const waiting = () => {
     const current = state();
-    return "code" in current ? current : null;
+    return "command" in current ? current : null;
   };
   const failure = () => {
     const current = state();
@@ -96,14 +96,8 @@ export function LoginGateBrowserPairCard(props: {
           <>
             <div class="login-gate__hero">
               <span class="login-gate__hero-label">{t("login.browserPair.runOnGatewayHost")}</span>
-              <ConnectCommand command={`openclaw pair ${request().code}`} variant="hero" />
+              <ConnectCommand command={request().command} variant="hero" />
             </div>
-            <p class="login-gate__lede login-gate__browser-pair-code">
-              {t("login.browserPair.identity", {
-                code: request().code,
-                id: request().browserId,
-              })}
-            </p>
             <p class="login-gate__lede" role="status">
               <Show
                 when={request().kind !== "cancelFailed" && request().kind !== "alreadyApproved"}

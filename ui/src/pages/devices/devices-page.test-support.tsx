@@ -15,6 +15,7 @@ import {
   deviceSystemInfo,
   deviceDesktopEnvironments,
 } from "../../test-helpers/devices-fixtures.ts";
+import { openDeviceDisclosures } from "../../test-helpers/devices-view.tsx";
 import { createModalDialogTestFixture } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -250,6 +251,7 @@ export async function selectEntryAction(
 ) {
   // Let initial native readiness settle before keeping an interactive row reference.
   await waitForSolid(() => expect(container.textContent).toContain(name));
+  openDeviceDisclosures(container);
   const selector = `[data-device-action="${action}"]`;
   const row = [...container.querySelectorAll(".device-entry")].find(
     (entry) =>
@@ -276,6 +278,7 @@ export function mountPaired(request: Parameters<typeof clientFor>[0]) {
     devicesList: { paired: [pairedDevice], pending: [] },
     nodes: [{ nodeId: "node-1", displayName: "Office Mac" }],
   });
+  openDeviceDisclosures(page.container);
   return { ...page, fixture, client };
 }
 

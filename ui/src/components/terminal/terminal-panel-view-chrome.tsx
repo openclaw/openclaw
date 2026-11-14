@@ -81,6 +81,7 @@ export function SessionMenu(props: {
           <Show when={props.inline && props.mobile}>
             <PanelIconButton
               label={t("common.back")}
+              title={false}
               icon={<Icon name="chevronLeft" />}
               class="tp-rail__icon"
               onClick={() => props.state.onDismiss(true)}
@@ -97,7 +98,6 @@ export function SessionMenu(props: {
               ]}
               type="button"
               aria-label={t("terminal.refreshSessions")}
-              title={t("terminal.refreshSessions")}
               onClick={() => props.state.onRefresh()}
             >
               <Show when={props.inline || !props.mobile} fallback={t("terminal.refreshSessions")}>
@@ -278,6 +278,7 @@ export function Actions(props: { state: TerminalPanelViewState; dialogId: string
         <PanelIconButton
           class="rail-header__action tp-icon tp-upload"
           label={t("terminal.addFiles")}
+          title={t("terminal.addFilesLabel")}
           icon={<Icon name="paperclip" />}
           disabled={
             !props.state.connected ||
@@ -357,6 +358,7 @@ export function Actions(props: { state: TerminalPanelViewState; dialogId: string
             <PanelIconButton
               class="rail-header__action tp-icon tp-open-fullscreen"
               label={t("terminal.openWindow")}
+              title={t("terminal.openWindowTooltip")}
               icon={<Icon name="maximize" />}
               newTab
               onClick={props.state.onOpenFullscreen}
@@ -365,6 +367,7 @@ export function Actions(props: { state: TerminalPanelViewState; dialogId: string
           <PanelIconButton
             class="rail-header__action tp-icon"
             label={t("terminal.hide")}
+            title={false}
             icon={<Icon name="x" />}
             onClick={props.state.onHide}
           />

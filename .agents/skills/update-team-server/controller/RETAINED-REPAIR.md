@@ -312,6 +312,134 @@ Ordinary adoption consumes that receipt, retains the original backups (not bridg
 
 Never install an arbitrary partial closure or treat repository publication as live permission. See [SOURCE.md](SOURCE.md) for the captured installed provenance, reviewed differences, and qualification limits.
 
+### Adopt for native-update forward recovery
+
+A schema-crossing native update retained in `ROLLBACK_FAILED` can use the same
+four-file `prepare` (or `historical-successor`) and `apply` adoption sequence.
+Add `nativeRecovery` to its request. This is limited to a completed migration
+whose distinct candidate is still selected and running; it does not admit an
+incomplete migration, restored predecessor, downgrade, or another journal phase.
+Ordinary same-schema adoption keeps its existing request and checks.
+
+`nativeRecovery.receipt` is the exact `{path,device,inode,sha256}` descriptor of
+`<nativeUpdate.backupRoot>.receipt.json`. `nativeRecovery.backup` is the
+`{path,device,inode}` identity of the receipt's existing
+`<nativeUpdate.backupRoot>.databases` directory. The receipt must still say
+`migrated`. Live databases retain its exact device/inode identities; held stores
+may retain those same identities in their owner-safe archive even when the
+receipt lists their original live paths. `nativeRecovery.process` is
+`{pid,generation,release,runtime,uid,port}`: the current system Gateway's PID,
+`/proc` start ticks, canonical candidate release directory, runtime executable,
+runtime UID and listener port. The existing native live-custody owner verifies
+the system service, process, invocation, command, cgroup and listeners. The
+existing `source` descriptor binds every byte of the original journal, including
+its candidate, predecessor/candidate schema
+pair, creation time, and transaction UUID in `nativeUpdate.backupRoot`; V1
+activation journals have no separate `id` field.
+
+For this retained failed migration, a later atomic config replacement is accepted
+only when the selected serving candidate has loaded the current config. The
+controller checks its canonical path, runtime ownership and private mode, then
+binds the current bytes to the Gateway's `config.get` revision and requires that
+revision to be applied. A stale watcher snapshot, invalid or unapplied config,
+or included-file revision cannot authorize this single-file reconciliation.
+The existing installation revision key is read without creating or changing it;
+key material and config contents are never recorded. Adoption records the old
+and current config identities and applied revision in its immutable intent.
+Recovery uses the same proof for its local protected-path snapshot and rechecks
+it after full acceptance. The original journal, witness and native receipt stay
+unchanged; stopped migration/restore and same-schema reconciliation keep their
+existing contracts.
+
+Serving-process binding accepts exactly the system unit's cgroup or its
+`/gateway` leaf, matching `DelegateSubgroup=gateway`. Other leaves, nested
+sandboxes and other units are refused. The observed path stays in the native
+owner witness. Profiling uses the same two process locations; the privileged
+systemd condition instead accepts the unit root or its exact `/.control` leaf.
+Unit `ControlGroup` remains the unit root. Stopped custody checks that root's
+recursive kernel population bit, so empty delegated children do not block it;
+root-owned ancestors and the exact runtime-owned delegation boundary remain
+checked.
+
+The adoption sequence and request shape are unchanged. After a refused binding
+that published no adoption intent, stage the newly reviewed complete four-file
+closure and bind its new descriptors before retrying. Never reuse a replacement
+descriptor for changed file bytes or overwrite a packet referenced by an
+incomplete adoption.
+
+Adoption retains the original journal and all four old controller files through
+the existing immutable adoption archives. It validates the original session
+witness and native backup identity without rewriting either or copying database
+snapshots. Keep the old adoption archives, native backup, receipt and original
+witness in place while the transaction references them.
+
+After completed adoption, run the installed
+`/usr/local/sbin/openclaw-release-deploy --recover` with the same inherited FD9
+lock and existing private operator environment. Keep held agent directories in
+their witnessed archive.
+Successful full candidate acceptance retires the journal without restarting;
+ordinary recovery's failure/rollback behavior remains unchanged. This sequence
+does not deploy a new Gateway release or enable update timers.
+
+Do not use `--prepare-retained-repair` for this operation: that surface prepares
+a distinct same-schema repair release, rather than adopting a controller for
+native forward recovery. Do not remove the journal or install only the library.
+The approved shell, library and both helper files form one adoption closure even
+when only the library changes in this fix.
+
+### Adopt a controller after journal retirement
+
+When the canonical `journal/activation.json` is absent and the installed closure
+has a completed adoption gate, use `steady-successor` through the staged reviewed
+library. This is ordinary controller adoption after recovery or a later accepted
+deployment. It does not require the old incident's candidate, native backup,
+configuration or database identities to remain current. An existing activation
+journal still requires its recovery owner; this action never retires a journal.
+
+Under the existing exclusive FD9 deployment lock, construct the request:
+
+- `version: 1` and a fresh UUIDv4 `operation`.
+- `source`: the exact descriptor in the completed gate's intent `original` field
+  (its archived journal, not the absent canonical path).
+- `oldClosure` and `replacement`: the four installed and staged file descriptors,
+  in the existing shell/library/suspension/startup-profile order.
+- `historical`: exact `gate` and `complete` file descriptors of the current
+  completed adoption. The installed closure must match that completion.
+- `steady.process`: current `{pid,generation,release,runtime,uid,port}`, using
+  the same native serving-process binding described above.
+- `steady.pointers`: `current` and `previous` symlink identities as
+  `{path,sha,device,inode}`. An absent `previous` is `null`.
+
+All file descriptors use `{path,device,inode,sha256}`. Do not include
+`nativeRecovery` or `retirement`. Run the three library commands under that same
+lock and existing private operator environment:
+
+```sh
+node "$STAGED/release-lib.mjs" retained-controller-adoption \
+  steady-successor "$ROOT" @stdin < "$STAGED/request.json" > "$STAGED/binding.json"
+node "$STAGED/release-lib.mjs" retained-controller-adoption \
+  apply "$ROOT" @stdin < "$STAGED/binding.json" > "$STAGED/adopted.json"
+node "$STAGED/release-lib.mjs" retained-controller-adoption \
+  context "$ROOT" @stdin < "$STAGED/binding.json"
+```
+
+The existing adoption owner archives the predecessor gate and all four old
+files, records old/new hashes and publication inodes, and fences incomplete
+closures. Preserve the request, binding, staging inodes and archives after an
+interruption; replay the same commands rather than reinstalling files or deleting
+the gate. It rechecks journal absence, live process and pointers during adoption.
+Once completed, ordinary controller entry checks closure integrity rather than
+pinning future deployments to that process. A subsequent approved deployment
+uses the installed shell normally, and a later controller adoption can use
+`steady-successor` again.
+
+The absent journal is the canonical owner's ordinary-admission fact, not a
+reconstructed receipt for the historical recovery. The prior immutable intent,
+original journal archive and completion remain evidence of their own operation.
+Adoption does not restart, deploy, migrate state or enable a timer. The native
+forward-recovery path has already retired its journal; do not run `--recover`
+merely to adopt a newer controller.
+
 ## Qualification still required
 
 `retained-repair-native-config.test.mjs` exercises reviewed-config preparation,

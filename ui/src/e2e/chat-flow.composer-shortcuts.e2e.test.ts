@@ -316,15 +316,11 @@ suite.define(() => {
       await composer.fill(followUpText);
       const primary = page.locator(".agent-chat__composer-actions .chat-send-btn--send");
       await primary.hover();
-      const modifiedEnter = await page.evaluate(() =>
-        /Mac|iPhone|iPad|iPod/u.test(navigator.platform) ? "⌘/Ctrl+Enter" : "CtrlEnter",
-      );
-      const tooltip = `${followUpMode === "steer" ? "Steer ⏎ · Queue" : "Queue ⏎ · Steer"} ${modifiedEnter}`;
       const tooltipHost = primary.locator("..");
       const tooltipContent = tooltipHost.locator('[slot="content"]');
       await expect
         .poll(async () => (await tooltipContent.textContent())?.replace(/\s+/gu, ""))
-        .toBe(tooltip.replace(/\s+/gu, ""));
+        .toMatch(followUpMode === "steer" ? /^Steer.*Queue/u : /^Queue.*Steer/u);
       await tooltipHost.locator(".tooltip-surface[popover]").waitFor({ state: "visible" });
       expect(await tooltipContent.locator("kbd").count()).toBe(2);
       await composer.press("Control+Enter");

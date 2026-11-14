@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readGatewayServiceCommand } from "../daemon/service-command.js";
 import { mergeGatewayServiceEnv } from "../daemon/service-env-merge.js";
 import {
   inspectGatewayServiceInstallationDrift,
@@ -7,7 +8,6 @@ import {
   summarizeGatewayServiceLayout,
 } from "../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
-import { resolveGatewayService } from "../daemon/service.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import type { GatewayServiceInstallation } from "../infra/gateway-service-installation-context.js";
@@ -112,9 +112,9 @@ export async function inspectCliGatewayServiceInstallation(
   env: NodeJS.ProcessEnv,
 ): Promise<GatewayServiceInstallation | undefined> {
   try {
-    const service = resolveGatewayService();
     const ownCommand = await readOwnGatewayServiceCommand(env);
-    const command = ownCommand ?? (await service.readCommand(env, { inspectStateIdentity: true }));
+    const command =
+      ownCommand ?? (await readGatewayServiceCommand(env, { inspectStateIdentity: true }));
     const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
     const layout = await summarizeGatewayServiceLayout(command);
     const drift = root ? await inspectGatewayServiceInstallationDrift(layout, root) : undefined;

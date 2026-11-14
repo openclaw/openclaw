@@ -1,2 +1,0 @@
-# Regression proof that message-tool replies from hidden child-coordination turns stay visible in history and live chat.
-38

@@ -9,7 +9,7 @@ import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
 import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import {
-  reportStatusScanFailure,
+  reportStatusScanFailureUnlessInterrupted,
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
@@ -50,41 +50,54 @@ export async function runStatusJsonCommand(params: {
         params.runtime,
       ),
     )
-    .catch((error: unknown) => reportStatusScanFailure(error, params.runtime, opts.timeoutMs));
+    .catch((error: unknown) =>
+      reportStatusScanFailureUnlessInterrupted(error, params.runtime, opts.timeoutMs),
+    );
+  if (!scan) {
+    return;
+  }
   const updateRunStatus = await readUpdateRunStatus();
   const includeSecurityAudit = opts.all === true || opts.deep === true;
   const inspectionReason = "Local plugin inspection is not collected in online status.";
-  const { securityAudit, usage, health, lastHeartbeat, gatewayService, nodeService } =
-    await resolveStatusRuntimeSnapshot({
-      config: scan.cfg,
-      sourceConfig: scan.sourceConfig,
-      timeoutMs: opts.timeoutMs,
-      gatewayProbeDeadlineMs: opts.gatewayProbeDeadlineMs,
-      ...(opts.agent ? { agentId: opts.agent } : {}),
-      usage: opts.usage,
-      deep: opts.deep,
-      gatewayReachable: scan.gatewayReachable,
-      ...(scan.gatewayProbe?.startupPhase
-        ? { gatewayStartupPhase: scan.gatewayProbe.startupPhase }
-        : {}),
-      ...(scan.gatewayProbe?.error ? { gatewayProbeError: scan.gatewayProbe.error } : {}),
-      includeSecurityAudit: includeSecurityAudit && !scan.collection,
-      suppressHealthErrors: true,
-      ...(scan.collection && opts.usage
-        ? {
-            resolveUsage: async (input: Parameters<typeof resolveStatusUsageSummary>[0]) => {
-              const { readConfigFileSnapshot, setAppliedRuntimeConfigSnapshot } =
-                await import("../config/config.js");
-              const snapshot = await readConfigFileSnapshot({
-                observe: false,
-                pluginValidation: "core-only",
-              });
-              await setAppliedRuntimeConfigSnapshot(snapshot.runtimeConfig, snapshot.sourceConfig);
-              return resolveStatusUsageSummary({ ...input, config: snapshot.runtimeConfig });
-            },
-          }
-        : {}),
-    });
+  const snapshot = await resolveStatusRuntimeSnapshot({
+    config: scan.cfg,
+    sourceConfig: scan.sourceConfig,
+    timeoutMs: opts.timeoutMs,
+    gatewayProbeDeadlineMs: opts.gatewayProbeDeadlineMs,
+    ...(opts.agent ? { agentId: opts.agent } : {}),
+    usage: opts.usage,
+    deep: opts.deep,
+    gatewayReachable: scan.gatewayReachable,
+    ...(scan.gatewayProbe?.startupPhase
+      ? { gatewayStartupPhase: scan.gatewayProbe.startupPhase }
+      : {}),
+    ...(scan.gatewayProbe?.error ? { gatewayProbeError: scan.gatewayProbe.error } : {}),
+    includeSecurityAudit: includeSecurityAudit && !scan.collection,
+    suppressHealthErrors: true,
+    ...(scan.collection && opts.usage
+      ? {
+          resolveUsage: async (input: Parameters<typeof resolveStatusUsageSummary>[0]) => {
+            const { readConfigFileSnapshot, setAppliedRuntimeConfigSnapshot } =
+              await import("../config/config.js");
+            const configSnapshot = await readConfigFileSnapshot({
+              observe: false,
+              pluginValidation: "core-only",
+            });
+            await setAppliedRuntimeConfigSnapshot(
+              configSnapshot.runtimeConfig,
+              configSnapshot.sourceConfig,
+            );
+            return resolveStatusUsageSummary({ ...input, config: configSnapshot.runtimeConfig });
+          },
+        }
+      : {}),
+  }).catch((error: unknown) =>
+    reportStatusScanFailureUnlessInterrupted(error, params.runtime, opts.timeoutMs),
+  );
+  if (!snapshot) {
+    return;
+  }
+  const { securityAudit, usage, health, lastHeartbeat, gatewayService, nodeService } = snapshot;
 
   const databaseEngines = await resolveStatusDatabaseEngines(scan.cfg, scan.summary.databaseStores);
   const backups = await readBackupRunFreshness(scan.env ?? {});

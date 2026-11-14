@@ -1,0 +1,4 @@
+# Real sharing-owner stdout delivery across private/shared/revoked state: 50 lines.
+# Renderer failure recovery copy/details: 3 lines; explicit catalog acquisition fixture: 2 lines.
+# Existing mocked disclosure tests cannot detect stale real sharing authority.
+55

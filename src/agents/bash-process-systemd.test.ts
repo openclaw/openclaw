@@ -1,13 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
-import {
-  cleanupDurableProcess,
-  durableProcessUnitName,
-  launchDurableProcess,
-  readDurableProcess,
-  requireDurableProcessHost,
-  stopDurableProcess,
-} from "./bash-process-systemd.js";
+import { systemdDurableSupervisor as supervisor } from "./bash-process-systemd.js";
 
 const { spawn } = vi.hoisted(() => ({
   spawn: vi.fn<(input: SpawnInput) => Promise<ManagedRun>>(),
@@ -27,7 +20,7 @@ vi.mock("../infra/executable-path.js", async (importOriginal) => ({
 }));
 
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
-const unitName = durableProcessUnitName("quiet-raven:0123456789ab");
+const unitName = supervisor.unitName("quiet-raven:0123456789ab");
 function respond(stdout = "", exitCode = 0) {
   const exit: RunExit = {
     reason: "exit",
@@ -67,7 +60,7 @@ it("launches an independent user service with private environment, cgroup limits
   respond();
   const assertCurrent = vi.fn();
   await expect(
-    launchDurableProcess({
+    supervisor.launch({
       id: "quiet-raven:0123456789ab",
       argv: ["/bin/sh", "-c", 'printf "%s" "$GH_TOKEN"'],
       env: { PATH: "/workspace/command-bin", GH_TOKEN: "synthetic-launch-secret" },
@@ -140,44 +133,44 @@ it.each([
   ],
 ])("reads retained systemd status: %s", async (fields, expected) => {
   respond(`LoadState=loaded\n${fields}`);
-  await expect(readDurableProcess(unitName)).resolves.toEqual(expected);
+  await expect(supervisor.read(unitName)).resolves.toEqual(expected);
 });
 
 it("distinguishes a missing unit from an unavailable manager", async () => {
   respond("LoadState=not-found\n", 4);
-  await expect(readDurableProcess(unitName)).resolves.toEqual({ state: "missing" });
+  await expect(supervisor.read(unitName)).resolves.toEqual({ state: "missing" });
   respond("", 1);
-  await expect(readDurableProcess(unitName)).rejects.toThrow("control was not confirmed");
+  await expect(supervisor.read(unitName)).rejects.toThrow("control was not confirmed");
 });
 
 it("refuses unsupported hosts and unreachable user managers", async () => {
   Object.defineProperty(process, "platform", { ...originalPlatform, value: "darwin" });
-  await expect(requireDurableProcessHost({ XDG_RUNTIME_DIR: "/run/user/1000" })).rejects.toThrow(
+  await expect(supervisor.requireHost({ XDG_RUNTIME_DIR: "/run/user/1000" })).rejects.toThrow(
     "Linux",
   );
   Object.defineProperty(process, "platform", { ...originalPlatform, value: "linux" });
   vi.stubEnv("XDG_RUNTIME_DIR", undefined);
-  await expect(requireDurableProcessHost({})).rejects.toThrow("XDG_RUNTIME_DIR");
+  await expect(supervisor.requireHost({})).rejects.toThrow("XDG_RUNTIME_DIR");
   vi.stubEnv("XDG_RUNTIME_DIR", "/run/user/1000");
   respond("systemd 250\n");
   respond("", 1);
-  await expect(requireDurableProcessHost({ XDG_RUNTIME_DIR: "/run/user/1000" })).rejects.toThrow(
+  await expect(supervisor.requireHost({ XDG_RUNTIME_DIR: "/run/user/1000" })).rejects.toThrow(
     "reachable",
   );
 });
 
 it("checks current stop authority and never selects arbitrary units", async () => {
-  await expect(stopDurableProcess("gateway.service")).rejects.toThrow("unit identity");
+  await expect(supervisor.stop("gateway.service")).rejects.toThrow("unit identity");
   respond();
   const assertCurrent = () => {
     throw new Error("source retired");
   };
-  await expect(stopDurableProcess(unitName, { assertCurrent })).rejects.toThrow(
+  await expect(supervisor.stop(unitName, { assertCurrent })).rejects.toThrow(
     "control was not confirmed",
   );
   respond();
   respond();
-  await cleanupDurableProcess(unitName);
+  await supervisor.cleanup(unitName);
   expect(spawn.mock.calls[1]![0]).toMatchObject({
     argv: ["/gateway/bin/systemctl", "--user", "--no-ask-password", "stop", "--", unitName],
   });
@@ -190,7 +183,7 @@ it("does not expose helper command arguments in launch failures", async () => {
   respond();
   spawn.mockRejectedValueOnce(new Error("command argv containing synthetic-secret"));
   await expect(
-    launchDurableProcess({
+    supervisor.launch({
       id: "failure",
       argv: ["/bin/sh", "-c", "synthetic-secret"],
       env: {},
@@ -202,7 +195,7 @@ it("does not expose helper command arguments in launch failures", async () => {
 
 it("refuses environment overrides selecting a different user manager", async () => {
   await expect(
-    requireDurableProcessHost({ DBUS_SESSION_BUS_ADDRESS: "unix:path=/synthetic-other-manager" }),
+    supervisor.requireHost({ DBUS_SESSION_BUS_ADDRESS: "unix:path=/synthetic-other-manager" }),
   ).rejects.toThrow("Gateway user's systemd manager");
   expect(spawn).not.toHaveBeenCalled();
 });
@@ -218,12 +211,14 @@ it.each([
   respond(`Version=${manager}\n`);
   const env = { XDG_RUNTIME_DIR: "/run/user/1000" };
   if (client < 250 || manager < 250) {
-    await expect(api.requireDurableProcessHost(env)).rejects.toThrow("systemd 250 or newer");
+    await expect(api.systemdDurableSupervisor.requireHost(env)).rejects.toThrow(
+      "systemd 250 or newer",
+    );
     return;
   }
-  await expect(api.requireDurableProcessHost(env)).resolves.toBeUndefined();
+  await expect(api.systemdDurableSupervisor.requireHost(env)).resolves.toBeUndefined();
   respond("Version=250\n");
-  await expect(api.requireDurableProcessHost(env)).resolves.toBeUndefined();
+  await expect(api.systemdDurableSupervisor.requireHost(env)).resolves.toBeUndefined();
   expect(
     spawn.mock.calls.filter(
       ([input]) => input.mode === "child" && input.argv.includes("--version"),

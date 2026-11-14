@@ -17,8 +17,8 @@ const DEEP_CONFIG_DEPTH = 20_000;
 async function readPatch(contents: string, options: Omit<ConfigPatchOptions, "file"> = {}) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-input-"));
   const patchPath = path.join(tempDir, "patch.json5");
-  fs.writeFileSync(patchPath, contents, "utf8");
   try {
+    fs.writeFileSync(patchPath, contents, "utf8");
     return await readConfigPatchOperations({ ...options, file: patchPath });
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });

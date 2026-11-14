@@ -130,6 +130,7 @@ export const WorktreesGcResultSchema = closedObject({
   removed: Type.Array(NonEmptyString),
   orphansDeleted: Type.Integer({ minimum: 0 }),
   snapshotsPruned: Type.Integer({ minimum: 0 }),
+  scratchDeferred: Type.Optional(Type.Literal("io-pressure")),
   scratch: Type.Optional(
     closedObject({
       entriesRemoved: Type.Integer({ minimum: 0 }),

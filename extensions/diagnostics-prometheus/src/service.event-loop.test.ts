@@ -246,7 +246,15 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
       : worker;
     const sample = memorySample({
       workerCount: retired ? 0 : 1,
-      workerTaskMetrics: [current],
+      workerTaskMetrics: [
+        current,
+        {
+          workerClass: "writer",
+          script: "sqlite-store.worker.js",
+          heapUsedHighWaterBytes: 6000,
+          gc: [{ kind: "mark_sweep_compact", count: 2, durationMs: 40, reclaimedBytes: 8000 }],
+        },
+      ],
       sqliteReaderMetrics: [
         {
           operation: "sessions.usage.refresh",
@@ -310,6 +318,12 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
     }
     const labels = 'script="provider-prompt-state.worker.js",worker_class="compute"';
     const rendered = metrics.render();
+    const sqliteLabels = 'script="sqlite-store.worker.js",worker_class="writer"';
+    expect(rendered).not.toContain(`openclaw_worker_tasks_completed_total{${sqliteLabels}}`);
+    expectMetrics(rendered)(`openclaw_worker_heap_used_high_water_bytes{${sqliteLabels}} 6000
+openclaw_worker_gc_collections_total{kind="mark_sweep_compact",${sqliteLabels}} 2
+openclaw_worker_gc_duration_seconds_total{kind="mark_sweep_compact",${sqliteLabels}} 0.04
+openclaw_worker_gc_reclaimed_bytes_total{kind="mark_sweep_compact",${sqliteLabels}} 8000`);
     expectMetrics(
       rendered,
     )(`openclaw_worker_tasks_completed_total{${labels}} ${current.tasksCompleted}
@@ -517,6 +531,12 @@ it("exports completed SQLite request phases without inventing missing or invalid
       posted: 2_000,
       postFinished: 9_000,
       received: 4_000,
+      backendLoadStarted: 4_000,
+      backendLoadFinished: 5_000,
+      openGrantStarted: 5_000,
+      openGrantFinished: 6_000,
+      factoryStarted: 6_000,
+      factoryFinished: 7_000,
       inputReady: 7_000,
       executeStarted: 11_000,
       executeFinished: 16_000,
@@ -557,6 +577,9 @@ it("exports completed SQLite request phases without inventing missing or invalid
   for (const [phase, seconds, count] of [
     ["dispatch", 1, 2],
     ["delivery", 2, 1],
+    ["backend-load", 1, 1],
+    ["open-grant", 1, 1],
+    ["factory", 1, 1],
     ["input", 3, 1],
     ["prepare", 4, 1],
     ["execute", 5, 1],
@@ -575,5 +598,5 @@ openclaw_worker_request_seconds_count{kind="sqlite_writer",request_class="transc
     rendered
       .split("\n")
       .filter((line) => /^openclaw_worker_request(?:_phase)?_seconds_bucket/.test(line)),
-  ).toEqual(Array.from({ length: 8 }, () => expect.stringContaining('le="+Inf"')));
+  ).toEqual(Array.from({ length: 11 }, () => expect.stringContaining('le="+Inf"')));
 });

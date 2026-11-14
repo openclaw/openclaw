@@ -16,6 +16,15 @@ function assertPostgresOperationCurrent(): void {
   }
 }
 
+/** Multi-store fences release every acquired store before retrying a busy writer. */
+export function tryReservePostgresTransactionSync(db: PostgresSqlConnection): boolean {
+  db.exec("BEGIN ISOLATION LEVEL READ COMMITTED");
+  return (
+    db.prepare("SELECT pg_try_advisory_xact_lock(?) AS acquired").get(db.advisoryLockKey)
+      ?.acquired === 1
+  );
+}
+
 export function runPostgresTransactionSync<T>(
   db: PostgresSqlConnection,
   operation: () => T,
@@ -96,4 +105,40 @@ export function runPostgresTransactionSync<T>(
       closeReadScope?.();
     }
   });
+}
+
+/**
+ * Opens the read-only snapshot of runPostgresTransactionSync for a serialized worker task
+ * whose reads span awaits. The returned function ends it.
+ */
+export function beginPostgresReadOnlyTransaction(db: PostgresSqlConnection): () => void {
+  if (db.isTransaction) {
+    throw new Error("A held PostgreSQL read snapshot requires an idle connection");
+  }
+  assertPostgresOperationCurrent();
+  let closeReadScope: (() => void) | undefined;
+  const end = () => {
+    try {
+      if (db.isTransaction) {
+        db.exec("ROLLBACK");
+      }
+    } catch {
+      // An unjoinable rollback cannot leave a reusable connection behind.
+      try {
+        db.close();
+      } catch {
+        // The connection is already unusable.
+      }
+    } finally {
+      closeReadScope?.();
+    }
+  };
+  try {
+    db.exec("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    closeReadScope = beginPostgresReadSnapshotScope(db);
+  } catch (error) {
+    end();
+    throw error;
+  }
+  return end;
 }

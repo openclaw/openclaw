@@ -351,7 +351,9 @@ it.for([
         await withinTest(observed.promise, signal);
         // A foreground request expires, while the same startup owner keeps preparing.
         const foreground = waitForPreparation(job.agentId, { env, forWrite: true });
-        const timedOut = expect(foreground).rejects.toThrow("still preparing");
+        const timedOut = expect(foreground).rejects.toThrow(
+          "Agent database verification and preparation in progress. Retry the request shortly.",
+        );
         await vi.advanceTimersByTimeAsync(360_001);
         await timedOut;
         vi.useRealTimers();

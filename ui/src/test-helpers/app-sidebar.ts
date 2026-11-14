@@ -11,6 +11,7 @@ import { registerListener } from "../../../src/shared/listeners.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
+import { createApplicationRouter } from "../app-routes.ts";
 import { createApplicationNavigationPreferences } from "../app/bootstrap-navigation-preferences.ts";
 import { createChatSubmissions } from "../app/chat-submissions.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
@@ -511,6 +512,7 @@ export function createContext(
     chatSubmissions: createChatSubmissions(),
     navigation: createApplicationNavigationPreferences(lifecycle.theme),
     navigate: vi.fn(),
+    router: createApplicationRouter(),
     sessions,
     plugins: {
       registrations: () => [],

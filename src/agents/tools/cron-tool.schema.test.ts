@@ -79,7 +79,7 @@ describe("cron model schema regressions", () => {
       expect(restricted.parameters).not.toHaveProperty(`properties.${field}`);
     }
     expect(restricted.description).not.toContain("ADD: job");
-    expect(restricted.description).not.toContain("delayed self-wakeups");
+    expect(restricted.description).not.toContain("Schedule saved reminders");
     expect(restricted.description).toContain("remove");
     const active = createCronToolSchema({ selfRemoveOnly: true, activeRun: true });
     const paced = createCronToolSchema({

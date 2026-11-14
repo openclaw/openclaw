@@ -3,7 +3,17 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { AsyncContext } from "../shared/async-context.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
+export type AgentDatabasePreparedIntegrity = {
+  agentId: string;
+  path: string;
+  env: NodeJS.ProcessEnv;
+  identity: string;
+  birthtime: string;
+  integrityVerifiedAt?: number;
+};
+
 export type AgentDatabasePreparation = {
+  observePreparedIntegrity?: (prepared: AgentDatabasePreparedIntegrity) => void;
   readonly hasPendingAgents: boolean;
   registerInputRecovery(
     agentId: string,
@@ -58,6 +68,11 @@ export function withAgentDatabasePreparationContext<T>(
   return preparation.getStore() === resolveOwner ? run() : preparation.run(resolveOwner, run);
 }
 
+/** Capture only the Gateway lifetime's observer, not the request's async context. */
+export function captureAgentDatabaseIntegrityObserver() {
+  return preparation.getStore()?.()?.observePreparedIntegrity;
+}
+
 export function waitForAgentDatabasePreparation(
   agentId: string,
   options?: { env?: NodeJS.ProcessEnv; signal?: AbortSignal },
@@ -105,20 +120,22 @@ export function waitForAgentInputAdmission(
     (signal): signal is AbortSignal => signal !== undefined,
   );
   const signal = signals.length ? AbortSignal.any(signals) : undefined;
-  const wait = (selected: string, sessionKey: string | undefined) => {
+  const recovering = (selected: string) => {
     const recovery = inputRecovery.getStore();
-    return owner.waitForAgentPreparation(selected, {
+    return (
+      recovery?.active &&
+      recovery.owner === owner &&
+      recovery.agentId === normalizeAgentId(selected)
+    );
+  };
+  const wait = (selected: string, sessionKey: string | undefined) =>
+    owner.waitForAgentPreparation(selected, {
       env: options.env,
       signal,
-      forWrite: true,
+      forWrite: recovering(selected) ? undefined : true,
       sessionKey,
-      forInput: !(
-        recovery?.active &&
-        recovery.owner === owner &&
-        recovery.agentId === normalizeAgentId(selected)
-      ),
+      forInput: !recovering(selected),
     });
-  };
   return (async () => {
     let sessionKey = options.sessionKey;
     if (sessionKey) {
@@ -128,7 +145,11 @@ export function waitForAgentInputAdmission(
         ? resolveSessionStoreKey({ cfg: options.cfg, storeAgentId: agentId, sessionKey })
         : canonicalizeSessionKeyForAgent(agentId, sessionKey);
     }
-    await owner.waitForAgentPreparation(agentId, { env: options.env, signal, forWrite: true });
+    await owner.waitForAgentPreparation(agentId, {
+      env: options.env,
+      signal,
+      forWrite: recovering(agentId) ? undefined : true,
+    });
     if (!owner.hasPendingAgents || (!options.storePath && !options.cfg?.session?.store)) {
       await wait(agentId, sessionKey);
       return;

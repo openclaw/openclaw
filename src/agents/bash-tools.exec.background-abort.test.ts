@@ -16,7 +16,10 @@ import {
   resultDetails,
 } from "./code-mode.test-support.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
-import { createAgentRunDirectAbortError } from "./run-termination.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+} from "./run-termination.js";
 
 const supervisorMockState = vi.hoisted(() => ({
   onSpawn: undefined as (() => void) | undefined,
@@ -203,49 +206,50 @@ test("Send now joins foreground exec exit without aborting the run", async () =>
   }
 });
 
-test.each([false, true])(
-  "invocation disposal preserves yielded exec until request Stop (owned=%s)",
-  async (owned) => {
-    vi.useFakeTimers();
-    const returned = createDeferredCore<string>();
-    const finishTurn = createDeferredCore();
-    const owner = identity("yielded-stop", "agent:main:yielded-stop", "yielded-session");
-    const request = new AbortController();
-    const invocation = new AbortController();
-    const execute = async () => {
-      const tool = makeTool(owned ? owner : {}, owner.sessionKey);
-      const args = { ...command, yieldMs: 10 };
-      returned.resolve(await yieldExec(tool, "ordinary-command", args, invocation.signal));
-      await finishTurn.promise;
-    };
-    const running = owned
-      ? withExecRequestTurn({ identity: owner, abortSignal: request.signal }, execute)
-      : execute();
-    try {
-      const sessionId = await returned.promise;
-      invocation.abort();
-      expect(supervisorMockState.cancelled).toEqual([]);
-      if (owned) {
-        request.abort(createAgentRunDirectAbortError());
-      } else {
-        supervisorMockState.finish.get(sessionId)?.();
-      }
-      finishTurn.resolve();
-      await running;
-      await waitForExecScope(owner.sessionKey);
-      expect(supervisorMockState.cancelled).toEqual(owned ? [sessionId] : []);
-      expect(getFinishedSession(sessionId)).toMatchObject({
-        exited: true,
-        exitReason: owned ? "manual-cancel" : "exit",
-      });
-    } finally {
-      finishTurn.resolve();
-      await finishProcesses();
-      await running;
-      await waitForExecScope(owner.sessionKey);
+test.each([
+  { owned: false, reason: "unowned", abort: createAgentRunDirectAbortError },
+  { owned: true, reason: "Stop", abort: createAgentRunDirectAbortError },
+  { owned: true, reason: "restart", abort: createAgentRunRestartAbortError },
+])("invocation disposal preserves yielded exec until request $reason", async ({ owned, abort }) => {
+  vi.useFakeTimers();
+  const returned = createDeferredCore<string>();
+  const finishTurn = createDeferredCore();
+  const owner = identity("yielded-stop", "agent:main:yielded-stop", "yielded-session");
+  const request = new AbortController();
+  const invocation = new AbortController();
+  const execute = async () => {
+    const tool = makeTool(owned ? owner : {}, owner.sessionKey);
+    const args = { ...command, yieldMs: 10 };
+    returned.resolve(await yieldExec(tool, "ordinary-command", args, invocation.signal));
+    await finishTurn.promise;
+  };
+  const running = owned
+    ? withExecRequestTurn({ identity: owner, abortSignal: request.signal }, execute)
+    : execute();
+  try {
+    const sessionId = await returned.promise;
+    invocation.abort();
+    expect(supervisorMockState.cancelled).toEqual([]);
+    if (owned) {
+      request.abort(abort());
+    } else {
+      supervisorMockState.finish.get(sessionId)?.();
     }
-  },
-);
+    finishTurn.resolve();
+    expect(supervisorMockState.cancelled).toEqual(owned ? [sessionId] : []);
+    await running;
+    await waitForExecScope(owner.sessionKey);
+    expect(getFinishedSession(sessionId)).toMatchObject({
+      exited: true,
+      exitReason: owned ? "manual-cancel" : "exit",
+    });
+  } finally {
+    finishTurn.resolve();
+    await finishProcesses();
+    await running;
+    await waitForExecScope(owner.sessionKey);
+  }
+});
 
 test.each([false, true])(
   "request Stop preserves tool disposal, services and new requests (Code Mode=%s)",

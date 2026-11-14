@@ -655,7 +655,8 @@ private fun VoiceSettingsScreen(
   val voiceWakeLastCommand by viewModel.voiceWakeLastTriggeredCommand.collectAsState()
   val voiceWakeWordsSaving by viewModel.voiceWakeWordsSaving.collectAsState()
   val voiceWakeWordsNoticeText by viewModel.voiceWakeWordsNoticeText.collectAsState()
-  var wakeWordDrafts by remember(voiceWakeWords) {
+  val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
+  var wakeWordDrafts by remember(activeGatewayStableId, voiceWakeWords) {
     mutableStateOf(voiceWakeWords)
   }
   var audioInputDevices by remember { mutableStateOf<List<AudioInputDeviceOption>>(emptyList()) }

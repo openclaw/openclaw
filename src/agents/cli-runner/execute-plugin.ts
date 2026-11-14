@@ -32,6 +32,7 @@ import type { CliTerminalInterruption } from "../cli-output-contracts.js";
 import { resolveExecDefaultsAsync } from "../exec-defaults.js";
 import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
 import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
+import { buildHarnessHostRequester } from "../harness/host-requester.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
 import { resolveExecToolConfig } from "../lazy-exec-tool.js";
@@ -134,14 +135,7 @@ async function createPluginToolPermissionHandler(params: {
       }
     }
 
-    const requester = {
-      ...((run.messageChannel ?? run.messageProvider)
-        ? { channel: run.messageChannel ?? run.messageProvider }
-        : {}),
-      ...(run.agentAccountId ? { accountId: run.agentAccountId } : {}),
-      ...(run.senderId ? { senderId: run.senderId } : {}),
-      ...(run.senderIsOwner !== undefined ? { senderIsOwner: run.senderIsOwner } : {}),
-    };
+    const requester = buildHarnessHostRequester(run);
     const hookResult = await runBeforeToolCallHook({
       toolName: canonicalToolName,
       params: policyInput,

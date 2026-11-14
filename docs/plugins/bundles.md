@@ -272,6 +272,50 @@ MCP servers can use stdio or HTTP transport.
   session start uses `requestTimeoutMs` when it is set, and 10 seconds
   otherwise.
 
+### Python stdio servers in Agent Plugins bundles
+
+Supply the Python interpreter and the server's dependencies before enabling the
+bundle. OpenClaw launches the configured executable; it does not install Python
+or run `pip` for you.
+
+For an Agent Plugins bundle with a root `plugin.json`, put this configuration in
+`mcp.json`. This format uses `mcpServers` and `type`, rather than the embedded
+OpenClaw `mcp.servers` shape above:
+
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "python-tools": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["${PLUGIN_ROOT}/server.py", "--data-dir", "${PLUGIN_DATA}"]
+    }
+  }
+}
+```
+
+This example assumes the bundle ships `server.py` with a `--data-dir` argument;
+replace both with your server's entry point and arguments. OpenClaw expands
+`${PLUGIN_ROOT}` and `${PLUGIN_DATA}` in `args`, `env` values, and `cwd` in one
+pass and supplies both variables to the subprocess. This is bundle placeholder
+expansion, not shell expansion. Keep mutable data under `PLUGIN_DATA`, outside
+the replaceable bundle source in `PLUGIN_ROOT`.
+
+The `command` must be a bare executable name or a `./`-relative path inside the
+plugin; an absolute virtual-environment executable path is invalid in this
+format. For `command: "python"`, put the intended interpreter's directory on the
+Gateway process's `PATH`. If using a virtual environment, that directory is
+`bin` on Unix or `Scripts` on Windows. Activating a venv in an interactive shell
+does not change an already running Gateway service's environment; configure
+the service's `PATH` and restart it. If using the Windows `py` launcher, put
+launcher options such as `-3` in `args`, not in `command`, and verify that the
+selected interpreter has the required dependencies.
+
+`openclaw plugins inspect <id>` confirms detection and configuration support,
+not successful Python startup or tool execution. After enabling the bundle,
+start a new agent session and invoke one of its tools to verify the full path.
+
 ### Tool naming
 
 OpenClaw registers bundle MCP tools with provider-safe names in the form

@@ -1,3 +1,0 @@
-56
-# Cron sender/receiver authority: accepted turns outlive the sender occurrence and sender-session cleanup, with device-token revocation still enforced (operator-run-cancellation it.each).
-# Exact measured net test LF growth; shared scalar unchanged.

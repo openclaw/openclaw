@@ -82,6 +82,7 @@ export class TranscriptLayoutOwner {
       font?.customTheme,
       props.showThinking,
       props.showToolCalls,
+      props.inlineCommands,
       props.persistCommentary,
       typeof window === "undefined" ? 1 : window.devicePixelRatio,
       ...getExpandedToolCards(props.sessionKey),
@@ -390,9 +391,9 @@ export class TranscriptLayoutOwner {
       return false;
     }
     const shrinking =
-      element.parentElement === this.viewport && previous !== undefined && height < previous;
+      this.viewport?.contains(element) && previous !== undefined && height < previous;
     const before = shrinking ? this.viewport?.scrollTop : undefined;
-    // The direct child's height alone keeps an interior viewport in range.
+    // The range height alone keeps an interior viewport in range.
     // Read before writing; only a possible native clamp needs a second layout.
     const staysInRange =
       before !== undefined && before >= 0 && height - this.viewport!.clientHeight > before + 1;

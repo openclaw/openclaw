@@ -295,7 +295,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     stream wrapper auto-enables server-side compaction for store-capable direct
     OpenAI Responses models (`openai/*` resolved to `api.openai.com`):
 
-    - Forces `store: true` (unless model compat sets `supportsStore: false`)
+    - Uses `store: true` until input contains a compaction checkpoint, then uses
+      `store: false` for replay (unless model compat sets `supportsStore: false`)
     - Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
     - Default `compact_threshold`: 70% of `contextWindow` (or `80000` when
       unavailable)
@@ -310,6 +311,13 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     On direct API-key `openai-responses` routes, defaults, explicit opt-in, and
     stored checkpoint replay follow
     [context-engine compaction ownership](/concepts/context-engine#provider-compaction-ownership).
+
+    Checkpoint replay is stateless: OpenAI can reject repeated stored checkpoint
+    input with `item_conflict`, even when item IDs are removed. OpenClaw preserves
+    the checkpoint and retained context and sends `store: false`, without a stored
+    `previous_response_id`. This also lets an already-affected session recover on
+    its next turn without editing its history. Requests without checkpoints retain
+    stored continuation. Azure and custom endpoint storage policies are unchanged.
 
     On the native ChatGPT sign-in route, the built-in runtime instead uses
     **Codex V2 compaction** by default for context-budget pressure before a model
@@ -439,8 +447,8 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     separate endpoint. `/compact <focus>`, provider-confirmed overflow, and
     endpoint failures use client-side summarization.
 
-    Direct OpenAI Responses models still force `store: true` unless compat
-    sets `supportsStore: false`.
+    Direct OpenAI Responses models use `store: false` when replaying a compaction
+    checkpoint, as described above.
     </Note>
 
   </Accordion>

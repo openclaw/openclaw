@@ -12,8 +12,6 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.js"
 import { expandProvider } from "./model-providers.test-support.ts";
 import { respondAsReasoningModel } from "./reasoning-upstream.test-support.js";
 
-// A provider that judges the key it receives, like a real one: revoked keys get 401,
-// keys without model access get 403, an overloaded account gets 500, others answer.
 const STATUS_BY_KEY: Record<string, [number, string]> = {
   "sk-synthetic-revoked": [401, "Incorrect API key provided"],
   "sk-synthetic-noaccess": [403, "This key has no access to the requested model"],
@@ -175,10 +173,10 @@ suite.define(() => {
         await picker.getByRole("searchbox", { name: "Search providers…" }).fill("Tencent");
         await picker.getByRole("button", { name: "Tencent TokenHub" }).click();
         const form = page.getByRole("dialog", { name: "Add provider" });
-        const added = await saveAndRead(form, async () => {
-          await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-revoked");
-          await form.getByRole("button", { name: "Save provider", exact: true }).click();
-        });
+        await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-revoked");
+        const added = await saveAndRead(form, () =>
+          form.getByRole("button", { name: "Save provider", exact: true }).click(),
+        );
         expect(added.text).toMatch(/Authentication failed/u);
         expect(await form.isVisible()).toBe(true);
         expect(await form.getByRole("textbox", { name: "API key" }).isEditable()).toBe(true);

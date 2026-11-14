@@ -3,6 +3,7 @@ import {
   seedSkillLibrarySelection,
   type PreparedSkillLibrarySession,
 } from "../skills/library/selection.js";
+import { currentOwnerDevicePrincipal } from "./openclaw-id/tunnel-principal.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
@@ -21,6 +22,8 @@ export async function prepareSkillLibrarySessionCreation(
     return creation;
   }
   prepared?.assertCurrent();
+  // A linked owner device seeds with the owner's library permissions (OCF-510).
+  const ownerDevice = currentOwnerDevicePrincipal(client) !== undefined;
   return {
     ...creation,
     skillLibrarySelections:
@@ -28,8 +31,13 @@ export async function prepareSkillLibrarySessionCreation(
       (await seedSkillLibrarySelection({
         profileId: client.authenticatedUserProfile.profileId,
         scopes: client.connect.scopes ?? [],
+        ...(ownerDevice ? { ownerDevice } : {}),
         getConfig: typeof cfg === "function" ? cfg : () => cfg,
-        assertCurrent: () => {},
+        assertCurrent: () => {
+          if (ownerDevice && currentOwnerDevicePrincipal(client) === undefined) {
+            throw new Error("OpenClaw ID owner authority changed");
+          }
+        },
       })),
   };
 }

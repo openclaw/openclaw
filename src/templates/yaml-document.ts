@@ -9,16 +9,10 @@ function diagnostic(code: string, message: string): TemplateDiagnostic {
 export function parseTemplateYaml(
   raw: string,
   path: string,
-  kind: "frontmatter" | "profile",
 ): { ok: true; value: unknown } | { ok: false; diagnostics: TemplateDiagnostic[] } {
-  const [invalidCode, unsupportedCode, label]: [string, string, string] =
-    kind === "frontmatter"
-      ? ["invalid_template_frontmatter", "unsupported_template_yaml_feature", "CLAW.md frontmatter"]
-      : [
-          "invalid_openclaw_profile",
-          "unsupported_openclaw_profile_yaml_feature",
-          "OpenClaw profile YAML",
-        ];
+  const invalidCode = "invalid_template_frontmatter";
+  const unsupportedCode = "unsupported_template_yaml_feature";
+  const label = "CLAW.md frontmatter";
   const document = parseDocument(raw, {
     prettyErrors: false,
     uniqueKeys: true,

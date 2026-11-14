@@ -22,6 +22,8 @@ import {
 } from "../../tool-replay-safety.js";
 import { addClientToolsToToolCatalog } from "../../tool-search-catalog.js";
 import { resolveToolSearchConfig, type ToolSearchCatalogRef } from "../../tool-search.js";
+import { bindToolUsageIds } from "../../tool-usage-bindings.js";
+import { isToolUsageRecordingEnabled } from "../../tool-usage-recorder.js";
 import {
   AGENT_RESERVED_TOOL_NAMES,
   CLIENT_TOOL_NAME_CONFLICT_PREFIX,
@@ -34,7 +36,7 @@ import type { EmbeddedAttemptClientToolCallSlot, EmbeddedRunAttemptParams } from
 export function prepareEmbeddedAttemptClientTools(params: {
   attempt: Pick<
     EmbeddedRunAttemptParams,
-    "config" | "sessionId" | "runId" | "onToolOutcome" | "allocateToolOutcomeOrdinal"
+    "config" | "sessionId" | "sessionKey" | "runId" | "onToolOutcome" | "allocateToolOutcomeOrdinal"
   >;
   catalogToolHookContext: Parameters<typeof toToolDefinitions>[1];
   codeModeControlsEnabledForRun: boolean;
@@ -196,6 +198,12 @@ export function prepareEmbeddedAttemptClientTools(params: {
       params.getToolAbortSignal?.(),
     );
     const allCustomTools = [...customTools, ...clientToolDefs];
+    const toolUsageIdsByName = isToolUsageRecordingEnabled(params.attempt)
+      ? bindToolUsageIds(
+          params.deferredDirectoryToolsCallable ? params.uncompactedEffectiveTools : effectiveTools,
+          clientToolDefs.map((tool) => tool.name),
+        )
+      : undefined;
     const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(allCustomTools));
     return {
       allCustomTools,
@@ -208,6 +216,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
       codeModeExecToolNames,
       sourceReplyCapableToolNames,
       sideEffectToolOwners,
+      toolUsageIdsByName,
       sessionToolAllowlist,
       trustedLocalMediaToolNames,
     };
@@ -239,6 +248,12 @@ export function prepareEmbeddedAttemptClientTools(params: {
         replaceSet(current[key], next[key]);
       }
       replaceSet(current.replaySafeTools, next.replaySafeTools);
+      if (current.toolUsageIdsByName) {
+        current.toolUsageIdsByName.clear();
+        for (const [name, id] of next.toolUsageIdsByName ?? []) {
+          current.toolUsageIdsByName.set(name, id);
+        }
+      }
       current.sideEffectToolOwners.clear();
       for (const [name, owner] of next.sideEffectToolOwners) {
         current.sideEffectToolOwners.set(name, owner);

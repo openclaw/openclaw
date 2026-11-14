@@ -4,9 +4,11 @@ import { iterateSessionContextMessages } from "../../../packages/agent-core/src/
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionActorMemoryHistoryScope } from "./session-actor-memory-history-projection.js";
 import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
+import { readSessionContextSeed } from "./session-context-seed.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import type {
+  SessionContextSeedRequest,
   SessionModelContextLimits,
   SessionTranscriptModelContext,
   SessionTranscriptContextSnapshot,
@@ -129,6 +131,7 @@ export function readSessionActorMemoryContext(
 /** Full-fidelity context uses the same path and boundary policy as the native reader. */
 export function readSessionActorMemoryContextMessages(
   window: SessionActorMemoryWindow,
+  seed?: SessionContextSeedRequest,
 ): SessionTranscriptContextSnapshot {
   const tree = scanSessionTranscriptTree(window.events.map((row) => row.event));
   const entries = normalizeSessionContextEntryBoundaries(
@@ -138,7 +141,9 @@ export function readSessionActorMemoryContextMessages(
     tree.nodes,
   );
   return {
-    messages: Array.from(iterateSessionContextMessages(entries)),
+    ...(seed
+      ? readSessionContextSeed(entries, seed)
+      : { messages: Array.from(iterateSessionContextMessages(entries)) }),
     header: window.events.find((row) => isRecord(row.event) && row.event.type === "session")?.event,
     version: window.hot.transcript.version,
   };

@@ -822,9 +822,16 @@ function withCacheOwner(cache, operation, initialize, readOnly = false, recovery
   const deadline = performance.now() + 1_000;
   const pause = new Int32Array(new SharedArrayBuffer(4));
   const assertCache = () => {
-    if (!same(directory(cache), cacheIdentity)) {
-      throw new Error(`PR dependency cache directory changed; retain ${cache}`);
+    try {
+      if (same(directory(cache), cacheIdentity)) {
+        return;
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        throw error;
+      }
     }
+    throw new Error(`PR dependency cache directory changed; retain ${cache}`);
   };
   // Only the atomic namespace creator may initialize. Peers wait for its DB
   // while it holds the mutex; a crashed empty namespace is never adopted.

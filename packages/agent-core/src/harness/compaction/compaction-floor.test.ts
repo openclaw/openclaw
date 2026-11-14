@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { runNodeScript } from "../../../../../test/helpers/run-node-script.js";
 import type { AgentMessage } from "../../types.js";
-import { buildCompactionFloor } from "./compaction-floor.js";
+import {
+  buildCompactionFloor,
+  commitCompactionSummary,
+  stripSummaryFloor,
+} from "./compaction-floor.js";
 
 const user = (text: string, extra: Record<string, unknown> = {}): AgentMessage =>
   ({ role: "user", content: text, timestamp: 1, ...extra }) as AgentMessage;
@@ -8,6 +13,23 @@ const assistant = (text: string): AgentMessage =>
   ({ role: "assistant", content: [{ type: "text", text }], timestamp: 1 }) as AgentMessage;
 
 describe("buildCompactionFloor", () => {
+  it("releases transcript payloads after preparing bounded floor facts", async ({ signal }) => {
+    const result = await runNodeScript(
+      [
+        "--max-old-space-size=256",
+        "--expose-gc",
+        "--import",
+        "./scripts/tsx.mjs",
+        "packages/agent-core/src/harness/compaction/compaction-floor.retention.test-support.ts",
+      ],
+      process.env,
+      15_000,
+      { cwd: process.cwd(), signal },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  });
+
   it("keeps attributed user-role words, identifiers, and the last reply", () => {
     const floor = buildCompactionFloor([
       user("Build acme/widget-oauth and never publish it", { __openclaw: { senderId: "u1" } }),
@@ -47,5 +69,35 @@ describe("buildCompactionFloor", () => {
       timestamp: 1,
     };
     expect(buildCompactionFloor([toolOnly])).toBe("");
+  });
+
+  it("appends a bounded floor after a summary, yields to the token budget, and strips cleanly", () => {
+    const messages = Array.from({ length: 200 }, (_, index) =>
+      user(`request ${index} ${"detail ".repeat(60)}`),
+    );
+    const commit = (maxSummaryChars?: number, summaryTokenBudget?: number, refused = false) =>
+      commitCompactionSummary(
+        {
+          summary: "SUMMARY",
+          ...(refused
+            ? { details: { readFiles: [], modifiedFiles: [], summaryRefused: true } }
+            : {}),
+        },
+        {
+          messagesToSummarize: messages,
+          turnPrefixMessages: [],
+          summaryTokenBudget,
+          settings: { maxSummaryChars },
+        },
+        false,
+      );
+    const withFloor = commit();
+    expect(withFloor.startsWith("SUMMARY\n\n---")).toBe(true);
+    expect(withFloor).toContain("request 199");
+    expect(withFloor.length).toBeLessThanOrEqual("SUMMARY".length + 6_200);
+    expect(stripSummaryFloor(withFloor)).toBe("SUMMARY");
+    expect(commit(1_000).length).toBeLessThan(1_300);
+    expect(commit(undefined, 2)).toBe("SUMMARY");
+    expect(commit(undefined, undefined, true)).toBe("SUMMARY");
   });
 });

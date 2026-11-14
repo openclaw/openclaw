@@ -1,2 +1,0 @@
-# Pin persisted schema-41 facts alongside exact batched turn statement counts.
-7

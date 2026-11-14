@@ -222,9 +222,11 @@ describe("Browser panel copy", () => {
     controller.input.copySelection();
 
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("clicked field"));
-    const order = remote.requests.map((request) => String(request.body?.kind));
-    expect(order.indexOf("clickCoords")).toBeGreaterThanOrEqual(0);
-    expect(order.indexOf("clickCoords")).toBeLessThan(order.lastIndexOf("evaluate"));
+    const order = remote.requests.map((request) =>
+      request.path === "/operator/input" ? "input" : String(request.body?.kind),
+    );
+    expect(order.indexOf("input")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("input")).toBeLessThan(order.lastIndexOf("evaluate"));
   });
 });
 

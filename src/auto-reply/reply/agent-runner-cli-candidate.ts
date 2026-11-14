@@ -23,6 +23,7 @@ import { resolveCyberAccessProgramForProvider } from "../../agents/model-catalog
 import { findModelByNativeAlias, findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
@@ -237,33 +238,60 @@ export async function runCliFallbackCandidate(
             activeSessionEntry: sessionEntry,
           });
         const scheduledInference = params.scheduledInference;
-        // The CLI owner must see explicit pins before provider scoping can discard them.
-        // A recorded account runs only when this backend forwards exactly that account.
-        const authProfileId = scheduledInference
-          ? await scheduledInference.resolveCliAuthProfile(async (selected) =>
-              allowCliAuthProfileForwarding
-                ? await resolveCliExecutionAuthProfileId({
-                    cliExecutionProvider: params.cliExecutionProvider,
-                    authProfileProvider: params.provider,
-                    config: params.runtimeConfig,
-                    agentDir: params.candidateRun.agentDir,
-                    selected,
-                    sessionBinding: cliSessionBinding,
-                  })
-                : undefined,
-            )
-          : allowCliAuthProfileForwarding
+        // Only a session pin follows the conversation into another provider's CLI, where the
+        // CLI owner rejects it. A configured model account stays with that model's provider.
+        const sessionPinned =
+          params.candidateRun.authProfileId?.trim() === sessionEntry?.authProfileOverride?.trim() &&
+          resolveCollapsedSessionAuthPinSource(sessionEntry) === "user";
+        const resolveLiveProfile = async () =>
+          allowCliAuthProfileForwarding
             ? await resolveCliExecutionAuthProfileId({
                 cliExecutionProvider: params.cliExecutionProvider,
                 authProfileProvider: params.provider,
                 config: params.runtimeConfig,
                 agentDir: params.candidateRun.agentDir,
-                selected: params.candidateRun,
+                selected: sessionPinned
+                  ? params.candidateRun
+                  : resolveRunAuthProfile(params.candidateRun, params.provider, {
+                      config: params.runtimeConfig,
+                    }),
                 sessionBinding: cliSessionBinding,
               })
             : resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {
                 config: params.runtimeConfig,
               }).authProfileId;
+        // The CLI owner must see explicit pins before provider scoping can discard them.
+        // The recorded provider runs only when this backend forwards exactly its account;
+        // other providers select their account live.
+        const authProfileId = scheduledInference
+          ? await scheduledInference.resolveCliAuthProfile(
+              params.provider,
+              async (selected) =>
+                allowCliAuthProfileForwarding
+                  ? await resolveCliExecutionAuthProfileId({
+                      cliExecutionProvider: params.cliExecutionProvider,
+                      authProfileProvider: params.provider,
+                      config: params.runtimeConfig,
+                      agentDir: params.candidateRun.agentDir,
+                      selected,
+                      sessionBinding: cliSessionBinding,
+                    })
+                  : undefined,
+              // The run's selected profile is the recorded account on its own provider; another
+              // provider's CLI backend selects its account without it.
+              async () =>
+                allowCliAuthProfileForwarding
+                  ? await resolveCliExecutionAuthProfileId({
+                      cliExecutionProvider: params.cliExecutionProvider,
+                      authProfileProvider: params.provider,
+                      config: params.runtimeConfig,
+                      agentDir: params.candidateRun.agentDir,
+                      selected: undefined,
+                      sessionBinding: cliSessionBinding,
+                    })
+                  : undefined,
+            )
+          : await resolveLiveProfile();
         if (turn.followupRun.run.scheduledAutomation && !scheduledInference && authProfileId) {
           throw createUnrecordedScheduledAccountRefusal({
             runtime: params.cliExecutionProvider,
@@ -496,7 +524,7 @@ export async function runCliFallbackCandidate(
             assertCurrent: scheduledInference
               ? () => {
                   assertSettlementCurrent();
-                  scheduledInference.runParams.authProfileBinding?.assertCurrent();
+                  scheduledInference.assertCurrent(params.provider);
                 }
               : undefined,
             nativeAuthOnly:

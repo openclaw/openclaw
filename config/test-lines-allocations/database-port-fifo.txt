@@ -1,2 +1,0 @@
-# Bounded native FIFO regression for startup refusal and recovery guidance (#172264).
-28

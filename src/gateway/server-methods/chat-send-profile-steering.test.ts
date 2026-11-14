@@ -296,6 +296,10 @@ it.each(["backend", "question dispatcher"] as const)(
       throw new Error("Expected normal followup dispatch after unsupported steering");
     }
     expect(dispatched.replyOptions.messageInjectionDisposition).toBe("rejected");
+    expect(dispatched.replyOptions.messageInjectionRejection).toMatchObject({
+      status: "rejected",
+      reason: sink === "backend" ? "guarded_injection_unsupported" : "injection_unavailable",
+    });
     const authority = dispatched.replyOptions.operatorAuthority;
     assertAdmittedRunOperatorAuthority(authority);
     expect(authority).toBe(originalOperatorAuthority);

@@ -977,8 +977,8 @@ function getLegacyFieldRecordEdits(field: RedactionField, value: string): Redact
     : [];
 }
 
-export function resolveLogTailRedactOptions(): ResolvedRedactOptions {
-  return resolveRedactOptions(resolveToolPayloadRedaction());
+export function resolveLogTailRedactOptions(loggingConfig?: LoggingConfig): ResolvedRedactOptions {
+  return resolveRedactOptions(resolveToolPayloadRedaction(loggingConfig));
 }
 
 function* redactionEditMatches(input: string, edits: RedactionEdit[]): Iterable<RedactMatch> {

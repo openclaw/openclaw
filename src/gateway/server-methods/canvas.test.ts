@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { decodeSandboxHostCsp } from "../../agents/sandbox-host.js";
+import { buildSandboxHostDocument, decodeSandboxHostCsp } from "../../agents/sandbox-host.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   markGatewayRestartDraining,
@@ -9,6 +9,7 @@ import {
 import type { ControlUiEmbedSandboxMode } from "../control-ui-bootstrap-contract.js";
 import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
+import { setOpenClawIdClawOriginResolver } from "../openclaw-id/claw-origin.js";
 import { canvasHandlers } from "./canvas.js";
 import type {
   GatewayClient,
@@ -56,7 +57,10 @@ beforeEach(() => {
   resetGatewayWorkAdmission();
   readDocument.mockReset().mockResolvedValue({ html: "<p>Widget</p>", cspSandbox: "scripts" });
 });
-afterEach(() => resetGatewayWorkAdmission());
+afterEach(() => {
+  resetGatewayWorkAdmission();
+  setOpenClawIdClawOriginResolver(undefined);
+});
 
 describe("canvas.document.view", () => {
   it("returns only the hosted document and isolated sandbox metadata", async () => {
@@ -396,3 +400,31 @@ describe("canvas.document.preview", () => {
     expect((await invoke({ html: "" })).mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
   });
 });
+
+describe.each(["canvas.document.view", "canvas.document.preview"])(
+  "%s tunnel sandbox",
+  (method) => {
+    it("bootstraps only linked tunnel views, preserving direct and unlinked responses", async () => {
+      const { client, invoke } = createHarness(method);
+      const params =
+        method === "canvas.document.view" ? { docId: "cv_widget" } : { html: "<p>Preview</p>" };
+      const direct = (await invoke(params)).mock.calls[0]![1];
+      client.browserOrigin = { openclawIdTunnel: true };
+      expect((await invoke(params)).mock.calls[0]![1]).toEqual(direct);
+      setOpenClawIdClawOriginResolver(() => "https://studio-k7x2q.crabd.xyz");
+      const tunnel = (await invoke(params)).mock.calls[0]![1];
+      const url = new URL(tunnel.sandboxUrl);
+      expect(url.origin).toBe("https://sbx--5hc3teeyegqctvmnit76geymerpsvbtq.crabd.xyz");
+      expect(url.pathname).toBe("/mcp-app-sandbox");
+      expect(url.searchParams.get("cspv")).toBe("1");
+      expect(url.searchParams.get("claw")).toBe("studio-k7x2q");
+      expect(tunnel.sandboxOrigin).toBe(url.origin);
+      expect(tunnel.sandboxShellHtml).toBe(
+        buildSandboxHostDocument(decodeSandboxHostCsp(url.searchParams.get("csp"))).html,
+      );
+      expect(tunnel.html).toBe(direct.html);
+      client.browserOrigin = { openclawIdTunnel: false };
+      expect((await invoke(params)).mock.calls[0]![1]).toEqual(direct);
+    });
+  },
+);

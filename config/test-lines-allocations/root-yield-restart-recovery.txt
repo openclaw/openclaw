@@ -1,3 +1,0 @@
-# Root yield restart classification, stable-record upgrade, and classified handoff notice.
-# Includes exact-writer settlement, shared-store readiness and actual Gateway restart proof.
-502

@@ -1,2 +1,0 @@
-# Enable native Anthropic compaction in the authored-context preservation fixture.
-3

@@ -109,7 +109,7 @@ function nativeStub() {
     s.unset.data=guard?["NODE_OPTIONS","NODE_PATH","LD_PRELOAD","LD_LIBRARY_PATH","LD_AUDIT"]:[];fs.writeFileSync(file,JSON.stringify(s));
   } else {process.stderr.write("fixture refuses non-observation command "+a.join(" "));process.exit(8);}
 }
-function nativeFixture(f) {
+export function nativeFixture(f) {
   const unit="openclaw-gateway.service", proc=join(f.root,"proc"), pid=f.pid, uid=process.getuid();
   f.nativePath=join(f.root,"native.json");f.nativeCalls=f.nativePath+".calls";
   f.nativeGuard=join(f.fragment+".d","zzzz-openclaw-retained-repair-"+f.request.operation+".conf");

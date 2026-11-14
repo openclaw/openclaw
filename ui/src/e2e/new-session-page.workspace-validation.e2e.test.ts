@@ -37,7 +37,7 @@ const checkoutPopover = (page: Page) =>
   page.locator(".oc-popover.new-session-page__checkout-popover");
 const worktreeOption = (page: Page) =>
   checkoutPopover(page).getByRole("button", {
-    name: "New worktree Isolated copy of the repo",
+    name: "New worktree",
     exact: true,
   });
 const messageInput = (page: Page) => page.locator(".new-session-page__message");
@@ -306,11 +306,9 @@ suite.define(() => {
       await expectFocus(name);
       await expectOpen(checkout, true);
       await name.fill("picker-inputs");
-      await checkout
-        .getByText("Creates branch openclaw/picker-inputs in a separate checkout.", {
-          exact: true,
-        })
-        .waitFor();
+      await expect
+        .poll(() => name.getAttribute("title"))
+        .toBe("Creates branch openclaw/picker-inputs in a separate checkout.");
 
       const box = await name.boundingBox();
       expect(box).not.toBeNull();
@@ -371,14 +369,13 @@ suite.define(() => {
           page,
           `worktree-branches-${branchesUnavailable ? "unavailable" : "limited"}.png`,
         );
-        await page
-          .getByText(
-            branchesUnavailable
-              ? "Branch suggestions are unavailable. Enter a branch or commit."
-              : "Suggestions are limited. Enter any branch or commit.",
-            { exact: true },
-          )
-          .waitFor({ state: "visible" });
+        if (branchesUnavailable) {
+          await page
+            .getByText("Branch suggestions are unavailable. Enter a branch or commit.", {
+              exact: true,
+            })
+            .waitFor({ state: "visible" });
+        }
         await page.keyboard.press("Escape");
         await messageInput(page).fill("start from the selected release");
         await startButton(page).click();

@@ -30,6 +30,7 @@ import {
 } from "../../state/agent-database-admission.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import {
   prepareGatewaySessionAccessAuthority,
@@ -299,8 +300,9 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         params.methodRegistry.requiresAuthenticatedProfile(params.method) ||
         resolveDirectIncognitoTargets(params.method, params.requestParams).length > 0 ||
         (sessionMutationTargetFields(params.method).length > 0 &&
-          (params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig)().gateway
-            ?.roles !== undefined),
+          isNamedOperatorRoleEnforcementEnabled(
+            (params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig)(),
+          )),
     });
     if (profileError) {
       return { error: profileError };

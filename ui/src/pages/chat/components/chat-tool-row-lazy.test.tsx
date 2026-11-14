@@ -126,7 +126,9 @@ it("keeps card chrome through import recovery and retains the current resolved r
   expect(placeholder.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe("Exec");
   expect(placeholder.querySelector(".chat-tool-disclosure__content")).not.toBeNull();
   expect(placeholder.querySelector(".chat-tool-row__chevron")).not.toBeNull();
-  expect(root.container.querySelector(".chat-permission-card")).not.toBeNull();
+  await waitForSolid(() =>
+    expect(root.container.querySelector(".chat-permission-card")).not.toBeNull(),
+  );
   expect(root.container.querySelector(".chat-progress-card-receipt")).not.toBeNull();
   for (const [name, verb, removed] of [
     ["edit", "Editing", "-1"],

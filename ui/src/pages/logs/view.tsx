@@ -614,7 +614,13 @@ export function LogsView(props: LogsProps) {
                 {/* Keep empty-result feedback live without announcing incoming log rows. */}
                 <div role="status">
                   <Show when={props.status.hasLoaded && rows().length === 0}>
-                    <SettingsEmpty message={t("gatewayLogs.empty")} />
+                    <SettingsEmpty
+                      message={t(
+                        props.entries.length > 0
+                          ? "gatewayLogs.filteredEmpty"
+                          : "gatewayLogs.empty",
+                      )}
+                    />
                   </Show>
                 </div>
                 <Show

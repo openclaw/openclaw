@@ -1,2 +1,0 @@
-# Presentation scan bound, scope/lifecycle isolation, and canonical/legacy alias parity.
-100

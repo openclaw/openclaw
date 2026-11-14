@@ -1,2 +1,0 @@
-41
-# Regression distinguishes cloud, paired-device, and unknown-startup stop copy. Updates existing lifecycle, failure and uncertain-delivery assertions; longer approved copy wraps existing assertions.

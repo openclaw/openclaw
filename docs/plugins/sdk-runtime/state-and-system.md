@@ -299,7 +299,9 @@ a captured scope retain database-wide denial. Independent keyed writes do not
 deny unrelated binding reads. Known rollback preserves the
 prior facts; compound binding cleanup publishes deletion or compensation before
 releasing denial. An unknown outcome keeps effect guards denied for that database
-identity until the Gateway restarts. Ordinary descriptive reads remain available.
+identity until the host re-reads committed state through the state worker; a later
+guarded call starts that confirmation, and a failed confirmation or a newer unknown
+outcome keeps denial. Ordinary descriptive reads remain available.
 
 Custom store adapters return `undefined` because the host cannot observe their
 writers. Keep the adapter's authoritative reader for that case. A failed prepared

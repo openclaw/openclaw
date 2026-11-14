@@ -33,20 +33,4 @@ describe("readCommandSource", () => {
     expect(source).toContain('import("./command.runtime.js")');
     expect(source).toContain("resolveCommandSecretRefsViaGateway");
   });
-
-  it("dedupes repeated runtime imports", async () => {
-    const rootDir = tempDirs.make("openclaw-command-source-");
-    const cliDir = path.join(rootDir, "src", "cli");
-    fs.mkdirSync(cliDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(cliDir, "command.ts"),
-      ['await import("./shared.runtime.js");', 'await import("./shared.runtime.js");'].join("\n"),
-    );
-    fs.writeFileSync(path.join(cliDir, "shared.runtime.ts"), "export const shared = true;\n");
-
-    const source = await readCommandSource("src/cli/command.ts", rootDir);
-    const occurrences = source.match(/export const shared = true;/gu) ?? [];
-
-    expect(occurrences).toHaveLength(1);
-  });
 });

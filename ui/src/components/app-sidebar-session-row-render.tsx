@@ -382,7 +382,6 @@ function renderRecentSessionRow(params: RecentSessionParams) {
               ref={(element) => (controls.pin = element)}
               data-sidebar-session-pin="true"
               type="button"
-              title={pinLabel()}
               aria-label={pinLabel()}
               disabled={!pinnable()}
               onClick={() => host().toggleSessionPin(actionSession())}
@@ -427,7 +426,6 @@ function renderRecentSessionRow(params: RecentSessionParams) {
             data-sidebar-session-menu="true"
             disabled={Boolean(host().sidebarSnapshot)}
             type="button"
-            title={t("chat.sidebar.openSessionMenu")}
             aria-label={`${t("chat.sidebar.openSessionMenu")}: ${label()}`}
             aria-haspopup="menu"
             aria-expanded={menuOpen() ? "true" : "false"}

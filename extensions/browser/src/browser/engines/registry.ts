@@ -1,3 +1,4 @@
+import { kitesurfEngine } from "./kitesurf.js";
 import { lightpandaEngine } from "./lightpanda.js";
 import type { BrowserEngineAdapter, BrowserEngineDescriptor, BrowserEngineId } from "./types.js";
 
@@ -55,16 +56,17 @@ const chromiumEngine: BrowserEngineAdapter = {
   },
 };
 
-// The Browser plugin owns this fixed registry. Register both implementations
+// The Browser plugin owns this fixed registry. Register implementations
 // here; selection never loads a second tool, process manager, or plugin runtime.
 const engines: Readonly<Record<BrowserEngineId, BrowserEngineAdapter>> = {
   chromium: chromiumEngine,
   lightpanda: lightpandaEngine,
+  kitesurf: kitesurfEngine,
 };
 
 export function resolveBrowserEngine(id: BrowserEngineId = "chromium"): BrowserEngineAdapter {
   if (!Object.hasOwn(engines, id)) {
-    throw new Error(`Unknown browser engine "${id}". Select chromium or lightpanda.`);
+    throw new Error(`Unknown browser engine "${id}". Select chromium, lightpanda, or kitesurf.`);
   }
   return engines[id];
 }

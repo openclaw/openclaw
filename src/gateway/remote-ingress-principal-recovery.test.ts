@@ -1,10 +1,15 @@
 import { afterEach, assert, expect, it } from "vitest";
 import { formatIrohEndpointKey } from "../../packages/openclaw-id-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type {
   GatewayIngressPrincipal,
   GatewayIngressPrincipalRecovery,
 } from "../plugins/gateway-ingress.types.js";
 import { createOpenClawIdAuthority } from "./openclaw-id/authority.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
 import { captureGatewayIngressPersonPrincipal } from "./remote-ingress-principal-admission.js";
@@ -15,9 +20,17 @@ import {
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 
-afterEach(() => setOpenClawIdTunnelPrincipalLookup(undefined));
+afterEach(() => {
+  setOpenClawIdTunnelPrincipalLookup(undefined);
+  clearRuntimeConfigSnapshot();
+});
 
 it("keeps the original app admission through recovery without revoking independent person grants", async () => {
+  setRuntimeConfigSnapshot({
+    gateway: {
+      roles: { definitions: { operator: structuredClone(MEMBER_ROLE_PRESETS.operator) } },
+    },
+  });
   const claw = await linkedClaw();
   const peerKey = formatIrohEndpointKey(new Uint8Array(32).fill(171));
   const accountId = "recovered-member";

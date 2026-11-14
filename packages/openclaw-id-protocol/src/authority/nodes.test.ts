@@ -99,6 +99,24 @@ beforeAll(async () => {
   admitted = stateOf(await approve(pending));
 });
 
+it("keeps an invite-enrolled node admitted when its approver's certificate expires", async () => {
+  const cert = await signStatement(
+    "OwnerDeviceCert",
+    { ...certBody(world.device1), expires_at: WORLD_NOW + 60 },
+    world.root,
+  );
+  const state = stateOf(
+    await submitStatement(
+      admitted,
+      await signChange(admitted, world.root, { op: "add_owner_device", cert }),
+      context,
+    ),
+  );
+  expect(isAdmitted(state, world.device1.peer, WORLD_NOW + 60)).toBe(false);
+  expect(isAdmitted(state, peer, WORLD_NOW + 60)).toBe(true);
+  expect(snapshotBody(state, 1, WORLD_NOW + 60).node_peer_keys).toContain(peer);
+});
+
 describe("node authority boundary", () => {
   it("requires pending W possession and owner approval, then admits only a node", async () => {
     expect(isAdmitted(registered, peer, WORLD_NOW)).toBe(false);

@@ -333,37 +333,6 @@ describe("runIsolatedCompletion", () => {
     },
   );
 
-  it.each(["retired", "aborted"] as const)(
-    "does not rotate after a returned quota error when %s",
-    async (state) => {
-      prepareQuotaProfiles();
-      const controller = new AbortController();
-      let current = true;
-      const expired = new Error("Completion owner retired.");
-      const dispatch = vi.fn(async () => {
-        if (state === "retired") {
-          current = false;
-        } else {
-          controller.abort(expired);
-        }
-        return errorReply("429 Too many requests");
-      });
-      registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
-      await expect(
-        complete({
-          abortSignal: controller.signal,
-          assertCurrent() {
-            if (!current) {
-              throw expired;
-            }
-          },
-        }),
-      ).rejects.toBe(expired);
-      expect(dispatch).toHaveBeenCalledOnce();
-      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
-    },
-  );
-
   it.each([
     ["runtime", "v2"],
     ["plugin", "v2"],

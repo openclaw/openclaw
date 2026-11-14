@@ -130,8 +130,17 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     }
     // An admitted start may publish activity after cleanup. Its terminal stop
     // must follow that work so late acknowledgments cannot leave typing visible.
-    void (startInFlight ? startInFlight.then(stop) : stop()).catch((err: unknown) =>
-      (params.onStopError ?? params.onStartError)(err),
+    void (async () => {
+      try {
+        if (startInFlight) {
+          await startInFlight;
+        }
+        await stop();
+      } catch (err) {
+        (params.onStopError ?? params.onStartError)(err);
+      }
+    })().catch((err: unknown) =>
+      console.warn(`[typing] stop error callback failed: ${String(err)}`),
     );
   };
 

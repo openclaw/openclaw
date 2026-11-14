@@ -619,15 +619,13 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     if (completedCandidates.length > 1 && candidateResult.meta.agentMeta) {
       const usage = createUsageAccumulator();
       const diagnosticUsage = createUsageAccumulator();
-      for (const candidate of completedCandidates) {
-        mergeCompletedAgentUsage({
-          usage,
-          diagnosticUsage,
-          agentMeta: candidate,
-          config: params.selection.cfg,
-          agentDir: params.selection.agentDir,
-        });
-      }
+      await mergeCompletedAgentUsage({
+        usage,
+        diagnosticUsage,
+        agentMetas: completedCandidates,
+        config: params.selection.cfg,
+        agentDir: params.selection.agentDir,
+      });
       candidateResult = {
         ...candidateResult,
         meta: {

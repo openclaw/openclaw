@@ -1,6 +1,10 @@
 import type { AssistantMessage, ToolResultMessage } from "@openclaw/llm-core";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { createStreamedSteeringConfig, getSteeringAtCheckpoint } from "./agent-loop-steering.js";
+import {
+  commitInputMessages,
+  createStreamedSteeringConfig,
+  getSteeringAtCheckpoint,
+} from "./agent-loop-steering.js";
 import {
   prepareToolCallExecution,
   prepareResolvedToolCall,
@@ -33,7 +37,6 @@ import {
   TranscriptNotContinuableError,
 } from "./errors.js";
 import {
-  commitInternalToolTurnInput,
   getInternalBeforeRequest,
   getInternalToolTurnInputScope,
   getInternalSteeringQueueObserver,
@@ -41,7 +44,7 @@ import {
   type InternalBeforeRequestHook,
   type InternalToolBatchLifecycle,
 } from "./internal-hooks.js";
-import { isOpenClawSystemUpdateMessage, orderSystemUpdateMessages } from "./operator-messages.js";
+import { isOpenClawSystemUpdateMessage } from "./operator-messages.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import type { AgentCoreStreamRuntimeDeps } from "./runtime-deps.js";
 import { admittedEntryIds, admittedIds, toToolBatchCalls } from "./tool-batch-admission.js";
@@ -105,23 +108,9 @@ export async function runAgentLoop(
   const inputPrompts = prompts.filter((message) => !isOpenClawSystemUpdateMessage(message));
   await emit({ type: "agent_start" });
   await emit({ type: "turn_start" });
-  for (const prompt of inputPrompts) {
-    if (config.consumeQueuedMessageCancellation?.(prompt)) {
-      continue;
-    }
-    await emit({ type: "message_start", message: prompt });
-    if (config.consumeQueuedMessageCancellation?.(prompt)) {
-      continue;
-    }
-    state.context.messages.push(prompt);
-    newMessages.push(prompt);
-    if (prompt.role === "user") {
-      resetToolLoopRecovery(recoveryState);
-    }
-    // Acceptance precedes fallible publication so continuation cannot reuse the prior input.
-    commitInternalToolTurnInput(config.completesToolTurn);
-    await emit({ type: "message_end", message: prompt });
-  }
+  await commitInputMessages(inputPrompts, state.context, config, emit, newMessages, () =>
+    resetToolLoopRecovery(recoveryState),
+  );
   if (inputPrompts.length > 0 && newMessages.length === 0) {
     // A drained queue batch can be cancelled while turn_start listeners settle.
     // Close without a provider call so cancelled input cannot become an empty continuation.
@@ -184,10 +173,7 @@ async function runLoop(
   const toolLoopRecoveryState = initialConfig.toolLoopRecoveryState ?? {
     criticalToolLoopSeen: false,
   };
-  const initialSteering = getSteeringAtCheckpoint(config);
-  let pendingMessages: AgentMessage[] = Array.isArray(initialSteering)
-    ? initialSteering
-    : await initialSteering;
+  let pendingMessages: AgentMessage[] = [];
   const stopIfAborted = async (): Promise<boolean> => {
     if (!signal?.aborted) {
       return false;
@@ -221,31 +207,13 @@ async function runLoop(
     return true;
   };
 
-  const commitPendingMessages = async () => {
-    const messagesToInject = orderSystemUpdateMessages(pendingMessages);
+  const commitPendingMessages = () => {
+    const messagesToInject = pendingMessages;
     pendingMessages = [];
-    let injectedMessage = false;
-    for (const message of messagesToInject) {
-      if (config.consumeQueuedMessageCancellation?.(message)) {
-        continue;
-      }
-      await emit({ type: "message_start", message });
-      if (config.consumeQueuedMessageCancellation?.(message)) {
-        continue;
-      }
-      if (message.role === "user") {
-        turnTainted = false;
-        resetToolLoopRecovery(toolLoopRecoveryState);
-      }
-      state.context.messages.push(message);
-      newMessages.push(message);
-      if (!isOpenClawSystemUpdateMessage(message)) {
-        commitInternalToolTurnInput(config.completesToolTurn);
-      }
-      await emit({ type: "message_end", message });
-      injectedMessage = true;
-    }
-    return injectedMessage;
+    return commitInputMessages(messagesToInject, state.context, config, emit, newMessages, () => {
+      turnTainted = false;
+      resetToolLoopRecovery(toolLoopRecoveryState);
+    });
   };
   while (true) {
     let hasMoreToolCalls = firstTurn || !prepareContinuation;
@@ -262,8 +230,9 @@ async function runLoop(
         firstTurn = false;
       }
 
+      let injectedMessage = false;
       if (pendingMessages.length > 0) {
-        const injectedMessage = await commitPendingMessages();
+        injectedMessage = await commitPendingMessages();
         if (!injectedMessage && !hasMoreToolCalls) {
           // The entire drained batch was cancelled before transcript commit.
           // Re-evaluate the loop instead of issuing an empty provider continuation.
@@ -288,23 +257,34 @@ async function runLoop(
         }
       }
 
-      const queuedContext =
-        getInternalSteeringQueueObserver(config.getSteeringMessages)?.drainContext?.() ?? [];
-      if (promptContext.length > 0 || queuedContext.length > 0) {
-        pendingMessages = [...promptContext, ...queuedContext];
-        promptContext = [];
-        await commitPendingMessages();
-        if (await stopIfAborted()) {
-          return newMessages;
-        }
-      }
-
       if (beforeRequest) {
         const requestMessages = await beforeRequest(signal);
         if (requestMessages?.length) {
           state.context.messages.push(...requestMessages);
           newMessages.push(...requestMessages);
         }
+        if (await stopIfAborted()) {
+          return newMessages;
+        }
+      }
+
+      // Preparation can admit input after the previous checkpoint. Keep one drained
+      // batch per request so one-at-a-time steering retains its delivery order.
+      if (!injectedMessage) {
+        const steering = getSteeringAtCheckpoint(config);
+        pendingMessages = Array.isArray(steering) ? steering : await steering;
+        await commitPendingMessages();
+        if (await stopIfAborted()) {
+          return newMessages;
+        }
+      }
+
+      const queuedContext =
+        getInternalSteeringQueueObserver(config.getSteeringMessages)?.drainContext?.() ?? [];
+      if (promptContext.length > 0 || queuedContext.length > 0) {
+        pendingMessages = [...promptContext, ...queuedContext];
+        promptContext = [];
+        await commitPendingMessages();
         if (await stopIfAborted()) {
           return newMessages;
         }

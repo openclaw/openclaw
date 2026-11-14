@@ -904,6 +904,14 @@ and self-contained answers do not require discovery.
   from the prompt directory are limited to 256 KiB and rejected if larger, not
   truncated. Prompt-listed instructions retain the existing whole-read contract,
   including Code Mode's separate program-data limits.
+- Instructions larger than one tool result are not cut from the middle. The
+  `skills_read` response shows the first lines and ends with the `read` call,
+  with the skill location and the next line `offset`, that continues the
+  document. Each `read` page names the next offset until the end. When `read`
+  is unavailable, the response names the location and line to continue from
+  with another file tool, such as a harness's native reader. A `read` of
+  a skill's `SKILL.md` that fits is still served whole and ignores paging
+  arguments; a larger one pages through the normal `read` continuation.
 
 Both tools use the current session's eligible catalog. Disabled, filtered,
 ineligible, and model-hidden skills are not added by search. Existing explicit

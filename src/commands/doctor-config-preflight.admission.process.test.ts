@@ -39,13 +39,18 @@ const tempDirs = createFixtureLifetime();
 afterAll(() => tempDirs.cleanup());
 
 function manifest(root: string): Record<string, string> {
-  // Ignore lifecycle scratch and SQLite reader noise; persisted state stays byte-identical.
+  // Refusals may log diagnostics; config and durable state must stay byte-identical.
   return Object.fromEntries(
     listDirectoryTreeStrictSync(root)
       .map((walkEntry) => walkEntry.dirent)
       .filter((entry) => entry.isFile())
       .map((entry) => path.relative(root, path.join(entry.parentPath, entry.name)))
       .filter((relative) => relative.split(path.sep)[0] !== "tmp" && !relative.endsWith("-shm"))
+      .filter(
+        (relative) =>
+          path.dirname(relative) !== "logs" ||
+          !/^openclaw-\d{4}-\d{2}-\d{2}\.log$/u.test(path.basename(relative)),
+      )
       .toSorted()
       .map((relative) => [
         relative,

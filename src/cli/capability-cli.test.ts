@@ -55,19 +55,7 @@ const mocks = await vi.hoisted(async () => ({
     throw new Error("no auth profile");
   }),
   resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agent-${agentId}`),
-  updateAuthProfileStoreWithLock: vi.fn(
-    async ({ updater }: { updater: (store: any) => boolean }) => {
-      const store = {
-        version: 1,
-        profiles: {},
-        order: {},
-        lastGood: {},
-        usageStats: {},
-      };
-      updater(store);
-      return store;
-    },
-  ),
+
   resolveMemorySearchConfig: vi.fn<
     typeof import("../agents/memory-search.js").resolveMemorySearchConfig
   >(() => null),
@@ -334,7 +322,6 @@ vi.mock("../agents/model-auth.js", () => ({
 
 vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/auth-profiles/store-runtime.js")>()),
-  updateAuthProfileStoreWithLock: mocks.updateAuthProfileStoreWithLock,
   ensureAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => ({
     version: 1,
     profiles: {},
@@ -650,14 +637,13 @@ describe("capability cli", () => {
   }
 
   it.each(["list", "inspect"])("queries capability metadata through %s", async (action) => {
-    await runCap(
-      "capability",
-      action,
-      ...(action === "inspect" ? ["--name", "image.edit"] : []),
-      "--json",
-    );
+    const nameOption = action === "inspect" ? ["--name", "image.edit"] : [];
+    await runCap("capability", action, ...nameOption, "--json");
     if (action === "inspect") {
       expect(firstJsonOutput()).toMatchObject({ id: "image.edit", transports: ["local"] });
+      const unknown = runCap("capability", "inspect", "--name", "no-such", "--json");
+      await expect(unknown).rejects.toBeInstanceOf(ExpectedCliError);
+      await expect(unknown).rejects.toThrow("Unknown capability: no-such");
     } else {
       const payload = (firstJsonOutput() as unknown as Array<{ id: string }> | undefined) ?? [];
       const ids = payload.map((entry) => entry.id);
@@ -875,8 +861,9 @@ describe("capability cli", () => {
   it.each(invalidModelRunOptionCases)(
     "rejects invalid model run options $args before dispatch",
     async ({ args, error }) => {
-      await expect(runModelProbe(...args)).rejects.toThrow("exit 1");
-      expectRuntimeErrorContains(error);
+      const run = runModelProbe(...args);
+      await expect(run).rejects.toBeInstanceOf(ExpectedCliError);
+      await expect(run).rejects.toThrow(error);
       expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
       expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
       expect(mocks.callGateway).not.toHaveBeenCalled();
@@ -1682,11 +1669,9 @@ describe("capability cli", () => {
   });
 
   it("rejects conflicting TTS provider and model selections", async () => {
-    await expect(
-      convertTts("--provider", "xiaomi", "--model", "openai/gpt-4o-mini-tts"),
-    ).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains("TTS --provider must match the provider in --model.");
+    const run = convertTts("--provider", "xiaomi", "--model", "openai/gpt-4o-mini-tts");
+    await expect(run).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(run).rejects.toThrow("TTS --provider must match the provider in --model.");
   });
 
   it("fails clearly when gateway TTS output is requested against a remote gateway", async () => {
@@ -1783,63 +1768,9 @@ describe("capability cli", () => {
     expectError: expectRuntimeErrorContains,
   });
 
-  it.each(["populated", "lock-failed"])(
-    "logs out provider profiles when the store is %s",
-    async (state) => {
-      const store = {
-        version: 1,
-        profiles: {
-          "openai:default": { id: "openai:default" },
-          "openai:secondary": { id: "openai:secondary" },
-          "anthropic:default": { id: "anthropic:default" },
-        },
-        order: { openai: ["openai:default", "openai:secondary"] },
-        lastGood: { openai: "openai:secondary" },
-        usageStats: {
-          "openai:default": { errorCount: 2 },
-          "openai:secondary": { errorCount: 1 },
-          "anthropic:default": { errorCount: 3 },
-        },
-      };
-      const profiles =
-        state === "populated" ? ["openai:default", "openai:secondary"] : ["openai:default"];
-      mocks.listProfilesForProvider.mockReturnValue(profiles);
-      if (state === "populated") {
-        mocks.loadAuthProfileStoreForRuntime.mockReturnValue(store as never);
-        mocks.updateAuthProfileStoreWithLock.mockImplementationOnce(async ({ updater }) => {
-          updater(store);
-          return store;
-        });
-      } else if (state === "lock-failed") {
-        mocks.updateAuthProfileStoreWithLock.mockResolvedValueOnce(null as never);
-      }
-      const run = runCapability("model", "auth", "logout", "--provider", "openai", "--json");
-      if (state === "lock-failed") {
-        await expect(run).rejects.toThrow("exit 1");
-        expectRuntimeErrorContains("Failed to remove saved auth profiles for provider openai.");
-        return;
-      }
-      await run;
-      expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
-        provider: "openai",
-        removedProfiles: profiles,
-      });
-      if (state === "populated") {
-        expect(store.profiles).toEqual({ "anthropic:default": { id: "anthropic:default" } });
-        expect(store.order).toEqual({});
-        expect(store.lastGood).toEqual({});
-        expect(store.usageStats).toEqual({ "anthropic:default": { errorCount: 3 } });
-        expect(mocks.updateAuthProfileStoreWithLock).toHaveBeenCalledWith(
-          expect.objectContaining({ agentDir: "/tmp/agent-main" }),
-        );
-      }
-    },
-  );
-
   it.each([
     ["parent", "login", "beta", undefined],
     ["leaf", "status", "beta", undefined],
-    ["parent", "status", "", "--agent must not be blank"],
     ["leaf", "status", "retired", 'Unknown agent id "retired"'],
   ] as const)("routes %s model auth %s for agent %j", async (position, action, agent, error) => {
     mocks.loadConfig.mockReturnValue({

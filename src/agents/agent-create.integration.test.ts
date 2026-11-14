@@ -22,7 +22,7 @@ import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js"
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
-import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-repair.js";
+import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-read.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
@@ -40,8 +40,8 @@ import {
 } from "../plugins/provider-auth-persistence.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { AGENT_DELETION_RECOVERY_SOURCE_KEY } from "../state/agent-deletion-journal-recovery.kernel.js";
-import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
+import { completeDeletion } from "../state/agent-deletion-journal.test-support.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   isOpenClawAgentDatabaseOpen,
@@ -49,10 +49,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { executeSystemAgentOperation } from "../system-agent/operations-execute.js";
 import { createSystemAgentTestRuntime } from "../system-agent/system-agent.runtime.test-support.js";
@@ -73,24 +70,6 @@ import { resolveSharedAuthStorePath } from "./auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
-
-function completeDeletion(
-  state: Awaited<ReturnType<typeof createState>>,
-  agentId: string,
-  workspaceDir: string,
-) {
-  const deletion = beginAgentDeletionJournal({
-    agentId,
-    operationId: randomUUID(),
-    agentDir: state.agentDir(agentId),
-    workspaceDir,
-    sessionsDir: state.sessionsDir(agentId),
-    deleteFiles: false,
-  });
-  runOpenClawStateWriteTransaction((database) =>
-    completeAgentDeletionJournalInDatabase(database, deletion.agentId, deletion.operationId),
-  );
-}
 
 function assertAuthority(authority: Parameters<typeof validateAgentRunDelegatedAuthority>[0]) {
   if (!validateAgentRunDelegatedAuthority(authority)) {

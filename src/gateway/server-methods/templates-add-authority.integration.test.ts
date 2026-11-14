@@ -557,9 +557,7 @@ it.each(["allowed", "revoked"] as const)(
             JSON.stringify({
               schemaVersion: 1,
               agent: { id: agentId },
-              packages: [
-                { kind: "plugin", source: "clawhub", ref: pluginPackage, version: "1.0.0" },
-              ],
+              plugins: [{ ref: pluginPackage, version: "1.0.0" }],
             }) +
             "\n---\n",
         );

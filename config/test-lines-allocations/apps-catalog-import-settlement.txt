@@ -1,2 +1,0 @@
-# Wait for lazy catalog imports before asserting the discovered entries.
-1

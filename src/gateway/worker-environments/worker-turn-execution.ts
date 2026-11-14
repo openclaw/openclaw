@@ -40,7 +40,7 @@ import {
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-failure.js";
 import { prepareWorkerTurnMedia } from "./worker-turn-media.js";
-import { prepareWorkerTurnModel } from "./worker-turn-model.js";
+import { prepareWorkerTurnModel, workerTurnRuntimeLeaseOptions } from "./worker-turn-model.js";
 import {
   assertSupportedTurn,
   captureWorkerTurnInputAuthority,
@@ -85,7 +85,7 @@ export async function executeWorkerTurn(
       agentDir: input.agentDir ?? resolveAgentDir(input.config ?? {}, placement.agentId),
       workspaceDir: input.workspaceDir,
     },
-    { pluginGeneration: input.pluginGeneration, abortSignal: input.abortSignal },
+    workerTurnRuntimeLeaseOptions(input),
   );
   return await preparedRuntime.run(async () => {
     const backend = "cloud-worker";

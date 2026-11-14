@@ -39,7 +39,8 @@ vi.mock("../cli/plugin-registry-loader.js", () => ({
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+  const mocked = { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+  return { ...mocked, default: mocked };
 });
 
 afterEach(() => vi.restoreAllMocks());

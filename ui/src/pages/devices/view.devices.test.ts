@@ -1020,7 +1020,7 @@ describe("devices access gating", () => {
     const row = getSettingsRow(container, "Device One");
     for (const name of ["remove", "editAlias"]) {
       expect(action(row, name).disabled).toBe(true);
-      expect(action(row, name).title).toContain("only admins");
+      expect(action(row, name).title).toContain("Admin access required");
       action(row, name).click();
     }
     const pendingNode = getSettingsRow(getSection(container, "Pending approval"), "Pending node");

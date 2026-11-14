@@ -142,11 +142,12 @@ it("persists an accepted fork and queued rewind across the close prelude before 
       "Rewind settled before entering the lifecycle queue",
     );
     await race.close(undefined, undefined, { reason: "session rewind close regression" });
-    expect([kernel.scheduler.signal.aborted, race.closed, database.db.isOpen]).toEqual([
-      true,
-      false,
-      true,
-    ]);
+    expect([
+      kernel.requestEntryLifetime.signal.aborted,
+      kernel.scheduler.signal.aborted,
+      race.closed,
+      database.db.isOpen,
+    ]).toEqual([true, false, false, true]);
     await expect(dispatch("sessions.rewind", params)).rejects.toThrow(
       "Gateway request entry is closed",
     );
@@ -157,6 +158,7 @@ it("persists an accepted fork and queued rewind across the close prelude before 
       sessionKey: expect.any(String),
     });
     expect(result).toEqual({ editorText: "Edit this question." });
+    expect(kernel.scheduler.signal.aborted).toBe(true);
     expect(database.db.isOpen).toBe(false);
     using reopened = new DatabaseSync(database.path, { readOnly: true });
     const activeEvents = reopened.prepare(

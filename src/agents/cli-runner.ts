@@ -1,6 +1,5 @@
 import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import { prepareCronRootSessionGeneration } from "../config/sessions/session-delivery-generation.js";
-import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ImageContent } from "../llm/types.js";
@@ -36,6 +35,7 @@ import {
   settleCliPreparationError,
 } from "./cli-runner/cli-run-settlement.js";
 import {
+  buildCliAssistantTranscriptUsage,
   buildCliHookAssistantMessage,
   buildCliHookUserMessage,
   finalizeCliContextEngineTurn,
@@ -45,6 +45,7 @@ import {
   resolveCliAssistantStopReason,
   runCliAgentEndHook,
 } from "./cli-runner/cli-run-transcript.js";
+import { startCliContextEngineTurn } from "./cli-runner/context-engine-turn.js";
 import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
@@ -53,10 +54,7 @@ import { createCliFailoverError } from "./cli-runner/exit-error.js";
 import { loadCliPromptImages } from "./cli-runner/helpers.js";
 import { cliBackendLog } from "./cli-runner/log.js";
 import type { ClaudeCliRunDiagnosticLifecycle } from "./cli-runner/run-diagnostics.js";
-import {
-  loadCliSessionContextEngineMessages,
-  loadCliSessionHistoryMessages,
-} from "./cli-runner/session-history.js";
+import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import { prepareCliRunTerminalReply } from "./cli-runner/terminal-reply.js";
 import { settlePreparedCliRunWithTrajectory } from "./cli-runner/trajectory.js";
 import { runWithCliTurn } from "./cli-runner/turn-admission.js";
@@ -66,7 +64,6 @@ import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
 import { resolveSourceReplyDelivery } from "./embedded-agent-runner/delivery-evidence.js";
 import { coerceToFailoverError, recordModelFallbackStop } from "./failover-error.js";
 import { runBeforeAgentRunGate } from "./harness/before-agent-run.js";
-import { bootstrapHarnessContextEngine } from "./harness/context-engine-lifecycle.js";
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
 import {
@@ -530,30 +527,7 @@ async function runPreparedCliAgentOwned(
         userTurnHandled,
       });
     }
-    await bootstrapHarnessContextEngine({
-      admittedRunContext: params.admittedRunContext,
-      preparedRunAdmission: params.preparedRunAdmission,
-      hadSessionFile: context.hadSessionFile,
-      contextEngine: context.contextEngine,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionTarget: params.sessionTarget,
-      sessionFile: params.sessionFile,
-      sessionManager: params.sessionManager,
-      transcriptReadFence: params.sessionManager
-        ? undefined
-        : params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
-      config: context.contextEngineConfig,
-      contextEngineHostSupport: buildGenericCliContextEngineHostSupport({
-        backendId: context.backendResolved.id,
-      }),
-      providerId: params.provider,
-      modelId: context.modelId,
-      warn: (message) => log.warn(message),
-    });
-    const contextEngineHistoryMessages = context.contextEngine
-      ? await loadCliSessionContextEngineMessages(params)
-      : [];
+    const contextEngineHistoryMessages = await startCliContextEngineTurn(context);
     const finishCliAttempt = async (
       result: Awaited<ReturnType<typeof executeCliAttempt>>,
       fallbackCliSessionId?: string,
@@ -595,6 +569,13 @@ async function runPreparedCliAgentOwned(
                 },
               }
             : undefined;
+        const pricedUsage = await buildCliAssistantTranscriptUsage({
+          runParams: params,
+          modelId: context.modelId,
+          agentDir: context.agentDir,
+          usage: output.usage,
+          turnUsage: output.diagnosticUsage,
+        });
         const assistantTranscript = await persistCliAssistantTranscript({
           runParams: params,
           // Dispatch owns source-reply transcript mirrors and their idempotency keys.
@@ -602,13 +583,16 @@ async function runPreparedCliAgentOwned(
           text: sourceReplyWasDelivered ? "" : (nativeFinal?.text ?? output.text),
           ...(nativeFinal ? { nativeIdentity: nativeFinal.identity } : {}),
           modelId: context.modelId,
-          usage: output.usage,
-          turnUsage: output.diagnosticUsage,
+          usage: pricedUsage.usage,
           stopReason: resolveCliAssistantStopReason(output),
           yielded: output.yielded,
         });
         const runResult = buildCliRunResult({
           ...resultContext,
+          preparedContextAgentMeta: {
+            ...resultContext.preparedContextAgentMeta,
+            ...(pricedUsage.costUsd !== undefined ? { costUsd: pricedUsage.costUsd } : {}),
+          },
           output,
           preparedReply,
           effectiveCliSessionId,

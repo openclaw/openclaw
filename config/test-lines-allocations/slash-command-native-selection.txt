@@ -1,2 +1,0 @@
-# Queue native textarea selection notifications during real ArrowDown in two existing browser cases to protect keyboard selection through delayed events.
-11

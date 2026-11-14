@@ -418,7 +418,7 @@ flow:
                       - text
                     # Only the required ingress turn's public spawn status is visible;
                     # private child labels, result prose, and media remain forbidden.
-                    expr: "config.parentAcknowledgment.startsWith(String(text ?? '').trim()) || (privateTelegramWire && ['<b>Working</b>', '<b>Working</b>\\n<b>🤖 Sub-agent</b> <i>running</i>', '<b>Working</b>\\n<b>🤖 Sub-agent</b>'].includes(String(text ?? '').trim()))"
+                    expr: "config.parentAcknowledgment.startsWith(String(text ?? '').trim()) || (privateTelegramWire && ['<b>Working</b>', '<b>Working</b>\\n🤖 <b>Sub-agent</b> <i>running</i>', '<b>Working</b>\\n🤖 <b>Sub-agent</b>'].includes(String(text ?? '').trim()))"
               - assert:
                   expr: "privateIngress.id && privateOutbound.length === 2 && privateAcknowledgments.length === 1 && privateOutbound.every((message) => message.conversation.id === privateConversationId && (privateTelegramWire || message.replyToId === privateIngress.id) && (message.attachments?.length ?? 0) === 0 && isPrivateKickoffText(message.text))"
                   message:

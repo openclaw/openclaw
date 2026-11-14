@@ -9,22 +9,15 @@ import type { PackageUpdateTransaction } from "./package-update-swap-contract.js
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { prepareNativePackageStage } from "./update-native-package-stage.js";
 
-export async function createPackageSwapFixture(base: string) {
+/** Paths and swap parameters of the npm fixture rooted at `base`; touches no files. */
+export function resolvePackageSwapFixture(base: string) {
   const prefix = path.join(base, "live");
   const globalRoot = path.join(prefix, "lib", "node_modules");
   const packageRoot = path.join(globalRoot, "openclaw");
   const stagePrefix = path.join(base, "stage");
   const stageGlobalRoot = path.join(stagePrefix, "lib", "node_modules");
   const stagePackageRoot = path.join(stageGlobalRoot, "openclaw");
-  await writePackageRoot(packageRoot, "1.0.0");
-  await writePackageRoot(stagePackageRoot, "2.0.0");
   const launcher = path.join(prefix, "bin", "openclaw");
-  const stagedLauncher = path.join(stagePrefix, "bin", "openclaw");
-  for (const entry of [launcher, stagedLauncher]) {
-    await fs.mkdir(path.dirname(entry), { recursive: true });
-  }
-  await fs.writeFile(launcher, "old launcher\n");
-  await fs.writeFile(stagedLauncher, "candidate launcher\n");
   const params = {
     installTarget: createNpmTarget(globalRoot),
     packageName: "openclaw",
@@ -33,13 +26,49 @@ export async function createPackageSwapFixture(base: string) {
       layout: {
         prefix: stagePrefix,
         globalRoot: stageGlobalRoot,
-        binDir: path.dirname(stagedLauncher),
+        binDir: path.join(stagePrefix, "bin"),
       },
       packageRoot: stagePackageRoot,
       installTarget: createNpmTarget(stageGlobalRoot),
     },
   };
   return { params, packageRoot, globalRoot, launcher };
+}
+
+export async function createPackageSwapFixture(base: string) {
+  const fixture = resolvePackageSwapFixture(base);
+  await writePackageRoot(fixture.packageRoot, "1.0.0");
+  await writePackageRoot(fixture.params.stage.packageRoot, "2.0.0");
+  const stagedLauncher = path.join(fixture.params.stage.layout.binDir, "openclaw");
+  for (const entry of [fixture.launcher, stagedLauncher]) {
+    await fs.mkdir(path.dirname(entry), { recursive: true });
+  }
+  await fs.writeFile(fixture.launcher, "old launcher\n");
+  await fs.writeFile(stagedLauncher, "candidate launcher\n");
+  return fixture;
+}
+
+export const symlinkDirectory = (target: string, link: string) =>
+  fs.symlink(target, link, process.platform === "win32" ? "junction" : "dir");
+
+export async function createLinkedPackageSwapFixture(rootDir: string, relative = false) {
+  const fixture = await createPackageSwapFixture(rootDir);
+  const checkout = path.join(rootDir, "checkout");
+  await fs.rename(fixture.packageRoot, checkout);
+  await fs.writeFile(path.join(checkout, "operator.txt"), "operator-owned checkout\n");
+  // A linked checkout can reference dependencies outside the package root.
+  await symlinkDirectory(rootDir, path.join(checkout, "external"));
+  await symlinkDirectory(
+    relative ? path.relative(path.dirname(fixture.packageRoot), checkout) : checkout,
+    fixture.packageRoot,
+  );
+  return {
+    ...fixture,
+    checkout,
+    target: await fs.readlink(fixture.packageRoot),
+    linkIdentity: (await fs.lstat(fixture.packageRoot)).ino,
+    checkoutIdentity: (await fs.stat(checkout)).ino,
+  };
 }
 
 export async function createNativePackageSwapFixture(base: string) {

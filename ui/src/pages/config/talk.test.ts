@@ -4,10 +4,7 @@ import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
-import type { SelectPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -15,15 +12,17 @@ import {
   createNativeDeviceSettingsSnapshot,
 } from "../../test-helpers/native-device-settings.ts";
 import { choosePickerValue, updatePickers } from "../../test-helpers/select-picker.ts";
-import { createApplicationGateway } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
+  createTalkMutationHarness,
   expectVoiceState,
   mountTalkPage,
   mountTalkSettingsRoutes,
   nativeVoice,
   readVoiceOptions,
+  realtimeModelPicker,
   setTalkRealtimeConfig,
+  type TalkMutationHarnessOptions,
 } from "./talk.test-support.tsx";
 
 const ACTIVE_VOICES = ["", "cove", "spruce", "custom-voice"];
@@ -49,8 +48,7 @@ const expectFocused = (input: HTMLTextAreaElement, value: string) => {
   expect(input.value).toBe(value);
   expect(document.activeElement).toBe(input);
 };
-const modelPicker = (page: HTMLElement) =>
-  page.querySelector<SelectPicker>("openclaw-select-picker");
+const modelPicker = realtimeModelPicker;
 const waitCatalogCalls = (request: unknown, count: number) =>
   waitForSolid(() => expect(request).toHaveBeenCalledTimes(count));
 const realtimePath = (field: string) => ["talk", "realtime", field];
@@ -75,168 +73,6 @@ async function voiceWakeFixture(
     input: triggerInput(harness.page),
     voiceWakeRequest,
     writes: () => writes,
-  };
-}
-
-type TalkMutationHarnessOptions = {
-  configSaving?: boolean;
-  speakerVoice?: string | null;
-  providerOption?: Partial<TalkCatalogResult["realtime"]["providers"][number]>;
-  nativeDeviceSettings?: NativeDeviceSettingsCapability;
-  voiceWakeRequest?: (
-    method: string,
-    params: Record<string, unknown>,
-  ) => Promise<{ triggers: string[] }>;
-  catalogRequest?: (
-    requestIndex: number,
-    catalog: TalkCatalogResult,
-  ) => Promise<TalkCatalogResult> | TalkCatalogResult;
-  configSnapshot?: { hash?: string | null; configRevisionHash?: string | null };
-  activeProvider?: string | null;
-  activeVoiceSelectionPolicy?: "allowlist-default";
-  aliases?: string[];
-  consultRouting?: string | null;
-  defaultModel?: string;
-  model?: string | null;
-  openAIProviderModel?: string;
-  provider?: string | null;
-  transport?: string | null;
-  transports?: TalkCatalogResult["transports"];
-  voicesByModel?: Record<string, string[]>;
-};
-
-function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
-  const catalog = {
-    modes: ["realtime"],
-    transports: ["gateway-relay", "webrtc"],
-    brains: ["agent-consult"],
-    speech: { providers: [] },
-    transcription: { providers: [] },
-    realtime: {
-      ready: true,
-      activeProvider: options.activeProvider ?? "openai",
-      providers: [
-        {
-          id: "openai",
-          label: "OpenAI",
-          configured: true,
-          aliases: options.aliases ?? [],
-          models: [options.defaultModel ?? "gpt-live-test-canary"],
-          voices: ["marin"],
-          activeVoices: ["cove", "spruce"],
-          activeVoiceSelectionPolicy: options.activeVoiceSelectionPolicy,
-          voicesByModel: options.voicesByModel,
-          modelFamilySettings: {
-            family: "gpt-live",
-            unlistedModelVoices: "active",
-            unsupportedTransports: ["provider-websocket"],
-            gatewayRelayHandlesAgentConsult: true,
-            hint: {
-              titleKey: "talkPage.gptLive.title",
-              descriptionKey: "talkPage.gptLive.hint",
-              readyKey: "talkPage.gptLive.ready",
-            },
-          },
-          transports: options.transports ?? ["gateway-relay"],
-          defaultModel: options.defaultModel ?? "gpt-live-test-canary",
-          ...options.providerOption,
-        },
-        {
-          id: "xai",
-          label: "xAI",
-          configured: true,
-          aliases: [],
-          models: ["grok-voice"],
-          voices: ["ara"],
-          activeVoices: ["xai-active"],
-          transports: ["gateway-relay"],
-          defaultModel: "grok-voice",
-        },
-      ],
-    },
-  } satisfies TalkCatalogResult;
-  let catalogRequestIndex = 0;
-  const request = vi.fn(async (_method: string, _params: Record<string, unknown>) => {
-    catalogRequestIndex += 1;
-    return await (options.catalogRequest?.(catalogRequestIndex, catalog) ?? catalog);
-  });
-  const { gateway, publish } = createApplicationGateway();
-  gateway.connection.gatewayUrl = "wss://gateway.example.test";
-  const hello: ApplicationContext["gateway"]["snapshot"]["hello"] = options.voiceWakeRequest
-    ? {
-        type: "hello-ok" as const,
-        protocol: 4,
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: ["voicewake.get", "voicewake.set"] },
-      }
-    : null;
-  publish({
-    ...gateway.snapshot,
-    client: {
-      request: (method: string, params: Record<string, unknown>) =>
-        method.startsWith("voicewake.")
-          ? (options.voiceWakeRequest?.(method, params) ?? Promise.resolve({ triggers: [] }))
-          : request(method, params),
-    } as unknown as GatewayBrowserClient,
-    phase: "connected",
-    hello,
-    assistantAgentId: "main",
-    sessionKey: "main",
-  });
-  const configForm = {
-    talk: {
-      realtime: {
-        provider: options.provider === undefined ? "openai" : options.provider,
-        ...(options.model === null
-          ? {}
-          : { model: options.model === undefined ? "gpt-realtime-2.1" : options.model }),
-        transport: options.transport === undefined ? "gateway-relay" : options.transport,
-        consultRouting: options.consultRouting,
-        speakerVoice: options.speakerVoice,
-        providers: options.openAIProviderModel
-          ? { openai: { model: options.openAIProviderModel } }
-          : undefined,
-      },
-    },
-  };
-  const runtimeConfigListeners = new Set<() => void>();
-  const runtimeConfig = {
-    state: {
-      configForm,
-      configSnapshot: options.configSnapshot ?? { hash: "hash" },
-      configLoading: false,
-      configSaving: options.configSaving ?? false,
-      configApplying: false,
-    },
-    patchForm: vi.fn(),
-    removeFormValue: vi.fn(),
-    subscribe: (listener: () => void) => {
-      runtimeConfigListeners.add(listener);
-      return () => runtimeConfigListeners.delete(listener);
-    },
-  };
-  const context = {
-    nativeDeviceSettings: options.nativeDeviceSettings ?? null,
-    gateway,
-    runtimeConfig,
-  } as unknown as ApplicationContext;
-  const page = mountTalkPage(context, configForm);
-  return {
-    page,
-    request,
-    runtimeConfig,
-    setConfigHash: (hash: string | null) => {
-      runtimeConfig.state.configSnapshot.hash = hash;
-      runtimeConfigListeners.forEach((notify) => notify());
-    },
-    setGatewayConnection: (connected: boolean, gatewayUrl = gateway.connection.gatewayUrl) => {
-      gateway.connection.gatewayUrl = gatewayUrl;
-      publish({
-        ...gateway.snapshot,
-        phase: connected ? "connected" : "reconnecting",
-        hello: connected ? hello : null,
-      });
-    },
   };
 }
 
@@ -280,9 +116,7 @@ it("locks every curated picker while config is saving", async () => {
   const { page } = await readyTalk({ configSaving: true, speakerVoice: "marin" });
   expect(page.querySelector(".settings-segmented__input")?.hasAttribute("disabled")).toBe(true);
   expect([...page.querySelectorAll("select")]).toMatchObject([{ disabled: true }]);
-  expect(page.querySelector<HTMLButtonElement>("openclaw-select-picker button")?.disabled).toBe(
-    true,
-  );
+  expect(modelPicker(page)?.querySelector("button")?.disabled).toBe(true);
 });
 
 it("commits provider-local model ids without qualifying them", async () => {
@@ -348,6 +182,8 @@ describe("Talk catalog boundaries", () => {
     const input = triggerInput(page);
     initial.reject(new Error("catalog temporarily unavailable"));
     await waitForSolid(() => expect(page.textContent).toContain(t("talkPage.status.unavailable")));
+    expect(page.textContent).toContain("catalog temporarily unavailable");
+    expect(page.textContent).not.toContain(t("talkPage.status.unavailableHint"));
     expect(page.textContent).toContain("gpt-realtime-2.1");
     expect(triggerInput(page)).toBe(input);
 

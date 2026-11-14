@@ -8,16 +8,34 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 
+// mock-isolation: native handles keep observer policy deterministic; the host suite proves subprocess isolation.
+vi.mock("./directory-watch-host.js", () => ({
+  watchDirectory(directory: string, listener: fs.WatchListener<string>, recursive: boolean) {
+    try {
+      if (recursive) {
+        fs.accessSync(directory, fs.constants.R_OK);
+      }
+      return fs.watch(directory, { persistent: false, recursive }, listener);
+    } catch (error) {
+      const watch = new EventEmitter();
+      queueMicrotask(() => watch.emit("error", error, true));
+      return Object.assign(watch, { close() {} });
+    }
+  },
+}));
+
 const importingScope = new AsyncLocalStorage<string>();
 const { observeOwnedDirectory } = await runInDetachedAsyncContext(() =>
   importingScope.run("retired-importer", () => import("./owned-directory-observation.js")),
 );
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-// These cases drive in-process watchers; directory-watch-host.test.ts covers the macOS host.
+// These cases drive in-process watchers; directory-watch-host.test.ts covers the helper host.
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 beforeEach(() => {
   Object.defineProperty(process, "platform", { ...platform, value: "linux" });
+  const access = fs.accessSync;
+  vi.spyOn(fs.promises, "access").mockImplementation(async (...args) => access(...args));
 });
 // Select the adapter's overload so its registered event callback stays typed.
 const nativeWatchFs: {
@@ -70,7 +88,7 @@ afterEach(() => {
   Object.defineProperty(process, "platform", platform);
 });
 
-it("bounds scheduling work as directories subscribe and close", () => {
+it("bounds scheduling work as directories subscribe and close", async () => {
   const root = timedDirectory("fleet");
   const timeout = vi.spyOn(globalThis, "setTimeout");
   const clock = vi.spyOn(Date, "now");
@@ -89,22 +107,27 @@ it("bounds scheduling work as directories subscribe and close", () => {
   }
   expect(clock).not.toHaveBeenCalled();
   expect(timeout).toHaveBeenCalledOnce();
-  vi.advanceTimersByTime(29_999);
+  const syncFs = ["existsSync", "accessSync", "statSync", "lstatSync", "realpathSync"] as const;
+  const probes = syncFs.map((method) => vi.spyOn(fs, method));
+  await vi.advanceTimersByTimeAsync(29_999);
   expect(listener).not.toHaveBeenCalled();
-  vi.advanceTimersByTime(1);
+  await vi.advanceTimersByTimeAsync(1);
   expect(listener).toHaveBeenCalledOnce();
+  for (const probe of probes) {
+    expect(probe).not.toHaveBeenCalled();
+  }
   subscriptions.pop()!.close();
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it("keeps the authority recovery bound across a backward wall-clock correction", () => {
+it("keeps the authority recovery bound across a backward wall-clock correction", async () => {
   const listener = observe(timedDirectory("clock", 300_000));
   vi.setSystemTime(0);
-  vi.advanceTimersByTime(30_000);
+  await vi.advanceTimersByTimeAsync(30_000);
   expect(listener).toHaveBeenCalledOnce();
 });
 
-it("shares recursive watches while preserving each consumer's recovery interval", () => {
+it("shares recursive watches while preserving each consumer's recovery interval", async () => {
   const directory = timedDirectory("recursive");
   const watch = spyOnNativeWatch();
   const frequent = vi.fn();
@@ -113,17 +136,17 @@ it("shares recursive watches while preserving each consumer's recovery interval"
   observe(directory, quiet, { recursive: true, reconcileIntervalMs: 30 * 60_000 });
   expect(watch).toHaveBeenCalledOnce();
   expect(watch.mock.calls[0]![1]).toMatchObject({ recursive: true });
-  vi.advanceTimersByTime(300_000);
+  await vi.advanceTimersByTimeAsync(300_000);
   expect(frequent).toHaveBeenCalledTimes(10);
   expect(quiet).not.toHaveBeenCalled();
   watch.mock.calls[0]![2]("change", "nested/resource.txt");
   expect(quiet).toHaveBeenCalledWith("nested/resource.txt", "change");
   quiet.mockClear();
-  vi.advanceTimersByTime(25 * 60_000);
+  await vi.advanceTimersByTimeAsync(25 * 60_000);
   expect(quiet).toHaveBeenCalledOnce();
 });
 
-it("keeps recursive handles outside replaceable subtrees and filters their events", () => {
+it("keeps recursive handles outside replaceable subtrees and filters their events", async () => {
   const workspace = timedDirectory("boundary");
   const skills = path.join(workspace, "skills");
   const grouped = path.join(workspace, ".agents", "skills");
@@ -154,27 +177,28 @@ it("keeps recursive handles outside replaceable subtrees and filters their event
   fs.renameSync(workspace, path.join(tempDirs.make("owned-directory-retired-"), "workspace"));
   fs.mkdirSync(skills, { recursive: true });
   fs.mkdirSync(grouped, { recursive: true });
-  vi.advanceTimersByTime(30_000);
+  await vi.advanceTimersByTimeAsync(30_000);
   expect(close).toHaveBeenCalledOnce();
   expect(watch).toHaveBeenCalledTimes(2);
   expect(watch.mock.calls[1]![0]).toBe(workspace);
 });
 
-it("repairs failed watches within 30 seconds and resumes healthy recovery", () => {
+it("repairs a failed host within 30 seconds without treating it as a missing directory", async () => {
   const directory = timedDirectory("repair");
-  const watch = vi.spyOn(fs, "watch");
+  const watch = vi.spyOn(nativeWatchFs, "watch");
   const listener = vi.fn();
   const observation = observeOwnedDirectory(directory, listener);
   subscriptions.push(observation);
   expect(observation.isWatching()).toBe(true);
-  watch.mock.results[0]!.value.emit("error", new Error("lost watch"));
+  watch.mock.results[0]!.value.emit("error", new Error("lost host"), false);
   expect(observation.isWatching()).toBe(false);
   listener.mockClear();
-  vi.advanceTimersByTime(30_000);
+  await vi.advanceTimersByTimeAsync(30_000);
   expect(listener).toHaveBeenCalledOnce();
   expect(watch).toHaveBeenCalledTimes(2);
+  expect(watch.mock.calls[1]![0]).toBe(directory);
   expect(observation.isWatching()).toBe(true);
-  vi.advanceTimersByTime(30_000);
+  await vi.advanceTimersByTimeAsync(30_000);
   expect(listener).toHaveBeenCalledTimes(2);
   observation.close();
   expect(observation.isWatching()).toBe(false);
@@ -278,7 +302,8 @@ it("shares one watcher, forwards invalidation and reconciles an atomic replaceme
   const directory = tempDirs.make("owned-directory-external-");
   const filename = path.join(directory, "profiles");
   fs.writeFileSync(filename, "before");
-  const watch = vi.spyOn(nativeWatchFs, "watch");
+  // Hold native events while proving missed-notification recovery and explicit delivery.
+  const watch = vi.spyOn(nativeWatchFs, "watch").mockImplementation(() => new SilentWatch());
   const listener = vi.fn(() => fs.readFileSync(filename, "utf8"));
   const otherListener = vi.fn();
   observe(directory, listener);
@@ -289,7 +314,7 @@ it("shares one watcher, forwards invalidation and reconciles an atomic replaceme
     "const fs = require('node:fs'); const p = process.argv[1]; fs.writeFileSync(p + '.tmp', 'after'); fs.renameSync(p + '.tmp', p);",
     filename,
   ]);
-  vi.advanceTimersByTime(300_000);
+  await vi.advanceTimersByTimeAsync(300_000);
   expect(listener).toHaveLastReturnedWith("after");
   expect(otherListener).toHaveBeenCalledWith(undefined, undefined);
   expect(watch).toHaveBeenCalledTimes(1);
@@ -311,32 +336,15 @@ it("shares one watcher, forwards invalidation and reconciles an atomic replaceme
   expect(resolve).not.toHaveBeenCalled();
 });
 
-it("watches the long form of a Windows 8.3 short path", () => {
-  // libuv aborts when a directory watch opened through a short path reports a child event.
-  const root = tempDirs.make("owned-directory-short-");
-  const shortPath = path.join(root, "RUNNER~1");
-  const longPath = path.join(root, "runneradmin");
-  fs.mkdirSync(shortPath);
-  fs.mkdirSync(longPath);
-  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-  vi.spyOn(fs.realpathSync, "native").mockImplementation(((target: fs.PathLike) =>
-    target === shortPath ? longPath : String(target)) as typeof fs.realpathSync.native);
-  const watch = vi.spyOn(nativeWatchFs, "watch");
-  const listener = observe(shortPath);
-  expect(watch).toHaveBeenCalledOnce();
-  expect(watch.mock.calls[0]![0]).toBe(longPath);
-  watch.mock.calls[0]![2]("change", "auth.json");
-  expect(listener).toHaveBeenCalledWith("auth.json", "change");
-});
-
-it("ignores ancestor activity while observing missing subtree creation and replacement", () => {
-  const root = tempDirs.make("owned-directory-ancestor-");
+it("ignores ancestor activity while observing missing subtree creation and replacement", async () => {
+  const root = timedDirectory("ancestor");
   const agents = path.join(root, "agents");
   const watch = spyOnNativeWatch();
   const opened = () =>
     watch.mock.calls.filter((_, index) => watch.mock.results[index]?.type === "return");
   const changed = vi.fn();
   observe(path.join(agents, "work"), changed, { recursive: true });
+  await vi.advanceTimersByTimeAsync(0);
   const [ancestor] = opened();
   expect(ancestor?.[0]).toBe(root);
   const close = vi.spyOn(watch.mock.results[watch.mock.calls.indexOf(ancestor!)]!.value, "close");
@@ -349,16 +357,18 @@ it("ignores ancestor activity while observing missing subtree creation and repla
   expect(opened()).toHaveLength(1);
   fs.mkdirSync(agents);
   ancestor![2]("rename", "agents");
+  await vi.advanceTimersByTimeAsync(0);
   expect(changed).toHaveBeenCalledOnce();
   expect(close).toHaveBeenCalledOnce();
   expect(opened().map(([directory]) => directory)).toEqual([root, agents]);
   changed.mockClear();
   opened()[1]![2]("rename", "agents");
+  await vi.advanceTimersByTimeAsync(0);
   expect(changed).toHaveBeenCalledOnce();
   expect(opened().map(([directory]) => directory)).toEqual([root, agents, agents]);
 });
 
-it("re-admits an absent directory and invalidates after missed notifications", () => {
+it("re-admits an absent directory and invalidates after missed notifications", async () => {
   vi.useFakeTimers({
     toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
@@ -367,9 +377,9 @@ it("re-admits an absent directory and invalidates after missed notifications", (
   const directory = path.join(root, "new");
   const listener = observe(directory);
   fs.mkdirSync(directory);
-  vi.advanceTimersByTime(30_000);
+  await vi.advanceTimersByTimeAsync(30_000);
   expect(listener).toHaveBeenCalledWith(undefined, undefined);
   listener.mockClear();
-  vi.advanceTimersByTime(30_000);
+  await vi.advanceTimersByTimeAsync(30_000);
   expect(listener).toHaveBeenCalledWith(undefined, undefined);
 });

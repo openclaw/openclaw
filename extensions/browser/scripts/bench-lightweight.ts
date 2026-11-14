@@ -10,7 +10,7 @@ import { parseArgs } from "node:util";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
-type Engine = "chromium" | "lightpanda";
+type Engine = "chromium" | "lightpanda" | "kitesurf";
 type Distribution = "chromium" | "chromium-headless-shell" | "lightpanda";
 type Run =
   | { engine: Engine; distribution: Distribution; executable: string }
@@ -41,8 +41,8 @@ if (values.endpoint) {
     "Use either native binaries or an external --endpoint, not both.",
   );
   assert(
-    values.engine === "chromium" || values.engine === "lightpanda",
-    "--endpoint requires --engine chromium|lightpanda.",
+    values.engine === "chromium" || values.engine === "lightpanda" || values.engine === "kitesurf",
+    "--endpoint requires --engine chromium|lightpanda|kitesurf.",
   );
   assert(
     ["http:", "https:", "ws:", "wss:"].includes(new URL(values.endpoint).protocol),
@@ -431,7 +431,7 @@ async function main() {
         closeOwnedContext = async () => {
           try {
             // External Chromium outlives this run; remove only the tab we created.
-            if (engine === "chromium" && targetId) {
+            if (engine !== "lightpanda" && targetId) {
               await ctx.forProfile().closeTab(targetId, { exactTargetId: true });
             }
           } finally {
@@ -515,6 +515,26 @@ async function main() {
           assert(typeof stale.body.error === "string");
           assert.match(stale.body.error, /^tab not found(?::|$)/);
           checks.staleTargetRejected = true;
+        }
+        if (engine !== "lightpanda") {
+          const capture = await request("POST", "/screenshot", { targetId, type: "png" });
+          assert(typeof capture.path === "string");
+          const bytes = await fs.readFile(capture.path);
+          assert(bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])));
+          if (values.output) {
+            await fs.writeFile(`${values.output}.${engine}.png`, bytes);
+          }
+          checks.renderedScreenshot = true;
+        }
+        if (engine === "kitesurf") {
+          const second = await request("POST", "/tabs/open", { url: fixtureUrl.href });
+          assert(typeof second.targetId === "string" && second.targetId !== targetId);
+          await request("DELETE", `/tabs/${second.targetId}`);
+          checks.multipleTabs = true;
+          for (const route of ["/pdf", "/download", "/hooks/file-chooser", "/set/media"]) {
+            assert.equal((await dispatch("POST", route, { targetId })).status, 501);
+          }
+          checks.unsupportedCapabilities = true;
         }
         const sorted = tasks.map((item) => item.durationMs).toSorted((a, b) => a - b);
         return {

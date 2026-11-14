@@ -1,0 +1,4 @@
+46
+# Command and native exec main-thread IO regressions, physical PATH identity,
+# native-policy worker transitions, approval revocation, and async consumer migration.
+# Shell fallback main-thread IO and asynchronous PowerShell selection.

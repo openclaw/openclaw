@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
-import type { ClientCredentialDatabase } from "./client-credential-schema.js";
+import type {
+  ClientCredentialDatabase,
+  ClientCredentialResult,
+} from "./client-credential-schema.js";
 import {
   deriveCanonicalEd25519PrivateKeyRaw,
   deriveCanonicalEd25519PublicKeyRaw,
@@ -198,4 +201,21 @@ export function storedDeviceIdentityToRow(
     created_at_ms: stored.createdAtMs,
     updated_at_ms: updatedAtMs,
   };
+}
+
+export function identityFromCredentialResult(
+  result: ClientCredentialResult,
+): StoredDeviceIdentity | null {
+  if (result.kind !== "identity") {
+    throw new Error("Client credential owner returned an unexpected identity result.");
+  }
+  const row = result.identity;
+  return row
+    ? {
+        deviceId: row.device_id,
+        publicKeyPem: row.public_key_pem,
+        privateKeyPem: row.private_key_pem,
+        createdAtMs: row.created_at_ms,
+      }
+    : null;
 }

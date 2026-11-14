@@ -17,6 +17,7 @@ import {
 } from "../infra/exec-control-command-guard.js";
 import { captureExecRequestOwners, readExecRequestOwners } from "../infra/exec-request-context.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isSecretEgressProxyActive } from "../secrets/egress-proxy/registry.js";
@@ -25,14 +26,16 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
+import { listActiveProcessSessionReferences } from "./bash-process-references.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import { ExecProcessPreflightError } from "./bash-tools.exec-launch.js";
 import {
+  buildBackgroundExecFollowUp,
   buildExecRuntimeErrorOutcome,
-  EXEC_MANUAL_COLLECTION_FOLLOW_UP,
+  MAX_EXEC_YIELD_MS,
 } from "./bash-tools.exec-output.js";
 import {
   assertSupportedExecParams,
@@ -82,9 +85,6 @@ import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context
 
 type GatewayApprovalResult = Awaited<ReturnType<typeof processGatewayAllowlist>>;
 
-const BACKGROUND_EXEC_FOLLOW_UP =
-  "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up. Automatic completion wake, when enabled, occurs only after exit. New output while this command is running does not automatically start another turn. Ending the turn does not stop it; use process kill when it is no longer needed. Completion and the configured timeout still apply; this is not a saved, restartable automation.";
-
 export function createExecTool(defaults?: ExecToolDefaults) {
   const secretEgressEnabled = isSecretEgressProxyActive();
   const cleanupMs = defaults?.cleanupMs;
@@ -127,36 +127,13 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     defaults?.backgroundMs ?? readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS"),
     10_000,
     10,
-    120_000,
+    MAX_EXEC_YIELD_MS,
   );
   const backgroundAvailable =
     defaults?.processToolAvailabilityRef?.value ?? defaults?.allowBackground ?? true;
   const defaultTimeoutSec = resolveExecDefaultTimeoutSec(defaults?.timeoutSec);
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
-  const {
-    safeBins,
-    safeBinProfiles,
-    trustedSafeBinDirs,
-    unprofiledSafeBins,
-    unprofiledInterpreterSafeBins,
-  } = resolveExecSafeBinRuntimePolicy({
-    local: {
-      safeBins: defaults?.safeBins,
-      safeBinTrustedDirs: defaults?.safeBinTrustedDirs,
-      safeBinProfiles: defaults?.safeBinProfiles,
-    },
-    onWarning: logInfo,
-  });
-  if (unprofiledSafeBins.length > 0) {
-    logInfo(
-      `exec: ignoring unprofiled safeBins entries (${unprofiledSafeBins.toSorted().join(", ")}); use allowlist or define tools.exec.safeBinProfiles.<bin>`,
-    );
-  }
-  if (unprofiledInterpreterSafeBins.length > 0) {
-    logInfo(
-      `exec: interpreter/runtime binaries in safeBins (${unprofiledInterpreterSafeBins.join(", ")}) are unsafe without explicit hardened profiles; prefer allowlist entries`,
-    );
-  }
+  let safeBinPolicy: ReturnType<typeof resolveExecSafeBinRuntimePolicy> | undefined;
   const {
     notifyOnExit,
     notifyOnExitEmptySuccess,
@@ -196,6 +173,28 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const approvalTransport = defaults?.createApprovalTransport?.(toolCallId, signal);
       const assertSourceActive = captureAgentToolSourceExecutionGuard(signal);
       assertSupportedExecParams(args);
+      const { safeBins, safeBinProfiles, trustedSafeBinDirs } = await (safeBinPolicy ??=
+        resolveExecSafeBinRuntimePolicy({
+          local: {
+            safeBins: defaults?.safeBins,
+            safeBinTrustedDirs: defaults?.safeBinTrustedDirs,
+            safeBinProfiles: defaults?.safeBinProfiles,
+          },
+          onWarning: logInfo,
+        }).then((policy) => {
+          if (policy.unprofiledSafeBins.length > 0) {
+            logInfo(
+              `exec: ignoring unprofiled safeBins entries (${policy.unprofiledSafeBins.join(", ")}); use allowlist or define tools.exec.safeBinProfiles.<bin>`,
+            );
+          }
+          if (policy.unprofiledInterpreterSafeBins.length > 0) {
+            logInfo(
+              `exec: interpreter/runtime binaries in safeBins (${policy.unprofiledInterpreterSafeBins.join(", ")}) are unsafe without explicit hardened profiles; prefer allowlist entries`,
+            );
+          }
+          return policy;
+        }));
+      assertSourceActive();
       // Capture settings and cancellation per execution; unused reviewers must not load model runtime.
       let autoReviewer: ExecAutoReviewer | undefined = defaults?.autoReviewer;
       if (!autoReviewer) {
@@ -242,7 +241,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
               params.yieldMs ?? defaultBackgroundMs,
               defaultBackgroundMs,
               10,
-              120_000,
+              MAX_EXEC_YIELD_MS,
             )
         : null;
       const elevatedDefaults = defaults?.elevated;
@@ -598,12 +597,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         return attachExecApprovalReview(ExecProcessPreflightError.unwrap(error), approvalReview);
       }
 
-      const backgroundFollowUp =
-        run.session.notifyOnExit && notifyOnExitEmptySuccess
-          ? `Completion will wake this conversation automatically. If only waiting remains, report that the job is running and end this turn; do not keep polling. ${BACKGROUND_EXEC_FOLLOW_UP}`
-          : run.session.notifyOnExit
-            ? `${BACKGROUND_EXEC_FOLLOW_UP} Completion wakes this conversation on output or failure; empty successful jobs are silent (tools.exec.notifyOnExitEmptySuccess=false). Arrange continuation or collect the result before ending the turn if empty success matters.`
-            : `${BACKGROUND_EXEC_FOLLOW_UP} ${EXEC_MANUAL_COLLECTION_FOLLOW_UP}`;
       let yielded = false;
       let yieldTimer: NodeJS.Timeout | null = null;
       let registeredAbortSignal: AbortSignal | null = null;
@@ -685,11 +678,20 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         if (toolAborted && !(signal?.reason instanceof ToolInterruptedByUser)) {
           throw createAbortError("Tool execution was aborted", { cause: signal?.reason });
         }
+        // Waiters started earlier in this turn are not in the turn-start snapshot.
+        const otherRunning = listActiveProcessSessionReferences({ scopeKey: run.session.scopeKey })
+          .filter((other) => other.sessionId !== run.session.id)
+          .map((other) => `${other.sessionId} (${other.name})`);
+        const backgroundFollowUp = buildBackgroundExecFollowUp(
+          run.session,
+          params.yieldMs,
+          otherRunning,
+        );
         const deadlineAtMs = run.session.processActivity?.deadlineAtMs;
-        const followUp =
+        const deadline =
           deadlineAtMs === undefined
-            ? backgroundFollowUp
-            : `Automatic stop will be requested at ${new Date(deadlineAtMs).toISOString()}; the process may exit earlier. ${backgroundFollowUp}`;
+            ? ""
+            : `, times out in ${formatDurationCompact(Math.max(1_000, deadlineAtMs - Date.now()))}`;
         return attachExecApprovalReview(
           completed.status === "settled"
             ? buildExecForegroundResult({
@@ -705,7 +707,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                     type: "text",
                     text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
                       run.session.pid ?? "n/a"
-                    }). ${followUp}`,
+                    })${deadline}. ${backgroundFollowUp}`,
                   },
                 ],
                 details: {
@@ -718,7 +720,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                   tail: run.session.tail,
                   ...(warnings.length ? { warningText: warnings.join("\n") } : {}),
                   // Structured callers receive details without the visible content.
-                  followUp,
+                  followUp: backgroundFollowUp,
                 },
               },
           approvalReview,

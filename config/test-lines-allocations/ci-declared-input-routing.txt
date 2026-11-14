@@ -1,2 +1,0 @@
-# Keep filesystem fixture readers in CI and native Vitest selection.
-19

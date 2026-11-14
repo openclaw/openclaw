@@ -1,3 +1,4 @@
+import type { IconName } from "../../components/icon-data.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 
@@ -10,7 +11,9 @@ export type PendingInputStatus =
   | "cancelled";
 
 type SystemNoticeKind = {
-  labelKey: string;
+  // Plugin steering omits this: the plugin's own name is the label.
+  labelKey?: string;
+  icon?: IconName;
   // Explicit status copy, never the model-facing instruction. Other kinds retain
   // their detailed context or actionable update outcomes unchanged.
   summaryKey?: string;
@@ -50,7 +53,7 @@ const systemNoticeKinds: Readonly<Record<string, SystemNoticeKind>> = {
 };
 
 const pluginSteeringNotice: SystemNoticeKind = {
-  labelKey: "chat.systemNotice.pluginSteering.label",
+  icon: "compass",
   collapsedBody: true,
   showTimestamp: true,
   startsTurn: false,

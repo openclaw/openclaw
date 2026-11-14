@@ -9,24 +9,25 @@ import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv } from "../test-utils/env.js";
-import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createWatcherMock } from "./config-reload.watcher.test-support.js";
 import {
   CHANNEL_BINDING_IDS,
-  clearInstanceBindingProbeCoordinators,
   INSTANCE_BINDING_PROBE_METHOD,
   type ChannelBindingProof,
   type InstanceBindingProbeCoordinator,
   type InstanceBindingProbeResult,
 } from "./server-plugins.lifecycle.test-fixtures.js";
 import {
+  closePluginGateway,
   prepareInstanceBindingFixture,
   installInstanceBindingConfigIo,
+  observePostReadyStartupMaintenance,
   patchInstanceBindingTestConfig,
   requireBoundRuntime,
   requestInstanceBindingProbe as readProbe,
   requestSettledInstanceBindingProbe as settledProbe,
   reloadInstanceBindingAfterServiceDeadline,
+  startPluginGateway,
 } from "./server-plugins.lifecycle.test-support.js";
 import {
   connectWebchatClient,
@@ -54,25 +55,19 @@ async function prepareBinding(options?: Parameters<typeof prepareInstanceBinding
 installInstanceBindingConfigIo();
 
 describe("gateway plugin instance bindings", () => {
-  const started: Array<Awaited<ReturnType<typeof startTestGatewayServer>>> = [];
-  const sockets: Array<Awaited<ReturnType<typeof connectWebchatClient>>> = [];
+  let activeServer: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
+  let adminSocket: Awaited<ReturnType<typeof connectWebchatClient>> | undefined;
   const finishServiceStops: Array<() => void> = [];
 
   async function startServer(options: Parameters<typeof startTestGatewayServer>[1]) {
-    const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-    const server = await startTestGatewayServer(claim, {
-      auth: { mode: "none" },
-      controlUiEnabled: false,
-      ...options,
-    });
-    started.push(server);
-    return { server, port: claim.port };
+    const started = await startPluginGateway(options);
+    activeServer = started.server;
+    return started;
   }
 
   async function connectAdmin(port: number) {
-    const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
-    sockets.push(socket);
-    return socket;
+    adminSocket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+    return adminSocket;
   }
 
   async function expectReplacement(
@@ -80,12 +75,7 @@ describe("gateway plugin instance bindings", () => {
     since: number,
     previous: InstanceBindingProbeResult,
   ) {
-    const { runtime } = await requireBoundRuntime(
-      coordinator.runtimes.filter(
-        (_runtime, index) => index >= since && coordinator.registrationModes[index] === "full",
-      ),
-      "replacement",
-    );
+    const { runtime } = await requireBoundRuntime(coordinator, since);
     const probe = await readProbe(runtime);
     expect(probe.registryId).not.toBe(previous.registryId);
     expect(probe).toMatchObject(bindingIds(previous));
@@ -106,34 +96,15 @@ describe("gateway plugin instance bindings", () => {
     for (const finish of finishServiceStops.splice(0)) {
       finish();
     }
-    const closingSockets = sockets.splice(0);
-    const socketClosures = closingSockets.map((socket) =>
-      socket.readyState === socket.CLOSED
-        ? Promise.resolve()
-        : new Promise<void>((resolve) => {
-            socket.once("close", () => resolve());
-          }),
-    );
-    const closeFailures: unknown[] = [];
     try {
-      for (const socket of closingSockets) {
-        socket.close();
-      }
-      for (const server of started.splice(0).toReversed()) {
-        try {
-          await server.close({ reason: "instance binding cleanup" });
-        } catch (error) {
-          closeFailures.push(error);
-        }
-      }
-      await Promise.all(socketClosures);
+      await closePluginGateway(activeServer, adminSocket);
     } finally {
+      activeServer = undefined;
+      adminSocket = undefined;
       restoreChannelRuntimeLoader?.();
       restoreChannelRuntimeLoader = undefined;
       channelEnv?.restore();
       channelEnv = undefined;
-      clearInstanceBindingProbeCoordinators();
-      delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
       if (channelProof) {
         const proof = channelProof;
         channelProof = undefined;
@@ -141,9 +112,6 @@ describe("gateway plugin instance bindings", () => {
           .soft(proof.monitors.every((monitor) => monitor.stopped && monitor.abortSignal.aborted))
           .toBe(true);
       }
-    }
-    if (closeFailures.length > 0) {
-      throw new AggregateError(closeFailures, "Gateway lifecycle fixture shutdown failed");
     }
   });
 
@@ -220,8 +188,10 @@ describe("gateway plugin instance bindings", () => {
     delete process.env.OPENCLAW_SKIP_CHANNELS;
     delete process.env.OPENCLAW_SKIP_PROVIDERS;
     const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
+    const maintenance = await observePostReadyStartupMaintenance();
     const { server, port } = await startServer({ hotReloadRecovery, sidecarStartup: "start" });
     await server.startupSettled;
+    await maintenance.settled;
     await expect.poll(() => proof.monitors.length, { timeout: 30_000 }).toBe(2);
     const initialMonitors = [...proof.monitors];
     expect(initialMonitors.map((monitor) => monitor.channelId).toSorted()).toEqual([
@@ -231,10 +201,7 @@ describe("gateway plugin instance bindings", () => {
       initialMonitors.map((monitor) => settledProbe(monitor.runtime)),
     );
     expect(initialProbes[0]).toEqual(initialProbes[1]);
-    const { runtime: initialProbeRuntime } = await requireBoundRuntime(
-      coordinator.runtimes,
-      "initial probe owner",
-    );
+    const { runtime: initialProbeRuntime } = await requireBoundRuntime(coordinator);
     const startupMetadata = getGatewayPluginMetadataSnapshot();
     expect(startupMetadata?.byPluginId.get("instance-binding-probe")?.name).toBe("Startup plugin");
     const manifestPath = path.join(bundledRoot, "instance-binding-probe", "openclaw.plugin.json");
@@ -245,18 +212,36 @@ describe("gateway plugin instance bindings", () => {
     let reloadEventIndex = proof.events.length;
     const socket = await connectAdmin(port);
     const reload = await patchInstanceBindingTestConfig(socket);
-    expect(reload.ok, reload.error?.message).toBe(true);
-    expect(reload.payload).toMatchObject({
-      sentinel: { payload: { stats: { requiresRestart: false } } },
-    });
+    if (reload.ok) {
+      expect(reload.payload).toMatchObject({
+        sentinel: { payload: { stats: { requiresRestart: false } } },
+      });
+    } else {
+      // Saving config may defer replacement while retained plugin work settles.
+      expect(reload.error).toMatchObject({
+        code: "UNAVAILABLE",
+        details: {
+          application: { status: "deferred" },
+          persistedConfig: {
+            config: {
+              plugins: {
+                entries: { "instance-binding-probe": { subagent: { allowModelOverride: true } } },
+              },
+            },
+          },
+        },
+      });
+    }
     await expect
       .poll(() => coordinator.runtimes.length, { timeout: 300_000 })
       .toBeGreaterThan(registrationsBeforeReload);
     const { runtime: freshRuntime } = await requireBoundRuntime(
-      coordinator.runtimes.slice(registrationsBeforeReload),
-      "reloaded",
+      coordinator,
+      registrationsBeforeReload,
     );
     const freshProbe = await settledProbe(freshRuntime);
+    const { runtime: selectedRuntime } = await requireBoundRuntime(coordinator);
+    await expect(readProbe(selectedRuntime)).resolves.toEqual(freshProbe);
     expect(getGatewayPluginMetadataSnapshot()).not.toBe(startupMetadata);
     expect(getGatewayPluginMetadataSnapshot()?.byPluginId.get("instance-binding-probe")?.name).toBe(
       "Changed plugin",
@@ -398,10 +383,7 @@ describe("gateway plugin instance bindings", () => {
       expect(initialRegistry).toBeDefined();
       expect(initialMetadata).toBeDefined();
       expect(coordinator.serviceStarts).toBe(1);
-      const { runtime: initialRuntime } = await requireBoundRuntime(
-        coordinator.runtimes.slice(0, initialRegistrationCount),
-        "initial",
-      );
+      const { runtime: initialRuntime } = await requireBoundRuntime(coordinator);
       const initialProbe = await readProbe(initialRuntime);
 
       const socket = await connectAdmin(port);
@@ -470,7 +452,7 @@ describe("gateway plugin instance bindings", () => {
         expect(coordinator.serviceStarts).toBe(1);
       }
       await server.close({ reason: "close after plugin cleanup refusal" });
-      started.splice(started.indexOf(server), 1);
+      activeServer = undefined;
       expect(coordinator.serviceStops).toBe(serviceStopFailure === "timeout" ? 3 : 1);
     },
   );

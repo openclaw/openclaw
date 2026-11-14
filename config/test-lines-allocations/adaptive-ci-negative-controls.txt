@@ -1,2 +1,0 @@
-# Isolated Git fixture and valid control for adaptive-CI prior rejection tests.
-28

@@ -12,6 +12,11 @@ import {
 } from "../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
+import {
+  withAgentDatabasePreparationContext,
+  withAgentInputRecovery,
+} from "../../state/agent-database-preparation-context.js";
+import { createAgentDatabaseStartupObservation } from "../../state/agent-database-startup-observation.js";
 import type { TurnAdoptionLifecycle } from "../get-reply-options.types.js";
 import { prepareInternalGetReplyOptions } from "./get-reply.types.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
@@ -47,6 +52,35 @@ const nativeContext = (commandTarget: string, sessionKey = key) => ({
   SessionKey: sessionKey,
   CommandSource: "native" as const,
   CommandTargetSessionKey: commandTarget,
+});
+
+it("lets restart recovery claim its session before a fresh input reserves FIFO custody", async () => {
+  const ready = createDeferred();
+  const owner = createAgentDatabaseStartupObservation(new Map(), new AbortController().signal);
+  owner.registerInputRecovery("main", {
+    sessions: new Map([[key, ready.promise]]),
+    completion: ready.promise,
+  });
+  await withAgentDatabasePreparationContext(
+    () => owner,
+    async () => {
+      const fresh = prepareReplySourceInput({ SessionKey: key }, {}, undefined);
+      const recovery = await withAgentInputRecovery(owner, "main", () =>
+        prepareReplySourceInput({ SessionKey: key }, {}, undefined),
+      );
+      const claim = tryClaimSessionControllerTask(recovery.input!);
+      try {
+        expect(claim).toBeDefined();
+      } finally {
+        if (claim) {
+          releaseSessionControllerClaim(claim);
+        }
+        retireUnadoptedReplySource(recovery.input);
+        ready.resolve();
+        retireUnadoptedReplySource((await fresh).input);
+      }
+    },
+  );
 });
 
 it("carries the Gateway source through lifecycle/options spreads to the actual followup", async () => {

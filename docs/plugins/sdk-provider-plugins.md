@@ -54,7 +54,7 @@ Do not write a separate permission store or infer consent from successful login.
   the row to `src/plugins/contracts/catalog-thinking-profiles.contract.test.ts`.
   Use `compat.thinkingLevels` when the offered ladder differs from what the map implies.
 - **Live listing needs both halves.** The entry sets `catalog.liveModelDiscovery`
-  and the manifest declares `modelCatalog.discovery: { "<provider>": "refreshable" }`.
+  and the manifest declares `modelCatalog.discovery: { "<provider>": "refreshable" }` (equivalent to `runtime`).
   Without the manifest half, the Gateway never refreshes the provider and only
   catalog rows appear.
 - **Row IDs match the listing.** Use the ID the vendor's model list returns.

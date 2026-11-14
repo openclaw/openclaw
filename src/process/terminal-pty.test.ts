@@ -16,6 +16,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import * as nodeRuntime from "../infra/node-runtime-executable.js";
+import * as systemBin from "../infra/resolve-system-bin.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
@@ -157,6 +158,8 @@ describe("terminal PTY spawn diagnostics", () => {
       value: backend === "node-pty" ? undefined : "synthetic-bun",
     });
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    // Synthetic Linux backends must not discover executables on the actual host.
+    vi.spyOn(systemBin, "resolveSystemBin").mockReturnValue("/synthetic/prlimit");
     const isolation =
       backend === "cgroup-helper" ||
       backend === "gateway-cgroup" ||
@@ -200,6 +203,24 @@ describe("terminal PTY spawn diagnostics", () => {
           rows: 24,
         }),
       );
+      if (backend === "node-pty") {
+        expect(mocks.spawn).toHaveBeenCalledWith(
+          "/synthetic/prlimit",
+          ["--core=0:0", "--", "/bin/bash", "-c", "synthetic"],
+          expect.any(Object),
+        );
+      } else if (backend === "bun-native" || backend === "bun-native-no-node") {
+        expect(mocks.spawnBunTerminalPty).toHaveBeenCalledWith(
+          expect.objectContaining({
+            file: "/synthetic/prlimit",
+            args: ["--core=0:0", "--", "/bin/bash", "-c", "synthetic"],
+          }),
+        );
+      } else if (backend === "gateway-cgroup") {
+        expect(mocks.spawnBunTerminalPty).toHaveBeenCalledWith(
+          expect.objectContaining({ file: "/bin/bash", args: ["-c", "synthetic"] }),
+        );
+      }
       if (backend === "bun-native-no-node") {
         expect(mocks.spawnBunTerminalPty).toHaveBeenCalledOnce();
         expect(mocks.spawnNodeTerminalPty).not.toHaveBeenCalled();

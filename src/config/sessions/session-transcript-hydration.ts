@@ -42,7 +42,7 @@ import {
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 import {
   historyLane,
-  targetDiscoveryLane,
+  sessionStoreLane,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -286,16 +286,20 @@ export function prepareSessionTranscriptHydration(
     if (!prepared) {
       return undefined;
     }
+    // The target may name a session-store locator (sessions.json); the resident state names
+    // the physical database the admission was committed to.
+    const databasePath =
+      hot.target.database.kind === "file" ? hot.target.database.nativeLocation : target.storePath;
     runWithSessionTranscriptReadFence(admission, () =>
       resolveSqliteSessionTranscriptReadFence({
-        database: { path: target.storePath },
+        database: { path: databasePath },
         ...target,
       }),
     );
     if (selection) {
       const transcript = readSessionActorTranscriptAnchors(
         hot,
-        { agentId: target.agentId, path: target.storePath, sessionId: target.sessionId },
+        { agentId: target.agentId, path: databasePath, sessionId: target.sessionId },
         selection,
         retained?.tail,
         retained?.anchors,
@@ -434,7 +438,7 @@ export function prepareSessionTranscriptHydration(
                         preparedEntry: readOwnedSessionTranscriptEntry(target),
                         caller,
                       },
-                      targetDiscoveryLane,
+                      sessionStoreLane,
                     ),
                   (prepared) => {
                     const consumed = consume(prepared);
@@ -451,7 +455,7 @@ export function prepareSessionTranscriptHydration(
           },
           signal,
           // Keep discovery separate from the bounded history worker.
-          targetDiscoveryLane,
+          sessionStoreLane,
         );
       }
     : undefined;

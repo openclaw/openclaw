@@ -9,10 +9,10 @@ import {
   tryResolveLegacyCompatibilityAgentId,
 } from "../../../agents/agent-scope-config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace-default-path.js";
+import { fileDiffersFromTemplate } from "../../../agents/workspace-template-load.js";
 import {
   DEFAULT_MEMORY_FILENAME,
   GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES,
-  fileDiffersFromTemplate,
 } from "../../../agents/workspace.js";
 import { containsEnvVarReference, resolveConfigEnvVars } from "../../../config/env-substitution.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";

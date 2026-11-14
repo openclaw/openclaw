@@ -428,8 +428,16 @@ it(
         if (scenario.revoke) {
           // The administrator may still inspect the canonical history; only the
           // revoked requester's publication stream is required to be silent.
-          // Role changes refresh projected avatar URLs, not durable message identity/content.
-          expect(transcriptContent(history.messages)).toEqual(
+          // The delivery owner records its failed obligation without resuming revoked work.
+          expect(history.messages).toHaveLength((beforeHistory?.messages.length ?? 0) + 1);
+          expect(history.messages.at(-1)).toMatchObject({
+            role: "custom",
+            customType: "run-failed-before-reply",
+            display: true,
+            content: expect.stringContaining("child result couldn't be delivered"),
+          });
+          // Role changes refresh projected avatar URLs, not prior durable message content.
+          expect(transcriptContent(history.messages.slice(0, -1))).toEqual(
             transcriptContent(beforeHistory?.messages),
           );
           expect(

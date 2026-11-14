@@ -1,2 +1,0 @@
-27
-# Offline reply/restart dedupe and group gating regressions; replace obsolete reconnect-window proof.

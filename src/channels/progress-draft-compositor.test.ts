@@ -126,7 +126,7 @@ describe("consecutive tool runs", () => {
       await tool(`${index}`);
       expect(labels()).toEqual([index === 1 ? "Bash" : `Bash ×${index}`]);
       await tool(`${index}`, "bash", "completed");
-      await tool(`${index}`, "bash", "completed");
+      await progress.pushItemEvent({ itemId: "model-wait", kind: "model-wait", phase: "end" });
       expect(labels()).toEqual([index === 1 ? "Bash" : `Bash ×${index}`]);
     }
     await tool("other", "read");

@@ -148,13 +148,13 @@ async function buildSystemRunAllowAlwaysCoverage(params: {
       .map((candidate) => candidate.sourceSegment);
     complete = segments.length === candidates.length;
   } else {
-    const analysis = analyzeArgvCommand({ argv: params.argv, cwd, env: params.env });
+    const analysis = await analyzeArgvCommand({ argv: params.argv, cwd, env: params.env });
     if (!analysis.ok) {
       return { complete: false, patterns: [] };
     }
     segments = analysis.segments;
   }
-  const coverage = resolveAllowAlwaysPatternCoverage({
+  const coverage = await resolveAllowAlwaysPatternCoverage({
     segments,
     cwd,
     env: params.env,
@@ -566,7 +566,7 @@ export async function handleInvoke(
           params.strictInlineEval === true ||
           execPolicy.agentExec?.strictInlineEval === true ||
           execPolicy.globalExec?.strictInlineEval === true;
-        const prepared = buildSystemRunApprovalPlan(params, bindApproval);
+        const prepared = await buildSystemRunApprovalPlan(params, bindApproval);
         if (!prepared.ok) {
           await response.error(
             "INVALID_REQUEST",

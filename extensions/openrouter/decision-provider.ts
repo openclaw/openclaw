@@ -4,21 +4,22 @@ import type {
   DecisionProviderContextV2,
   ProviderDecisionOutcomeV2,
 } from "openclaw/plugin-sdk/decisions";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
-  resolveProviderHttpRequestConfig,
-  sanitizeConfiguredModelProviderRequest,
-} from "openclaw/plugin-sdk/provider-http";
-import {
+  decodeOpenRouterDecisionResult,
   encodeOpenRouterDecisionRequest,
   isOpenRouterDecisionModel,
   supportsOpenRouterDecisionBatch,
 } from "./decision-codec.js";
-import { executeOpenRouterDecision } from "./decision-execution.js";
-import { OPENROUTER_BASE_URL, resolveOpenRouterApiBaseUrl } from "./provider-catalog.js";
+import { resolveOpenRouterApiBaseUrl } from "./provider-catalog.js";
 import {
   resolveOpenRouterConfiguredExtraParams,
   resolveOpenRouterExtraParamsForTransport,
 } from "./provider-routing.js";
+
+const loadDecisionHttp = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/decisions-http-runtime"),
+);
 
 function unsupported(): ProviderDecisionOutcomeV2 {
   return { status: "unavailable", reason: "unsupported-input" };
@@ -63,54 +64,25 @@ export function buildOpenRouterDecisionProvider(): DecisionProviderV2 {
       if (!body) {
         return unsupported();
       }
-      if (!context.auth.apiKey && !context.model.headers) {
-        return { status: "unavailable", reason: "credentials-unavailable" };
+      let baseUrl: string;
+      try {
+        baseUrl = resolveOpenRouterApiBaseUrl(
+          context.model.baseUrl ?? context.config.models?.providers?.openrouter?.baseUrl,
+        );
+      } catch {
+        return { status: "unavailable", reason: "transport" };
       }
-      const providerConfig = context.config.models?.providers?.openrouter;
-      return executeOpenRouterDecision(batch, {
-        body,
-        signal: context.signal,
-        deadlineMonotonicMs: context.deadlineMonotonicMs,
-        isAdmissible: context.isAdmissible,
-        capabilities: context.model.inference?.decision,
-        prepareTransport: () => {
-          // Auth and effective headers are prepared by the host. Only proxy/TLS/SSRF
-          // policy is read here; never select a second credential or auth profile.
-          const configuredRequest = providerConfig?.request;
-          const request = sanitizeConfiguredModelProviderRequest(
-            configuredRequest
-              ? {
-                  proxy: configuredRequest.proxy,
-                  tls: configuredRequest.tls,
-                  allowPrivateNetwork: configuredRequest.allowPrivateNetwork,
-                }
-              : undefined,
-          );
-          const requestConfig = resolveProviderHttpRequestConfig({
-            provider: "openrouter",
-            capability: "llm",
-            transport: "http",
-            baseUrl: resolveOpenRouterApiBaseUrl(context.model.baseUrl ?? providerConfig?.baseUrl),
-            defaultBaseUrl: OPENROUTER_BASE_URL,
-            defaultHeaders: {
-              "Content-Type": "application/json",
-              // The host already applied an explicit auth override to its private headers.
-              // Do not restore the provider-default bearer after a custom header replaced it.
-              ...(context.auth.apiKey &&
-              (!configuredRequest?.auth || configuredRequest.auth.mode === "provider-default")
-                ? { Authorization: `Bearer ${context.auth.apiKey}` }
-                : {}),
-            },
-            headers: context.model.headers,
-            request,
-          });
-          return {
-            requestConfig,
-            configuredRequest: configuredRequest
-              ? { allowPrivateNetwork: configuredRequest.allowPrivateNetwork }
-              : undefined,
-          };
-        },
+      const { evaluateDecisionHttp } = await loadDecisionHttp();
+      context.signal.throwIfAborted();
+      return evaluateDecisionHttp(context, {
+        provider: "openrouter",
+        baseUrl,
+        endpointPath: "systemone",
+        body: JSON.stringify(body),
+        // OpenRouter reports an overloaded upstream as 529.
+        statusReason: (status) => (status === 529 ? "rate-limited" : undefined),
+        decode: (payload) =>
+          decodeOpenRouterDecisionResult(batch, payload, context.model.inference?.decision),
       });
     },
   };

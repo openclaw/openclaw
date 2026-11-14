@@ -1,2 +1,0 @@
-# Default reaction command admission and unchanged parser/authorization boundaries.
-15

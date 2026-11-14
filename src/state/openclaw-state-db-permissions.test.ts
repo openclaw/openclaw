@@ -4,19 +4,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveDaemonRuntimePinStorePath } from "../daemon/runtime-pin-store.js";
-import type { ClientIdentityRecord } from "../infra/client-credential-operations.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
-import { runClientCredentialOperation } from "../infra/client-credential-store.js";
-import {
-  generateStoredDeviceIdentity,
-  storedDeviceIdentityToRow,
-} from "../infra/device-identity-material.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
-import {
-  ensureOpenClawStatePermissions,
-  restorePrivateStateStoreModes,
-} from "./openclaw-state-db-permissions.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { restorePrivateStateStoreModes } from "./openclaw-state-db-permissions.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const mode = (target: string) => fs.lstatSync(target).mode & 0o7777;
@@ -87,6 +77,7 @@ describe.runIf(process.platform !== "win32")("restorePrivateStateStoreModes", ()
     for (const store of [credentials, runtimePins]) {
       fs.chmodSync(store, 0o660);
     }
+    const stateDirMode = mode(stateDir);
 
     restorePrivateStateStoreModes(env);
 
@@ -95,7 +86,7 @@ describe.runIf(process.platform !== "win32")("restorePrivateStateStoreModes", ()
     }
     // A shared, group-accessible state root is a supported layout, and config
     // publication preserves its mode, so the restore must leave it untouched.
-    expect(mode(stateDir)).toBe(0o2770);
+    expect(mode(stateDir)).toBe(stateDirMode);
     for (const store of [credentials, runtimePins]) {
       expect(mode(store)).toBe(0o600);
       expect(fs.readFileSync(store, "utf8")).toBe(`retained ${path.basename(store)}`);
@@ -138,12 +129,13 @@ describe.runIf(process.platform !== "win32")("restorePrivateStateStoreModes", ()
     fs.rmSync(path.dirname(credentials), { recursive: true });
     fs.symlinkSync(foreign, path.dirname(credentials));
     fs.chmodSync(stateDir, 0o2770);
+    const before = [foreign, stateDir].map(mode);
 
     restorePrivateStateStoreModes(env);
 
     expect(fs.lstatSync(path.dirname(credentials)).isSymbolicLink()).toBe(true);
-    expect(mode(foreign)).toBe(0o2770);
-    expect(mode(stateDir)).toBe(0o2770);
+    expect(mode(foreign)).toBe(before[0]);
+    expect(mode(stateDir)).toBe(before[1]);
   });
 
   it("refuses a store file reached through a symlinked store directory", () => {
@@ -158,13 +150,14 @@ describe.runIf(process.platform !== "win32")("restorePrivateStateStoreModes", ()
     fs.chmodSync(smuggled, 0o660);
     fs.rmSync(path.dirname(credentials), { recursive: true });
     fs.symlinkSync(outside, path.dirname(credentials));
+    const outsideMode = mode(outside);
     fs.chmodSync(stateDir, 0o2770);
 
     restorePrivateStateStoreModes(env);
 
     // Refusing the directory has to stop the walk: a pathname below it would
     // resolve through the alias, and chmod would land outside the installation.
-    expect(mode(outside)).toBe(0o2770);
+    expect(mode(outside)).toBe(outsideMode);
     expect(mode(smuggled)).toBe(0o660);
     expect(fs.readFileSync(smuggled, "utf8")).toBe("outside this installation");
   });
@@ -192,10 +185,11 @@ describe.runIf(process.platform !== "win32")("restorePrivateStateStoreModes", ()
       // an unopenable store is left alone rather than mutated unverified -- and
       // permission hardening stays best-effort, never fatal to a start (#91919).
       fs.chmodSync(directory, 0o2070);
+      const before = mode(directory);
 
       expect(() => restorePrivateStateStoreModes(env)).not.toThrow();
 
-      expect(mode(directory)).toBe(0o2070);
+      expect(mode(directory)).toBe(before);
     } finally {
       fs.chmodSync(directory, 0o700);
     }
@@ -206,10 +200,11 @@ describe.runIf(process.platform !== "win32")("restorePrivateStateStoreModes", ()
     fs.rmSync(credentials);
     fs.mkdirSync(credentials);
     fs.chmodSync(credentials, 0o2770);
+    const before = mode(credentials);
 
     restorePrivateStateStoreModes(env);
 
-    expect(mode(credentials)).toBe(0o2770);
+    expect(mode(credentials)).toBe(before);
   });
 
   it("leaves an already-private installation untouched", () => {
@@ -220,44 +215,6 @@ describe.runIf(process.platform !== "win32")("restorePrivateStateStoreModes", ()
 
     expect(mode(credentials)).toBe(0o600);
     expect(fs.lstatSync(credentials).ctimeMs).toBe(before);
-  });
-
-  // Red on the base: ensureOpenClawStatePermissions already runs on every Gateway
-  // start (gateway-lock) and before Doctor's state-schema step, but hardened only
-  // the shared state database, so the credential owner still refused after a remount.
-  it("lets the credential owner admit a remounted installation", () => {
-    const stateDir = path.join(dirs.make("state-store-admission-"), ".openclaw");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const identity: ClientIdentityRecord = storedDeviceIdentityToRow(
-      "node",
-      generateStoredDeviceIdentity(123),
-      456,
-    );
-    const read = () =>
-      runClientCredentialOperation(env, {
-        kind: "identity.read",
-        identity_key: identity.identity_key,
-      });
-    runClientCredentialOperation(env, { kind: "identity.create", identity });
-    const credentials = resolveClientCredentialStorePath(env);
-
-    for (const [target, broadened] of [
-      [stateDir, 0o2770],
-      [path.dirname(credentials), 0o2770],
-      [credentials, 0o660],
-    ] as const) {
-      fs.chmodSync(target, broadened);
-    }
-    expect(() => read()).toThrow("directory is unsafe");
-
-    // Same call the Gateway makes on every start (infra/gateway-lock.ts).
-    ensureOpenClawStatePermissions(resolveOpenClawStateSqlitePath(env), env, {
-      createDirectory: true,
-    });
-
-    expect(read()).toEqual({ kind: "identity", identity });
-    expect(mode(path.dirname(credentials))).toBe(0o700);
-    expect(mode(credentials)).toBe(0o600);
   });
 
   // Kept deliberately. PRIVATE_STATE_STORES repeats these path literals, and

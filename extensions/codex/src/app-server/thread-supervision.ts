@@ -247,6 +247,7 @@ export async function materializePendingSupervisionBranch(
     const nativeAttempt = { ...params.attempt, modelId: nativeModel };
     const nativeStartOptions = {
       ...params,
+      preserveNativeCollaboration: true,
       model: nativeModel,
       modelProvider: nativeModelProvider,
       nativeModelProvider,

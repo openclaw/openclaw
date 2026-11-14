@@ -6,6 +6,7 @@ import {
   stripMemoryAnnotationCarriers,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -199,10 +200,20 @@ export async function prepareProjectMemoryBootstrap(
     return [];
   }
   // Bound prompt waiting; the read keeps the turn's authority and owns its late cleanup.
+  const startedAt = Date.now();
   return await raceWithTimeout(
     () => loadProjectMemoryBootstrap(params),
     1_000,
     () => {
+      const endedAt = Date.now();
+      emitTrustedDiagnosticEvent({
+        type: "diagnostic.phase.completed",
+        name: "project-memory.recall",
+        startedAt,
+        endedAt,
+        durationMs: endedAt - startedAt,
+        details: { outcome: "skipped", reason: "budget_exceeded", budgetMs: 1_000 },
+      });
       log.warn(
         "project memory recall skipped: 1000ms budget exceeded; continuing without project candidates",
       );

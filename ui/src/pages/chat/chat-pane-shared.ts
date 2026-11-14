@@ -11,6 +11,7 @@ import { hasModalSurface, registryFor } from "../../components/overlay-registry.
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
+import { focusComposerInput } from "../../lib/composer-input.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import {
   PANE_SESSION_HANDOFF_TTL_MS,
@@ -220,8 +221,8 @@ export function focusChatComposerFromKeydown(
   if (!composer || composer.disabled || composer.readOnly) {
     return;
   }
-  // Keep the native default: paste must reach this textarea with its original clipboard data.
+  // Keep the native default: paste must reach the composer with its original clipboard data.
   // Block old-target dropdown typeahead from cancelling the transferred input.
-  composer.focus({ preventScroll: true });
+  focusComposerInput(composer, { preventScroll: true });
   event.stopImmediatePropagation();
 }

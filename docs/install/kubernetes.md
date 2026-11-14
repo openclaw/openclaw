@@ -155,6 +155,8 @@ capture, so a remount
 that widens them no longer blocks startup. The restore covers the client
 credential store, the daemon runtime pin store, their SQLite sidecars, and the
 sibling `<stateDir>.update-captures` directory.
+Ordinary state writes harden their own database and sidecars without repeating
+this startup repair across the other private stores.
 
 The state directory itself is left as it is found. A shared, group-accessible
 state root is a supported layout — config publication preserves its mode while

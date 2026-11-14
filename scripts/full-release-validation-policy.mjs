@@ -14,6 +14,7 @@ import {
 import { compareAscii, sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { hasRequiredCrossOsSuites } from "./lib/cross-os-release-checks/suite-filter.mjs";
 import { candidateArtifactJsonFromBinding } from "./lib/full-release-candidate-reuse.mjs";
+import { releaseChildReuseSha256 } from "./lib/full-release-child-request.mjs";
 import {
   FULL_RELEASE_CHILD_EVIDENCE_JOB,
   MAX_RELEASE_ARTIFACT_BYTES,
@@ -66,7 +67,12 @@ export function validateReleaseManifestAdvisoryJobs(manifest) {
     if (!normalCi || !Array.isArray(normalCi.jobs)) {
       throw new Error("Release advisory child evidence is invalid");
     }
-    if (normalCi.jobs.some(isFailedJob)) {
+    if (
+      evaluateReleaseChildPolicy({
+        child: { ...normalCi, key: "normalCi" },
+        targetVersion: manifest.validationInputs?.targetVersion,
+      }).blockingJobs.length > 0
+    ) {
       throw new Error("Release manifest contains failed selected job evidence");
     }
   }
@@ -763,12 +769,19 @@ export function composeReleaseChildAttemptEvidence({ attempts, expected, run }) 
 
 export function validateReleaseChildDispatchBinding({
   child,
+  childReuse,
   coveragePolicy,
   log,
   plannedRunAttempt,
   repository,
   targetSha,
 }) {
+  if (childReuse) {
+    const witnesses = [...String(log).matchAll(/\bFRV_CHILD_REUSE_SHA256=([a-f0-9]{64})\b/gu)];
+    if (witnesses.length !== 1 || witnesses[0][1] !== releaseChildReuseSha256(childReuse)) {
+      throw new Error(`release child reuse adoption witness mismatch: ${child.key}`);
+    }
+  }
   const escapedRepo = String(repository).replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
   const exactPattern = new RegExp(
     `https://github\\.com/${escapedRepo}/actions/runs/([1-9][0-9]*) \\(attempt ([1-9][0-9]*)\\)`,
@@ -1619,6 +1632,17 @@ export function planReleaseChildRerun({ childKey, jobs }) {
   // can therefore need only this failed metadata job, never its passing workloads.
   if (failed.length === 1 && failed[0] === FULL_RELEASE_CHILD_EVIDENCE_JOB) {
     return { failed, mode: "receipt", producer: FULL_RELEASE_CHILD_EVIDENCE_JOB };
+  }
+  // The artifact seal depends on the entire npm stage. Retrying its one failed
+  // leaf also reruns the seal; neither failure is waived or posted separately.
+  const npmLeaf = failed.filter((name) => name.startsWith("Prepare npm artifacts / "));
+  if (
+    childKey === "artifact:npm" &&
+    failed.length === 2 &&
+    npmLeaf.length === 1 &&
+    failed.includes("Seal artifact producer receipt")
+  ) {
+    return { failed, jobName: npmLeaf[0], mode: "single-job" };
   }
   if (failed.length !== 1) {
     throw new Error(

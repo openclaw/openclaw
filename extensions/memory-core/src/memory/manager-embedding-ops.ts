@@ -59,13 +59,9 @@ import type {
 } from "./manager-sync-base.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
-import { runEmbeddingOperationWithTimeout } from "./paused-deadline.js";
+import { EMBEDDING_TIMEOUTS_MS, runEmbeddingOperationWithTimeout } from "./paused-deadline.js";
 
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
-const EMBEDDING_TIMEOUTS_MS = {
-  query: { remote: 60_000, local: 5 * 60_000 },
-  batch: { remote: 2 * 60_000, local: 10 * 60_000 },
-};
 const SOURCE_PUBLICATION_MAX_FILES = 8;
 const SOURCE_PUBLICATION_MAX_ROWS = 128;
 const SOURCE_WIDE_BATCH_MAX_FILES = 2048;
@@ -358,6 +354,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
   protected async probeEmbeddingProvider(
     provider: MemoryEmbeddingProvider,
     providerRuntime: MemoryEmbeddingProviderRuntime | undefined,
+    signal?: AbortSignal,
   ): Promise<void> {
     const timeoutMs = this.resolveEmbeddingTimeout("query", provider, providerRuntime);
     const deadlineControl = createMemorySearchDeadlineControl();
@@ -365,15 +362,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       await runEmbeddingOperationWithTimeout({
         timeoutMs,
         message: `memory embedding probe timed out after ${Math.round(timeoutMs / 1000)}s`,
+        signal,
         deadlineControl,
-        run: (signal) =>
+        run: (operationSignal) =>
           embedMemoryQuery(provider, "ping", this.settings, {
-            signal,
+            signal: operationSignal,
             [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl,
           }),
       });
     } catch (error) {
-      if (provider === this.provider) {
+      // An interrupted check says nothing about the provider's health.
+      if (provider === this.provider && !signal?.aborted) {
         this.markLocalEmbeddingProviderDegraded(error);
       }
       throw error;

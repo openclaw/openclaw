@@ -4,7 +4,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { isMainThread, threadId } from "node:worker_threads";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { startSqliteStatementTiming } from "./database-engine/observation.js";
+import {
+  attributesSqliteStatements,
+  startSqliteStatementTiming,
+} from "./database-engine/observation.js";
 // The cache-state module keeps this lifecycle edge off the kysely value graph
 // so cold control-plane paths using transactions do not load kysely.
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
@@ -467,8 +470,9 @@ function settleSqliteTransactionSync<T>(
   let statementTiming: ReturnType<ReturnType<typeof startSqliteStatementTiming>> | undefined;
   try {
     // Share admitted schema inside rollback protection unless the source fence already owns it.
+    // GC sampling stays hydration-only: joining it restarts the native profiler per call.
     const stopStatementTiming =
-      operationLabel === "session.lifecycle.delete" || hydration
+      operationLabel && attributesSqliteStatements(operationLabel)
         ? startSqliteStatementTiming(hydration)
         : undefined;
     let result: T;

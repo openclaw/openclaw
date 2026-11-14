@@ -1,11 +1,13 @@
-import { constants as fsConstants } from "node:fs";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resolveCommandEnv } from "../process/exec-spawn.js";
 import { commandResult } from "./github-identity.test-support.js";
 import { clearGitHubCredentialVerificationCache } from "./github-oauth-client.js";
@@ -63,6 +65,21 @@ describe("GitHub tool identity", () => {
   });
   const statusFor = (config: OpenClawConfig, selectedScope: "system" | "agent" = "system") =>
     resolveGitHubToolIdentityStatus({ config, agentId: "main", selectedScope, env });
+  it("reads current managed credentials without synchronous filesystem work on the caller", async () => {
+    const profileDir = profilePath();
+    await writeProfile(profileDir, "synthetic-initial");
+    const config = { tools: { github: { profileId } } };
+    await statusFor(config);
+    const lstat = vi.spyOn(fsSync, "lstatSync");
+    for (const credential of ["synthetic-initial", "synthetic-replaced"]) {
+      await writeProfile(profileDir, credential);
+      expect((await statusFor(config)).effective.credentialState).toBe("available");
+      expectVerifiedToken(credential);
+    }
+    expect(lstat.mock.calls.filter(([target]) => String(target).startsWith(profileDir))).toEqual(
+      [],
+    );
+  });
   beforeEach(() => {
     root = tempDirs.make("openclaw-github-identity-");
     env = { OPENCLAW_STATE_DIR: root };
@@ -385,6 +402,110 @@ describe("GitHub tool identity", () => {
     expect(JSON.stringify(status)).not.toContain("private diagnostics");
   });
 
+  // Exercise the POSIX portable-write fallback; Windows uses a separate ACL helper.
+  it.skipIf(process.platform === "win32").each(["install", "refresh"] as const)(
+    "preserves required native policy for managed profile %s across worker reuse",
+    async (operation) => {
+      const identityUrl = resolveRuntimeWorkerUrl({
+        currentModuleUrl: import.meta.url,
+        sourceWorkerName: "github-tool-identity",
+        distWorkerPath: "legacy-finalizer/src/agents/github-tool-identity.js",
+      });
+      const singletonUrl = resolveRuntimeWorkerUrl({
+        currentModuleUrl: import.meta.url,
+        sourceWorkerName: "../shared/global-singleton",
+        distWorkerPath: "legacy-finalizer/src/shared/global-singleton.js",
+      });
+      const result = await runNodeScript(
+        (workerArgv) => [
+          ...workerArgv(identityUrl).slice(0, -1),
+          "--input-type=module",
+          "--eval",
+          `
+          import assert from "node:assert/strict";
+          import fs from "node:fs/promises";
+          import path from "node:path";
+          import { configureFsSafeNative } from "@openclaw/fs-safe/config";
+          const identity = await import(process.argv[1]);
+          const { drainGlobalSingletonLifecycleState } = await import(process.argv[2]);
+          const [profileDir, operation] = process.argv.slice(3);
+          globalThis.fetch = async () => Response.json({ id: 123, login: "synthetic-account" });
+          if (operation === "refresh") {
+            await fs.mkdir(profileDir, { mode: 0o700 });
+            await fs.writeFile(path.join(profileDir, "hosts.yml"), "previous credential", { mode: 0o600 });
+          }
+          const write = () => operation === "install"
+            ? identity.installManagedGitHubProfile({ profileDir, token: "synthetic-placeholder", commitConfig: async () => {} })
+            : identity.refreshManagedGitHubProfile({ profileDir, token: "synthetic-placeholder", expectedAccountId: 123 });
+          try {
+            configureFsSafeNative({ mode: "require" });
+            await assert.rejects(write, { code: "helper-unavailable" });
+            configureFsSafeNative({ mode: "off" });
+            await write();
+            assert.match(await fs.readFile(path.join(profileDir, "hosts.yml"), "utf8"), /synthetic-placeholder/);
+          } finally {
+            await drainGlobalSingletonLifecycleState();
+          }
+          `,
+          identityUrl.href,
+          singletonUrl.href,
+          path.join(root, "profile"),
+          operation,
+        ],
+        { ...process.env, NODE_OPTIONS: "--no-addons", FS_SAFE_NATIVE_MODE: "auto" },
+        15_000,
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+    },
+  );
+
+  it.each(["install", "refresh"] as const)(
+    "keeps managed profile %s filesystem work off the caller thread",
+    async (operation) => {
+      const profileDir = path.join(root, "profile");
+      if (operation === "refresh") {
+        await writeProfile(profileDir, "previous-credential");
+      }
+      const synchronous = [
+        "lstatSync",
+        "fstatSync",
+        "realpathSync",
+        "openSync",
+        "writeSync",
+        "fsyncSync",
+        "renameSync",
+      ] as const;
+      const spies = synchronous.map((method) => vi.spyOn(fsSync, method));
+      try {
+        if (operation === "install") {
+          await installManagedGitHubProfile({
+            profileDir,
+            token: "replacement-credential",
+            commitConfig: async () => {},
+          });
+        } else {
+          await refreshManagedGitHubProfile({
+            profileDir,
+            token: "replacement-credential",
+            expectedAccountId: 202,
+            assertCurrent: () => {},
+          });
+        }
+        for (const spy of spies) {
+          expect(spy).not.toHaveBeenCalled();
+        }
+      } finally {
+        for (const spy of spies) {
+          spy.mockRestore();
+        }
+      }
+      expect(await fs.readFile(path.join(profileDir, "hosts.yml"), "utf8")).toContain(
+        "oauth_token: replacement-credential",
+      );
+    },
+  );
+
   it.each(["verification", "preparation", "staging"] as const)(
     "preserves the stable credential when refresh authority closes during %s",
     async (phase) => {
@@ -408,19 +529,6 @@ describe("GitHub tool identity", () => {
         }
         return Response.json({ id: 202, login: "managed-user" });
       });
-      const open = fs.open.bind(fs);
-      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-        const handle = await open(...args);
-        if (
-          phase === "staging" &&
-          path.dirname(String(args[0])) === profileDir &&
-          typeof args[1] === "number" &&
-          (args[1] & fsConstants.O_EXCL) !== 0
-        ) {
-          revoke();
-        }
-        return handle;
-      });
 
       await expect(
         refreshManagedGitHubProfile({
@@ -434,6 +542,14 @@ describe("GitHub tool identity", () => {
             }
           },
           assertCurrent: () => {
+            if (
+              phase === "staging" &&
+              fsSync
+                .readdirSync(profileDir)
+                .some((name) => name !== "hosts.yml" && name !== "config.yml")
+            ) {
+              revoke();
+            }
             if (!authorized) {
               throw revoked;
             }

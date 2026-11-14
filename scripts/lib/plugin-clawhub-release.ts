@@ -391,10 +391,13 @@ export function collectClawHubVersionGateErrors(params: {
   return errors;
 }
 
-async function readClawHubPublication(
+export async function readClawHubPublication(
   packageName: string,
   version: string,
-  options: ClawHubRetryOptions & { registryBaseUrl?: string } = {},
+  options: ClawHubRetryOptions & {
+    allowLegacyVersionFallback?: boolean;
+    registryBaseUrl?: string;
+  } = {},
 ): Promise<ClawHubPublicationState> {
   const resource = `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${encodeURIComponent(version)}`;
   const message = `Failed to query ClawHub for ${packageName}@${version}`;
@@ -403,6 +406,17 @@ async function readClawHubPublication(
     body === undefined ? null : classifyClawHubPublication(body, { name: packageName, version });
   if (publication) {
     return publication;
+  }
+  if (options.allowLegacyVersionFallback === false) {
+    throw new Error(
+      body === undefined
+        ? "ClawHub publication-state endpoint is unavailable for " +
+            packageName +
+            "@" +
+            version +
+            "; refusing to infer authoritative absence from the legacy version probe."
+        : "ClawHub returned an invalid publication state for " + packageName + "@" + version + ".",
+    );
   }
   return {
     state: (await clawHubResourceExists(resource, message, options)) ? "published" : "absent",

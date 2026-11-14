@@ -209,6 +209,13 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     settled<T>(work: PromiseLike<T>) {
       return withinTest(work, signal);
     },
+    /** Host sleep: the clock jumps, then each overdue timer fires once at the resumed time. */
+    async freeze(ms: number) {
+      const resumedAt = performance.now() + ms;
+      clock.mockImplementation(() => resumedAt);
+      await vi.advanceTimersByTimeAsync(ms);
+      clock.mockImplementation(() => started + fakeNow());
+    },
     holdProvider() {
       fs.writeFileSync(providerHold, "");
       return providerEntered.promise;
@@ -321,4 +328,24 @@ it("keeps stalled native admission terminal after parent auth failure", async ({
   expect(records.filter(({ event }) => event === "started")).toHaveLength(1);
   expect(records.some(({ event }) => event === "admitted" || event === "catalog")).toBe(false);
   expect([retained.refreshFailed, retained.pendingProviders]).toEqual([true, undefined]);
+});
+
+it("does not count host sleep toward the native admission stall", async ({ signal }) => {
+  await using fixture = await createGatewayNativeAdmissionFixture(1, signal);
+  const first = fixture.refresh();
+  const gate = await fixture.wait(
+    fixture.entered[0]!.promise,
+    first.completed,
+    "Native capture did not enter",
+  );
+  await checkpoint();
+  // Two sleeps longer than the stall budget, one second apart.
+  await fixture.freeze(PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS + 4_000);
+  await vi.advanceTimersByTimeAsync(1_000);
+  await fixture.freeze(PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS + 4_000);
+  expect(fixture.failures).toEqual([]);
+  fixture.release(gate);
+  const catalog = await fixture.settled(first.completed);
+  expect(catalog.entries).toContainEqual(catalogEntry("native-admitted"));
+  expect(fixture.failures).toEqual([]);
 });

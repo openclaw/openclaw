@@ -7,6 +7,7 @@ import {
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { collectForRetentionCheck } from "../test-utils/retention.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -50,6 +51,8 @@ it("retains nested publication facts across real transcript writes without hidin
       clients.map((client) => [client, new ConnectionSessionRows()]),
     );
     const cfg = rolePolicyConfig();
+    // Permission fingerprints do not depend on automatic utility-model discovery.
+    cfg.agents = { defaults: { utilityModel: "" } };
     const query = { agentId: "main", key: "agent:main:fingerprint-publication" };
     const target = { agentId: query.agentId, sessionKey: query.key, sessionId: "fingerprints" };
     const toolOverrides = { mcpToolsDeny: { synthetic: ["unchanged-tool".repeat(100)] } };
@@ -103,6 +106,7 @@ it("retains nested publication facts across real transcript writes without hidin
           includeLastMessage: true,
         }).row!;
         return {
+          delivery,
           row,
           fields: prepareSessionRowDeltaFields(row, common),
         };
@@ -114,9 +118,11 @@ it("retains nested publication facts across real transcript writes without hidin
       expect(rows.every(({ row }) => row.toolOverrides === common.toolOverrides)).toBe(true);
       return rows;
     };
-    let previous = await read();
-    expect(previous.map(({ row }) => row.activitySummary?.canEnsure)).toEqual([true, true, false]);
+    // The first delivery owns the weak fingerprint sample throughout this reuse proof.
+    const initial = await read();
+    let previous = initial;
     for (let update = 0; update < 3; update++) {
+      await collectForRetentionCheck("session-row-fingerprint-sample", 1);
       clock.mockReturnValue(Date.now() + 1);
       await append();
       vi.mocked(hash).mockClear();
@@ -130,13 +136,18 @@ it("retains nested publication facts across real transcript writes without hidin
       expect(nestedHashes).toHaveLength(0);
       current.forEach(({ row, fields }, index) => {
         expect(
-          JSON.stringify(createSessionRowDeltaDiffer()(previous[index]!.fields, fields, row)),
+          JSON.stringify(createSessionRowDeltaDiffer()(previous[index]!.fields, fields, row).patch),
         ).toBe(
           JSON.stringify({ set: { updatedAt: Date.now(), snapshotAt: Date.now() }, remove: [] }),
         );
       });
       previous = current;
     }
+    expect(initial.map(({ delivery }) => delivery.payload)).toMatchObject(
+      [true, true, false].map((canEnsure) => ({
+        session: { full: { activitySummary: { canEnsure } } },
+      })),
+    );
     const replacement = { mcpToolsDeny: { synthetic: ["replacement-tool"] } };
     await updateSessionEntry(target, () => ({ toolOverrides: replacement }), {
       skipMaintenance: true,
@@ -144,15 +155,15 @@ it("retains nested publication facts across real transcript writes without hidin
     const changed = await read();
     changed.forEach(({ row, fields }, index) => {
       expect(
-        JSON.stringify(createSessionRowDeltaDiffer()(previous[index]!.fields, fields, row)),
+        JSON.stringify(createSessionRowDeltaDiffer()(previous[index]!.fields, fields, row).patch),
       ).toBe(JSON.stringify({ set: { toolOverrides: replacement }, remove: [] }));
     });
     setUserProfileRole(profiles[2]!.id, "write");
     prepareGatewayRecipientProfile(clients[2]!);
     const admitted = await read();
     expect(
-      createSessionRowDeltaDiffer()(changed[2]!.fields, admitted[2]!.fields, admitted[2]!.row).set
-        .activitySummary,
+      createSessionRowDeltaDiffer()(changed[2]!.fields, admitted[2]!.fields, admitted[2]!.row).patch
+        .set.activitySummary,
     ).toEqual({ state: "unavailable", canEnsure: true });
     // The row fact owner may publish equal JSON values in a different property order.
     const record = projection.describe(query)!;

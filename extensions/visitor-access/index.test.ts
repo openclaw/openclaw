@@ -874,9 +874,7 @@ describe("visitor-access plugin lifecycle", () => {
       expiresAt: START_MS,
     });
     expect(policy.emails()).toContain("pending@example.test");
-    expect(() => first.authorize({ ...visitor, emails: ["pending@example.test"] })).toThrow(
-      /active visitor invitation/,
-    );
+    expect(first.authorize({ ...visitor, emails: ["pending@example.test"] })).toBeUndefined();
     policy.controls.loseWriteResponse = false;
     await first.stop();
     expect(original.signal.aborted).toBe(true);
@@ -898,9 +896,7 @@ describe("visitor-access plugin lifecycle", () => {
         "expired@example.test",
         "pending@example.test",
       ]) {
-        expect(() => restarted.authorize({ ...visitor, emails: [email], assignedRole })).toThrow(
-          /active visitor invitation/,
-        );
+        expect(restarted.authorize({ ...visitor, emails: [email], assignedRole })).toBeUndefined();
       }
     }
     for (const profile of [
@@ -922,7 +918,7 @@ describe("visitor-access plugin lifecycle", () => {
     });
     expect(revoked.signal.aborted).toBe(true);
     expect(() => revoked.assertCurrent()).toThrow(/access ended/);
-    expect(() => restarted.authorize(visitor)).toThrow(/active visitor invitation/);
+    expect(restarted.authorize(visitor)).toBeUndefined();
     expect(await restarted.store.lookup("revoked@example.test")).toMatchObject({
       expiresAt: START_MS + 1_000,
     });
@@ -974,9 +970,7 @@ describe("visitor-access plugin lifecycle", () => {
     await registered.start();
     const signal = await entered.promise;
     const profile = { profileId: "visitor", assignedRole: "external-work" };
-    expect(() => registered.authorize({ ...profile, emails: ["expired@example.test"] })).toThrow(
-      /active visitor invitation/,
-    );
+    expect(registered.authorize({ ...profile, emails: ["expired@example.test"] })).toBeUndefined();
     const authority = registered.authorize({ ...profile, emails: ["active@example.test"] });
     expect(authority).toBeDefined();
     expect(() => authority?.assertCurrent()).not.toThrow();

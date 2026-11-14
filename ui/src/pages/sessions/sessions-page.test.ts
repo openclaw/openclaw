@@ -179,7 +179,7 @@ describe("sessions page lifecycle", () => {
     agentIdentity.invalidate(["main"]);
     await agentIdentity.ensure(["main"]);
     await page.updateComplete;
-    expect(page.querySelector(".session-link")?.textContent).toContain("After");
+    expect(page.querySelector(".session-key-display-name")?.textContent).toContain("After");
     const checkbox = page.querySelector<HTMLInputElement>(".session-data-row input")!;
     const menu = page.querySelector(".session-row-menu-trigger")!.closest("openclaw-tooltip")!;
     const english = [checkbox.getAttribute("aria-label"), menu.content];

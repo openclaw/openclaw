@@ -66,6 +66,17 @@ describe("limit reporting", () => {
     },
   );
 
+  it("never fails an update candidate build on a maintainer limit", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(
+      reportLimitViolations(
+        [{ file: "src/example.ts", title: "Line budget", message: "701 > 700" }],
+        { CI: "1", OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+      ),
+    ).toBe(false);
+    expect(error).toHaveBeenCalledWith("Warning: Line budget\n  src/example.ts: 701 > 700");
+  });
+
   it("escapes workflow commands and writes every warning to the job summary", () => {
     const summary = path.join(tempDirs.make("limit-summary-"), "summary.md");
     const error = vi.spyOn(console, "error").mockImplementation(() => {});

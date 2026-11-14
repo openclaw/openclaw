@@ -1,3 +1,0 @@
-159
-# Exact net counted test-line growth: candidate CLI 148, shared fixture 4, checklist 1, stable wrapper 6.
-# Covers interrupted ref recovery, late authority revocation, immutable state, bounded inventories, and helper-owned guidance.

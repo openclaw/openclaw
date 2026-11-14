@@ -1,2 +1,0 @@
-# Responsive toast wrapping, text-scale restoration, and card lifecycle coverage.
-30

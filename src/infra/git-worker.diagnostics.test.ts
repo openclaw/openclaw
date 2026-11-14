@@ -90,7 +90,14 @@ it.each([
   const idleMs = owner === "reads" ? 120_001 : 60_001;
   for (const [reason, retained, retire] of [
     ["idle_timeout", Number(floor), () => vi.advanceTimersByTimeAsync(idleMs)],
-    ["memory_pressure", 0, () => channel("openclaw.memory.critical").publish({})],
+    [
+      "memory_pressure",
+      0,
+      async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+        channel("openclaw.memory.critical").publish({});
+      },
+    ],
   ] as const) {
     const started = starts(),
       retired = exits(reason),

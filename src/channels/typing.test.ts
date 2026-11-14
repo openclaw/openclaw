@@ -42,6 +42,21 @@ function createTypingHarness(overrides: TypingHarnessOptions = {}) {
 }
 
 describe("createTypingCallbacks", () => {
+  it("contains a synchronous plugin stop failure from the TTL timer", async () => {
+    const error = new Error("Plugin invocation scope is closed");
+    const { callbacks, onStopError, stop } = createTypingHarness({
+      maxDurationMs: 1_000,
+      stop: () => {
+        throw error;
+      },
+    });
+    await callbacks.onReplyStart();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(onStopError).toHaveBeenCalledWith(error);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("coalesces explicit starts with a pending keepalive without shifting cadence", async () => {
     const { promise, resolve } = createDeferred();
     const { start, callbacks } = createTypingHarness({

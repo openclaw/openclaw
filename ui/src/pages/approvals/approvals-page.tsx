@@ -452,7 +452,8 @@ export function ApprovalsPage() {
           ) : null}
           {view().connected && !view().approvalsAccess ? (
             <InlineAlert tone="warning" role="status">
-              {t("common.disabled")} · <code>{APPROVAL_HISTORY_REQUIRED_SCOPE}</code>
+              {t("approvalPage.accessRequiredDescription")}{" "}
+              <code>{APPROVAL_HISTORY_REQUIRED_SCOPE}</code>
             </InlineAlert>
           ) : null}
           {view().approvalsAccess ? (

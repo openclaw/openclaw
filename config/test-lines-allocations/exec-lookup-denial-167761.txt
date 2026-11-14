@@ -1,2 +1,0 @@
-# Exec-tool regression distinguishes lookup failures from permission denials without spawning.
-33

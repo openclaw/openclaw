@@ -6,7 +6,7 @@ import { providerUsageForAccount } from "./model-auth.ts";
 registerModelControlsEnglish();
 
 export type ModelProviderAuthLabel = {
-  kind: "subscription" | "api" | "missing";
+  kind: "subscription" | "api" | "native" | "missing";
   label: string;
   detail?: string;
 };
@@ -32,6 +32,16 @@ export function describeModelProviderAuth(
       (showCredentials && provider.profiles.length > 0)) &&
       !provider.apiKey &&
       usableProfiles.length === 0);
+  if (!active && provider.nativeAuth && !(showCredentials && options.authProfileId)) {
+    const { kind, plan } = provider.nativeAuth;
+    return {
+      kind,
+      label:
+        kind === "subscription"
+          ? plan || t("chat.modelControls.subscription")
+          : t(kind === "api" ? "chat.modelControls.api" : "chat.modelControls.nativeLogin"),
+    };
+  }
   if (missing) {
     return { kind: "missing", label: t("modelSetup.candidates.signInNeeded") };
   }

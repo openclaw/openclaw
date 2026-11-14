@@ -1,2 +1,0 @@
-16
-# Extend the all-row sharing work-count regression to reject duplicate recipient vectors.

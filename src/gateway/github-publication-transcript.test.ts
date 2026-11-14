@@ -198,7 +198,11 @@ describe("GitHub publication transcript reporting", () => {
       };
       const entry = { sessionId: session.sessionId, updatedAt: Date.now() };
       await upsertSessionEntryCore({ ...session, env: state.env }, entry);
-      const result = { ...publishedResult, requestId: "private-result" };
+      const result = {
+        ...publishedResult,
+        requestId: "private-result",
+        publisher: { source: "agent-override" as const, accountId: 7, login: "agent-bot" },
+      };
       const loadRuntime = vi.fn(async () => {
         throw new Error("Private reports must not select native storage");
       });
@@ -220,6 +224,8 @@ describe("GitHub publication transcript reporting", () => {
         const reports = reportMessages(events, result.requestId);
         expect(reports).toHaveLength(1);
         expect(JSON.stringify(reports[0])).toContain(publishedResult.url);
+        // The account source reads the same as Settings → Profile → GitHub accounts.
+        expect(JSON.stringify(reports[0])).toContain("Using @agent-bot (Own account).");
         expect(markReportedAsync).toHaveBeenCalledTimes(2);
         expect(loadRuntime).not.toHaveBeenCalled();
         expect(sql.queries).toEqual([]);
@@ -385,6 +391,8 @@ describe("GitHub publication transcript reporting", () => {
         const events = await loadTranscriptEvents(identity);
         const messages = reportMessages(events, result.requestId, true);
         expect(messages).toHaveLength(1);
+        // A deferred report may be the only result after the agent has replied.
+        expect(messages[0]).not.toMatchObject({ message: { phase: "commentary" } });
         expect(JSON.stringify(messages[0])).toContain(visibleText);
         expect(markReportedAsync).toHaveBeenCalledWith(result.requestId);
       });

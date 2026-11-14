@@ -242,6 +242,7 @@ describe("plugin-owned CLI native tool policy", () => {
       agentAccountId: "bot-1",
       senderId: "user-1",
       senderIsOwner: true,
+      memberRoleIds: ["role-1"],
       currentThreadTs: "thread-1",
     });
     let decision: CliBackendToolPermissionResult | undefined;
@@ -295,6 +296,7 @@ describe("plugin-owned CLI native tool policy", () => {
         accountId: "bot-1",
         senderId: "user-1",
         senderIsOwner: true,
+        roleIds: ["role-1"],
       },
     });
     await vi.waitFor(() =>

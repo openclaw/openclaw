@@ -52,6 +52,34 @@ function emitSettlement(f: Fixture, cfg: OpenClawConfig = {}) {
   );
 }
 
+it("reads unchanged inboxes without preparing another recipient's unavailable target", () =>
+  withMentionInbox(async (f) => {
+    await f.post();
+    const carolSessionKey = "agent:main:dashboard:carol-mention";
+    await f.setSession({ displayName: "Carol review" }, carolSessionKey);
+    await f.post("carol-source", {
+      sessionKey: carolSessionKey,
+      recipientProfileIds: [f.carol.id],
+    });
+    expect(await f.items(f.carolClient)).toHaveLength(1);
+    sessionChanges.emit({ sessionKey: SESSION_KEY, agentId: "main", scope: "session-entry" });
+    const resolve = vi
+      .spyOn(sessionSharing, "resolveSessionSharingTargetAsync")
+      .mockRejectedValue(new Error("Unrelated session target is unavailable"));
+
+    expect(await f.call("mentions.list", {}, f.carolClient)).toMatchObject({
+      ok: true,
+      payload: { items: [{ sessionKey: carolSessionKey, messageId: "message-carol-source" }] },
+    });
+    expect(await f.call("mentions.list", {}, f.aliceClient)).toMatchObject({
+      ok: true,
+      payload: { items: [] },
+    });
+    expect(resolve).not.toHaveBeenCalled();
+    expectMentionError(await f.call("mentions.list", {}, f.bobClient), "UNAVAILABLE");
+    expect(resolve).toHaveBeenCalled();
+  }));
+
 it("recovers background views when a session is replaced during cold target preparation", () =>
   withMentionInbox(async (f) => {
     await f.post();

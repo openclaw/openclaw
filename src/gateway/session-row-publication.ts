@@ -69,6 +69,9 @@ export function prepareSessionRowPublicationView(
           retained.lists.clear();
           return;
         }
+        if (change.factsChanged === false) {
+          return;
+        }
         // Unaffected immutable vectors remain comparison witnesses after selection retires.
         retained.revision = undefined;
         for (const list of retained.lists.values()) {

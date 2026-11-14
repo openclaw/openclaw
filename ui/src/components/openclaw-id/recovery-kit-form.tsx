@@ -17,7 +17,6 @@ export function RecoveryKitForm(props: {
   onContinue: () => void;
   children: JSX.Element;
 }) {
-  let username!: HTMLInputElement;
   let retired = false;
   // A posted task, not a timer: native submit listeners have microtask checkpoints
   // between them. Finish the whole event before the flow unmounts and scrubs fields.
@@ -26,16 +25,11 @@ export function RecoveryKitForm(props: {
     const stop = listen(submitTask.port1, "message", () => props.onContinue(), { once: true });
     submitTask.port1.start();
     return () => {
+      retired = true;
       stop();
       submitTask.port1.close();
       submitTask.port2.close();
     };
-  });
-  // Scrub detached DOM too: password managers may retain references to these fields.
-  onSettled(() => () => {
-    retired = true;
-    username.value = "";
-    username.defaultValue = "";
   });
   return (
     <>
@@ -53,26 +47,37 @@ export function RecoveryKitForm(props: {
           submitTask.port2.postMessage(null);
         }}
       >
-        <label class="field">
-          <span>{t("openclawId.kitAccount")}</span>
-          <input
-            ref={(element) => (username = element)}
-            id="openclaw-recovery-kit-username"
-            name="username"
-            type="text"
-            autocomplete="username"
-            readonly
-            value={
-              props.accountEmail ||
-              t("openclawId.kitAccountFallback", {
-                name: clawNameFromHostname(props.details.hostname),
-              })
-            }
-          />
-        </label>
         {props.children}
       </form>
     </>
+  );
+}
+
+/** The visible account fact remains a native credential field for password managers. */
+export function RecoveryAccountField(props: { accountEmail?: string | null; hostname: string }) {
+  let input!: HTMLInputElement;
+  // Scrub detached DOM too: password managers may retain references to these fields.
+  onSettled(() => () => {
+    input.value = "";
+    input.defaultValue = "";
+  });
+  return (
+    <label class="oc-dialog__row">
+      <span class="oc-dialog__row-label">{t("openclawId.kitAccount")}</span>
+      <input
+        ref={(element) => (input = element)}
+        id="openclaw-recovery-kit-username"
+        class="openclaw-id-kit__account"
+        name="username"
+        type="text"
+        autocomplete="username"
+        readonly
+        value={
+          props.accountEmail ||
+          t("openclawId.kitAccountFallback", { name: clawNameFromHostname(props.hostname) })
+        }
+      />
+    </label>
   );
 }
 
@@ -94,7 +99,7 @@ export function RecoveryCodeField(props: { code: string }) {
           ref={(element) => (input = element)}
           id="openclaw-recovery-kit-password"
           name="password"
-          class="secret-reveal__code openclaw-id-kit__secret"
+          class="settings-input secret-reveal__code openclaw-id-kit__secret"
           type={shown() ? "text" : "password"}
           autocomplete="new-password"
           readonly

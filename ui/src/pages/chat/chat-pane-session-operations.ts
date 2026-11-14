@@ -248,7 +248,7 @@ export async function runHeaderSessionOperation(
       if (currentSession) {
         const patch = headerSessionMetadataPatch(action, currentSession);
         await patchSession(host, currentSession, patch, scope, {
-          sessionScope: action.kind === "toggle-unread",
+          sessionScope: action.kind !== "set-communication",
         });
       }
       break;

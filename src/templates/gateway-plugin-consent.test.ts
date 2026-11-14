@@ -13,6 +13,7 @@ const grants = {
   },
 };
 const review: TemplatePluginReview = {
+  source: "clawhub",
   actionId: "plugin:@example/sample-runner",
   pluginId: "sample-runner",
   ref: "@example/sample-runner",

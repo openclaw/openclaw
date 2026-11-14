@@ -16,6 +16,7 @@ import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { GatewayClient } from "./client.js";
 import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
 import {
   createSubagentModelConfig,
@@ -33,6 +34,11 @@ const HANDOFF = "Handoff: middle runner\nPending: leaf check";
 const PAUSE_NOTICE = "A child is paused awaiting a continuation";
 const FOLLOWUP = "Continue with the follow-up check after requester completion.";
 const CLAIM = "Wait for a message from the middle runner.";
+
+function waitForRun(client: GatewayClient, runId: string) {
+  // The transport must outlive the server's observation window.
+  return client.request("agent.wait", { runId, timeoutMs: 30_000 }, { timeoutMs: 35_000 });
+}
 
 function promptStrings(value: unknown): string[] {
   if (typeof value === "string") {
@@ -305,9 +311,9 @@ it("treats a subagent's waitFor yield for its own children as a child wait, not 
       idempotencyKey: `yield-wait-scope-${randomUUID()}`,
       deliver: false,
     });
-    await expect(
-      gateway.client.request("agent.wait", { runId: accepted.runId, timeoutMs: 30_000 }),
-    ).resolves.toMatchObject({ status: "ok" });
+    await expect(waitForRun(gateway.client, accepted.runId)).resolves.toMatchObject({
+      status: "ok",
+    });
 
     // The root is woken once, by the middle runner's completion carrying the leaf
     // answer, and is never told the runner is paused awaiting a sessions_send.
@@ -392,9 +398,9 @@ it.each([
         30_000,
         () => "requester never spawned the child",
       );
-      await expect(
-        gateway.client.request("agent.wait", { runId: bootstrap.runId, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
+      await expect(waitForRun(gateway.client, bootstrap.runId)).resolves.toMatchObject({
+        status: "ok",
+      });
       model.allowFollowup();
       child = await within(model.claimed, 30_000, () => "requester never claimed the child");
       expect(subagentRuns.getRequesterRunInstance(getSubagentRunByRunId(child.runId)!)?.runId).toBe(
@@ -403,9 +409,9 @@ it.each([
       observeChild();
       const finishRequester = async () => {
         model.finishRequester();
-        await expect(
-          gateway.client.request("agent.wait", { runId: requester.runId, timeoutMs: 30_000 }),
-        ).resolves.toMatchObject({ status: "ok" });
+        await expect(waitForRun(gateway.client, requester.runId)).resolves.toMatchObject({
+          status: "ok",
+        });
       };
       if (order === "before") {
         await finishRequester();
@@ -417,9 +423,9 @@ it.each([
           idempotencyKey: `message-wait-later-${randomUUID()}`,
           deliver: false,
         });
-        await expect(
-          gateway.client.request("agent.wait", { runId: later.runId, timeoutMs: 30_000 }),
-        ).resolves.toMatchObject({ status: "ok" });
+        await expect(waitForRun(gateway.client, later.runId)).resolves.toMatchObject({
+          status: "ok",
+        });
         const pending = getSubagentRunByRunId(child.runId)!;
         expect(subagentRuns.getRequesterRunInstance(pending)?.runId).toBe(requester.runId);
         const entry = await readSessionEntryReadOnlyInWorker({
@@ -429,9 +435,9 @@ it.each([
         expect(entry?.lastRunId).toBe(later.runId);
       }
       model.allowMessageWait();
-      await expect(
-        gateway.client.request("agent.wait", { runId: child.runId, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
+      await expect(waitForRun(gateway.client, child.runId)).resolves.toMatchObject({
+        status: "ok",
+      });
       await within(parked.promise, 5_000, () => "child never published its accepted message wait");
       expect(getSubagentRunByRunId(child.runId)).toMatchObject({
         pauseReason: "sessions_yield",
@@ -470,9 +476,9 @@ it.each([
         },
       );
       expect(followup.status).toBe("started");
-      await expect(
-        gateway.client.request("agent.wait", { runId: followup.runId, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
+      await expect(waitForRun(gateway.client, followup.runId)).resolves.toMatchObject({
+        status: "ok",
+      });
     } finally {
       stop();
       stopClosed();
@@ -570,9 +576,9 @@ it("closes a claimed child's message wait when its requester task finishes throu
       30_000,
       () => "requester never spawned its leaf",
     );
-    await expect(
-      gateway.client.request("agent.wait", { runId: bootstrap.runId, timeoutMs: 30_000 }),
-    ).resolves.toMatchObject({ status: "ok" });
+    await expect(waitForRun(gateway.client, bootstrap.runId)).resolves.toMatchObject({
+      status: "ok",
+    });
     model.allowFollowup();
     child = await within(model.claimed, 30_000, () => "requester never claimed the leaf follow-up");
     observeRows();
@@ -612,9 +618,9 @@ it("closes a claimed child's message wait when its requester task finishes throu
       message: FOLLOWUP,
       idempotencyKey: `successor-child-followup-${randomUUID()}`,
     });
-    await expect(
-      gateway.client.request("agent.wait", { runId: followup.runId, timeoutMs: 30_000 }),
-    ).resolves.toMatchObject({ status: "ok" });
+    await expect(waitForRun(gateway.client, followup.runId)).resolves.toMatchObject({
+      status: "ok",
+    });
   } finally {
     stopRows();
     stopSessions();

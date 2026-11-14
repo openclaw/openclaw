@@ -720,6 +720,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       mutable,
       initialStartupBindingHadInactiveThreadBootstrap,
       initialInactiveThreadBootstrapBindingForcedFreshStart,
+      // Prompt continuity must see a thread the token fuse rotated away above.
+      initialNativeThreadId: startupBindingBeforeRotation?.threadId,
     };
   } catch (error) {
     // The attempt owns this listener only after connection preparation returns.

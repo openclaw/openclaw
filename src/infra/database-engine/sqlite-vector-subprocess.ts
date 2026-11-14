@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 import { serialize } from "node:v8";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { BrokerChild } from "../../process/spawn-broker/child.js";
 import { getSpawnBroker } from "../../process/spawn-broker/context.js";
 import { spawnProcess } from "../../process/spawn-utils.js";
@@ -8,7 +9,7 @@ import { createPermitPool } from "../../shared/permit-pool.js";
 import { ensureSqliteLibrarySelected } from "../bun-sqlite-library.js";
 import {
   assertChildRuntimeAvailable,
-  classifyChildRuntimeFailure,
+  prepareChildRuntimeFailure,
 } from "../child-runtime-viability.js";
 import { runtimeProcessEntrypoints } from "../runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
@@ -224,7 +225,7 @@ async function runAdmittedVectorKnn<Row>(
     } catch (error) {
       releaseAdmission();
       throw (
-        classifyChildRuntimeFailure({ error }) ??
+        (await prepareChildRuntimeFailure({ error })) ??
         new VectorKnnSubprocessError(
           error instanceof Error ? error.message : String(error),
           "unavailable",
@@ -402,7 +403,7 @@ async function runAdmittedVectorKnn<Row>(
       requestTermination(new VectorKnnSubprocessError(error.message, "unavailable"));
     };
     child.once("error", onError);
-    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+    const finishClose = async (code: number | null, signal: NodeJS.Signals | null) => {
       closed = true;
       // close is the authoritative process/stdio completion; a recycled numeric
       // PID must not turn a successful query into a false cleanup failure.
@@ -411,13 +412,20 @@ async function runAdmittedVectorKnn<Row>(
         killExitTimer = undefined;
       }
       params.signal?.removeEventListener("abort", abort);
+      const operationError = nativeError ?? terminationReason;
+      const runtimeFailure = await prepareChildRuntimeFailure({
+        error: operationError,
+        stderr: Buffer.concat(stderrChunks).toString("utf8"),
+        signal,
+        started: ownedWorker.started,
+      }).catch((error: unknown) =>
+        operationError
+          ? new AggregateError([operationError, error], "Child runtime diagnosis failed", {
+              cause: operationError,
+            })
+          : toStringifiedError(error),
+      );
       settleCaller(() => {
-        const runtimeFailure = classifyChildRuntimeFailure({
-          error: nativeError ?? terminationReason,
-          stderr: Buffer.concat(stderrChunks).toString("utf8"),
-          signal,
-          started: ownedWorker.started,
-        });
         if (runtimeFailure) {
           reject(runtimeFailure);
           return;
@@ -434,6 +442,9 @@ async function runAdmittedVectorKnn<Row>(
           ),
         );
       });
+    };
+    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+      void finishClose(code, signal);
     };
     child.once("close", onClose);
     stdin.write(Buffer.concat([inputPayload, Buffer.from("\n")]));

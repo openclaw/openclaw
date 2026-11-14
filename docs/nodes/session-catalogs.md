@@ -35,6 +35,12 @@ rechecks current visibility and local session identity. The one-second budget
 covers provider discovery and queueing, not session-projection preparation or
 time spent waiting for the Gateway event loop.
 
+Unchanged transcript or automation notifications preserve local catalog entry order
+and reuse the frozen metadata snapshot. Committed entry changes refresh it. If multiple
+completed, plugin-owned sessions bind the same native source, the adoption helper
+chooses the greatest session key in binary (UTF-8) order, independent of notification
+or enumeration order. Explicit agent ownership still limits eligible sessions.
+
 Paired-node discovery reuses the current committed node inventory while pairing
 writes are queued. Committed pairing receipts refresh that inventory from the
 owner's prepared rows without another database read, including when a node's

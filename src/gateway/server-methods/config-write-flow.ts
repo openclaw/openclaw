@@ -42,6 +42,7 @@ import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { resolveSharedGatewaySessionGeneration } from "../server/ws-shared-generation.js";
+import { replyWithBillingRouteWarnings } from "./config-write-reply.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -314,28 +315,6 @@ async function collectConfigWriteBillingRouteWarnings(params: {
     params.context?.logGateway?.warn(`billing route comparison skipped: ${String(error)}`);
     return [];
   }
-}
-
-/**
- * Success replies carry and log the write's billing-route warnings. Error replies, including a
- * write that persisted but was not applied, moved no route and stay unchanged.
- */
-export function replyWithBillingRouteWarnings(
-  respond: RespondFn | undefined,
-  warnings: readonly string[],
-  context: GatewayRequestContext | undefined,
-): RespondFn {
-  return (...args) => {
-    const [ok, payload] = args;
-    if (ok && warnings.length > 0 && isRecord(payload)) {
-      for (const warning of warnings) {
-        context?.logGateway?.warn(warning);
-      }
-      args[1] = { ...payload, billingRouteWarnings: warnings };
-    }
-    // Forward the caller's exact arguments; responders and tests observe their arity.
-    respond?.(...args);
-  };
 }
 
 /** Persists a gateway config write and returns follow-up work that must run after response. */

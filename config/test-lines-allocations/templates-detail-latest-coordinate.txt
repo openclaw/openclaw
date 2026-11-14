@@ -1,2 +1,0 @@
-# Exact net regression growth: detail discovery may resolve latest while preview and Add remain pinned; public handler retains Labs recheck.
-3

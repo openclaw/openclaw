@@ -16,7 +16,7 @@
   z-index: 121;
   width: min(390px, calc(100vw - 16px));
   block-size: min(
-    560px,
+    500px,
     calc(
       100dvh -
         max(var(--sidebar-issues-panel-top, 8px), calc(8px + env(safe-area-inset-top, 0px))) -
@@ -242,6 +242,17 @@
   color: var(--text-strong);
   font-size: var(--control-ui-text-md);
   font-weight: 500;
+}
+
+.sidebar-issues-panel__empty-icon {
+  display: inline-flex;
+  margin-block-end: 12px;
+  color: var(--icon-decorative, var(--muted));
+}
+
+.sidebar-issues-panel__empty-icon svg {
+  width: 28px;
+  height: 28px;
 }
 
 .sidebar-issues-panel__overflow-cue {

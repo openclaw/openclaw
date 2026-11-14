@@ -34,7 +34,7 @@ import {
 type Listing = NonNullable<Awaited<ReturnType<typeof listOmlxModels>>>;
 
 function automaticModels(listing: Listing) {
-  return listing.provider.models.filter((model) =>
+  return listing.chatModels.filter((model) =>
     listing.rows.some(
       (row) =>
         row.model.id === model.id &&
@@ -71,6 +71,7 @@ function setupResult(
         providers: {
           [OMLX_PROVIDER_ID]: {
             ...provider,
+            models: listing.chatModels,
             // Auth patches deep-merge; explicit undefined removes prior endpoint credentials.
             auth: provider.auth,
             authHeader: provider.authHeader,
@@ -159,13 +160,13 @@ export async function configureOmlxInteractive(
     apiKey,
     replaceAuth: true,
   });
-  if (!listing?.provider.models.length) {
+  if (!listing?.chatModels.length) {
     throw new Error(unavailableMessage);
   }
   const modelId = await ctx.prompter.select({
     message: "oMLX chat model",
-    initialValue: selectPreferredLocalModelId(listing.provider.models.map((m) => m.id)),
-    options: listing.provider.models.map((model) => ({ value: model.id, label: model.name })),
+    initialValue: selectPreferredLocalModelId(listing.chatModels.map((m) => m.id)),
+    options: listing.chatModels.map((model) => ({ value: model.id, label: model.name })),
   });
   ctx.signal?.throwIfAborted();
   const credential = apiKey
@@ -236,7 +237,7 @@ async function prepareNonInteractive(ctx: NonInteractiveContext) {
     apiKey: resolved?.key ?? (replaceAuth ? "" : undefined),
     replaceAuth,
   });
-  if (!listing?.provider.models.some((model) => model.id === modelId)) {
+  if (!listing?.chatModels.some((model) => model.id === modelId)) {
     ctx.runtime.error(`${unavailableMessage} Requested model: ${modelId}.`);
     return null;
   }
@@ -280,6 +281,7 @@ export async function configureOmlxNonInteractive(
   }
   config.models.providers.omlx = {
     ...listing.provider,
+    models: listing.chatModels,
     auth: credential?.keyRef ? "api-key" : listing.provider.auth,
     apiKey:
       credential?.keyRef ??
@@ -391,13 +393,17 @@ async function listOmlxModels(params: {
       ...(request ? { request } : {}),
       models: existing?.models ?? [],
     };
-    // oMLX's inference catalog has no model-type field. Use the shared chat
-    // projection; embedding models remain explicitly selected by memory setup.
+    // Current oMLX lists model_type (llm/vlm/embedding/audio); the shared owner
+    // retains non-chat rows for pinned sessions, while setup offers chat only.
     provider.models = buildOpenAICompatibleLiveModels(
       result.rows.map(({ model }) => model),
       provider,
     );
-    return { provider, rows: result.rows };
+    return {
+      provider,
+      rows: result.rows,
+      chatModels: provider.models.filter((model) => model.inference?.chat !== false),
+    };
   } catch (error) {
     params.signal?.throwIfAborted();
     if (params.strict) {

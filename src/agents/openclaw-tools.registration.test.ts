@@ -514,7 +514,7 @@ describe("gateway client capability tool filtering", () => {
       JSON.stringify(
         await expectToolNamed(background, "github_identity_status").execute("background", {}),
       ),
-    ).toContain("Settings → Agents → Tools");
+    ).toContain("Settings → Profile → GitHub accounts");
   });
 
   it.each([

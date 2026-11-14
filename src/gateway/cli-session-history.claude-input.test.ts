@@ -106,7 +106,7 @@ function readSeed(
   lines: readonly unknown[] | undefined,
   options: { fromHome?: boolean; cliSessionId?: string } = {},
 ) {
-  return withClaudeProjectsDir(async ({ filePath, sessionId, homeDir }) => {
+  return withClaudeProjectsDir(async ({ filePath, sessionId, projectsDir }) => {
     if (lines) {
       await fs.writeFile(filePath, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
     } else {
@@ -114,7 +114,7 @@ function readSeed(
     }
     return readClaudeCliFallbackSeed({
       cliSessionId: options.cliSessionId ?? sessionId,
-      ...(options.fromHome ? {} : { homeDir }),
+      ...(options.fromHome ? {} : { projectsDir }),
     });
   });
 }

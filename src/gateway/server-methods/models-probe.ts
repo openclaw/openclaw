@@ -64,6 +64,7 @@ const PROBE_REASON_MESSAGES: Partial<Record<AuthProbeReasonCode, string>> = {
   missing_credential:
     "This credential is missing. Add it or remove the stale configuration, then retry.",
   expired: "This credential has expired. Sign in again or replace it, then retry.",
+  refresh_failed: "This sign-in could not be refreshed. Sign in again from Models, then retry.",
   invalid_expires:
     "This credential has invalid expiry metadata. Sign in again or replace it, then retry.",
   unresolved_ref:

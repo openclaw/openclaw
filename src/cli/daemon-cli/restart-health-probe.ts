@@ -206,14 +206,27 @@ function isGatewayAuthRejection(reason: string): boolean {
   );
 }
 
-function isVerifiedUserRequiredResponse(error: unknown): boolean {
-  // The exact close-reason allowlist does not include this sentence. The
-  // structured code is the Gateway's correlated refusal, so the probe can stop.
-  return (
-    isGatewayProtocolResponseError(error) &&
-    readConnectErrorDetailCode(error.details) ===
-      ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED
-  );
+// Mirrors the canonical auth-rejection classification in
+// packages/gateway-protocol/src/connect-error-details.ts (the `authRejected`
+// predicate used by the Gateway's own auth-failure message owner). The hand
+// copied text allowlist in isGatewayAuthRejection drifts whenever a new auth
+// failure reason is added, so prefer the structured code the Gateway already
+// correlates with each refusal. This is correlation, not authentication: a
+// local listener that echoes a request can return a matching response ID and an
+// AUTH_/DEVICE_AUTH_ detail code, and PendingGatewayRequests.handleResponse
+// constructs and marks that error without authenticating the listener through
+// this marker. The probe treats a correlated structured refusal (the Gateway
+// paired the error with this specific request) as a terminal auth rejection; it
+// does not treat the code as proof of Gateway identity.
+function isGatewayAuthRejectionError(error: unknown): boolean {
+  if (!isGatewayProtocolResponseError(error)) {
+    return false;
+  }
+  const code = readConnectErrorDetailCode(error.details);
+  if (code === null || code === undefined) {
+    return false;
+  }
+  return code.startsWith("AUTH_") || code.startsWith("DEVICE_AUTH_");
 }
 
 function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] {
@@ -376,7 +389,7 @@ export async function confirmGatewayReachable(params: {
     if (
       (reason && isGatewayAuthRejection(reason)) ||
       isGatewayCredentialsRequiredError(error) ||
-      isVerifiedUserRequiredResponse(error)
+      isGatewayAuthRejectionError(error)
     ) {
       result.authenticationError = formatGatewayRestartProbeError(reason ?? error);
     }

@@ -1,6 +1,10 @@
 import type { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import type { MemoryDatabaseAdmission } from "./manager-database-admission.js";
 import type {
+  MemoryEmbeddingCacheRetireCursor,
+  MemoryEmbeddingCacheRetirement,
+} from "./manager-embedding-cache-retire.js";
+import type {
   loadMemoryEmbeddingCache,
   MemoryEmbeddingCacheEvictionPreference,
 } from "./manager-embedding-cache.js";
@@ -121,6 +125,11 @@ export type MemoryPublicationOperations = {
       recount?: boolean;
     };
     output: MemoryPublicationResult<boolean>;
+  };
+  "cache.retire": {
+    input: MemoryEmbeddingCacheRetirement;
+    /** The next page cursor, or null once the fenced rows are exhausted. */
+    output: MemoryPublicationResult<MemoryEmbeddingCacheRetireCursor | null>;
   };
   "cache.stage.start": {
     input: { header: MemoryEmbeddingCacheHeader };

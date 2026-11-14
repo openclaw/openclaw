@@ -223,6 +223,8 @@ suite.define(() => {
         );
         const row = page.locator(`[data-session-key="${renameKey}"]`);
         await row.waitFor({ state: "visible", timeout: 10_000 });
+        await page.evaluate(() => document.fonts.ready);
+        const rowBounds = await row.boundingBox();
         if (surface === "menu") {
           await row.hover();
           await row.click({ button: "right" });
@@ -248,6 +250,7 @@ suite.define(() => {
         await name.waitFor({ state: "visible" });
         await expect.poll(() => name.inputValue()).toBe("Original name");
         if (surface !== "menu") {
+          expect(await row.boundingBox()).toEqual(rowBounds);
           expect(
             await name.evaluate((element: HTMLInputElement) => ({
               focused: element === document.activeElement,

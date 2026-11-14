@@ -1,2 +1,0 @@
-# Native signal publication and rollback fixtures exercise deferred ledger writes.
-3

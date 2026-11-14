@@ -158,17 +158,32 @@ Start a normal parent turn
 in the current runtime before requesting a fork. The native hook relay must be
 enabled and available; otherwise the request fails closed.
 The built-in `openclaw` runtime builds the fork request when `forkSession` is
-called. Normal model turns do not serialize or retain fork snapshots, copy
-published messages, or schedule fork expiry timers. Active forks read the running
-session's current context; completed sessions are reconstructed from the persisted
-model context, including compaction and the pinned system prompt and tool schemas.
+called. Normal model turns do not serialize fork snapshots, copy published
+messages, or schedule fork expiry timers; a running attempt keeps its last prepared
+provider request, without copying its items, until the run settles. A fork of a
+running session replays that request's instructions, tool schemas, and input items
+unchanged, then appends its own items rebuilt from the current context, on every
+provider API that supports forks. Rebuilt history can differ from what the parent sent (runtime-context
+order, rewritten tool-call IDs), so the replay keeps the fork on the parent's cached
+prefix. The fork sends its rebuilt request instead when the parent request holds an
+item the rebuilt context lacks, or is a continuation that carries only its delta.
+Active forks read the running session's current context; completed sessions are
+reconstructed from the persisted model context, including compaction and the pinned
+system prompt and tool schemas.
 Sessions with history can be forked after a restart without sending another normal
 message first. Routes without a persisted prompt pin rebuild their configured
 system prompt at fork time.
 Completed-session forks apply the configured channel history window and preserve
-compaction summaries. All built-in runtime forks omit the parent's prompt-cache
-identity, including forks of running sessions: they rebuild context independently
-and do not share the parent's complete request preparation.
+compaction summaries. Built-in runtime forks send the parent's prompt-cache
+identity: a running parent's exact `prompt_cache_key`, or the session's default
+key for a completed session. A run-only explicit key is not recorded after the run
+ends, so a completed-session fork falls back to the default key. Forks also apply
+the parent's configured tool policy to provider-hosted tools and derive request
+reasoning from the thinking level the way the parent's turn does; on Anthropic
+Messages and OpenAI Responses routes that level includes the agent and model
+thinking defaults.
+OpenAI serves a cached prefix only for the same key, hosted tools, and reasoning
+settings.
 
 The fork uses the same provider payload builders as a normal request. Unchanged
 prompt and tool prefixes can reuse the provider's prompt cache. Cache reuse is
@@ -185,15 +200,16 @@ result in the parent session.
 The request uses the current model's credentials, proxy, and TLS policy. Session
 read authority is checked immediately before network sends, including retries.
 Native ChatGPT forks use independent connections without consuming or replacing
-the parent's continuation. Supported APIs are OpenAI Responses (including native
-ChatGPT), Chat Completions, and Anthropic Messages. Other APIs, including Bedrock,
-fail before dispatch because their transports cannot enforce live fork authority.
-Local tool calls are denied, with at most two additional inference attempts.
-OpenAI forks set tool choice to `none`. Anthropic forks keep the parent's tool
-choice, because changing it invalidates the messages cache, unless the request
-carries a provider-hosted tool such as web search; then tool choice is `none`, so
-the provider never runs it. Live forks also send the parent's normalized tool-call
-IDs, so an Anthropic fork can reuse the parent's cached messages.
+the parent's continuation. Forks run on every model API whose transport sends
+through the guarded fetch, including Gemini and Ollama. Bedrock fails before
+dispatch, because the AWS SDK sends requests and retries through its own HTTP
+handler and cannot enforce live fork authority.
+Local tool calls are denied, with at most two additional inference attempts. On
+OpenAI Responses (including native ChatGPT), Chat Completions, and Anthropic
+Messages, tool choice is also set to `none` to prevent hosted tool execution. On
+Anthropic, changing tool choice invalidates the messages cache, while the tool and
+system caches can remain reusable. Other APIs keep the parent's tool choice; a fork
+whose request carries a provider-hosted tool on those APIs fails before it is sent.
 
 Read-only forks do not acquire workspace placement authority, write a transcript,
 or change the parent's history. Normal parent settlement preserves a fork's read
@@ -444,7 +460,15 @@ Plugin authors must not mutate values after handing them to the host, including
 nested objects and byte buffers. Produce a new value for a later update.
 Registered callables retain their instance scope, receiver binding, and lifecycle
 fencing. Plugin code runs inside a Gateway request scope established for its
-invocation.
+invocation. Post-turn `subagent_ended` and `subagent_delivery_target` dispatches
+acquire fresh admission for the registered plugin instance, independent of the
+finished turn. Removed or replaced instances
+and callbacks explicitly bound to a closed turn remain unavailable.
+
+Gateway access-policy authorization, resumption, and retained grant checks also
+acquire bounded admission on their original plugin instance, independently of the
+caller's turn. Quiesced or retired instances still refuse evaluation; a policy
+evaluation error means unavailable access and never grants permission.
 
 Tool factories and provider schema normalizers keep the same tool-object API.
 The host separates their definition data from executable callbacks: schemas and
@@ -788,6 +812,12 @@ Each participating writer names its affected scopes with
 `withSqliteDatabaseWriteScope`. Unscoped writes and schema changes invalidate
 all scope receipts. These tokens describe committed data, never effect authority.
 
+The process keeps one identity descriptor open per admitted database file, because
+closing it can release SQLite's POSIX locks. An owner that deletes a private database
+file it created calls `retireSqliteDatabaseAdmissionForPath(path)` from
+`sqlite-runtime` first, after every connection and worker using that file has closed.
+Otherwise the deleted file keeps its disk space until the process exits.
+
 `readSqliteDatabaseWriteRevision` from `sqlite-worker-runtime` reads the in-process
 write revision without SQL. PostgreSQL owners retaining a snapshot across their own
 commit capture this revision under the writer lock and accept only that commit's
@@ -1017,6 +1047,19 @@ declared breaking Plugin SDK revision. It is not a capability-free runtime path:
 current hosts supply this assertion, and bundled providers reject missing
 allocation authority before performing work. An older host must be updated to
 use these providers.
+
+## Harness request-policy denials
+
+A native harness that confirms a deployment model-request gate refusal can return
+`AgentHarnessModelRequestPolicyError` from `openclaw/plugin-sdk/agent-harness-runtime`
+as its prompt error. This host-owned error stops credential and model fallback and
+carries fixed operator guidance into lifecycle events and assistant history.
+Preserve the Error object through terminal emission; do not replace it with its
+message before the lifecycle owner receives it.
+
+Do not use this error for an ordinary upstream 401/403 or an unverified diagnostic
+code. Those remain provider failures. A code string alone does not establish a
+deployment-policy denial.
 
 ## Harness execution identity
 

@@ -1,2 +1,0 @@
-# Verify exact private worktree removal and owned-parent cleanup with real Git.
-10

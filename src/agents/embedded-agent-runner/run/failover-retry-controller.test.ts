@@ -232,10 +232,11 @@ it.each([-90_000, 0, 90_000])(
 
 it.each([
   ["fallback", undefined, 30_000, "rate_limit", 9_897_000, false],
-  ["replay-unsafe", false, 30_000, "rate_limit", 9_897_000, true],
+  ["replay-unsafe", false, 30_000, "rate_limit", 9_897_000, false],
   ["disabled cap", undefined, 0, "rate_limit", 9_897_000, true],
   ["absent cap", undefined, undefined, "rate_limit", 9_897_000, true],
   ["inside cap", undefined, 30_000, "rate_limit", 20_000, true],
+  ["replay-unsafe at cap", false, 30_000, "rate_limit", 30_000, true],
   ["non-rate limit", undefined, 30_000, "server_error", 60_000, true],
   ["unrepresentable", undefined, undefined, "rate_limit", Infinity, false],
 ] as const)(
@@ -247,20 +248,13 @@ it.each([
       runParams: { timeoutMs: 2_147_483_647 },
     });
     await checkRetry(
-      {
-        reason,
-        retryAfterMs,
-        maxRetryDelayMs,
-        failoverEligible,
-        onRetry,
-      },
+      { reason, retryAfterMs, maxRetryDelayMs, failoverEligible, onRetry },
       expected,
     );
     if (expected) {
       expect(sleep).toHaveBeenCalledWith(Math.max(1_000, retryAfterMs), undefined);
     } else {
-      expect(sleep).not.toHaveBeenCalled();
-      expect(onRetry).not.toHaveBeenCalled();
+      expectNoRetry();
     }
   },
 );

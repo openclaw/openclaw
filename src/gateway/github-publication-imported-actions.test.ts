@@ -6,9 +6,16 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { SessionGitHubActionResultSchema } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import {
+  createAdmittedGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
+import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js";
+import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
 import { createRequesterPublicationFixture } from "./github-publication-requester.test-support.js";
 import {
@@ -18,6 +25,8 @@ import {
   SESSION_ID,
   SESSION_KEY,
 } from "./github-publication.test-support.js";
+import { prepareAdmission } from "./mcp-http-request.test-support.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 
 const mocks = githubPublicationTestMocks();
 const headCommit = "a".repeat(40);
@@ -206,6 +215,39 @@ describe("actions on the imported original PR", () => {
     creatorEmail: "publication-guest@example.test",
     sandbox: "required",
     realWorktree: true,
+  });
+
+  it("refuses native read-only edit of the bound PR without a selected linked account", async () => {
+    const f = await fixture();
+    const runId = randomUUID();
+    const admission = prepareAdmission(runId, "source-less-native-read-control");
+    const work = new AsyncWorkScope();
+    try {
+      const admitted = await admission.admit("gateway", runId);
+      const context = createDirectChatContext({
+        ...f.maintainerSource.context,
+        githubPublicationService: f.coordinator,
+        trackExecution: work.track.bind(work),
+      });
+      bindGatewayContextResolver(admitted, () => context);
+      const caller = createAdmittedGatewayToolCallerIdentity({
+        admittedRunContext: admitted,
+        agentId: "main",
+        sessionKey: SESSION_KEY,
+      });
+      expect(caller?.operatorAuthority).toBeUndefined();
+      expect(caller?.requesterOrigin).toBeUndefined();
+      await expect(
+        withGatewayToolCallerIdentity(caller, () =>
+          createGitHubPublishTool().execute("native-read-control", { action: "edit" }),
+        ),
+      ).rejects.toThrow("verified linked GitHub account");
+      expect(f.writes).toEqual([]);
+      expect(f.externalWrites).toEqual([]);
+    } finally {
+      admission.close();
+      await work.drain();
+    }
   });
 
   it.each(["guest", "admin"] as const)(
@@ -565,6 +607,47 @@ describe("actions on the imported original PR", () => {
       createdActor: { id: f.guestProfile },
       worktree: { githubPullRequest: f.binding },
     });
+  });
+
+  it("lets a full-write maintainer land an explicit PR from an unbound session", async () => {
+    const f = await fixture(false, false, false);
+    f.state.user = { id: 999, login: "other-contributor" };
+    const worktree = structuredClone(loadSessionEntryReadOnly(f.scope)?.worktree);
+    await expect(
+      f.invoke("guest", { action: "inspect", pullRequestUrl: url }, undefined, { raw: true }),
+    ).rejects.toThrow(/scope|permission/iu);
+    await expect(
+      f.invoke("admin", {
+        action: "merge",
+        pullRequestUrl: url,
+        publishingSessionKey: SESSION_KEY,
+        mergeMethod: "squash",
+        expectedHeadCommit: headCommit,
+      }),
+    ).rejects.toThrow(/not both/);
+    const observed = await f.invoke("admin", { action: "inspect", pullRequestUrl: url });
+    expect(observed.details).toMatchObject({
+      pullRequest: { url, repository: "example/repository", branch: "topic" },
+      headCommit,
+      state: "draft",
+    });
+    await f.invoke("admin", {
+      action: "ready",
+      pullRequestUrl: url,
+      expectedHeadCommit: headCommit,
+    });
+    const merged = await f.invoke("admin", {
+      action: "merge",
+      pullRequestUrl: url,
+      mergeMethod: "squash",
+      expectedHeadCommit: headCommit,
+    });
+    expect(merged.details).toMatchObject({ state: "merged", mergeCommit: "e".repeat(40) });
+    expect(f.writes.map((write) => write.endpoint)).toEqual([
+      "graphql",
+      "repos/example/repository/pulls/7/merge",
+    ]);
+    expect(loadSessionEntryReadOnly(f.scope)?.worktree).toEqual(worktree);
   });
 
   type Fixture = Awaited<ReturnType<typeof fixture>>;

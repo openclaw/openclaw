@@ -20,6 +20,7 @@ import {
   resolveSessionAgentIds,
 } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
+import { readGitHubPublicationConfiguration } from "./github-tool-identity-config.js";
 import {
   resolveOpenClawPluginToolsForOptions,
   resolveOpenClawPluginToolsForOptionsAsync,
@@ -99,7 +100,6 @@ import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
-export { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 export async function createOpenClawToolsAsync(
   options?: OpenClawToolsOptions,
   preparation: ToolConstructionPreparationOptions = {},
@@ -241,6 +241,9 @@ function* createOpenClawToolsSteps(
     nativeChannelId: options?.nativeChannelId,
     currentChannelId: options?.currentChannelId,
     currentMessagingTarget: options?.currentMessagingTarget,
+    ...(options?.currentMessageId !== undefined
+      ? { currentMessageId: String(options.currentMessageId) }
+      : {}),
     sessionKey: widgetSessionKey,
   };
   const widgetPresenters = resolveWidgetPresenters().map((registration) => registration.presenter);
@@ -481,6 +484,12 @@ function* createOpenClawToolsSteps(
       (options?.runSessionKey ?? options?.agentSessionKey) ? options?.sessionId : undefined,
     agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
     requesterTurnRunId: options?.runId,
+    // A scheduled owner run carries no sender bit; its children record the owner
+    // bit the occurrence was admitted with, as the run's own memory audience does.
+    senderIsOwner: scheduledTargets?.spawnSenderIsOwner ?? options?.senderIsOwner,
+    ...(scheduledTargets?.spawnSenderIsOwner
+      ? { assertSenderOwnerCurrent: scheduledTargets.assertOwnerCurrent }
+      : {}),
     completionOwnerKey: options?.runSessionKey,
     currentMessagingTarget: options?.currentMessagingTarget ?? options?.currentChannelId,
     currentChannelId: options?.nativeChannelId ?? options?.currentChannelId,
@@ -490,7 +499,9 @@ function* createOpenClawToolsSteps(
     workspaceDir: spawnWorkspaceDir,
   };
   const tools: AnyAgentTool[] = [
-    ...createInstalledSkillTools(options?.installedSkills ?? []),
+    ...createInstalledSkillTools(options?.installedSkills ?? [], {
+      modelContextWindowTokens: options?.modelContextWindowTokens,
+    }),
     createDashboardTool({
       agentSessionKey:
         scheduledTargets?.boardSessionKey ?? options?.runSessionKey ?? options?.agentSessionKey,
@@ -582,6 +593,12 @@ function* createOpenClawToolsSteps(
       ? createGitHubPublishTool({
           ...options,
           publicationAvailable: options.githubPublicationAvailable,
+          observationOnly:
+            options.githubPublicationConfigurationAware === true &&
+            readGitHubPublicationConfiguration({
+              config: availabilityConfig ?? {},
+              agentId: sessionAgentId,
+            }) === "unconfigured",
           preview: options.githubPublicationPreview,
         })
       : null,

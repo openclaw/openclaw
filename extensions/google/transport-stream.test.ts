@@ -1003,7 +1003,7 @@ describe("google transport stream", () => {
     expect(payload.toolConfig).toBeUndefined();
     expect((payload.generationConfig as { thinkingConfig?: unknown }).thinkingConfig).toEqual({
       includeThoughts: true,
-      thinkingLevel: "HIGH",
+      thinkingLevel: "MEDIUM",
     });
     expect(result.api).toBe("google-generative-ai");
     expect(result.provider).toBe("google");

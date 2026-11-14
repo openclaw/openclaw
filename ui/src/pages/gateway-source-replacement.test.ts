@@ -170,6 +170,7 @@ function contextWithClient(
     runtimeConfig: {
       state: { configSnapshot: {}, configLoading: false },
       ensureLoaded: vi.fn(async () => undefined),
+      ensureDisplayLoaded: vi.fn(async () => undefined),
       subscribe,
     },
     overlays: {

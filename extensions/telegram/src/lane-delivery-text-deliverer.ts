@@ -280,7 +280,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams): 
       }
       const messageId = stream.messageId();
       if (typeof messageId !== "number") {
-        if (finalizePreview && stream.sendMayHaveLanded()) {
+        // A lost send of earlier preview text cannot stand in for this final; send it normally.
+        if (finalizePreview && stream.sendMayHaveLanded(previewText)) {
           const retainedDelivery = lane.retainedPromptContextPages.length
             ? createAcceptedChannelDeliveryResult({
                 results: lane.retainedPromptContextPages.map(({ messageId: acceptedPageId }) => ({

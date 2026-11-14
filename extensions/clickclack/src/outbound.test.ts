@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   reconcileClickClackUnknownSend,
@@ -26,17 +29,6 @@ const loadOutboundMediaFromUrl = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/outbound-media", () => ({ loadOutboundMediaFromUrl }));
 
-vi.mock("./accounts.js", () => ({
-  resolveClickClackAccount: () => ({
-    baseUrl: "https://clickclack.example",
-    apiEndpoint: "http://127.0.0.1:8484",
-    token: "test-token-placeholder",
-    workspace: "wsp_1",
-    accountId: "default",
-    config: {},
-  }),
-}));
-
 vi.mock("./http-client.js", () => ({
   createClickClackClient: (options: unknown) => {
     createClientOptions(options);
@@ -59,7 +51,16 @@ vi.mock("./resolve.js", () => ({
   resolveChannelId: async (_client: unknown, _workspaceId: string, id: string) => id,
 }));
 
-const cfg = {} as CoreConfig;
+const cfg: CoreConfig = {
+  channels: {
+    clickclack: {
+      baseUrl: "https://clickclack.example",
+      apiBaseUrl: "http://127.0.0.1:8484",
+      token: "test-token-placeholder",
+      workspace: "wsp_1",
+    },
+  },
+};
 
 function sendTestMedia(overrides: Partial<Parameters<typeof sendClickClackMedia>[0]> = {}) {
   return sendClickClackMedia({
@@ -387,5 +388,33 @@ describe("reconcileClickClackUnknownSend", () => {
       retryable: false,
     });
     expect(attachUpload).not.toHaveBeenCalled();
+  });
+});
+
+it("sends with current file credentials without synchronous filesystem reads", async () => {
+  await withTempDir("clickclack-send-credential-", async (directory) => {
+    const tokenFile = path.join(directory, "token");
+    await fs.promises.writeFile(tokenFile, "first-placeholder");
+    const config: CoreConfig = {
+      channels: { clickclack: { ...cfg.channels!.clickclack!, tokenFile } },
+    };
+    const send = () => sendClickClackText({ cfg: config, to: "channel:general", text: "hello" });
+    await send();
+    const reads = vi.spyOn(fs, "lstatSync");
+    try {
+      await send();
+      expect(reads).not.toHaveBeenCalled();
+      expect(createClientOptions).toHaveBeenLastCalledWith(
+        expect.objectContaining({ token: "first-placeholder" }),
+      );
+      await fs.promises.writeFile(tokenFile, "second-placeholder");
+      await send();
+      expect(reads).not.toHaveBeenCalled();
+      expect(createClientOptions).toHaveBeenLastCalledWith(
+        expect.objectContaining({ token: "second-placeholder" }),
+      );
+    } finally {
+      reads.mockRestore();
+    }
   });
 });

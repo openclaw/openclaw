@@ -98,6 +98,7 @@ beforeEach(() => {
     workspaceDir: "/tmp/workspace",
     config,
     authStore: store,
+    authModes: {},
     metadataSnapshot: createPluginMetadataSnapshotFixture(),
     isCurrent: () => true,
   });

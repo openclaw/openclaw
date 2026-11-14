@@ -85,7 +85,7 @@ suite.define(() => {
       await expect.poll(() => activity.textContent()).toContain("Never");
       await expect
         .poll(() => page.locator(".cron-empty-state").textContent())
-        .toContain("No payload runs yet");
+        .toContain("No run history to show");
     });
   });
 });

@@ -70,6 +70,7 @@ export function projectCronRunQueueRequests(
             : "scheduled",
         onExitSchedule: options.onExit?.schedule,
         event: eventTransferred ? undefined : options.event,
+        evaluateTrigger: !isImmediateCronRunMode(options.mode) || options.evaluateTrigger === true,
       }))
   );
 }

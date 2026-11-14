@@ -534,44 +534,90 @@ it("preserves canonical task facts on v3 and keeps chat references chat-only", (
       provider.recommendedModels ? { recommendedModels: [] } : {},
     );
   }
-  const warn = vi.fn();
-  const invalid = {
-    ...native,
-    id: "invalid",
-    inference: { chat: false, decision: { protocol: "bad" } },
-  };
-  const salvaged = sanitizeV3({ ...bundle, models: [native, invalid, dual] }, warn);
-  expect(salvaged.models).toEqual([native, dual]);
-  expect(warn).toHaveBeenCalledTimes(1);
-  expect(() => parseV3({ ...bundle, models: [invalid] })).toThrow();
   expect(() => parseV3({ ...bundle, schemaVersion: 4 })).toThrow();
 });
 
-it("reads v3 fields added by newer publishers without dropping rows", () => {
-  const known = { ...modelV2("future"), inference: { chat: true } };
+it("drops unknown v3 keys and degrades unknown values to the narrowest field", () => {
+  const priced = { ...knownPrice, input: 1, output: 2 };
+  const unknownPrice = { status: "unknown" };
+  const decision = { protocol: "fixture.decisions", input: ["text"] };
+  const row = (id: string, patch: Record<string, unknown> = {}) => ({
+    ...modelV2(id, "first", priced),
+    ...patch,
+  });
+  const upstream = { input: 1, output: 2, source: "native" };
+  const window = { id: "w", label: "W", contextWindow: 9 };
   const newer = {
     ...validBundleV2,
     schemaVersion: 3,
     futureEnvelope: 1,
-    providers: { first: { futureProvider: true } },
-    models: [
-      {
-        ...known,
-        futureRow: { unit: "image" },
-        pricing: { status: "unknown", futureRate: 1 },
-        inference: { chat: true, music: { input: ["text"] } },
+    providers: {
+      first: {
+        api: "future-api",
+        defaultModel: null,
+        recommendedModels: ["chat", "chat"],
+        futureProvider: true,
       },
+      second: {},
+    },
+    models: [
+      // Unknown keys at any depth are dropped silently.
+      row("chat", {
+        futureRow: { unit: "image" },
+        pricing: { ...priced, futureRate: 1 },
+        inference: { chat: true, music: { input: ["text"] } },
+      }),
+      row("per-image", {
+        inference: { chat: false },
+        pricing: { ...knownPrice, unit: "image", perImage: 0.04 },
+      }),
+      row("future-status", { pricing: { status: "tiered" } }),
+      row("eur", { pricing: { ...priced, currency: "EUR" } }),
+      row("negative", { pricing: { ...priced, input: -1 } }),
+      row("retired", { status: "retired" }),
+      row("future-decision", {
+        inference: { chat: false, decision: { ...decision, input: ["audio"] } },
+      }),
+      row("nulls", { name: null, statusReason: null, pricing: { ...priced, source: null } }),
+      row("future-api", { api: "future-api" }),
+      row("windows", {
+        contextWindow: 9,
+        contextWindows: Array.from({ length: 17 }, () => window),
+        contextWindowDefault: "w",
+      }),
     ],
+    upstreamPricing: {
+      "vendor/kept": upstream,
+      "vendor/not-passthrough": { ...upstream, passthroughOnly: false },
+      "no-slash": upstream,
+    },
+    providerPricing: { "vendor/negative": { ...upstream, input: -1 } },
   };
-  // The publisher still rejects them, so a typo cannot reach the hosted feed.
-  expect(() => parseV3(newer)).toThrow();
   const warn = vi.fn();
-  expect(sanitizeV3(newer, warn)).toEqual({
-    ...validBundleV2,
-    schemaVersion: 3,
-    providers: { first: {} },
-    models: [known],
-  });
+  const bundle = sanitizeV3(newer, warn);
+  expect(bundle.providers).toEqual({ first: { recommendedModels: ["chat"] }, second: {} });
+  expect(bundle.models).toEqual([
+    row("chat", { inference: { chat: true } }),
+    row("per-image", { inference: { chat: false }, pricing: unknownPrice }),
+    row("future-status", { pricing: unknownPrice }),
+    row("eur", { pricing: unknownPrice }),
+    row("negative", { pricing: unknownPrice }),
+    // Deprecated rows stay selectable for configured refs but leave pickers and utility defaults.
+    row("retired", { status: "deprecated" }),
+    row("future-decision", { inference: { chat: false } }),
+    row("nulls"),
+    row("windows", { contextWindow: 9 }),
+  ]);
+  expect(bundle.upstreamPricing).toEqual({ "vendor/kept": upstream });
+  expect(bundle.providerPricing).toEqual({});
+  expect(warn).toHaveBeenCalledTimes(13);
+  warn.mockClear();
+  expect(sanitizeV3(bundle, warn)).toEqual(bundle);
   expect(warn).not.toHaveBeenCalled();
+  // The publisher schema stays strict, and frozen v2 readers still reject the same envelope.
   expect(newer.models[0]).toHaveProperty("futureRow");
+  for (const model of [newer.models[0], newer.models[6]]) {
+    expect(() => parseV3({ ...validBundleV2, schemaVersion: 3, models: [model] })).toThrow();
+  }
+  expect(() => sanitizeV2({ ...newer, schemaVersion: 2, models: [row("chat")] })).toThrow();
 });

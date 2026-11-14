@@ -45,7 +45,7 @@ import {
 import { readSessionTranscriptHydrationRequest } from "./session-transcript-hydration-read.worker.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import * as targetWorker from "./session-transcript-read-worker-runtime.js";
-import { historyLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { historyLane, sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
 const events = [
@@ -375,19 +375,17 @@ it.for([false, true])(
     const { append } = await seedDatabase(scope);
     const entered = createDeferred();
     const release = createDeferred();
-    const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+    const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
     let held = false;
-    const delayed = vi
-      .spyOn(targetDiscoveryLane.pool, "run")
-      .mockImplementation(async (...args) => {
-        const reply = await run(...args);
-        if (!held) {
-          held = true;
-          entered.resolve();
-          await release.promise;
-        }
-        return reply;
-      });
+    const delayed = vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
+      const reply = await run(...args);
+      if (!held) {
+        held = true;
+        entered.resolve();
+        await release.promise;
+      }
+      return reply;
+    });
     const consume = vi.fn(
       (
         prepared: import("./session-transcript-worker.types.js").PreparedSessionTranscriptHydration,

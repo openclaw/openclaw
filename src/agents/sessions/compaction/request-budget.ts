@@ -1,38 +1,26 @@
+import {
+  commitCompactionSummary,
+  resolveSummaryFloorChars,
+} from "../../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
+import type { SessionTreeEntry } from "../../../../packages/agent-core/src/harness/types.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
 import {
+  SAFETY_MARGIN,
   createFreshLlmBoundaryTokenEstimator,
+  estimateCompactionHistoryTokens,
+  estimateVariableRequestTokens,
   type FixedRequestTokenPressure,
 } from "../context-token-pressure.js";
+import type {
+  CompactionRequestBudget,
+  CompactionRequestConstraints,
+} from "./request-budget.types.js";
 
-/** Ephemeral foreground facts; a separately routed summarizer cannot reconstruct these. */
-export type CompactionRequestBudget = Readonly<{
-  contextWindow: number;
-  reserveTokens: number;
-  fixedTokens: number;
-  pendingTokens: number;
-  /** Known queue reservation, replaced by the SDK's projected queue at submission. */
-  pendingQueuedContextTokens?: number;
-  /** Overlap credit applies only to the user body, never newly added context. */
-  pendingUserTokens?: number;
-  pendingUserIdempotencyKey?: string;
-}>;
-
-/** Input preservation exists before the foreground prompt can supply a token budget. */
-export type CompactionRequestConstraints = Readonly<{
-  requestBudget?: CompactionRequestBudget;
-  /** Source of the active run, including after its input has been processed. */
-  requestFromEntryId?: string;
-  pendingUserEntryId?: string;
-}>;
-
+const log = createSubsystemLogger("agents/session");
 const promptRequestBudgets = new WeakMap<PromptOptions, CompactionRequestBudget>();
-
-function estimateVariableRequestTokens(messages: AgentMessage[], prompt: string): number {
-  const estimateTokens = createFreshLlmBoundaryTokenEstimator({});
-  return estimateTokens({ messages, prompt }) - estimateTokens({ messages: [], prompt: "" });
-}
 
 /** Bind prepared foreground facts to the exact owned prompt invocation, outside public options. */
 export function attachPromptCompactionRequestBudget(
@@ -132,32 +120,8 @@ export function withCompactionQueuedContext(
   };
 }
 
-export function estimateCompactionHistoryTokens(
-  messages: AgentMessage[],
-  budget?: CompactionRequestBudget,
-): number {
-  // A key identifies overlapping input, not proof that its content is replaced.
-  // A retained carrier can reuse a larger canonical user, so charge the larger representation.
-  const pending =
-    budget?.pendingTokens && budget.pendingUserIdempotencyKey
-      ? messages.findLast(
-          (message) =>
-            message.role === "user" &&
-            "idempotencyKey" in message &&
-            message.idempotencyKey === budget.pendingUserIdempotencyKey,
-        )
-      : undefined;
-  const overlap = pending
-    ? Math.min(
-        estimateCompactionHistoryTokens([pending]),
-        budget?.pendingUserTokens ?? budget?.pendingTokens ?? 0,
-      )
-    : 0;
-  return estimateVariableRequestTokens(messages, "") - overlap;
-}
-
 export function estimateCompactedRequestTokens(
-  messages: AgentMessage[],
+  messages: Iterable<AgentMessage>,
   budget: CompactionRequestBudget,
 ): number {
   return (
@@ -165,8 +129,55 @@ export function estimateCompactedRequestTokens(
   );
 }
 
-export function assertCompactionRequestCanFit(
+/**
+ * Summary tokens a replacement without a foreground budget may spend in the window beside its
+ * fixed prompt, tools and retained history, in the same units as the foreground summary budget.
+ * An unknown window yields no limit.
+ */
+export function replayTokenBudget(
+  session: {
+    agent: {
+      state: Pick<Parameters<typeof createCompactionRequestBudget>[0], "systemPrompt" | "tools">;
+    };
+  },
+  model: { contextWindow?: number },
+  settings: { reserveTokens: number },
   messages: AgentMessage[],
+): number | undefined {
+  if (!model.contextWindow || model.contextWindow <= 0) {
+    return undefined;
+  }
+  const { systemPrompt, tools } = session.agent.state;
+  const budget = createCompactionRequestBudget({
+    contextWindow: 0,
+    reserveTokens: 0,
+    systemPrompt,
+    tools,
+  });
+  const remaining =
+    model.contextWindow - settings.reserveTokens - estimateCompactedRequestTokens(messages, budget);
+  // The estimator above carries the safety margin; the summary is fitted without it.
+  return Math.floor(remaining / SAFETY_MARGIN) - 1;
+}
+
+/** Commits the harness summary; a floor the token budget shrank or dropped gets one warning. */
+export function commitSessionCompactionSummary(
+  result: Parameters<typeof commitCompactionSummary>[0],
+  preparation: Parameters<typeof commitCompactionSummary>[1],
+  withoutSummary: boolean,
+  replayBudget: () => number | undefined,
+): string {
+  return commitCompactionSummary(result, preparation, withoutSummary, replayBudget, (reduction) =>
+    log.warn(
+      `[compaction] summary floor ${reduction.keptChars ? "shrunk" : "dropped"} for the ` +
+        `${reduction.source} token budget: kept ${reduction.keptChars}/${reduction.floorChars} ` +
+        `floor chars; summaryTokenBudget=${reduction.tokenBudget}`,
+    ),
+  );
+}
+
+export function assertCompactionRequestCanFit(
+  messages: Iterable<AgentMessage>,
   budget: CompactionRequestBudget | undefined,
   hasCompactableHistory: boolean,
 ): void {
@@ -186,7 +197,7 @@ export function assertCompactionRequestCanFit(
 
 export function resolveCompactionRetentionBudget(
   budget: CompactionRequestBudget,
-  messages: AgentMessage[],
+  messages: Iterable<AgentMessage>,
   maxSummaryChars = MAX_COMPACTION_SUMMARY_CHARS,
 ) {
   const preferredTokens =
@@ -198,7 +209,8 @@ export function resolveCompactionRetentionBudget(
   const summaryTokens = estimateCompactionHistoryTokens([
     {
       role: "compactionSummary",
-      summary: "x".repeat(maxSummaryChars),
+      // The cut keeps room for the floor committed beside a full summary.
+      summary: "x".repeat(maxSummaryChars + resolveSummaryFloorChars(maxSummaryChars)),
       tokensBefore: 0,
       timestamp: 0,
     },
@@ -212,4 +224,28 @@ export function resolveCompactionRetentionBudget(
         : maxTokens,
     reserveTokens: summaryTokens,
   };
+}
+
+/** Locate the admitted pending request before choosing a compaction cut. */
+export function resolveCompactionPendingEntryIndex(
+  pathEntries: SessionTreeEntry[],
+  constraints: CompactionRequestConstraints,
+  pendingUserIdempotencyKey?: string,
+): number {
+  const pendingEntryIndex =
+    constraints.pendingUserEntryId || pendingUserIdempotencyKey
+      ? pathEntries.findLastIndex(
+          (entry) =>
+            entry.type === "message" &&
+            entry.message.role === "user" &&
+            (constraints.pendingUserEntryId
+              ? entry.id === constraints.pendingUserEntryId
+              : "idempotencyKey" in entry.message &&
+                entry.message.idempotencyKey === pendingUserIdempotencyKey),
+        )
+      : -1;
+  if (constraints.pendingUserEntryId && pendingEntryIndex < 0) {
+    throw new Error("Compaction cannot find the admitted pending user request.");
+  }
+  return pendingEntryIndex;
 }

@@ -1,2 +1,0 @@
-# Production Git matcher: original acceptance, canonical cherry/PR origins, whitespace and unrelated trailers.
-57

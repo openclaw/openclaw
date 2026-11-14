@@ -74,6 +74,7 @@ import {
   createModifiedMemoryFlushPlan,
   createMemoryRunEntryMockImplementation,
   createSessionEntry,
+  registerClaudeCliBackend,
   modelRoutingProvenance,
   runSelectedMemoryModel,
   seedMemoryAccountingTranscript,
@@ -163,20 +164,6 @@ async function runSessionCompactionIfNeeded(params: PreflightCompactionTestParam
 
 function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
   registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
-}
-
-function registerClaudeCliBackend(ownsNativeCompaction = false): void {
-  cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-        ownsNativeCompaction,
-      },
-    ],
-  });
 }
 
 type TestReplyOperation = ReplyOperation & {
@@ -810,25 +797,23 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
   });
 
-  it("passes persisted session policy and runtime policy key to preflight compaction", async () => {
-    registerMemoryFlushPlanResolverForTest(() =>
-      createModifiedMemoryFlushPlan({ softThresholdTokens: 1, reserveTokensFloor: 0 }),
-    );
-    const sessionEntry: SessionEntry = createFreshSessionEntry({
-      totalTokens: 120,
+  it("passes persisted session policy, runtime policy key and turn skills to preflight compaction", async () => {
+    // The stored snapshot drops runtime catalogs; compaction must reuse this turn's hydrated one.
+    const persistedSkills = { prompt: "selected", skills: [{ name: "selected" }] };
+    const turnSkills = { ...persistedSkills, resolvedSkills: [] };
+    const { sessionEntry, run } = await createRequiredPreflight({
       permissionMode: "full",
       sessionRoot: "/tmp/workspace",
+      skillsSnapshot: persistedSkills,
     });
-
-    await runDefaultPreflight(sessionEntry, {
+    await run({
       followupRun: createTestFollowupRun({
         sessionId: "session",
         sessionKey: "agent:main:main",
         cwd: "/tmp/task-repo",
         runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+        skillsSnapshot: turnSkills,
       }),
-      modelContextTokens: 100,
-      sessionKey: "agent:main:main",
       runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
     });
 
@@ -838,6 +823,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.cwd).toBe("/tmp/task-repo");
     expect(compactCall.sandboxSessionKey).toBe("agent:main:telegram:default:direct:12345");
     expect(compactCall.sessionEntry).toBe(sessionEntry);
+    expect(compactCall.skillsSnapshot).toBe(turnSkills);
   });
 
   it("applies session compaction at reported pressure after a runtime fallback with memory flush disabled", async () => {

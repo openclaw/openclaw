@@ -34,7 +34,6 @@ export interface ReleaseValidationWaiver {
   evidence?: { runId: string; runAttempt: number };
   qualificationExemption?: QualificationExemptionEvidence;
 }
-export const RELEASE_VALIDATION_WAIVERS: ReleaseValidationWaiver[];
 export interface ReleasePolicyJob {
   name: string;
   status: string;

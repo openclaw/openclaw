@@ -91,6 +91,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   // The message runner selects config preparation from the action's execution mode.
   { commandPath: ["message"], policy: { configGuard: "defer", loadPlugins: "never" } },
   { commandPath: ["docs"], policy: { configGuard: "skip" } },
+  { commandPath: ["tools", "usage"], policy: PASSIVE_STARTUP_POLICY },
   // Destructive maintenance owns a validity-aware, non-observing config read.
   // Startup migrations would mutate the SQLite state these commands may refuse to remove.
   { commandPath: ["reset"], policy: { configGuard: "skip" } },
@@ -343,8 +344,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
     route: { id: "models-status" },
   },
-  // These unregistered roots are reserved so plugin registration cannot claim them;
-  // the catalog entries preserve their startup policy.
+  // The unregistered legacy root stays reserved so plugin registration cannot claim it.
+  // The built-in tools root shares its policy so stray Gateway RPC names fail fast.
   ...["tool", "tools"].map((command): CliCommandCatalogEntry => ({
     commandPath: [command],
     policy: { loadPlugins: "never", ensureCliPath: false, networkProxy: "bypass" },

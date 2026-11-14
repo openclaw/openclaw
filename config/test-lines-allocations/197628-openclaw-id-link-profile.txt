@@ -1,0 +1,4 @@
+# PR #197628 (OCF-510): linked owner devices keep certificate authority under a restricted
+# personal role. Regression tests for each review finding: dispatch, policy refresh, recovery,
+# stored-role changes, personal APIs, skill seeding, fenced link writes, and the Profile row.
+483

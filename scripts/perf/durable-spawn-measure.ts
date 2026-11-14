@@ -5,6 +5,7 @@
  * --control compares two identical native arms. Run it separately from ABAB.
  * --broker-entry selects an independently bundled copy of the existing worker.
  * --owner container or git exercises those real command owners instead of raw spawn.
+ * --owner guarded includes the exec tool's broker launch-admission round trip.
  * The container fixture is a synthetic podman executable, not a container engine.
  * Prepare a standalone Linux bundle on the development host:
  *   node --import ./scripts/tsx.mjs scripts/perf/durable-spawn-measure.ts --prepare /task/proof
@@ -13,6 +14,11 @@
  * --cpu-profile /task/profile writes per-batch main-thread CPU profiles; run separately
  * from acceptance timing because profiling changes overhead.
  * Both arms use the current source: this isolates transport cost, not a patch speedup.
+ * --gateway-lifetime before|after instead exercises detached work after real Gateway
+ * broker startup, without restoring a request scope. Bundle each source revision
+ * into a directory ending in /dist and alternate those bundles for patch proof;
+ * both arms then serve as A/A controls for that revision. The label asserts the
+ * expected native spawn count and never changes routing.
  *
  * Acceptance (before running): every command returns the same bytes/status;
  * candidate host native launches are zero; synchronous dispatch blocking falls;
@@ -39,8 +45,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
 import { execContainerRaw } from "../../src/agents/sandbox/container-engine.js";
-import { executeGitCommand } from "../../src/infra/git-exec.js";
-import { runWithSpawnBroker } from "../../src/process/spawn-broker/context.js";
+import { executeGitCommandBuffered } from "../../src/infra/git-exec.js";
+import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entrypoints.js";
+import {
+  runWithSpawnBroker,
+  startGatewaySpawnBroker,
+} from "../../src/process/spawn-broker/context.js";
 import { createSpawnBrokerHost } from "../../src/process/spawn-broker/host.js";
 import { spawnProcess } from "../../src/process/spawn-utils.js";
 import { runInDetachedAsyncContext } from "../../src/shared/detached-async-context.js";
@@ -51,11 +61,13 @@ const { values } = parseArgs({
     "cpu-profile": { type: "string" },
     owner: { type: "string", default: "raw" },
     "rss-mib": { type: "string", default: "2048" },
+    "heap-mib": { type: "string", default: "0" },
     mappings: { type: "string", default: "2000" },
     samples: { type: "string", default: "5" },
     commands: { type: "string", default: "20" },
     control: { type: "boolean", default: false },
     "broker-entry": { type: "string" },
+    "gateway-lifetime": { type: "string" },
   },
 });
 if (values.prepare) {
@@ -81,6 +93,12 @@ if (values.prepare) {
   ]) {
     await build({ ...options, entryPoints: [source!], outfile: path.join(directory, output!) });
   }
+  const installedBroker = path.join(
+    directory,
+    runtimeProcessEntrypoints.spawnBroker.distWorkerPath,
+  );
+  fs.mkdirSync(path.dirname(installedBroker), { recursive: true });
+  fs.copyFileSync(path.join(directory, "broker.mjs"), installedBroker);
   for (const name of ["openclaw-agent-schema.sql", "openclaw-state-schema.sql"]) {
     fs.copyFileSync(path.join(root, "src/state", name), path.join(directory, name));
   }
@@ -99,20 +117,31 @@ if (values.prepare) {
   console.log(JSON.stringify({ directory, ...provenance }));
   process.exit(0);
 }
-assert(["raw", "container", "git"].includes(values.owner));
+assert(["raw", "guarded", "container", "git"].includes(values.owner));
+assert(!values["gateway-lifetime"] || ["before", "after"].includes(values["gateway-lifetime"]));
 assert.equal(process.platform, "linux", "Linux fork and /proc measurement only");
 const rssMiB = Number(values["rss-mib"]);
+const heapMiB = Number(values["heap-mib"]);
 const mappingCount = Number(values.mappings);
 const samples = Number(values.samples);
 const commands = Number(values.commands);
-for (const value of [rssMiB, mappingCount, samples, commands]) {
+for (const value of [rssMiB, heapMiB, mappingCount, samples, commands]) {
   assert(Number.isSafeInteger(value) && value >= 0);
 }
 assert(samples >= 5 && commands > 0);
 assert(Number.isFinite(getHeapStatistics().total_allocated_bytes), "Requires Node 26.12+");
-const broker = createSpawnBrokerHost(
-  values["broker-entry"] ? { workerUrl: pathToFileURL(values["broker-entry"]) } : {},
-);
+const selectedBroker = values["gateway-lifetime"]
+  ? await startGatewaySpawnBroker({
+      onReady() {},
+      onStartupFailure: (message) => {
+        throw new Error(message);
+      },
+    })
+  : createSpawnBrokerHost(
+      values["broker-entry"] ? { workerUrl: pathToFileURL(values["broker-entry"]) } : {},
+    );
+assert(selectedBroker);
+const broker = selectedBroker;
 await broker.ready();
 assert(broker.pid);
 
@@ -171,6 +200,9 @@ const retained = Buffer.allocUnsafe(rssMiB * 1024 * 1024);
 for (let offset = 0; offset < retained.length; offset += 4096) {
   retained[offset] = 1;
 }
+const retainedHeap = Array.from({ length: heapMiB }, () =>
+  Array.from({ length: 128 * 1024 }, () => 1),
+);
 // Each bounded Wasm memory gets its own protected reservation, separating VMA
 // cost from the resident-buffer sweep. Record actual /proc counts, not estimates.
 const mappings = Array.from(
@@ -180,6 +212,11 @@ const mappings = Array.from(
 let nativeCalls = 0;
 let nativeBlockingMs = 0;
 let brokerCalls = 0;
+const brokerSpawn = broker.spawn.bind(broker);
+broker.spawn = (...args) => {
+  brokerCalls++;
+  return brokerSpawn(...args);
+};
 const brokerSpawnExeca = broker.spawnExeca.bind(broker);
 broker.spawnExeca = (...args) => {
   brokerCalls++;
@@ -198,12 +235,15 @@ const measuredSpawn = (...args: Parameters<typeof nativeSpawn>) => {
 Object.defineProperty(childProcess, "spawn", { value: measuredSpawn });
 syncBuiltinESMExports();
 
-async function command(brokered: boolean) {
-  return runInDetachedAsyncContext(() =>
-    runWithSpawnBroker(brokered ? broker : undefined, async () => {
+async function command(requestedBroker: boolean) {
+  const brokered = values["gateway-lifetime"]
+    ? values["gateway-lifetime"] === "after"
+    : requestedBroker;
+  return runInDetachedAsyncContext(() => {
+    const run = async () => {
       const start = performance.now();
       const blockingBefore = nativeBlockingMs;
-      if (values.owner !== "raw") {
+      if (values.owner === "container" || values.owner === "git") {
         const pending =
           values.owner === "container"
             ? execContainerRaw(
@@ -211,7 +251,7 @@ async function command(brokered: boolean) {
                 podmanArgs,
                 { input },
               )
-            : executeGitCommand(fixture, ["hash-object", "--stdin"], {
+            : executeGitCommandBuffered(fixture, ["hash-object", "--stdin"], {
                 input,
                 baseEnv: environment,
               });
@@ -239,9 +279,12 @@ async function command(brokered: boolean) {
           nativeBlockingMs: nativeBlockingMs - blockingBefore,
         };
       }
-      const child = spawnProcess("/bin/sh", ["-c", "printf 'spawn-fixture\\n'"], {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      const child = spawnProcess(
+        "/bin/sh",
+        ["-c", "printf 'spawn-fixture\\n'"],
+        { stdio: ["ignore", "pipe", "pipe"] },
+        values.owner === "guarded" ? (launch) => launch() : undefined,
+      );
       const dispatchMs = performance.now() - start;
       let stdout = "";
       let stderr = "";
@@ -258,8 +301,11 @@ async function command(brokered: boolean) {
       assert.equal(stdout, "spawn-fixture\n");
       assert.equal(stderr, "");
       return { dispatchMs, readyMs, wallMs, nativeBlockingMs: nativeBlockingMs - blockingBefore };
-    }),
-  );
+    };
+    return values["gateway-lifetime"]
+      ? run()
+      : runWithSpawnBroker(brokered ? broker : undefined, run);
+  });
 }
 
 type Row = Awaited<ReturnType<typeof command>>;
@@ -337,10 +383,13 @@ try {
           JSON.stringify(profile),
         );
       }
+      const brokered = values["gateway-lifetime"]
+        ? values["gateway-lifetime"] === "after"
+        : !values.control && arm === "after";
       if (values.owner !== "raw") {
-        assert.equal(brokerCalls, !values.control && arm === "after" ? commands : 0);
+        assert.equal(brokerCalls, brokered ? commands : 0);
       }
-      assert.equal(nativeCalls, !values.control && arm === "after" ? 0 : commands);
+      assert.equal(nativeCalls, brokered ? 0 : commands);
       rows.push({
         arm,
         sample,
@@ -367,10 +416,12 @@ try {
       fixture: {
         owner: values.owner,
         rssMiB,
+        heapMiB,
         mappingCount,
         samples,
         commands,
         control: values.control,
+        gatewayLifetime: values["gateway-lifetime"],
       },
       runtime: {
         node: process.version,
@@ -423,6 +474,7 @@ try {
     }),
   );
   assert.equal(retained.length, rssMiB * 1024 * 1024);
+  assert.equal(retainedHeap.length, heapMiB);
   assert.equal(mappings.length, mappingCount);
 } finally {
   Object.defineProperty(childProcess, "spawn", { value: nativeSpawn });

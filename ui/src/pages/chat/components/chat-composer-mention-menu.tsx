@@ -2,6 +2,7 @@ import { lazy, Repeat, Show } from "solid-js";
 import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { MAX_HUMAN_MENTIONS } from "../../../lib/chat/human-mentions.ts";
+import { focusComposerInput } from "../../../lib/composer-input.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import type { HumanMentionMenu, HumanMentionMenuHost } from "./chat-composer-mention-menu-state.ts";
@@ -56,7 +57,7 @@ export function HumanMentionMenuView(props: { args: [HumanMentionMenu, HumanMent
               class="btn btn--sm mention-menu__retry"
               onClick={() => {
                 menu().retry();
-                host().getTextarea()?.focus({ preventScroll: true });
+                focusComposerInput(host().getTextarea(), { preventScroll: true });
               }}
             >
               {t("common.retry")}

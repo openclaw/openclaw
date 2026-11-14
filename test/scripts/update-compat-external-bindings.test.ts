@@ -155,32 +155,35 @@ it.each([
   ).toThrow("Cannot trace surface-abcdefgh.mjs export external to its release source");
 });
 
-it("bridges Rolldown module labels without confusing an unrelated same-named export", async () => {
-  const f = candidateFixture();
-  for (const file of fs.readdirSync(f.file("dist"))) {
-    if (file.startsWith("candidate-")) {
-      const source = fs.readFileSync(f.file("dist/" + file), "utf8");
-      f.write("dist/" + file, source.replaceAll("//#region ", "// "));
+it.each(["// ", "//!"])(
+  "bridges %s module labels without confusing an unrelated same-named export",
+  async (label) => {
+    const f = candidateFixture();
+    for (const file of fs.readdirSync(f.file("dist"))) {
+      if (file.startsWith("candidate-")) {
+        const source = fs.readFileSync(f.file("dist/" + file), "utf8");
+        f.write("dist/" + file, source.replaceAll("//#region ", label));
+      }
     }
-  }
-  const origin = chunk.exports[0]!.origin;
-  f.write(
-    "dist/optional-worker.mjs",
-    "// src/infra/unrelated.ts\nconst example = " +
-      String.fromCharCode(96) +
-      "\n// " +
-      origin.module +
-      "\n" +
-      String.fromCharCode(96) +
-      ";\nfunction " +
-      origin.symbol +
-      '() { return "wrong owner"; }\nexport { ' +
-      origin.symbol +
-      " };\n",
-  );
-  f.emit();
-  await expectLegacy(f);
-});
+    const origin = chunk.exports[0]!.origin;
+    f.write(
+      "dist/optional-worker.mjs",
+      "// src/infra/unrelated.ts\nconst example = " +
+        String.fromCharCode(96) +
+        "\n// " +
+        origin.module +
+        "\n" +
+        String.fromCharCode(96) +
+        ";\nfunction " +
+        origin.symbol +
+        '() { return "wrong owner"; }\nexport { ' +
+        origin.symbol +
+        " };\n",
+    );
+    f.emit();
+    await expectLegacy(f);
+  },
+);
 
 it("records updater imports and export origins from Rolldown module labels", () => {
   const f = fixtureFiles(createTempDir("update-compat-module-labels-"));

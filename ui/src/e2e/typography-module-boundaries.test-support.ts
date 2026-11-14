@@ -132,7 +132,7 @@ export function defineTypographyModuleBoundaryTests(
 
         const genericFonts = await page.evaluate(() => {
           const fixture = document.createElement("div");
-          fixture.innerHTML = `<span class="chat-controls__model-option-action"><kbd class="shortcut-kbd">C</kbd></span>
+          fixture.innerHTML = `<kbd class="shortcut-kbd">C</kbd>
           <span class="session-menu__shortcut">C</span>`;
           document.body.append(fixture);
           const fonts = Array.from(

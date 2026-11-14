@@ -25,6 +25,7 @@ export const CHAT_TRANSCRIPT_METADATA_KEYS = [
   "lastRunId",
   "status",
   "runtimeMs",
+  "abortedLastRun",
   "contextTokens",
   "sessionId",
   "archived",

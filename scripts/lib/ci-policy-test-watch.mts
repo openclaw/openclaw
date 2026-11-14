@@ -30,6 +30,29 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile,
     watchGlobs: [input],
   })),
+  {
+    // Scenario coverage and taxonomy are filesystem inventories, not imports.
+    testFile: "extensions/qa-lab/src/coverage-report.test.ts",
+    watchGlobs: ["qa/scenarios/**", "taxonomy.yaml"],
+  },
+  {
+    // Copilot consumes this shared replay contract through the SDK facade (three hops).
+    testFile: "extensions/github-copilot/replay-policy.test.ts",
+    watchGlobs: ["src/plugins/provider-replay-helpers.ts"],
+  },
+  {
+    // Match the native scanner's source roots, not all Apple/Android build inputs.
+    testFile: "test/scripts/native-app-i18n.test.ts",
+    watchGlobs: [
+      "apps/ios/**/*.{swift,plist}",
+      "apps/macos/Sources/**/*.{swift,plist}",
+      "apps/shared/OpenClawKit/Sources/**/*.{swift,plist}",
+      "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+      "apps/android/app/src/{main,play,thirdParty}/**/*.{kt,kts}",
+      "apps/android/app/src/{main,play,thirdParty}/**/res/values/*.xml",
+      "apps/android/wear/src/main/res/values/*.xml",
+    ],
+  },
   // Copied release fixtures need the complete helper closure beyond the hub cutoff.
   ...[
     "test/scripts/ocm-npm-workspace-deps.test.ts",
@@ -46,6 +69,18 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     // The node-host integration proves the official-plugin version floor through a facade.
     testFile: "src/node-host/codex-node-plugin.integration.test.ts",
     watchGlobs: ["src/plugins/official-runtime-plugins.ts"],
+  },
+  {
+    // Catalog artwork is read from every bundled manifest's package directory.
+    testFile: "src/plugins/bundled-plugin-icons.test.ts",
+    watchGlobs: [
+      "extensions/*/openclaw.plugin.json",
+      "extensions/*/assets/{icon.png,activity.svg}",
+    ],
+  },
+  {
+    testFile: "src/plugins/bundled-plugin-categories.test.ts",
+    watchGlobs: ["extensions/*/openclaw.plugin.json"],
   },
   {
     // YAML code/docs references are not import edges. A removed path can be

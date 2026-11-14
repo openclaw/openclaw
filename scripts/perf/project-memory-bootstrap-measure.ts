@@ -29,6 +29,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { onTrustedInternalDiagnosticEvent } from "../../src/infra/diagnostic-events.js";
 import type { MemoryProviderHandle } from "../../src/plugins/memory-provider-runtime-types.js";
 import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
@@ -37,23 +38,34 @@ const { values } = parseArgs({
     root: { type: "string" },
     "baseline-dir": { type: "string" },
     "reuse-fixture": { type: "boolean", default: false },
+    "seed-only": { type: "boolean", default: false },
     records: { type: "string", default: "6000" },
     projects: { type: "string", default: "200" },
+    "body-bytes": { type: "string", default: "1040" },
+    sessions: { type: "string", default: "0" },
+    "transcript-mib": { type: "string", default: "0" },
     iterations: { type: "string", default: "20" },
     mode: { type: "string", default: "timing" },
     "candidate-delay-ms": { type: "string", default: "0" },
     "expect-skips": { type: "boolean", default: false },
+    "allow-skips": { type: "boolean", default: false },
   },
 });
 assert(values.root, "--root must name an isolated synthetic fixture directory");
 const root = path.resolve(values.root);
 const count = Number(values.records);
 const projects = Number(values.projects);
+const bodyBytes = Number(values["body-bytes"]);
+const sessions = Number(values.sessions);
+const transcriptBytes = Number(values["transcript-mib"]) * 1024 * 1024;
 const iterations = Number(values.iterations);
 const candidateDelayMs = Number(values["candidate-delay-ms"]);
 assert(Number.isSafeInteger(candidateDelayMs) && candidateDelayMs >= 0);
 for (const n of [count, projects, iterations]) {
   assert(Number.isSafeInteger(n) && n > 0);
+}
+for (const n of [bodyBytes, sessions, transcriptBytes]) {
+  assert(Number.isSafeInteger(n) && n >= 0);
 }
 assert(["timing", "allocation"].includes(values.mode));
 process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
@@ -191,7 +203,10 @@ if (values["reuse-fixture"]) {
         approved_at: "2026-01-01T00:00:00Z",
       },
     };
-    const content = `---\n${JSON.stringify(metadata)}\n---\n\n${"Synthetic durable context. ".repeat(40)}\n`;
+    const body = "Synthetic durable context. "
+      .repeat(Math.ceil(bodyBytes / 27))
+      .slice(0, bodyBytes);
+    const content = `---\n${JSON.stringify(metadata)}\n---\n\n${body}\n`;
     writeFileSync(path.join(vaultRoot, "private", `${metadata.id}.md`), content);
     fixtureBytes += Buffer.byteLength(content);
   }
@@ -213,7 +228,24 @@ const entry = {
   chatType: "direct" as const,
 };
 if (!values["reuse-fixture"]) {
+  if (sessions) {
+    const { seedTeamShapeSessions } = await import("./team-shape-sessions.ts");
+    await seedTeamShapeSessions({
+      stateDir: process.env.OPENCLAW_STATE_DIR,
+      sessions,
+      retainedRuns: 0,
+      transcriptBytes,
+      longTranscriptEntries: 5_000,
+      longTranscriptSessions: 4,
+      seed: "project-memory-recall",
+      now: Date.parse("2026-11-13T00:00:00Z"),
+    });
+  }
   replaceSessionEntrySync({ agentId: "main", sessionKey }, entry);
+}
+if (values["seed-only"]) {
+  console.log(JSON.stringify({ count, projects, fixtureBytes, sessions, transcriptBytes }));
+  process.exit(0);
 }
 const audience = await resolveMemoryAudienceFromEntry(
   {
@@ -246,6 +278,29 @@ record.kind = "memory";
 record.memorySlotSelected = true;
 registry.registry.plugins.push(record);
 const nativeRuntime = createKnowledgeMemoryRuntime(stores);
+let storagePhases = { queueMs: 0, operationMs: 0 };
+const measuredRuntimes = new WeakSet();
+const openStore = stores.open.bind(stores);
+stores.open = async (...args) => {
+  const opened = await openStore(...args);
+  if (opened.kind === "ready" && !measuredRuntimes.has(opened.runtime)) {
+    measuredRuntimes.add(opened.runtime);
+    const enqueue = opened.runtime.enqueue.bind(opened.runtime);
+    opened.runtime.enqueue = (check, operation) => {
+      const queued = performance.now();
+      return enqueue(check, async () => {
+        const started = performance.now();
+        storagePhases.queueMs += started - queued;
+        try {
+          return await operation();
+        } finally {
+          storagePhases.operationMs += performance.now() - started;
+        }
+      });
+    };
+  }
+  return opened;
+};
 const pendingProviders = new Set<Promise<void>>();
 let providerOpens = 0;
 let candidateCalls = 0;
@@ -320,11 +375,25 @@ const context = {
 };
 let expected: string | undefined;
 const run = async (cold = false) => {
+  storagePhases = { queueMs: 0, operationMs: 0 };
   const phases: Record<string, number> = {};
   const opensBefore = providerOpens;
   const cpu = process.cpuUsage();
   const thread = process.threadCpuUsage();
   const started = performance.now();
+  let skipDiagnosticCount = 0;
+  const stopDiagnostics = onTrustedInternalDiagnosticEvent(
+    (event) => {
+      if (
+        event.type === "diagnostic.phase.completed" &&
+        event.name === "project-memory.recall" &&
+        event.details?.outcome === "skipped"
+      ) {
+        skipDiagnosticCount++;
+      }
+    },
+    { includeTrusted: ["diagnostic.phase.completed"] },
+  );
   const lines = await withDiagnosticsTimelineObserver(
     (name, _attributes, duration) => {
       const phaseStart = performance.now();
@@ -345,6 +414,7 @@ const run = async (cold = false) => {
   // If no lease started, caller admission can still be pending: report that gap.
   const providerStarted = providerOpens > opensBefore;
   await Promise.all(pendingProviders);
+  stopDiagnostics();
   const settledMs = performance.now() - started;
   const used = process.cpuUsage(cpu);
   const main = process.threadCpuUsage(thread);
@@ -354,7 +424,7 @@ const run = async (cold = false) => {
   const bytes = lines.join("\n");
   if (!cold && values["expect-skips"]) {
     assert.equal(bytes, "", "slow provider must omit project recall");
-  } else if (!cold || bytes) {
+  } else if (bytes || (!cold && !values["allow-skips"])) {
     assert(
       bytes.includes("Synthetic project 0 fact 0"),
       "native provider must return the seeded project memory",
@@ -367,8 +437,10 @@ const run = async (cold = false) => {
     settledMs,
     providerStarted,
     skipped: !bytes,
+    skipDiagnosticCount,
     cpuMs: (used.user + used.system) / 1000,
     mainCpuMs: (main.user + main.system) / 1000,
+    storagePhases: { ...storagePhases },
     phases,
   };
 };
@@ -411,7 +483,15 @@ try {
         mode: values.mode,
         baseline: values["baseline-dir"] ?? null,
         ownerSources,
-        fixture: { count, projects, fixtureBytes, reused: values["reuse-fixture"] },
+        fixture: {
+          count,
+          projects,
+          fixtureBytes,
+          sessions,
+          transcriptBytes,
+          agentDatabaseBytes: statSync(resolveOpenClawAgentSqlitePath({ agentId: "main" })).size,
+          reused: values["reuse-fixture"],
+        },
         candidateDelayMs,
         candidateCalls,
         explicitWarmupMs,

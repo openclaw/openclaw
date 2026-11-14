@@ -1,8 +1,10 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as text } from "@openclaw/normalization-core/string-coerce";
+import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ToolCard } from "../../lib/chat/chat-types.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -83,6 +85,49 @@ export function ownSessionLaunchCalls(cards: readonly ToolCard[]): Set<string> {
 export function spawnedSubagentLabel(card: LaunchCard): string | undefined {
   const launch = readLaunch(card);
   return launch && !launch.ownSession ? launch.label : undefined;
+}
+
+/**
+ * The session a call starts or addresses by key: a launch, a message, a history
+ * read, or a steer or stop. Undefined when the call names no session by key.
+ */
+function readAddressedSessionKey(card: LaunchCard): string | undefined {
+  const launch = readLaunch(card);
+  if (launch) {
+    return launch.ownSession ? undefined : launch.childKey;
+  }
+  const call = unwrapToolCallForDisplay(card);
+  const args = asRecord(call.args);
+  const tool = call.name.trim().toLowerCase();
+  const key =
+    tool === "sessions_send" || tool === "sessions_history"
+      ? text(args?.sessionKey)
+      : tool === "subagents" && (args?.action === "steer" || args?.action === "kill")
+        ? text(args?.target)
+        : undefined;
+  // Steer and stop also take labels, run ids and list indexes; those already read as names.
+  return key?.includes(":") ? key : undefined;
+}
+
+/**
+ * What a call that addresses a session by key is about: the roster names the
+ * session, else the call's own label. The key is routing, never a name, so an
+ * unresolved session leaves `name` empty and the caller keeps the action.
+ */
+export function addressedSession(
+  card: LaunchCard,
+  rows: readonly GatewaySessionRow[] | undefined,
+): { name?: string } | undefined {
+  const key = readAddressedSessionKey(card);
+  if (!key) {
+    return undefined;
+  }
+  const row = rows?.find((candidate) => areUiSessionKeysEquivalent(candidate.key, key));
+  return {
+    name: row
+      ? resolveSessionDisplayName(row.key, row)
+      : text(asRecord(unwrapToolCallForDisplay(card).args)?.label),
+  };
 }
 
 export function isSubagentsPanelSession(row: GatewaySessionRow): boolean {

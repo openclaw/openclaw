@@ -5,7 +5,8 @@ import { readGatewayOwnerLeaseFromDatabase } from "../gateway-owner-lease.read.j
 import type { GatewayOwnerLeaseIdentity } from "../gateway-owner-lease.types.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import type { DatabaseStoreDiagnostic } from "./diagnostic-record.js";
-import { readEngineAnchorIdentity, type BackupEngine } from "./physical-store.js";
+import { readEngineAnchorIdentity } from "./physical-store-inspection.js";
+import type { BackupEngine } from "./physical-store.js";
 import type { PortDescriptor } from "./port-types.js";
 
 export function observeLease(

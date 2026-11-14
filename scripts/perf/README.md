@@ -1911,7 +1911,7 @@ equivalence from the supplied revision label.
 ## Measure idle Gateway allocation and timer work
 
 `idle-gateway-measure.ts` connects one real Control UI client to an owned Gateway,
-then sends no application requests during the measured window. Use a freshly
+then sends no application requests during the measured window by default. Use a freshly
 generated, offline team-shape fixture for each side; omitting `--state-dir`
 retains the small empty-state workload. `--output` must name a new artifact
 directory. The fixture config is preserved and an isolated measurement config
@@ -1932,7 +1932,14 @@ and the host's interleaved CPU sets, swapped for the second pair. The start barr
 follows readiness and settling; a missed barrier fails the run. Actual capture
 timestamps are recorded so placement and start skew remain visible.
 
-`result.json` records main-isolate CPU, GC durations and counts, event-loop p99 and
+`--write-interval-ms 500` instead exercises real shared-state commits through
+`voicewake.set`, verifies replies and final readback, and records each request's
+scheduled, actual start/end timestamps and latency. `--host-samples` records Linux
+VM and mapped-cgroup counters once per second in the benchmark parent, outside
+the Gateway process; unavailable counters remain explicit. Enable it identically
+on both sides when attributing host interference.
+
+`result.json` records Gateway-process/main-thread CPU, main-isolate GC durations and counts, event-loop p99 and
 sample count, and V8 promoted bytes for the capture only. `--allocations` uses the
 shared private IPC profiler to include objects collected by minor and major GC;
 the saved heap profile and summary include the top allocation sites and estimated
@@ -1941,6 +1948,11 @@ a main-isolate CPU profile and its diagnostics over the measured window; promoti
 accounting requires a run without `--profile`. Run CPU and allocation profiling
 separately. Neither profiling mode exposes an inspector listener or copies operator
 credentials.
+
+Main-isolate diagnostics also retain up to 10,000 individual GC events with epoch
+timestamps, duration and kind, plus a dropped-event count. Correlate actual request
+intervals with those events and raw V8 pause traces; a slow sample or a GC event
+alone does not establish causality or justify excluding a paired result.
 
 Use `--timers` in a separate attribution run to collect per-timer callback counts,
 CPU and worker snapshots. It instruments timer creation and adds periodic IPC

@@ -1,5 +1,6 @@
 import { ConnectErrorDetailCodes } from "@openclaw/gateway-client/browser";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type {
   MentionInboxItem,
   MentionsListResult,
@@ -13,6 +14,7 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { resolveGatewayReadRetryDelayMs } from "../lib/gateway-availability.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import { showToast } from "../lib/toast.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 
@@ -238,20 +240,24 @@ export function createMentionsCapability(
   // snapshot and the profile's targeted invalidation stream.
   const stopEvents = gateway.subscribeEvents((event) => {
     const owner = connection;
-    if (event.event !== "mentions.changed" || !owner || !isCurrent(owner)) {
+    const payload = asOptionalRecord(event.payload);
+    if (!owner || !isCurrent(owner) || payload?.gatewayInstanceId !== owner.gatewayInstanceId) {
       return;
     }
-    const payload = isRecord(event.payload) ? event.payload : undefined;
+    const message = readStringValue(payload.errorMessage);
+    if (event.event === "mentions.failed" && message && message.length <= 512) {
+      showToast({ message, severity: "warning" });
+    }
+    const revision = payload.revision;
     if (
-      payload?.gatewayInstanceId !== owner.gatewayInstanceId ||
-      typeof payload.revision !== "number" ||
-      !Number.isSafeInteger(payload.revision) ||
-      payload.revision < 0 ||
-      payload.revision <= Math.max(owner.revision, owner.requestedRevision)
+      event.event !== "mentions.changed" ||
+      typeof revision !== "number" ||
+      !Number.isSafeInteger(revision) ||
+      revision <= Math.max(owner.revision, owner.requestedRevision)
     ) {
       return;
     }
-    owner.requestedRevision = payload.revision;
+    owner.requestedRevision = revision;
     owner.refreshRequested = true;
     void refreshAutomatically(owner);
   });

@@ -218,6 +218,7 @@ describe("steering input custody", () => {
         steeringConfig.gateway = {
           ...steeringConfig.gateway,
           roles: {
+            default: "participant",
             definitions: {
               writer: role,
               participant: { ...role, sessions: { others: "view" } },

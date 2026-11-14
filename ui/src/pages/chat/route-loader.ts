@@ -10,7 +10,10 @@ import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
 } from "../../lib/sessions/catalog-key.ts";
-import { resolveHomeSession } from "../../lib/sessions/home-session.ts";
+import {
+  homeSessionRequiresConfirmation,
+  resolveHomeSession,
+} from "../../lib/sessions/home-session.ts";
 import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import {
   findUiSessionRow,
@@ -365,7 +368,7 @@ export async function loadChatRoute(
     }
     const sessionKey = mainSessionKey(context, target);
     const homeSnapshot = context.gateway.snapshot;
-    if (homeSnapshot.hello?.auth?.sessionCap === "none") {
+    if (homeSessionRequiresConfirmation(homeSnapshot)) {
       const available = await resolveHomeSession(homeSnapshot, {
         sessionKey,
         agentId: target.agentId,
@@ -680,7 +683,7 @@ export async function verifyChatSessionRoute(
   }
   const reference = sessionRouteTargetFromLocation(context, target.location)?.target;
   // Warm Home can render before hello reveals that its access needs confirmation.
-  if (reference?.kind === "main" && context.gateway.snapshot.hello?.auth?.sessionCap === "none") {
+  if (reference?.kind === "main" && homeSessionRequiresConfirmation(context.gateway.snapshot)) {
     await revalidate();
     return;
   }

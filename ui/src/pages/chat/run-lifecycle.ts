@@ -39,7 +39,11 @@ import {
 } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 import type { ToolStreamHost, ToolStreamState } from "./tool-stream-contract.ts";
-import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
+import {
+  resetToolStream,
+  resetToolStreamRun,
+  retireToolStreamLiveOutput,
+} from "./tool-stream-state.ts";
 
 registerChatQuestionsEnglish();
 
@@ -545,6 +549,9 @@ function applyChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions
 
   if (options.clearIndicators ?? true) {
     clearRunIndicators(host, runId);
+  }
+  if (options.outcome && runId) {
+    retireToolStreamLiveOutput(host, runId);
   }
   if (options.clearLocalRun) {
     host.chatStream = null;

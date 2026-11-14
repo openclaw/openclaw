@@ -256,7 +256,22 @@ function PromptSection(
       {props.isAgentTurn ? (
         <>
           {props.form.payloadText.trim() ? (
-            <MarkdownHtml class="chat-text" markdown={props.form.payloadText} />
+            <FieldRow
+              label={t("cron.form.promptPreview")}
+              controlId=""
+              stacked
+              wide
+              control={
+                <div
+                  class="cron-prompt-preview"
+                  role="region"
+                  aria-label={t("cron.form.promptPreview")}
+                  tabindex="0"
+                >
+                  <MarkdownHtml class="chat-text" markdown={props.form.payloadText} />
+                </div>
+              }
+            />
           ) : undefined}
           <FieldRow
             label={t("cron.form.model")}

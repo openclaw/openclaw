@@ -778,7 +778,15 @@ describe("controlUi.sessionPullRequests.checks", () => {
     await withOpenClawTestState({ label: "ci-details-missing-client-roles" }, async () => {
       let cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       const enableRoles = () => {
-        cfg = { ...cfg, gateway: { roles: { definitions: {} } } };
+        cfg = {
+          ...cfg,
+          gateway: {
+            roles: {
+              default: "denied",
+              definitions: { denied: { agents: [], scopes: [], sessions: { others: "none" } } },
+            },
+          },
+        };
         setRuntimeConfigSnapshot(cfg);
       };
       setRuntimeConfigSnapshot(cfg);

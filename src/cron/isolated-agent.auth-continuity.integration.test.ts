@@ -353,8 +353,8 @@ it.each([
     "unadopted stored account",
     "Automation has no recorded inference account. Runtime openclaw would run openai/gpt-4.1 with stored account openai:platform. Record the account with openclaw automations edit <jobId> --model openai/gpt-4.1@openai:platform. For eligible host-managed accounts, openclaw doctor --fix can record it without pinning the model.",
   ],
-  ["replacement", "inference account openai:platform on runtime openclaw was replaced"],
-  ["revocation", "account openai:platform on runtime openclaw was removed or signed out"],
+  ["replacement", undefined],
+  ["revocation", undefined],
 ] as const)("enforces %s before provider HTTP through the real runner", async (kind, error) => {
   await withAuthState("cron-legacy-account", async (state) => {
     const openaiUrl = "https://api.openai.com/v1";
@@ -412,7 +412,13 @@ it.each([
     expect(reloaded.inferenceBinding).toEqual(job.inferenceBinding);
     try {
       const result = await runStoredTurn(cfg, reloaded);
-      if (error) {
+      if (kind === "replacement" || kind === "revocation") {
+        // The changed account is never adopted: no openai request is sent with any key.
+        // Only its provider is refused; the configured local fallback still serves the run.
+        expect(result.status, result.error).toBe("ok");
+        expect(requests.some(({ url }) => url.startsWith(openaiUrl))).toBe(false);
+        expect(requests.length).toBeGreaterThan(0);
+      } else if (error) {
         expect(result.status).toBe("error");
         expect(result.error).toContain(error);
         expect(requests).toEqual([]);

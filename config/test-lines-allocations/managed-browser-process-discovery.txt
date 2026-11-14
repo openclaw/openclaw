@@ -1,2 +1,0 @@
-# Native subprocess capture proves large macOS startup and fail-closed overflow.
-49

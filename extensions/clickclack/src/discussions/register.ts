@@ -3,11 +3,16 @@ import { registerSessionDiscussionProvider } from "openclaw/plugin-sdk/session-d
 import { createSessionVisibilityChecker } from "openclaw/plugin-sdk/session-visibility";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { PluginHookBeforeToolCallResult } from "openclaw/plugin-sdk/types";
+import type { CoreConfig, ResolvedClickClackAccount } from "../types.js";
 import {
   bindingMatchesActiveSessionIncarnation,
   getClickClackDiscussionBindingStore,
   type ClickClackDiscussionBinding,
 } from "./binding-store.js";
+import {
+  resolveDiscussionBindingAccount,
+  resolvePreparedDiscussionBindingAccount,
+} from "./eligibility.js";
 import { discussionSessionKey, isDiscussionSessionKey } from "./naming.js";
 import {
   adoptLegacyMarkers,
@@ -87,15 +92,21 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
     binding: ClickClackDiscussionBinding | undefined,
     isRevoked: (binding: ClickClackDiscussionBinding) => boolean,
     isActiveSession: (binding: ClickClackDiscussionBinding) => boolean,
+    preparedAccount?: ResolvedClickClackAccount,
   ) {
     const { targetSessionKey } = params;
+    // SAFETY: The runtime exposes the registered channel schema-validated config.
+    const cfg = runtime.config.current() as CoreConfig;
     if (
       binding &&
       discussionSessionKey({ runtime, mainSessionKey: targetSessionKey, ...binding }) ===
         params.requesterSessionKey &&
       !isRevoked(binding) &&
       isActiveSession(binding) &&
-      service.resolveBindingAccount(binding).state === "active"
+      (preparedAccount
+        ? resolvePreparedDiscussionBindingAccount(cfg, binding, preparedAccount)
+        : resolveDiscussionBindingAccount(cfg, binding)
+      ).state === "active"
     ) {
       return { sessionKey: targetSessionKey, binding };
     }
@@ -127,6 +138,10 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
         runtime,
         ...binding,
       });
+      const resolved = await service.prepareBindingAccount(binding);
+      if (resolved.state !== "active") {
+        return undefined;
+      }
       session = await prepareDiscussionSessionEntry(runtime, params.targetSessionKey);
       session.source();
       const entry = session.entry;
@@ -135,6 +150,7 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
         facts.read(),
         revocation.isRevoked,
         (current) => entry?.sessionId === current.sessionId && entry.archivedAt === undefined,
+        resolved.account,
       );
     } catch {
       return undefined;

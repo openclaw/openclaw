@@ -1,2 +1,0 @@
-# Wait for the mobile filter sheet before exercising the existing Display reset contract.
-4

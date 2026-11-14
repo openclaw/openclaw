@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Client } from "pg";
 import type { PortDescriptor } from "../infra/database-engine/port-descriptor.js";
 import {
@@ -10,6 +11,7 @@ import {
   readDatabasePortAllocations,
 } from "../infra/database-engine/port.worker.js";
 import { sha256File } from "../infra/directory-durability.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { writePostgresExportEnvelope, type PostgresExportEnvelope } from "./export-envelope.js";
 import type { GitBackupIdentity } from "./git-backup-codec.js";
@@ -150,6 +152,65 @@ export async function exportPostgresBackup(params: {
   return manifest;
 }
 
+/** Capture into a frozen schema on the source server; only the anchor is written locally. */
+export async function capturePostgresSchema(params: {
+  client: Client;
+  descriptor: PortDescriptor;
+  anchor: Anchor;
+  directory: string;
+  prune?: { directoryPrefix: string; captureId: string };
+  assertCurrent: () => void;
+}): Promise<PostgresExportEnvelope> {
+  const { client, descriptor, anchor } = params;
+  const schema = `restore_${randomUUID().replaceAll("-", "")}`;
+  // Schema comments are visible across database roles. Keep local custody paths private.
+  const marker = params.prune
+    ? JSON.stringify({
+        openclawCapture: {
+          prefixHash: createHash("sha256").update(params.prune.directoryPrefix).digest("hex"),
+          captureId: params.prune.captureId,
+        },
+      })
+    : undefined;
+  try {
+    params.assertCurrent();
+    const verification = await materializeDatabasePort({
+      source: { engine: "postgres", db: client, namespace: anchor.namespace },
+      destination: { engine: "postgres", db: client, namespace: schema },
+      // Commit the prune marker with the capture so a lost client cannot leave an
+      // unmarked schema behind. Ordinary restores keep their unmarked descriptor.
+      descriptor: {
+        ...descriptor,
+        postgresPostData: (namespace) =>
+          `${descriptor.postgresPostData?.(namespace) ?? ""}\n;\n` +
+          (marker ? `COMMENT ON SCHEMA "${namespace}" IS ${client.escapeLiteral(marker)}` : ""),
+      },
+      storeId: anchor.storeId,
+      assertCurrent: params.assertCurrent,
+    });
+    const manifest: PostgresExportEnvelope = {
+      schemaVersion: 2,
+      snapshotId: path.basename(params.directory),
+      createdAt: new Date().toISOString(),
+      profile: "exact",
+      source: { ...anchor, owner: descriptor.id, schemaVersion: descriptor.version },
+      exportSchemaVersion: descriptor.version,
+      activeFragments: [...descriptor.activeFragments!],
+      verification,
+      carrier: "postgres-schema",
+      schema,
+      artifacts: { "anchor.sqlite": await artifact(path.join(params.directory, "anchor.sqlite")) },
+      sanitizedDifferences: [],
+    };
+    params.assertCurrent();
+    await writePostgresExportEnvelope(params.directory, manifest);
+    return manifest;
+  } catch (error) {
+    await discardPostgresNamespace(client, schema);
+    throw error;
+  }
+}
+
 /** Restore an already verified capture; the caller owns its client and publication. */
 export async function restorePostgresBackup(params: {
   client: Client;
@@ -169,13 +230,18 @@ export async function restorePostgresBackup(params: {
   }
   const namespace = `restore_${randomUUID().replaceAll("-", "")}`;
   try {
-    using image = openNodeSqliteDatabase(path.join(params.directory, "database.sqlite"), {
-      readOnly: true,
-      readBigInts: true,
-    });
+    // A schema capture stays frozen: restore copies it, so a retry can start again from it.
+    using image = manifest.schema
+      ? undefined
+      : openNodeSqliteDatabase(path.join(params.directory, "database.sqlite"), {
+          readOnly: true,
+          readBigInts: true,
+        });
     params.assertCurrent();
     const verified = await materializeDatabasePort({
-      source: { engine: "sqlite", db: image },
+      source: image
+        ? { engine: "sqlite", db: image }
+        : { engine: "postgres", db: client, namespace: manifest.schema! },
       destination: { engine: "postgres", db: client, namespace },
       descriptor,
       storeId: manifest.source.storeId,
@@ -214,6 +280,49 @@ export async function discardPostgresNamespace(client: Client, namespace: string
     throw new Error("Refusing to discard a namespace not allocated by PostgreSQL restore.");
   }
   await client.query(`DROP SCHEMA IF EXISTS "${namespace}" CASCADE`);
+}
+
+/** Drop marked captures of this store whose directory under the prefix is gone. */
+export async function pruneOrphanedPostgresCaptures(
+  client: Client,
+  params: { storeId: string; directoryPrefix: string },
+) {
+  // Installs sharing a database may run as separate roles; only schemas this role may drop are read.
+  const marked = await client.query<{ schema: string; note: string }>(
+    "SELECT nspname AS schema, obj_description(oid, 'pg_namespace') AS note FROM pg_namespace WHERE nspname ~ '^restore_[a-f0-9]{32}$' AND pg_has_role(nspowner, 'USAGE') AND obj_description(oid, 'pg_namespace') IS NOT NULL",
+  );
+  const dropped: string[] = [];
+  const prefixHash = createHash("sha256").update(params.directoryPrefix).digest("hex");
+  for (const { schema, note } of marked.rows) {
+    let marker: unknown;
+    try {
+      marker = JSON.parse(note);
+    } catch {
+      continue;
+    }
+    const capture = isRecord(marker) ? marker.openclawCapture : undefined;
+    if (
+      !isRecord(capture) ||
+      capture.prefixHash !== prefixHash ||
+      typeof capture.captureId !== "string" ||
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(capture.captureId)
+    ) {
+      continue;
+    }
+    // Only a generated ID may extend the trusted local prefix; comments never select a path.
+    const directory = `${params.directoryPrefix}${capture.captureId}.postgres.bak`;
+    if (await fs.lstat(directory).catch(ignoreMissingPath)) {
+      continue;
+    }
+    const meta = await client.query<{ store_id: string }>(
+      `SELECT store_id FROM "${schema}".openclaw_schema_meta`,
+    );
+    if (meta.rows.length === 1 && meta.rows[0]!.store_id === params.storeId) {
+      await discardPostgresNamespace(client, schema);
+      dropped.push(schema);
+    }
+  }
+  return dropped;
 }
 
 export async function fingerprintPostgresDatabase(params: { client: Client; anchor: Anchor }) {

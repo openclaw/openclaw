@@ -82,6 +82,7 @@ const cases: Array<[string, SessionsListParams]> = [
   ["sidebar", { archived: false }],
   ["archived", { archived: true }],
   ["agent", { agentId: "ops" }],
+  ["agent-involving", { agentId: "ops", involvingMe: true }],
   ["search", { search: "fixture-7" }],
   ["offset", { offset: 50 }],
   ["activity", { sortBy: "activity" }],
@@ -235,13 +236,25 @@ for (const [name, query] of cases.filter(
   }
   const hostLoad = loadavg();
   const times = new Float64Array(iterations);
+  const taskCpuTimes = values.mode === "timing" ? new Float64Array(iterations) : undefined;
+  let maxTaskMs = 0;
+  let maxTaskCpuMs: number | undefined;
   const cpu = process.threadCpuUsage();
   const started = performance.now();
   let last = read();
   for (let index = 0; index < iterations; index++) {
+    const taskCpu = taskCpuTimes && process.threadCpuUsage();
     const before = performance.now();
     last = run();
     times[index] = performance.now() - before;
+    if (taskCpu && taskCpuTimes) {
+      const used = process.threadCpuUsage(taskCpu);
+      taskCpuTimes[index] = (used.user + used.system) / 1000;
+      if (times[index]! > maxTaskMs) {
+        maxTaskMs = times[index]!;
+        maxTaskCpuMs = taskCpuTimes[index];
+      }
+    }
   }
   const elapsedMs = performance.now() - started;
   const used = process.threadCpuUsage(cpu);
@@ -262,6 +275,7 @@ for (const [name, query] of cases.filter(
     `${name}: retained selection differs from full ordered filtering`,
   );
   times.sort();
+  taskCpuTimes?.sort();
   const gcByKind: Record<number, { count: number; ms: number; maxMs: number }> = {};
   for (const entry of collections) {
     const { kind } = (entry as PerformanceNodeEntry).detail as { kind: number };
@@ -281,7 +295,12 @@ for (const [name, query] of cases.filter(
     cpuMs: (used.user + used.system) / 1000,
     cpuUsPerCall: (used.user + used.system) / iterations,
     p50Ms: times[Math.floor(iterations * 0.5)],
+    p95Ms: times[Math.min(iterations - 1, Math.floor(iterations * 0.95))],
     p99Ms: times[Math.min(iterations - 1, Math.floor(iterations * 0.99))],
+    maxMs: times[iterations - 1],
+    maxTaskCpuMs,
+    p99TaskCpuMs: taskCpuTimes?.[Math.min(iterations - 1, Math.floor(iterations * 0.99))],
+    maxCpuMs: taskCpuTimes?.[iterations - 1],
     sampledBytesPerCall: bytes === undefined ? undefined : bytes / iterations,
     gcMs,
     gcMsPerMinute: (gcMs * 60_000) / elapsedMs,

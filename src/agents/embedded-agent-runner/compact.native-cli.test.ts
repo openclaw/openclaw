@@ -5,9 +5,23 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type CliRunParams = Parameters<typeof import("../cli-runner.js").runCliAgent>[0];
+type CliRunResult = Awaited<ReturnType<typeof import("../cli-runner.js").runCliAgent>>;
 
 const { runCliAgentMock, storedProfiles } = vi.hoisted(() => ({
-  runCliAgentMock: vi.fn(async (_params: CliRunParams) => undefined),
+  // The runner reports the sizes from the backend's own compaction record.
+  runCliAgentMock: vi.fn(async (_params: CliRunParams): Promise<CliRunResult> => ({
+    meta: {
+      durationMs: 1,
+      agentMeta: {
+        sessionId: "",
+        provider: "anthropic",
+        model: "opus",
+        compactionCount: 1,
+        compactionTokensBefore: 33_905,
+        compactionTokensAfter: 6_173,
+      },
+    },
+  })),
   storedProfiles: {} as Record<string, unknown>,
 }));
 
@@ -55,6 +69,7 @@ function compactParams(overrides: Record<string, unknown> = {}) {
     trigger: "manual",
     cliSessionBinding: { sessionId: "native-session", authProfileId: "anthropic:subscription" },
     sessionEntry: { execHost: "node", execNode: "paired-node" },
+    skillsSnapshot: { prompt: "stored skills prompt", skills: [] }, // stored copy: no catalogs
     customInstructions: "keep decisions",
     ...overrides,
   } as never;
@@ -78,6 +93,7 @@ it("resumes the bound backend session with the backend-owned command", async () 
     ok: true,
     compacted: true,
     reason: 'CLI backend "claude-cli" compacted its native session.',
+    result: { tokensBefore: 33_905, tokensAfter: 6_173 },
   });
   expect(runCliAgentMock).toHaveBeenCalledOnce();
   const call = runCliAgentMock.mock.calls[0]?.[0];
@@ -94,16 +110,13 @@ it("resumes the bound backend session with the backend-owned command", async () 
     cliSessionBinding: { sessionId: "native-session", authProfileId: "anthropic:subscription" },
     authProfileId: "anthropic:subscription",
     sessionEntry: { execHost: "node", execNode: "paired-node" },
+    skillsSnapshot: { resolvedSkills: expect.any(Array) },
     controlOperation: "compact",
     disableCliLiveSession: true,
     cleanupCliLiveSessionOnRunEnd: true,
     allowEmptyAssistantReplyAsSilent: true,
   });
-  const preparedRunAdmission = call?.preparedRunAdmission;
-  if (!preparedRunAdmission) {
-    throw new Error("native compaction did not prepare run admission");
-  }
-  await expect(preparedRunAdmission.admit("embedded")).rejects.toThrow(
+  await expect(call?.preparedRunAdmission?.admit("embedded")).rejects.toThrow(
     "prepared execution context is already closed",
   );
 });

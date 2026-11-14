@@ -1,7 +1,7 @@
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
-import { isSessionRouteId, pathForAgentPanel } from "../app-route-paths.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
@@ -366,12 +366,8 @@ export class ShellGatewayOwner {
       return;
     }
     if (command.kind === "agent-github-settings") {
-      const agentId = commandParams.agentId?.trim();
-      if (agentId) {
-        context.navigate("agents", {
-          pathname: pathForAgentPanel(agentId, "tools", context.basePath),
-        });
-      }
+      // Every agent's GitHub account, and the shared agent account, are changed in Profile.
+      context.navigate("profile", { hash: "#settings-profile-github-connections" });
       return;
     }
     if (command.kind === "sidebar") {
@@ -393,7 +389,7 @@ export class ShellGatewayOwner {
             commandParams.agentId !== undefined &&
             commandParams.agentId !== context.agentSelection.state.selectedId))
       ) {
-        this.host.shellNavigation.selectChatSession(sessionKey, commandParams.agentId);
+        return; // Background panel requests must not steal navigation or replay on return.
       }
       const panelEvent = new CustomEvent(
         {

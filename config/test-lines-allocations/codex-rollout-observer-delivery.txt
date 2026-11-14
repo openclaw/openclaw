@@ -1,2 +1,0 @@
-# Coarse-directory invalidation, warm-cache reuse and controlled watcher loss beyond upstream targeted notification delivery; exact membership oracles remain.
-16

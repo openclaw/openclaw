@@ -6,6 +6,7 @@ import { assertNoSymlinkParentsSync } from "@openclaw/fs-safe/advanced";
 import * as replaceFile from "@openclaw/fs-safe/atomic";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { classifyDoctorMigrationBackupPath } from "../commands/doctor-migration-backup-names.js";
 import { resolveStateDir } from "../config/paths.js";
 import { VERSION } from "../version.js";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
@@ -490,13 +491,10 @@ function isRestoreMoveWithinTarget(
   }
   const storePath = path.resolve(target.storePath);
   if (move.kind === "database-backup") {
-    return (
-      sourcePath === storePath &&
-      archivePath.startsWith(`${sourcePath}.pre-startup-migration-`) &&
-      /^[a-f0-9-]{36}(?:\.scoped)?\.bak$/.test(
-        archivePath.slice(`${sourcePath}.pre-startup-migration-`.length),
-      )
-    );
+    // Manifests record only SQLite file originals; PostgreSQL directories and
+    // restart-recovery snapshots are never restore moves.
+    const format = classifyDoctorMigrationBackupPath(sourcePath, archivePath);
+    return sourcePath === storePath && (format === "full" || format === "scoped");
   }
   const sessionsDir = path.dirname(storePath);
   const archiveDir = path.join(path.dirname(sessionsDir), "session-sqlite-import-archive");

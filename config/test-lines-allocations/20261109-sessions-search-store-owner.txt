@@ -1,0 +1,3 @@
+# Existing search-owner table gains an ordinary-key regression; one fixed/global main-alias negative contract protects canonical ownership.
+# Exact net tracked test growth against 433a0c35850349620fbcb23cf6792f2e7d882fde; task-only RPC fixture is excluded from commit scope.
+24

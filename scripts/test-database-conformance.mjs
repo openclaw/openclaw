@@ -57,13 +57,13 @@ try {
 let targets = explicitTargets
   ? []
   : resolvePostgresConformanceTargets(
-      listDirectoryTreeStrictSync(
-        fileURLToPath(new URL("../src/infra/database-engine/", import.meta.url)),
-      )
-        .map((walkEntry) => walkEntry.relativePath)
-        .filter((file) => file.endsWith(".test.ts"))
-        .map((file) => `src/infra/database-engine/${file.replaceAll("\\", "/")}`)
-        .toSorted(),
+      ["src", "extensions"].flatMap((root) =>
+        listDirectoryTreeStrictSync(fileURLToPath(new URL(`../${root}/`, import.meta.url)))
+          .map((walkEntry) => walkEntry.relativePath)
+          .filter((file) => file.endsWith(".test.ts"))
+          .map((file) => `${root}/${file.replaceAll("\\", "/")}`)
+          .toSorted(),
+      ),
     );
 if (shardCount) {
   if (shardCount > targets.length) {

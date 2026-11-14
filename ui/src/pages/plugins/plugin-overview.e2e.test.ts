@@ -1,5 +1,6 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
 import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
@@ -53,6 +54,90 @@ async function setup(
 describeControlUiE2e("Plugin overview", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
+
+  it("shows the official publisher for an installed bundled plugin", async () => {
+    const bundled = {
+      ...calendarPlugin,
+      id: "huggingface",
+      name: "Hugging Face",
+      description: "Run models through Hugging Face Inference Providers.",
+      packageName: "@openclaw/huggingface-provider",
+      version: "2026.11.3",
+      catalogId: "local_aHVnZ2luZ2ZhY2U",
+      origin: "bundled" as const,
+      removable: false,
+    };
+    const catalog: PluginDiscoveryDetailResult = {
+      plugin: {
+        id: bundled.catalogId,
+        catalog: { name: bundled.name, official: true, categories: ["models"] },
+        local: {
+          present: true,
+          installed: true,
+          enabled: true,
+          state: "enabled",
+          pluginId: bundled.id,
+          action: "manage",
+        },
+      },
+      detail: {
+        origin: "local",
+        author: { handle: "openclaw", displayName: "OpenClaw", official: true },
+        topics: [],
+        configuration: [],
+        mcpServers: [],
+        skills: [],
+        versions: [],
+      },
+    };
+    const context = await newContext();
+    onTestFinished(() => context.close());
+    const page = await context.newPage();
+    const gateway = await installMockGateway(
+      page,
+      {
+        featureMethods: pluginMethods,
+        methodResponses: {
+          ...pluginMethodResponses(),
+          "plugins.list": inventory([bundled]),
+          "plugins.inspect": {
+            ...calendarInspection,
+            plugin: bundled,
+            source: { kind: "npm", packageName: bundled.packageName },
+            declared: { ...calendarInspection.declared, tools: [] },
+            overview: {
+              readme: "# Hugging Face\n\nUse hosted models through Inference Providers.",
+            },
+          },
+        },
+      },
+      {
+        requestHandlers: {
+          "plugins.catalog.get": (params) =>
+            asNullableRecord(params)?.version
+              ? {
+                  __mockError: {
+                    code: "INVALID_REQUEST",
+                    message: "Local plugin details do not select releases.",
+                  },
+                }
+              : catalog,
+        },
+      },
+    );
+    await page.goto(server.baseUrl + "plugins/" + bundled.catalogId);
+    await role(page, "button", "Disable Hugging Face").waitFor();
+    await gateway.waitForRequest("plugins.catalog.get");
+    await page.locator(".plugin-metadata__loading").waitFor({ state: "hidden" });
+    await captureScreenshot(page, "bundled-publisher.png", "viewport");
+    expect(await role(page, "link", "@openclaw").count()).toBe(1);
+    expect(
+      await page.locator(".plugin-catalog-detail__publisher .plugin-official-badge").count(),
+    ).toBe(1);
+    expect((await gateway.getRequests("plugins.catalog.get"))[0]?.params).toEqual({
+      id: bundled.catalogId,
+    });
+  });
 
   it("gives failed plugin actions shared callout padding and space before capabilities", async () => {
     const message =

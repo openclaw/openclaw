@@ -393,6 +393,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       },
       sync: async () => {},
       seal: async () => {},
+      recordScheduledMemoryParent: async () => {},
     });
     const release = vi.fn(async () => {});
     acquirePreparedModelRuntimeMock.mockResolvedValue({

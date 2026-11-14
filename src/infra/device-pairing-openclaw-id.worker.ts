@@ -46,6 +46,7 @@ type OpenClawIdNodePairingInput = {
   publicKey: string;
   commands: string[];
   caps: string[];
+  permissions?: Record<string, boolean>;
   displayName: string;
   accessMetadata?: DevicePairingAccessMetadata;
   nowMs: number;
@@ -96,6 +97,7 @@ export function approveOpenClawIdNodeInWorker(
     displayName: input.displayName,
     commands: input.commands,
     caps: input.caps,
+    ...(input.permissions ? { permissions: input.permissions } : {}),
     createdAtMs: input.nowMs,
     approvedAtMs: input.nowMs,
   };

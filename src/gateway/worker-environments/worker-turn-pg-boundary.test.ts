@@ -60,9 +60,9 @@ it("prepares fresh and follow-up worker turns without Gateway-thread database qu
       } finally {
         input.preparedRunAdmission.close();
       }
+      sql.expectIdle();
     }
     expect(launchTurn).toHaveBeenCalledTimes(2);
-    sql.expectIdle();
   } finally {
     sql.restore();
   }

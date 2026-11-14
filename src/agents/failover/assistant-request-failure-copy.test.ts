@@ -252,3 +252,22 @@ describe("renderAssistantRequestFailureCopy", () => {
     expect(renderAssistantRequestFailureCopy({ model: "test-model" })).toBe(runFailure);
   });
 });
+
+it("gives compacted-history recovery guidance for structured and terminal item conflicts", () => {
+  const expected =
+    "⚠️ The AI service rejected saved conversation state (item_conflict). Run /compact, then retry. If it still fails, choose another model and share the Gateway logs with the operator.";
+  for (const message of [
+    {
+      errorCode: "item_conflict",
+      errorType: "invalid_request_error",
+      errorMessage: "An input item conflicts with an existing record.",
+    },
+    { errorMessage: "LLM request rejected: An input item conflicts with an existing record." },
+  ]) {
+    expect(renderRecordedAssistantFailureCopy(message)).toBe(expected);
+    expect(
+      formatUserFacingAssistantErrorText(makeAssistant({ ...message, stopReason: "error" })),
+    ).toBe(expected);
+  }
+  expect(renderRecordedAssistantFailureCopy({ errorMessage: expected })).toBe(expected);
+});

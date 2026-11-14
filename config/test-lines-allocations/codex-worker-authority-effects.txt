@@ -1,4 +1,0 @@
-245
-# Counted test/support growth for real profile/model admission, node exec policy,
-# workspace lease revocation, native auth subprocess and loopback provider I/O.
-# The opt-in .proof.ts entry is not counted by the canonical test-line inventory.

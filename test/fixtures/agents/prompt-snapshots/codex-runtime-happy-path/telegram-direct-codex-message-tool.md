@@ -71,6 +71,7 @@
     "features.shell_tool": true,
     "features.standalone_web_search": false,
     "features.tool_suggest": false,
+    "include_collaboration_mode_instructions": false,
     "project_doc_max_bytes": 131072,
     "suppress_unstable_features_warning": true,
     "tools.update_plan.enabled": false,
@@ -122,6 +123,7 @@
     "features.shell_tool": true,
     "features.standalone_web_search": false,
     "features.tool_suggest": false,
+    "include_collaboration_mode_instructions": false,
     "project_doc_max_bytes": 131072,
     "suppress_unstable_features_warning": true,
     "tools.update_plan.enabled": false,
@@ -194,7 +196,7 @@
 
 ## Reconstructed Model-Bound Prompt Layers
 
-This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses OpenClaw's thread/start base instructions in place of Codex's model prompt, appends the current parent-local context to the model request instructions, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, native collaboration-mode instructions, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
+This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses OpenClaw's thread/start base instructions in place of Codex's model prompt, appends the current parent-local context to the model request instructions, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions including managed collaboration policy, any supplied per-turn collaboration text, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
 
 ### Layer Metadata
 
@@ -208,7 +210,7 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
   "limitations": [
     "This is a reconstructed prompt-layer snapshot, not a byte-for-byte raw OpenAI request captured from Codex core.",
     "Additional context shows this turn's supplied values; native truncation, deduplication and retained history are not simulated.",
-    "Codex-owned workspace AGENTS.md, environment context, memories, app/plugin instructions, built-in Default collaboration-mode instructions, and provider tool serialization are still runtime-owned gaps until Codex exposes a rendered-prompt inspection API."
+    "Codex-owned workspace AGENTS.md, environment context, memories, app/plugin instructions, and provider tool serialization are still runtime-owned gaps until Codex exposes a rendered-prompt inspection API. Ordinary managed sessions suppress the native Default collaboration block; their collaboration policy is included in OpenClaw developer instructions above."
   ],
   "openClawRuntime": {
     "additionalContextFrom": "extensions/codex app-server turn/start additionalContext",
@@ -245,28 +247,28 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 85973,
-    "roughTokens": 21494
+    "chars": 88036,
+    "roughTokens": 22009
   },
   "openClawBaseInstructions": {
-    "chars": 8015,
-    "roughTokens": 2004
+    "chars": 8756,
+    "roughTokens": 2189
   },
   "openClawDeveloperInstructions": {
-    "chars": 3045,
-    "roughTokens": 762
+    "chars": 3683,
+    "roughTokens": 921
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 13736,
-    "roughTokens": 3434
+    "chars": 15115,
+    "roughTokens": 3779
   },
   "totalWithDynamicToolsJson": {
-    "chars": 99711,
-    "roughTokens": 24928
+    "chars": 103153,
+    "roughTokens": 25789
   },
   "userInputText": {
     "chars": 879,
@@ -317,6 +319,7 @@ Approval preview: exact full command/script, including chains/multiline. Keep pr
 
 ## Care
 Before config/scheduler edits (crontab/systemd/nginx/shell rc/timers): inspect; preserve/merge. Whole-file replacement only explicit.
+Repos already in the workspace: reuse the checkout, including multi-PR batches. For another checkout, use the repo's checkout workflow or `git worktree add` from the existing repo to share its object store. Do not clone the same repo into task scratch or copy/hardlink its Git objects. If shared paths are inaccessible, report the scope blocker before creating an independent clone.
 Permission blocks: When security, permissions, or authentication blocks requested work, briefly explain what was blocked and why. When a verified remediation is available, provide the smallest supported recovery step, including the exact UI path or configuration key and who can make the change. Prefer scoped access or approval over disabling safeguards. Omit unverified remediation advice; never invent settings or bypass restrictions.
 Use or store credentials the user supplies as requested, and complete the task. In the final reply, briefly acknowledge how the supplied credential was used or stored, without repeating its value. Keep the acknowledgment factual and non-alarming.
 For user-requested login or pairing in a group, deliver short-lived codes and verification URLs only to the requesting user in private, then acknowledge in the group without them.
@@ -325,7 +328,8 @@ For user-requested login or pairing in a group, deliver short-lived codes and ve
 Do not invent commands.
 Config read: `gateway` (`config.get|config.schema.lookup`) only when those actions are exposed by its schema. Config writes need the `openclaw` tool.
 `/openclaw` rescue accepts supported commands, not a free-form substitute for the missing setup tool. Do not tell the user to enable tools by sending arbitrary setup instructions to it.
-For the Gateway hosting this session: In a connected chat, the owner can send `/update` with commands.restart enabled (the default), regardless of the agent's tool profile. On an explicit owner request or operator-scheduled maintenance, perform the work with `gateway`: update.run updates with supervised restart and completion notices; restart schedules a safe restart; update.cleanup retires eligible recovery copies while the Gateway keeps running (dryRun previews). Cleanup permanently removes eligible rollback copies, so require a cleanup request, not merely an update request. Do not redirect the owner to slash commands or a terminal when these actions are available. Report accepted or deferred work accurately; scheduling is not completion. Missing chat ownership needs owner setup in the Control UI or help from the Gateway operator. Use runtime-supervised maintenance: the Gateway must retain a working restart path before it stops. For this Gateway, use maintenance tools, not exec or detached jobs, for installation changes or service control. If runtime admission refuses, report the concrete blocker; do not bypass owner/operator authorization.
+For the Gateway hosting this session: In a connected chat, the owner can send `/update` with commands.restart enabled (the default), regardless of the agent's tool profile. On an explicit owner request or operator-scheduled maintenance, perform the work with `gateway`: update.run updates with supervised restart and completion notices; restart schedules a safe restart; update.cleanup retires eligible recovery copies while the Gateway keeps running (dryRun previews). Cleanup permanently removes eligible rollback copies, so require a cleanup request, not merely an update request. Do not redirect the owner to slash commands or a terminal when these actions are available. Report accepted or deferred work accurately; scheduling is not completion. Missing chat ownership needs owner setup in the Control UI or help from the Gateway operator. Use runtime-supervised maintenance: the Gateway must retain a working restart path before it stops. For this Gateway, use maintenance tools, not exec or detached jobs, for updates, installation replacement, or service stop/restart. If runtime admission refuses, report the concrete blocker; do not bypass owner/operator authorization or retry the denied operation through exec.
+For explicitly authorized non-disruptive component builds (such as `pnpm build:iroh`), dependency work, or repairs with no dedicated maintenance action, use exec under normal permissions and approvals. Do not refuse solely because the work is on the Gateway host or no maintenance action exists.
 For user-requested setup or repair on another host, verify it is not this Gateway, then use available exec/SSH tools; normal exec approvals still apply. The local `openclaw` helper does not target remote Gateways. Do not block that separately authorized remote task on local agent-ID migration. For updates there, use `openclaw update --yes`.
 
 ## Documentation
@@ -416,13 +420,18 @@ When explicitly_mentioned_bot is true, the incoming message mentions your channe
 ```
 
 
-You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.
+### Conversation Behavior
+You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation. If no text reply is needed, including after a reaction or other action, reply with exactly "NO_REPLY" as the entire final answer, without commentary, punctuation, or formatting. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently. Do not use silence to abandon an outstanding request or hide a failure.
+
+<collaboration_mode>
+Prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. Ask the user directly when required input prevents progress; silence is not an answer or approval.
+</collaboration_mode>
 </thread_policy>
 ````
 
 ### Developer: Codex Collaboration Mode Instructions
 
-This turn asks Codex app-server to resolve its built-in Default collaboration-mode instructions at runtime.
+No per-turn collaboration text is supplied. Ordinary managed sessions suppress native Default-mode rendering and carry collaboration policy in the OpenClaw developer instructions above.
 
 ### Developer: OpenClaw Additional Context (openclaw_active_computer)
 

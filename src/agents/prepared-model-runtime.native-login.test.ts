@@ -33,7 +33,11 @@ const nativeLogin = {
   apiKey: "synthetic-native-presence",
   source: "Fixture CLI login",
   mode: "oauth",
-  nativeAuth: { runtime: "fixture-cli", mode: "oauth" },
+  nativeAuth: {
+    runtime: "fixture-cli",
+    mode: "oauth",
+    display: { kind: "subscription", plan: "Max" },
+  },
 } as const;
 const sharedCredential = { type: "api_key", key: "synthetic-shared-key" } as const;
 const savedCredential = { type: "api_key", key: "synthetic-saved-key" } as const;
@@ -131,7 +135,11 @@ it("publishes native login recovery on forced admission recheck without waiting 
   await recheck({ force: true });
   expect(readAuth().authModes).toEqual({
     shared: "api_key",
-    "fixture-cli": { source: "native", mode: "oauth" },
+    "fixture-cli": {
+      source: "native",
+      mode: "oauth",
+      display: { kind: "subscription", plan: "Max" },
+    },
   });
   expect(readAuth().credentials?.[native.id]).toEqual({
     type: "api_key",
@@ -174,7 +182,11 @@ it("publishes a login whose check outlives the triggering read's plugin scope", 
   probed.resolve();
   await pending;
   expect(publish).toHaveBeenCalledOnce();
-  expect(readAuth().authModes[native.id]).toEqual({ source: "native", mode: "oauth" });
+  expect(readAuth().authModes[native.id]).toEqual({
+    source: "native",
+    mode: "oauth",
+    display: { kind: "subscription", plan: "Max" },
+  });
 });
 
 it("keeps saved profile credentials authoritative across native login and logout", async () => {

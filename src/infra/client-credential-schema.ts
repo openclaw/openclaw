@@ -85,3 +85,16 @@ export type ClientCredentialDatabase = {
     updated_at_ms: number;
   };
 };
+
+export type ClientIdentityRecord = ClientCredentialDatabase["device_identities"];
+export type ClientTokenRecord = ClientCredentialDatabase["device_auth_tokens"];
+export type ClientSocketRecord = ClientCredentialDatabase["native_exec_socket_credentials"];
+
+export type ClientCredentialResult =
+  | { kind: "identity"; identity: ClientIdentityRecord | null }
+  | { kind: "token"; token: ClientTokenRecord | null }
+  | { kind: "tokens"; tokens: ClientTokenRecord[]; nextRole: string | null }
+  | { kind: "identityRepair"; identity: ClientIdentityRecord; repaired: boolean; rotated: boolean }
+  | { kind: "changed"; changed: boolean }
+  | { kind: "cleared"; count: number }
+  | { kind: "socket"; socket: ClientSocketRecord | null };

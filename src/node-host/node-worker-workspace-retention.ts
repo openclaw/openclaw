@@ -67,3 +67,26 @@ export async function listNodeWorkerWorkspaceSessions(
   }
   return sessions;
 }
+
+/** Retain an exact generation through asynchronous work and concurrent collection. */
+export function retainNodeWorkerWorkspaceOperation(
+  active: Map<string, number>,
+  retainedDuringPass: Set<string> | undefined,
+  generationKey: string,
+): () => void {
+  active.set(generationKey, (active.get(generationKey) ?? 0) + 1);
+  retainedDuringPass?.add(generationKey);
+  let released = false;
+  return () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    const count = active.get(generationKey) ?? 0;
+    if (count <= 1) {
+      active.delete(generationKey);
+    } else {
+      active.set(generationKey, count - 1);
+    }
+  };
+}

@@ -4,20 +4,22 @@ import {
   estimateStringTokenPressure,
 } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  isDeeplyFrozenPlainData,
-  memoizeFrozenPlainDataProjection,
-} from "../../shared/immutable-data.js";
-import { SAFETY_MARGIN } from "../compaction-planning.js";
-import type { AgentMessage, BashExecutionMessage } from "../runtime/index.js";
+import { IMAGE_BLOCK_TOKENS } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
 import {
   BRANCH_SUMMARY_PREFIX,
   BRANCH_SUMMARY_SUFFIX,
   bashExecutionToText,
   COMPACTION_SUMMARY_PREFIX,
   COMPACTION_SUMMARY_SUFFIX,
-  IMAGE_BLOCK_TOKENS,
-} from "../runtime/index.js";
+} from "../../../packages/agent-core/src/harness/messages.js";
+import type { AgentMessage, BashExecutionMessage } from "../../../packages/agent-core/src/types.js";
+import {
+  isDeeplyFrozenPlainData,
+  memoizeFrozenPlainDataProjection,
+} from "../../shared/immutable-data.js";
+
+/** Buffer for token-estimation inaccuracy, shared by admission and compaction. */
+export const SAFETY_MARGIN = 1.2;
 
 const JSON_PAYLOAD_CHARS_PER_TOKEN = 3;
 const MESSAGE_BOUNDARY_OVERHEAD_TOKENS = 12;
@@ -240,7 +242,11 @@ export function createFreshLlmBoundaryTokenEstimator(params: {
     ? params.fixedTokenPressure.systemTokens + MESSAGE_BOUNDARY_OVERHEAD_TOKENS
     : estimateRenderedPromptTokens({ systemPrompt: params.systemPrompt, prompt: "" });
   // Apply the safety margin once to the complete request before provider tokenization.
-  return (request: { messages: AgentMessage[]; prompt: string; imageCount?: number }): number => {
+  return (request: {
+    messages: Iterable<AgentMessage>;
+    prompt: string;
+    imageCount?: number;
+  }): number => {
     let messageTokens = 0;
     const completions = new Map<string, { estimated: number; measured: number }>();
     for (const message of request.messages) {
@@ -278,4 +284,42 @@ export function createFreshLlmBoundaryTokenEstimator(params: {
         safetyMargin,
     );
   };
+}
+
+export function estimateVariableRequestTokens(
+  messages: Iterable<AgentMessage>,
+  prompt: string,
+): number {
+  const estimateTokens = createFreshLlmBoundaryTokenEstimator({});
+  return estimateTokens({ messages, prompt }) - estimateTokens({ messages: [], prompt: "" });
+}
+
+export function estimateCompactionHistoryTokens(
+  messages: Iterable<AgentMessage>,
+  budget?: {
+    pendingTokens: number;
+    pendingUserTokens?: number;
+    pendingUserIdempotencyKey?: string;
+  },
+): number {
+  let overlap = 0;
+  function* observed() {
+    for (const message of messages) {
+      if (
+        budget?.pendingTokens &&
+        budget.pendingUserIdempotencyKey &&
+        message.role === "user" &&
+        "idempotencyKey" in message &&
+        message.idempotencyKey === budget.pendingUserIdempotencyKey
+      ) {
+        overlap = Math.min(
+          estimateVariableRequestTokens([message], ""),
+          budget.pendingUserTokens ?? budget.pendingTokens,
+        );
+      }
+      yield message;
+    }
+  }
+  const total = estimateVariableRequestTokens(observed(), "");
+  return total - overlap;
 }

@@ -31,8 +31,9 @@ import {
 import { buildSessionTranscriptTurnExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import {
   historyLane,
-  targetDiscoveryLane,
+  sessionStoreLane,
 } from "../../config/sessions/session-transcript-worker-resources.js";
+import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import {
   getOwnedSessionTranscriptReader,
@@ -144,7 +145,7 @@ it("reuses resident transcript bytes for admitted reads outside the actor withou
         transcriptHydration.prepareSessionTranscriptHydration(target, limits);
       const cohort = { sessionKey: target.sessionKey, entryIds: [entryId] };
       const replies: number[] = [];
-      const spies = [historyLane, targetDiscoveryLane].map(({ pool }) => {
+      const spies = [historyLane, sessionStoreLane].map(({ pool }) => {
         const run = pool.run.bind(pool);
         return vi.spyOn(pool, "run").mockImplementation((input, options) => {
           let hydration = false;
@@ -756,6 +757,7 @@ it.each([
             const questionPayload = question.message;
             const replyPayload = reply.message;
             expect(context.messages[0]).toBe(questionPayload);
+            expect(isOwnedTranscriptPayload(questionPayload)).toBe(true);
             expect(assistantMessage(context.messages[1]).content).toBe(replyPayload.content);
             expect(Object.isFrozen(questionPayload)).toBe(true);
             const writable = manager.getEntry(questionId!);

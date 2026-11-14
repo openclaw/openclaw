@@ -87,7 +87,7 @@ describe("background run lifecycle projection", () => {
     expect(frames(result.chain).map((frame) => [frame.runId, frame.outcome.kind])).toEqual([
       ["one", "active"],
       ["two", "active"],
-      ["old", "interrupted"],
+      ["old", "completed"],
     ]);
   });
 
@@ -165,14 +165,14 @@ describe("background run lifecycle projection", () => {
     const activeRunIds = result.options.activeRunIds;
     activeRunIds.splice(0, 1, "two");
     const second = frames(projectTranscriptChain(result.items, result.options));
-    expect(first.map((frame) => frame.outcome.kind)).toEqual(["active", "interrupted"]);
-    expect(second.map((frame) => frame.outcome.kind)).toEqual(["interrupted", "active"]);
+    expect(first.map((frame) => frame.outcome.kind)).toEqual(["active", "completed"]);
+    expect(second.map((frame) => frame.outcome.kind)).toEqual(["completed", "active"]);
     expect(second.map((frame) => frame.key)).toEqual(first.map((frame) => frame.key));
     activeRunIds.length = 0;
     expect(
       frames(projectTranscriptChain(result.items, result.options)).map(
         (frame) => frame.outcome.kind,
       ),
-    ).toEqual(["interrupted", "interrupted"]);
+    ).toEqual(["completed", "completed"]);
   });
 });

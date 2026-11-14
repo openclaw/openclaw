@@ -143,6 +143,23 @@ workflow binding, and hosted lease. The default source-review file is
 `.local/correction-review.json`; an explicit file lets the reviewer supply new
 source-review bytes without overwriting an older correction review.
 
+For a retained baseline-bound source, add both `--predecessor-head <SHA>` and
+`--predecessor-binding <OID>`, selecting the active baseline candidate and exact
+`.local/prepare-baseline.json` bytes. This also supports an initial signed
+`incomingSource` baseline followed by native publication and further correction.
+The source review keeps the original incoming identity while its hosted lease
+names the exact native publication. The publication owner reconstructs that lease
+from retained push or sync results; `prep.env` alone is insufficient. The source
+must descend from the hosted head.
+
+The version-2 binding retains the external source review separately from the
+historical correction review, and inventories the complete predecessor proof
+chain. Original incoming metadata, workflow binding, and native publication
+receipts remain unchanged. Each predecessor is reconstructed before admission or
+recovery. Interrupted and completed retries must name the same predecessor.
+Predecessor selection cannot combine with the fresh-incoming continuation flags
+below; it does not advance the original incoming context.
+
 To credit additional verified contributors without rewriting the signed source,
 add `--coauthors <file>` to this explicit `--for-proof` invocation. The regular
 UTF-8 JSON file contains an array of `Name <email>` identities, for example:
@@ -185,14 +202,18 @@ the same selected identities; a different request cannot adopt its journal.
 
 The source review authorizes materialization only. The producer initializes a
 new, unapproved exact-candidate review through the existing correction-review
-owner while it still owns current-main execution. Complete that independent
+owner while it still owns current-main execution. Pending IMPORTANT findings from
+the source review remain visible in that template, including findings absent from
+the original incoming review. READY, successful tests, and proof-publication
+authorization are never inherited. Complete that independent
 review for the new candidate; if the retained workflow predates this capability,
 use the existing exact-identity `prepare-workflow-successor --for-proof` operation
 to advance it to the authenticated current-main workflow named by that new review.
 Only that new exact-candidate typed NEEDS WORK authorization can use `prepare-publish-for-proof`. No successful gate
 or qualified preparation is created. Ordinary gates, push, sync, and merge still
-require READY. `--for-proof` does not select baseline succession or remote signing;
-those combinations, duplicate options, and unknown options refuse before locking.
+require READY. `--for-proof` remains exclusive to `prepare-baseline-refresh`;
+using it with `prepare-baseline-successor` or remote signing, incomplete predecessor
+pairs, mixed continuation options, duplicate options, and unknown options refuses before locking.
 Qualified version-1 refresh, successor, and signing contracts are unchanged.
 
 ## Signing a baseline on another host

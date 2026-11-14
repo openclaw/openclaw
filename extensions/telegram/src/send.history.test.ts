@@ -228,7 +228,11 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
   });
 
   it("refreshes authoritative edited captions without hiding later group history", async () => {
-    const original = providerMessage(-100123, "original response", { message_thread_id: 77 });
+    // Telegram marks forum topic messages; a bare supergroup message_thread_id is a reply chain.
+    const original = providerMessage(-100123, "original response", {
+      message_thread_id: 77,
+      is_topic_message: true,
+    });
     fixture.responseFor = () => original;
     await sendMessageTelegram("-100123:topic:77", "original response", sendOptions());
     await cache().record({
@@ -280,6 +284,23 @@ describe("Telegram outbound history over HTTP and SQLite", () => {
     expect(hasProviderObservedTelegramThreadBinding(await getCached("902", -100123), 77)).toBe(
       true,
     );
+  });
+
+  it("keeps an edited non-forum reply-chain message in unthreaded group history", async () => {
+    fixture.responseFor = () =>
+      providerMessage(-100123, "finalized reply", {
+        message_thread_id: 77,
+        edit_date: 1_779_394_750,
+      });
+    await editMessageTelegram("-100123", 902, "finalized reply", sendOptions());
+    resetTelegramMessageCacheForTest();
+    const read = (threadId?: number) =>
+      cache().readHistory({ accountId: "default", chatId: -100123, threadId, limit: 50 });
+    expect((await read()).messages).toMatchObject([
+      { messageId: "902", sender: "OpenClaw (you)", body: "finalized reply" },
+    ]);
+    expect((await read(77)).messages).toEqual([]);
+    expect((await getCached("902", -100123))?.threadId).toBeUndefined();
   });
 
   const emptyText = "Bad Request: text must be non-empty";

@@ -24,7 +24,7 @@ import {
   type SessionTranscriptWorkerReadSource,
 } from "./session-transcript-read-source.js";
 import { readSessionTranscriptModelContextInWorker } from "./session-transcript-read-worker-runtime.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import {
   sameTranscriptEntryAnchor,
   snapshotTranscriptEntryAnchor,
@@ -105,7 +105,7 @@ export async function readSessionTranscriptContextProjectionAsync<T>(
       return result.value;
     },
     signal,
-    targetDiscoveryLane,
+    sessionStoreLane,
   );
 }
 

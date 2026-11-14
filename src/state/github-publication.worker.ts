@@ -51,7 +51,8 @@ function mutate(
   const requiresSource =
     (input.operation === "claim" && kind === "personal") ||
     input.operation === "bindWorkspaceSnapshot" ||
-    input.operation === "checkpoint";
+    input.operation === "checkpoint" ||
+    input.operation === "reopen";
   if (requiresSource && !input.source) {
     throw new Error("GitHub publication action requires a typed source.");
   }
@@ -188,6 +189,10 @@ function repositoryMutation(database: OpenClawStateDatabase, input: RepositoryPu
   const admitted = () => assertGitHubPublicationWorkerSourceCurrent(database.db);
   const authority = { assertCurrent: admitted, assertCustody: () => assertCustody(database) };
   switch (input.operation) {
+    case "reopen":
+      return [
+        repository.reopenRepositoryGitHubPublicationInDatabase(database, input.row, admitted),
+      ];
     case "claim":
       return [
         repository.claimRepositoryGitHubPublicationInDatabase(

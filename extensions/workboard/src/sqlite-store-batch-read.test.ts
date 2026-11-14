@@ -316,8 +316,7 @@ describe("workboard sqlite batch card persistence", () => {
           target.id,
           persisted(next),
           target.updatedAt - (result === "conflict" ? 1 : 0),
-          "slot-owner",
-          3000,
+          { ownerId: "slot-owner", now: 3000, limit: 1 },
         ),
       ).resolves.toBe(result);
       if (result === "conflict") {
@@ -362,13 +361,11 @@ describe("workboard sqlite batch card persistence", () => {
       await stores.cards.register(target.id, persisted(target));
       const next = { ...target, updatedAt: target.updatedAt + 1 };
       await expect(
-        stores.cards.claimIfOwnerAvailable(
-          target.id,
-          persisted(next),
-          target.updatedAt,
-          "slot-owner",
-          1_000_000,
-        ),
+        stores.cards.claimIfOwnerAvailable(target.id, persisted(next), target.updatedAt, {
+          ownerId: "slot-owner",
+          now: 1_000_000,
+          limit: 1,
+        }),
       ).resolves.toBe(expected);
       await expect(stores.cards.lookup(target.id)).resolves.toEqual(
         persisted(expected === "updated" ? next : target),
@@ -430,13 +427,11 @@ describe("workboard sqlite batch card persistence", () => {
               version: 1,
               board: { id: "grouped", createdAt: 1, updatedAt: 2 },
             });
-            stores.cards.claimIfOwnerAvailable(
-              target.id,
-              persisted(next),
-              target.updatedAt,
-              "slot-owner",
-              3000,
-            );
+            stores.cards.claimIfOwnerAvailable(target.id, persisted(next), target.updatedAt, {
+              ownerId: "slot-owner",
+              now: 3000,
+              limit: 1,
+            });
           }),
         ).toThrow(fault === "constraint" ? "UNIQUE constraint failed" : TypeError);
         expect(stores.boards.lookup("grouped")).toBeUndefined();

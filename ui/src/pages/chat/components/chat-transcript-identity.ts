@@ -19,12 +19,22 @@ import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { resolveChatDefaultAvatarPlacement } from "./chat-author-avatar.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
+import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
 const participants = createTranscriptMemo<{
   showOwnSenderName: boolean;
   replyPeople: readonly string[];
 }>();
 const forwardedGroups = createTranscriptMemo<boolean>();
+
+export function resolveTranscriptAssistantIdentity(
+  props: Parameters<typeof resolveAssistantDisplayAvatar>[0] &
+    Pick<ChatThreadProps, "fullMessageAgentId" | "assistantName">,
+) {
+  const agentId = props.currentAgentId ?? props.fullMessageAgentId;
+  const { avatar, textAvatar } = resolveAssistantDisplayAvatar(props, agentId);
+  return { agentId, name: props.assistantName, avatar, textAvatar };
+}
 
 export function resolveTranscriptParticipants(
   props: Pick<

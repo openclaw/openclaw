@@ -30,7 +30,10 @@ import { startGatewayServer } from "./server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { acquireGatewayE2ePortBlock } from "./test-helpers.listener.js";
-import type { WorkerEnvironmentServiceRecord } from "./worker-environments/service-contract.js";
+import type {
+  WorkerEnvironmentServiceContract,
+  WorkerEnvironmentServiceRecord,
+} from "./worker-environments/service-contract.js";
 
 const injectedWorkerService = vi.hoisted(() => {
   const records = new Map<string, WorkerEnvironmentServiceRecord>();
@@ -42,11 +45,16 @@ const injectedWorkerService = vi.hoisted(() => {
     get: (environmentId: string) => records.get(environmentId),
     readPreparedPoolSummary: () => ({ maxTotal: 4, reservedEnvironmentIds: [] }),
     readReadyWorkerTarget: () => 1,
-    create: async (profileId: string, idempotencyKey: string) => {
+    createWithRequest: async ({
+      profileId,
+      idempotencyKey,
+      beforeProvision,
+    }: Parameters<WorkerEnvironmentServiceContract["createWithRequest"]>[0]) => {
       const existingId = idempotency.get(idempotencyKey);
       if (existingId) {
         return records.get(existingId)!;
       }
+      beforeProvision?.();
       createCount += 1;
       const environmentId = `worker-qa-${createCount}`;
       const record: WorkerEnvironmentServiceRecord = {

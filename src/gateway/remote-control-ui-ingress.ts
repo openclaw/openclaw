@@ -284,6 +284,7 @@ export function createGatewayControlUiIngressFactory(params: {
           principal.kind !== "owner"
             ? resolveGatewayOperatorAccessAuthority(profileId, host.getRuntimeConfig(), {
                 requireLivePolicySet: true,
+                openclawIdPrincipal: admission?.principal,
               })
             : undefined;
         const signal = AbortSignal.any([

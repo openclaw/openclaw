@@ -1,3 +1,0 @@
-# Collapsed, redacted, expandable error details in the shared toast and panel owners,
-# plus replacement-disclosure regressions for desktop and mobile chat.
-69

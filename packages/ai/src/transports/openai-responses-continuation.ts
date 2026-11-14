@@ -1,5 +1,4 @@
 import { createHash, type Hash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import type { ModelRequestHeaders } from "@openclaw/llm-core";
 import { writeStableStringify } from "@openclaw/normalization-core";
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
@@ -14,7 +13,11 @@ import {
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { getResponsesCompactionInputIdentity } from "./openai-responses-compaction-window.js";
 import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
-import { projectJsonObject, projectJsonValue } from "./openai-responses-json-projection.js";
+import {
+  projectedJsonEqual,
+  projectJsonObject,
+  projectJsonValue,
+} from "./openai-responses-json-projection.js";
 import {
   canReferenceResponsesReasoningHistory,
   replayResponsesReasoningUpdates,
@@ -60,7 +63,7 @@ export type ResponsesContinuationStatus =
 
 function jsonValuesEqual(left: object, right: object): boolean {
   // Finish the left side before evaluating any right-side hook values.
-  return isDeepStrictEqual(projectJsonObject(left), projectJsonObject(right));
+  return projectedJsonEqual(projectJsonObject(left), projectJsonObject(right));
 }
 
 function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {
@@ -536,7 +539,7 @@ export function resolveResponsesContinuationRequest(
     if (
       normalizedPrevious === undefined ||
       normalizedCurrent === undefined ||
-      !isDeepStrictEqual(
+      !projectedJsonEqual(
         projectContinuationHistory(normalizedCurrent),
         projectContinuationHistory(normalizedPrevious),
       )

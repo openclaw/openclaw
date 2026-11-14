@@ -672,7 +672,6 @@
 }
 
 .plugins-tile--fallback {
-  background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
   color: rgb(255 255 255 / 92%);
   font-family: var(--mono);
   font-size: var(--control-ui-text-sm);
