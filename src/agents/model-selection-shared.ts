@@ -54,6 +54,7 @@ import {
   warnUnresolvedConfiguredModel,
 } from "./model-selection-warnings.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
+import { ToolAuthorizationError } from "./tool-input-error.js";
 import { readUtilityModelSetting } from "./utility-model-setting.js";
 
 export { resolvePrimaryStringValue as normalizeModelSelection } from "@openclaw/normalization-core/string-coerce";
@@ -1437,6 +1438,12 @@ export function createModelVisibilityPolicyWithFallbacks(
           current.model === configuredDefault.model)
       ) {
         return current;
+      }
+      // Initial catalog substitution must honor the same strictness as runtime failover.
+      if (params.fallbackModels.length === 0) {
+        throw new ToolAuthorizationError(
+          `Configured model "${modelKey(current.provider, current.model)}" is not allowed by ${visibility.configPath ?? "modelPolicy.allow"} and model fallback is disabled. Update the configured model or ${visibility.repairConfigPath}.`,
+        );
       }
       const fallback = allowed.allowedCatalog.find((entry) =>
         allowed.allows({ provider: entry.provider, model: entry.id }),
