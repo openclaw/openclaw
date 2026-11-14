@@ -4,7 +4,10 @@ import { flush } from "../../../test-helpers/solid-settle.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
 import { createChatTranscript } from "./chat-transcript-controller.ts";
-import { setTranscriptViewport } from "./chat-transcript-fixture.test-support.tsx";
+import {
+  emitTranscriptResize,
+  setTranscriptViewport,
+} from "./chat-transcript-fixture.test-support.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -82,6 +85,10 @@ it.each([
       renderRows(rows);
       await commitLayout();
       bubbles = [...container.querySelectorAll(".chat-bubble")];
+      // A projected predecessor stays outside the flow until its native size arrives.
+      expect(bubbles[0]!.classList.contains("chat-bubble--reply-target")).toBe(false);
+      emitTranscriptResize(bubbles[0]!.closest(".chat-virtual-row")!, 800, 100);
+      await commitLayout();
     } else if (interruption === "wheel") {
       scrollTo.mockClear();
       container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));

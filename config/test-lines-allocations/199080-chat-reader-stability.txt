@@ -1,2 +1,2 @@
-# #199080: reader-stability regressions for the chat transcript: a strict scroll e2e over a mixed agent session, the late Mermaid render e2e, the top-row anchor rules, and the retained-content landing case.
-75
+# #199080: reader-stability regressions for the chat transcript: a strict scroll e2e over a mixed agent session, the late Mermaid render e2e, the top-row anchor rules, the retained-content landing case, and seven lines for the projected-reply fixture's missing native measurement/admission step.
+82
