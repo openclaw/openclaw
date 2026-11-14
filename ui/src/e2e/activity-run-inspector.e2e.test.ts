@@ -198,7 +198,7 @@ suite.define(() => {
         .poll(() => page.evaluate(() => document.activeElement?.textContent?.trim()))
         .toBe("Current work");
       await page.keyboard.press("Enter");
-      await page.locator(".activity-empty").waitFor();
+      await page.getByRole("region", { name: "Active sessions", exact: true }).waitFor();
       await expect
         .poll(() => modePanel.getAttribute("aria-labelledby"))
         .toBe("activity-mode-tab-live");
