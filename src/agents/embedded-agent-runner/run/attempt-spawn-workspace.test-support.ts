@@ -30,12 +30,13 @@ import {
   agentSessionQueuePromptContext,
   agentSessionSetPromptPreparation,
 } from "../../sessions/agent-session-prompting.js";
-import type { AgentSession, CreateAgentSessionOptions } from "../../sessions/index.js";
+import type { AgentSession } from "../../sessions/index.js";
 import { convertToLlm } from "../../sessions/messages.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
 } from "../../sessions/model-registry-runtime.js";
+import type { CreateAgentSessionOptions } from "../../sessions/sdk.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
@@ -72,8 +73,6 @@ type CapturedTrajectoryEvent = {
   type: string;
   workspaceDir?: string;
 };
-
-const normalizeMockProviderId = normalizeLowercaseStringOrEmpty;
 
 const hoisted = vi.hoisted(() => {
   const mock = () => vi.fn<(...args: unknown[]) => unknown>();
@@ -459,7 +458,7 @@ vi.mock("../../../image-generation/runtime.js", () => ({
 // mock-isolation: Workspace attempts pin synthetic models without loading the provider registry.
 vi.mock("../../model-selection.js", () => ({
   findNormalizedProviderValue,
-  normalizeProviderId: normalizeMockProviderId,
+  normalizeProviderId: normalizeLowercaseStringOrEmpty,
   resolveDefaultModelForAgent: () => ({ provider: "openai", model: "gpt-test" }),
 }));
 

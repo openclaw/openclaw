@@ -28,9 +28,7 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { withFileMutationQueueKeyResolution } from "./sessions/tools/file-mutation-queue.js";
 import { isToolResultError } from "./tool-result-error.js";
 
-type MemoryFlushToolProjection =
-  | Parameters<typeof wrapToolMemoryFlushAppendOnlyWrite>[1]
-  | MemoryFlushToolRunContext;
+type MemoryFlushToolProjection = MemoryFlushAppendOnlyWriteOptions | MemoryFlushToolRunContext;
 
 /** Validate the memory trigger's persistence arm and expose its plugin identity. */
 export function resolveMemoryFlushToolSetup(options?: OpenClawCodingToolsOptions) {
@@ -253,7 +251,7 @@ async function appendMemoryFlushContent(params: {
 }
 
 /** Restrict a write tool to appending memory-flush content to one path. */
-export function wrapToolMemoryFlushAppendOnlyWrite(
+function wrapToolMemoryFlushAppendOnlyWrite(
   tool: AnyAgentTool,
   options: MemoryFlushAppendOnlyWriteOptions,
 ): AnyAgentTool {

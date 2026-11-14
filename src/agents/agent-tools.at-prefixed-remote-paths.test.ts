@@ -6,7 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readMemoryArtifactProvenance } from "../memory/memory-artifact-provenance.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { wrapToolMemoryFlushAppendOnlyWrite } from "./agent-tools.memory-flush.js";
+import { projectMemoryFlushWriteTool } from "./agent-tools.memory-flush.test-support.js";
 import {
   createSandboxedEditTool,
   createSandboxedReadTool,
@@ -159,7 +159,7 @@ it.each(fixtures)("leading-@ remote paths (%s)", async (fixture) => {
   const journal = "memory/2026-08-25.md";
   await fs.writeFile(remoteFile(journal), "allowed", "utf8");
   await fs.writeFile(remoteFile(`@${journal}`), "literal", "utf8");
-  const memoryWriteTool = wrapToolMemoryFlushAppendOnlyWrite(writeTool, {
+  const memoryWriteTool = projectMemoryFlushWriteTool(writeTool, {
     root: hostRoot,
     relativePath: journal,
     sandbox: patchSandbox,
@@ -223,7 +223,7 @@ it.each(fixtures)("leading-@ remote paths (%s)", async (fixture) => {
         memoryWriteProvenance,
       });
       await expectQuarantine("patched");
-      await wrapToolMemoryFlushAppendOnlyWrite(memoryWrite, {
+      await projectMemoryFlushWriteTool(memoryWrite, {
         root: hostRoot,
         relativePath,
         containerWorkdir,

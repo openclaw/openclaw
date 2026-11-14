@@ -6,7 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
-import { wrapToolMemoryFlushAppendOnlyWrite } from "./agent-tools.memory-flush.js";
+import { projectMemoryFlushWriteTool } from "./agent-tools.memory-flush.test-support.js";
 import { createHostWorkspaceWriteTool, createOpenClawReadTool } from "./agent-tools.read.js";
 import { expectReadWriteEditTools, getTextContent } from "./test-helpers/agent-tools-fs-helpers.js";
 
@@ -61,7 +61,7 @@ describe("memory filesystem policy", () => {
     "validates memory append paths after suffix stripping (valid: %s)",
     async (valid) => {
       const file = "memory/2026-03-08.md";
-      const write = wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(workspaceDir), {
+      const write = projectMemoryFlushWriteTool(createHostWorkspaceWriteTool(workspaceDir), {
         root: workspaceDir,
         relativePath: file,
       });
