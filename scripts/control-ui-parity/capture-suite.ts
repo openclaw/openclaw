@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { Page, Route } from "playwright";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
@@ -39,6 +40,59 @@ const suite = createControlUiE2eSuite({
   },
 });
 const captureOrigin = "http://parity.localhost:18789";
+
+// Routes paint before their independent sources (config editor, presence, catalogs, lazy
+// styles) arrive, and focus and smooth scrolling land after interaction. Capture once no
+// proxied asset is loading and the page has been quiet for ten frames and 500 ms, the
+// same idle window as Playwright's networkidle; shorter windows missed debounced reloads.
+async function waitForQuietPage(page: Page, assets: { started: number; pending: number }) {
+  for (let started = -1; started !== assets.started || assets.pending > 0;) {
+    await expect.poll(() => assets.pending).toBe(0);
+    started = assets.started;
+    await page.evaluate(async () => {
+      const now = () => Number(document.timeline.currentTime);
+      let changedAt = now();
+      const changed = () => {
+        changedAt = now();
+      };
+      const activeElement = () => {
+        let active = document.activeElement;
+        while (active?.shadowRoot?.activeElement) {
+          active = active.shadowRoot.activeElement;
+        }
+        return active;
+      };
+      const observer = new MutationObserver(changed);
+      observer.observe(document, {
+        attributes: true,
+        characterData: true,
+        childList: true,
+        subtree: true,
+      });
+      document.addEventListener("scroll", changed, true);
+      try {
+        let focused = activeElement();
+        // Frames as well as time: work queued behind a long task lands between frames.
+        let quietFrames = 0;
+        for (const start = now(); quietFrames < 10 || now() - changedAt < 500;) {
+          if (now() - start > 10_000) {
+            throw new Error("The page kept changing for 10 s before capture");
+          }
+          const before = changedAt;
+          await new Promise(requestAnimationFrame);
+          if (activeElement() !== focused) {
+            focused = activeElement();
+            changed();
+          }
+          quietFrames = changedAt === before ? quietFrames + 1 : 0;
+        }
+      } finally {
+        observer.disconnect();
+        document.removeEventListener("scroll", changed, true);
+      }
+    });
+  }
+}
 let directory: string;
 let stylesheet: string | undefined;
 let capture: Capture;
@@ -126,12 +180,8 @@ suite.define(() => {
               async ({ page }) => {
                 const pageErrors: string[] = [];
                 page.on("pageerror", (error) => pageErrors.push(error.message));
-                await page.route("**/*", async (route) => {
-                  const url = new URL(route.request().url());
-                  if (url.origin !== captureOrigin) {
-                    await route.abort();
-                    return;
-                  }
+                const assets = { started: 0, pending: 0 };
+                const proxyAsset = async (route: Route, url: URL) => {
                   // The visible connection URL must not inherit the server's random port.
                   const response = await route.fetch({
                     url: new URL(`${url.pathname}${url.search}`, suite.server.baseUrl).href,
@@ -155,9 +205,31 @@ suite.define(() => {
                   } else {
                     await route.fulfill({ response });
                   }
+                };
+                await page.route("**/*", async (route) => {
+                  const url = new URL(route.request().url());
+                  if (url.origin !== captureOrigin) {
+                    await route.abort();
+                    return;
+                  }
+                  assets.started += 1;
+                  assets.pending += 1;
+                  try {
+                    await proxyAsset(route, url);
+                  } finally {
+                    assets.pending -= 1;
+                  }
                 });
                 await page.clock.setFixedTime(fixedTime);
                 await page.addInitScript(() => {
+                  // Scenes allow workers only for Playwright's sandbox-frame limit. The app
+                  // worker's script bypasses the capture proxy, and its build probe can
+                  // reload the page mid-capture.
+                  if (window === window.top) {
+                    Object.defineProperty(navigator.serviceWorker, "register", {
+                      value: () => Promise.reject(new Error("Parity captures run without workers")),
+                    });
+                  }
                   // A fixed draw keeps module-level decorative salts independent of load order.
                   Math.random = () => 0.42;
                   // Keep native frame delivery for readiness, but sample JS animation time
@@ -198,10 +270,24 @@ suite.define(() => {
                 }
                 await scene.prepare?.(page, gateway);
                 if (scene.route === "new-session") {
-                  await page.evaluate(() => {
-                    // Finish the typed New Session placeholder at a fixed animation sample.
-                    window.dispatchEvent(new CustomEvent("parity-frame-time", { detail: 3_000 }));
-                  });
+                  // The typed placeholder starts on its composer's first frame, which can follow
+                  // readiness. Advance the sample until a full animation fits after that start.
+                  let typed: string | null = null;
+                  for (let sample = 3_000; ; sample += 3_000) {
+                    const text = await page.evaluate(async (detail) => {
+                      window.dispatchEvent(new CustomEvent("parity-frame-time", { detail }));
+                      await new Promise(requestAnimationFrame);
+                      return document.querySelector(".agent-chat__composer-placeholder")
+                        ?.textContent;
+                    }, sample);
+                    if (text && text === typed) {
+                      break;
+                    }
+                    expect(sample, "New Session placeholder must finish typing").toBeLessThan(
+                      30_000,
+                    );
+                    typed = text ?? null;
+                  }
                 }
                 if (!scene.loading) {
                   await expect
@@ -214,6 +300,7 @@ suite.define(() => {
                     )
                     .toBe(0);
                 }
+                await waitForQuietPage(page, assets);
                 expect(pageErrors, "Synthetic scene must render without uncaught errors").toEqual(
                   [],
                 );
@@ -242,6 +329,8 @@ suite.define(() => {
                   height: profile.height,
                 });
               },
+              // Requests still loading after capture are irrelevant; drop their proxy quietly.
+              ({ page }) => page.unrouteAll({ behavior: "ignoreErrors" }),
             );
           } catch (error) {
             capture.failures.push({

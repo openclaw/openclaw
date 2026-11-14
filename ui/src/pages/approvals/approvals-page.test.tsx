@@ -125,6 +125,12 @@ function createPage({
 
 beforeEach(() => i18n.setLocale("en"));
 
+it("paints its route subtitle in English without another page registering it", () => {
+  expect(createPage().text(".page-subtitle")).toContain(
+    "Recent exec, plugin, and system-agent approvals.",
+  );
+});
+
 it("refreshes retained timestamps with locale and accepted history, not grants or loading", async () => {
   const NativeDateTimeFormat = Intl.DateTimeFormat;
   let timeZone = "UTC";
