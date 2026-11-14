@@ -10,6 +10,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
+import { loadavg } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
@@ -59,7 +60,11 @@ const { values } = parseArgs({
     "retention-mode": { type: "string", default: "retained" },
     "short-replies": { type: "boolean" },
     "large-session-events": { type: "string" },
+    "seed-concurrency": { type: "string", default: "1" },
     "restart-after-seed": { type: "boolean" },
+    "reset-after-seed": { type: "boolean" },
+    "compact-before-turn": { type: "boolean" },
+    "summary-delay-ms": { type: "string", default: "250" },
     "gateway-preload": { type: "string" },
     "shell-turns": { type: "boolean" },
     "idle-minutes": { type: "string" },
@@ -70,7 +75,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90 [--sessions 2000 --clients 10 --port 41673 --snapshot-minutes 10,90 --module-census --coverage --idle-minutes 5]\nFixed-session retention: --fixed-turn-sessions 8 --turn-count 80 --retention-round-size 10 --snapshot-minutes none --short-replies --retention-mode retained|allocation|timing\nNew idle sessions: --new-turn-sessions 1000 --turns-per-new-session 3 --retention-round-size 750 --snapshot-minutes none [--retention-snapshots --fixture-gib 35 (0 generates the small 5000-session fixture)]",
+    "node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90 [--sessions 2000 --clients 10 --port 41673 --snapshot-minutes 10,90 --module-census --coverage --idle-minutes 5]\nCompaction: --sessions 1 --large-session-events 33000 --event-chars 15000 --restart-after-seed --compact-before-turn [--reset-after-seed --seed-concurrency 4]\nCompaction burst: --sessions 10 --large-session-events 2000 --compact-before-turn [--summary-delay-ms 2000] compacts every seeded session at once\nFixed-session retention: --fixed-turn-sessions 8 --turn-count 80 --retention-round-size 10 --snapshot-minutes none --short-replies --retention-mode retained|allocation|timing\nNew idle sessions: --new-turn-sessions 1000 --turns-per-new-session 3 --retention-round-size 750 --snapshot-minutes none [--retention-snapshots --fixture-gib 35 (0 generates the small 5000-session fixture)]",
   );
   process.exit(0);
 }
@@ -103,13 +108,27 @@ const sessionCount = positiveInteger(values.sessions, "sessions");
 const largeSessionEvents = values["large-session-events"]
   ? positiveInteger(values["large-session-events"], "large-session-events")
   : undefined;
-if (largeSessionEvents && sessionCount !== 1) {
-  throw new Error("--large-session-events requires --sessions 1");
+// A compaction burst seeds and compacts several large sessions at once; other workloads use one.
+if (largeSessionEvents && sessionCount !== 1 && !values["compact-before-turn"]) {
+  throw new Error("--large-session-events requires --sessions 1 unless --compact-before-turn");
+}
+if (values["reset-after-seed"] && sessionCount !== 1) {
+  throw new Error("--reset-after-seed requires --sessions 1");
+}
+if ((values["reset-after-seed"] || values["compact-before-turn"]) && !largeSessionEvents) {
+  throw new Error("Compaction comparison options require --large-session-events");
+}
+const seedConcurrency = positiveInteger(values["seed-concurrency"], "seed-concurrency");
+const summaryDelayMs = positiveInteger(values["summary-delay-ms"], "summary-delay-ms");
+if (seedConcurrency > 8) {
+  throw new Error("--seed-concurrency exceeds the synthetic fixture's eight-request limit");
 }
 const eventChars = positiveInteger(values["event-chars"], "event-chars");
 if (
   largeSessionEvents &&
-  (largeSessionEvents > 150000 || eventChars > 65536 || largeSessionEvents * eventChars > 600000000)
+  (largeSessionEvents > 150000 ||
+    eventChars > 65536 ||
+    sessionCount * largeSessionEvents * eventChars > 600000000)
 ) {
   throw new Error("Synthetic fixture exceeds bounded investigation budget");
 }
@@ -291,6 +310,12 @@ const env = createGatewayBenchEnv(root, configPath, {
   startupTrace: false,
   caseEnv: {
     ...turnDriver.env,
+    ...(process.env.OPENCLAW_BENCH_WORKER_MEMORY_DIR
+      ? { OPENCLAW_BENCH_WORKER_MEMORY_DIR: process.env.OPENCLAW_BENCH_WORKER_MEMORY_DIR }
+      : {}),
+    ...(process.env.OPENCLAW_BENCH_WORKER_PROFILE === "1"
+      ? { OPENCLAW_BENCH_WORKER_PROFILE: "1" }
+      : {}),
     ...(largeSessionEvents ? { MOCK_REQUEST_LOG: "" } : {}),
     OPENAI_API_KEY: "synthetic-heap-rig-not-a-real-key",
     OPENCLAW_PROFILE: `heap-rig-${port}`,
@@ -475,6 +500,9 @@ try {
   start(["scripts/e2e/mock-openai-server.mjs"], "mock", {
     MOCK_PORT: String(port + 1),
     MOCK_BIND_HOST: "127.0.0.1",
+    ...(values["compact-before-turn"]
+      ? { MOCK_TIMING_LOG: path.join(root, "mock-model-timing.jsonl") }
+      : {}),
   });
   start(["scripts/e2e/mock-openai-server.mjs"], "mock-utility", {
     MOCK_PORT: String(port + 2),
@@ -562,6 +590,8 @@ try {
   });
   let nextSeed = 0;
   let largeSessionId;
+  const largeSessionIds = [];
+  let anchorTurns = Promise.resolve();
   let completedLargeSessionTurns = 0;
   await Promise.all(
     Array.from({ length: Math.min(8, sessionCount) }, async () => {
@@ -600,18 +630,35 @@ try {
           if (!created.sessionId) {
             throw new Error("Large-session seed did not return a session ID");
           }
-          largeSessionId = created.sessionId;
+          largeSessionIds[index] = created.sessionId;
+          largeSessionId = largeSessionIds[0];
+        }
+        if (values["compact-before-turn"]) {
+          // Injected assistant notes alone are not a real conversation. Anchor
+          // the measured compaction with an ordinary completed user/agent turn.
+          // The turn driver is serial, so burst seeders take turns.
+          const anchor = anchorTurns.then(() =>
+            turnDriver.runTurn(admin.rpc, 0, { agentId, sessionKey: key, kind: "text" }),
+          );
+          anchorTurns = anchor.catch(() => {});
+          await anchor;
         }
         const eventCount = largeSessionEvents ?? 1;
-        for (let event = 0; event < eventCount; event++) {
-          await admin.rpc("chat.inject", {
-            sessionKey: key,
-            message: largeSessionEvents
-              ? `Synthetic history ${event}. `.padEnd(eventChars, "x")
-              : `Synthetic history ${index}. `.repeat(2048).slice(0, 32 * 1024),
-          });
-          if ((event + 1) % 500 === 0) {
-            record({ kind: "large-session-seed", completed: event + 1 });
+        // Seeding is outside the measured interval; every write still uses chat.inject.
+        for (let seedStart = 0; seedStart < eventCount; seedStart += seedConcurrency) {
+          const count = Math.min(seedConcurrency, eventCount - seedStart);
+          await Promise.all(
+            Array.from({ length: count }, (_, offset) =>
+              admin.rpc("chat.inject", {
+                sessionKey: key,
+                message: largeSessionEvents
+                  ? `Synthetic history ${seedStart + offset}. `.padEnd(eventChars, "x")
+                  : `Synthetic history ${index}. `.repeat(2048).slice(0, 32 * 1024),
+              }),
+            ),
+          );
+          if (Math.floor(seedStart / 500) !== Math.floor((seedStart + count) / 500)) {
+            record({ kind: "large-session-seed", completed: seedStart + count });
           }
         }
         if ((index + 1) % 250 === 0) {
@@ -628,8 +675,31 @@ try {
     kind: "seeded",
     totalCount: inventory.totalCount,
     historyEventsPerSession: largeSessionEvents ?? 1,
+    seedConcurrency,
     historyBytesPerSession: largeSessionEvents ? largeSessionEvents * eventChars : 32 * 1024,
   });
+  if (values["reset-after-seed"]) {
+    const { key, agentId } = sessions[0];
+    const reset = await admin.rpc("sessions.reset", {
+      key,
+      agentId,
+      reason: "new",
+      expectedSessionId: largeSessionId,
+    });
+    if (reset.entry?.sessionId !== largeSessionId) {
+      throw new Error("Archive comparison reset replaced the seeded session");
+    }
+    if (values["compact-before-turn"]) {
+      await turnDriver.runTurn(admin.rpc, 0, { agentId, sessionKey: key, kind: "text" });
+    }
+    for (let event = 0; event < 10; event++) {
+      await admin.rpc("chat.inject", {
+        sessionKey: key,
+        message: `Synthetic current history ${event}. `.padEnd(eventChars, "x"),
+      });
+    }
+    record({ kind: "seed-reset", activeHistoryEvents: 10, activeHistoryBytes: 10 * eventChars });
+  }
   if (values["restart-after-seed"]) {
     admin.close();
     admin = undefined;
@@ -687,6 +757,85 @@ try {
   }
   if (values.coverage) {
     await census("coverage-start", "workload");
+  }
+  if (values["compact-before-turn"]) {
+    const marker = `SYNTHETIC_HEAP_RIG_${turnDriver.evidence.at(-1).runId}`;
+    writeFileSync(
+      turnDriver.responseControlPath,
+      JSON.stringify({
+        text: [
+          "## Decisions\nContinue the synthetic heap investigation.",
+          "## Open TODOs\nNone.",
+          "## Constraints/Rules\nPreserve the synthetic session and exact identifiers.",
+          "## Pending user asks\nNone; the seeded user request already completed.",
+          `## Exact identifiers\n${marker}`,
+        ].join("\n"),
+        // A slow synthetic summary makes retained host payloads and summary queueing observable.
+        chunkDelayMs: summaryDelayMs,
+      }),
+    );
+    const compactStartedAt = performance.now();
+    const compactStartedAtEpochMs = Date.now();
+    const before = await readGatewayMemory(admin.rpc, compactStartedAt);
+    record({ kind: "compaction-start", hostLoad: loadavg(), sessions: sessions.length, ...before });
+    // Every session compacts at once; a burst shows whether summaries wait on one another.
+    const results = await Promise.all(
+      sessions.map(async ({ key, agentId }, index) => {
+        const result = await admin.rpc("sessions.compact", { key, agentId }, 300000);
+        const elapsedMs = performance.now() - compactStartedAt;
+        if (sessions.length > 1) {
+          record({ kind: "compaction-session-end", index, elapsedMs, compacted: result.compacted });
+        }
+        return { result, elapsedMs };
+      }),
+    );
+    const result = results[0].result;
+    // Summary requests reach the mock only during this window; overlap shows parallel summaries.
+    const summaryRequests = readFileSync(path.join(root, "mock-model-timing.jsonl"), "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter(({ receivedAtMs }) => receivedAtMs >= compactStartedAtEpochMs);
+    let peakConcurrentSummaryRequests = 0;
+    for (const { receivedAtMs } of summaryRequests) {
+      peakConcurrentSummaryRequests = Math.max(
+        peakConcurrentSummaryRequests,
+        summaryRequests.filter(
+          (request) => request.receivedAtMs <= receivedAtMs && request.closedAtMs > receivedAtMs,
+        ).length,
+      );
+    }
+    const latencies = results.map(({ elapsedMs }) => elapsedMs).toSorted((a, b) => a - b);
+    record({
+      kind: "compaction-end",
+      elapsedMs: performance.now() - compactStartedAt,
+      ...(sessions.length > 1
+        ? {
+            sessionLatencyMedianMs: latencies[Math.floor((latencies.length - 1) / 2)],
+            sessionLatencyMaxMs: latencies.at(-1),
+          }
+        : {}),
+      summaryRequests: summaryRequests.length,
+      peakConcurrentSummaryRequests,
+      ok: result.ok,
+      compacted: result.compacted,
+      reason: result.reason,
+      tokensBefore: result.result?.tokensBefore,
+      summaryChars: result.result?.summary?.length,
+      qualityDegraded: result.result?.details?.qualityDegraded,
+      ...(await readGatewayMemory(admin.rpc, compactStartedAt)),
+    });
+    for (const { result: compacted } of results) {
+      if (
+        compacted.ok !== true ||
+        compacted.compacted !== true ||
+        compacted.result?.details?.qualityDegraded === true
+      ) {
+        throw new Error(
+          `Synthetic manual compaction did not produce a non-degraded summary: ${JSON.stringify(compacted)}`,
+        );
+      }
+    }
   }
   const startedAt = performance.now();
   const deadline = startedAt + minutes * 60000;
