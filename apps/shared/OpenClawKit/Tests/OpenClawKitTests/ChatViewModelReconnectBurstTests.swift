@@ -257,5 +257,4 @@ struct ChatViewModelReconnectBurstTests {
             #expect((requests.firstIndex(of: catalog) ?? -1) > historyDone)
         }
     }
-
 }

@@ -117,14 +117,17 @@ extension OpenClawChatViewModel {
         // iOS may also own a bootstrap history read on the replacement route.
         await self.bootstrapTask?.value
         guard self.pendingTransportRecoveryID == recoveryID, !self.isTransportDetached else { return }
-        self.pendingTransportRecoveryID = nil
+        defer {
+            if self.pendingTransportRecoveryID == recoveryID { self.pendingTransportRecoveryID = nil }
+        }
         guard self.isCurrentSession(session) else { return }
         // Applied history schedules the progress card itself. A failed read must still
         // refetch it, since this pass also stands in for health recovery's fetch.
         if !history.applied { self.scheduleProgressCardFetch(for: session) }
         async let catalogs: Void = self.refreshCatalogsAfterRecovery(session: session)
+        async let composer: Void = self.loadComposerCapabilities(force: true)
         await self.pollHealthIfNeeded(force: true, sessionSnapshot: session)
-        await catalogs
+        _ = await (catalogs, composer)
     }
 
     private func refreshAfterHealthRecovery() {
@@ -143,8 +146,7 @@ extension OpenClawChatViewModel {
         async let models: Void = self.fetchModels(sessionSnapshot: session)
         async let questions: Void = self.refreshQuestions()
         async let swarm: Void = self.refreshSwarmCapability()
-        async let composer: Void = self.loadComposerCapabilities(force: true)
-        _ = await (models, questions, swarm, composer)
+        _ = await (models, questions, swarm)
     }
 
     func applySessionChangeProjection(
