@@ -193,15 +193,24 @@ export class MemoryDB {
     minScore = 0.5,
     options?: Pick<LanceDB.QueryExecutionOptions, "timeoutMs"> & MemoryReadGuard,
   ): Promise<MemorySearchResult[]> {
+    const deadlineAtMs =
+      options?.timeoutMs === undefined ? undefined : performance.now() + options.timeoutMs;
     // LanceDB applies metadata predicates before vector ranking. Foreign rows
     // must never enter this agent's candidate set or top-K.
     const results = await this.useTable((table) => {
       options?.beforeRead?.();
+      const timeoutMs =
+        deadlineAtMs === undefined
+          ? undefined
+          : Math.max(0, Math.floor(deadlineAtMs - performance.now()));
+      if (timeoutMs === 0) {
+        throw new Error("Query timeout");
+      }
       return table
         .vectorSearch(vector)
         .where(memoryAgentPredicate(agentId))
         .limit(limit)
-        .toArray(options?.timeoutMs === undefined ? undefined : { timeoutMs: options.timeoutMs });
+        .toArray(timeoutMs === undefined ? undefined : { timeoutMs });
     });
 
     const mapped = results.map((row) => {

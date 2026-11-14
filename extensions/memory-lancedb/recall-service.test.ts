@@ -26,6 +26,36 @@ describe("memory-lancedb recall deadline", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  test.each([false, true])(
+    "does not start search after expired embedding (timer settled: %s)",
+    async (settled) => {
+      vi.useFakeTimers();
+      const nowSpy = vi.spyOn(performance, "now").mockReturnValue(0);
+      const embedding = createDeferred<number[]>();
+      const search = vi.fn(async () => []);
+      const beforeSearch = vi.fn();
+      const operation = startMemoryRecall({
+        timeoutMs: 15_000,
+        embed: () => embedding.promise,
+        beforeSearch,
+        search,
+      });
+      nowSpy.mockReturnValue(15_000);
+      if (settled) {
+        await vi.advanceTimersByTimeAsync(15_000);
+        await expect(operation.result).resolves.toEqual({ status: "timeout" });
+      }
+      embedding.resolve([1, 0]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(operation.result).resolves.toEqual({ status: "timeout" });
+      expect(beforeSearch).not.toHaveBeenCalled();
+      expect(search).not.toHaveBeenCalled();
+      expect(operation.phase).toBe("embedding");
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
   test("keeps the embed/search budget monotonic, integer, and skew-proof", async () => {
     vi.useFakeTimers();
     // performance.now returns a float (the real monotonic clock does); the
