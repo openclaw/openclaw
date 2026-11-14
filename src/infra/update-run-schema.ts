@@ -184,7 +184,7 @@ const version = z.object({
   buildId: text.nullable().optional(),
 });
 
-const UpdateRunStepSchema = z.object({
+export const UpdateRunStepSchema = z.object({
   step: text,
   status: z.enum(UPDATE_RUN_STEP_STATUSES),
   startedAtMs: timestamp.optional(),
@@ -241,6 +241,14 @@ export const UpdateRunRecordSchema = z.object({
     candidateAdmission: candidateAdmission.optional(),
     updateRecoveryCapture: updateRecoveryCaptureStateSchema.optional(),
     driver: driver.optional(),
+    managedHandoff: z.object({ parent: driver, helper: driver }).optional(),
+    packageStage: z
+      .object({
+        prefix: z.string().max(4096),
+        packageRoot: z.string().max(4096),
+        identity: z.object({ dev: z.number(), ino: z.number(), birthtimeMs: z.number() }),
+      })
+      .optional(),
     previousDrivers: z
       .array(driver)
       .max(UPDATE_RUN_DRIVER_LIMIT - 1)

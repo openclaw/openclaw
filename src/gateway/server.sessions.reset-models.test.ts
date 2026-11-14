@@ -153,6 +153,8 @@ const ownedChildMetadata = {
   claudeCliSessionId: "cli-session-123",
   label: "owned child",
   autoLabel: "Device",
+  icon: "bot",
+  color: "blue",
 } satisfies Partial<SessionEntry>;
 
 test("sessions.reset rejects a model-locked session without replacing native state", async () => {
@@ -195,10 +197,8 @@ test("sessions.reset drops cached skills snapshot so /new rebuilds visible skill
     "openai/gpt-test-a",
   );
   const reset = await resetMain();
-  expect(reset.ok).toBe(true);
-  expect(reset.payload?.entry.sessionId).toBe("sess-stale-skills");
+  expect(reset).toMatchObject({ ok: true, payload: { entry: { sessionId: "sess-stale-skills" } } });
   expect(reset.payload?.entry.skillsSnapshot).toBeUndefined();
-
   expect(read()?.skillsSnapshot).toBeUndefined();
 });
 

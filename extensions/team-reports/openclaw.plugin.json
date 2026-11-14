@@ -462,5 +462,10 @@
         }
       ]
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me plan Team Reports setup for the repositories, people, and channels I choose.",
+    "Summarize a stored team activity report with evidence and source gaps.",
+    "Help me prepare a local export of a stored team report for my chosen audience."
+  ]
 }

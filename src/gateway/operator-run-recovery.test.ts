@@ -13,17 +13,14 @@ import { createWriteTool } from "../agents/sessions/tools/write.js";
 import { getCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
 import { withAdminIngress } from "../channels/message-access/operator-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import {
-  persistSessionTranscriptTurn,
-  replaceSessionEntry,
-} from "../config/sessions/session-accessor.js";
-import { buildRestartRecoveryExpectedState } from "../config/sessions/session-transcript-turn-state.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import { ensureDeviceToken, rotateDeviceToken } from "../infra/device-pairing-tokens.js";
 import { getPairedDevice, updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { isMissingPathError } from "../infra/errors.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import type { PluginGatewayAccessPolicy } from "../plugins/gateway-access-policy.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -37,7 +34,11 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { changeCanonicalUserChannelIdentity } from "../state/user-channel-identity-operations.js";
 import { fenceUserProfileMutationAuthority } from "../state/user-profile-events.js";
@@ -57,7 +58,12 @@ import {
   invalidateGatewayDeviceRevocation,
 } from "./device-revocation.js";
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
+import {
+  setOpenClawIdTunnelPrincipalLookup,
+  type OpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
+import * as sourcePolicy from "./operator-role-source-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
   decodeQueuedOperatorRecoverySource,
@@ -65,7 +71,6 @@ import {
 } from "./operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import {
-  readGatewayOperatorRecoverySource,
   restoreGatewayOperatorSource,
   restoreGatewayQueuedOperatorRecovery,
 } from "./operator-run-recovery.js";
@@ -144,7 +149,46 @@ async function restoreFixture(fixture: RecoveryFixture) {
   return { ...source, [Symbol.dispose]: source.release };
 }
 
-describe("restart recovery authenticated operator source", () => {
+describe("scheduled authenticated operator source", () => {
+  it("refuses retained and recovered runs for an opaque role with no Gateway policy", () =>
+    withRecovery(async (fixture) => {
+      const principal: OpenClawIdTunnelPrincipal = {
+        kind: "member",
+        peerKey: `iroh:${"ab".repeat(32)}`,
+        accountId: "acct-guest",
+        role: "guest",
+        authority: { clawId: "claw", rootPub: "root", listedSeq: 1 },
+      };
+      setOpenClawIdTunnelPrincipalLookup(() => principal);
+      try {
+        fixture.client.internal!.openclawIdPrincipal = principal;
+        const caller = acceptedCaller(fixture);
+        try {
+          await expect(caller.capture()).rejects.toThrow(/authority/);
+        } finally {
+          caller.release();
+        }
+        const snapshot = expectDefined(
+          normalizeGatewayOperatorRecoverySnapshot({
+            ...fixture.snapshot,
+            openclawIdPrincipal: principal,
+          }),
+          "opaque role survives recovery decoding",
+        );
+        expect(snapshot.openclawIdPrincipal).toEqual(principal);
+        await expect(
+          restoreGatewayOperatorSource({
+            snapshot,
+            target: fixture.target,
+            context: fixture.context,
+            assertCurrent: () => {},
+          }),
+        ).rejects.toThrow("OpenClaw ID membership authority changed");
+      } finally {
+        setOpenClawIdTunnelPrincipalLookup(undefined);
+      }
+    }));
+
   it.each(["pending", "uncertain"] as const)(
     "refuses cached profile facts while their mutation is %s",
     (outcome) =>
@@ -395,10 +439,7 @@ describe("restart recovery authenticated operator source", () => {
     (change) =>
       withRecovery(
         async (fixture, _stateDir, profile) => {
-          const snapshot = expectDefined(
-            fixture.entry.restartRecoveryOperatorSource?.snapshot,
-            "authenticated continuation source",
-          );
+          const snapshot = expectDefined(fixture.snapshot, "authenticated continuation source");
           let current = true;
           const restore = restoreGatewayOperatorSource({
             snapshot,
@@ -430,13 +471,6 @@ describe("restart recovery authenticated operator source", () => {
               scopes: ["operator.write"],
             });
             expect(restored.authority.assertCurrent).not.toThrow();
-            expect(
-              readGatewayOperatorRecoverySource(restored.authority, {
-                runId: fixture.target.recoveryRunId,
-                sessionKey: fixture.target.sessionKey,
-                sessionId: fixture.target.sessionId,
-              }),
-            ).toBeUndefined();
             current = false;
             expect(restored.authority.assertCurrent).toThrow("Continuation owner closed");
           } finally {
@@ -449,7 +483,7 @@ describe("restart recovery authenticated operator source", () => {
   );
   it("preserves live channel work at recovery bounds and rejects revoked ingress", async () => {
     await withAdminIngress(
-      async ({ admins, context, gateway, retire, cfg, activatePolicy }) => {
+      async ({ admins, context, gateway, retire, cfg, activatePolicy, state }) => {
         const admin = expectDefined(admins[0], "linked administrator");
         cfg.agents = { entries: { main: { model: "fixture/permitted" } } };
         const roles = expectDefined(cfg.gateway?.roles, "configured channel roles");
@@ -534,6 +568,7 @@ describe("restart recovery authenticated operator source", () => {
         const persisted: unknown = JSON.parse(serializedSource);
         retire();
         expect(original.assertCurrent).toThrow();
+        await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
         const restore = () =>
           restoreGatewayQueuedOperatorRecovery({
             source: decodeQueuedOperatorRecoverySource(persisted),
@@ -547,7 +582,7 @@ describe("restart recovery authenticated operator source", () => {
           await changeCanonicalUserChannelIdentity("unlink", admin.profile.id, admin.identity);
           await changeCanonicalUserChannelIdentity("link", admin.profile.id, admin.identity);
           expect(restored.authority.assertCurrent).toThrow();
-          await expect(restore()).rejects.toThrow("Queued channel operator authority changed");
+          await expect(restore()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
         } finally {
           restored.release();
         }
@@ -567,7 +602,7 @@ describe("restart recovery authenticated operator source", () => {
   it("does not adopt an incidental paired token for tokenless trusted-proxy ingress", () =>
     withRecovery(
       async (fixture) => {
-        expect(fixture.entry.restartRecoveryOperatorSource?.snapshot.device).toBeUndefined();
+        expect(fixture.snapshot.device).toBeUndefined();
         using restored = await restoreFixture(fixture);
 
         expect(
@@ -577,6 +612,40 @@ describe("restart recovery authenticated operator source", () => {
       },
       { tokenlessDevice: true },
     ));
+  it("recovers a source with a handshake-attested OpenClaw ID origin marker", () =>
+    withRecovery(async (fixture) => {
+      fixture.client.authPolicy = captureGatewayAuthPolicy(fixture.context.getRuntimeConfig(), {
+        ...fixture.client.authPolicy,
+        browserOrigin: {
+          requestHost: "localhost",
+          origin: "http://localhost",
+          isLocalClient: true,
+          openclawIdTunnel: true,
+        },
+      });
+      const caller = acceptedCaller(fixture);
+      const captured = expectDefined(await caller.capture(), "captured source");
+      try {
+        const source = expectDefined(
+          captureQueuedOperatorRecoverySource(captured.authority),
+          "captured recovery source",
+        );
+        expect(source.kind).toBe("gateway");
+        const restored = await restoreGatewayQueuedOperatorRecovery({
+          source,
+          context: fixture.context,
+          assertCurrent: () => {},
+        });
+        try {
+          expectCurrent(restored.authority);
+        } finally {
+          restored.release();
+        }
+      } finally {
+        captured.release();
+        caller.release();
+      }
+    }));
   it.each(["before capture", "after admission", "after restoration"] as const)(
     "revokes the original device authority on Gateway retirement %s",
     (timing) =>
@@ -704,7 +773,9 @@ describe("restart recovery authenticated operator source", () => {
           owner.publish({ current: generation, required: null });
           expect(restored.authority.assertCurrent).toThrow("authority changed");
         } else {
-          await expect(fixture.restore()).rejects.toThrow("authentication owner changed");
+          await expect(fixture.restore()).rejects.toThrow(
+            GatewayOperatorRecoveryAuthorizationError,
+          );
         }
       }),
   );
@@ -772,7 +843,7 @@ describe("restart recovery authenticated operator source", () => {
             gatewayAccessGrant: original,
           });
           permitted = false;
-          await expect(fixture.restore()).rejects.toThrow("Gateway access is not active");
+          await expect(fixture.restore()).rejects.toThrow("[access-cause=grant-revoked]");
           permitted = true;
           resume.mockClear();
           using restored = await restoreFixture(fixture);
@@ -807,7 +878,7 @@ describe("restart recovery authenticated operator source", () => {
         }
       }),
   );
-  it("re-admits durable input after the original authority closes without exporting credentials", () =>
+  it("admits scheduled work after the original authority closes without exporting credentials", () =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       setRuntimeConfigSnapshot({});
       const profile = ensureProfileForEmail("recovery@example.test");
@@ -816,31 +887,13 @@ describe("restart recovery authenticated operator source", () => {
         scopes: ["operator.write"],
       });
       expect(fixture.sourceAuthority.assertCurrent).toThrow("no longer active");
-      expect(fixture.entry.restartRecoveryOperatorSource?.snapshot).toMatchObject({
+      expect(fixture.snapshot).toMatchObject({
         controlUiAdmin: false,
         sourceIngress: "control-ui",
       });
-      const serialized = JSON.stringify(fixture.entry.restartRecoveryOperatorSource);
+      const serialized = JSON.stringify(fixture.snapshot);
       expect(serialized).not.toContain("fixture-device-token");
       expect(serialized).not.toContain("fixture-signature");
-      const admitted = await persistSessionTranscriptTurn(fixture.target, {
-        expectedSessionId: fixture.target.sessionId,
-        expectedSessionState: buildRestartRecoveryExpectedState(fixture.entry),
-        messages: [
-          {
-            idempotencyLookup: "scan",
-            message: {
-              role: "user",
-              content: "Continue accepted work",
-              idempotencyKey: "serialized-source:user",
-              timestamp: 1,
-            },
-          },
-        ],
-        updateMode: "none",
-      });
-      expect(admitted.messages.filter((m) => m.appended)).toHaveLength(1);
-      expect(admitted.rejectedReason).toBeUndefined();
       using restored = await restoreFixture(fixture);
 
       expect(restored.authority).toMatchObject({
@@ -854,35 +907,6 @@ describe("restart recovery authenticated operator source", () => {
       retain();
       expect(restored.authority.assertCurrent).toThrow("no longer active");
     }));
-
-  it.each([
-    "legacy claim",
-    "different source turn",
-    "different session",
-    "different lifecycle",
-  ] as const)("never reconstructs authorization from attribution for a %s", (change) =>
-    withRecovery(
-      async (fixture) => {
-        const changed = { ...fixture.entry };
-        if (change === "legacy claim") {
-          changed.restartRecoveryOperatorSource = undefined;
-        } else if (change === "different source turn") {
-          changed.restartRecoveryDeliverySourceRunId = "another-turn";
-        } else if (change === "different session") {
-          changed.sessionId = "replacement-session";
-        } else {
-          changed.lifecycleRevision = "replacement-lifecycle";
-        }
-        await replaceSessionEntry(fixture.target, changed);
-        if (change === "legacy claim") {
-          await expect(fixture.restore()).resolves.toBeUndefined();
-        } else {
-          await expect(fixture.restore()).rejects.toThrow(/no longer owns|no longer active/);
-        }
-      },
-      { device: undefined },
-    ),
-  );
 
   it.each([
     "profile merge",
@@ -944,19 +968,21 @@ describe("restart recovery authenticated operator source", () => {
       }),
   );
 
-  it("restores only the admitted scopes and keeps them live until a role removes one", () =>
+  it.each(["gateway", "runtime"])("refreshes source policy on %s publication", (publication) =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const profile = ensureProfileForEmail("role-recovery@example.test");
-      const cfg: OpenClawConfig = {
-        gateway: {
-          roles: {
-            default: "operator",
-            definitions: {
-              operator: { agents: "*", sessions: { others: "none" }, scopes: ["operator.admin"] },
-            },
-          },
-        },
+      const operator: GatewayOperatorRoleDefinition = {
+        agents: "*",
+        sessions: { others: "none" },
+        scopes: ["operator.admin"],
       };
+      const cfg: OpenClawConfig = {
+        gateway: { roles: { default: "operator", definitions: { operator } } },
+      };
+      const publish = () =>
+        publication === "gateway"
+          ? publishOperatorRoleConfigChange(fixture.context)
+          : setRuntimeConfigSnapshot(fixture.context.getRuntimeConfig());
       const fixture = await recoveryFixture(state.stateDir, profile.id, {
         config: cfg,
         scopes: ["operator.write"],
@@ -967,21 +993,25 @@ describe("restart recovery authenticated operator source", () => {
       using restored = await restoreFixture(fixture);
 
       expect(restored.authority.scopes).toEqual(["operator.write"]);
-      expectCurrent(restored.authority);
+      using derive = vi.spyOn(sourcePolicy, "sourceRolePolicy");
+      using compare = vi.spyOn(sourcePolicy, "isOperatorRoleSourcePolicyCurrent");
+      restored.authority.assertCurrent();
+      restored.assertPolicyCurrent();
+      expect([derive.mock.calls, compare.mock.calls]).toEqual([[], []]);
       const widened = structuredClone(cfg);
       fixture.setConfig(widened);
-      publishOperatorRoleConfigChange(fixture.context);
+      publish();
       expectCurrent(restored.authority);
-      const narrowed = structuredClone(cfg);
-      narrowed.gateway!.roles!.definitions.operator!.scopes = ["operator.read"];
-      fixture.setConfig(narrowed);
-      publishOperatorRoleConfigChange(fixture.context);
-      expect(restored.authority.signal?.aborted).toBe(true);
-      expect(restored.authority.assertCurrent).toThrow();
+      // Committed publication must invalidate even when the config identity is retained.
+      widened.gateway!.roles!.definitions.operator!.scopes = ["operator.read"];
+      publish();
+      expect(restored.authority.signal?.aborted).toBe(publication === "gateway");
+      expectRevoked(restored.authority);
       fixture.setConfig(cfg);
-      publishOperatorRoleConfigChange(fixture.context);
+      publish();
       expect(restored.authority.assertCurrent).toThrow();
-    }));
+    }),
+  );
 
   it("intersects the original model ceiling with current policy without widening the admitted role", () =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -996,7 +1026,7 @@ describe("restart recovery authenticated operator source", () => {
       } satisfies GatewayOperatorRoleDefinition;
       const cfg = {
         agents: { defaults: { model: "fixture/a" } },
-        gateway: { roles: { definitions: { operator } } },
+        gateway: { roles: { default: "operator", definitions: { operator } } },
       } satisfies OpenClawConfig;
       const fixture = await recoveryFixture(state.stateDir, profile.id, {
         config: cfg,

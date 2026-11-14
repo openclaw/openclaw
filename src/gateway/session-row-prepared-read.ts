@@ -6,7 +6,10 @@ import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { PreparedRepositoryWorkspace } from "../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
+import type { createSessionRowChildActivity } from "./session-row-child-activity.js";
+import type { createSessionRowChildVisibility } from "./session-row-child-visibility.js";
 import * as records from "./session-row-projection-record.js";
+import type { SessionSharingTarget } from "./session-sharing-policy.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import {
@@ -56,9 +59,24 @@ export function projectPreparedSessionRunState(
   });
 }
 
+export function toProjectedSessionSharingTarget(
+  record: records.MaterializedRow,
+): SessionSharingTarget {
+  return {
+    agentId: record.agentId,
+    canonicalKey: record.key,
+    entry: record.entry,
+    storeKey: record.key,
+    storeKeys: [record.key],
+    storePath: record.storeTarget.storePath,
+  };
+}
+
 export type SessionRowSelectionPreparationOptions = {
   metadataOnly?: boolean;
   includeCatalog?: boolean;
+  requireCurrentCatalog?: boolean;
+  catalogSignal?: AbortSignal;
 };
 
 export type SessionRowPreparationOptions = {
@@ -74,7 +92,22 @@ export class SessionRowFactsPending extends Error {
   }
 }
 
+/** Only failed row materialization can request a catalog rebind, never its consumer. */
+export class SessionRowCatalogPending extends Error {
+  constructor() {
+    // RPC formatters include causes; keep model-facing plugin errors out of the response.
+    super("Session model catalog is unavailable; refresh and try again.");
+  }
+}
+
 export type SessionRowReadView = {
+  readChildVisibility: ReturnType<typeof createSessionRowChildVisibility>["read"];
+  readChildActivity(
+    record: records.MaterializedRow,
+    now: number,
+    excluded?: ReadonlySet<string>,
+    exclusionRevision?: object,
+  ): ReturnType<ReturnType<typeof createSessionRowChildActivity>["read"]>;
   describe(
     query: records.Lookup,
     captured?: records.Row,
@@ -88,11 +121,11 @@ export type SessionRowReadView = {
   ): ReturnType<typeof records.present>;
   selectEntries(query: { key: string }): records.EntryRow[];
   readonly physicalPaths: (locator: string, agentId?: string) => readonly string[];
-  readonly state: {
+  readonly state: Readonly<{
     cfg: OpenClawConfig;
     policyConfig: OpenClawConfig;
     rowContext: SessionListRowContext;
-  };
+  }>;
 };
 
 export type PreparedPrivateSessionRepository = {
@@ -184,6 +217,14 @@ export function readPreparedSessionRows<T>(
     }
   };
   const read: SessionRowReadView = {
+    readChildVisibility(...args) {
+      assertActive();
+      return owner.readChildVisibility(...args);
+    },
+    readChildActivity(...args) {
+      assertActive();
+      return owner.readChildActivity(...args);
+    },
     readSource(row) {
       assertActive();
       return owner.readSource(row);
@@ -232,7 +273,11 @@ export function readPreparedSessionRows<T>(
     },
     get state() {
       assertActive();
-      return { ...state, policyConfig: owner.getPolicyConfig() };
+      const policyConfig = owner.getPolicyConfig();
+      if (state.policyConfig !== policyConfig) {
+        state = { ...state, policyConfig };
+      }
+      return state;
     },
   };
   try {
@@ -279,4 +324,29 @@ export async function withReadySessionRows<T>(
   const result = await owner.withPreparedExactRows(select, consumeCurrent, options);
   signal?.throwIfAborted();
   return result;
+}
+
+// Child summaries share the same membership boundary as top-level rows.
+export function prepareLinkedSessionEntryFilter(
+  projection: SessionRowReadView,
+  filter:
+    | ((key: string, entry: SessionSharingTarget["entry"], isMember?: boolean) => boolean)
+    | undefined,
+  profileId: string | undefined,
+) {
+  return (
+    key: string,
+    entry: SessionSharingTarget["entry"],
+    agentId?: string,
+    storePath?: string,
+  ) =>
+    filter?.(
+      key,
+      entry,
+      Boolean(
+        profileId &&
+        agentId &&
+        projection.readMembership({ key, agentId, storePath })?.has(profileId),
+      ),
+    ) !== false;
 }

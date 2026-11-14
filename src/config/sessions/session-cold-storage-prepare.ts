@@ -9,6 +9,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -107,7 +108,12 @@ async function prepareExternalization(
     if (envelopeBytes > maxEnvelopeBytes) {
       throw new ColdArchiveBudgetError();
     }
-    decodeSessionColdRecords(bytes, { ...file, generation: archive.generation });
+    for (const record of decodeSessionColdRecords(bytes, {
+      ...file,
+      generation: archive.generation,
+    })) {
+      void record;
+    }
     const directory = path.dirname(
       resolveSessionColdArchivePath(input.databaseOptions.path, file.archive_name),
     );
@@ -139,7 +145,6 @@ export async function prepareSessionColdBatchInWorker(
     return result;
   }
   result.freePages = selection.value.freePages;
-  result.oversizedTranscripts = selection.value.oversizedTranscripts;
   const maxBytes = Math.min(input.maxBytes, MAX_COLD_ARCHIVE_BYTES);
   const candidates = [
     ...selection.value.externalizations.map((archive) => ({
@@ -158,6 +163,14 @@ export async function prepareSessionColdBatchInWorker(
       result.envelopeBytes === 0 && maxBytes === MAX_COLD_ARCHIVE_BYTES ? Infinity : remaining;
     try {
       if (candidate.kind === "archive") {
+        const lowerBoundBytes = readLargestSessionColdEvent(candidate.plan);
+        if (lowerBoundBytes > MAX_COLD_ARCHIVE_BYTES) {
+          result.oversizedTranscripts.push({
+            sessionId: candidate.plan.sessionId,
+            lowerBoundBytes,
+          });
+          continue;
+        }
         const prepared = prepareSessionColdArchiveInWorker(candidate.plan, budget);
         result.prepared.push(prepared);
         result.envelopeBytes += prepared.envelopeBytes;
@@ -205,6 +218,47 @@ export async function prepareSessionColdBatchInWorker(
   }
 
   return result;
+}
+
+/** Only inspect payload sizes for windows reached within this pass's byte budget. */
+function readLargestSessionColdEvent(plan: SessionColdPlan): number {
+  const opened = withOpenClawAgentDatabaseReadOnly((database) => {
+    const db = getNodeSqliteKysely<DB>(database.db);
+    const sizes = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("transcript_events")
+        .select((eb) => [
+          eb.fn.max<number>("event_utf8_bytes").as("known"),
+          eb.fn
+            .max<number>(
+              eb
+                .case()
+                .when("event_utf8_bytes", "is", null)
+                .then(eb.fn<number>("octet_length", ["event_json"]))
+                .end(),
+            )
+            .as("stored"),
+        ])
+        .where("session_id", "=", plan.sessionId),
+    );
+    const stored = sizes?.stored ?? 0;
+    // UTF-16 stores leave event_utf8_bytes null; half the stored bytes bounds UTF-8 below.
+    const utf16Storage =
+      stored > 0 &&
+      !isPostgresSqlConnection(database.db) &&
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        getNodeSqliteKysely<{ pragma_encoding: { encoding: string } }>(database.db)
+          .selectFrom("pragma_encoding")
+          .select("encoding"),
+      )?.encoding !== "UTF-8";
+    return Math.max(sizes?.known ?? 0, utf16Storage ? Math.ceil(stored / 2) : stored);
+  }, plan.databaseOptions);
+  if (!opened.found) {
+    throw new Error("Cold transcript database disappeared during preparation");
+  }
+  return opened.value;
 }
 
 function prepareSessionColdArchiveInWorker(
@@ -377,7 +431,12 @@ function prepareSessionColdArchiveInWorker(
               raw_bytes: rawBytes + eventCount - 1,
               archive_bytes: bytes.length,
             };
-            decodeSessionColdRecords(bytes, { ...chunk, generation: plan.snapshot.generation! });
+            for (const record of decodeSessionColdRecords(bytes, {
+              ...chunk,
+              generation: plan.snapshot.generation!,
+            })) {
+              void record;
+            }
             publishEncodedSessionTranscriptArchive({
               archiveDirectory: directory,
               archiveName: chunk.archive_name,

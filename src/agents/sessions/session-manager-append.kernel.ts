@@ -5,7 +5,7 @@ import { canRebasePreparedAssistantInTransaction } from "../../config/sessions/s
 import {
   appendTranscriptEventSnapshotSync,
   appendTranscriptMessageSnapshotSync,
-} from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+} from "../../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
 import { isReadableSessionMessage } from "../../config/sessions/session-entry-codec.js";
 import type { SessionMetadataOperations } from "../../config/sessions/session-manager-write-contract.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
@@ -102,6 +102,7 @@ export function applySessionMetadataAppendInTransaction(
         now: Date.parse(event.timestamp),
         cwd: message.cwd,
         idempotencyLookup: message.idempotencyLookup,
+        mentionInvitation: message.mentionInvitation,
         ...(message.freshMessageCheck ? { beforeFreshMessageCommit } : {}),
       },
       prepared,
@@ -168,6 +169,7 @@ export function applySessionDirectMessageInTransaction(
     {
       message,
       cwd: input.cwd,
+      mentionInvitation: input.mentionInvitation,
       ...(input.freshMessageCheck && beforeFreshMessageCommit ? { beforeFreshMessageCommit } : {}),
     },
     { messageJson: input.messageJson, persistedMessage: message },

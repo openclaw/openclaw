@@ -66,7 +66,7 @@ describe("Cloud backend picker presentation", () => {
     const row = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]')!;
     for (const element of [trigger, row]) {
       expect(element.querySelector('[data-provider-icon="azure"]')).not.toBeNull();
-      expect(element.getAttribute("aria-description")).toBe("Cloud worker provider: Azure");
+      expect(element.getAttribute("aria-description")).toBe("Cloud provider: Azure");
       expect(element.textContent).toContain("Linux");
       expect(element.textContent).toContain("Standard");
     }

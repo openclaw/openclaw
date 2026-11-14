@@ -17,6 +17,7 @@ import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 const runId = "automation-result-run";
 const jobId = "automation-result-job";
+const sessionKey = "agent:main:cron:automation-result-job";
 let ownedClaim: string | undefined;
 type Invocation =
   NonNullable<AgentRunContext["cronRunsByJobId"]> extends Map<string, infer T> ? T : never;
@@ -26,7 +27,7 @@ function createInvocation(nextCheckEnabled = false) {
   ownedClaim = claimAgentRunContext(
     runId,
     {
-      sessionKey: "agent:main:main",
+      sessionKey,
       cronRunsByJobId: new Map([[jobId, invocation]]),
     },
     { trackOwner: true, ownsContext: true },
@@ -36,7 +37,7 @@ function createInvocation(nextCheckEnabled = false) {
     tool: createTestCronTool({
       runId,
       selfRemoveOnlyJobId: jobId,
-      agentSessionKey: "agent:main:main",
+      agentSessionKey: sessionKey,
     }),
   };
 }
@@ -57,6 +58,11 @@ describe("automation invocation tools", () => {
       expect(tool.description.includes("scratch_get")).toBe(state !== "inactive");
       expect(tool.description.includes("record_result")).toBe(state !== "inactive");
       expect(tool.description.includes("next_check")).toBe(state === "paced");
+      const conversation = { agentSessionKey: "agent:main:main" };
+      const user = createTestCronTool(conversation);
+      const scheduled = createTestCronTool({ ...conversation, runId, selfRemoveOnlyJobId: jobId });
+      expect(scheduled.description).toBe(user.description);
+      expect(scheduled.parameters).toEqual(user.parameters);
     },
   );
 

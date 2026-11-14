@@ -12,6 +12,7 @@ import {
   INCOMPLETE_ASSISTANT_STREAM_RE,
   TERMINATED_TRANSPORT_MESSAGE_RE,
 } from "../../failover/message-patterns.js";
+import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import type { AgentRuntimeModelAttempt } from "../../runtime-plan/types.js";
 import { markCoreTtsAttemptResult } from "../../tools/tts-tool-result-provenance.js";
@@ -151,6 +152,7 @@ export function completeEmbeddedAttemptResult(
   const hookAgentId = input.setup.sessionAgentId;
   // Output hooks can reenter the runtime; project only the state settled before they run.
   const state = {
+    agentTerminal: input.state.agentTerminal,
     terminal: input.state.terminal,
     preflightRecovery: prompt.preflightRecovery,
     sessionIdUsed: prompt.sessionIdUsed,
@@ -180,9 +182,12 @@ export function completeEmbeddedAttemptResult(
   const evidence = readSubscriptionCompletionEvidence(subscription);
 
   if (
+    !attempt.inputAlreadyDelivered &&
     attempt.operation !== "settled-tool-finalization" &&
     hookRunner?.hasHooks("llm_output") &&
-    terminal.promptErrorSource !== "hook:before_agent_run"
+    terminal.promptErrorSource !== "hook:before_agent_run" &&
+    // A refresh continues this logical turn; its final attempt reports the output.
+    !(state.terminal.kind === "ok" && captureAgentPluginRuntimeRefresh().continuesAfterAttempt())
   ) {
     const contextWindow = {
       ...(attempt.contextWindowInfo?.tokens
@@ -278,7 +283,10 @@ export function completeEmbeddedAttemptResult(
     assistant?.stopReason === "stop" &&
     !assistant.content.some(isRunnerToolCallBlock)
   ) {
-    const allowedToolNames = input.prepared.toolCatalog.toolSearchRunPlan.liveAllowedToolNames;
+    const { liveAllowedToolNames, capabilityToolNames } =
+      input.prepared.toolCatalog.toolSearchRunPlan;
+    // Deferred names need native correction too; detection never executes text.
+    const allowedToolNames = new Set([...liveAllowedToolNames, ...capabilityToolNames]);
     textToolCallAttempt =
       allowedToolNames.size > 0 &&
       isPlainTextToolCallAttempt(extractAssistantTranscriptSourceText(assistant) ?? "", (name) =>
@@ -297,6 +305,7 @@ export function completeEmbeddedAttemptResult(
     ...(textToolCallAttempt ? { textToolCallAttempt: true } : {}),
     ...state,
     ...evidence,
+    ...(attempt.inputAlreadyDelivered ? { inputAlreadyDelivered: true as const } : {}),
     preparedTerminalReply: keptReply,
     sandboxRuntime: input.setup.sandboxRuntime,
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),

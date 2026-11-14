@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { shortenHomePath } from "../utils.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
 
@@ -12,11 +13,14 @@ export function resolveFileNpmSpecToLocalPath(
   if (!rest) {
     return { ok: false, error: "unsupported file: spec: missing path" };
   }
-  if (rest.startsWith("///")) {
-    return { ok: true, path: rest.slice(2) };
-  }
-  if (rest.startsWith("//localhost/")) {
-    return { ok: true, path: rest.slice("//localhost".length) };
+  if (rest.startsWith("///") || rest.startsWith("//localhost/")) {
+    try {
+      // Bun can preserve malformed escapes instead of rejecting them during conversion.
+      decodeURIComponent(new URL(trimmed).pathname);
+      return { ok: true, path: fileURLToPath(trimmed) };
+    } catch {
+      return { ok: false, error: "unsupported file: URL: invalid local path" };
+    }
   }
   if (rest.startsWith("//")) {
     return {

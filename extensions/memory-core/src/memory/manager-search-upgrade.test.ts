@@ -12,6 +12,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, it, vi } from "vitest";
+import { keepPublishedCacheDuplicates } from "./manager-cache-retention.test-support.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import { MEMORY_INDEX_PROVENANCE_VERSION, type MemoryIndexMeta } from "./manager-reindex-state.js";
 
@@ -111,19 +112,26 @@ it("keeps status inspection read-only during an upgrade", async () => {
   expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(MEMORY_CHUNKING_VERSION - 1);
 });
 
-it.each(versionKeys)("preserves newer %s indexes until explicit reindex", async (versionKey) => {
-  const cfg = createConfig();
-  const dbPath = await publishIndex(cfg, versionKey, 1);
-  const manager = await fixture.getFreshManager(cfg);
-  const embedded = provider.embedBatchCalls;
-  await manager.sync({ reason: "search", force: true });
-  expect(await manager.search("alpha", { lexicalOnly: true })).toEqual([]);
-  expect(withDatabase(dbPath, readMeta)[versionKey]).toBe(versions[versionKey] + 1);
-  expect(provider.embedBatchCalls).toBe(embedded);
-  await manager.sync({ reason: "cli", force: true });
-  expect(await manager.search("alpha", { lexicalOnly: true })).not.toEqual([]);
-  expect(withDatabase(dbPath, readMeta)[versionKey]).toBe(versions[versionKey]);
-});
+it.each(
+  versionKeys.flatMap((versionKey) =>
+    (["default", "cli"] as const).map((purpose) => ({ versionKey, purpose })),
+  ),
+)(
+  "preserves newer $versionKey indexes during $purpose search until explicit reindex",
+  async ({ versionKey, purpose }) => {
+    const cfg = createConfig();
+    const dbPath = await publishIndex(cfg, versionKey, 1);
+    const manager = await fixture.getFreshManager(cfg, purpose);
+    const embedded = provider.embedBatchCalls;
+    await manager.sync({ reason: "search", force: true });
+    expect(await manager.search("alpha", { lexicalOnly: true })).toEqual([]);
+    expect(withDatabase(dbPath, readMeta)[versionKey]).toBe(versions[versionKey] + 1);
+    expect(provider.embedBatchCalls).toBe(embedded);
+    await manager.sync({ reason: "cli", force: true });
+    expect(await manager.search("alpha", { lexicalOnly: true })).not.toEqual([]);
+    expect(withDatabase(dbPath, readMeta)[versionKey]).toBe(versions[versionKey]);
+  },
+);
 
 it.each(versionKeys)("serves compatible rows after failed %s rebuild", async (versionKey) => {
   const cfg = createConfig();
@@ -148,6 +156,7 @@ it.each([
 ])(
   "re-embeds unchanged legacy $model cache rows once on ordinary search",
   async ({ model, document, query }) => {
+    keepPublishedCacheDuplicates();
     const cfg = fixture.createConfig({
       model,
       cacheEnabled: true,

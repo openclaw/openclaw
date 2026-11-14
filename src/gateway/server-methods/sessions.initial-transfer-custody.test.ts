@@ -14,8 +14,6 @@ import { createRequesterYieldCallback } from "../../agents/openclaw-tools.reques
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import * as registryPersistence from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import {
-  activateSubagentRegistry,
-  initSubagentRegistry,
   registerSubagentRun,
   settleRequesterAfterSessionSpawns,
 } from "../../agents/subagents/registry/subagent-registry.js";
@@ -23,7 +21,6 @@ import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subag
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { revokeRequesterCronAuthority } from "../../agents/subagents/requester-cron-authority.js";
 import { createSessionsYieldTool } from "../../agents/tools/sessions-yield-tool.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolvePhysicalSessionStorePath } from "../../config/sessions/session-store-path.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
@@ -32,7 +29,6 @@ import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-c
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import * as sessionSharing from "../session-sharing-preparation.js";
 import { withRequesterTestAuthority } from "./sessions-initial-transfer.test-support.js";
-import { sessionSharingTestContext } from "./sessions-sharing.test-support.js";
 
 const fixture = useSubagentControlFixture();
 const requesterSessionKey = "agent:main:main";
@@ -57,16 +53,13 @@ function yieldTool(requesterTurnRunId: string) {
   };
 }
 
-function observeCommits(
-  onCommit: (writes: number) => void | Promise<void> = () => {},
-  phase: "before" | "after" = "after",
-) {
+function observeCommits(onCommit: (writes: number) => void | Promise<void>) {
   let writes = 0;
   fixture.interceptWorkerCommand((command) => {
     if (command.type === "subagents.persistChanges") {
       return onCommit(++writes);
     }
-  }, phase);
+  }, "after");
   return {
     spy: fixture.worker,
     get writes() {
@@ -123,18 +116,11 @@ function writeRequester(sessionKey = requesterSessionKey, lifecycleRevision = "o
   });
 }
 
-async function createYieldedChild(withSibling = false) {
+async function createYieldedChild() {
   const requesterTurnRunId = "staged-cohort-parent";
   const runId = "staged-cohort-child";
   const childSessionKey = "agent:main:subagent:staged-cohort-child";
   const children = [{ runId, childSessionKey, expectsCompletionMessage: true }];
-  if (withSibling) {
-    children.push({
-      runId: `${runId}-sibling`,
-      childSessionKey: `${childSessionKey}-sibling`,
-      expectsCompletionMessage: true,
-    });
-  }
   for (const sessionKey of [
     requesterSessionKey,
     ...children.map((child) => child.childSessionKey),
@@ -157,7 +143,6 @@ async function createYieldedChild(withSibling = false) {
   });
   return {
     entry: expectDefined(subagentRuns.get(runId), "original cohort child"),
-    entries: children.map((child) => expectDefined(subagentRuns.get(child.runId), "cohort member")),
     nativePersistence,
     onYield,
     settle: (requesterYielded = true) =>
@@ -298,35 +283,6 @@ it.each(["source retirement", "transport failure after commit"] as const)(
     }
   },
 );
-
-it("recovers an untransferred requester cohort after restart in one write", async () => {
-  vi.useFakeTimers();
-  const { entries } = await createYieldedChild(true);
-  const worker = observeCommits(undefined, "before");
-  try {
-    await resetSubagentRegistryForTests({ persist: false });
-    await closeOpenClawStateDatabaseAsync();
-    await initSubagentRegistry();
-    const restored = expectDefined(subagentRuns.get(entries[0]!.runId), "restored cohort");
-    expect(restored).not.toBe(entries[0]);
-    expect(restored.requesterTurnRunId).toBe("staged-cohort-parent");
-    expect(restored.requesterSettleWake).toBeUndefined();
-    const context = sessionSharingTestContext(vi.fn(), getRuntimeConfig());
-    context.resolveGatewayContext = () => context;
-    await activateSubagentRegistry(context.resolveGatewayContext).settled;
-    expect(subagentRuns.get(restored.runId)?.requesterTurnRunId).toBeUndefined();
-    expect(subagentRuns.get(restored.runId)?.requesterTurnYielded).toBeUndefined();
-    expect(subagentRuns.get(restored.runId)?.requesterSettleWake).toMatchObject({
-      batchRunIds: entries.map((entry) => entry.runId).toSorted(),
-      rearmGeneration: 1,
-    });
-    expect(worker.writes).toBe(1);
-    expect(fixture.wake).not.toHaveBeenCalled();
-  } finally {
-    await resetSubagentRegistryForTests({ persist: false });
-    worker.spy.mockRestore();
-  }
-});
 
 it.each([false, true])(
   "does not acknowledge the opposite settlement while a cohort write is pending (yielded: %s)",

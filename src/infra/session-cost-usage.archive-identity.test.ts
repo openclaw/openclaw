@@ -348,7 +348,7 @@ describe("usage archive identity", () => {
     });
   });
 
-  it("keeps cold usage inventory cheap, restores for scanning, and reports a missing archive", async () => {
+  it("refreshes cold usage without restoring transcripts and reports a missing archive", async () => {
     const scope = scopeFor("cold-usage");
     const coldConfig = {
       ...config,
@@ -408,8 +408,33 @@ describe("usage archive identity", () => {
     });
     expect(readCold(database.db, scope.sessionId)).toBeDefined();
     await expectTotal("main", 36);
-    expect(readCold(database.db, scope.sessionId)).toBeUndefined();
+    expect(readCold(database.db, scope.sessionId)).toBeDefined();
+    const discovered = expectDefined(
+      (await discoverAllSessions(main)).find((session) => session.sessionId === scope.sessionId),
+      "cold usage discovery",
+    );
+    expect(
+      await cachedSessions({ ...main, sessions: [discovered], requestRefresh: false }),
+    ).toMatchObject({
+      summaries: [{ totalTokens: 17, totalCost: 0.017 }],
+      cacheStatus: { status: "fresh" },
+    });
+    expect(
+      await cachedSessions({
+        ...main,
+        sessions: [{ sessionFile: before.filePath }],
+        startMs: archiveTime - 1,
+        endMs: archiveTime + 1,
+        requestRefresh: false,
+      }),
+    ).toMatchObject({
+      summaries: [{ totalTokens: 17, totalCost: 0.017 }],
+      cacheStatus: { status: "fresh" },
+    });
     const rollups = readRollups("main");
+    await refreshCostUsageCacheForAgent(main);
+    expect(readRollups("main")).toEqual(rollups);
+    expect(readCold(database.db, scope.sessionId)).toBeDefined();
     const missingScope = scopeFor("missing-usage", scope.storePath);
     await seed(missingScope, 19, false);
     await ageTranscript(missingScope);
@@ -420,6 +445,8 @@ describe("usage archive identity", () => {
     await archiveOne();
     const archive = expectDefined(readCold(database.db, missingScope.sessionId), "cold archive");
     await fs.unlink(resolveSessionColdArchivePath(database.path, archive.archive_name));
+    await expect(refreshCostUsageCacheForAgent(main)).rejects.toThrow(/missing|unreadable/);
+    expect(readRollups("main")).toEqual(rollups);
     await expect(
       loadSessionLogs({ agentId: "main", sessionFile: missingFile.filePath }),
     ).rejects.toThrow(/missing|unreadable/);
@@ -429,7 +456,7 @@ describe("usage archive identity", () => {
 
   it("discovers and reads compressed deleted archives for a non-main agent", async ({ signal }) => {
     const agentId = "worker";
-    const { manager, sessionId, sessionFile } = await archiveFixture({
+    const { sessionId, sessionFile } = await archiveFixture({
       reason: "deleted",
       agentId,
       generated: true,
@@ -439,10 +466,8 @@ describe("usage archive identity", () => {
     expect(sessions).toEqual([{ sessionId, sessionFile, mtime: sourceStats.mtimeMs }]);
 
     const resolved = expectDefined(await resolveTranscript(sessionFile), "resolved archive");
-    expect(resolved).toMatchObject({
-      size: Buffer.byteLength(serialize(manager)),
-      mtimeMs: sourceStats.mtimeMs,
-    });
+    // Identity describes the durable compressed source; resolving never decodes it.
+    expect(resolved).toMatchObject({ size: sourceStats.size, mtimeMs: sourceStats.mtimeMs });
     expect(resolved.filePath).not.toBe(sessionFile);
 
     const cacheLookup = { agentId, config, sessions: [{ sessionId, sessionFile }] };
@@ -550,7 +575,7 @@ describe("usage archive identity", () => {
     expect(rows.map((row) => row.key)).toEqual([replacement.filePath]);
     const fingerprint = await resolveUsageCostPricingFingerprint(config, state.agentDir());
     const rollup = expectDefined(rows[0], "replacement archive rollup");
-    const size = Buffer.byteLength(serialize(manager));
+    const { size } = await fs.stat(sessionFile);
     expect(decodeUsageCostRollupEnvelope(rollup.valueJson, fingerprint)?.checkpoint).toMatchObject({
       kind: "jsonl",
       parsedOffset: size,
@@ -575,11 +600,17 @@ describe("usage archive identity", () => {
     expect(rows).toHaveLength(1);
     await fs.writeFile(sessionFile, "not a zstd frame");
 
-    await expect(resolveTranscript(sessionFile)).resolves.toBeUndefined();
+    // The new bytes have a new identity; only a scan discovers they cannot be decoded.
+    expect((await resolveTranscript(sessionFile))?.filePath).not.toBe(rows[0]!.key);
     expect(await discoverAllSessions({ agentId: "main" })).toMatchObject([
       { sessionId: manager.getSessionId(), sessionFile },
     ]);
-    await expect(refreshCostUsageCacheForAgent(main)).rejects.toThrow();
-    expect(readRollups("main")).toEqual(rows);
+    // The rest of the batch commits; this archive's last usage moves to its new identity.
+    await expect(refreshCostUsageCacheForAgent(main)).resolves.toBe("refreshed");
+    const carried = readRollups("main");
+    expect(carried.map((row) => row.key)).toEqual([
+      (await resolveTranscript(sessionFile))?.filePath,
+    ]);
+    expect(carried[0]!.updatedAt).toBe(rows[0]!.updatedAt);
   });
 });

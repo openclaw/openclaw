@@ -327,6 +327,28 @@ describe("createMattermostDraftStream", () => {
     expect(warn).toHaveBeenCalledWith("mattermost stream preview failed: patch failed");
     expect(requestMock.mock.calls.map(([path]) => path)).toEqual(["/posts", "/posts/post-1/patch"]);
   });
+
+  it("waits a throttle window after a slow preview send before the next edit", async () => {
+    vi.useFakeTimers();
+    const releaseCreate = createDeferred<void>();
+    const { calls, stream } = createDraftStreamFixture({
+      beforeRequest: (path) => (path === "/posts" ? releaseCreate.promise : Promise.resolve()),
+    });
+    try {
+      stream.update("Working");
+      await vi.advanceTimersByTimeAsync(0);
+      stream.update("Working on it");
+      await vi.advanceTimersByTimeAsync(2500);
+      releaseCreate.resolve();
+      await vi.advanceTimersByTimeAsync(1199);
+      expect(calls.map(({ path }) => path)).toEqual(["/posts"]);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(calls.map(({ path }) => path)).toEqual(["/posts", "/posts/post-1/patch"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("Mattermost preview final placement", () => {
@@ -411,6 +433,9 @@ describe("Mattermost preview final placement", () => {
     if (newer !== "error") {
       timeline.push({ id: "newer-post", message: "Progress note", root_id: "root-1", ...newer });
     }
+    await publish("Final", true);
+    await publish("Final answer", true);
+    expect(timeline[0]?.message).toBe(inPlace ? "Final answer" : "Running tools…");
     await deliverMattermostReplyWithDraftPreview({
       payload: { text: "Final answer" },
       info: { kind: "final" },
@@ -426,21 +451,18 @@ describe("Mattermost preview final placement", () => {
       findPostAfterPreview: stream.findPostAfter,
     });
 
-    const messages = timeline.map((post) => post.message);
     if (inPlace) {
-      expect(messages[0]).toBe("Final answer");
-      expect(timeline[0]?.id).toBe("post-1");
+      expect(timeline[0]).toMatchObject({ id: "post-1", message: "Final answer" });
       expect(deliverPayload).not.toHaveBeenCalled();
     } else {
-      // The preview is deleted and the answer lands below the newer post.
-      expect(messages).toEqual(["Progress note", "Final answer"]);
+      expect(timeline.map((post) => post.message)).toEqual(["Progress note", "Final answer"]);
       expect(logVerboseMessage).toHaveBeenCalledWith(
         "mattermost preview post-1 is above newer post newer-post; sending the final as a new post",
       );
     }
-    expect(channelReads).toEqual([
-      "/channels/channel-1/posts?per_page=200&after=post-1&skipFetchThreads=true",
-    ]);
+    expect(channelReads).toEqual(
+      Array(2).fill("/channels/channel-1/posts?per_page=200&after=post-1&skipFetchThreads=true"),
+    );
     if (newer === "error") {
       expect(logVerboseMessage).toHaveBeenCalledWith(
         "mattermost preview order check failed; finalizing in place (Error: Mattermost API 403 Forbidden)",

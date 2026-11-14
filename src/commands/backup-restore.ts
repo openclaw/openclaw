@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import * as tar from "tar";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";
+import { isValidEnvSecretRefId } from "../config/types.secrets.js";
+import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import { prepareRestoredClientCredentials } from "../infra/client-credential-restore.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -11,10 +13,9 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import {
   BACKUP_MAX_DECOMPRESSION_RATIO,
-  buildBackupArchivePath,
   canonicalizePathForContainment,
   resolveBackupAgentRoots,
-  resolveRequiredBackupPath,
+  resolveBackupArchivePath,
 } from "./backup-shared.js";
 import { prepareBackupArchive } from "./backup-verify.js";
 import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-config-repair.js";
@@ -146,6 +147,7 @@ async function restorePostgresExports(
   recoveryConfigContextPath: string | undefined,
   archiveRoot: string,
   publishCompanions?: () => void,
+  postgresConnectionEnv?: string,
 ): Promise<void> {
   if (candidates.length === 0) {
     publishCompanions?.();
@@ -248,6 +250,7 @@ async function restorePostgresExports(
     {
       configPath: path.join(targetPath, recoveryConfigContextPath ?? recoveryConfigPath),
       configSourcePath: configPath,
+      ...(postgresConnectionEnv ? { postgresConnectionEnv } : {}),
       env: {
         ...process.env,
         OPENCLAW_INCLUDE_ROOTS: path.join(targetPath, archiveRoot, "payload"),
@@ -262,26 +265,49 @@ async function restorePostgresExports(
 
 function formatRestoreResult(result: BackupRestoreResult): string {
   return [
-    `Backup archive restored to staging: ${shortenHomePath(result.targetPath)}`,
-    `Verified archive: ${shortenHomePath(result.archivePath)}`,
-    `Archive root: ${result.archiveRoot}`,
-    `Archive entries restored: ${result.entryCount}`,
+    terminalText`Backup archive restored to staging: ${shortenHomePath(result.targetPath)}`,
+    terminalText`Verified archive: ${shortenHomePath(result.archivePath)}`,
+    terminalText`Archive root: ${result.archiveRoot}`,
+    terminalText`Archive entries restored: ${result.entryCount}`,
+    ...(result.postgresConnectionEnv
+      ? [
+          terminalText`PostgreSQL stores imported through: $${result.postgresConnectionEnv}`,
+          "The restored config keeps the archived PostgreSQL connection; point it at the same server before activation.",
+        ]
+      : []),
     "",
     "Rollback warnings:",
-    ...result.warnings.map((warning) => `- ${warning}`),
+    ...result.warnings.map((warning) => terminalText`- ${warning}`),
     "",
     "Activation is explicit: stop the Gateway, move the restored asset tree into place or point OPENCLAW_STATE_DIR at the restored state asset, then run `openclaw doctor`.",
-  ]
-    .map(sanitizeTerminalText)
-    .join("\n");
+  ].join("\n");
 }
 
 /** Verify first, then extract a whole backup archive into a fresh staging directory. */
 export async function backupRestoreCommand(
   runtime: RuntimeEnv,
-  options: { archive: string; target?: string; json?: boolean },
+  options: {
+    archive: string;
+    target?: string;
+    json?: boolean;
+    sourceEngine?: "sqlite";
+    localCompanion?: boolean;
+    /** Import PostgreSQL stores through the DSN in this environment variable. */
+    postgresConnectionEnv?: string;
+  },
 ) {
-  const targetPath = resolveRequiredBackupPath(options.target, "--target");
+  const postgresConnectionEnv = options.postgresConnectionEnv;
+  if (postgresConnectionEnv !== undefined) {
+    if (!isValidEnvSecretRefId(postgresConnectionEnv)) {
+      throw new Error("--postgres-connection-env requires an environment variable name.");
+    }
+    if (!process.env[postgresConnectionEnv]?.trim()) {
+      throw new Error(
+        `--postgres-connection-env: ${postgresConnectionEnv} is not set; nothing was restored.`,
+      );
+    }
+  }
+  const targetPath = resolveBackupArchivePath(options.target, "--target");
   await assertTargetOutsideLiveState(targetPath);
   const {
     result: verified,
@@ -293,6 +319,24 @@ export async function backupRestoreCommand(
     recoveryConfigContextPath,
     manifest,
   } = await prepareBackupArchive(options.archive);
+  if (
+    options.sourceEngine === "sqlite" &&
+    (databaseRestoreCandidates.length > 0 || (manifest.postgresAnchors?.length ?? 0) > 0)
+  ) {
+    throw new Error(
+      "This restore requires a SQLite-only archive; PostgreSQL namespaces were not imported.",
+    );
+  }
+  if (options.localCompanion && manifest.profile !== "local-companion") {
+    throw new Error(
+      "--local-companion requires a local-companion checkpoint; no PostgreSQL data was imported.",
+    );
+  }
+  if (postgresConnectionEnv !== undefined && databaseRestoreCandidates.length === 0) {
+    throw new Error(
+      "--postgres-connection-env requires an archive with PostgreSQL stores; nothing was restored.",
+    );
+  }
   assertRestoreCapacity(targetPath, regularFileExtractionBytes);
   const target = await prepareRestoreTarget(targetPath);
 
@@ -319,6 +363,7 @@ export async function backupRestoreCommand(
       recoveryConfigContextPath,
       verified.archiveRoot,
       restoreClientCredentials,
+      postgresConnectionEnv,
     );
   } catch (extractionError) {
     try {
@@ -341,8 +386,15 @@ export async function backupRestoreCommand(
   const result = {
     ...verified,
     targetPath,
+    ...(postgresConnectionEnv === undefined ? {} : { postgresConnectionEnv }),
     warnings: [
-      ...BACKUP_RESTORE_WARNINGS,
+      ...(manifest.profile === "local-companion"
+        ? [
+            "Local files roll back to the checkpoint; PostgreSQL rows do not. This checkpoint is not disaster recovery.",
+            ...BACKUP_RESTORE_WARNINGS.slice(1, 2),
+            ...BACKUP_RESTORE_WARNINGS.slice(3),
+          ]
+        : BACKUP_RESTORE_WARNINGS),
       ...(verified.warnings ?? []),
       ...(verified.externalSymbolicLinks ?? []).map(
         ({ entryPath, linkpath }) =>

@@ -20,10 +20,7 @@ import type { PersonalGitHubAction } from "./github-personal-oauth.js";
 import { presentPersonalGitHubPublicationStatusAsync } from "./github-personal-publication-status.js";
 import { personalGitHubRequestDigest } from "./github-personal-publication-store.js";
 import type { PersonalGitHubPublicationRow } from "./github-personal-publication-store.worker.js";
-import {
-  readGitHubPublicationWorktreeOwner,
-  type PublicationSessionIdentity as SessionIdentity,
-} from "./github-publication-availability.js";
+import { readGitHubPublicationWorktreeOwner } from "./github-publication-availability.js";
 import { executeGitHubPublication } from "./github-publication-executor.js";
 import {
   GitHubPublicationRequesterUnavailableError,
@@ -34,6 +31,7 @@ import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import { insertPersonalGitHubPublicationAsync } from "./github-publication-request-async.js";
 import type { GitHubPublicationRequesterV2 } from "./github-publication-requester.js";
+import type { PublicationSessionIdentity as SessionIdentity } from "./github-publication-session.types.js";
 import { bindGitHubPublicationSourceLifetime } from "./github-publication-source.js";
 import {
   claimPersonalGitHubPublicationAsync,
@@ -51,7 +49,10 @@ export type PersonalGitHubSessionAction = PersonalGitHubAction & {
   lifecycleRevision: string | null;
 };
 export type PersonalGitHubSessionActionV2 = PersonalGitHubSessionAction &
-  Pick<GitHubPublicationRequesterV2, "version" | "signal" | "prepareSource">;
+  Pick<
+    GitHubPublicationRequesterV2,
+    "version" | "signal" | "prepareSource" | "prepareDispatchCredential"
+  >;
 type Selection = { generation: string; account: { accountId: number; login: string } };
 type PersonalPublicationWorkspace = {
   assertCurrent: () => void;

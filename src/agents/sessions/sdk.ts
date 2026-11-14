@@ -1,5 +1,10 @@
 /** Assembles an agent session from the run owner's selected model and prepared resources. */
+import { markModelPayloadObserver } from "@openclaw/ai/internal/model-request-body";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
+import {
+  setInternalBeforeToolBatch,
+  type InternalBeforeToolBatchHook,
+} from "../../../packages/agent-core/src/internal-hooks.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import type { SessionMetadataCommit } from "../../config/sessions/transcript-write-context-store.js";
 import {
@@ -19,10 +24,6 @@ import {
   type AgentTool,
   type ThinkingLevel,
 } from "../runtime/index.js";
-import {
-  setInternalBeforeToolBatch,
-  type InternalBeforeToolBatchHook,
-} from "../runtime/internal-hooks.js";
 import type { AgentSessionConfig } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import type { ExtensionRunner } from "./extensions/index.js";
@@ -31,6 +32,7 @@ import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import { sessionManagerAppendInitialMetadata } from "./session-manager-metadata.js";
+import { sessionManagerReadTranscriptBranch } from "./session-manager-view-types.js";
 import type { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
 
@@ -211,9 +213,9 @@ export async function createAgentSession(
   const existingSession = await sessionManager[sessionManagerReadInitialContext]();
   assertInitialSessionCurrent();
   const hasExistingSession = existingSession.messages.length > 0;
-  const hasThinkingEntry = sessionManager
-    .getBranch()
-    .some((entry) => entry.type === "thinking_level_change");
+  const hasThinkingEntry = sessionManager[sessionManagerReadTranscriptBranch]().some(
+    (entry) => entry.type === "thinking_level_change",
+  );
 
   const model = options.model;
   const thinkingLevel = clampThinkingLevel(model, options.thinkingLevel) as ThinkingLevel;
@@ -235,15 +237,19 @@ export async function createAgentSession(
     convertToLlm: (messages) =>
       convertToLlmWithBlockImages(messages, settingsManager.getBlockImages()),
     streamFn: createSessionStreamFn(modelRegistry, settingsManager, options.thinkingExplicit),
-    onPayload: async (payload) => {
-      const runner = extensionRunnerRef.current;
-      if (!runner?.hasHandlers("before_provider_request")) {
-        return payload;
-      }
-      return await runWithSessionWriteSettlement(
-        async () => await runner.emitBeforeProviderRequest(payload),
-      );
-    },
+    onPayload: markModelPayloadObserver(
+      async (payload: unknown) => {
+        const runner = extensionRunnerRef.current;
+        if (!runner?.hasHandlers("before_provider_request")) {
+          return payload;
+        }
+        return await runWithSessionWriteSettlement(
+          async () => await runner.emitBeforeProviderRequest(payload),
+        );
+      },
+      undefined,
+      () => !extensionRunnerRef.current?.hasHandlers("before_provider_request"),
+    ),
     onResponse: async (response) => {
       const runner = extensionRunnerRef.current;
       if (!runner?.hasHandlers("after_provider_response")) {

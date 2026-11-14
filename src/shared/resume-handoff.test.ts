@@ -10,7 +10,7 @@ function encodeJson(value: unknown): string {
   return btoa(String.fromCharCode(...bytes))
     .replaceAll("+", "-")
     .replaceAll("/", "_")
-    .replace(/=+$/u, "");
+    .replace(/[=]+$/u, "");
 }
 
 function decodeText(encoded: string): string {

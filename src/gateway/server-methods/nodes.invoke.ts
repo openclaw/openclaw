@@ -35,6 +35,7 @@ import {
   parseGatewayPayload,
 } from "./nodes.helpers.js";
 import {
+  captureNodeSystemRunEventSource,
   isForwardedNodeInvokeApprovalAuthorityActive,
   resolveNodeInvokeRuntimeAuthorityError,
 } from "./nodes.invoke-authority.js";
@@ -54,7 +55,15 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const nodeInvokeHandlers: GatewayRequestHandlers = {
-  "node.invoke": async ({ params, respond, context, client, req, signal }) => {
+  "node.invoke": async ({
+    params,
+    respond,
+    context,
+    client,
+    req,
+    signal,
+    hasCurrentClientAuthority,
+  }) => {
     if (!assertValidParams(params, validateNodeInvokeParams, "node.invoke", respond)) {
       return;
     }
@@ -494,6 +503,8 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           command,
           params: forwardedParams.params,
           turnSource,
+          prepareSystemRunEventSource: (key) =>
+            captureNodeSystemRunEventSource({ client, context, hasCurrentClientAuthority }, key),
           timeoutMs: dispatchTimeoutMs,
           deadlineAtMs: invokeDeadlineAtMs,
           signal: invocationLifecycle,
@@ -525,6 +536,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             // Pending actions outlive this RPC. Closure-bound agent or approval
             // authority cannot be transferred to a later device pull.
             !client?.internal?.agentRuntimeIdentity &&
+            !client?.internal?.operatorRunAuthority &&
             !forwardedParams.approvalAuthority
           ) {
             // Foreground-only iOS commands become pullable pending actions instead
@@ -536,6 +548,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               command,
               paramsJSON,
               idempotencyKey: p.idempotencyKey,
+              openclawIdPrincipal: client?.internal?.openclawIdPrincipal,
               ttlMs: nodeInvokePolicy.pendingActionTtlMs,
               maxPerNode: nodeInvokePolicy.pendingActionMaxPerNode,
             });

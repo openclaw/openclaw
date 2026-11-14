@@ -12,16 +12,18 @@ export function buildSkillsSection(params: {
   deferredToolsDirectlyCallable?: boolean;
 }) {
   const { availableTools, visibleTools } = params;
+  const installedSkillRead = availableTools.has("skills_read");
   // CLI backends own native file tools outside OpenClaw's projected tool list.
   const canAccess = params.codeModeActive
-    ? visibleTools.has("exec")
-    : visibleTools.has("read") ||
-      availableTools.has("skills_read") ||
-      params.promptSurface === "cli_backend";
-  const skillsPrompt = canAccess ? (params.skillsPrompt?.trim() ?? "") : "";
-  const hasListedSkills = parseSkillsPromptCatalog(skillsPrompt).length > 0;
+    ? visibleTools.has("exec") && installedSkillRead
+    : visibleTools.has("read") || installedSkillRead || params.promptSurface === "cli_backend";
   const installedSkillSearch = availableTools.has("skills_search");
-  const installedSkillRead = availableTools.has("skills_read");
+  // Code Mode searches the admitted skill catalog; listing it again only consumes context.
+  const skillsPrompt =
+    canAccess && !(params.codeModeActive && installedSkillSearch)
+      ? (params.skillsPrompt?.trim() ?? "")
+      : "";
+  const hasListedSkills = parseSkillsPromptCatalog(skillsPrompt).length > 0;
   if (!canAccess || (!hasListedSkills && !installedSkillSearch)) {
     return { skillsPrompt, section: skillsPrompt ? ["## Skills", skillsPrompt, ""] : [] };
   }

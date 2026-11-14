@@ -157,6 +157,11 @@ cleanup. Failed retirement retains custody for a later retry. Neither a rejected
 result nor a cancellation request alone proves that execution or resources have
 settled.
 
+Workers without retained native resources use one supervisor receipt for execution
+and cleanup completion. The host still emits execution exit before final exit.
+Resource-owning workers retain separate receipts so execution capacity can be
+released while resource cleanup is pending or has failed.
+
 When queued work competes with a task waiting for a host response, `yieldSignal`
 requests a cooperative checkpoint. The host operation retains its own lifetime;
 queue pressure does not grant permission to cancel its underlying work. A
@@ -253,6 +258,11 @@ capacity waiters. A generic `drain` notification would add no useful producer
 control to those paths. Add one only for a caller that can pause before buffering
 or allocating its next input, and observe actual admission release, including
 retained ownership, rather than task-result completion.
+
+Admission errors identify the exhausted pool or shared-compute task/byte budget,
+its current count and limit, and the rejected input's reported bytes. Host-classified
+worker/operation labels provide context without exposing task input or private paths.
+The error code remains `overloaded`; diagnostics do not change admission or retry behavior.
 
 Memory-driven recycling needs evidence of growth after garbage collection and
 must weigh recovered heap and external memory against worker startup cost.

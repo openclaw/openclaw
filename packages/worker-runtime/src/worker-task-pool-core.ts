@@ -112,8 +112,7 @@ export class WorkerTaskPoolCore<Input, Output> {
   private closedError?: Error;
   private nextTaskId = 0;
   private readonly retireIdleOnPressure = () => this.retirement.retireIdle(this.resourceClosures);
-  private readonly expireTasks = () =>
-    expireWorkerTasks(this.queue, this.slots, (task) => this.timeout(task));
+  private readonly expireTasks = () => expireWorkerTasks(this.queue, this.slots, this.timeout);
 
   constructor(
     private readonly options: WorkerTaskPoolOptions<Output>,
@@ -135,6 +134,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     this.retirement = createWorkerTaskPoolRetirement({
       slots: this.slots,
       options,
+      retainOneIdleWorker: ownerOptions.retainOneIdleWorker,
       runInContext: runInWorkerPoolContext,
       dispatch: () => this.dispatch(),
       onRotationComplete: () => {
@@ -240,13 +240,11 @@ export class WorkerTaskPoolCore<Input, Output> {
       );
       return task;
     }
-    if (!this.admission.admit(inputBytes)) {
-      this.finish(
-        task,
-        new WorkerTaskError("worker task capacity reached", "overloaded", {
-          capacityAvailable: this.admission.waitForCapacity(inputBytes),
-        }),
-      );
+    const refusal = this.admission.admit(inputBytes, () =>
+      this.host.describeTask?.(this.options.workerUrl, undefined, options.diagnosticOperation),
+    );
+    if (refusal) {
+      this.finish(task, refusal);
       return task;
     }
     task.admitted = true;
@@ -339,7 +337,8 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.computeCapacity?.remove(this.resumeCompute);
     }
     while (!this.closedError && this.retirement.dispatchAllowed && this.queue.length) {
-      let slot = [...this.slots].find(
+      let slot = this.retirement.preferredIdle;
+      slot ??= [...this.slots].find(
         (entry) =>
           !entry.task &&
           !entry.retiring &&

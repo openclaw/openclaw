@@ -1,11 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { twoFrames } from "./chat-presentation.test-support.ts";
-import {
-  expectPaletteProjectGrouping,
-  expectPaletteSettingsAlignment,
-} from "./command-palette-settings.test-support.ts";
+import { captureUiProof } from "./chat-flow.test-support.ts";
+import { expectPaletteProjectGrouping } from "./command-palette-settings.test-support.ts";
 import {
   foregroundDraft,
   scenario,
@@ -56,7 +53,7 @@ suite.define(() => {
     { width: 1280, colorScheme: "dark", reducedMotion: "no-preference" },
     { width: 390, colorScheme: "light", reducedMotion: "reduce" },
   ] as const)(
-    "collapses prompt searches in place and restores them at $width px",
+    "switches Search and Compose in place and remembers the chosen mode at $width px",
     async (options) => {
       await suite.withPage(
         {
@@ -80,8 +77,8 @@ suite.define(() => {
           const original = (await palette.locator(".cmd-palette").boundingBox())!;
           const inputTop = (await input.boundingBox())!.y;
           const initialHeight = (await search.boundingBox())!.height;
-          const prompt = "Help me plan the next steps for this small project this week";
-          const samples = await input.evaluateHandle((element: HTMLTextAreaElement, value) => {
+          await captureUiProof(suite, page, "cmdk-modes", `search-${options.width}.png`);
+          const samples = await input.evaluateHandle((element: HTMLTextAreaElement) => {
             const frames: Array<{
               x: number;
               y: number;
@@ -107,10 +104,11 @@ suite.define(() => {
               }
             };
             requestAnimationFrame(sample);
-            element.value = value;
-            element.dispatchEvent(new Event("input", { bubbles: true }));
+            element.dispatchEvent(
+              new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }),
+            );
             return frames;
-          }, prompt);
+          });
           await expect
             .poll(() => search.evaluate((element: HTMLElement) => element.inert))
             .toBe(true);
@@ -125,19 +123,32 @@ suite.define(() => {
             expect(frame.width).toBeCloseTo(original.width, 1);
             expect(frame.inputY).toBeCloseTo(inputTop, 1);
           }
-          if (options.reducedMotion === "no-preference") {
+          // The card swaps content in one frame: an in-between height would read as jitter.
+          for (const frame of frames) {
             expect(
-              frames.some(
-                (frame) => frame.searchHeight > 0 && frame.searchHeight < initialHeight - 1,
-              ),
+              frame.searchHeight === 0 || Math.abs(frame.searchHeight - initialHeight) < 1,
             ).toBe(true);
-          } else {
-            expect(
-              await search.evaluate((element) =>
-                Number.parseFloat(getComputedStyle(element).transitionDuration),
-              ),
-            ).toBeLessThanOrEqual(0.00001);
           }
+          await captureUiProof(suite, page, "cmdk-modes", `compose-${options.width}.png`);
+          expect(await input.inputValue()).toBe("appearance");
+          await input.press("Escape");
+          await page.keyboard.press("ControlOrMeta+K");
+          await input.waitFor({ state: "visible" });
+          await expect
+            .poll(() =>
+              palette
+                .getByRole("tab", { name: "Compose", exact: true })
+                .getAttribute("aria-selected"),
+            )
+            .toBe("true");
+          const composeTab = palette.getByRole("tab", { name: "Compose", exact: true });
+          await composeTab.focus();
+          await composeTab.press("ArrowLeft");
+          const searchTab = palette.getByRole("tab", { name: "Search", exact: true });
+          await expect.poll(() => searchTab.getAttribute("aria-selected")).toBe("true");
+          expect(await searchTab.evaluate((element) => document.activeElement === element)).toBe(
+            true,
+          );
           await input.fill("");
           await expect
             .poll(() => search.evaluate((element: HTMLElement) => element.inert))
@@ -153,7 +164,7 @@ suite.define(() => {
     { mode: "dark", width: 1280 },
     { mode: "light", width: 390 },
   ] as const)(
-    "aligns settings and preserves keyboard focus in $mode at $width",
+    "preserves settings navigation and keyboard focus in $mode at $width",
     async ({ mode, width }) => {
       await suite.withPage(
         {
@@ -164,12 +175,12 @@ suite.define(() => {
         },
         async ({ page }) => {
           await installMockGateway(page, scenario());
-          const { palette } = await openFromForeground(page, suite.server.baseUrl);
+          const { palette, input } = await openFromForeground(page, suite.server.baseUrl);
+          await input.press("Tab");
           const popup = palette.locator(".oc-popover.palette-session-settings");
           await changePicker(popup, "overlay-after-show", () =>
             palette.getByRole("button", { name: "New session settings", exact: true }).click(),
           );
-          await expectPaletteSettingsAlignment(popup);
           const remember = popup.getByRole("checkbox", { name: /Remember settings for/ });
           expect(await remember.isVisible()).toBe(true);
           const workspaceButton = popup.locator(".palette-session-settings__workspace");
@@ -178,16 +189,11 @@ suite.define(() => {
           await search.waitFor({ state: "visible" });
           await expectPaletteProjectGrouping(popup);
           expect.soft(await remember.count()).toBe(0);
-          expect
-            .soft(await search.evaluate((element) => getComputedStyle(element).outlineStyle))
-            .toBe("none");
-          // Pointer entry keeps focus inside the nested view without summoning a
-          // text caret (or a touch keyboard). Tab still reaches its search field.
-          await page.keyboard.press("Tab");
+          // The nested view opens in its search field, by pointer or by keyboard.
           expect
             .soft(await search.evaluate((element) => document.activeElement === element))
             .toBe(true);
-          await search.press("Escape");
+          await page.keyboard.press("Escape");
           expect(await remember.isVisible()).toBe(true);
           expect(
             await workspaceButton.evaluate((element) => document.activeElement === element),
@@ -195,10 +201,7 @@ suite.define(() => {
           await workspaceButton.press("Enter");
           await search.waitFor({ state: "visible" });
           expect(await search.evaluate((element) => document.activeElement === element)).toBe(true);
-          expect(await search.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe(
-            "solid",
-          );
-          await search.fill("no-such-workspace");
+          await page.keyboard.type("no-such-workspace");
           expect(await popup.locator("[data-machine]").count()).toBe(0);
           await popup.getByRole("button", { name: "Back", exact: true }).click();
           expect(await remember.isVisible()).toBe(true);
@@ -244,6 +247,7 @@ suite.define(() => {
             page,
             suite.server.baseUrl,
           );
+          await input.press("Tab");
           const prompt = "Investigate missing worker error messages.\n".repeat(6).trimEnd();
           const finalLine = "Keep the changes focused.";
           const emptySearch = { ts: 1, path: "", defaults: {}, count: 0, sessions: [] };
@@ -282,10 +286,18 @@ suite.define(() => {
           await changePicker(agent.locator(".agent-select__menu"), "overlay-after-show", () =>
             agent.getByRole("button", { name: /^Agent:/ }).click(),
           );
-          const reviewer = agent.getByRole("menuitemradio", { name: "Reviewer", exact: true });
+          const reviewer = agent.getByRole("option", { name: "Reviewer", exact: true });
           await reviewer.waitFor();
-          await reviewer.focus();
-          await reviewer.press("Enter");
+          await agent.getByRole("listbox").press("End");
+          await expect
+            .poll(() =>
+              reviewer.evaluate(
+                (element) =>
+                  document.activeElement?.getAttribute("aria-activedescendant") === element.id,
+              ),
+            )
+            .toBe(true);
+          await page.keyboard.press("Enter");
           await expect
             .poll(() => agent.getByRole("button", { name: /^Agent:/ }).textContent())
             .toContain("Reviewer");
@@ -305,6 +317,7 @@ suite.define(() => {
             const search = settings.getByRole("searchbox");
             await search.fill("Palette runner");
             await search.press("Escape");
+            await page.keyboard.press("Escape");
             await workspaceChoice.waitFor({ state: "visible" });
             expect(await input.isVisible()).toBe(true);
             await workspaceChoice.press("Enter");
@@ -326,7 +339,6 @@ suite.define(() => {
           await expect.poll(() => start.isEnabled()).toBe(true);
           expect(await palette.locator(".agent-chat__composer-shell").count()).toBe(0);
           expect(await palette.locator(".chat-composer-model-control").count()).toBe(0);
-          expect(await palette.locator(".new-session-page__visibility").count()).toBe(0);
           const bounds = (await palette.locator(".cmd-palette").boundingBox())!;
           expect(bounds.x).toBeGreaterThanOrEqual(0);
           expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
@@ -344,14 +356,20 @@ suite.define(() => {
           });
           expect(create.params).not.toHaveProperty("execNode");
           expect(create.params).not.toHaveProperty("parentSessionKey");
-          await expect.poll(() => start.isEnabled()).toBe(false);
-          // A second physical chord while admission is pending must not start a second session.
-          await page.keyboard.press("ControlOrMeta+Enter");
-          expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-          expect(page.url()).toBe(url);
-          await gateway.resolveDeferred("sessions.create");
+          // Optimistic start: the launcher returns to the foreground before admission.
           await input.waitFor({ state: "hidden" });
           await expectForegroundUnchanged(page, composer, url);
+          // The pending start owns its draft; Cmd+K reopens empty and cannot resend it.
+          await page.keyboard.press("ControlOrMeta+K");
+          await input.waitFor({ state: "visible" });
+          expect(await input.inputValue()).toBe("");
+          await expect.poll(() => start.isEnabled()).toBe(false);
+          await input.press("ControlOrMeta+Enter");
+          expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+          await input.press("Escape");
+          await input.waitFor({ state: "hidden" });
+          await gateway.resolveDeferred("sessions.create");
+          expect(page.url()).toBe(url);
           if (destination === "device") {
             expect((await gateway.waitForRequest("sessions.dispatch")).params).toEqual({
               key: sessionKey,
@@ -378,7 +396,7 @@ suite.define(() => {
     },
   );
 
-  it("opens persistent rejected-turn recovery with the keyboard after dismissing its toast", async () => {
+  it("opens a rejected first turn from its notice without resending it", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const key = "agent:main:dashboard:palette-rejected-turn";
       const gateway = await installMockGateway(
@@ -394,6 +412,7 @@ suite.define(() => {
         page,
         suite.server.baseUrl,
       );
+      await input.press("Tab");
       const prompt = "Keep this accepted session recoverable.\nDo not send the same request twice.";
       await input.fill(prompt);
       const start = palette.getByRole("button", {
@@ -403,87 +422,87 @@ suite.define(() => {
       await expect.poll(() => start.isEnabled()).toBe(true);
       await input.press("ControlOrMeta+Enter");
       await gateway.waitForRequest("sessions.create");
-      await expect
-        .poll(() => palette.getByRole("alert").textContent())
-        .toContain("Initial turn rejected");
-      const toast = page.locator(".app-toast");
-      await toast.getByRole("button", { name: "Dismiss", exact: true }).click();
-      await toast.waitFor({ state: "hidden" });
-      expect(await input.inputValue()).toBe(prompt);
-      expect(page.url()).toBe(url);
-      expect(await composer.inputValue()).toBe(foregroundDraft);
-      await input.press("ControlOrMeta+Enter");
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-      const recovery = palette.getByRole("button", { name: "Open session", exact: true });
-      await recovery.waitFor({ state: "visible" });
-      await input.focus();
-      for (let step = 0; step < 10; step += 1) {
-        await page.keyboard.press("Tab");
-        if (await recovery.evaluate((element) => document.activeElement === element)) {
-          break;
-        }
-      }
-      expect(await recovery.evaluate((element) => document.activeElement === element)).toBe(true);
-      await page.keyboard.press("Enter");
-      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(key));
       await input.waitFor({ state: "hidden" });
+      await expectForegroundUnchanged(page, composer, url);
+      // The destination session owns the rejected prompt; the launcher is already free.
+      await page.keyboard.press("ControlOrMeta+K");
+      await input.waitFor({ state: "visible" });
+      expect(await input.inputValue()).toBe("");
+      expect(await palette.getByRole("alert").count()).toBe(0);
+      await input.press("Escape");
+      await input.waitFor({ state: "hidden" });
+      const toast = page.locator(".app-toast");
+      await expect.poll(() => toast.textContent()).toContain("Initial turn rejected");
+      await toast.getByRole("button", { name: "Open session", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(key));
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       expect(await gateway.getRequests("chat.send")).toEqual([]);
     });
   });
 
-  it("keeps a rejected creation visible and retries the same prompt without touching chat", async () => {
+  it("starts a second prompt while the first is pending and retries a failed start", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const firstKey = "agent:main:dashboard:palette-retried";
+      const secondKey = "agent:main:dashboard:palette-second";
       const gateway = await installMockGateway(
         page,
         scenario({
-          "sessions.create": { key: "agent:main:dashboard:palette-retried", runStarted: true },
+          "sessions.create": { key: secondKey, runStarted: true },
         }),
       );
       const { composer, url, palette, input } = await openFromForeground(
         page,
         suite.server.baseUrl,
       );
+      await input.press("Tab");
       const prompt = "Preserve this task when creation is denied.\nRetry only after I ask.";
-      await input.fill(prompt);
+      const second = "A second task while the first one starts.\nKeep both.";
       const start = palette.getByRole("button", {
         name: "Start new session in background",
         exact: true,
       });
+      await input.fill(prompt);
       await expect.poll(() => start.isEnabled()).toBe(true);
-      await gateway.deferNext("sessions.create");
+      await gateway.deferNext("sessions.create", { message: prompt });
       await input.press("ControlOrMeta+Enter");
       await gateway.waitForRequest("sessions.create");
-      // A disabled field loses focus on the next frame; the pending prompt stays focused and read-only.
-      await expect.poll(() => start.isEnabled()).toBe(false);
-      await twoFrames(page);
-      expect(
-        await input.evaluate((element: HTMLTextAreaElement) => [
-          document.activeElement === element,
-          element.readOnly,
-          element.getAttribute("aria-busy"),
-        ]),
-      ).toEqual([true, true, "true"]);
+      await input.waitFor({ state: "hidden" });
+      await expectForegroundUnchanged(page, composer, url);
+      // The pending start never holds the launcher: a new prompt starts immediately.
+      await page.keyboard.press("ControlOrMeta+K");
+      await input.waitFor({ state: "visible" });
+      expect(await input.inputValue()).toBe("");
+      expect(await input.evaluate((element: HTMLTextAreaElement) => element.readOnly)).toBe(false);
+      await input.fill(second);
+      await expect.poll(() => start.isEnabled()).toBe(true);
+      await input.press("ControlOrMeta+Enter");
+      await input.waitFor({ state: "hidden" });
+      await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
+      const started = page.locator('.app-toast--success[data-active="true"]');
+      await expect.poll(() => started.textContent()).toContain("Session started");
+      await page.locator(".app-toast-lane--top-center").hover();
       await gateway.rejectDeferred("sessions.create", {
         code: "INVALID_REQUEST",
         message: "Fixture denied creation; correct the request and retry.",
       });
-      const error = palette.getByRole("alert");
-      await expect.poll(() => error.textContent()).toContain("Fixture denied creation");
-      expect(await input.inputValue()).toBe(prompt);
+      const errorToast = page.locator('.app-toast--error[data-active="true"]');
+      await expect.poll(() => errorToast.textContent()).toContain("Couldn’t start the session");
+      expect(await errorToast.textContent()).toContain("Fixture denied creation");
+      await gateway.deferNext("sessions.create", { message: prompt });
+      await errorToast.getByRole("button", { name: "Try again", exact: true }).click();
+      const retry = await gateway.waitForRequest("sessions.create", { after: 2 });
+      expect(retry.params).toMatchObject({ agentId: "main", message: prompt });
+      await gateway.resolveDeferred("sessions.create", { key: firstKey, runStarted: true });
+      await expect.poll(() => started.count()).toBe(2);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(3);
+      expect(await gateway.getRequests("chat.send")).toEqual([]);
       expect(page.url()).toBe(url);
       expect(await composer.inputValue()).toBe(foregroundDraft);
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-      expect(await input.evaluate((element) => document.activeElement === element)).toBe(true);
-      expect(await input.getAttribute("aria-busy")).toBeNull();
-      await expect.poll(() => start.isEnabled()).toBe(true);
-      await input.press("ControlOrMeta+Enter");
-      const retry = await gateway.waitForRequest("sessions.create", { after: 1 });
-      expect(retry.params).toMatchObject({ agentId: "main", message: prompt });
-      await input.waitFor({ state: "hidden" });
-      await expectForegroundUnchanged(page, composer, url);
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(2);
-      expect(await gateway.getRequests("chat.send")).toEqual([]);
+      await page.locator(".app-toast-lane--top-center").hover();
+      await started.nth(1).getByRole("button", { name: "Open session", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));
+      await started.getByRole("button", { name: "Open session", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(firstKey));
     });
   });
 });

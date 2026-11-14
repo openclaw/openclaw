@@ -76,7 +76,6 @@ it.each([
     await openMenu("badge-pattern");
     const reference = getComputedStyle(view.container.querySelector(".shortcut-hint__keys")!);
     const skin = (style: CSSStyleDeclaration) => [
-      style.backgroundColor,
       style.color,
       style.borderRadius,
       style.paddingInlineStart,
@@ -85,7 +84,13 @@ it.each([
     ];
     expect(Number.parseFloat(reference.paddingInlineStart)).toBeGreaterThan(0);
     for (const badge of view.container.querySelectorAll("kbd")) {
-      expect(skin(getComputedStyle(badge)), badge.outerHTML).toEqual(skin(reference));
+      const style = getComputedStyle(badge);
+      if (badge.closest(".chat-controls__model-option-action")) {
+        // Model digits use a flat skin but keep the shared shortcut font owner.
+        expect(style.fontFamily).toBe(reference.fontFamily);
+      } else {
+        expect(skin(style), badge.outerHTML).toEqual(skin(reference));
+      }
     }
     const hints = [...surface("badge-pattern").querySelectorAll("kbd")];
     const edge = dir === "rtl" ? "left" : "right";

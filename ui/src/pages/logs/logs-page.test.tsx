@@ -2,16 +2,23 @@
 
 import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { downloadTextFile } from "../../lib/download.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { missingReadScopeErrorFixture } from "../../test-helpers/gateway-client.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { installLogsViewport } from "./logs-layout.test-support.ts";
 import { renderSolid as LogsRoute } from "./logs-page.tsx";
+
+vi.mock("../../lib/download.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/download.ts")>()),
+  downloadTextFile: vi.fn(),
+}));
 
 type TestContext = ReturnType<typeof contextWithClient>;
 const TRUNCATION_NOTICE = "Log output truncated; showing latest chunk.";
@@ -59,7 +66,7 @@ function mountPage(initial: TestContext) {
     dispose,
     lines,
     async refresh() {
-      query(".settings-section__actions button")!.click();
+      query(".page-header-actions button")!.click();
       await settle();
     },
   };
@@ -111,6 +118,8 @@ async function poll() {
   await settle();
 }
 
+beforeEach(installLogsViewport);
+
 afterEach(() => {
   cleanupSolid();
   vi.restoreAllMocks();
@@ -124,7 +133,7 @@ it("names the page with a level-one heading", async () => {
   );
 });
 
-it("warns only after the display buffer evicts rows and retains that notice", async () => {
+it("exports the retained buffer and warns only after old rows are evicted", async () => {
   const lines = Array.from({ length: 2001 }, (_, index) => `line ${index + 1}`);
   let cursor = 0;
   const request = vi.fn(async () => {
@@ -133,16 +142,25 @@ it("warns only after the display buffer evicts rows and retains that notice", as
     return tail(cursor, pageLines, "/tmp/buffer.log");
   });
   const { page } = await setup(request);
+  const expectExport = (expected: string[]) => {
+    page.container.querySelectorAll<HTMLButtonElement>(".page-header-actions button")[1]!.click();
+    expect(downloadTextFile).toHaveBeenLastCalledWith(
+      expect.any(String),
+      `${expected.join("\n")}\n`,
+    );
+  };
   for (const count of [1000, 1500, 2000]) {
     await poll();
-    expect(page.lines()).toHaveLength(count);
+    expectExport(lines.slice(0, count));
     expect(page.text()).not.toContain(TRUNCATION_NOTICE);
   }
   await poll();
   const retained = lines.slice(1);
-  page.expectRows(retained, true);
+  expectExport(retained);
+  expect(page.text()).toContain(TRUNCATION_NOTICE);
   await poll();
-  page.expectRows(retained, true);
+  expectExport(retained);
+  expect(page.text()).toContain(TRUNCATION_NOTICE);
 });
 
 it.each([false, true])("clears truncation on replacement (server reset: %s)", async (reset) => {
@@ -165,7 +183,7 @@ it("retains one initial request across metadata snapshots with empty logs", asyn
   const { request, replies } = pendingRequests();
   const { client, context, page } = await setup(request, false);
   context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
-  await waitForSolid(() => expect(page.disabled("Loading…")).toBe(true));
+  await waitForSolid(() => expect(page.disabled("Refresh")).toBe(true));
   context.gateway.publish({ ...context.gateway.snapshot });
   expect(request.mock.calls.map((call) => call[2].signal.aborted)).toEqual([false]);
   await deliver(replies[0]!, tail(100, [], "/tmp/initial.log"));
@@ -217,7 +235,9 @@ it.each(["same", "changed"])("resumes %s-boot logs and retries failures", async 
   const { context, page } = await setup(request, true, "original-boot");
   const stream = page.query(".log-stream")!;
   Object.defineProperty(stream, "scrollHeight", { value: 500 });
+  stream.dispatchEvent(new WheelEvent("wheel", { deltaY: -500 }));
   stream.scrollTop = 0;
+  stream.dispatchEvent(new Event("scroll"));
   // SAFETY: This focused snapshot fixture supplies only the hello boot field read by LogsPage.
   reconnect(context, {
     ...context.gateway.snapshot,
@@ -232,7 +252,7 @@ it.each(["same", "changed"])("resumes %s-boot logs and retries failures", async 
     pending.reject(new Error("replacement boot is not ready"));
     await settle();
     page.expectRows(["before"], true);
-    expect(page.text()).toContain("Showing stale data");
+    expect(page.text()).toContain("Showing last known data");
     expect(page.text()).toContain("replacement boot is not ready");
     await poll();
     expect(request.mock.calls[2]![1]).toMatchObject({ cursor: undefined });
@@ -307,15 +327,15 @@ it.each([false, true])("recovers a logs error with previously loaded rows: %s", 
     await page.refresh();
     page.expectRows(["old"], true);
   }
-  expect(page.disabled("Loading…")).toBe(true);
+  expect(page.disabled("Refresh")).toBe(true);
   expectRetainedControls();
   pending.reject(new Error("logs unavailable"));
   await waitForSolid(() => expect(page.disabled("Refresh")).toBe(false));
   if (loaded) {
     page.expectRows(["old"], true);
-    expect(page.query(".logs-refresh-status")?.textContent).toContain("Showing stale data");
+    expect(page.query(".logs-refresh-status")?.textContent).toContain("Showing last known data");
   } else {
-    expect(page.text()).not.toContain("No log entries.");
+    expect(page.text()).not.toContain("No log entries yet.");
     context.gateway.publish({ ...context.gateway.snapshot });
     expect(request).toHaveBeenCalledOnce();
     expect(page.query(".logs-refresh-status button")).toBeNull();
@@ -329,7 +349,7 @@ it.each([false, true])("recovers a logs error with previously loaded rows: %s", 
     page.expectRows(["recovered"], true);
     await poll();
     page.expectRows([], false);
-    expect(page.text()).toContain("You don't have permission to view logs.");
+    expect(page.text()).toContain("Couldn’t view logs. Ask an admin to grant read access.");
   }
 });
 
@@ -346,7 +366,15 @@ it("keeps text and level filters active as quiet polls append rows", async () =>
   filter.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
   page.expectRows(["alpha info", "alpha error"]);
-  page.query(".log-chip.info input")!.click();
+  page.query('[aria-controls="logs-levels:content"]')!.click();
+  flush();
+  await vi.waitFor(() => {
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')].find(
+      (candidate) => candidate.textContent?.trim() === "info",
+    );
+    expect(item).toBeTruthy();
+    item!.click();
+  });
   flush();
   page.expectRows(["alpha error"]);
   await poll();
@@ -363,10 +391,9 @@ it("forces a scroll when auto-follow is re-enabled away from the bottom", async 
   flush();
   stream.scrollTop = 0;
   stream.dispatchEvent(new Event("scroll"));
-  const frames = captureFrames();
   toggle.click();
   flush();
-  expect(frames).toHaveLength(1);
-  frames[0]!(0);
-  expect(stream.scrollTop).toBe(500);
+  await vi.waitFor(() =>
+    expect(stream.scrollHeight - stream.clientHeight - stream.scrollTop).toBe(0),
+  );
 });

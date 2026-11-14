@@ -18,6 +18,7 @@ export function expectSubagentFollowupReactivation(params: {
     previousRunId: "run-old",
     nextRunId: "run-new",
     preserveCompletedRun: true,
+    sessionEntry: expect.objectContaining({ sessionId: "sess-followup" }),
     assertCurrent: expect.any(Function),
     runTimeoutSeconds: 0,
     ...(params.task ? { task: params.task } : {}),

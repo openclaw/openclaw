@@ -18,6 +18,14 @@ function fingerprint(file: BigIntStats): string {
   return [file.dev, file.ino, file.birthtimeNs, file.ctimeNs, file.mtimeNs, file.size].join(":");
 }
 
+/**
+ * As root, SQLite fchowns the WAL on every native open, including read-only ones.
+ * That changes ctime (and birthtime where libuv derives it) but never the WAL's bytes.
+ */
+function walFingerprint(file: BigIntStats): string {
+  return [file.dev, file.ino, file.mtimeNs, file.size].join(":");
+}
+
 function readFile(pathname: string): BigIntStats | undefined {
   const file = fs.lstatSync(pathname, { bigint: true, throwIfNoEntry: false });
   if (!file) {
@@ -42,19 +50,19 @@ export function captureSqlitePrivateSnapshotFamily(
   // SQLite ignores WALs no larger than its 32-byte header. Read-only opens can
   // create/remove these frame-free files without changing the owned main image.
   return main
-    ? { root, main: fingerprint(main), wal: wal && wal.size > 32n ? fingerprint(wal) : null }
+    ? { root, main: fingerprint(main), wal: wal && wal.size > 32n ? walFingerprint(wal) : null }
     : undefined;
 }
 
 export function readSqlitePrivateSnapshotFamily(value: unknown): SqlitePrivateSnapshotFamily {
-  const isFingerprint = (entry: unknown): entry is string =>
-    typeof entry === "string" && /^-?\d+(?::-?\d+){5}$/.test(entry);
+  const isFingerprint = (entry: unknown, pattern: RegExp): entry is string =>
+    typeof entry === "string" && pattern.test(entry);
   if (
     !isRecord(value) ||
     typeof value.root !== "string" ||
     !path.isAbsolute(value.root) ||
-    !isFingerprint(value.main) ||
-    (value.wal !== null && !isFingerprint(value.wal))
+    !isFingerprint(value.main, /^-?\d+(?::-?\d+){5}$/) ||
+    (value.wal !== null && !isFingerprint(value.wal, /^-?\d+(?::-?\d+){3}$/))
   ) {
     throw new Error("SQLite private fork requires its producer's captured family");
   }
@@ -82,7 +90,7 @@ export async function forkSqlitePrivateSnapshotInProcess(
     return runWithSqliteCleanup({ release: releaseSource }, "Private SQLite snapshot fork", () => {
       const current = captureSqlitePrivateSnapshotFamily(pathname, family.root);
       if (current?.main !== family.main || current?.wal !== family.wal) {
-        throw new SqliteSourceChangedError(`Retained SQLite snapshot changed: ${pathname}`);
+        throw new SqliteSourceChangedError("retained-snapshot-changed");
       }
       directory = createSqliteSnapshotStagingDirectorySync(stagingRoot);
       const destination = path.join(directory, "database.sqlite.partial");

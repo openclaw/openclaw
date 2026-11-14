@@ -137,6 +137,25 @@ afterEach(async () => {
 });
 
 describe("doctor generated plugin model catalog migration", () => {
+  it.each([
+    "invalid JSON",
+    JSON.stringify({ generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY, providers: [] }),
+    catalog("ollama", null),
+    catalog("ollama", { models: "invalid" }),
+    catalog("ollama", { api: "ollama", models: [null] }),
+  ])("preserves incomplete persisted catalog inspection: %s", async (contents) => {
+    const agentDir = createAgentDir();
+    await seedCatalogs(agentDir, { ollama: generatedCatalog("ollama") });
+    await closeOpenClawAgentDatabasesAsync(agentDir);
+    overwriteCatalog(agentDir, "ollama", contents);
+    const before = readCatalogCacheRow(agentDir, "ollama");
+
+    expect(await migrate(agentDir, false)).toBe(true);
+    expect(await migrate(agentDir)).toBe(true);
+
+    expect(readCatalogCacheRow(agentDir, "ollama")).toEqual(before);
+  });
+
   it("repairs only partial retained costs and persists the repair across reopening", async () => {
     const agentDir = createAgentDir();
     await seedCatalogs(agentDir, {
@@ -167,7 +186,7 @@ describe("doctor generated plugin model catalog migration", () => {
     overwriteCatalog(agentDir, "ollama", retained);
     const before = readCatalogCacheRow(agentDir, "ollama");
     const sibling = readCatalogCacheRow(agentDir, "anthropic");
-    await migrate(agentDir, false);
+    expect(await migrate(agentDir, false)).toBe(true);
     expect(readCatalogCacheRow(agentDir, "ollama")).toEqual(before);
     expect(readCatalogCacheRow(agentDir, "anthropic")).toEqual(sibling);
     expect(terminalNote.note).toHaveBeenCalledWith(
@@ -175,7 +194,7 @@ describe("doctor generated plugin model catalog migration", () => {
       "Plugin model catalogs",
     );
 
-    await migrate(agentDir);
+    expect(await migrate(agentDir)).toBe(true);
     expect(terminalNote.note).toHaveBeenCalledWith(
       expect.stringContaining("completed the cost of 1 model row(s)"),
       "Doctor changes",
@@ -200,7 +219,7 @@ describe("doctor generated plugin model catalog migration", () => {
     });
     expect(readCatalogCacheRow(agentDir, "anthropic")).toEqual(sibling);
 
-    await migrate(agentDir);
+    expect(await migrate(agentDir)).toBe(false);
     expect(readCatalogCacheRow(agentDir, "ollama")).toEqual(repaired);
     expect(readCatalogCacheRow(agentDir, "anthropic")).toEqual(sibling);
   });
@@ -370,7 +389,7 @@ describe("doctor generated plugin model catalog migration", () => {
 
     try {
       const params = migrationParams([agentDir]);
-      await maybeMigrateLegacyPluginModelCatalogs(params);
+      expect(await maybeMigrateLegacyPluginModelCatalogs(params)).toBe(true);
       expect(params.runtime.error).toHaveBeenCalledWith(
         expect.stringContaining("Could not read legacy provider catalog"),
       );
@@ -443,23 +462,31 @@ describe.each(["JSON", "JSONC"])(
       expect(backups(agentDir)).toEqual(saved);
     });
 
-    it("preserves malformed UTF-8 root catalogs without rewriting or lossy backups", async () => {
-      const { agentDir } = await seedAgent({
-        "claude-cli": anthropicBlock,
-        authored: { label: "broken" },
-      });
-      const sourcePath = rootPath(agentDir);
-      const source = fs.readFileSync(sourcePath);
-      source[source.indexOf("broken")] = 0xff;
-      fs.writeFileSync(sourcePath, source);
-      const params = migrationParams([agentDir]);
+    it.each(["invalid-utf8", "null", "{}", '{"providers":[]}', '{"providers":{"x":null}}'])(
+      "preserves malformed root catalog %s and reports incomplete inspection",
+      async (malformed) => {
+        const { agentDir } = await seedAgent({
+          "claude-cli": anthropicBlock,
+          authored: { label: "broken" },
+        });
+        const sourcePath = rootPath(agentDir);
+        const source =
+          malformed === "invalid-utf8" ? fs.readFileSync(sourcePath) : Buffer.from(malformed);
+        if (malformed === "invalid-utf8") {
+          source[source.indexOf("broken")] = 0xff;
+        }
+        fs.writeFileSync(sourcePath, source);
+        const params = migrationParams([agentDir]);
 
-      await maybeMigrateLegacyPluginModelCatalogs(params);
+        expect(await maybeMigrateLegacyPluginModelCatalogs(params)).toBe(true);
 
-      expect(fs.readFileSync(sourcePath)).toEqual(source);
-      expect(backups(agentDir)).toEqual([]);
-      expect(params.runtime.error).toHaveBeenCalledWith(expect.stringContaining("UTF-8"));
-    });
+        expect(fs.readFileSync(sourcePath)).toEqual(source);
+        expect(backups(agentDir)).toEqual([]);
+        if (malformed === "invalid-utf8") {
+          expect(params.runtime.error).toHaveBeenCalledWith(expect.stringContaining("UTF-8"));
+        }
+      },
+    );
 
     it("keeps edited copies and ids that config declares", async () => {
       const edited = {

@@ -478,9 +478,7 @@ export class MediaStreamHandler {
         `[MediaStream] Closing pre-start idle connection after ${this.preStartTimeoutMs}ms (${ip})`,
       );
       ws.close(1008, "Start timeout");
-    }, this.preStartTimeoutMs);
-
-    timeout.unref?.();
+    }, this.preStartTimeoutMs).unref();
     this.pendingConnections.set(ws, { ip, timeout });
     this.pendingByIp.set(ip, pendingForIp + 1);
     return true;
@@ -594,8 +592,7 @@ export class MediaStreamHandler {
           pending();
         },
         Math.max(1, audioDurationMs + PLAYBACK_MARK_TIMEOUT_GRACE_MS),
-      );
-      timeout.unref?.();
+      ).unref();
       const onAbort = () => {
         const reason =
           signal.reason instanceof Error

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { getInternalToolExecutionPreparer } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { runWithAgentToolExecutionContext } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -10,6 +11,7 @@ import {
   getEmbeddedPluginApprovalBroker,
   setEmbeddedPluginApprovalBroker,
 } from "../../../infra/embedded-plugin-approval-broker.js";
+import * as logger from "../../../logger.js";
 import {
   getGlobalPluginRegistry,
   initializeGlobalHookRunner,
@@ -27,7 +29,6 @@ import {
 } from "../../code-mode.js";
 import { runUntilCompleted } from "../../code-mode.test-support.js";
 import { createAgentHarnessPromptToolPolicy } from "../../harness/prompt-tool-policy.js";
-import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
@@ -165,6 +166,89 @@ function clientTurn(tool: ReturnType<typeof wrapToolDefinition>, value: number) 
 }
 
 describe("prepareEmbeddedAttemptClientTools", () => {
+  it("counts same-named MCP and client catalog entries as separate callable tools", () => {
+    const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const catalogRef = createToolSearchCatalogRef();
+    try {
+      const native = Array.from({ length: 64 }, (_, index) =>
+        pluginTool(`remote_${index}`, "bundle-mcp", {
+          mcp: {
+            serverName: "fixture",
+            safeServerName: "fixture",
+            toolName: `operation_${index}`,
+            operation: "tool",
+          },
+        }),
+      );
+      const controls = createCodeModeTools({
+        config: CODE_MODE_CONFIG,
+        catalogRef,
+        ...RUN_CONTEXT,
+      });
+      const compacted = applyCodeModeCatalog({
+        config: CODE_MODE_CONFIG,
+        catalogRef,
+        tools: [...controls, ...native],
+      });
+      const prepared = prepare({
+        attemptConfig: CODE_MODE_CONFIG,
+        catalogRef,
+        codeModeControlsEnabledForRun: true,
+        toolSearchRuntimeConfig: CODE_MODE_CONFIG,
+        effectiveTools: compacted.tools,
+        uncompactedEffectiveTools: native,
+        clientTools: [clientTool("remote_0")],
+      });
+      createAgentHarnessPromptToolPolicy({
+        diagnosticIdentity: { ...RUN_CONTEXT, sessionKey: "distinct-catalog-identities" },
+        tools: prepared.allCustomTools,
+        catalogRef,
+        codeModeControlsEnabled: true,
+      }).apply();
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("catalog contains 65 tools"),
+      );
+    } finally {
+      clearToolSearchCatalog({ catalogRef });
+      warn.mockRestore();
+    }
+  });
+
+  it.each([
+    [0, 65],
+    [40, 30],
+  ])(
+    "includes %s native and %s client tools in the filtered catalog warning",
+    (nativeCount, clientCount) => {
+      const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+      try {
+        const native = Array.from({ length: nativeCount }, (_, index) =>
+          createStubTool(`native_${index}`),
+        );
+        const prepared = prepare({
+          effectiveTools: native,
+          uncompactedEffectiveTools: native,
+          clientTools: Array.from({ length: clientCount }, (_, index) =>
+            clientTool(`client_${index}`),
+          ),
+        });
+        const policy = createAgentHarnessPromptToolPolicy({
+          diagnosticIdentity: { ...RUN_CONTEXT, sessionKey: `client-catalog-${nativeCount}` },
+          tools: prepared.allCustomTools,
+          codeModeControlsEnabled: false,
+        });
+        policy.apply({ toolsAllow: ["client_0"] });
+        expect(warn).not.toHaveBeenCalled();
+        policy.apply();
+        expect(warn).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining(`catalog contains ${nativeCount + clientCount} tools`),
+        );
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
+
   it("keeps reused client call ids distinct across assistant turns and stable on replay", async () => {
     const prepared = prepare();
     const tool = wrappedTool(prepared.clientToolDefs);

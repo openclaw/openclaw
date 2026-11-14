@@ -36,6 +36,61 @@ const { prepare, preparePlan, expectAuthError } = createPreparationFixture(prepa
 type Params = Parameters<typeof prepare>[0];
 const xaiKey = (key: string) => createApiKeyCredential("xai", key);
 const pair = () => ({ "openai:platform": apiKey(), "openai:chatgpt": oauth() });
+const routedAlias = {
+  config: providerConfig("arcee", { baseUrl: "https://api.openai.com/v1" }),
+  metadataSnapshot: createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "arcee",
+        origin: "bundled",
+        providerAuthAliases: {
+          arcee: { provider: "openai", baseUrls: ["https://api.openai.com/v1"] },
+        },
+      },
+    ],
+  }),
+};
+
+it.each(["anthropic", "openai", "arcee"])(
+  "resolves fallback auth with a session pin owned by %s",
+  async (provider) => {
+    const store = authStore(
+      {
+        "session:work": createApiKeyCredential(provider, "synthetic-pinned-key"),
+        "openai:default": apiKey("synthetic-fallback-key"),
+      },
+      { openai: ["openai:default", "session:work"] },
+    );
+    const { plan, attempts } = prepare({
+      ...platform,
+      ...routedAlias,
+      ...userPin("session:work"),
+      authProfileStore: store,
+      allowAuthProfileFallback: false,
+    });
+    const auth = await getApiKeyForModelCore({
+      model: authModel(plan),
+      cfg: {},
+      store,
+      profileId: attempts[0]?.profileId,
+      lockedProfile: plan.forwardedAuthProfileSource === "user",
+    });
+    expect(auth).toMatchObject({
+      profileId: provider === "openai" ? "session:work" : "openai:default",
+      apiKey: provider === "openai" ? "synthetic-pinned-key" : "synthetic-fallback-key",
+    });
+    expect(plan.forwardedAuthProfileSource).toBe(provider === "openai" ? "user" : "auto");
+  },
+);
+
+it("keeps a same-provider pin strict when an endpoint alias changes its credential realm", () => {
+  expectAuthError({
+    ...routedAlias,
+    provider: " Arcee ",
+    ...userPin("session:work"),
+    profiles: oneProfile("session:work", createApiKeyCredential("arcee", "synthetic-pin")),
+  }).toThrow(/not configured/u);
+});
 
 // Provider-hook behavior is covered by its owner suites.
 vi.mock("../../plugins/provider-runtime.js", () => ({
@@ -570,12 +625,13 @@ it("keeps retries behind virtual Codex user pins", () => {
   ]);
 });
 
-it.each(["incompatible", "missing"] as const)("rejects %s virtual Codex pins", (failure) => {
+it.each(["incompatible", "missing"] as const)("rejects %s virtual Codex selections", (failure) => {
   const incompatible = failure === "incompatible",
     profileId = incompatible ? "amazon-bedrock:default" : "openai:missing";
   expectAuthError({
     ...nativeCodex,
     ...userPin(profileId),
+    ...(incompatible ? { requiredAuthProfileId: profileId } : {}),
     config: {
       auth: {
         profiles: {

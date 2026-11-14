@@ -118,13 +118,16 @@ for (let index = 0; index < 64; index++) {
 }
 cfg.agents.defaults.model.fallbacks = ["fixture-alias-0", "fixture-alias-1", "fixture-alias-2"];
 cfg.agents.ownership = "explicit";
-cfg.skills = { workshop: { autonomous: { mode: "off" } } };
 cfg.plugins = {
   enabled: true,
   allow: ["openai"],
   slots: { memory: "none" },
-  entries: { browser: { enabled: false } },
+  entries: {
+    browser: { enabled: false },
+    "skill-workshop": { config: { autonomous: { mode: "off" } } },
+  },
 };
+cfg.meta = { ...cfg.meta, migrations: { ...cfg.meta?.migrations, skillWorkshopPlugin: true } };
 cfg.gateway = {
   ...cfg.gateway,
   trustedProxies: ["127.0.0.1", "::1"],

@@ -1,9 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { ImageContent, UserMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
+import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -41,6 +42,30 @@ function contentOf(message: AgentMessage | undefined) {
 }
 
 describe("normalizeMessagesForLlmBoundary", () => {
+  it.each(["text", "blocks"] as const)(
+    "preserves completion provenance after context-engine reconstruction (%s)",
+    (shape) => {
+      const provenance = {
+        kind: "inter_session" as const,
+        sourceSessionKey: "agent:main:child",
+        sourceChannel: "internal",
+        sourceTool: "subagent_settle",
+      };
+      const text = "Child completion results: finished";
+      const marked = annotateInterSessionPromptText(text, provenance);
+      const content = (value: string) =>
+        shape === "text" ? value : [{ type: "text" as const, text: value }];
+      const current = { ...user(content(marked)), provenance };
+      const replay = { ...user(content(text)), provenance };
+      const boundary = { ...options, includeTimestamp: false };
+      const before = normalizeMessagesForLlmBoundary([current], boundary);
+      const after = normalizeMessagesForLlmBoundary([replay, user("Ok", timestamp + 1)], boundary);
+      expect(after[0]).toEqual(before[0]);
+      expect(contentOf(after[0])).toEqual(marked);
+      expect(normalizeMessagesForLlmBoundary(after, boundary)).toEqual(after);
+    },
+  );
+
   it.each(["string", "blocks"] as const)(
     "retains unchanged mutable %s history through delimiter escaping",
     (kind) => {
@@ -87,6 +112,32 @@ describe("normalizeMessagesForLlmBoundary", () => {
         operatorMessage: { turnScoped: true },
       },
     ]);
+  });
+
+  it("removes the synthetic tail without copying or mutating resident history", () => {
+    const earlier = user("Resident question");
+    const messages: AgentMessage[] = [earlier];
+    const before = JSON.stringify(messages);
+    const slice = vi.spyOn(Array.prototype, "slice");
+    let projected: AgentMessage[];
+    let historyCopies: number;
+    try {
+      projected = normalizeMessagesForCurrentPromptBoundary({
+        messages,
+        prompt: "Synthetic current question",
+        includeTimestamp: false,
+      });
+      historyCopies = slice.mock.contexts.filter(
+        (receiver) => Array.isArray(receiver) && receiver[0] === earlier,
+      ).length;
+    } finally {
+      slice.mockRestore();
+    }
+    expect(historyCopies).toBe(0);
+    expect(projected).toEqual([earlier]);
+    expect(projected[0]).toBe(earlier);
+    expect(projected).not.toBe(messages);
+    expect(JSON.stringify(messages)).toBe(before);
   });
 
   it.each(["aborted"] as const)(

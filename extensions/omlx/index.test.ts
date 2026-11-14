@@ -297,7 +297,9 @@ it("connects the registered setup and catalog hooks to the inference models endp
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => {
-      return Response.json({ data: [{ id: "Qwen2.5-3B-Instruct-4bit", max_model_len: 32768 }] });
+      return Response.json({
+        data: [{ id: "Qwen2.5-3B-Instruct-4bit", model_type: "llm", max_model_len: 32768 }],
+      });
     }),
   );
   const provider = capturePluginRegistration(plugin).providers[0];
@@ -337,6 +339,7 @@ function runtimeContext(
   model = chatModel(providerConfig.baseUrl),
 ) {
   return {
+    capability: "chat" as const,
     config: { models: { providers: { omlx: providerConfig } } },
     env: {},
     provider: "omlx",
@@ -416,9 +419,9 @@ it.each<
       baseUrl,
       ...configured,
     });
-    expect(await provider?.prepareRuntimeAuth?.(runtimeContext(providerConfig, sourceKey))).toEqual(
-      { apiKey: runtimeKey },
-    );
+    expect(
+      await provider?.prepareRuntimeAuthV2?.(runtimeContext(providerConfig, sourceKey)),
+    ).toEqual({ apiKey: runtimeKey });
   },
 );
 
@@ -464,7 +467,7 @@ it.each<{
   );
 
   await expect(
-    provider?.prepareRuntimeAuth?.(runtimeContext(providerConfig, "fixture-profile-key", model)),
+    provider?.prepareRuntimeAuthV2?.(runtimeContext(providerConfig, "fixture-profile-key", model)),
   ).resolves.toEqual(scenario.expectedAuth);
 });
 
@@ -495,7 +498,7 @@ it("keeps configured keys and unoverridden profile credentials authoritative", a
     chatProvider({ request: { auth: { mode: "provider-default" } } }),
   ]) {
     expect(
-      await provider?.prepareRuntimeAuth?.(runtimeContext(providerConfig, "fixture-profile-key")),
+      await provider?.prepareRuntimeAuthV2?.(runtimeContext(providerConfig, "fixture-profile-key")),
     ).toBeUndefined();
   }
 });

@@ -38,7 +38,14 @@ export function readInstalledPluginOverview(
   manifest:
     | Pick<
         PluginManifestRecord,
-        "rootDir" | "origin" | "providers" | "channels" | "contracts" | "uiCapabilities"
+        | "rootDir"
+        | "origin"
+        | "providers"
+        | "channels"
+        | "contracts"
+        | "uiCapabilities"
+        | "controlUi"
+        | "recommendedPrompts"
       >
     | undefined,
 ): PluginsInspectResult["overview"] {
@@ -62,10 +69,14 @@ export function readInstalledPluginOverview(
   const documentationUrl = normalizeOptionalString(pkg.homepage);
   const publisherName = normalizeOptionalString(asRecord(pkg.author).name);
   return {
+    hasNativeUi: Boolean(manifest.controlUi),
     capabilities: projectPluginOverviewCapabilities(
       buildPluginCapabilitySummary({ manifest, origin: manifest.origin }).declared,
       manifest.uiCapabilities,
     ),
+    ...(manifest.recommendedPrompts !== undefined
+      ? { recommendedPrompts: manifest.recommendedPrompts }
+      : {}),
     ...(readme.ok ? { readme: readme.contents.toString("utf8") } : {}),
     ...(repositoryUrl ? { repositoryUrl } : {}),
     ...(documentationUrl ? { documentationUrl } : {}),

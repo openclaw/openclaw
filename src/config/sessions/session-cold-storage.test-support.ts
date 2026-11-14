@@ -11,7 +11,7 @@ import { replaceSessionEntrySync } from "./session-accessor.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
-import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
+import { prepareTranscriptPayload, readTranscriptPayload } from "./transcript-payload.js";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
 export const historicalId = "cold-history-window";
@@ -82,12 +82,19 @@ export async function createSessionColdStorageFixture(
             "session_id",
             "seq",
             "created_at",
-            transcriptEventJsonSql(db).as("event_json"),
+            "event_json",
+            "event_zstd",
+            "event_utf8_bytes",
             transcriptEventReadBytesSql().as("event_bytes"),
           ])
           .orderBy("session_id")
           .orderBy("seq"),
-      ).rows,
+      ).rows.map(({ event_zstd, event_utf8_bytes, ...row }) => {
+        if (row.event_json !== null || event_zstd !== null) {
+          row.event_json = readTranscriptPayload({ ...row, event_zstd, event_utf8_bytes });
+        }
+        return row;
+      }),
       identities: rows("transcript_event_identities", "session_id, seq, event_id"),
       active: rows("session_transcript_active_events", "session_id, active_position"),
       index: rows("session_transcript_index_state", "session_id"),

@@ -127,7 +127,7 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 - `channels.msteams.certificateThumbprint`: certificate thumbprint; accepted, not required for auth.
 - `channels.msteams.useManagedIdentity`: enable managed identity auth (federated mode).
 - `channels.msteams.managedIdentityClientId`: client ID for user-assigned managed identity.
-- `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads in group chats/channels (see [Sending files in group chats](/channels/msteams/messaging#sending-files-in-group-chats)).
+- `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads. When omitted, standard channels resolve their team site automatically; group chats and private/shared channels require an explicit site (see [Sending files in group chats](/channels/msteams/messaging#sending-files-in-group-chats)).
 - `channels.msteams.welcomeCard`, `channels.msteams.groupWelcomeCard`, `channels.msteams.promptStarters`: welcome Adaptive Card shown on first DM/group contact, and its suggested prompt buttons.
 - `channels.msteams.responsePrefix`: text prefixed to outbound replies.
 - `channels.msteams.feedbackEnabled` (default `true`), `channels.msteams.feedbackReflection` (default `true`), `channels.msteams.feedbackReflectionCooldownMs`: thumbs-up/down feedback on replies and the negative-feedback reflection follow-up.
@@ -173,8 +173,10 @@ whose migration completion is already recorded.
 
 A custom path also accepts the older `/api/messages` alias with its existing
 deprecation warning when that route is available. If another plugin owns the
-alias, startup logs the conflict and keeps serving the configured path. Update
-Azure Bot to the configured path.
+alias, startup logs the conflict and keeps serving the configured path. If a
+named account sets `webhook.path` to `/api/messages`, that account receives
+`/api/messages` on the Gateway port instead. Update Azure Bot to the configured
+path.
 
 The Gateway reserves `/health`, `/healthz`, `/ready`, `/readyz`, `/startup`, and
 `/startupz` for checks, including URLs with query strings. If your former Teams

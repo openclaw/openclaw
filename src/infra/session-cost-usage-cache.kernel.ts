@@ -7,6 +7,7 @@ import {
 } from "./kysely-sync.js";
 import { boundedUsageCacheColumn, usageCacheJsonText } from "./session-cost-usage-expressions.js";
 import {
+  LEGACY_USAGE_COST_PARTITION_SCOPE,
   USAGE_COST_PARTITION_SCOPE,
   usageCostPartitionKey,
   type UsageCostPartition,
@@ -18,6 +19,7 @@ import {
 import { USAGE_COST_QUARTER_SCOPE } from "./session-cost-usage-quarters.js";
 import {
   decodeUsageCostRollupEnvelope,
+  readUsageCostDeferredMetadata,
   USAGE_COST_ROLLUP_SCOPE as ROLLUP_SCOPE,
   type UsageCostFreshnessCheckpoint,
 } from "./session-cost-usage-rollup-codec.js";
@@ -26,7 +28,12 @@ import { withSqliteDatabaseWriteScope } from "./sqlite-database-admission.js";
 
 const LEGACY_CACHE_SCOPE = "session-cost-usage";
 const LEGACY_CACHE_KEY = "cache";
-const RETIRED_ROLLUP_SCOPES = ["session-cost-usage-rollup-v1", "session-cost-usage-rollup-v2"];
+// v1 projection partitions (2026.10.10 and earlier) are rebuilt as v2 from transcripts.
+const RETIRED_ROLLUP_SCOPES = [
+  "session-cost-usage-rollup-v1",
+  "session-cost-usage-rollup-v2",
+  LEGACY_USAGE_COST_PARTITION_SCOPE,
+];
 const ROLLUP_PRUNE_BATCH_SIZE = 32;
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
@@ -48,6 +55,7 @@ export type SessionCostUsageRollupSnapshot = Omit<SessionCostUsageRollupRow, "va
 export type SessionCostUsageDeferredMetadata = {
   checkpoint: UsageCostFreshnessCheckpoint;
   scannedAt: number;
+  sqliteGenerationHash?: string;
 };
 
 type RollupReadOptions = {
@@ -113,32 +121,9 @@ export function readSessionCostUsageRollupRowsInDatabase(
         }
         if (row.value_json === null || headerBytes > budget.remainingBytes) {
           if (!invalidBody && envelope && budget.deferredMetadata.size < budget.metadataLimit) {
-            const source = envelope.checkpoint;
-            const checkpoint: UsageCostFreshnessCheckpoint =
-              source.kind === "jsonl"
-                ? {
-                    kind: source.kind,
-                    observedSize: source.observedSize,
-                    observedMtimeMs: source.observedMtimeMs,
-                    device: source.device,
-                    inode: source.inode,
-                  }
-                : {
-                    kind: source.kind,
-                    maxSeq: source.maxSeq,
-                    eventCount: source.eventCount,
-                    size: source.size,
-                    mtimeMs: source.mtimeMs,
-                  };
-            // Only numeric freshness facts fit the reserved descriptor allowance.
-            if (
-              Object.entries(checkpoint).every(
-                ([key, value]) =>
-                  key === "kind" || (typeof value === "number" && Number.isFinite(value)),
-              ) &&
-              Number.isFinite(envelope.scannedAt)
-            ) {
-              budget.deferredMetadata.set(row.key, { checkpoint, scannedAt: envelope.scannedAt });
+            const metadata = readUsageCostDeferredMetadata(envelope);
+            if (metadata) {
+              budget.deferredMetadata.set(row.key, metadata);
             }
           }
           continue;

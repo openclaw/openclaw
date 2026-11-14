@@ -14,83 +14,83 @@ const preview = (to: string, usedSharedMainFallback = true, rawSessionKey?: stri
     main: { delivery: { context: { channel: "telegram", to, accountId: "work", threadId: 0 } } },
   },
 });
-function saveRoute(storePath: string, sessionKey: string, to: string) {
-  replaceSessionEntrySync(
-    { agentId: "main", storePath, sessionKey },
-    {
-      sessionId: sessionKey === "agent:main:source" ? "source" : "main",
-      updatedAt: 1,
-      lifecycleRevision: "unchanged-revision",
-      label: "unrelated-session-payload".repeat(1500),
-      delivery: normalizeSessionDeliveryState({
-        context: { channel: "telegram", to, accountId: "work", threadId: 0 },
-      }),
-    },
-  );
-}
-
-it("reads 146 delivery previews without overflowing the session worker", async () => {
-  await withOpenClawTestState({ layout: "home" }, async (state) => {
+it("batches fallback delivery reads without hiding individual target results", () =>
+  withOpenClawTestState({ layout: "home" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const cfg = { session: { store: storePath } };
-    saveRoute(storePath, "agent:main:main", "main-recipient");
+    const save = (sessionKey: string, to: string) =>
+      replaceSessionEntrySync(
+        { agentId: "main", storePath, sessionKey },
+        {
+          sessionId: sessionKey === "agent:main:source" ? "source" : "main",
+          updatedAt: 1,
+          lifecycleRevision: "unchanged-revision",
+          label: "unrelated-session-payload".repeat(1500),
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "telegram", to, accountId: "work", threadId: 0 },
+          }),
+        },
+      );
+    save("agent:main:main", "main-recipient");
+    save("agent:main:source", "source-recipient");
     const requests = Array.from({ length: 146 }, (_, index) => ({
       agentId: "main",
-      sessionKey: `agent:main:preview-${index}`,
+      sessionKey: index === 0 ? "agent:main:source" : `agent:main:preview-${index}`,
     }));
-    await readCronDeliveryTargetContexts(cfg, requests.slice(0, 1));
-
-    expect(await readCronDeliveryTargetContexts(cfg, requests)).toMatchObject(
-      requests.map(({ sessionKey }) => preview("main-recipient", true, sessionKey)),
+    requests[145] = requests[2]!;
+    replaceSessionEntrySync(
+      { agentId: "main", storePath, sessionKey: requests[1]!.sessionKey },
+      { sessionId: "route-less", updatedAt: 1 },
     );
-  });
-});
-
-it("reads current delivery facts without decoding unrelated session payloads", async () => {
-  await withOpenClawTestState({ layout: "home" }, async (state) => {
-    const storePath = path.join(state.sessionsDir(), "sessions.json");
-    const cfg = { session: { store: storePath } };
-    const sessionKey = "agent:main:source";
-    const requests = [{ agentId: "main", sessionKey }, { agentId: "main" }, { agentId: "main" }];
-    const save = (key: string, to: string) => saveRoute(storePath, key, to);
-    save(sessionKey, "source-recipient");
-    save("agent:main:main", "main-recipient");
-    // Admission owns cold validation; measure the ordinary repeated read after it settles.
-    await readCronDeliveryTargetContexts(cfg, requests);
-    const parse = vi.spyOn(JSON, "parse");
-    const reads = vi.spyOn(sessionReads, "readSessionEntriesFromStoreInWorker");
-    try {
-      const result = await readCronDeliveryTargetContexts(cfg, requests);
-      expect(result).toMatchObject(
-        ["source-recipient", "main-recipient", "main-recipient"].map((to, index) =>
-          preview(to, index > 0),
-        ),
-      );
-      expect(
-        parse.mock.calls.filter(([json]) => json.includes("unrelated-session-payload")),
-      ).toHaveLength(0);
-      expect(
-        reads.mock.calls.filter(([input]) => input.sessionKeys?.includes("agent:main:main")),
-      ).toHaveLength(1);
-      const first = result[1]!;
-      const second = result[2]!;
-      assert(first.ok && second.ok, "delivery previews failed");
-      const firstDelivery = first.value.main?.delivery;
-      const secondDelivery = second.value.main?.delivery;
-      assert(firstDelivery?.kind === "external" && secondDelivery?.kind === "external");
-      firstDelivery.context!.to = "caller-edit";
-      expect(secondDelivery.context!.to).toBe("main-recipient");
-    } finally {
-      parse.mockRestore();
-      reads.mockRestore();
-    }
+    const routeLess = {
+      ok: true,
+      value: {
+        usedSharedMainFallback: false,
+        main: { sessionId: "route-less", updatedAt: 1, delivery: { kind: "none" } },
+      },
+    };
+    await readCronDeliveryTargetContexts(cfg, requests.slice(0, 3));
+    const readEntries = sessionReads.readSessionEntriesFromStoreInWorker;
+    using reads = vi.spyOn(sessionReads, "readSessionEntriesFromStoreInWorker");
+    using parse = vi.spyOn(JSON, "parse");
+    const result = await readCronDeliveryTargetContexts(cfg, requests);
+    expect(result).toMatchObject(
+      requests.map(({ sessionKey }, index) =>
+        index === 1
+          ? routeLess
+          : preview(index === 0 ? "source-recipient" : "main-recipient", index !== 0, sessionKey),
+      ),
+    );
+    expect(
+      reads.mock.calls.filter(([input]) => input.sessionKeys?.includes("agent:main:main")),
+    ).toHaveLength(1);
+    expect(
+      parse.mock.calls.filter(([json]) => json.includes("unrelated-session-payload")),
+    ).toHaveLength(0);
+    const [first, second] = [result[2]!, result[145]!];
+    assert(first.ok && second.ok, "delivery previews failed");
+    const firstDelivery = first.value.main?.delivery;
+    const secondDelivery = second.value.main?.delivery;
+    assert(firstDelivery?.kind === "external" && secondDelivery?.kind === "external");
+    firstDelivery.context!.to = "caller-edit";
+    expect(secondDelivery.context!.to).toBe("main-recipient");
     // A route can change without advancing either timestamp or lifecycle revision.
-    save(sessionKey, "new-source-recipient");
+    save("agent:main:source", "new-source-recipient");
     save("agent:main:main", "new-main-recipient");
-    expect(await readCronDeliveryTargetContexts(cfg, requests)).toMatchObject([
+    expect(await readCronDeliveryTargetContexts(cfg, requests.slice(0, 3))).toMatchObject([
       preview("new-source-recipient", false),
-      preview("new-main-recipient"),
+      routeLess,
       preview("new-main-recipient"),
     ]);
-  });
-});
+    const unreadable = new Error("Synthetic unreadable delivery target");
+    reads.mockImplementation((input, prepareSource) =>
+      input.sessionKeys?.includes(requests[2]!.sessionKey)
+        ? Promise.reject(unreadable)
+        : readEntries(input, prepareSource),
+    );
+    expect(await readCronDeliveryTargetContexts(cfg, requests.slice(1, 4))).toMatchObject([
+      routeLess,
+      { ok: false, error: unreadable },
+      preview("new-main-recipient", true, requests[3]!.sessionKey),
+    ]);
+  }));

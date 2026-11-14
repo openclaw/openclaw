@@ -40,11 +40,9 @@ it.each(["direct", "webrtc"] as const)(
     try {
       bridge.sendAudio(Buffer.alloc(160, 0x80));
       await bridge.connect();
-      const captured = input[0];
-      if (!captured) {
-        throw new Error("Missing converted microphone audio");
-      }
-      expect(captured.length).toBeGreaterThan(800);
+      const captured = input[0]!;
+      expect(captured).toBeDefined();
+      expect(captured.length).toBeGreaterThanOrEqual(transport === "direct" ? 960 : 801);
       expect(captured.length).toBeLessThanOrEqual(960);
       let loudSamples = 0;
       for (let offset = 0; offset < captured.length; offset += 2) {

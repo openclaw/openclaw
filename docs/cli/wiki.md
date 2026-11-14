@@ -81,13 +81,13 @@ digests already carry the active runtime agent context.
 
 Show vault mode and scope, resolved agent, health, and Obsidian CLI availability. Use this first to check whether the intended vault is initialized, bridge mode is healthy, or Obsidian integration is available.
 
-When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway so it sees the same active memory plugin context as agent/runtime memory.
+When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway so it sees the same active memory plugin context as agent/runtime memory. Ctrl-C or SIGTERM stops a pending Gateway read without printing a late result; the CLI exits with status 130 or 143.
 
 ### `wiki doctor`
 
 Run wiki health checks and report actionable fixes. Exits non-zero when unhealthy.
 
-When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway before building the report. Disabled bridge imports and bridge configs that do not read memory artifacts stay local/offline.
+When bridge mode is active and configured to read memory artifacts, this command queries the running Gateway before building the report. Disabled bridge imports and bridge configs that do not read memory artifacts stay local/offline. Ctrl-C or SIGTERM stops a pending Gateway read without printing a late result; the CLI exits with status 130 or 143.
 
 Typical issues:
 
@@ -146,6 +146,10 @@ Rebuild indexes, related blocks, dashboards, and the compiled query/prompt snaps
 
 If `render.createDashboards` is enabled, compile also refreshes report pages.
 
+Page names use the frontmatter `title`, then the first level-one heading outside
+code blocks, then the filename. Comments inside fenced code blocks do not become
+page names; inline code in a real heading remains part of its name.
+
 ### `wiki lint`
 
 Lint the vault and write a report covering:
@@ -199,6 +203,10 @@ retain their existing lookup fallbacks and may scan the vault.
 Wiki-page reads support large files and hard links. Reads refuse paths that
 escape the vault or pass through a symbolic link inside it.
 
+Pagination counts real body lines, not the empty split element after a terminal
+newline. A read ending on the last line reports `truncated: false`; intentional
+blank lines are preserved.
+
 ```bash
 openclaw wiki get entity.alpha
 openclaw wiki get syntheses/alpha-summary.md --from 1 --lines 80
@@ -212,6 +220,17 @@ Apply narrow mutations without freeform page surgery:
 - `apply metadata <lookup>`: update metadata on an existing page
 
 Both accept `--source-id`, `--contradiction`, `--question` (each repeatable), `--confidence <n>` (0-1), and `--status <status>`. `apply metadata` also accepts `--clear-confidence` to remove a stored confidence value. This is the supported way to evolve wiki pages so managed generated blocks stay intact.
+
+For `apply metadata`, each supplied `--source-id`, `--contradiction`, or
+`--question` list replaces the entire stored list. Read the page with `wiki get`
+first and repeat each flag for every value you want to retain; omitted lists
+stay unchanged. Successful output reports before/after counts for supplied lists
+(`metadataListChanges` in JSON). To clear a list explicitly, use `wiki_apply`
+with an empty array; the CLI has no list-clear flag.
+
+Metadata updates preserve comments and numeric spellings on untouched keys in ordinary string-keyed YAML mappings. Pages containing anchors, aliases, explicit tags, or non-string keys retain the existing value-rendering behavior instead; their parsed values remain authoritative, but source formatting is not preserved.
+
+Refreshing a synthesis without `--status` preserves its existing status. New synthesis pages default to `active`; an explicit `--status` sets or replaces the value.
 
 For `apply synthesis`, pass the summary with `--body <text>` or `--body-file <path>`.
 Body files must be regular files containing nonempty UTF-8 text. Symlinks to
@@ -231,6 +250,13 @@ Import from explicitly configured local paths (`unsafeLocal.paths`) in `unsafe-l
 ### `wiki chatgpt import`
 
 Import a ChatGPT export into draft wiki source pages.
+
+`--export` accepts a JSON file or a directory containing `conversations.json`.
+The path's file type determines which is used, so renamed JSON files and
+directories whose names end in `.json` work the same way.
+
+Imported transcript text preserves line breaks, code indentation, and internal
+spacing, including text parts stored as serialized JSON in the export.
 
 ```bash
 openclaw wiki chatgpt import --export ./chatgpt-export
@@ -252,7 +278,7 @@ Export files and existing source pages must resolve to regular files. Named pipe
 and other special files are rejected without waiting for data. Replace the affected
 path with a regular file and retry.
 
-Re-imports preserve handwritten Notes, including literal marker examples inside a complete Notes block. If a Notes marker is missing, restore it before retrying; the import leaves the affected page unchanged.
+Re-imports preserve handwritten Notes, including literal marker examples inside a complete Notes block. Markers inside transcript code blocks or inline code remain part of the transcript and do not prevent it from refreshing. If a Notes marker is missing, restore it before retrying; the import leaves the affected page unchanged.
 
 ### `wiki chatgpt rollback <run-id>`
 

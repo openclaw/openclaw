@@ -65,17 +65,17 @@ export function observeResponsesStream<TEvent>(
   let reasoningTokens: number | undefined;
   let terminalType: string | undefined;
   let incompleteReason: string | undefined;
-  let requestDetails = "";
+  const requestDetails = () =>
+    `transport=${transport} requestedTier=${request?.service_tier ?? "unspecified"} ` +
+    `max_output_tokens=${request?.max_output_tokens ?? "provider-default"}`;
   return observeAsyncIterator({
     iterator: () => stream[Symbol.asyncIterator](),
     onStart() {
       startedAt = Date.now();
-      requestDetails =
-        `transport=${transport} requestedTier=${request?.service_tier ?? "unspecified"} ` +
-        `max_output_tokens=${request?.max_output_tokens ?? "provider-default"}`;
       emitModelTransportDebug(
         log,
-        `[responses] stream_start provider=${model.provider} api=${model.api} model=${model.id} ${requestDetails}`,
+        () =>
+          `[responses] stream_start provider=${model.provider} api=${model.api} model=${model.id} ${requestDetails()}`,
       );
     },
     onEvent(event) {
@@ -109,21 +109,22 @@ export function observeResponsesStream<TEvent>(
       if (eventCount === 1) {
         emitModelTransportDebug(
           log,
-          `[responses] first_event provider=${model.provider} api=${model.api} model=${model.id} ` +
+          () =>
+            `[responses] first_event provider=${model.provider} api=${model.api} model=${model.id} ` +
             `elapsedMs=${Date.now() - (requestStartedAt ?? startedAt)} ` +
             `headersToEventMs=${Date.now() - startedAt} type=${type} responseId=${responseId ?? "unknown"}`,
         );
       }
     },
     onFinally() {
-      const types = [...eventTypes].map(([type, count]) => `${type}:${count}`).join(",");
       emitModelTransportDebug(
         log,
-        `[responses] stream_done provider=${model.provider} api=${model.api} model=${model.id} ` +
-          `${requestDetails} responseId=${responseId ?? "unknown"} servedTier=${servedTier ?? "unknown"} ` +
+        () =>
+          `[responses] stream_done provider=${model.provider} api=${model.api} model=${model.id} ` +
+          `${requestDetails()} responseId=${responseId ?? "unknown"} servedTier=${servedTier ?? "unknown"} ` +
           `outputTokens=${outputTokens ?? "unknown"} reasoningTokens=${reasoningTokens ?? "unknown"} ` +
           `streamDurationMs=${Date.now() - startedAt} elapsedMs=${Date.now() - (requestStartedAt ?? startedAt)} ` +
-          `terminal=${terminalType ?? "none"} incompleteReason=${incompleteReason ?? "none"} events=${eventCount} types=${types}`,
+          `terminal=${terminalType ?? "none"} incompleteReason=${incompleteReason ?? "none"} events=${eventCount} types=${[...eventTypes].map(([type, count]) => `${type}:${count}`).join(",")}`,
       );
     },
   });

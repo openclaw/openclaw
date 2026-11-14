@@ -152,7 +152,8 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       const providerId = provider?.trim();
       const modelId = model?.trim();
-      if (!providerId || !modelId) {
+      // Without an override, the completion runtime owns default model selection.
+      if (hasModelOverride && (!providerId || !modelId)) {
         throw new Error(
           `provider/model could not be resolved (provider=${provider ?? ""}, model=${model ?? ""})`,
         );
@@ -258,7 +259,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       if (!batch) {
         const result = await completeJson(serializeInput(params.input), signal, timeoutMs);
-        return textResult(JSON.stringify(result.json, null, 2), result);
+        return textResult(JSON.stringify(result.json), result);
       }
 
       type ItemResult =
@@ -309,7 +310,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         status: signal?.aborted ? "cancelled" : deadline.signal.aborted ? "timed_out" : "completed",
         results,
       };
-      return textResult(JSON.stringify(output, null, 2), { json: output });
+      return textResult(JSON.stringify(output), { json: output });
     },
   } satisfies AnyAgentTool;
 }

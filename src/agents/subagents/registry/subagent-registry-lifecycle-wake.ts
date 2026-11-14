@@ -16,13 +16,14 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { SubagentAnnouncePreparationConflictError } from "../announce/subagent-announce-result.js";
+import {
+  SubagentCompletionSourceChangedError,
+  SubagentRequesterWakeProgressChangedError,
+} from "../completion/subagent-completion-admission.store.js";
 import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.js";
 import { revokeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
-import {
-  captureSubagentControllerInputRetirement,
-  retireSubagentControllerInputs,
-} from "./subagent-controller-inputs.js";
+import { retireSubagentControllerInputs } from "./subagent-controller-inputs.js";
 import { isCompletedRequesterDeliveryBlocked } from "./subagent-delivery-state.js";
 import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import type {
@@ -41,7 +42,10 @@ import {
   assertRequesterSettleWakeBatchCurrent,
   mutateRequesterSettleWakeBatch,
   settleRequesterSettleWakeBatch,
+  createRequesterWakeSettlement,
+  hasPendingRequesterSettlement,
   isRetainedRequesterSettleWakeMember,
+  pendingRequesterSettlements,
   type RequesterWakeMutationReceipt,
 } from "./subagent-registry-requester-wake-mutation.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -57,43 +61,10 @@ import {
 } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
 
-// Observed outcomes belong to the run owner, not the transient evaluation. Weak keys release
-// retired owners; the scope keeps a later yield generation from consuming an older receipt.
-const pendingRequesterSettlements = new WeakMap<
-  object,
-  {
-    scope: string;
-    rearmGeneration: number | undefined;
-    receipt: RequesterWakeMutationReceipt;
-    stateContext: OpenClawStateWorkerContext;
-    settle: () => Promise<void>;
-  }
->();
 const pendingRequesterTransitions = new WeakMap<
   object,
   { scope: string; commit: () => Promise<void> }
 >();
-
-export function hasPendingRequesterSettlement(
-  context: SubagentLifecycleWakeContext,
-  entry: SubagentRunRecord,
-): boolean {
-  const pending = pendingRequesterSettlements.get(getSubagentRunRuntimeKey(entry));
-  if (!pending) {
-    return false;
-  }
-  try {
-    assertSubagentRegistryWriteSourceCurrent(pending.stateContext);
-  } catch {
-    return false;
-  }
-  return isRetainedRequesterSettleWakeMember(
-    context,
-    entry,
-    pending.rearmGeneration,
-    pending.receipt,
-  );
-}
 
 /** Releases a settled batch's process-local custody, then re-evaluates the requester's other wakes. */
 function releaseRequesterSettleWakeBatch(
@@ -387,58 +358,17 @@ export function scheduleRequesterSettleWake(
     if (Boolean(admittedWake?.pauseNotice) !== Boolean(entry.requesterSettleWake?.pauseNotice)) {
       return;
     }
-    // Retry bookkeeping with the observed outcome, never by replaying delivery or inventing failure.
-    const receipt: RequesterWakeMutationReceipt = {};
-    const retireInputs = batch.map(captureSubagentControllerInputRetirement);
-    const settlement = {
+    settleObserved = createRequesterWakeSettlement({
+      context,
       scope,
+      batch,
       rearmGeneration,
-      receipt,
+      outcome,
+      onCommitted,
       stateContext,
-      settle: async (): Promise<void> => {
-        const members = batch.filter(
-          (member) =>
-            pendingRequesterSettlements.get(getSubagentRunRuntimeKey(member)) === settlement &&
-            isRetainedRequesterSettleWakeMember(context, member, rearmGeneration, receipt),
-        );
-        // A quiet decision needs its whole cohort; a recorded outcome stays with surviving peers.
-        const settlesMembers =
-          members.length > 0 &&
-          (outcome !== undefined ||
-            receipt.committed !== undefined ||
-            members.length === batch.length);
-        if (
-          settlesMembers &&
-          !(await settleRequesterSettleWakeBatch(
-            context,
-            members,
-            rearmGeneration,
-            outcome,
-            stateContext,
-            receipt,
-          ))
-        ) {
-          return;
-        }
-        for (const member of batch) {
-          const key = getSubagentRunRuntimeKey(member);
-          if (pendingRequesterSettlements.get(key) === settlement) {
-            pendingRequesterSettlements.delete(key);
-          }
-        }
-        if (settlesMembers) {
-          for (const retire of retireInputs) {
-            retire();
-          }
-          await onCommitted?.();
-          releaseRequesterSettleWakeBatch(context, members, rearmGeneration);
-        }
-      },
-    };
-    for (const member of batch) {
-      pendingRequesterSettlements.set(getSubagentRunRuntimeKey(member), settlement);
-    }
-    settleObserved = settlement.settle;
+      admittedWake,
+      release: (members) => releaseRequesterSettleWakeBatch(context, members, rearmGeneration),
+    });
     await settleObserved();
   };
   runWithoutOwnedSessionTranscriptWrites(() => {
@@ -539,9 +469,10 @@ export function scheduleRequesterSettleWake(
                           }
                         } catch (error) {
                           retainOnFailure =
-                            retainReplay ||
                             receipt.committed !== undefined ||
-                            hasSqliteWorkerOutcomeUnknown(error);
+                            hasSqliteWorkerOutcomeUnknown(error) ||
+                            (retainReplay &&
+                              !(error instanceof SubagentCompletionSourceChangedError));
                           throw error;
                         } finally {
                           if (!retainOnFailure) {
@@ -584,6 +515,16 @@ export function scheduleRequesterSettleWake(
             }
           } catch (error: unknown) {
             if (isGatewayRestartDrainError(error)) {
+              return;
+            }
+            if (error instanceof SubagentRequesterWakeProgressChangedError) {
+              // Another attempt already owns this wake's newer progress.
+              for (const member of admittedBatch) {
+                const key = getSubagentRunRuntimeKey(member);
+                if (pendingRequesterSettlements.get(key)?.settle === settleObserved) {
+                  pendingRequesterSettlements.delete(key);
+                }
+              }
               return;
             }
             if (publishDispatch) {
@@ -646,16 +587,46 @@ export function scheduleRequesterSettleWake(
             if (!isSourceCurrent()) {
               return;
             }
+            if (error instanceof SubagentCompletionSourceChangedError && !settleObserved) {
+              const noticeScope = admittedWake?.batchRunIds ? scope : `${scope}\0${runId}`;
+              try {
+                const { appendAssistantMessageToSessionTranscript } =
+                  await import("../../../config/sessions/transcript.js");
+                const notice = await appendAssistantMessageToSessionTranscript({
+                  agentId: entry.requesterAgentId,
+                  sessionKey: requesterSessionKey,
+                  storePath: entry.requesterStorePath,
+                  expectedSessionId: entry.completionRequesterSessionId,
+                  expectedLifecycleRevision: entry.completionRequesterLifecycleRevision,
+                  idempotencyKey: JSON.stringify(["subagent-settle-rejected", noticeScope]),
+                  text: "Subagent result could not be delivered because its completion owner changed. Inspect the subagent result before continuing.",
+                  assertCurrent: () => {
+                    if (!isSourceCurrent() || requesterSettleWakeScope(entry) !== scope) {
+                      throw new Error("Requester wake changed before rejection notice", {
+                        cause: error,
+                      });
+                    }
+                  },
+                });
+                if (!notice.ok) {
+                  throw new Error(notice.reason, { cause: error });
+                }
+              } catch (noticeError) {
+                params.warn("failed to record requester settle wake rejection notice", {
+                  error: buildSafeLifecycleErrorMeta(noticeError),
+                  runId,
+                });
+              }
+            }
             // Delivery may have succeeded before its bookkeeping failed. Preserve that result.
-            const settle =
-              settleObserved ??
-              (() =>
-                completeBatch(admittedBatch, admittedWake?.rearmGeneration, {
-                  delivered: false,
-                  path: "none",
-                  error: safeError.message,
-                }));
-            await settle().catch((settleError: unknown) => {
+            await (
+              settleObserved?.() ??
+              completeBatch(admittedBatch, admittedWake?.rearmGeneration, {
+                delivered: false,
+                path: "none",
+                error: safeError.message,
+              })
+            ).catch((settleError: unknown) => {
               params.warn("failed to persist requester settle wake rejection", {
                 error: buildSafeLifecycleErrorMeta(settleError),
                 runId,

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
-import { createDeferred, nextEventLoopTurn } from "../../../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn, withinTest } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { streamAzureOpenAIResponses } from "../providers/azure-openai-responses.js";
@@ -213,20 +213,6 @@ const fixtures = {
   },
 };
 
-async function settleWithin<T>(promise: Promise<T>, timeoutMs = 500): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error("response hook lifecycle timed out")), timeoutMs);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 let previousHost: ReturnType<typeof getAiTransportHost>;
 
 beforeEach(() => {
@@ -319,7 +305,7 @@ describe.each([fixtures.azure, fixtures.chatgpt])(
 );
 
 describe.each([fixtures.shared])("$name response hook", ({ createStream, installResponse }) => {
-  it("applies the first-event timeout while the hook is pending", async () => {
+  it("applies the first-event timeout while the hook is pending", async ({ signal }) => {
     const lifecycle = installResponse();
     const onFirstEventTimeout = vi.fn();
     const onResponse = vi.fn(() => new Promise<void>(() => {}));
@@ -330,7 +316,7 @@ describe.each([fixtures.shared])("$name response hook", ({ createStream, install
     });
     const eventTypes: string[] = [];
     const consume = collectEventTypes(stream, eventTypes);
-    const result = await settleWithin(stream.result());
+    const result = await withinTest(stream.result(), signal);
     await consume;
 
     expect(onResponse).toHaveBeenCalledOnce();
@@ -348,9 +334,9 @@ describe.each([fixtures.shared])("$name response hook", ({ createStream, install
 describe.each([fixtures.openai, fixtures.chatgpt])(
   "$name response hook",
   ({ createStream, installResponse }) => {
-    it.each(["resolve", "reject"] as const)(
+    it.for(["resolve", "reject"] as const)(
       "keeps caller cancellation terminal after a late hook %s",
-      async (settlement) => {
+      async (settlement, { signal }) => {
         const lifecycle = installResponse();
         const controller = new AbortController();
         const pendingHook = createDeferred();
@@ -364,7 +350,7 @@ describe.each([fixtures.openai, fixtures.chatgpt])(
           code: "CALLER_ABORTED",
         });
         controller.abort(abortReason);
-        const result = await settleWithin(stream.result());
+        const result = await withinTest(stream.result(), signal);
         await consume;
         expect(result).toMatchObject({
           stopReason: "aborted",
@@ -477,7 +463,7 @@ describe.each(Object.values(fixtures))("$name non-success response hooks", ({ cr
 });
 
 describe("native ChatGPT SSE non-success response hooks", () => {
-  it("times out a stalled non-success hook and cancels its body", async () => {
+  it("times out a stalled non-success hook and cancels its body", async ({ signal }) => {
     const bodyCancelled = vi.fn();
     const body = new ReadableStream<Uint8Array>({
       pull() {},
@@ -489,7 +475,7 @@ describe("native ChatGPT SSE non-success response hooks", () => {
     );
     const onFirstEventTimeout = vi.fn();
 
-    const result = await settleWithin(
+    const result = await withinTest(
       streamOpenAICodexResponses(chatGptModel, context, {
         apiKey: chatGptToken,
         transport: "sse",
@@ -497,6 +483,7 @@ describe("native ChatGPT SSE non-success response hooks", () => {
         onFirstEventTimeout,
         onResponse: () => new Promise<void>(() => {}),
       }).result(),
+      signal,
     );
 
     expect(result.stopReason).toBe("error");

@@ -45,7 +45,7 @@ describe("Codex core conversation delivery", () => {
   ])("records $name without changing the Gateway result", async (testCase) => {
     const callGateway = vi
       .spyOn(gateway, "callAgentToolGatewayRequest")
-      .mockResolvedValue(testCase.receipt);
+      .mockResolvedValue(structuredClone(testCase.receipt));
     const tool = expectDefined(
       createHostedConversationTools(undefined, "main", {}).find(
         (entry) => entry.name === `conversations_${testCase.kind}`,

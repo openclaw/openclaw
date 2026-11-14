@@ -12,10 +12,8 @@ import {
   commitMemory,
   failSessionActorMemoryPublication,
 } from "./session-actor-memory-publication.test-support.js";
-import {
-  acquireSessionActorStorage,
-  runWithSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageWrites } from "./session-actor-storage-contract.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";

@@ -174,7 +174,7 @@ export async function withPreparedSessionEventRow(
   projection: SessionRowProjection | undefined,
   sessionKey: string,
   eventAgentId: string | undefined,
-  publish: (read?: SessionRowReadView) => void,
+  publish: Parameters<typeof withPreparedEventRow>[2],
 ) {
   if (!projection) {
     publish();

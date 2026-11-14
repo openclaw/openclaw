@@ -5,7 +5,7 @@ import type { PreparedTranscriptMessageAppend } from "../../config/sessions/sess
 import {
   appendTranscriptEventSnapshotSync,
   appendTranscriptMessageSnapshotSync,
-} from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+} from "../../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
 import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
@@ -17,6 +17,7 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { readUserTurnMentionInvitation } from "../../sessions/user-turn-transcript-admission.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { getSessionCompactionPersistence } from "./session-compaction-persistence.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
@@ -42,7 +43,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
   protected recordTranscriptNavigationChange(): void {
     this.#navigationEpoch++;
     this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter(
-      (prefix) => prefix.anchorIds.length > 0,
+      (prefix) => prefix.anchorIds.length,
     );
   }
 
@@ -264,6 +265,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
     }
     const appendOptions = {
       cwd: this.cwd,
+      mentionInvitation: readUserTurnMentionInvitation(options?.beforeFreshMessageCommit),
       eventId: entry.id,
       ...(options?.beforeFreshMessageCommit
         ? { beforeFreshMessageCommit: options.beforeFreshMessageCommit }

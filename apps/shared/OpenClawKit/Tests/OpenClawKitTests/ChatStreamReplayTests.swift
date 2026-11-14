@@ -475,7 +475,7 @@ struct ChatStreamReplayTests {
             window.close()
         }
 
-        /// Native math labels expose rendered content without global accessibility or focus state.
+        // Native math labels expose rendered content without global accessibility or focus state.
         func expectRendered(_ expected: [String]) {
             host.layoutSubtreeIfNeeded()
             // Subview order is stacking order, not the vertical order seen by the reader.
@@ -624,6 +624,24 @@ struct ChatStreamReplayTests {
         #expect(vm.liveText(vm.streamingAssistantText) == "**Ready**")
         vm.updateStreamingAssistantText(nil)
         #expect(vm.liveText(vm.streamingAssistantText) == nil)
+    }
+
+    @Test @MainActor func `a durable reply retires the live bubble while pacing holds its last words`() {
+        let transport = ScriptedChatTransport(history: replayHistory())
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer {
+            vm.detachTransport()
+            transport.finish()
+        }
+        let user = replayDurableMessage(role: "USER", text: "Again", timestamp: 100)
+        vm.updateStreamingAssistantText("The layout")
+        vm.updateStreamingAssistantText("The layout is ready.")
+        #expect(vm.liveAssistantTextShape == "The layout")
+
+        // The saved reply and the live bubble must never be on screen together.
+        let reply = replayDurableMessage(role: "ASSISTANT", text: "The layout is ready.", timestamp: 200)
+        vm.replaceMessages([user, reply])
+        #expect(vm.liveAssistantTextShape == nil)
     }
 
     @Test @MainActor func `live text comparison preserves supported text types and block boundaries`() {
@@ -801,17 +819,15 @@ struct ChatStreamReplayTests {
         let settled = ChatTranscriptRow.collapseCompletedWork(
             ChatTranscriptRow.build(from: harness.vm.transcriptMessages),
             runWorking: harness.vm.hasBlockingRunActivity)
-        #expect(settled.count == 3)
-        guard settled.count == 3, case let .completedWork(work) = settled[1],
-              case let .message(answer) = settled[2]
-        else {
-            Issue.record("Expected settled narration and tools above one visible final answer")
+        guard settled.count == 5, case let .completedWork(work) = settled[2] else {
+            Issue.record("Expected inline narration around completed tool work and one final answer")
             return
         }
-        #expect(work.messages.map { ChatMessageVisibleText.visibleText(in: $0) } == [
-            canonicalFirstText, "Read complete", secondText,
-        ])
-        #expect(ChatMessageVisibleText.visibleText(in: answer) == finalText)
+        #expect(settled.compactMap { row -> String? in
+            if case let .message(message) = row { return ChatMessageVisibleText.visibleText(in: message) }
+            return nil
+        } == ["Review the layout", canonicalFirstText, secondText, finalText])
+        #expect(work.messages.map { ChatMessageVisibleText.visibleText(in: $0) } == ["Read complete"])
 
         let generation = harness.vm.historyMutationGeneration
         harness.transport.emit(replayNarrationEvent(

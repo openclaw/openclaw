@@ -152,26 +152,17 @@ async function openBridge(params: Partial<GoogleLiveBridgeParams> = {}) {
 }
 
 describe("buildGoogleRealtimeVoiceProvider", () => {
-  let onAudio = vi.fn();
-  let onClearAudio = vi.fn();
-  let onClose = vi.fn();
-  let onError = vi.fn();
-  let onEvent = vi.fn();
-  let onReady = vi.fn();
-  let onResponseDone = vi.fn();
-  let onToolCall = vi.fn();
-  let onTranscript = vi.fn();
+  const onAudio = vi.fn();
+  const onClearAudio = vi.fn();
+  const onClose = vi.fn();
+  const onError = vi.fn();
+  const onEvent = vi.fn();
+  const onReady = vi.fn();
+  const onResponseDone = vi.fn();
+  const onToolCall = vi.fn();
+  const onTranscript = vi.fn();
   beforeEach(() => {
     vi.clearAllMocks();
-    onAudio = vi.fn();
-    onClearAudio = vi.fn();
-    onClose = vi.fn();
-    onError = vi.fn();
-    onEvent = vi.fn();
-    onReady = vi.fn();
-    onResponseDone = vi.fn();
-    onToolCall = vi.fn();
-    onTranscript = vi.fn();
     vi.stubEnv("GEMINI_API_KEY", undefined);
     vi.stubEnv("GOOGLE_API_KEY", undefined);
   });
@@ -269,6 +260,13 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
     expect(connection().config).not.toHaveProperty("sessionResumption");
     expect(connection().config).not.toHaveProperty("contextWindowCompression");
+  });
+
+  it("keeps the session language when short audio is mistranscribed", async () => {
+    await connectBridge({ language: "en", instructions: "Speak briefly." });
+    expect(connection().config.systemInstruction).toEqual(
+      expect.stringMatching(/^Reply language: English\..*\n\nSpeak briefly\.$/s),
+    );
   });
 
   it.each([

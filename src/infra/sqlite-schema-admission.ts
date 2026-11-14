@@ -8,23 +8,13 @@ import {
   type SqliteDatabaseAdmissionKey,
 } from "./sqlite-database-admission.js";
 import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
+import type { SqliteSchemaFacts } from "./sqlite-schema-scope.js";
 
-export type SqliteSchemaFacts = {
-  readonly admissionId: string;
-  readonly revision: number;
-  readonly userVersion: number;
-  readonly textEncoding: string;
-  readonly schemaVersion: number;
-  readonly tables: ReadonlySet<string>;
-  readonly views: ReadonlySet<string>;
-  readonly tableSql: ReadonlyMap<string, string | null>;
-  readonly indexes: ReadonlySet<string>;
-  readonly indexDefinitions: ReadonlyMap<string, { table: string; sql: string | null }>;
-  readonly triggers: ReadonlyMap<string, { table: string; sql: string | null }>;
-};
+export type { SqliteSchemaFacts } from "./sqlite-schema-scope.js";
 
 export const schemaAdmission: SqliteDatabaseAdmissionKey<SqliteSchemaFacts> = {
   name: "sqlite-schema",
+  writer: "connection",
   lifetime: "process",
   schemaDependent: true,
   read: (value) => {
@@ -35,6 +25,7 @@ export const schemaAdmission: SqliteDatabaseAdmissionKey<SqliteSchemaFacts> = {
 
 const textEncodingAdmission: SqliteDatabaseAdmissionKey<string> = {
   name: "sqlite-text-encoding",
+  writer: "connection",
   lifetime: "process",
   read: (value) => (typeof value === "string" ? value : undefined),
 };

@@ -56,6 +56,20 @@ export function createMissingReplyNotice(text = MISSING_REPLY_NOTICE_TEXT): Repl
 
 const EMPTY_REPLY_CONFIG: OpenClawConfig = {};
 
+export function resolveCompletionInputReplyExpectation(
+  sourceTool: string,
+  params: { expectsCompletionMessage: boolean; requireVisibleReply?: boolean },
+): ReplyExpectation {
+  // Available child findings do not create a reply obligation for their parent.
+  const isSubagentCompletion =
+    sourceTool === "subagent_announce" ||
+    sourceTool === "subagent_settle" ||
+    sourceTool === "agent_harness_completion";
+  return params.requireVisibleReply || (params.expectsCompletionMessage && !isSubagentCompletion)
+    ? "required"
+    : "optional";
+}
+
 export function resolveCommandReplyExpectation(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
@@ -73,8 +87,8 @@ export function resolveCommandReplyExpectation(params: {
     provenance?.kind === "inter_session" &&
     (provenance.sourceTool === "subagent_announce" || provenance.sourceTool === "subagent_settle")
   ) {
-    // Completion processing consumes child findings; it does not owe another answer.
-    return "optional";
+    // Completion processing is optional unless the caller assigns a reply obligation.
+    return params.opts.replyExpectation ?? "optional";
   }
   const inputExpectation = params.opts.replyExpectation;
   if (inputExpectation === "optional" || inputExpectation === "result-required") {
@@ -90,6 +104,14 @@ export function resolveCommandReplyExpectation(params: {
   // The wake prompt offers NO_REPLY, so silence stays valid on internal surfaces too.
   if (isExecCompletionInputProvenance(params.opts.inputProvenance)) {
     return "optional";
+  }
+  // WebChat also names the internal routing sentinel. Human conversations accept
+  // explicit silence, while internal work still owes its caller a result.
+  if (
+    params.messageChannel === INTERNAL_MESSAGE_CHANNEL &&
+    (!provenance || provenance.kind === "external_user")
+  ) {
+    return "required";
   }
   if (
     !params.messageChannel ||

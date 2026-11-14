@@ -12,11 +12,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { git } from "../agents/worktrees/git-fixture.test-support.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { updateRegistryWorktree } from "../agents/worktrees/registry.js";
-import {
-  IDLE_GC_MS,
-  managedWorktrees,
-  ManagedWorktreeService,
-} from "../agents/worktrees/service.js";
+import { IDLE_GC_MS } from "../agents/worktrees/retention.js";
+import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import {
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
@@ -430,14 +427,16 @@ describe("same-root local mutation routing", () => {
         },
       };
     }
-    await updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+    await updateRegistryWorktree(env, record.id, {
+      lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+    });
     const brokenRepo = await initializeRepository(path.join(root, name));
     const broken = await materializeManagedWorktreeFixture({
       env,
       repoRoot: brokenRepo,
       stateDir: path.join(root, name, "worktrees"),
       name: `${name}-broken`,
-      now: Date.now() - IDLE_GC_MS - 1,
+      now: Date.now() - IDLE_GC_MS - 3_600_001,
       ownerKind: "workboard",
     });
     await fs.rename(brokenRepo, `${brokenRepo}-away`);

@@ -52,62 +52,35 @@ describe("sandbox config hashes", () => {
     expect(left).toBe(right);
   });
 
-  it("preserves bind order", () => {
+  it.each([false, true])("preserves bind order (browser=%s)", (browser) => {
     const binds = ["/tmp/workspace:/workspace:rw", "/tmp/cache:/cache:ro"];
-    const left = computeSandboxConfigHash(createHashInput({ binds }));
-    const right = computeSandboxConfigHash(createHashInput({ binds: binds.toReversed() }));
-    expect(left).not.toBe(right);
+    const hash = (orderedBinds: string[]) => {
+      const input = createHashInput({ binds: orderedBinds });
+      return browser
+        ? computeSandboxBrowserConfigHash({ ...createBrowserHashInput(), docker: input.docker })
+        : computeSandboxConfigHash(input);
+    };
+    expect(hash(binds)).not.toBe(hash(binds.toReversed()));
   });
 
-  it("changes when read-only workspace skill mount state changes", () => {
+  it.each([
+    ["skills", "/tmp/workspace/skills:/workspace/skills:ro", []],
+    ["resources", "/host/attachments:/openclaw/attachments:ro", undefined],
+  ] as const)("changes when read-only %s mounts change", (_, mount, before) => {
     const shared = createHashInput();
-    const withoutSkills = computeSandboxConfigHash({ ...shared, managedMounts: [] });
-    const withSkills = computeSandboxConfigHash({
-      ...shared,
-      managedMounts: ["/tmp/workspace/skills:/workspace/skills:ro"],
-    });
-    expect(withoutSkills).not.toBe(withSkills);
+    expect(computeSandboxConfigHash({ ...shared, managedMounts: before })).not.toBe(
+      computeSandboxConfigHash({ ...shared, managedMounts: [mount] }),
+    );
   });
 
-  it("changes when read-only resource mount state changes", () => {
-    const shared = createHashInput();
-    const withoutResources = computeSandboxConfigHash(shared);
-    const withResources = computeSandboxConfigHash({
-      ...shared,
-      managedMounts: ["/host/attachments:/openclaw/attachments:ro"],
-    });
-    expect(withoutResources).not.toBe(withResources);
-  });
-
-  it("preserves browser bind order", () => {
+  it.each([
+    ["mount format", { mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION - 1 }],
+    ["security epoch", { securityEpoch: "epoch-v2" }],
+  ] as const)("changes when browser %s changes", (_, change) => {
     const shared = createBrowserHashInput();
-    const binds = ["/tmp/workspace:/workspace:rw", "/tmp/cache:/cache:ro"];
-    const left = computeSandboxBrowserConfigHash({
-      ...shared,
-      docker: { ...shared.docker, binds },
-    });
-    const right = computeSandboxBrowserConfigHash({
-      ...shared,
-      docker: { ...shared.docker, binds: binds.toReversed() },
-    });
-    expect(left).not.toBe(right);
-  });
-
-  it("changes when the browser mount format version changes", () => {
-    const shared = createBrowserHashInput();
-    const left = computeSandboxBrowserConfigHash(shared);
-    const right = computeSandboxBrowserConfigHash({
-      ...shared,
-      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION - 1,
-    });
-    expect(left).not.toBe(right);
-  });
-
-  it("changes when the browser security epoch changes", () => {
-    const shared = createBrowserHashInput();
-    const left = computeSandboxBrowserConfigHash(shared);
-    const right = computeSandboxBrowserConfigHash({ ...shared, securityEpoch: "epoch-v2" });
-    expect(left).not.toBe(right);
+    expect(computeSandboxBrowserConfigHash(shared)).not.toBe(
+      computeSandboxBrowserConfigHash({ ...shared, ...change }),
+    );
   });
 
   it("changes when cdp source range changes", () => {

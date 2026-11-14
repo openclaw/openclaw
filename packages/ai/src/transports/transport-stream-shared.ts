@@ -25,15 +25,21 @@ import {
 } from "../utils/provider-error.js";
 import { isTransientNetworkError } from "../utils/retryable-network-errors.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import { createZeroUsage, isUnbilledFailedTurn } from "../utils/usage.js";
+import { createZeroUsage } from "../utils/usage.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 
-/** Decodes frame boundaries; callers retain reader lifetime and protocol admission. */
-export async function* iterateSseFrames(
-  read: () => Promise<ReadableStreamReadResult<Uint8Array>>,
-  limit?: { max: number; unit: "characters" | "bytes"; message: string },
-): AsyncGenerator<{ frame: string; terminated: boolean }> {
+/** A single synchronous scanner per stream; undefined requests the next reader result. */
+export function* decodeSseFrames(limit?: {
+  max: number;
+  unit: "characters" | "bytes";
+  message: string;
+}): Generator<
+  { frame: string; terminated: boolean } | undefined,
+  void,
+  ReadableStreamReadResult<Uint8Array>
+> {
   const decoder = new TextDecoder();
+  const streaming = { stream: true };
   const parts: string[] = [];
   let partsLength = 0;
   let tail = "";
@@ -47,8 +53,8 @@ export async function* iterateSseFrames(
     }
   };
   for (;;) {
-    const { done, value } = await read();
-    const buffer = tail + decoder.decode(value, { stream: !done });
+    const { done, value } = yield undefined;
+    const buffer = tail + decoder.decode(value, done ? undefined : streaming);
     let start = 0;
     let cr = buffer.indexOf("\r");
     let lf = buffer.indexOf("\n");
@@ -94,32 +100,47 @@ export async function* iterateSseFrames(
         break;
       }
     }
-    const pending = buffer.slice(start);
     // Scan only new text plus the maximum delimiter overlap; scanning an ever-growing
     // concatenated string would flatten/copy the entire pending frame on every read.
     // Keep only trailing newline characters, so UTF-8 length accounting never
     // splits a surrogate pair between a retained fragment and the overlap.
-    let split = pending.length;
-    while (split > 0 && pending.length - split < 3) {
-      const last = pending.charCodeAt(split - 1);
+    let split = buffer.length;
+    while (split > start && buffer.length - split < 3) {
+      const last = buffer.charCodeAt(split - 1);
       if (last !== 10 && last !== 13) {
         break;
       }
       split--;
     }
-    if (split > 0) {
-      const part = pending.slice(0, split);
+    if (split > start) {
+      const part = buffer.slice(start, split);
       parts.push(part);
       if (limit) {
         partsLength += lengthOf(part);
       }
     }
-    tail = pending.slice(split);
+    tail = buffer.slice(split);
     if (limit) {
       assertWithinLimit(partsLength + lengthOf(tail));
     }
     if (done) {
       return;
+    }
+  }
+}
+
+/** Decodes frame boundaries; callers retain reader lifetime and protocol admission. */
+export async function* iterateSseFrames(
+  read: () => Promise<ReadableStreamReadResult<Uint8Array>>,
+  limit?: Parameters<typeof decodeSseFrames>[0],
+): AsyncGenerator<{ frame: string; terminated: boolean }> {
+  const decoder = decodeSseFrames(limit);
+  for (let next = decoder.next(); !next.done;) {
+    if (next.value === undefined) {
+      next = decoder.next(await read());
+    } else {
+      yield next.value;
+      next = decoder.next();
     }
   }
 }
@@ -418,22 +439,23 @@ export function copyProviderAcceptanceObserver<T extends object>(source: unknown
   return observer ? writeProviderAcceptanceObserver(target, observer) : target;
 }
 
-async function awaitProviderLifecycleCallback(
-  callback: (() => void | Promise<void>) | undefined,
+export async function awaitProviderLifecycleCallback<T>(
+  callback: (() => T | Promise<T>) | undefined,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<T | undefined> {
   if (signal?.aborted) {
     throw transportAbortError(signal);
   }
   if (!callback) {
-    return;
+    return undefined;
   }
   const callbackPromise = Promise.resolve().then(callback);
   getAiTransportHost().observePendingProviderWork?.(callbackPromise);
-  await racePromiseWithAbortSignal(callbackPromise, signal, transportAbortError);
+  const result = await racePromiseWithAbortSignal(callbackPromise, signal, transportAbortError);
   if (signal?.aborted) {
     throw transportAbortError(signal);
   }
+  return result;
 }
 
 function startProviderStreamCancellation(cancelStream: ProviderStreamCancel, error: unknown): void {
@@ -586,15 +608,22 @@ export function finalizeTransportStream(params: {
   stream.end();
 }
 
+type TransportFailureDiagnostic = {
+  abortReason?: string;
+  incompleteReason?: string;
+};
+
 /** Assign terminal fields and record silent transport failures before partial-call cleanup. */
 export function assignTransportErrorDetails(
   output: AssistantMessage,
   error: unknown,
   signal?: AbortSignal,
+  diagnostic?: TransportFailureDiagnostic,
 ): ProviderErrorProjection {
-  if (!signal?.aborted) {
-    // Provider prose and response bodies can echo prompts and tool results.
-    try {
+  try {
+    const host = getAiTransportHost();
+    if (!signal?.aborted && host.isLogEnabled?.("provider-error", "warn") !== false) {
+      // Provider prose and response bodies can echo prompts and tool results.
       const record = asOptionalRecord(error);
       const response = asOptionalRecord(record?.response);
       const cause = asOptionalRecord(record?.cause);
@@ -602,9 +631,11 @@ export function assignTransportErrorDetails(
         asOptionalRecord(record?.error) ??
         asOptionalRecord(response?.error) ??
         asOptionalRecord(asOptionalRecord(record?.payload)?.error);
-      getAiTransportHost().logWarn("provider-error", "Model request failed", {
+      const metadata: Record<string, string | number | undefined> = {
         provider: output.provider,
         model: output.model,
+        name: readTransportDiagnosticLabel(record?.name),
+        ...diagnostic,
         status: readTransportDiagnosticLabel(
           record?.status ?? record?.statusCode ?? response?.status,
         ),
@@ -616,10 +647,16 @@ export function assignTransportErrorDetails(
         responseId: readTransportDiagnosticLabel(
           record?.responseId ?? response?.id ?? output.responseId,
         ),
-      });
-    } catch {
-      // Diagnostic accessors and log sinks cannot replace the original failure.
+      };
+      for (const key in metadata) {
+        if (metadata[key] === undefined) {
+          delete metadata[key];
+        }
+      }
+      host.logWarn("provider-error", "Model request failed", metadata);
     }
+  } catch {
+    // Diagnostic accessors and log sinks cannot replace the original failure.
   }
   const projection = projectProviderError(error, signal);
   Object.assign(output, projection);
@@ -629,19 +666,11 @@ export function assignTransportErrorDetails(
     output.usage.usageReport = { state: "unavailable" };
     output.usage.contextUsage = { state: "unavailable" };
   }
-  if (isUnbilledFailedTurn(output)) {
-    // The provider did no billable work; record its usage as a complete zero.
-    output.usage = {
-      ...createZeroUsage(),
-      usageReport: { state: "available" },
-      contextUsage: output.usage.contextUsage,
-    };
-  }
   if (
     projection.stopReason === "error" &&
     output.content.length === 0 &&
     isTransientNetworkError(projectDiagnosticValue(error)) &&
-    !output.diagnostics?.some((diagnostic) => diagnostic.type === "provider_transport_failure")
+    !output.diagnostics?.some((entry) => entry.type === "provider_transport_failure")
   ) {
     // Recovery consumes this fact, not error-text guesses. Reuse the bounded,
     // redacted terminal message so diagnostics cannot expose the original throw.
@@ -661,10 +690,11 @@ export function failTransportStream(params: {
   output: AssistantMessage;
   signal?: AbortSignal;
   error: unknown;
+  diagnostic?: TransportFailureDiagnostic;
   cleanup?: () => void;
 }): void {
   const { stream, output, signal, error, cleanup } = params;
-  const projection = assignTransportErrorDetails(output, error, signal);
+  const projection = assignTransportErrorDetails(output, error, signal, params.diagnostic);
   cleanup?.();
   stream.push({ type: "error", reason: projection.stopReason, error: output });
   stream.end();

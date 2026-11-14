@@ -9,6 +9,7 @@ import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook
 import { bindModelLlmRuntime } from "./model-runtime-binding.js";
 import { withModelTransportContext } from "./model-transport-context.js";
 import { admitProviderRateLimitStream } from "./provider-rate-limit-stream.js";
+import { withProviderRateLimitRetryDeadline } from "./provider-rate-limit.js";
 import { complete, completeSimple, streamSimple } from "./stream.js";
 import { createAssistantMessageEventStream } from "./utils/event-stream.js";
 
@@ -211,11 +212,10 @@ it("leaves unkeyed and inherited stream consumers intact while gating a changed 
 });
 
 it("paces 30 shared-account sessions once per request and admits interactive work first", async () => {
-  const { model, runtime, message, providerStream, run, rateLimit, embedded } =
-    createCompletionRuntime();
+  const { model, message, providerStream, run, rateLimit, embedded } = createCompletionRuntime();
   await run();
   vi.useFakeTimers();
-  vi.setSystemTime(0);
+  vi.setSystemTime(1_700_000_000_000);
   providerStream
     .mockClear()
     .mockImplementationOnce(() =>
@@ -231,7 +231,6 @@ it("paces 30 shared-account sessions once per request and admits interactive wor
   );
   const stoppedWaiting = vi.fn();
   const onRateLimitWait = vi.fn(() => stoppedWaiting);
-  const siblingModel = bindModelLlmRuntime({ ...model, id: "fallback-sibling" }, runtime);
   const interactive = Array.from({ length: 10 }, (_, index) =>
     withModelTransportContext(
       {
@@ -241,7 +240,7 @@ it("paces 30 shared-account sessions once per request and admits interactive wor
       },
       async () =>
         (
-          await embeddedStream(siblingModel, emptyContext, {
+          await embeddedStream(model, emptyContext, {
             apiKey: "synthetic-priority-key",
             sessionId: `interactive-${index}`,
           })
@@ -251,6 +250,7 @@ it("paces 30 shared-account sessions once per request and admits interactive wor
   await vi.advanceTimersByTimeAsync(999);
   expect(calls()).toEqual(["seed", "other-account"]);
   expect(onRateLimitWait).toHaveBeenCalledTimes(10);
+  expect(onRateLimitWait).toHaveBeenCalledWith(Date.now() + 1);
   await vi.advanceTimersByTimeAsync(1);
   expect(calls()).toEqual(["seed", "other-account", "interactive-0"]);
   expect(stoppedWaiting).toHaveBeenCalledOnce();
@@ -265,7 +265,7 @@ it("paces 30 shared-account sessions once per request and admits interactive wor
   expect(stoppedWaiting).toHaveBeenCalledTimes(10);
 
   // Ongoing successful traffic must not keep the recovery gate alive forever.
-  await vi.advanceTimersByTimeAsync(60_000 - Date.now());
+  await vi.advanceTimersByTimeAsync(60_000 - performance.now());
   const active = run({ apiKey: "synthetic-priority-key" });
   await vi.advanceTimersByTimeAsync(0);
   await active;
@@ -274,6 +274,40 @@ it("paces 30 shared-account sessions once per request and admits interactive wor
   await vi.advanceTimersByTimeAsync(0);
   expect(calls()).toHaveLength(35);
   await Promise.all(recovered);
+});
+
+it("shares TPM waits across runs of one model without delaying another model on the same organization", async () => {
+  const { model, runtime, message, providerStream, run, limit } = createCompletionRuntime();
+  await run();
+  vi.useFakeTimers();
+  vi.setSystemTime(1_700_000_000_000);
+  const options = {
+    apiKey: "synthetic-model-scoped-key",
+    headers: { "OpenAI-Organization": "org-synthetic-model-scoped" },
+  };
+  providerStream.mockImplementationOnce(() => limit("model-scoped", 1000));
+  await run(options);
+  vi.setSystemTime(Date.now() + 90_000);
+  providerStream.mockClear();
+  const primary = withProviderRateLimitRetryDeadline(performance.now() + 1200, () =>
+    run({ ...options, sessionId: "another-primary-run" }),
+  );
+  const primaryOutcome = Promise.allSettled([primary]);
+  const fallbackModel = bindModelLlmRuntime({ ...model, id: "fallback-sibling" }, runtime);
+  const fallback = completeSimple(fallbackModel, emptyContext, {
+    ...options,
+    sessionId: "fallback-run",
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(providerStream.mock.calls.map((call) => call[2]?.sessionId)).toEqual(["fallback-run"]);
+  await expect(fallback).resolves.toEqual(message);
+  await vi.advanceTimersByTimeAsync(999);
+  expect(providerStream).toHaveBeenCalledOnce();
+  vi.setSystemTime(Date.now() - 180_000);
+  await vi.advanceTimersByTimeAsync(1);
+  await expect(primaryOutcome).resolves.toEqual([{ status: "fulfilled", value: message }]);
+  expect(providerStream).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(60_000);
 });
 
 it("merges credentials identified by the same organization and extends queued waits", async () => {
@@ -323,6 +357,32 @@ it("returns excessive shared floors to failover, including a floor extended whil
   await vi.advanceTimersByTimeAsync(1);
   await expect(uncapped).resolves.toEqual(message);
   expect(providerStream).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(60_000);
+});
+
+it("bounds retry admission while shared floors extend and interactive peers remain queued", async () => {
+  const options = { apiKey: "synthetic-deadline-key" };
+  const { providerStream, run, limit } = await createLimitedRuntime("deadline", options);
+  providerStream.mockClear();
+  const retry = withProviderRateLimitRetryDeadline(performance.now() + 1200, () =>
+    run({ ...options, sessionId: "bounded-retry" }),
+  );
+  const failed = expect(retry).rejects.toMatchObject({ reason: "rate_limit", status: 429 });
+  await vi.advanceTimersByTimeAsync(100);
+  providerStream.mockImplementationOnce(() => limit("deadline", 1000));
+  await run({ apiKey: "synthetic-deadline-second-key" });
+  const peers = Array.from({ length: 5 }, (_, index) =>
+    withModelTransportContext({ requestId: `peer-${index}`, priority: "interactive" }, () =>
+      run({ ...options, sessionId: `peer-${index}` }),
+    ),
+  );
+  await vi.advanceTimersByTimeAsync(1100);
+  await failed;
+  expect(providerStream.mock.calls.some((call) => call[2]?.sessionId === "bounded-retry")).toBe(
+    false,
+  );
+  await vi.advanceTimersByTimeAsync(2000);
+  await Promise.all(peers);
   await vi.advanceTimersByTimeAsync(60_000);
 });
 

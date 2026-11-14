@@ -1,28 +1,7 @@
 import { vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
-import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { createSessionStoreSummaryReaderStub } from "../config/sessions/session-store-summary.test-support.js";
-import type { collectGatewayHealthSnapshot } from "../gateway/health/collector.js";
-import type { HealthSummary } from "../gateway/health/types.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
-
-export type LegacyHealthSnapshotParams = Partial<
-  Omit<Parameters<typeof collectGatewayHealthSnapshot>[0], "audience">
-> & {
-  includeSensitive?: boolean;
-};
-
-function createLegacyHealthSnapshotCollector(collectSnapshot: typeof collectGatewayHealthSnapshot) {
-  return (params: LegacyHealthSnapshotParams = {}): Promise<HealthSummary> => {
-    const { includeSensitive, probe, ...rest } = params;
-    return collectSnapshot({
-      ...rest,
-      audience: includeSensitive === false ? "public" : "admin",
-      probe: probe !== false,
-    });
-  };
-}
 
 export type HealthTestPlugin = Pick<
   ChannelPlugin,
@@ -32,9 +11,7 @@ export type HealthTestPlugin = Pick<
 export async function loadFreshHealthModulesForTest(params: {
   getConfig: () => Record<string, unknown>;
   getSessionStorePath: () => string;
-  getSessions: () => Record<string, { updatedAt?: number }>;
   getPlugins: () => HealthTestPlugin[];
-  onSessionRead?: (scope: { agentId?: string; storePath?: string }) => void;
 }) {
   vi.doMock("../config/config.js", () => ({
     getRuntimeConfig: params.getConfig,
@@ -43,36 +20,9 @@ export async function loadFreshHealthModulesForTest(params: {
   vi.doMock("../config/sessions/paths.js", () => ({
     resolveSessionStorePathCore: params.getSessionStorePath,
   }));
-  vi.doMock("../config/sessions/session-entry-read-runtime.js", () => ({
-    withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub((scope, options) => {
-      params.onSessionRead?.({ agentId: scope.agentId, storePath: scope.storePath });
-      const entries = Object.entries(params.getSessions())
-        .filter(
-          ([sessionKey]) =>
-            parseAgentSessionKey(sessionKey) !== null && !isInternalSessionEffectsKey(sessionKey),
-        )
-        .map(([sessionKey, entry]) => ({
-          sessionKey,
-          entry: { sessionId: sessionKey, updatedAt: 0, ...entry },
-        }))
-        .toSorted(
-          (left, right) =>
-            right.entry.updatedAt - left.entry.updatedAt ||
-            (left.sessionKey < right.sessionKey ? -1 : 1),
-        );
-      return {
-        count: entries.length,
-        recent: entries.slice(0, options.recentLimit),
-        byAgent: new Map(
-          options.agentIds.map((agentId) => {
-            const owned = entries.filter(
-              ({ sessionKey }) => parseAgentSessionKey(sessionKey)?.agentId === agentId,
-            );
-            return [agentId, { count: owned.length, recent: owned.slice(0, options.recentLimit) }];
-          }),
-        ),
-      };
-    }),
+  vi.doMock("../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../config/sessions/session-entry-read-runtime.js")>()),
+    withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(),
   }));
   vi.doMock("../channels/plugins/read-only.js", () => ({
     listReadOnlyChannelPluginsForConfig: params.getPlugins,
@@ -84,13 +34,11 @@ export async function loadFreshHealthModulesForTest(params: {
     import("../test-utils/channel-plugins.js"),
     import("../gateway/health/collector.js"),
   ]);
-  const collectSnapshot = health.collectGatewayHealthSnapshot;
-
   return {
     setActivePluginRegistry: pluginsRuntime.setActivePluginRegistry,
     setActiveDegradedPlugins: pluginDegradedState.setActiveDegradedPlugins,
     createChannelTestPluginBase: channelTestUtils.createChannelTestPluginBase,
     createTestRegistry: channelTestUtils.createTestRegistry,
-    getHealthSnapshot: createLegacyHealthSnapshotCollector(collectSnapshot),
+    collectGatewayHealthSnapshot: health.collectGatewayHealthSnapshot,
   };
 }

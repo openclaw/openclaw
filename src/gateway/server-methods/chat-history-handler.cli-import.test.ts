@@ -17,6 +17,7 @@ import { readLoggingConfig } from "../../logging/config.js";
 import { applyLoggingConfig } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -45,6 +46,7 @@ async function seedCliHistory(
   sessionKey: string,
   incognito = false,
   entry: Parameters<typeof upsertSessionEntryCore>[1] = {},
+  projectsDir = path.join(state.home, ".claude", "projects"),
 ) {
   await captureRuntimeConfigAsyncReader()();
   const scope = { agentId: "main", sessionKey, sessionId: randomUUID() };
@@ -59,7 +61,7 @@ async function seedCliHistory(
     cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
     ...entry,
   });
-  const projectDir = path.join(state.home, ".claude", "projects", "synthetic-history");
+  const projectDir = path.join(projectsDir, "synthetic-history");
   await fs.mkdir(projectDir, { recursive: true });
   const sourcePath = path.join(projectDir, `${cliSessionId}.jsonl`);
   return {
@@ -207,6 +209,20 @@ function expectMissingAnchor(page: HistoryPage) {
     expect(page).not.toHaveProperty(key);
   }
 }
+
+it("imports Claude history from CLAUDE_CONFIG_DIR", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const configDir = path.join(state.home, "claude-config");
+    await withEnvAsync({ CLAUDE_CONFIG_DIR: configDir }, async () => {
+      const key = "agent:main:cli-history-config-dir";
+      const projectsDir = path.join(configDir, "projects");
+      const { timestamp, native, write } = await seedCliHistory(state, key, false, {}, projectsDir);
+      const nativeId = randomUUID();
+      await write([native(nativeId, "user", "Configured-root question", timestamp)]);
+      expect(ids(await (await historyReader(key))({ limit: 10 }))).toContain(nativeId);
+    });
+  });
+});
 
 it.each([false, true])("reads imported full messages (incognito=%s)", async (incognito) => {
   const text = "Imported full-message content. ".repeat(350);
@@ -465,6 +481,45 @@ it.each([
     );
   },
 );
+
+it.each([1, 2])("continues initial CLI pages ending in legacy rows (limit=%s)", async (limit) => {
+  await withImportedHistory(
+    2,
+    "Earlier import",
+    async ({ read, scope, timestamp, importedIds }) => {
+      const legacy = Array.from({ length: limit * 3 }, (_, index) => ({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: `Legacy local ${index}`,
+          timestamp: timestamp + 100 + index,
+        },
+      }));
+      await replaceTranscriptEvents(scope, [
+        { type: "session", version: 3, id: scope.sessionId },
+        ...legacy,
+      ]);
+      const newest = await read({ limit });
+      expect(ids(newest)).toEqual(Array.from({ length: limit }, () => undefined));
+      expect(newest.olderCursor).toBeUndefined();
+      expect(newest).toMatchObject({
+        hasMore: true,
+        nextOffset: limit,
+        totalMessages: legacy.length + 2,
+      });
+      const restored = [...newest.messages];
+      let page = newest;
+      while (page.hasMore) {
+        expect(page.nextOffset).toBeGreaterThan(page.offset ?? 0);
+        page = await read({ offset: page.nextOffset, limit });
+        restored.unshift(...page.messages);
+      }
+      expect(restored).toHaveLength(legacy.length + 2);
+      expect(ids({ messages: restored }).slice(0, 2)).toEqual(importedIds);
+      expect(restored.slice(2)).toMatchObject(legacy.map(({ message }) => message));
+    },
+  );
+});
 
 it("deduplicates native history independently of log redaction", async () => {
   const text = "opaqueSeedQ customMask7 laterRegV7 laterCfgV8";

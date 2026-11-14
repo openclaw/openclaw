@@ -16,7 +16,7 @@ the Xcode requirements below.
 
 - **Xcode 26.4+** (Swift 6.3 toolchain), on the latest macOS available in
   Software Update.
-- **Node.js 24.22.1+ or 26.12.1+ & pnpm** for the gateway, CLI, and packaging scripts.
+- **Patched Node.js 24.22.1+ or 26.12.1+ & pnpm** is recommended for development and packaging. Gateway/CLI runtime compatibility starts at Node 24.16.0 on 24.x or 26.1.0, subject to SQLite checks.
   SwiftPM and Xcode generate the Gateway protocol models with the first
   supported Node on `PATH`, then `/opt/homebrew/bin/node` or
   `/usr/local/bin/node`. Version-manager shims such as mise, asdf, or Volta
@@ -338,13 +338,14 @@ node scripts/test-macos-native.mts named \
 ```
 
 The ordinary CI invocation bounds Swift Testing parallelism to the runner's logical
-CPU count, capped at 12. It runs three disjoint partitions sequentially with coverage
-instrumentation: the default-profile suite, rendered Quick Chat in a fresh default-profile
-process, and named-profile fixtures. The rendered partition preserves catalog, disclosure,
-and shortcut order without sharing process-wide executor changes from other tests.
-Both interactive fixtures use Swift Testing and start an AppKit-owned run loop before
-exercising native menus, so XCTest does not have to regain its outer wait loop afterward. Historical targets
-with the launcher keep their original default- and named-profile partitions.
+CPU count, capped at 12. It runs four disjoint partitions sequentially with coverage
+instrumentation: the default-profile suite, Dashboard experience, rendered Quick Chat,
+and named-profile fixtures. Quick Chat and Dashboard experience each use a fresh
+default-profile process so other suites cannot steal key status or reactivate the app
+during menu, backgrounding, and reopening assertions.
+The interactive Quick Chat and profile-chat fixtures use Swift Testing and start an
+AppKit-owned run loop before exercising native menus, so XCTest does not have to regain
+its outer wait loop afterward. Historical targets retain only partitions whose suites exist.
 Local `scripts/prepush-ci.sh` runs Swift lint/format checks and a release
 build, but does not run native tests. For native changes it exits nonzero with a
 requirement to obtain the exact commit's `macos-swift` CI result; local build

@@ -1,4 +1,26 @@
 const REQUEST_BODY = Symbol("modelRequestBody");
+const payloadObservers = new WeakMap<object, { wrapped?: object; isObserver?: () => boolean }>();
+
+/** Input observers may patch request settings; caller hooks still require editable input. */
+export function markModelPayloadObserver<T extends object>(
+  observer: T,
+  wrapped?: object,
+  isObserver?: () => boolean,
+): T {
+  // Session handlers can change after policy wrappers have been composed.
+  payloadObservers.set(observer, { wrapped, isObserver });
+  return observer;
+}
+
+export function hasMutableModelPayloadHook(hook: object | undefined): boolean {
+  if (hook === undefined) {
+    return false;
+  }
+  const observer = payloadObservers.get(hook);
+  return (
+    !observer || observer.isObserver?.() === false || hasMutableModelPayloadHook(observer.wrapped)
+  );
+}
 
 export type EncodedModelRequestBody = { body: Uint8Array<ArrayBuffer>; stream: boolean };
 
@@ -69,8 +91,8 @@ class ModelRequestJson {
 }
 type ModelRequestBodyState = {
   enabled?: boolean;
+  reportsBytes?: boolean;
   encode?: (payload: unknown) => Promise<EncodedModelRequestBody>;
-  onEncoded?: (body: Blob, payload: unknown) => void;
   onBytes?: (bytes: number) => void;
 };
 
@@ -85,6 +107,23 @@ export function modelRequestBodyState(
   const state = (value as ModelRequestBodyState | undefined) ?? {};
   Reflect.set(options, REQUEST_BODY, state);
   return state;
+}
+
+/** Observe JSON fetch bodies without opting into host-owned request encoding. */
+export function withModelRequestBodyBytes(
+  options: object | undefined,
+  fetch: typeof globalThis.fetch,
+): typeof globalThis.fetch {
+  const state = modelRequestBodyState(options ?? {});
+  state.reportsBytes = true;
+  return (input, init) => {
+    if (typeof init?.body === "string") {
+      state.onBytes?.(Buffer.byteLength(init.body, "utf8"));
+    } else if (init?.body instanceof Blob) {
+      state.onBytes?.(init.body.size);
+    }
+    return fetch(input, init);
+  };
 }
 
 export function serializeModelRequestBody(
@@ -115,6 +154,10 @@ export function serializeModelRequestBody(
 
 const encodedBodyStreams = new WeakMap<object, boolean>();
 
+export function markEncodedModelRequestBody(body: Blob | Uint8Array, stream: boolean): void {
+  encodedBodyStreams.set(body, stream);
+}
+
 export function encodedModelRequestBodyStream(body: unknown): boolean | undefined {
   return typeof body === "object" && body !== null ? encodedBodyStreams.get(body) : undefined;
 }
@@ -125,11 +168,10 @@ export function prepareModelRequestBody(options: object | undefined) {
   state.enabled = true;
   return async (payload: unknown) => {
     const encoded = state.encode ? await state.encode(payload) : serializeModelRequestBody(payload);
-    // Fetch copies mutable byte arrays; an immutable body can also serve retained fork replay.
-    const body = new Blob([encoded.body]);
-    state.onEncoded?.(body, payload);
-    state.onBytes?.(body.size);
-    encodedBodyStreams.set(body, encoded.stream);
+    // The encoder owns these bytes; Fetch snapshots them for each retry/redirect.
+    const body = encoded.body;
+    state.onBytes?.(body.byteLength);
+    markEncodedModelRequestBody(body, encoded.stream);
     return { body, headers: { "content-type": "application/json" } };
   };
 }

@@ -1,6 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createUnreachableGatewayProbe } from "./gateway-status/test-support.js";
 import { createSqliteWalHealth } from "./sqlite-wal-health.test-support.js";
 import type { buildChannelsTable } from "./status-all/channels.js";
@@ -13,8 +15,8 @@ import {
   createStatusScanSharedMocks,
   createStatusSummary,
   loadStatusScanModuleForTest,
-  withTemporaryEnv,
 } from "./status.scan.test-helpers.js";
+import { createTestConfigSnapshot } from "./test-runtime-config-helpers.js";
 
 const mocks = {
   ...createStatusScanSharedMocks("status-scan"),
@@ -26,6 +28,7 @@ const mocks = {
 };
 const cfg = createStatusMemorySearchConfig();
 const url = "ws://127.0.0.1:18789";
+const reachableProbe = { ...createUnreachableGatewayProbe(url, "timeout"), ok: true };
 let scanStatus: typeof import("./status.scan.js").scanStatus;
 let scanStatusJsonFast: typeof import("./status.scan.fast-json.js").scanStatusJsonFast;
 let collectStatusScanOverview: typeof import("./status.scan-overview.js").collectStatusScanOverview;
@@ -114,6 +117,7 @@ const runtimeDiagnostics = {
     failedCertificates: 1,
   },
   childRuntime: { execPath: "/opt/homebrew/Cellar/node@24/24.20.0/bin/node", available: false },
+  pluginReload: { phase: "reloading", pluginIds: ["composio"] },
 };
 
 function expectChannels(
@@ -142,14 +146,11 @@ describe("status scans", () => {
         heartbeat: heartbeat(true),
       });
       mocks.probeGateway.mockResolvedValue({
-        ...createUnreachableGatewayProbe(url, "timeout"),
-        ok: true,
+        ...reachableProbe,
         status: available ? { heartbeat: heartbeat(false) } : null,
       });
       mocks.callGateway.mockRejectedValue(new Error("missing scope: operator.read"));
-
       const result = await scanStatus(createStatusGatewayProbeBudget());
-
       expect(result.summary.heartbeat).toEqual(heartbeat(!available));
       expect(mocks.callGateway).toHaveBeenCalledTimes(available ? 0 : 1);
       expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
@@ -159,29 +160,34 @@ describe("status scans", () => {
     },
   );
 
-  it("collects live channel and runtime diagnostics for deep text status", async () => {
-    const runtime = {
-      ...runtimeDiagnostics,
-      pluginReload: { phase: "reloading", pluginIds: ["composio"] },
-    };
-    const liveChannelStatus = { ok: true, accounts: [] };
-    mocks.callGateway.mockImplementation(async ({ method }: { method: string }) =>
-      method === "status" ? runtime : liveChannelStatus,
-    );
-    mocks.probeGateway.mockResolvedValue({
-      ...createUnreachableGatewayProbe(url, "timeout"),
-      ok: true,
-    });
-
-    const result = await scanStatus({ ...createStatusGatewayProbeBudget(5000), deep: true });
-
-    expect(result.summary).toMatchObject(runtime);
-    expectCall(mocks.callGateway, {
-      method: "channels.status",
-      params: { probe: false, timeoutMs: 5000 },
-    });
-    expectChannels({ includeSetupFallbackPlugins: true, liveChannelStatus });
-  });
+  it.each([undefined, "status", "channels.status"])(
+    "collects deep text status diagnostics unless interrupted during %s",
+    async (held) => {
+      const liveChannelStatus = { ok: true, accounts: [] };
+      const work = new AsyncWorkScope();
+      mocks.callGateway.mockImplementation(async ({ method }: { method: string }) => {
+        if (method === held) {
+          work.beginClose(held);
+          throw new Error("aborted");
+        }
+        return method === "status" ? runtimeDiagnostics : liveChannelStatus;
+      });
+      mocks.probeGateway.mockResolvedValue(reachableProbe);
+      const scan = work.run(() =>
+        scanStatus({ ...createStatusGatewayProbeBudget(5000), deep: true }),
+      );
+      if (held) {
+        await expect(scan).rejects.toBe(held);
+        return expectCall(mocks.callGateway, { method: held, signal: work.signal });
+      }
+      expect((await scan).summary).toMatchObject(runtimeDiagnostics);
+      expectCall(mocks.callGateway, {
+        method: "channels.status",
+        params: { probe: false, timeoutMs: 5000 },
+      });
+      expectChannels({ includeSetupFallbackPlugins: true, liveChannelStatus });
+    },
+  );
 
   it("skips gateway and update probes on cold-start text status", async () => {
     applyStatusScanDefaults(mocks, {
@@ -205,10 +211,15 @@ describe("status scans", () => {
       path: "/tmp/openclaw.json",
       issues: [{ path: "gateway.port", message: "invalid port" }],
     };
-    mocks.readBestEffortConfigSnapshot.mockResolvedValue({
-      config: sourceConfig,
-      sourceConfig,
-      configDiagnostics,
+    mocks.readConfigFileSnapshotWithPluginMetadata.mockResolvedValue({
+      snapshot: {
+        ...createTestConfigSnapshot(sourceConfig, sourceConfig, configDiagnostics.path),
+        exists: false,
+        raw: null,
+        parsed: sourceConfig,
+        valid: false,
+        issues: configDiagnostics.issues,
+      },
     });
 
     const result = await scanStatusJsonFast(createStatusGatewayProbeBudget(1234), {} as never);
@@ -257,7 +268,7 @@ describe("status scans", () => {
   });
 
   it("uses manifest environment credentials for cold-start JSON", async () => {
-    await withTemporaryEnv(coldStartEnv("token"), async () => {
+    await withEnvAsync(coldStartEnv("token"), async () => {
       await scanStatusJsonFast(createStatusGatewayProbeBudget(), {} as never);
     });
     expect(mocks.probeGateway).toHaveBeenCalledOnce();
@@ -265,27 +276,14 @@ describe("status scans", () => {
   });
 
   it("uses gateway fallback overrides for channels.status when requested", async () => {
-    const gatewaySnapshot: NonNullable<
-      Parameters<typeof collectStatusScanOverview>[0]["gatewaySnapshot"]
-    > = {
-      gatewayConnection: {
-        url,
-        urlSource: "missing gateway.remote.url (fallback local)",
-        message: "fallback",
+    const sourceConfig: OpenClawConfig = { session: { dmScope: "per-peer" } };
+    mocks.readConfigFileSnapshotWithPluginMetadata.mockResolvedValue({
+      snapshot: {
+        ...createTestConfigSnapshot(sourceConfig, { session: {} }, mocks.resolveConfigPath()),
+        exists: false,
+        raw: null,
+        parsed: sourceConfig,
       },
-      remoteUrlMissing: true,
-      gatewayMode: "remote",
-      gatewayProbeAuth: { token: "tok" },
-      gatewayProbe: { ...createUnreachableGatewayProbe(url, "timeout"), ok: true },
-      gatewayReachable: true,
-      gatewaySelf: null,
-      gatewayCallOverrides: { url, token: "tok" },
-    };
-
-    mocks.readBestEffortConfigSnapshot.mockResolvedValue({
-      config: { session: {} },
-      sourceConfig: { session: { dmScope: "per-peer" } },
-      configDiagnostics: null,
     });
     mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
       resolvedConfig: { session: {} },
@@ -300,9 +298,21 @@ describe("status scans", () => {
       opts: { ...createStatusGatewayProbeBudget(1234), deep: true },
       showSecrets: false,
       useGatewayCallOverridesForChannelsStatus: true,
-      gatewaySnapshot,
+      gatewaySnapshot: {
+        gatewayConnection: {
+          url,
+          urlSource: "missing gateway.remote.url (fallback local)",
+          message: "fallback",
+        },
+        remoteUrlMissing: true,
+        gatewayMode: "remote",
+        gatewayProbeAuth: { token: "tok" },
+        gatewayProbe: reachableProbe,
+        gatewayReachable: true,
+        gatewaySelf: null,
+        gatewayCallOverrides: { url, token: "tok" },
+      },
     });
-
     expect(result).toMatchObject({
       channelsStatus: { channelAccounts: {} },
       channelIssues: [{ channel: "quietchat", message: "boom" }],

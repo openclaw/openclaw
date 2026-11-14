@@ -1,14 +1,11 @@
+import type { EmbeddingProviderCreateOptions } from "../../../../src/plugins/embedding-provider-types.js";
 import {
   resolveEmbeddingEndpointUrl,
   resolveRemoteEmbeddingBearerClient,
   type RemoteEmbeddingProviderId,
 } from "./embeddings-remote-client.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
-import type {
-  EmbeddingProvider,
-  EmbeddingProviderCallOptions,
-  EmbeddingProviderOptions,
-} from "./embeddings.types.js";
+import type { EmbeddingProvider, EmbeddingProviderCallOptions } from "./embeddings.types.js";
 import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 import type { RemoteEmbeddingRequestAuth } from "./remote-http.js";
 
@@ -90,7 +87,7 @@ export function createRemoteEmbeddingProvider(params: {
 export async function resolveRemoteEmbeddingClient(params: {
   provider: RemoteEmbeddingProviderId;
   capability?: string;
-  options: EmbeddingProviderOptions;
+  options: EmbeddingProviderCreateOptions;
   defaultBaseUrl: string;
   normalizeModel: (model: string) => string;
 }): Promise<RemoteEmbeddingClient> {

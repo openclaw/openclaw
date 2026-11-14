@@ -9,11 +9,13 @@ import {
 } from "../config/plugin-auto-enable.test-helpers.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { createEnteredGate } from "./entered-gate.test-support.js";
 import {
   acquireAgentRunPreparedModelRuntime as acquire,
   acquireAgentRuntimeCleanupRegistries as acquireCleanup,
   getPreparedModelRuntimeSnapshot as readSnapshot,
   loadPublishedGatewayReplyDispatchRuntime as loadDispatch,
+  markPreparedModelRuntimeSnapshotsStale as markStale,
   refreshPreparedModelRuntimeSnapshots as refresh,
 } from "./prepared-model-runtime.js";
 
@@ -22,6 +24,55 @@ const { mocks } = fixture;
 
 beforeEach(() => {
   mocks.configuredAgentIds = ["default"];
+});
+
+it("reprepares run admission when config publication supersedes its unfinished build", async () => {
+  const config = { messages: { responsePrefix: "before" } };
+  const current = { messages: { responsePrefix: "after" } };
+  await refresh(config, { gatewayLifecycle: true, catalogMode: "static" });
+  const gate = createEnteredGate();
+  mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
+    await gate.wait();
+    return { entries: [] };
+  });
+  const admission = acquire({
+    ...fixture.agentInput("default", config),
+    loadRuntimePlugins: true,
+  });
+  void admission.catch(() => {});
+  let publication: Promise<void> | undefined;
+  try {
+    await gate.entered;
+    publication = refresh(current, { gatewayLifecycle: true, catalogMode: "static" });
+    gate.release();
+    await publication;
+    await using lease = await admission;
+    expect(lease.snapshot.config).toEqual(current);
+    expect(lease.snapshot.isCurrent()).toBe(true);
+    expect((await loadDispatch({ agentId: "default" }))?.config).toEqual(current);
+  } finally {
+    gate.release();
+    await Promise.allSettled([
+      publication,
+      admission.then((lease) => lease[Symbol.asyncDispose]()),
+    ]);
+  }
+});
+
+it("bounds repeated preparation supersession and leaves ordinary failures untouched", async () => {
+  const input = fixture.agentInput("unconfigured", {});
+  mocks.prepareStaticCatalog.mockImplementation(async () => {
+    markStale("fixture publication changed");
+    return { entries: [] };
+  });
+  await expect(acquire(input)).rejects.toThrow(
+    "Model runtime changed during both preparation attempts; retry the request",
+  );
+  expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
+  const failure = new Error("fixture credentials unavailable");
+  mocks.prepareStaticCatalog.mockReset().mockRejectedValue(failure);
+  await expect(acquire(input)).rejects.toBe(failure);
+  expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
 });
 
 it("borrows a configured generation for another model but builds for an uncovered provider", async () => {

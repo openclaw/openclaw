@@ -30,6 +30,8 @@ import {
 } from "./deliver.js";
 import type { ConversationDeliveryTarget } from "./delivery-completion.js";
 import {
+  GATEWAY_SEND_RECONCILIATION_TIMEOUT_MS,
+  isUnsettledGatewayRequestTimeout,
   loadMessageGatewayRuntime,
   resolveGatewayIdempotencyKey,
   resolveOutboundMessageGatewayOptions,
@@ -212,20 +214,34 @@ async function callMessageGateway<T>(params: {
     : await params.gateway?.resolveAgentRuntimeIdentityToken?.();
   await params.onPlatformSendDispatch?.();
   assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
-  if (params.gateway?.request) {
-    return await params.gateway.request<T>({
+  const request = async (timeoutMs: number) => {
+    if (params.gateway?.request) {
+      return await params.gateway.request<T>({
+        method: params.method,
+        params: params.params,
+        timeoutMs,
+      });
+    }
+    const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
+    return await callGatewayLeastPrivilege<T>({
+      ...gateway,
       method: params.method,
       params: params.params,
-      timeoutMs: gateway.timeoutMs,
+      timeoutMs,
+      agentRuntimeIdentityToken,
     });
+  };
+  try {
+    return await request(gateway.timeoutMs);
+  } catch (error) {
+    if (params.method !== "send" || !(await isUnsettledGatewayRequestTimeout(error))) {
+      throw error;
+    }
+    // A slow upload can outlive the caller's timer without cancelling the send.
+    // Reattach once with the unchanged idempotency key so the Gateway joins it.
+    assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+    return await request(Math.max(gateway.timeoutMs, GATEWAY_SEND_RECONCILIATION_TIMEOUT_MS));
   }
-  const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
-  return await callGatewayLeastPrivilege<T>({
-    ...gateway,
-    method: params.method,
-    params: params.params,
-    agentRuntimeIdentityToken,
-  });
 }
 
 async function resolveMessageConfig(cfg?: OpenClawConfig): Promise<OpenClawConfig> {

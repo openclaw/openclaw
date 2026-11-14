@@ -127,6 +127,21 @@ describe("exec approval card", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["Win32", "Linux x86_64", "MacIntel"])(
+    "uses compact non-Mac approval hints on %s",
+    (platform) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      renderCard(approval());
+      const shortcuts =
+        platform === "MacIntel"
+          ? ["Ctrl/Cmd+Enter", "Ctrl/Cmd+Shift+Enter", "Ctrl/Cmd+D"]
+          : ["CtrlEnter", "Ctrl⇧Enter", "CtrlD"];
+      for (const shortcut of shortcuts) {
+        expect(container.querySelector(`button[title$="(${shortcut})"]`)).not.toBeNull();
+      }
+    },
+  );
+
   it("retires a held decision when the displayed approval changes", async () => {
     const pending = createDeferred();
     const request = approval({ expiresAtMs: Date.now() + 60_000 });
@@ -191,7 +206,6 @@ describe("exec approval card", () => {
           host: "sandbox",
           ask: "always",
           warningText: "Runs after this turn and restarts automatically until stopped.",
-          allowedDecisions: ["allow-once", "deny"],
           streamProposal: { jobId: "watcher-1", name: "Watch application errors", operation },
         },
       });
@@ -206,6 +220,7 @@ describe("exec approval card", () => {
         operation === "add" ? "Start watching" : "Save watcher change",
       );
       expect(card?.textContent).toContain("Cancel");
+      expect(elements(".exec-approval-actions button")).toHaveLength(2);
       expect(card?.textContent).not.toContain("Approved by you");
     },
   );
@@ -414,7 +429,7 @@ describe("exec approval card", () => {
       }),
       "inline",
     );
-    expect(card?.textContent).toContain("gateway");
+    expect(card?.textContent).toContain("This computer");
     expect(card?.textContent).toContain("/workspace");
     expect(card?.textContent).toContain("/usr/bin/pnpm");
     expect(card?.textContent).toContain("allowlist");
@@ -501,48 +516,4 @@ describe("exec approval card", () => {
     view.unmount();
     expect(cancel).toHaveBeenCalledOnce();
   });
-
-  it.each([
-    [undefined, undefined, ["Deny", "Always allow", "Allow once"]],
-    [undefined, "always", ["Deny", "Allow once"]],
-    [["deny", "allow-once"], undefined, ["Deny", "Allow once"]],
-  ] as const)(
-    "keeps native mobile eligibility for decisions %j and ask %s",
-    (allowed, ask, labels) => {
-      const card = renderCard(
-        approval({
-          kind: "exec",
-          request: { command: "echo review", allowedDecisions: allowed && [...allowed], ask },
-        }),
-        "inline",
-        "mobile",
-      );
-      expect(
-        Array.from(card!.querySelectorAll("button"), (button) =>
-          button.textContent?.trim(),
-        ).toSorted(),
-      ).toEqual(labels.toSorted());
-    },
-  );
-
-  it.each(["modal", "plugin"] as const)(
-    "ignores the mobile opt-in for the %s presentation",
-    (surface) => {
-      const card = renderCard(
-        surface === "modal"
-          ? approval({ kind: "exec", request: { command: "echo modal" } })
-          : approval(),
-        surface === "modal" ? "modal" : "inline",
-        "mobile",
-      );
-      expect(card!.textContent).toContain(
-        surface === "modal" ? "Exec approval needed" : "Codex approval",
-      );
-      if (surface === "modal") {
-        expect(card!.textContent).toContain("Always allow");
-      } else {
-        expect(card!.querySelector("details")).toBeNull();
-      }
-    },
-  );
 });

@@ -1,4 +1,3 @@
-import * as childProcess from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -10,19 +9,21 @@ import { CodexAppServerClient } from "./client.js";
 import { resolveManagedCodexNativeCommand } from "./managed-binary.js";
 import { observeManagedCodexLauncherFailure } from "./managed-launcher-failure.js";
 import { findCodexAppServerSpawnError } from "./spawn-error.js";
+import * as stdioWorker from "./stdio-worker.js";
 import { RegistrationTestChildProcess } from "./transport-process-registration.test-support.js";
 import { createStdioTransport } from "./transport-stdio.js";
 import type { CodexAppServerTransport } from "./transport.js";
 
 const registration = vi.hoisted(() => ({ rejectOnExit: false, holdStderrUntilExit: false }));
 
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
+vi.mock("./stdio-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./stdio-worker.js")>()),
 }));
 
+// mock-isolation: delay registration around real native launch failures and stderr drain.
 vi.mock("./transport-process-registration.js", () => ({
   prepareCodexAppServerProcessRegistration:
-    async () => async (child: import("node:child_process").ChildProcess) => {
+    async () => async (child: stdioWorker.CodexStdioChild) => {
       if (registration.holdStderrUntilExit) {
         child.stderr?.pause();
         child.once("exit", () => child.stderr?.resume());
@@ -70,7 +71,7 @@ describe("Codex app-server OS launch failure", () => {
         env: { HOME: root, CODEX_HOME: path.join(root, "codex-home") },
       };
       let client: CodexAppServerClient | undefined;
-      const spawn = vi.spyOn(childProcess, "spawn");
+      const spawn = vi.spyOn(stdioWorker, "spawnCodexStdio");
       try {
         registration.rejectOnExit = phase === "registration";
         registration.holdStderrUntilExit = true;

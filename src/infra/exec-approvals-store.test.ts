@@ -1,6 +1,8 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -17,6 +19,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -86,9 +89,7 @@ function row() {
 
 function fixturePath(name: string) {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    throw new Error("missing test state dir");
-  }
+  assert(stateDir, "missing test state dir");
   return path.join(stateDir, name);
 }
 
@@ -187,6 +188,31 @@ const readOnlyLoaders = [
 ];
 
 describe("exec approvals SQLite store", () => {
+  it("keeps canonical policy authoritative across reads and writes with conflicting legacy state", async () => {
+    const input = authorizeEcho();
+    const canonical = readExecApprovalsSnapshot();
+    const legacyPath = fixturePath("exec-approvals.json");
+    const legacy = serializeExecApprovals(policy({ security: "full", ask: "off" }));
+    fs.writeFileSync(legacyPath, legacy);
+    execApprovalsStoreTesting.reset();
+
+    expect(readExecApprovalsSnapshot()).toEqual(canonical);
+    for (const { load } of readOnlyLoaders) {
+      expect(await load()).toEqual(canonical.file);
+    }
+    const allowed = await commitExecAuthorizations(input);
+    expect(allowed.readCurrent).not.toThrow();
+    expect(allowed.file.agents?.main?.allowlist?.[0]?.lastUsedCommand).toBe("echo before");
+    await updateExecApprovals({
+      update: { kind: "ensure-agent", agentId: "*", policy: { security: "deny" } },
+    });
+    await expect(commitExecAuthorizations(input)).rejects.toThrow(
+      "Exec approval changed before execution",
+    );
+    expect(loadExecApprovals().agents?.["*"]?.security).toBe("deny");
+    expect(fs.readFileSync(legacyPath, "utf8")).toBe(legacy);
+  });
+
   it.each(readOnlyLoaders)(
     "does not create shared state for a $name read-only load",
     async ({ load }) => {
@@ -221,7 +247,7 @@ describe("exec approvals SQLite store", () => {
     });
   });
 
-  it("rolls back a policy replacement when current authority ends before commit", async () => {
+  it("shares the policy publication and rolls back replacement when authority ends before commit", async () => {
     const before = await ensureExecApprovalsSnapshot();
     const unknown = vi.fn();
     const release = execApprovalsPublication.subscribeFacts((change) => {
@@ -231,10 +257,11 @@ describe("exec approvals SQLite store", () => {
     });
     try {
       let current = true;
-      let commitObserved = false;
+      let prepared: Record<string, unknown> | undefined;
       workerProbe.admission(workerAdmission, (request, grant, admit) => {
         if (request.stage === "commit") {
-          commitObserved = true;
+          assert(isRecord(request.facts));
+          prepared = request.facts;
           current = false;
         }
         admit(request, grant);
@@ -250,7 +277,9 @@ describe("exec approvals SQLite store", () => {
           update: { kind: "replace", file: { ...before.file, defaults: { security: "deny" } } },
         }),
       ).rejects.toThrow("request authority ended");
-      expect(commitObserved).toBe(true);
+      assert(prepared);
+      const fact = execApprovalsPublication.readReceipt(prepared.execFacts).facts.get("current");
+      expect(fact?.kind === "postimage" && fact.value.file).toBe(prepared.file);
       expect(readExecApprovalsSnapshot().hash).toBe(before.hash);
       expect(unknown).not.toHaveBeenCalled();
     } finally {
@@ -258,10 +287,15 @@ describe("exec approvals SQLite store", () => {
     }
   });
 
-  it("keeps socket credentials local across initialization and policy CAS", async () => {
+  it("keeps credentials local and canonical approval polls off the writer", async () => {
     const initialized = await ensureExecApprovalsSnapshot();
     const first = initialized.file;
     const policyRow = row();
+    const probe = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+    for (let poll = 0; poll < 18; poll++) {
+      await ensureExecApprovalsSnapshot();
+    }
+    expect(probe).not.toHaveBeenCalled();
     const repeated = await ensureExecApprovalsSnapshot();
     const second = repeated.file;
     expect(row()).toEqual(policyRow);
@@ -463,18 +497,14 @@ describe("exec approvals SQLite store", () => {
   it("restores snapshots and honors rollback CAS", async () => {
     const missing = readExecApprovalsSnapshot();
     const first = await replacePolicy(policy({ security: "deny" }));
-    if (!first) {
-      throw new Error("missing first snapshot");
-    }
+    assert(first, "missing first snapshot");
     expect(await restoreExecApprovalsSnapshotLocked(missing, first.hash)).toBe(true);
     expect(readExecApprovalsSnapshot().exists).toBe(false);
 
     saveExecApprovals(policy({ security: "allowlist" }));
     const original = readExecApprovalsSnapshot();
     const newer = await replacePolicy({ ...original.file, defaults: { security: "full" } });
-    if (!newer) {
-      throw new Error("missing newer snapshot");
-    }
+    assert(newer, "missing newer snapshot");
     expect(await restoreExecApprovalsSnapshotLocked(original, original.hash)).toBe(false);
     expect(await restoreExecApprovalsSnapshotLocked(original, newer.hash)).toBe(true);
     expect(loadExecApprovals().defaults?.security).toBe("allowlist");
@@ -509,16 +539,11 @@ describe("exec approvals SQLite store", () => {
   it("settles competing policy saves in writer submission order", async () => {
     const before = await ensureExecApprovalsSnapshot();
     await withoutHostSql(async () => {
-      const [first, second] = await Promise.all([
-        replacePolicy(
-          { ...before.file, defaults: { security: "allowlist" } },
-          { baseHash: before.hash },
+      const [first, second] = await Promise.all(
+        (["allowlist", "deny"] as const).map((security) =>
+          replacePolicy({ ...before.file, defaults: { security } }, { baseHash: before.hash }),
         ),
-        replacePolicy(
-          { ...before.file, defaults: { security: "deny" } },
-          { baseHash: before.hash },
-        ),
-      ]);
+      );
       expect(first?.file.defaults?.security).toBe("allowlist");
       expect(second).toBeNull();
     });
@@ -650,8 +675,8 @@ describe("exec approvals SQLite store", () => {
     ["source", ""],
     ["Doctor claim", ".doctor-importing"],
   ])(
-    "blocks runtime reads while the retired %s exists, then rechecks after removal",
-    (_, suffix) => {
+    "blocks runtime reads without canonical policy while the retired %s exists, then rechecks after removal",
+    async (_, suffix) => {
       closeOpenClawStateDatabaseForTest();
       const sourcePath = fixturePath("exec-approvals.json");
       const legacyPath = `${sourcePath}${suffix}`;
@@ -663,11 +688,28 @@ describe("exec approvals SQLite store", () => {
           message: `Legacy exec approvals exist at ${sourcePath}. Run \`openclaw doctor --fix\` with OPENCLAW_STATE_DIR set to ${path.dirname(sourcePath)} before using exec approvals.`,
         }),
       );
+      await expect(loadExecApprovalsReadOnlyAsync()).rejects.toBeInstanceOf(
+        ExecApprovalsMigrationRequiredError,
+      );
+      await expect(replacePolicy(policy({ security: "full" }))).rejects.toMatchObject({
+        name: "ExecApprovalsMigrationRequiredError",
+      });
 
       fs.rmSync(legacyPath);
       expect(loadExecApprovals()).toMatchObject({ version: 1, agents: {} });
     },
   );
+
+  it("checks legacy-only policy in the selected read-only state directory", async () => {
+    saveExecApprovals(policy({ security: "deny" }));
+    const selected = tempDirs.make("exec-approvals-selected-");
+    fs.writeFileSync(path.join(selected, "exec-approvals.json"), '{"version":1}');
+    await expect(
+      loadExecApprovalsReadOnlyAsync({ path: path.join(selected, "state", "openclaw.sqlite") }),
+    ).rejects.toBeInstanceOf(ExecApprovalsMigrationRequiredError);
+    expect(fs.existsSync(path.join(selected, "state"))).toBe(false);
+    expect(loadExecApprovals().defaults?.security).toBe("deny");
+  });
 
   it.each([
     [true, false, false],

@@ -66,7 +66,7 @@ it("serves JSON from worker provenance through reopen", async () => {
   const at = (nowMs: number) => ({ env: state.env, nowMs });
   await recordAgentProvenance("Main", { createdVia: "operator" }, at(10));
   await recordAgentProvenance("Child", { createdVia: "agent", creatorAgentId: "Main" }, at(20));
-  await recordAgentProvenance("retired", { createdVia: "claw" }, at(30));
+  await recordAgentProvenance("retired", { createdVia: "template" }, at(30));
   await closeOpenClawStateDatabaseAsync();
   requireNodeSqlite();
   sql = observeMainThreadSql({ includeClose: true });

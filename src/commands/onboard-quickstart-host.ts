@@ -1,9 +1,15 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import {
+  formatDurableInstallCommand,
+  isDisposableEntrypoint,
+} from "../daemon/durable-service-entrypoint.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createQuickstartNotePrompter } from "../system-agent/setup-apply.js";
+import { VERSION } from "../version.js";
 import { t } from "../wizard/i18n/index.js";
 import { resolveGatewayStartupTiming } from "./gateway-startup-timing.js";
 import {
@@ -82,7 +88,11 @@ export async function runQuickstartForegroundGateway(params: {
       );
       runtime.log(t("wizard.guided.quickstartDashboard", { url: dashboardUrl.toString() }));
       runtime.log(t("wizard.guided.quickstartForeground"));
-      runtime.log(t("wizard.guided.quickstartBackground"));
+      // npx/dlx users have no openclaw on PATH; the same version installs a durable copy.
+      const command = (await isDisposableEntrypoint(process.argv[1] ?? ""))
+        ? formatDurableInstallCommand(VERSION, "gateway install")
+        : formatCliCommand("openclaw gateway install");
+      runtime.log(t("wizard.guided.quickstartBackground", { command }));
       runtime.log(t("wizard.guided.quickstartReopen"));
       if (setupOnly) {
         runtime.log(

@@ -35,9 +35,14 @@ function pendingWelcomeGrant() {
   });
 }
 
-function guestClient(grantId: string, profile: { profileId: string; displayName?: string } = SAM) {
+function guestClient(
+  grantId: string,
+  profile: { profileId: string; displayName?: string } = SAM,
+  githubLogin?: string,
+) {
   return {
     authenticatedUserProfile: profile,
+    preparedSessionProfile: { profileId: profile.profileId, githubLogin, aliases: new Set() },
     internal: {
       operatorAccessAuthority: { gatewayAccessGrant: { pluginId: "visitor-access", grantId } },
     },
@@ -131,7 +136,7 @@ describe("visitor-access.welcome.ensure", () => {
     );
     const sessionKey = result.status === "ready" ? result.sessionKey : "";
     expect(h.creates()).toEqual([
-      ["sessions.create", { key: sessionKey, agentId: "main", displayName: "Welcome, Sam Rivera" }],
+      ["sessions.create", { key: sessionKey, agentId: "main", displayName: "Welcome Sam Rivera" }],
     ]);
     const message = h.gateway.appendAgentMessage.mock.calls[0]![0];
     expect(message).toMatchObject({
@@ -170,6 +175,20 @@ describe("visitor-access.welcome.ensure", () => {
     expect(await h.ensure()).toEqual({ ...result, created: false });
     expect(h.creates()).toHaveLength(1);
     expect(h.gateway.appendAgentMessage).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { displayName: "  Sam\n Rivera  ", githubLogin: "sam", title: "Welcome Sam Rivera" },
+    { displayName: " ", githubLogin: "sam", title: "Welcome sam" },
+    { displayName: undefined, githubLogin: undefined, title: "Welcome" },
+  ])("titles a new welcome session $title", async ({ displayName, githubLogin, title }) => {
+    const grant = pendingWelcomeGrant();
+    const h = await welcomeHarness([grant]);
+    const result = await h.welcome.ensure(
+      guestClient(grant.grantId!, { profileId: "profile-sam", displayName }, githubLogin),
+    );
+    expect(result).toMatchObject({ status: "ready", created: true });
+    expect([...h.sessions.values()]).toMatchObject([{ displayName: title }]);
   });
 
   it("returns not_applicable without an active visitor grant for this connection", async () => {

@@ -4,7 +4,9 @@ import * as normalization from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalizeSessionEntry } from "../sessions/session-manager-persistence-entry.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
+import * as promptPool from "../sessions/system-prompt-pool.js";
 import type { AnyAgentTool } from "../tools/common.js";
+import { createComputerTool } from "../tools/computer-tool.js";
 import {
   clearEmbeddedSessionPromptStates,
   beginSessionSystemPrompt,
@@ -190,8 +192,38 @@ describe("system prompt series", () => {
     const updated = project(second);
     expect(updated.systemPrompt).toBe(first);
     expect(updated.update?.content).toBe(`${updateHeading}## Changed\n\ud801`);
+    const pool = vi.spyOn(promptPool, "shareSystemPromptPrefix");
+    expect(project(second).update).toBeUndefined();
+    expect(pool).not.toHaveBeenCalled();
+    pool.mockRestore();
     expect(project(second, [], "other-route").systemPrompt).toBe(second);
   });
+
+  it.each(["compaction", "reset"] as const)(
+    "restarts on a new %s, but not when its payload enters or leaves a bounded window",
+    (kind) => {
+      const state = fixture.state;
+      const projectBoundary = (entries: SessionEntry[], historyBoundaryCount: number) => {
+        const result = prepareSessionSystemPrompt({
+          state,
+          routeKey,
+          entries,
+          historyBoundaryCount,
+          systemPrompt: entries.length ? changed : base,
+        });
+        result.commit();
+        return result;
+      };
+      const first = projectBoundary([], 1);
+      expect(projectBoundary([historyEntry(kind, "old")], 1).systemPrompt).toBe(first.systemPrompt);
+      const compacted = projectBoundary([historyEntry(kind, "new")], 2);
+      expect(compacted.restart).toBe(true);
+      expect(compacted.systemPrompt).toBe(changed);
+      expect(projectBoundary([], 2).systemPrompt).toBe(compacted.systemPrompt);
+      beginSessionSystemPrompt(state);
+      expect(projectBoundary([historyEntry(kind, "different-branch")], 2).restart).toBe(true);
+    },
+  );
 
   it("replaces duplicate-heading groups without ambiguous partial removals", () => {
     project("First.\n## File\nOne.\n## File\nTwo.");
@@ -235,7 +267,7 @@ describe("system prompt series", () => {
     await persist(entries);
     const state = fixture.state;
     const first = project(changed, entries);
-    beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => entries });
+    beginSessionSystemPrompt(state);
     const retry = project(changed, entries);
     expect(retry.update?.content).toBe(first.update?.content);
     await expect(
@@ -270,7 +302,7 @@ describe("system prompt series", () => {
     ).rejects.toThrow("checkpoint acknowledgment rejected");
     expect(entries.at(-1)).toMatchObject({ data: { renderedPrefix: changed.trimEnd() } });
 
-    beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => entries });
+    beginSessionSystemPrompt(state);
     const restored = project(base, entries);
     expect(restored.restart).toBe(false);
     expect(restored.systemPrompt).toBe(base.trimEnd());
@@ -295,7 +327,7 @@ describe("system prompt series", () => {
         fixture.reload();
       }
       const state = fixture.state;
-      beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => entries });
+      beginSessionSystemPrompt(state);
       const recovered = project(base, entries);
       expect(recovered.restart).toBe(true);
       expect(recovered.update).toBeUndefined();
@@ -344,25 +376,6 @@ describe("system prompt series", () => {
       expect(prepareSessionSystemPrompt(input).update).toBeUndefined();
     },
   );
-
-  it("retires earlier overrides when switching to a route that rebuilds the prompt", async () => {
-    const entries: SessionEntry[] = [];
-    project(base);
-    await persist(entries);
-    project(changed, entries);
-    await persist(entries);
-    const state = fixture.state;
-    expect(
-      beginSessionSystemPrompt({
-        state,
-        routeKey: "other",
-        enabled: false,
-        getEntries: () => entries,
-      }),
-    ).toBe(true);
-    expect(state.systemPrompt).toBeUndefined();
-    expect(project(changed, entries).restart).toBe(true);
-  });
 
   it("restores the pinned series and delivers intervening changes", async () => {
     const entries: SessionEntry[] = [];
@@ -424,9 +437,47 @@ describe("session tool surface", () => {
     await fixture.persist(entries);
   }
 
+  it.each([false, true])(
+    "pins initial computer capabilities across turns (restored=%s)",
+    async (restored) => {
+      const entries: SessionEntry[] = [];
+      const first = createComputerTool({
+        pairedNodeComputerUse: { actions: ["screenshot", "list_windows"] },
+      });
+      const initial = JSON.stringify(definitions(surface([first])));
+      expect(initial).toBe(JSON.stringify(definitions([first])));
+      await persist(entries);
+      if (restored) {
+        fixture.reload();
+      }
+      const current = createComputerTool({
+        pairedNodeComputerUse: {
+          actions: ["launch_app"],
+          gateway: { configured: false, available: false },
+        },
+      });
+      expect(JSON.stringify(definitions([current]))).not.toBe(initial);
+      const next = surface([current], entries);
+      expect(JSON.stringify(definitions(next))).toBe(initial);
+      expect(next[0]!.execute).toBe(current.execute);
+      const unavailable = surface([], entries);
+      expect(JSON.stringify(definitions(unavailable))).toBe(initial);
+      expect((await unavailable[0]!.execute("unavailable", {})).details).toMatchObject({
+        gated: true,
+      });
+      expect(definitions(surface([current], entries, routeKey, "new-provider-config"))).toEqual(
+        definitions([current]),
+      );
+    },
+  );
+
   it("reuses admitted tool payloads when checkpointing a changed prompt", async () => {
     const entries: SessionEntry[] = [];
-    surface([tool("read"), tool("exec")]);
+    const parameters = publishRuntimeToolInputSchema({
+      type: "object",
+      properties: { path: { type: "string", description: "Path to read 🦞\ud800" } },
+    }).schema;
+    surface([tool("read", "Read a file", parameters), tool("exec")]);
     const write = (customType: string, data: unknown) => {
       const entry = {
         ...entryMetadata,
@@ -438,6 +489,8 @@ describe("session tool surface", () => {
       const expected = JSON.stringify(entry);
       const canonical = canonicalizeSessionEntry(entry);
       expect(JSON.stringify(canonical)).toBe(expected);
+      const saved = canonical.data as { tools: { name: string; parameters: unknown }[] };
+      expect(saved.tools.find((pin) => pin.name === "read")?.parameters).toBe(parameters);
       entries.push(canonical);
     };
     fixture.prepare("Base.", entries).commit();
@@ -574,20 +627,17 @@ describe("session tool surface", () => {
       if (restored) {
         fixture.reload();
       }
-      const stringify = vi.spyOn(normalization, "stableStringify");
-      try {
-        const unchanged = surface([tool("read", "New guidance", reordered)], entries);
-        expect(unchanged[0]?.description).toBe("Pinned description");
-        expect(fixture.state.pendingToolSurface).toBeUndefined();
-        expect(stringify).toHaveBeenCalledTimes(restored ? 1 : 0);
-        stringify.mockClear();
-        const replacement = surface([tool("read", "Changed schema", changed)], entries);
-        expect(replacement[0]?.description).toBe("Changed schema");
-        expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(replacement));
-        expect(stringify).toHaveBeenCalledTimes(restored ? 1 : 0);
-      } finally {
-        stringify.mockRestore();
-      }
+      using stringify = vi.spyOn(normalization, "stableStringify");
+      const unchanged = surface([tool("read", "New guidance", reordered)], entries);
+      expect(unchanged[0]?.description).toBe("Pinned description");
+      expect(fixture.state.pendingToolSurface).toBeUndefined();
+      surface([tool("read", "New guidance", reordered)], entries);
+      expect(stringify).toHaveBeenCalledTimes(restored ? 3 : 2);
+      stringify.mockClear();
+      const replacement = surface([tool("read", "Changed schema", changed)], entries);
+      expect(replacement[0]?.description).toBe("Changed schema");
+      expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(replacement));
+      expect(stringify).toHaveBeenCalledTimes(restored ? 2 : 1);
     },
   );
 });

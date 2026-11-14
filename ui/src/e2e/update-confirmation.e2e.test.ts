@@ -33,7 +33,7 @@ function button(root: Page | Locator, name: string) {
 }
 
 function confirmationDialog(page: Page) {
-  return page.getByRole("dialog", { name: "Update Gateway", exact: true });
+  return page.getByRole("dialog", { name: "Update and restart?", exact: true });
 }
 
 function gitStatus(sha: string, behind: number, available: Partial<UpdateAvailable> = {}) {
@@ -184,7 +184,7 @@ suite.define(() => {
           await restoreNative(page);
           await button(page, "Retry update").click();
           expect(await confirmationCopy(page).getAttribute("label")).toBe(
-            "Update Mac app + Gateway",
+            "Update Mac app and restart?",
           );
           await button(page, "Update Mac app and restart").click();
           expect(await page.locator("html").getAttribute("data-native-update-posted")).toBe("yes");
@@ -262,7 +262,7 @@ suite.define(() => {
           message: "Latest target unavailable.",
         });
         await confirmationCopy(page)
-          .getByText("Status could not be refreshed. Check your connection and try again.", {
+          .getByText("Couldn’t refresh update status. Check your connection and try again.", {
             exact: true,
           })
           .waitFor();
@@ -351,6 +351,7 @@ suite.define(() => {
       const updateIssue = updateCard(page);
       await updateIssue.waitFor();
       const dismissButton = updateIssue.locator(".sidebar-issues-panel__dismiss");
+      await updateIssue.hover();
       await dismissButton.click();
       await updateIssue.waitFor({ state: "detached" });
       await page.keyboard.press("Escape");
@@ -393,6 +394,7 @@ suite.define(() => {
       await inboxBadge.waitFor();
       await page.locator(".sidebar-issues-button").click();
       const updateIssue = updateCard(page);
+      await updateIssue.hover();
       await updateIssue.locator(".sidebar-issues-panel__dismiss").click();
       await updateIssue.waitFor({ state: "detached" });
       await page.keyboard.press("Escape");
@@ -448,6 +450,7 @@ suite.define(() => {
 
       await page.locator(".sidebar-issues-button").click();
       const scopeGuidance = page.locator('[data-attention-kind="scopeUpgrade"]');
+      await scopeGuidance.hover();
       await scopeGuidance.locator(".sidebar-issues-panel__dismiss").click();
       await scopeGuidance.waitFor({ state: "detached" });
       const updateIssue = updateCard(page);
@@ -525,7 +528,7 @@ suite.define(() => {
       await confirmationCopy(page).locator("openclaw-update-run-view").waitFor();
 
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
-      await button(page, "Close").click();
+      await button(page.locator("openclaw-modal-dialog openclaw-modal-actions"), "Close").click();
       await page.locator(".sidebar-issues-button").click();
       const updateIssue = updateCard(page);
       await updateIssue.locator("summary").click();

@@ -148,6 +148,11 @@ export async function installManagedPlugin(
         officialCatalog.entries,
         clawhubUrl,
       );
+      if (request.source === "local" && params.localArtifact) {
+        request.recordPath = params.localArtifact.sourcePath;
+        request.expectedIntegrity = params.localArtifact.integrity;
+        request.policySource = params.localArtifact.policySource;
+      }
       // Official installs retain catalog-owned recovery after resolving their package source.
       const planned = resolvePluginInstallRequestContext({
         source: request.source,
@@ -210,8 +215,8 @@ export async function installManagedPlugin(
           },
         },
         onCapabilityConsent: params.onCapabilityConsent,
-        requireCapabilityConsent: params.clawManaged === true,
-        requireClawHubTrust: params.clawManaged === true,
+        requireCapabilityConsent: params.templateManaged === true,
+        requireClawHubTrust: params.templateManaged === true,
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         beforePersistentEffect: prepareEffect,
         ...(params.request.acknowledgeCapabilities
@@ -292,7 +297,7 @@ export async function installManagedPlugin(
         throw new PluginInstallPersistedError(installed.pluginId, error);
       }
     };
-    return params.request.source === "clawhub" && !params.clawManaged
+    return params.request.source === "clawhub" && !params.templateManaged
       ? await withClawPackageLifecycleLease(
           { kind: "plugin", source: "clawhub", ref: params.request.packageName },
           performInstall,

@@ -1,4 +1,5 @@
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
+import { freezeTrustedJsonSnapshot } from "../../../shared/immutable-data.js";
 import {
   executeExistingOpenClawStateRead,
   getActiveOpenClawStateDatabaseReadSnapshot,
@@ -10,7 +11,6 @@ import {
   getSubagentActivationRuns,
   getSubagentSessionReadLookup,
   immutableSubagentRunSessionList,
-  isSubagentRunPayloadEvicted,
 } from "./subagent-registry-memory.js";
 import {
   acceptedFullSnapshot,
@@ -28,6 +28,7 @@ import {
 } from "./subagent-registry-read-cache.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentRunPayloadEvicted } from "./subagent-run-payload-facts.js";
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
 export type SubagentRunReadSelection = {
@@ -281,16 +282,16 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
   const { inMemoryRuns, fullCache } = params;
   const context = params.context ?? captureOpenClawStateWorkerContext();
   const signal = getAsyncWorkSignal();
-  const roots = Object.freeze(
-    [...new Set(params.sessionKeys.map((key) => key.trim()).filter(Boolean))].toSorted(),
-  );
+  const roots = [
+    ...new Set(params.sessionKeys.map((key) => key.trim()).filter(Boolean)),
+  ].toSorted();
   const links = getSubagentSessionReadLookup(inMemoryRuns).captureTopology();
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
-    {
+    freezeTrustedJsonSnapshot({
       type: "subagents.runs",
       scope: { kind: "descendants", sessionKeys: roots, liveTopology: links },
-    },
+    } as const),
     { context, current: true },
   );
   if (reply && (reply.projection === "maintenance" || !reply.descendants)) {

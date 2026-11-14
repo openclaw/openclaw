@@ -1,15 +1,40 @@
+import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { prepareInitialAssistantTranscript } from "../config/sessions/session-accessor.sqlite-transcript-message-append.js";
+import {
+  AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+  isAgentHarnessSessionKey,
+  isAgentHarnessSessionKeyOwnedBy,
+} from "../sessions/agent-harness-session-key.js";
 import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
 import { invalidSessionRequest, unavailableSessionRequest } from "./session-request-error.js";
+
+/** Reject reserved harness targets before preparation and again at commit. */
+export function validateSessionCreateTarget(
+  key: string | undefined,
+  entry: Pick<SessionEntry, "modelSelectionLocked"> | undefined,
+  authorizedHarnessCreation: boolean,
+) {
+  if (
+    key &&
+    isAgentHarnessSessionKey(key) &&
+    !authorizedHarnessCreation &&
+    (!entry || entry.modelSelectionLocked === true)
+  ) {
+    return invalidSessionRequest(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+  }
+  return undefined;
+}
 
 type FreshSessionConstraints = {
   params: Pick<
     CreateGatewaySessionParams,
     | "initialEntry"
+    | "initialCatalogContinuation"
     | "initialAssistantMessage"
     | "fork"
     | "atomicInitialization"
+    | "deferInitialization"
     | "deviceFolder"
     | "catalogTarget"
   >;
@@ -32,13 +57,17 @@ export function validateFreshSessionConstraints(input: FreshSessionConstraints) 
     (existingEntry !== undefined ||
       params.fork === true ||
       params.atomicInitialization === true ||
+      params.deferInitialization === true ||
       params.initialEntry?.initializationPending === true)
   ) {
     return invalidSessionRequest(
       "initial assistant transcript requires a new session without fork or deferred initialization",
     );
   }
-  if (params.initialEntry && existingEntry !== undefined) {
+  if (
+    (params.initialEntry || params.initialCatalogContinuation || params.deferInitialization) &&
+    existingEntry !== undefined
+  ) {
     return invalidSessionRequest("trusted initial session state requires a new session");
   }
   if (
@@ -81,4 +110,24 @@ export function withInitialAssistantTranscript<T extends object>(
         }
       : {}),
   };
+}
+
+/** Trusted initial state must come from the owner of its reserved session namespace. */
+export function resolveSessionCreateTrustedOwners(
+  params: CreateGatewaySessionParams,
+  explicitTargetKey: string | undefined,
+) {
+  const authorizedHarnessCreation = Boolean(
+    explicitTargetKey &&
+    params.initialEntry &&
+    normalizeOptionalAgentRuntimeId(params.authorizedAgentHarnessId) ===
+      normalizeOptionalAgentRuntimeId(params.initialEntry.agentHarnessId) &&
+    isAgentHarnessSessionKeyOwnedBy(explicitTargetKey, params.authorizedAgentHarnessId),
+  );
+  const authorizedPluginCreation = Boolean(
+    explicitTargetKey &&
+    params.initialEntry?.pluginOwnerId &&
+    params.authorizedPluginId === params.initialEntry.pluginOwnerId,
+  );
+  return { authorizedHarnessCreation, authorizedPluginCreation };
 }

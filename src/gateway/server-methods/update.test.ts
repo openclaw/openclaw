@@ -33,12 +33,14 @@ import {
   sendGatewayLifecycleNoticeMock as sendNotice,
   resolveGatewayLifecycleNoticeRouteMock as resolveNoticeRoute,
   scheduleGatewayRestartMock as scheduleRestart,
-  readGatewayOwnerLeaseMock,
+  readGatewayOwnerLeaseAsyncMock,
   invokeUpdateRun,
   captureUpdateRunPayload,
   mockGlobalInstallSurface,
   mockGitInstallSurface,
 } from "./update.test-harness.js";
+
+const restarting = "⏳ Preparing to restart OpenClaw… The update is not complete yet.";
 
 function expectHandoff(fields: Record<string, unknown>) {
   expect(startHandoff).toHaveBeenCalledWith(expect.objectContaining(fields));
@@ -309,7 +311,7 @@ describe("update.run acknowledgement", () => {
     ).toEqual(["requested", "staging", "validating"]);
     expect(sendNotice).toHaveBeenCalledTimes(2);
     expect(sendNotice).toHaveBeenLastCalledWith(
-      expect.objectContaining({ message: "⏳ Restarting OpenClaw…" }),
+      expect.objectContaining({ message: restarting }),
       expect.any(Object),
     );
   });
@@ -341,7 +343,7 @@ describe("update.run acknowledgement", () => {
             type: "message",
             message: expect.objectContaining({
               idempotencyKey: `update-run-activating:${runId}`,
-              content: [{ type: "text", text: "⏳ Restarting OpenClaw…" }],
+              content: [{ type: "text", text: restarting }],
             }),
           }),
         );
@@ -686,7 +688,7 @@ describe("update.run prepared foreground handoff", () => {
   });
 
   it("does not hand off an unverified foreground process", async () => {
-    readGatewayOwnerLeaseMock.mockReturnValueOnce(undefined);
+    readGatewayOwnerLeaseAsyncMock.mockResolvedValueOnce(undefined);
     const payload = await captureUpdateRunPayload();
     expect(payload?.ok).toBe(false);
     expect(startHandoff).not.toHaveBeenCalled();

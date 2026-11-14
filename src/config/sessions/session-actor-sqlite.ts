@@ -30,7 +30,6 @@ import type {
   SessionActorAuthorityFacts,
   SessionActorCommandContext,
   SessionActorCommitObserver,
-  SessionActorHotState,
   SessionActorOperations,
   SessionActorOutcome,
   SessionActorPhase,
@@ -43,6 +42,7 @@ import { SessionActorReadInvalidatedError } from "./session-actor-read-error.js"
 import {
   restoreSessionActorCommittedOutcome,
   type SessionActorCommittedWireOutcome,
+  type SessionActorEntryReference,
 } from "./session-actor-receipt.js";
 import type { createSessionActorReplica } from "./session-actor-replica.js";
 import { publishCommittedSessionTranscriptReceipts } from "./session-transcript-authority.js";
@@ -93,8 +93,6 @@ const executePhase: {
   appendTranscriptEvent: (scope, input) =>
     scope.execute({ type: "session.actor.appendTranscriptEvent", input }),
   completeTurn: (scope, input) => scope.execute({ type: "session.actor.completeTurn", input }),
-  deliveryPending: (scope, input) =>
-    scope.execute({ type: "session.actor.deliveryPending", input }),
   deliverySettled: (scope, input) =>
     scope.execute({ type: "session.actor.deliverySettled", input }),
   patch: (scope, input) => scope.execute({ type: "session.actor.patch", input }),
@@ -125,7 +123,7 @@ export function createSqliteSessionActorExecutor(
       snapshot: SessionActorAuthorityFacts,
     ) => void,
     beforeFinalGrant?: (conversationPublication: unknown) => void,
-    entryReference?: () => SessionActorHotState | undefined,
+    entryReference?: () => SessionActorEntryReference | undefined,
   ) => {
     let actorAdmissionSeen = false;
     return (
@@ -236,7 +234,7 @@ export function createSqliteSessionActorExecutor(
     let native: NativeAdmission | undefined;
     let previousEntry: SessionActorAuthorityFacts["entry"];
     let capturedPreviousEntry = false;
-    let entryReference: SessionActorHotState | undefined;
+    let entryReference: SessionActorEntryReference | undefined;
     let running: Promise<Outcome> | undefined;
     let committed: Extract<Outcome, { kind: "committed" }> | undefined;
     let candidate: unknown;
@@ -373,6 +371,9 @@ export function createSqliteSessionActorExecutor(
                       true,
                       entry,
                       entry,
+                      new Set(
+                        committed.receipt.postimage.members.map((member) => member.identityId),
+                      ),
                     );
                     if (entry && (previousEntry || !metadata?.length)) {
                       // Metadata publication owns initial age facts; later settlement can release claims.
@@ -572,10 +573,13 @@ export function createSqliteSessionActorExecutor(
     }
     return outcome;
   };
-  const snapshot = (authority: SessionActorAuthority): SessionActorHotState | undefined => {
+  const snapshot = <State extends SessionActorAuthorityFacts>(
+    authority: SessionActorAuthority,
+    readFacts: () => State | undefined,
+  ): State | undefined => {
     params.assertReadable();
     authority.assertCurrent();
-    const installed = fenced ? undefined : params.replica.read();
+    const installed = fenced ? undefined : readFacts();
     if (installed) {
       authority.authorize("commit", installed);
       authority.assertCurrent();
@@ -584,7 +588,8 @@ export function createSqliteSessionActorExecutor(
     return installed;
   };
   return {
-    snapshot,
+    snapshot: (authority) => snapshot(authority, params.replica.read),
+    snapshotEntry: (authority) => snapshot(authority, params.replica.readEntry),
     read,
     command,
     retain: params.transport.retain?.bind(params.transport),

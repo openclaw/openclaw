@@ -72,6 +72,8 @@ async function assembleWithCapturedHookCtx({
     ...attemptOverrides,
   };
   const captured: PluginHookAgentContext[] = [];
+  const prompts: string[] = [];
+  const continuities: unknown[] = [];
   const hookRunner = createHookRunner({
     hooks: [],
     plugins: [],
@@ -81,8 +83,13 @@ async function assembleWithCapturedHookCtx({
         hookName: "before_prompt_build",
         source: "test",
         requiresToolAuthority,
-        handler: async (_event: unknown, ctx: PluginHookAgentContext) => {
+        handler: async (
+          event: { prompt: string; continuity?: unknown },
+          ctx: PluginHookAgentContext,
+        ) => {
           captured.push(ctx);
+          prompts.push(event.prompt);
+          continuities.push(event.continuity);
           return hookResult;
         },
       },
@@ -110,7 +117,7 @@ async function assembleWithCapturedHookCtx({
     },
   });
   expect(session.messages).toEqual(priorMessages);
-  return { captured, systemPrompt };
+  return { captured, prompts, continuities, systemPrompt };
 }
 
 describe("prompt-build hook context input provenance", () => {
@@ -172,6 +179,29 @@ describe("prompt-build hook context input provenance", () => {
       expect(applyPolicy).toHaveBeenCalledExactlyOnceWith(undefined, false);
     },
   );
+
+  it.each([{ requiresToolAuthority: undefined }, { requiresToolAuthority: true }] as const)(
+    "shows prompt hooks the user's request on a reload continuation (authority=$requiresToolAuthority)",
+    async ({ requiresToolAuthority }) => {
+      const { prompts } = await assembleWithCapturedHookCtx({
+        attempt: {
+          prompt: "A plugin was reloaded while you were working. Continue.",
+          pluginRuntimeRefreshUserPrompt: "Recall the Orion launch checklist",
+          toolAuthorityFingerprint: "authority-test",
+        },
+        requiresToolAuthority,
+      });
+      expect(prompts).toEqual(["Recall the Orion launch checklist"]);
+    },
+  );
+
+  it("reports a fresh embedded session to authorized prompt enrichment", async () => {
+    const { continuities } = await assembleWithCapturedHookCtx({
+      attempt: { toolAuthorityFingerprint: "authority-test" },
+      requiresToolAuthority: true,
+    });
+    expect(continuities).toEqual([{ state: "fresh", history: "none" }]);
+  });
 
   it.each([
     undefined,

@@ -7,9 +7,11 @@ import type {
   SessionParticipant,
   SessionParticipantIdentity,
 } from "../../packages/gateway-protocol/src/index.js";
+import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import {
+  MAX_SESSION_PARTICIPANTS,
   resolveSessionCreatorActor,
   sessionCreatorProfileId,
   type SessionActor,
@@ -26,6 +28,7 @@ import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveUserProfileReference } from "../state/user-profile-list.js";
+import type { UserProfileIdentity } from "../state/user-profiles.types.js";
 import { buildControlUiResourcePath } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
@@ -105,6 +108,50 @@ export function createSessionIdentityProjection() {
   };
 }
 
+/** Profile publications invalidate display facts independently of stored session metadata. */
+export function projectSessionRowProfiles(input: {
+  entry: SessionEntry | undefined;
+  cfg: OpenClawConfig;
+  userProfileIdentityById: Map<string, SessionActorProfileIdentity | undefined>;
+  configuredAgentIds?: ReadonlySet<string>;
+  identityProjection?: SessionIdentityProjection;
+}) {
+  const { entry, cfg, userProfileIdentityById, configuredAgentIds, identityProjection } = input;
+  const owner = (identityProjection?.owner ?? projectSessionOwner)(
+    entry,
+    userProfileIdentityById,
+    cfg,
+    configuredAgentIds,
+  );
+  const projected = (identityProjection?.participants ?? projectSessionParticipants)(
+    entry,
+    userProfileIdentityById,
+    cfg,
+  );
+  const ownerKey = owner?.actor.identity && JSON.stringify(owner.actor.identity);
+  const participants = [...projected].flatMap(([key, participant]) =>
+    key === ownerKey ? [] : [participant],
+  );
+  return {
+    createdActor: projectSessionActor(
+      resolveSessionCreatorActor(entry?.createdActor),
+      userProfileIdentityById,
+      cfg,
+      Boolean(sessionCreatorProfileId(entry?.createdActor)),
+    ),
+    owner,
+    // Keep the released v4 summary stable; expanded identities are additive for newer clients.
+    participants: participants.length
+      ? participants.slice(0, SESSION_PARTICIPANT_LIMIT)
+      : undefined,
+    expandedParticipants: participants.length
+      ? participants.slice(0, MAX_SESSION_PARTICIPANTS)
+      : undefined,
+    participantCount: participants.length || undefined,
+    archivedBy: projectSessionActor(entry?.archivedBy, userProfileIdentityById, cfg),
+  };
+}
+
 export function resolveSessionProfileId(
   id: string,
   profiles: Map<string, SessionActorProfileIdentity | undefined>,
@@ -147,7 +194,7 @@ export function projectSessionParticipant(
   return {
     identity: { type: "profile", id },
     ...(profile?.label ? { label: profile.label } : {}),
-    ...(profile?.hasUploadedAvatar ? { avatarUrl: profile.avatarUrl } : {}),
+    ...(profile ? { avatarUrl: profile.avatarUrl } : {}),
   };
 }
 
@@ -257,6 +304,31 @@ export function projectSessionParticipants(
     participants.set(JSON.stringify(participant.identity), participant);
   }
   return participants;
+}
+
+/** Match canonical owners or profile participants, never mentions or display-reference prefixes. */
+export function filterSessionEntriesByProfile<T extends { entry: SessionEntry }>(params: {
+  entries: T[];
+  profile: UserProfileIdentity | undefined;
+}): T[] {
+  const profile = params.profile;
+  if (!profile) {
+    return [];
+  }
+  return params.entries.filter(({ entry }) => {
+    const owner = entry.owner?.actor;
+    const ownerId = owner
+      ? owner.type === "human"
+        ? normalizeOptionalString(owner.id)
+        : undefined
+      : sessionCreatorProfileId(entry.createdActor);
+    return (
+      (ownerId !== undefined && profile.aliases.has(ownerId)) ||
+      (entry.participants ?? []).some(
+        ({ identity }) => identity.type === "profile" && profile.aliases.has(identity.id),
+      )
+    );
+  });
 }
 
 /** Participation, creation, and responsibility are associations, never access grants. */

@@ -77,6 +77,8 @@ async function proveWorkerCreation(): Promise<void> {
   let oc: OpenClaw | undefined;
   try {
     const record: WorkerEnvironmentServiceRecord = {
+      resourceReceipt: null,
+      retention: null,
       environmentId: "worker-sdk-e2e",
       providerId: "testbox",
       profileId: "development",
@@ -94,8 +96,8 @@ async function proveWorkerCreation(): Promise<void> {
     };
     const context = {
       workerEnvironmentService: {
-        create: async () => record,
-      } satisfies Pick<WorkerEnvironmentServiceContract, "create">,
+        createWithRequest: async () => record,
+      } satisfies Pick<WorkerEnvironmentServiceContract, "createWithRequest">,
     } as unknown as GatewayRequestHandlerOptions["context"];
     gateway.setRequestHandler((socket, frame) => {
       void (async () => {

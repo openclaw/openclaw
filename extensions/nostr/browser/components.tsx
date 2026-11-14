@@ -41,28 +41,3 @@ export function SettingsStatus(props: { kind: "ok" | "muted" | "danger"; label: 
     </span>
   );
 }
-
-export function SettingsSection(props: {
-  title: string;
-  description: string;
-  count?: number;
-  children: JSX.Element;
-}) {
-  return (
-    <section class="settings-section">
-      <div class="settings-section__header">
-        <div class="settings-section__copy">
-          <h2 class="settings-section__heading">
-            {props.title}
-            <Show when={props.count !== undefined}>
-              {" "}
-              <span class="settings-count">{props.count}</span>
-            </Show>
-          </h2>
-          <p class="settings-section__desc">{props.description}</p>
-        </div>
-      </div>
-      <div class="settings-group">{props.children}</div>
-    </section>
-  );
-}

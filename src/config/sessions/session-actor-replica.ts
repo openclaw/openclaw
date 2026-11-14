@@ -657,14 +657,10 @@ export function createSessionActorReplica(params: {
       return undefined;
     }
   };
-  const currentToken = (state: SessionActorHotState): string | undefined => {
-    const { database, sessionKey } = target;
-    return scopedWriteToken({ database, sessionKey }, state.dependencySessionIds);
-  };
   const accepts = (
     state: SessionActorHotState,
     expectedGeneration: string | undefined,
-    writeToken = currentToken(state),
+    writeToken = scopedWriteToken(target, state.dependencySessionIds),
   ): boolean =>
     expectedGeneration !== undefined &&
     expectedGeneration === generation() &&
@@ -692,12 +688,12 @@ export function createSessionActorReplica(params: {
 
   return {
     /** Borrow the immutable revision only after validating its current physical generation. */
-    read(): SessionActorHotState | undefined {
+    read(this: void): SessionActorHotState | undefined {
       params.lifetime.assertReadable();
       if (closed || !owned.snapshot) {
         return undefined;
       }
-      const token = currentToken(owned.snapshot);
+      const token = scopedWriteToken(target, owned.snapshot.dependencySessionIds);
       if (token === undefined) {
         // An unrelated unsettled writer can temporarily fence disclosure without
         // discarding this session's still-valid postimage.
@@ -711,6 +707,8 @@ export function createSessionActorReplica(params: {
       touch(owned);
       return owned.snapshot;
     },
+    // Entry receipts belong to the physical database, not one worker connection.
+    readEntry: () => (!closed ? readCurrentEntryCell(target)?.state : undefined),
     beginRead() {
       const expectedGeneration = begin();
       return (state: SessionActorHotState) => install(state, expectedGeneration);
@@ -718,11 +716,12 @@ export function createSessionActorReplica(params: {
     beginCommand() {
       const previous = owned.snapshot;
       const previousTranscript = owned.transcript;
+      const reference = previous ?? (owned.entry?.snapshots === "full" ? owned.entry : undefined);
       const previousGeneration = owned.generation;
       const expectedGeneration = begin();
       return {
         // Compression only: the worker must confirm this exact revision before using it.
-        preimage: previousGeneration === expectedGeneration ? previous : undefined,
+        preimage: previousGeneration === expectedGeneration ? reference : undefined,
         settle<Value>(outcome: SessionActorOutcome<Value>): boolean {
           if (outcome.kind === "rolled-back") {
             const restored = previous !== undefined && install(previous, previousGeneration);

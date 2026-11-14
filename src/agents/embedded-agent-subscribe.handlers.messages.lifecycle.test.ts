@@ -289,6 +289,32 @@ const preamble = (progressText: string, phase: string, itemId = "item-commentary
 describe("handleMessageUpdate text signatures", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("preserves commentary snapshots when duplicate CJK paragraphs diverge", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_000);
+    const context = createMessageUpdateContext({ onAgentEvent });
+    let text = "";
+    for (const [delta, expected] of [
+      ["完成 café。\r\n\r\n", "完成 café。"],
+      ["完成 café。", "完成 café。"],
+      [" 新信息", "完成 café。\r\n\r\n完成 café。 新信息"],
+      ["\r\n\r\n<final>Done</final>", "完成 café。\r\n\r\n完成 café。 新信息\r\n\r\nDone"],
+      [
+        "\n<think>hidden</think> Visible",
+        "完成 café。\r\n\r\n完成 café。 新信息\r\n\r\nDone\n Visible",
+      ],
+    ]) {
+      text += delta;
+      const partial = commentaryPartial(text);
+      await updateMessage(context, {
+        message: partial,
+        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial },
+      });
+      expect(events().at(-1)?.data).toMatchObject({ text: expected, replace: true });
+      vi.setSystemTime(Date.now() + 80);
+    }
+  });
+
   it("emits the full incrementally extracted reasoning value on every delta", async () => {
     const emitReasoningStream = vi.fn();
     const context = createMessageUpdateContext({ emitReasoningStream });

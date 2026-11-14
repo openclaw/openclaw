@@ -89,6 +89,8 @@ describe("plugin manifest backup resources", () => {
     ["non-array declarations", {}],
     ["unknown disposition", [resource({ disposition: "exclude" })]],
     ["unknown scope", [resource({ scope: "workspace" })]],
+    ["unknown backup profile", [resource({ disposition: "regenerable", profile: "unknown" })]],
+    ["profile-limited durable data", [resource({ profile: "local-companion" })]],
     ["owner-controlled extra keys", [resource({ pluginId: "spoofed" })]],
     ["missing keys", [{ disposition: "include", relativePath: "owner" }]],
     ["unsupported database family", [resource({ databaseFamily: "unknown" })]],
@@ -109,7 +111,8 @@ describe("plugin manifest backup resources", () => {
       scope: "agent",
       relativePath: "backup-owner/cache",
     });
-    const enabled = createPluginFixture([included, regenerable, included]);
+    const companion = { ...regenerable, profile: "local-companion" };
+    const enabled = createPluginFixture([included, regenerable, companion, included, companion]);
     const disabled = createPluginFixture(
       [{ ...regenerable, relativePath: "disabled-owner/cache" }],
       {
@@ -130,6 +133,7 @@ describe("plugin manifest backup resources", () => {
       pluginRoots: [],
       resources: [
         { pluginId: enabled.id, ...regenerable },
+        { pluginId: enabled.id, ...companion },
         { pluginId: enabled.id, ...included },
       ],
     });
@@ -158,7 +162,13 @@ describe("plugin manifest backup resources", () => {
 
   it("retains only database resources when plugins are disabled", () => {
     const database = resource({ databaseFamily: "state" });
-    const fixture = createPluginFixture([database, resource({ relativePath: "cache" })]);
+    const regenerable = resource({ disposition: "regenerable" });
+    const fixture = createPluginFixture([
+      database,
+      resource({ relativePath: "cache" }),
+      regenerable,
+      { ...regenerable, profile: "local-companion" },
+    ]);
     expect(fixture.inventory({ enabled: false })).toEqual({
       pluginRoots: [],
       resources: [{ pluginId: fixture.id, ...database }],

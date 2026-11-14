@@ -18,7 +18,11 @@ import {
   type ConnectionSessionRows,
 } from "./session-ancestor-references.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
-import { createSessionRowDeltaDiffer } from "./session-row-delta-fields.js";
+import {
+  createSessionRowDeltaDiffer,
+  prepareSessionRowDeltaFields,
+} from "./session-row-delta-fields.js";
+import { sessionRowId } from "./session-row-identity.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -99,7 +103,8 @@ export function prepareSessionEventProjection(
   projection: SessionRowProjection,
   read?: SessionRowReadView,
   prepared?: {
-    ancestors: ReturnType<SessionRowProjection["ancestorRows"]>;
+    /** Omission resolves lazily; explicit undefined means ancestry could not be certified. */
+    ancestors?: ReturnType<SessionRowProjection["ancestorRows"]>;
     /** The transcript publisher owns the message graph for synchronous fanout. */
     encodeMessage?: true;
     /** The producer owns a plain envelope with stable fields throughout synchronous fanout. */
@@ -170,7 +175,10 @@ export function prepareSessionEventProjection(
           }
         : undefined;
     const presentRecipient = prepareSessionRowPublication(projection, Date.now(), rows);
-    const ancestors = prepared ? prepared.ancestors : projection.ancestorRows(record, read);
+    const ancestors =
+      prepared && "ancestors" in prepared
+        ? prepared.ancestors
+        : projection.ancestorRows(record, read);
     const enrichment = { includeDerivedTitles: true, includeLastMessage: true };
     const ancestorRevision = randomUUID();
     const audiences = new Map<
@@ -208,7 +216,7 @@ export function prepareSessionEventProjection(
       }
       // Resolve each recipient's live authority before reusing this synchronous publication.
       const recipient = presentRecipient(client, runProjector);
-      const audienceKey = recipient.getAudienceKey();
+      const audienceKey = `scope:${recipient.getAudienceKey()}`;
       let audience = audiences.get(audienceKey);
       if (!audience) {
         const presentation = recipient.getPresentation();
@@ -217,23 +225,44 @@ export function prepareSessionEventProjection(
           return undefined;
         }
         const hiddenAncestors: Array<{ key: string; histories: Map<object, object> }> = [];
+        const ancestorRowIds: number[] | undefined = prepared?.reuseEnvelope ? [] : undefined;
         const ancestorRows = ancestors?.every((ancestor) => projection.isCurrent(ancestor))
           ? ancestors.flatMap((ancestor) => {
-              if (presentation.sharing.entryFilter?.(ancestor.key, ancestor.entry) === false) {
+              const target = presentation.target({
+                key: ancestor.key,
+                agentId: ancestor.agentId,
+                storePath: ancestor.storeTarget.storePath,
+              });
+              if (!target || !presentation.sharing.canReadTarget(target)) {
                 hiddenAncestors.push({ key: ancestor.key, histories: new Map() });
                 return [];
               }
               const presented = presentation.present(ancestor, enrichment);
+              if (presented) {
+                ancestorRowIds?.push(sessionRowId(presented));
+              }
               return presented ? [prepareSessionAncestor(presented)] : [];
             })
           : undefined;
-        audience = {
+        // Different identities can receive identical immutable rows. Share delivery work
+        // only after current disclosure, including every visible and hidden ancestor.
+        const contentKey = prepared?.reuseEnvelope
+          ? JSON.stringify([
+              sessionRowId(row),
+              ancestorRows && ancestorRowIds,
+              hiddenAncestors.map((ancestor) => ancestor.key),
+            ])
+          : undefined;
+        audience = (contentKey === undefined ? undefined : audiences.get(contentKey)) ?? {
           row,
           ancestors: ancestorRows,
           hiddenAncestors,
           ancestorInvalidations: ancestorRows ? undefined : new Map(),
           deliveries: [new WeakMap(), new WeakMap()],
         };
+        if (contentKey !== undefined) {
+          audiences.set(contentKey, audience);
+        }
         audiences.set(audienceKey, audience);
       }
       const rowDeltas = hasGatewayClientCap(
@@ -251,6 +280,9 @@ export function prepareSessionEventProjection(
       let delivery = deliveries.get(references.history);
       if (!delivery) {
         const { row } = audience;
+        if (rowDeltas) {
+          prepareSessionRowDeltaFields(row, record.materialized.publicationIdentity);
+        }
         const plan = references.prepareDelivery(
           row,
           audience.ancestors,
@@ -297,10 +329,17 @@ export function prepareSessionEventProjection(
           variants: [],
           envelope,
           plan,
-          serializeSession: () =>
-            (sessionJSON ??= plan.rows
-              ? JSON.stringify(plan.rows.wire[0])
-              : serializeSessionRow(row)),
+          serializeSession: () => {
+            if (sessionJSON === undefined) {
+              const encoded = serializeSessionRow(row);
+              const wire = plan.rows?.wire[0];
+              // Patches already carry their encoding; full wrappers vary only by history.
+              sessionJSON = wire
+                ? `${JSON.stringify({ key: wire.key, agentId: wire.agentId, version: wire.version }).slice(0, -1)},"full":${encoded}${"retain" in wire ? ',"retain":false' : ""}}`
+                : encoded;
+            }
+            return sessionJSON;
+          },
           delivered: (viewer) => connection.references(viewer).deliver(plan),
         };
         deliveries.set(references.history, delivery);

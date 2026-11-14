@@ -3,17 +3,24 @@ import {
   INTERNAL_PLUGIN_SETTINGS_PATH_PARAM,
   INTERNAL_PLUGINS_PATH_PARAM,
   pathForRoute,
+  pathForPluginCatalogEntry,
+  pluginCatalogIdFromPath,
   restoreBridgedRouteLocation,
 } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
 
+export type PluginsInventoryRead = {
+  readonly gateway: ApplicationContext["gateway"];
+  readonly gatewaySnapshot: ApplicationGatewaySnapshot;
+  readonly generation: number | undefined;
+  readonly signal: AbortSignal;
+  readonly result: Promise<{ value: PluginListResult } | { error: unknown }>;
+};
+
 export type PluginsRouteData = {
-  gateway: ApplicationContext["gateway"];
-  gatewaySnapshot: ApplicationGatewaySnapshot;
-  result: PluginListResult | null;
-  error: string | null;
   location: RouteLocation;
+  inventory?: PluginsInventoryRead;
 };
 
 export function pluginsRouteLocation(location: RouteLocation): RouteLocation {
@@ -31,17 +38,25 @@ export function canonicalPluginsRouteLocation(
   const settingsPath = pathForRoute("plugin-settings", basePath);
   const legacyTab = searchParams.get("tab");
   const supportedAdvancedTab = location.pathname === settingsPath && legacyTab === "advanced";
-  const hadLegacyTab = searchParams.has("tab") && !supportedAdvancedTab;
+  const hadLegacyTab = legacyTab !== null && !supportedAdvancedTab;
   if (hadLegacyTab) {
     searchParams.delete("tab");
   }
-  const search = searchParams.toString();
   const isLegacyDiscoverPath = location.pathname === `${settingsPath}/discover`;
   const legacyDiscover = isLegacyDiscoverPath || legacyTab === "discover";
-  const canonical: RouteLocation = {
-    pathname: legacyDiscover ? pathForRoute("plugins", basePath) : location.pathname,
+  const catalogId = pluginCatalogIdFromPath(location.pathname, basePath);
+  const pathname = legacyDiscover
+    ? pathForRoute("plugins", basePath)
+    : catalogId
+      ? pathForPluginCatalogEntry(catalogId, basePath)
+      : location.pathname;
+  if (!hadLegacyTab && pathname === location.pathname) {
+    return null;
+  }
+  const search = searchParams.toString();
+  return {
+    pathname,
     search: search ? `?${search}` : "",
     hash: location.hash,
   };
-  return hadLegacyTab || isLegacyDiscoverPath ? canonical : null;
 }

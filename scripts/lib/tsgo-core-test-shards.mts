@@ -3,6 +3,8 @@
  * time but never block CI, so unrelated test-only PRs keep landing while a
  * rebalance is scheduled.
  */
+import { isTestLineAllocationPath } from "./changed-path-facts.mjs";
+
 const TSGO_CORE_TEST_MAX_ROOTS = 720;
 
 export const TSGO_CORE_TEST_SHARDS = [
@@ -120,9 +122,9 @@ export const TSGO_CORE_TEST_SHARDS = [
     config: "test/tsconfig/tsconfig.core.test.ui-components.json",
   },
   {
-    name: "claws",
+    name: "templates",
     group: "src",
-    config: "test/tsconfig/tsconfig.core.test.claws.json",
+    config: "test/tsconfig/tsconfig.core.test.templates.json",
   },
   {
     name: "ui-e2e-chat",
@@ -199,10 +201,11 @@ export function resolveChangedCiTsgoInputs(
   paths: readonly string[],
   exists?: (file: string) => boolean,
 ): readonly string[] | undefined {
-  // Documentation and UI styles cannot change compiler inputs. Keep data and
-  // configuration paths for the conservative admission below.
+  // Documentation, UI styles and numeric test allocations cannot change compiler
+  // inputs. Other data and configuration retain conservative admission.
   const compilerPaths = paths.filter(
-    (file) => !/\.mdx?$/u.test(file) && !/^ui\/.+\.css$/u.test(file),
+    (file) =>
+      !/\.mdx?$/u.test(file) && !/^ui\/.+\.css$/u.test(file) && !isTestLineAllocationPath(file),
   );
   if (
     compilerPaths.length === 0 ||

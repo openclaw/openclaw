@@ -23,9 +23,10 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
-  hasSupportedGitHubPublicationTarget,
+  qualifyGitHubPublicationSource,
   prepareGitHubPublicationSession,
   prepareGitHubPublicationWorkspaceOwner,
+  readGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
 import {
   readGitHubPublicationFact,
@@ -272,6 +273,11 @@ it.each([true, false])(
     sql.calibrate();
     expect(await prepareGitHubPublicationAvailability(session)).toBe(present);
     sql.expectIdle();
+    if (!present) {
+      await expect(readGitHubPublicationWorktreeOwner(session)).rejects.toThrow(
+        "GitHub publication session lifecycle changed.",
+      );
+    }
   },
 );
 
@@ -376,8 +382,12 @@ it.each(["session", "identity", "discovery"])(
         },
       );
       expect(
-        await hasSupportedGitHubPublicationTarget(session, () => {}, prepared.readCurrent),
-      ).toBe(true);
+        await qualifyGitHubPublicationSource(session, () => {}, prepared.readCurrent),
+      ).toMatchObject({
+        ok: true,
+        custody: { kind: "qualified", source: "worktree" },
+        target: { kind: "supported" },
+      });
     } else {
       expect(await prepareGitHubPublicationAvailability(session)).toBe(true);
     }

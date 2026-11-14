@@ -405,8 +405,8 @@ describe("embedded retry transcript ownership", () => {
                 customType: "incomplete-tool-call",
                 content: expect.stringContaining(
                   failure === "output-limit-empty"
-                    ? "The model response reached the provider's output limit"
-                    : "Split the remaining work into smaller tool calls",
+                    ? "The model response reached the provider's output limit (max_output_tokens) before producing an answer. Continue with a shorter response and smaller tool calls only if the original request allows continuing that work. Use recorded tool results to determine what completed, and do not repeat completed actions. Inspect state only for actions whose outcomes are unknown."
+                    : "Split the remaining work into smaller tool calls with shorter arguments only if the original request allows continuing that work. Use recorded tool results to determine what completed, and do not repeat completed actions. Inspect state only for actions whose outcomes are unknown.",
                 ),
                 details: {
                   reason: "max_output_tokens",

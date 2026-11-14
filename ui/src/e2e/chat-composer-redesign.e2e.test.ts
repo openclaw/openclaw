@@ -10,7 +10,6 @@ import {
   bottom,
   layoutBox,
   right,
-  twoFrames,
   exactButton,
   polledFocus,
   polledAttribute,
@@ -62,7 +61,7 @@ suite.define(() => {
           await polledCount(page.locator(".agent-chat__composer-status-band")).toBe(0);
           if (message) {
             await polledText(setupBanner).toContain(message);
-            const setupAction = setupBanner.getByRole("button", { name: "Connect an AI provider" });
+            const setupAction = setupBanner.getByRole("button", { name: "Set up a model" });
             await polledVisible(setupAction).toBe(true);
             expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           } else {
@@ -81,8 +80,11 @@ suite.define(() => {
           await revealChatModelOption(page, "openai/gpt-5.5");
           await polledVisible(option).toBe(true);
           if (blocked) {
-            await polledAttribute(option, "data-chat-model-setup").toBe("true");
-            await option.click();
+            expect(await option.isDisabled()).toBe(true);
+            await page.locator("[data-chat-model-search]").fill("");
+            await page
+              .locator('[data-chat-model-auth-state] [data-chat-model-setup="true"]')
+              .click();
             await page.waitForURL("**/settings/model-providers?connect=1");
           } else {
             expect(await option.isDisabled()).toBe(true);
@@ -115,7 +117,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await exactButton(page, "Stop generating").waitFor();
+      await exactButton(page, "Stop").waitFor();
       await gateway.emitGatewayEvent("chat", {
         errorDetail: {
           provider: "openai",
@@ -164,7 +166,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps mobile picker panels above an attachment-expanded composer", async () => {
+  it("keeps mobile picker panels reachable with an attachment-expanded composer", async () => {
     await suite.withPage({ viewport: { width: 393, height: 852 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -196,12 +198,18 @@ suite.define(() => {
           layoutBox(page.locator(menu)),
           layoutBox(visibleTrigger),
         ]);
-        // Fixed pickers use the shared 16px mobile gutter.
-        expect(menuBox.x).toBeCloseTo(16, 0);
-        expect(right(menuBox)).toBeCloseTo(393 - 16, 0);
-        expect(menuBox.width).toBeCloseTo(393 - 2 * 16, 0);
         expect(menuBox.y).toBeGreaterThanOrEqual(0);
-        expect(bottom(menuBox)).toBeLessThanOrEqual(composerBox.y + 1);
+        expect(bottom(menuBox)).toBeLessThanOrEqual(853);
+        if (kind === "model") {
+          expect(menuBox.x).toBeGreaterThanOrEqual(0);
+          expect(right(menuBox)).toBeLessThanOrEqual(394);
+        } else {
+          // The effort menu remains anchored above the composer.
+          expect(menuBox.x).toBeCloseTo(16, 0);
+          expect(right(menuBox)).toBeCloseTo(393 - 16, 0);
+          expect(menuBox.width).toBeCloseTo(393 - 2 * 16, 0);
+          expect(bottom(menuBox)).toBeLessThanOrEqual(composerBox.y + 1);
+        }
         expect(bottom(triggerBox)).toBeLessThanOrEqual(853);
         expect(bottom(footerBox)).toBeLessThanOrEqual(853);
         await page.keyboard.press("Escape");
@@ -216,6 +224,34 @@ suite.define(() => {
       await polledFocus(focusedEffortControl.first()).toBe(true);
       await page.keyboard.press("Escape");
       await polledFocus(effort).toBe(true);
+
+      await page.setViewportSize({ width: 390, height: 900 });
+      await composer.locator('[data-chat-model-select="true"]').click();
+      const modelMenu = composer.locator(".chat-controls__model-menu");
+      const search = modelMenu.locator("[data-chat-model-search]");
+      const result = modelMenu.locator('[data-chat-model-option="openai/gpt-5.5"]').first();
+      // A mobile keyboard reduces and may pan the visual viewport without resizing layout.
+      for (const offsetTop of [0, 48, 520]) {
+        await page.evaluate((offset) => {
+          for (const [key, value] of Object.entries({ height: 380, offsetTop: offset })) {
+            Object.defineProperty(window.visualViewport!, key, { configurable: true, value });
+          }
+          window.visualViewport!.dispatchEvent(new Event("resize"));
+          window.visualViewport!.dispatchEvent(new Event("scroll"));
+        }, offsetTop);
+        await search.fill("gpt-5.5");
+        await waitForControlUiProofSurface(modelMenu, [search, result]);
+        await expect
+          .poll(async () => {
+            const boxes = await Promise.all([search.boundingBox(), result.boundingBox()]);
+            return boxes.every(
+              (box) => box && box.y >= offsetTop && bottom(box) <= offsetTop + 380,
+            );
+          })
+          .toBe(true);
+      }
+      await result.click();
+      await polledVisible(modelMenu).toBe(false);
     });
   });
 
@@ -236,9 +272,44 @@ suite.define(() => {
         microphonePicker.evaluate((node) => node.getBoundingClientRect().width);
       await expect.poll(pickerWidth).toBe(0);
       await page.emulateMedia({ reducedMotion: "no-preference" });
+      // Probe the actual hover transition inside its delay, independent of
+      // browser round trips that can outlast the dwell time on a loaded host.
+      const hoverDelay = await microphonePickerShell.evaluateHandle((node) => ({
+        proof: new Promise<{ delay: number; width: number }>((resolve, reject) => {
+          const onTransition = (event: Event) => {
+            if (
+              !(event instanceof TransitionEvent) ||
+              event.target !== node ||
+              event.propertyName !== "width"
+            ) {
+              return;
+            }
+            node.removeEventListener("transitionrun", onTransition);
+            const transition = node
+              .getAnimations()
+              .find(
+                (animation) =>
+                  animation instanceof CSSTransition && animation.transitionProperty === "width",
+              );
+            if (!transition?.effect) {
+              reject(new Error("Missing microphone width transition"));
+              return;
+            }
+            transition.pause();
+            const delay = transition.effect.getTiming().delay ?? 0;
+            transition.currentTime = delay / 2;
+            const width = node.getBoundingClientRect().width;
+            transition.play();
+            resolve({ delay, width });
+          };
+          node.addEventListener("transitionrun", onTransition);
+        }),
+      }));
       await voice.hover();
-      await twoFrames(page);
-      expect(await pickerWidth()).toBe(0);
+      const dwell = await hoverDelay.evaluate(({ proof }) => proof);
+      await hoverDelay.dispose();
+      expect(dwell.delay).toBeGreaterThan(0);
+      expect(dwell.width).toBe(0);
       await expect.poll(pickerWidth).toBeGreaterThanOrEqual(27.5);
       const [voiceBeforeHold, pickerBeforeHold] = await Promise.all([
         voice.boundingBox(),

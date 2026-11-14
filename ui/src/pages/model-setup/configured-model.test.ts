@@ -111,7 +111,7 @@ describe("ConfiguredModel", () => {
 
     expect(text(container)).toContain("Timed out. LLM request timed out.");
     expect(text(container)).toContain(
-      "The model did not finish the setup test in time. Warm it or choose a faster model, then retry.",
+      "The model didn’t reply in time. Try again or choose a faster model.",
     );
     expect(text(container)).not.toContain("isn’t responding");
     expect(text(container)).not.toContain("service is running and reachable");

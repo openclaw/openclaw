@@ -1,7 +1,10 @@
 /** Connection-scoped publication shared by the CLI and native app node transports. */
 import { isDeepStrictEqual } from "node:util";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
-import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_BUNDLE_PREWARM_VERSION,
+  WORKER_LOCAL_MCP_PROTOCOL_FEATURE,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { CORE_WORKER_LAUNCH_TOOL_NAMES } from "../agents/tool-catalog.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import {
@@ -349,7 +352,10 @@ export function startNodeHostConnection({
                 ? { workspaceQuiescence: NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION }
                 : {}),
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_RESULT)
-                ? { workspaceResultVersion: NODE_WORKSPACE_RESULT_VERSION }
+                ? {
+                    workspaceResultVersion: NODE_WORKSPACE_RESULT_VERSION,
+                    publicationIntegration: 1 as const,
+                  }
                 : {}),
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT)
                 ? { statusWait: NODE_WORKER_STATUS_WAIT_VERSION }
@@ -362,6 +368,10 @@ export function startNodeHostConnection({
                 : {}),
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_PROMPT_CONTEXT)
                 ? { promptContext: NODE_WORKER_PROMPT_CONTEXT_VERSION }
+                : {}),
+              ...(prepared.localMcpEnabled &&
+              gatewayCapabilities.has(WORKER_LOCAL_MCP_PROTOCOL_FEATURE)
+                ? { localMcp: true as const }
                 : {}),
               ...(prepared.nativeInferenceEnabled &&
               gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_NATIVE_INFERENCE)

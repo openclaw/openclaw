@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
-import { withOpenClawStateDatabaseReadSnapshot as withSnapshot } from "./openclaw-state-db-readonly.js";
+import { GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY as organizationKey } from "../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
+import * as stateReads from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync as closeAsync,
   closeOpenClawStateDatabaseForTest as closeDatabase,
@@ -32,9 +33,8 @@ const { options, hydrate, github } = useProfileDatabase("openclaw-multi-account-
 const createAccount = (accountId: number, login: string, email: string, initialName?: string) =>
   github(accountId, login, { email, initialName });
 const accountFixture = (accountId: number, login: string, email: string, name: string) => ({
-  accountId,
+  binding: { accountId, email },
   login,
-  email,
   signIn: () => createAccount(accountId, login, email, name),
 });
 const consent = (id: string, enabled: boolean) =>
@@ -50,6 +50,159 @@ const directoryRow = (id: string, ...logins: string[]) => ({ id, logins });
 const legacyPerson = { displayName: "Saved Person Name", githubIdentity: { login: "legacy" } };
 
 describe("multi-account people", () => {
+  it.each<{
+    label: string;
+    sourceConsent?: boolean;
+    targetPair?: true;
+    targetConsent?: boolean;
+    selected: "source" | "target";
+    expectedConsent?: boolean;
+  }>([
+    {
+      label: "inherits consenting organization credit",
+      sourceConsent: true,
+      selected: "source",
+      expectedConsent: true,
+    },
+    {
+      label: "preserves target opt-out",
+      sourceConsent: true,
+      targetConsent: false,
+      selected: "source",
+      expectedConsent: false,
+    },
+    {
+      label: "does not reuse inert target consent for an opted-out source",
+      sourceConsent: false,
+      targetConsent: true,
+      selected: "source",
+      expectedConsent: false,
+    },
+    {
+      label: "does not reuse inert target consent for an unsigned source",
+      targetConsent: true,
+      selected: "source",
+    },
+    {
+      label: "does not apply source consent to target defaults",
+      sourceConsent: true,
+      targetPair: true,
+      selected: "target",
+    },
+    {
+      label: "retains target defaults and opt-out",
+      sourceConsent: true,
+      targetPair: true,
+      targetConsent: false,
+      selected: "target",
+      expectedConsent: false,
+    },
+  ])("merges proxy credit: $label", async (scenario) => {
+    const source = ensureProfileForEmail("source@example.test", options);
+    const target = ensureProfileForEmail("target@example.test", options);
+    const sourcePair = {
+      name: "Source Person",
+      email: "source-credit@example.test",
+      policy: "test-policy",
+    };
+    const targetPair = {
+      name: "Target Person",
+      email: "target-credit@example.test",
+      policy: "test-policy",
+    };
+    expect(
+      setUserPreferences(
+        source.id,
+        {
+          [organizationKey]: sourcePair,
+          ...(scenario.sourceConsent === undefined ? {} : publicCredit(scenario.sourceConsent)),
+        },
+        { ...options, trustedProxyGitCoauthor: true },
+      ),
+    ).toMatchObject({ ok: true });
+    if (scenario.sourceConsent === undefined) {
+      expect(
+        setUserPreferences(source.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: null }, options),
+      ).toMatchObject({ ok: true });
+    }
+    expect(
+      setUserPreferences(
+        target.id,
+        {
+          ...(scenario.targetPair ? { [organizationKey]: targetPair } : {}),
+          ...(scenario.targetConsent === undefined ? {} : publicCredit(scenario.targetConsent)),
+        },
+        { ...options, trustedProxyGitCoauthor: true },
+      ),
+    ).toMatchObject({ ok: true });
+    if (scenario.targetConsent === undefined && scenario.targetPair) {
+      expect(
+        setUserPreferences(target.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: null }, options),
+      ).toMatchObject({ ok: true });
+    }
+    linkEmail("source@example.test", target.id, options);
+    expect(readConsent(target.id)).toEqual(
+      scenario.expectedConsent === undefined ? {} : publicCredit(scenario.expectedConsent),
+    );
+    const selected = scenario.selected === "source" ? sourcePair : targetPair;
+    expect(getUserPreferences(target.id, [organizationKey], options)).toEqual({
+      [organizationKey]: selected,
+    });
+    const credit = await resolveAttribution([source.id, target.id], {
+      ...options,
+      organizationDefaults: "test-policy",
+    });
+    const expected =
+      scenario.expectedConsent === true ? { name: selected.name, email: selected.email } : null;
+    expect(credit.get(source.id)).toEqual(expected);
+    expect(credit.get(target.id)).toEqual(expected);
+  });
+
+  it("retains protected proxy defaults under canonical authority", async () => {
+    const profile = ensureProfileForEmail("oidc:proxy-credit", options);
+    const imported = {
+      name: "Organization Alice",
+      email: "work@example.test",
+      policy: "test-policy",
+    };
+    for (const value of [imported, null]) {
+      expect(await setPreferences(profile.id, { [organizationKey]: value }, options)).toEqual({
+        ok: false,
+        error: { code: "invalid-key", key: organizationKey },
+      });
+    }
+    expect(
+      await setPreferences(
+        profile.id,
+        { [organizationKey]: imported },
+        { ...options, trustedProxyGitCoauthor: true },
+      ),
+    ).toMatchObject({ ok: true });
+    const unsigned = await prepareAttribution([profile.id], {
+      ...options,
+      organizationDefaults: "test-policy",
+    });
+    expect(unsigned.identities.get(profile.id)).toBeNull();
+    await setPreferences(profile.id, publicCredit(true), options);
+    expect(unsigned.isCurrent()).toBe(false);
+    expect((await resolveAttribution([profile.id], options)).get(profile.id)).toBeNull();
+    const organization = await prepareAttribution([profile.id], {
+      ...options,
+      organizationDefaults: "test-policy",
+    });
+    expect(organization.identities.get(profile.id)).toEqual({
+      name: imported.name,
+      email: imported.email,
+    });
+    await setPreferences(profile.id, publicCredit(false), options);
+    expect(organization.isCurrent()).toBe(false);
+    expect(
+      (
+        await resolveAttribution([profile.id], { ...options, organizationDefaults: "test-policy" })
+      ).get(profile.id),
+    ).toBeNull();
+  });
+
   it("bounds the directory while preserving merged-profile filtering and account order", async () => {
     const database = openDatabase(options);
     ensureUserProfilesSchema(options, database);
@@ -157,7 +310,7 @@ describe("multi-account people", () => {
     consent(person.id, false);
     const version = schemaVersion();
     const beforeMerge = await prepareAttribution([work.id], options);
-    linkEmail(secondary.email, person.id, options);
+    linkEmail(secondary.binding.email, person.id, options);
     expect(beforeMerge.isCurrent()).toBe(false);
     closeDatabase();
     await hydrate();
@@ -167,10 +320,11 @@ describe("multi-account people", () => {
         ...display,
         githubIdentity: { login: "person" },
       });
-      expect(
-        (await resolveIdentity({ accountId: account.accountId, email: account.email }, options))
-          ?.profileId,
-      ).toBe(person.id);
+      const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockClear();
+      expect(await resolveIdentity(account.binding, options)).toMatchObject({
+        profileId: person.id,
+      });
+      expect(reads).not.toHaveBeenCalled();
       expect(getUserProfileDisplay(work.id, options)).toMatchObject(display);
       expect(getProfileAvatar(work.id, options)?.bytes).toEqual(new Uint8Array([1, 2, 3]));
       expect(readConsent(person.id)).toEqual(publicCredit(false));
@@ -187,18 +341,18 @@ describe("multi-account people", () => {
     expect(
       syncGitHubIdentity(
         {
-          identity: { accountId: secondary.accountId, login: secondary.login },
+          identity: { accountId: secondary.binding.accountId, login: secondary.login },
           authenticationAlias: { kind: "github-login", login: secondary.login },
         },
         options,
       ),
     ).toMatchObject({ id: person.id, githubIdentity: { login: primary.login } });
     expect(getUserProfileDisplay(signInAlias.id, options).id).toBe(person.id);
-    expect(await resolveIdentity({ accountId: 73, email: primary.email }, options)).toBeUndefined();
+    expect(await resolveIdentity({ ...primary.binding, accountId: 73 }, options)).toBeUndefined();
     expect((await resolveAttribution([person.id, work.id], options)).get(work.id)).toBeNull();
     consent(person.id, true);
     const unverified = ensureProfileForEmail("unverified@example.test", options);
-    const identity = { accountId: primary.accountId, login: primary.login };
+    const identity = { accountId: primary.binding.accountId, login: primary.login };
     expect(
       await resolveAttribution([person.id, work.id, work.id, unverified.id, "missing"], options),
     ).toEqual(
@@ -208,15 +362,15 @@ describe("multi-account people", () => {
         [unverified.id, null],
       ]),
     );
-    await withSnapshot(async () => {
+    await stateReads.withOpenClawStateDatabaseReadSnapshot(async () => {
       consent(person.id, false);
       expect(await attribution(work.id)).toBeNull();
     }, options);
     consent(person.id, true);
     const preparedCredit = await prepareAttribution([work.id], options);
     const credit = await attribution(work.id);
-    expect(credit?.accountId).toBe(primary.accountId);
-    if (credit) {
+    expect(credit?.accountId).toBe(primary.binding.accountId);
+    if (credit && "login" in credit) {
       credit.login = "caller-edit";
     }
     expect(await attribution(work.id)).toEqual(identity);

@@ -1,5 +1,3 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { IDBFactory } from "fake-indexeddb";
 import { expect, it, onTestFinished, vi } from "vitest";
@@ -9,8 +7,8 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
+import type { ChatBoardPanelSource } from "./chat-pane-panel-source.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
-import type { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
 import { createTestChatPane, mountBoardPanel } from "./chat-pane.test-support.ts";
 import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -22,6 +20,8 @@ import {
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+/* @vitest-environment jsdom */
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 import { openSlot } from "./sidebar-layout.ts";
 import "../../components/board/board-view.tsx";
 
@@ -32,10 +32,10 @@ type BoardTestPane = HTMLElement & {
   hydrateStoredChatSnapshot: (state: ChatPageHost, sessionKey: string) => void;
   resolveBoardProvider: () => BoardProvider;
   resolveBoardView: () => ResolvedBoardView;
-  renderBoardPanel: (
+  boardPanelSource: (
     board: ResolvedBoardView,
     layout: ChatPageHost["sidebarLayout"],
-  ) => Parameters<typeof ChatBoardPanel>[0] | null;
+  ) => ChatBoardPanelSource | null;
   releaseBoardProviderLease: () => void;
 };
 
@@ -106,16 +106,20 @@ async function persistBoard(pane: BoardTestPane, snapshot: unknown, cleanup: Cle
   };
   const store = new SessionSnapshotStore(pane.state.chatMessagesBySession);
   pane.sessionSnapshotStore = store;
-  store.write(resolveChatSnapshotKey(pane.state, { sessionKey: pane.state.sessionKey }), {
-    ...transcript,
-    board: { snapshot, receivedAtMs: Date.now() },
-  });
+  writeSnapshotFixture(
+    store,
+    resolveChatSnapshotKey(pane.state, { sessionKey: pane.state.sessionKey }),
+    {
+      ...transcript,
+      board: { snapshot, receivedAtMs: Date.now() },
+    },
+  );
   await store.flush();
   return store;
 }
 
 it.each([false, true])(
-  "paints saved rows before connect while board restoration waits (route pending: %s)",
+  "paints saved rows and board while the socket cannot open (route pending: %s)",
   async (routePending) => {
     const sessionKey = "agent:main:dispatch-cached-board";
     const { pane, request, snapshot, cleanup } = createGatewayBoardPane(sessionKey);
@@ -141,11 +145,7 @@ it.each([false, true])(
     await expectDefined(reading.mock.results[0], "snapshot read").value;
     await vi.advanceTimersByTimeAsync(0);
     expect(pane.state.chatMessages).toEqual(transcript.messages);
-    expect(provider.hasLoadedSnapshot).toBe(false);
-    dispatch.resolve();
-    await dispatch.promise;
     expect(provider.hasLoadedSnapshot).toBe(true);
-    expect(pane.state.chatMessages).toEqual(transcript.messages);
     await vi.runAllTimersAsync();
     await hydration.promise;
     expect(pane.state.chatMessages).toEqual(transcript.messages);

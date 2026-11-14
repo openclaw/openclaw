@@ -1,10 +1,6 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import {
-  expectForegroundUnchanged,
-  openFromForeground,
-  scenario,
-} from "./command-palette.test-support.ts";
+import { foregroundDraft, openFromForeground, scenario } from "./command-palette.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -38,7 +34,7 @@ function anchors(palette: Locator) {
       ".cmd-palette",
       ".cmd-palette__input",
       ".cmd-palette__create",
-      'button[aria-label="New session settings"]',
+      ".palette-session-settings__trigger",
     ].map((selector) => {
       const node = element.querySelector(selector);
       if (!node) {
@@ -52,7 +48,7 @@ function anchors(palette: Locator) {
 
 suite.define(() => {
   it.each([1280, 390])(
-    "keeps the input and actions anchored through paste and removal at %s px",
+    "keeps the card anchored through paste and restores it after removal at %s px",
     async (width) => {
       await suite.withPage(
         { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
@@ -70,7 +66,16 @@ suite.define(() => {
             page,
             suite.server.baseUrl,
           );
+          await input.press("Tab");
           await page.evaluate(() => document.fonts.ready);
+          // Anchors are measured after the card settles from its mode glide.
+          await page.evaluate(() =>
+            Promise.allSettled(
+              (document.querySelector(".cmd-palette-stack")?.getAnimations() ?? []).map(
+                (animation) => animation.finished,
+              ),
+            ),
+          );
           const images = palette.locator(".chat-attachment-thumb img");
           const start = palette.getByRole("button", {
             name: "Start new session in background",
@@ -87,10 +92,11 @@ suite.define(() => {
             const initial = await anchors(palette);
             await pasteImages(input, 2);
             await expect.poll(() => images.count()).toBe(2);
-            expect(await anchors(palette)).toEqual(initial);
+            // The strip docks above the text, as in the composer; only the card's top is fixed.
+            expect((await anchors(palette))[0]).toEqual(initial[0]);
             await pasteImages(input, 10);
             await expect.poll(() => images.count()).toBe(12);
-            expect(await anchors(palette)).toEqual(initial);
+            expect((await anchors(palette))[0]).toEqual(initial[0]);
             expect(
               await palette
                 .locator(".chat-attachments-preview")
@@ -98,7 +104,7 @@ suite.define(() => {
             ).toBe(true);
             await remove.first().click();
             await expect.poll(() => images.count()).toBe(11);
-            expect(await anchors(palette)).toEqual(initial);
+            expect((await anchors(palette))[0]).toEqual(initial[0]);
             // The first pointer removal covers interaction; clear the unchecked tail together.
             await remove.evaluateAll((buttons) => {
               for (const button of buttons) {
@@ -120,32 +126,30 @@ suite.define(() => {
               message: "",
               attachments,
             });
-            expect(await input.isEditable()).toBe(false);
-            await page.keyboard.press("ControlOrMeta+Enter");
-            expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+            // The start owns its images; the launcher reopens empty while it is pending.
+            await input.waitFor({ state: "hidden" });
+            await page.keyboard.press("ControlOrMeta+K");
+            await input.waitFor({ state: "visible" });
+            expect(await images.count()).toBe(0);
+            await input.press("Escape");
+            await input.waitFor({ state: "hidden" });
             await gateway.rejectDeferred("sessions.create", {
               code: "INVALID_REQUEST",
               message: "Could not create session",
             });
-            await expect
-              .poll(() => palette.getByRole("alert").textContent())
-              .toContain("Could not create session");
-            expect(await images.count()).toBe(2);
-            await input.press("Escape");
-            await input.waitFor({ state: "hidden" });
-            await page.keyboard.press("ControlOrMeta+K");
-            await input.waitFor({ state: "visible" });
-            expect(await images.count()).toBe(2);
-            await expect.poll(() => start.isEnabled()).toBe(true);
-            await input.press("ControlOrMeta+Enter");
+            const toast = page.locator(".app-toast");
+            await expect.poll(() => toast.textContent()).toContain("Could not create session");
+            expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+            await toast.getByRole("button", { name: "Try again", exact: true }).click();
             expect(
               (await gateway.waitForRequest("sessions.create", { after: 1 })).params,
             ).toMatchObject({
               message: "",
               attachments,
             });
-            await input.waitFor({ state: "hidden" });
-            await expectForegroundUnchanged(page, composer, url);
+            // Notice actions retire their own button; the foreground route and draft stay intact.
+            expect(page.url()).toBe(url);
+            expect(await composer.inputValue()).toBe(foregroundDraft);
             expect(await gateway.getRequests("chat.send")).toEqual([]);
           }
         },

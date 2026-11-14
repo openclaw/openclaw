@@ -92,26 +92,24 @@ it.each(["maintenance", "confirmation", "config"] as const)(
     try {
       await navigate("agents", "/settings/agents/main/memory");
       await waitForSolid(() =>
-        expect(container.querySelector<HTMLButtonElement>(".dreams__phase-toggle")?.disabled).toBe(
+        expect(container.querySelector<HTMLInputElement>('input[role="switch"]')?.disabled).toBe(
           false,
         ),
       );
       const oldHost = container.querySelector("openclaw-agent-memory-panel")!;
       if (operation === "maintenance") {
-        click(container, "#dreams-tab-advanced");
-        const backfill = [...container.querySelectorAll("button")].find(
-          (button) => button.textContent?.trim() === "Backfill",
+        click(container, ".dreams-review__menu button");
+        await waitForSolid(() => expect(document.body.textContent).toContain("Backfill diary"));
+        const backfill = [...document.body.querySelectorAll<HTMLElement>("[role='menuitem']")].find(
+          (item) => item.textContent?.trim() === "Backfill diary",
         );
         expect(backfill).toBeDefined();
-        await waitForSolid(() => expect(backfill!.disabled).toBe(false));
         backfill!.click();
         await waitForSolid(() => expect(request).toHaveBeenCalledWith(method, { agentId: "main" }));
         await waitForSolid(() => expect(container.textContent).toContain("Working…"));
       } else if (operation === "config") {
-        click(container, "#dreams-tab-diary");
-        click(container, "#dream-diary-tab-wiki");
-        const openConfig = container.querySelector<HTMLButtonElement>(
-          ".dreams-diary__empty-actions .btn",
+        const openConfig = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+          (button) => button.textContent?.trim() === "Open config",
         )!;
         openConfig.click();
         await waitForSolid(() => {
@@ -120,8 +118,8 @@ it.each(["maintenance", "confirmation", "config"] as const)(
           expect(config.openFile).toHaveBeenCalledOnce();
         });
       } else {
-        click(container, ".dreams__phase-toggle");
-        click(container, ".exec-approval-actions button:last-child");
+        click(container, 'input[role="switch"]');
+        click(container, "openclaw-modal-actions button:last-child");
         await waitForSolid(() => expect(container.textContent).toContain("Saving…"));
         await waitForSolid(() => expect(config.patch).toHaveBeenCalledOnce());
       }
@@ -129,7 +127,7 @@ it.each(["maintenance", "confirmation", "config"] as const)(
       await waitForSolid(() => {
         expectDestination();
         expect(oldHost.isConnected).toBe(false);
-        expect(container.querySelector(".exec-approval-actions")).toBeNull();
+        expect(container.querySelector("openclaw-modal-actions")).toBeNull();
       });
       pending.reject(new Error("Late Dreaming failure"));
       await Promise.allSettled([pending.promise, navigation]);

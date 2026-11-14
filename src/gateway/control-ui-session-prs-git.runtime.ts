@@ -4,8 +4,13 @@ import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { unavailableDiffRevision, type DiffReadTiming } from "../infra/diff-read-timing.js";
 import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { GitCommandTimeoutError, requireGitCommandOutput } from "../infra/git-exec.js";
-import type { GitReadOperations } from "../infra/git-read-operations.js";
-import { readGitHead, readGitMetadataPrefix, readGitRefs } from "../infra/git-root.js";
+import type { GitCheckoutContext, GitReadOperations } from "../infra/git-read-operations.js";
+import {
+  readGitHead,
+  readGitMetadataPrefix,
+  readGitBranchTrackingRemotes,
+  readGitRefs,
+} from "../infra/git-root.js";
 import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
 import type { GitWorkerOperations } from "../infra/git-worker-contract.js";
 import { readCheckoutDiffRevision } from "./control-ui-session-diff-revision.js";
@@ -19,6 +24,21 @@ import {
 } from "./control-ui-session-prs-landing.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 
+/** Bound PR-list fanout for checkouts that track one branch on several forks. */
+const MAX_FORK_HEAD_CANDIDATES = 3;
+
+/**
+ * Alternate-fork discovery covers one named branch on several forks. Detached
+ * and default-branch checkouts never discover alternate fork heads, so their
+ * remote-tracking refs are not fork-head inputs.
+ */
+function canDiscoverAlternateForkHeads(
+  branch: string | null,
+  defaultBranch: string | undefined,
+): branch is string {
+  return branch !== null && branch !== "HEAD" && branch !== defaultBranch;
+}
+
 /** Observe only this checkout's refs; snapshot publication does not change PR facts. */
 export async function readCheckoutGitRevision(
   {
@@ -27,6 +47,7 @@ export async function readCheckoutGitRevision(
     branch,
     defaultBranch,
     summaryOnly = false,
+    refreshIndex = false,
     paths: diffPaths,
   }: GitReadOperations["checkout.revision"]["input"],
   timing?: DiffReadTiming,
@@ -36,7 +57,7 @@ export async function readCheckoutGitRevision(
   }
   try {
     if (scope === "diff") {
-      return await readCheckoutDiffRevision(root, diffPaths, summaryOnly, timing);
+      return await readCheckoutDiffRevision(root, diffPaths, summaryOnly, timing, refreshIndex);
     }
     const head = readGitHead(root, { maxDepth: 1 });
     const checkout = readCheckoutHead(root, head);
@@ -83,6 +104,7 @@ export async function readCheckoutGitRevision(
     }
     const selectedBranch = branch ?? checkout.branch;
     const selectedDefault = defaultBranch ? `origin/${defaultBranch}` : defaultRef;
+    const defaultBranchName = defaultRef?.replace(/^origin\//, "");
     const tips =
       scope !== "context"
         ? await readRemoteRevisions(
@@ -94,6 +116,13 @@ export async function readCheckoutGitRevision(
             checkout,
           )
         : [];
+    // Context discovery resolves the branch on every remote, so remote-tracking
+    // ref presence is an input even when no tip is read. Detached and
+    // default-branch checkouts never discover alternate fork heads.
+    const trackingRemotes =
+      scope === "context" && canDiscoverAlternateForkHeads(selectedBranch, defaultBranchName)
+        ? readGitBranchTrackingRemotes(checkout.refsBase, selectedBranch)
+        : null;
     return {
       key: JSON.stringify([
         // Context exposes branch names and remote configuration, not commit IDs.
@@ -101,6 +130,7 @@ export async function readCheckoutGitRevision(
         defaultRef,
         [...tips],
         packedReplacements,
+        trackingRemotes,
         paths.toSorted().map((file) => {
           const stat = fs.lstatSync(file, { throwIfNoEntry: false });
           if (
@@ -167,6 +197,92 @@ function readDefaultRef(head: ReturnType<typeof readCheckoutHead>): string | nul
   }
 }
 
+/**
+ * Resolve head candidates from local refs, not push configuration: contributors keep
+ * upstream as origin, fetch their branch from a fork remote, and often have no
+ * `pushRemote`, `remote.pushDefault`, or resolvable `@{push}`.
+ */
+async function readForkHeadCandidates(
+  root: string,
+  {
+    branch,
+    base,
+    head,
+    remoteHost,
+  }: {
+    branch: string;
+    base: Pick<GitCheckoutContext, "owner" | "repo">;
+    head: ReturnType<typeof readCheckoutHead>;
+    remoteHost: string;
+  },
+): Promise<NonNullable<GitCheckoutContext["forkHeadCandidates"]>> {
+  const candidates: NonNullable<GitCheckoutContext["forkHeadCandidates"]> = [];
+  if (!head?.refsBase) {
+    return candidates;
+  }
+  const seen = new Set([`${base.owner}/${base.repo}`.toLowerCase()]);
+  let remotes: string[];
+  try {
+    remotes = readGitBranchTrackingRemotes(head.refsBase, branch);
+  } catch {
+    // Unreadable ref metadata degrades to origin-only discovery, not a failed context.
+    return candidates;
+  }
+  for (const remote of remotes) {
+    if (candidates.length === MAX_FORK_HEAD_CANDIDATES) {
+      break;
+    }
+    if (remote === "origin") {
+      continue;
+    }
+    const url = await gitOutput(root, ["remote", "get-url", remote]);
+    // The remote is only a candidate: the PR lookup verifies its head repository.
+    const fork = url ? parseGitHubRemoteUrl(url, remoteHost) : null;
+    if (!fork) {
+      continue;
+    }
+    const identity = `${fork.owner}/${fork.repo}`.toLowerCase();
+    if (seen.has(identity)) {
+      continue;
+    }
+    seen.add(identity);
+    candidates.push(fork);
+  }
+  return candidates;
+}
+
+// Git's creation entry: "<old> <new> <ident> <seconds> <zone>\tbranch: Created from <start>".
+const BRANCH_CREATED_REFLOG =
+  /^[0-9a-f]+ [0-9a-f]+ [^\n\t]*> (\d+) [+-]\d{4}\tbranch: Created from (\S+)\n/u;
+
+/**
+ * Managed worktrees mint `openclaw/<name>` from the default branch, and retired
+ * names are reused. Only a branch Git created from the default branch is new
+ * work; other start points (HEAD, FETCH_HEAD, a remote branch) may adopt an
+ * existing PR. Missing, rewritten, or expired reflogs leave discovery unfiltered.
+ */
+function readBranchStartedAt(
+  refsBase: string,
+  branch: string,
+  defaultBranch: string,
+): number | undefined {
+  try {
+    const [, seconds, start] =
+      BRANCH_CREATED_REFLOG.exec(
+        readGitMetadataPrefix(nodePath.join(refsBase, "logs/refs/heads", branch), 1024),
+      ) ?? [];
+    const defaultRefs = [
+      defaultBranch,
+      `origin/${defaultBranch}`,
+      `refs/heads/${defaultBranch}`,
+      `refs/remotes/origin/${defaultBranch}`,
+    ];
+    return seconds && start && defaultRefs.includes(start) ? Number(seconds) * 1000 : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function readCheckoutGitContext(
   root: string,
   githubHost = "github.com",
@@ -175,7 +291,9 @@ export async function readCheckoutGitContext(
   const branch =
     head?.branch === null
       ? "HEAD"
-      : (head?.branch ?? (await gitOutput(root, ["rev-parse", "--abbrev-ref", "HEAD"])));
+      : (head?.branch ??
+        (await gitOutput(root, ["branch", "--show-current"])) ??
+        (await gitOutput(root, ["rev-parse", "--abbrev-ref", "HEAD"])));
   if (!branch) {
     return null;
   }
@@ -185,18 +303,31 @@ export async function readCheckoutGitContext(
   if (!remote) {
     return null;
   }
+  const remoteHost = publicRemote ? "github.com" : githubHost;
   const preparedDefaultRef = readDefaultRef(head);
   const defaultRef =
     preparedDefaultRef === undefined
-      ? await gitOutput(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+      ? (await gitOutput(root, ["symbolic-ref", "refs/remotes/origin/HEAD"]))?.replace(
+          /^refs\/remotes\//,
+          "",
+        )
       : preparedDefaultRef;
   const defaultBranch = defaultRef?.replace(/^origin\//, "");
+  const forkHeadCandidates = canDiscoverAlternateForkHeads(branch, defaultBranch)
+    ? await readForkHeadCandidates(root, { branch, base: remote, head, remoteHost })
+    : [];
+  const branchStartedAt =
+    head?.refsBase && defaultBranch && canDiscoverAlternateForkHeads(branch, defaultBranch)
+      ? readBranchStartedAt(head.refsBase, branch, defaultBranch)
+      : undefined;
   return {
     ...remote,
     ...(!publicRemote ? { host: githubHost } : {}),
     branch: branch === "HEAD" ? null : branch,
     root,
     ...(defaultBranch ? { defaultBranch } : {}),
+    ...(forkHeadCandidates.length > 0 ? { forkHeadCandidates } : {}),
+    ...(branchStartedAt !== undefined ? { branchStartedAt } : {}),
   };
 }
 

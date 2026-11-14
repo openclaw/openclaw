@@ -4,12 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readSessionArchiveText } from "../../test/helpers/session-archive.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import {
-  readSessionArchiveContentSync,
-  SESSION_ARCHIVE_ZSTD_SUFFIX,
-} from "../config/sessions/archive-compression.js";
+import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "../config/sessions/archive-compression.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { prepareTranscriptPayload } from "../config/sessions/transcript-payload.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   claimOpenClawAgentDatabaseLease,
@@ -296,7 +295,7 @@ describe("historical transcript directive migration", () => {
       });
       expect(migratedArchiveContent).toContain(archivedCodeJson);
       expect(migratedArchiveContent).toContain(archivedUserJson);
-      expect(readSessionArchiveContentSync(archivePath)).toBe(migratedArchiveContent);
+      expect(readSessionArchiveText(archivePath)).toBe(migratedArchiveContent);
 
       const generationsAfterFirstRun = {
         tagged: readGeneration(databasePath, "tagged-session"),
@@ -443,17 +442,19 @@ describe("historical transcript directive migration", () => {
   it("surfaces lease inspection failures from preflight", async () => {
     const { env, databasePath } = fixture();
     closeOpenClawAgentDatabasesForTest();
-    const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
-    vi.spyOn(agentDatabaseLease, "assertNoOpenClawAgentDatabaseLeases").mockImplementation(() => {
-      throw new Error("shared-state lease inspection failed");
-    });
+    const agentDatabaseLease = await import("../state/openclaw-agent-db-lease-inspection.js");
+    vi.spyOn(agentDatabaseLease, "assertNoOpenClawAgentDatabaseLeasesReadOnly").mockImplementation(
+      () => {
+        throw new Error("shared-state lease inspection failed");
+      },
+    );
 
     const result = await migrateHistoricalTranscriptDirectives({ env });
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([
       expect.stringContaining(
-        `Skipped historical transcript directive migration preflight for ${databasePath}: Error: shared-state lease inspection failed`,
+        "Skipped historical transcript directive migration: Error: shared-state lease inspection failed",
       ),
     ]);
     expect(readMigrationCursor(databasePath)).toBeUndefined();
@@ -479,6 +480,42 @@ describe("historical transcript directive migration", () => {
         .get("historical-transcript-directives-v1"),
     ).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "defers idle bookkeeping but keeps actual legacy repair exclusive (legacy=%s)",
+    async (legacy) => {
+      const { env, database, databasePath } = fixture();
+      const event = textEvent(
+        "idle-assistant",
+        legacy ? "[[reply_to_current]] repair" : "Canonical",
+      );
+      insertSession(database, {
+        events: [event],
+        generation: "before",
+        sessionId: "idle-session",
+        legacy,
+      });
+      const active = openOpenClawAgentDatabase({ agentId: "active", env });
+      closeOpenClawAgentDatabasesForTest();
+      const leaseId = claimOpenClawAgentDatabaseLease({
+        agentId: "active",
+        path: active.path,
+        env,
+      });
+
+      const result = await migrateHistoricalTranscriptDirectives({ env }).finally(() =>
+        releaseOpenClawAgentDatabaseLease(leaseId, { env }),
+      );
+
+      if (legacy) {
+        expect(result.warnings).toEqual([expect.stringContaining("still open")]);
+      } else {
+        expect(result).toEqual(NO_CHANGES);
+      }
+      expect(readMigrationCursor(databasePath)).toBeUndefined();
+      expect(JSON.parse(readEventJson(databasePath, "idle-session", 0))).toEqual(event);
+    },
+  );
 
   it("continues preflight after an unreadable target", async () => {
     const stateDir = makeTempDir(tempDirs, "transcript-directive-preflight-targets-");
@@ -838,7 +875,7 @@ it.each(["identity", "zstd"])(
     expect(readGeneration(databasePath, "multi-session")).not.toBe("multi-before");
     expect(readGeneration(databasePath, "ambiguous-session")).toBe("ambiguous-before");
     const restoredArchive = `${restored(archived)}\n${JSON.stringify(archivedUser)}\n`;
-    expect(readSessionArchiveContentSync(archivePath)).toBe(restoredArchive);
+    expect(readSessionArchiveText(archivePath)).toBe(restoredArchive);
     expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete", version: 2 });
     const recorded = readDatabaseRow(
       databasePath,
@@ -877,6 +914,22 @@ it.each(["complete", "transcripts"])("resumes V1 %s provider repair", async (pha
   const { env, databasePath, database, masked, tagged, read } = singleSession(content, sessionId);
   // Completed V1 already handled directives; interrupted V1 skipped earlier session ids.
   writeMetadata(database, phase === "complete" ? { phase } : { phase, sessionId: "z-session" });
+  if (phase === "complete") {
+    const ignored = prepareTranscriptPayload(
+      database,
+      JSON.stringify({
+        type: "custom",
+        customType: "synthetic",
+        data: "x".repeat(4_096),
+      }),
+    );
+    // Provider-only repair must not decode an unrelated historical payload.
+    database
+      .prepare(`INSERT INTO transcript_events
+      (session_id,seq,event_json,event_zstd,event_utf8_bytes,navigation_json,created_at)
+      VALUES(?,2,NULL,x'00',?,?,1)`)
+      .run(sessionId, ignored.event_utf8_bytes, ignored.navigation_json);
+  }
   closeOpenClawAgentDatabasesForTest();
   const result = await migrateHistoricalTranscriptDirectives({ env });
   expect(result.warnings).toEqual([]);
@@ -886,6 +939,13 @@ it.each(["complete", "transcripts"])("resumes V1 %s provider repair", async (pha
   expect(read(sessionId, 0)).toBe(restored(masked));
   if (phase === "complete") {
     expect(read(sessionId, 1)).toBe(JSON.stringify(tagged));
+    expect(
+      readDatabaseRow(
+        databasePath,
+        "SELECT hex(event_zstd) AS bytes FROM transcript_events WHERE session_id = ? AND seq = 2",
+        sessionId,
+      )?.bytes,
+    ).toBe("00");
   }
   expect(readMigrationCursor(databasePath)).toEqual({ phase: "complete", version: 2 });
   await expect(migrateHistoricalTranscriptDirectives({ env })).resolves.toEqual({

@@ -5,14 +5,20 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ArtifactSummary } from "../../packages/gateway-protocol/src/index.js";
+import { isScratchFileExpired, resolveScratchFilePath } from "../infra/scratch-expiry.js";
+import { SCRATCH_EXPIRED_MESSAGE } from "../shared/scratch-expiry.js";
 import {
-  type ArtifactBase64Payload,
   base64FromDataUrl,
   mimeFromDataUrl,
   readArtifactBase64Payload,
 } from "./artifacts-base64.js";
 
-export type ArtifactRecord = ArtifactSummary & { data?: string; url?: string };
+export type ArtifactRecord = ArtifactSummary & {
+  data?: string;
+  url?: string;
+  localPath?: string;
+  expired?: boolean;
+};
 
 export type ArtifactLookup = {
   artifact?: ArtifactRecord;
@@ -21,8 +27,22 @@ export type ArtifactLookup = {
 };
 
 export function toArtifactSummary(artifact: ArtifactRecord): ArtifactSummary {
-  const { data: _data, url: _url, ...summary } = artifact;
+  const { data: _data, url: _url, localPath: _localPath, expired: _expired, ...summary } = artifact;
   return summary;
+}
+
+/** Filesystem availability is current; it never enters the transcript metadata cache. */
+export async function resolveArtifactAvailability(
+  artifact: ArtifactRecord,
+): Promise<ArtifactRecord> {
+  return artifact.localPath && (await isScratchFileExpired(artifact.localPath))
+    ? {
+        ...artifact,
+        title: `${SCRATCH_EXPIRED_MESSAGE}: ${artifact.title}`,
+        download: { mode: "unsupported" },
+        expired: true,
+      }
+    : artifact;
 }
 
 export function mediaUrlValue(value: unknown): string | undefined {
@@ -50,6 +70,7 @@ export function resolveBlockDownload(
   mode: ArtifactSummary["download"]["mode"];
   data?: string;
   url?: string;
+  localPath?: string;
   mimeType?: string;
   sizeBytes?: number;
   /** Decoded size measured from the inline payload itself, ignoring declared metadata. */
@@ -66,15 +87,15 @@ export function resolveBlockDownload(
   const dataUrl = [url, sourceUrl, imageUrl, audioUrl, data, content, sourceData].find(
     (value) => typeof value === "string" && /^data:/i.test(value),
   );
-  const base64FromDetectedDataUrl = readArtifactBase64Payload(
-    dataUrl ? base64FromDataUrl(dataUrl) : undefined,
-    opts,
-  );
-  const directBase64 = [data, sourceData, content]
-    .filter((value): value is string => typeof value === "string" && !/^data:/i.test(value))
-    .map((value) => readArtifactBase64Payload(value, opts))
-    .find((value): value is ArtifactBase64Payload => value !== undefined);
-  const base64 = base64FromDetectedDataUrl ?? directBase64;
+  let base64 = readArtifactBase64Payload(dataUrl ? base64FromDataUrl(dataUrl) : undefined, opts);
+  for (const value of [data, sourceData, content]) {
+    if (base64) {
+      break;
+    }
+    if (typeof value === "string" && !/^data:/i.test(value)) {
+      base64 = readArtifactBase64Payload(value, opts);
+    }
+  }
   const remoteUrl = [url, sourceUrl, imageUrl, audioUrl].find(
     (value) => typeof value === "string" && isSafeDownloadUrl(value),
   );
@@ -101,5 +122,8 @@ export function resolveBlockDownload(
   if (remoteUrl) {
     return { mode: "url", url: remoteUrl, mimeType, sizeBytes };
   }
-  return { mode: "unsupported", mimeType, sizeBytes };
+  const localPath = [url, sourceUrl, imageUrl, audioUrl, block.path]
+    .map((value) => (typeof value === "string" ? resolveScratchFilePath(value) : undefined))
+    .find((value) => value !== undefined);
+  return { mode: "unsupported", mimeType, sizeBytes, ...(localPath ? { localPath } : {}) };
 }

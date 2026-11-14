@@ -202,9 +202,14 @@ suite.define(() => {
           viewport.failure ? "timeout" : "done",
         );
         expect(await pane.locator('[data-test-id="chat-delegation"]').count()).toBe(0);
-        expect(await pane.locator(".chat-thread openclaw-chat-subagent-activity").count()).toBe(0);
+        expect(await pane.locator(".chat-thread .chat-subagent-activity").count()).toBe(0);
         // The retained tool stays with the completed request, before the next user turn.
         const next = pane.getByText("Now look at the next change.", { exact: true });
+        // Expanded results can push the next turn past the mounted transcript window on a phone.
+        await pane.locator(".chat-thread").evaluate((thread) => {
+          thread.scrollTop = thread.scrollHeight;
+        });
+        await next.waitFor();
         const collectorBounds = await tools.last().boundingBox();
         const nextBounds = await next.boundingBox();
         expect(collectorBounds).not.toBeNull();

@@ -3,23 +3,22 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { loadPreparedModelCatalogSnapshot } from "../agents/prepared-model-catalog.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
 import { assignSessionOwner, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   cleanupStore,
   makeRuntime,
-  mockSessionsConfig,
   resetMockSessionsConfig,
   runSessionsJson,
   setMockSessionsConfig,
   writeStore as seedStore,
 } from "./sessions.test-helpers.js";
 
-mockSessionsConfig();
 const gatewayOwner = { pid: 123, port: 19461, createdAt: "fixture" };
 
 const catalogState = vi.hoisted(() => ({
@@ -120,8 +119,14 @@ describe("sessionsCommand", () => {
     const entries = [
       ["agent:main:main", "gpt-5.6-luna"],
       ["agent:main:東京", "gemini-3-flash-preview"],
-      ["agent:main:e\u0301", "gpt-5.6-luna"],
-      ["agent:main:👩‍💻", "claude-sonnet-4-6"],
+      ...["😀", "👩‍💻", "e\u0301"].map(
+        (cluster) =>
+          [
+            `agent:main:aaaa${cluster}middle${cluster}zzzzz`,
+            "claude-sonnet-4-6",
+            `agent:main:aaaa${cluster}...${cluster}zzzzz`,
+          ] as const,
+      ),
     ] as const;
     const store = await writeStore(
       Object.fromEntries(
@@ -133,22 +138,22 @@ describe("sessionsCommand", () => {
     );
     const columns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
     Object.defineProperty(process.stdout, "columns", { configurable: true, value: 240 });
-    onTestFinished(() => {
-      if (columns) {
-        Object.defineProperty(process.stdout, "columns", columns);
-      } else {
-        Reflect.deleteProperty(process.stdout, "columns");
-      }
-    });
+    onTestFinished(
+      () =>
+        void (columns
+          ? Object.defineProperty(process.stdout, "columns", columns)
+          : Reflect.deleteProperty(process.stdout, "columns")),
+    );
     const { runtime, logs } = makeRuntime();
     await run({ store, ...options }, runtime);
     const lines = stripAnsi(logs.join("\n")).split("\n");
     const header = lines.find((line) => line.includes("Key") && line.includes("Model")) ?? "";
     expect(header).toContain("Flags");
-    for (const [key, model] of entries) {
-      const row = lines.find((line) => line.includes(key)) ?? "";
+    for (const [key, model, displayKey = key] of entries) {
+      const row = lines.find((line) => line.includes(displayKey)) ?? "";
+      expect(singleSessionTableCells([header, row])[1]).toBe(displayKey);
       for (const [title, value] of [
-        ["Key", key],
+        ["Key", displayKey],
         ["Model", model],
         ["Flags", "system"],
       ] as const) {
@@ -203,7 +208,7 @@ describe("sessionsCommand", () => {
       contextTokensSource: "runtime",
       totalTokens: 11,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     });
 
     const logs = await readSessionsText(store);
@@ -275,18 +280,22 @@ describe("sessionsCommand", () => {
     },
   );
 
-  it.each(["absent", "unreachable", "uninspectable", "other-workspace"])(
+  it.each(["absent", "unreachable", "interrupted", "uninspectable", "other-workspace"])(
     "preserves verified capacity for auto runtime when the Gateway is %s",
     async (gatewayState) => {
       const spawnedWorkspaceDir =
         gatewayState === "other-workspace" ? "/workspace/spawned" : undefined;
+      const work = new AsyncWorkScope();
+      if (gatewayState === "interrupted") {
+        work.beginClose();
+      }
       if (gatewayState === "uninspectable") {
         catalogState.readActiveGatewayLockIdentity.mockRejectedValue(
           new Error("Gateway lock payload could not be verified"),
         );
       } else if (gatewayState !== "absent") {
         catalogState.readActiveGatewayLockIdentity.mockResolvedValue(gatewayOwner);
-        if (gatewayState === "unreachable") {
+        if (gatewayState === "unreachable" || gatewayState === "interrupted") {
           catalogState.callGateway.mockRejectedValue(new Error("Gateway unavailable"));
         } else {
           catalogState.callGateway.mockResolvedValue({
@@ -310,7 +319,10 @@ describe("sessionsCommand", () => {
         agents: { defaults: { model: { primary: "llama-cpp/local-llama" } } },
       }));
       const { runtime, logs, errors } = makeRuntime();
-      await sessionsCommand({ json: true }, runtime);
+      await work.run(() => sessionsCommand({ json: true }, runtime));
+      if (gatewayState === "interrupted") {
+        return expect([...logs, ...errors]).toEqual([]);
+      }
       const payload = JSON.parse(logs[0] ?? "{}") as SessionsJsonPayload;
       expect(payload.sessions?.[0]).toMatchObject({
         contextTokens: 16_384,
@@ -335,10 +347,7 @@ describe("sessionsCommand", () => {
   it("shows placeholder rows when tokens are missing", async () => {
     const store = await writeSession(
       "xyz",
-      {
-        updatedAt: Date.now() - 5 * 60_000,
-        thinkingLevel: "high",
-      },
+      { thinkingLevel: "high" },
       "agent:main:quietchat:group:demo",
     );
 
@@ -380,12 +389,10 @@ describe("sessionsCommand", () => {
     expect(textOutput).toContain("\\r\\nforged-id");
     expect(textOutput).toContain("🦞\\tvariant");
 
-    const payload = await readSessionsJson(store);
-
-    expect(payload.sessions?.[0]).toMatchObject({ key, sessionId, model });
+    expect((await readSessionsJson(store)).sessions?.[0]).toMatchObject({ key, sessionId, model });
   });
 
-  it("preserves collaboration metadata in JSON and human output", async () => {
+  it.each([false, true])("preserves collaboration metadata (delegated=%s)", async (delegated) => {
     const sessionKey = "agent:main:shared";
     const ids = ["profile-ada", "profile-ben", "profile-cam", "profile-dee", "profile-eli"];
     const store = await writeSession(
@@ -396,8 +403,11 @@ describe("sessionsCommand", () => {
         createdActor: {
           type: "human",
           source: "profile",
-          id: "profile-creator",
+          id: delegated ? "isolation-owner" : "profile-creator",
           label: "Creator",
+          ...(delegated
+            ? { delegatedBy: { type: "human", source: "profile", id: "profile-creator" } as const }
+            : {}),
         },
       },
       sessionKey,
@@ -422,7 +432,6 @@ describe("sessionsCommand", () => {
     const shared = payload.sessions?.find((entry) => entry.key === sessionKey);
     expect(shared).toMatchObject({
       visibility: "suggest",
-      createdActor: { type: "human", id: "profile-creator" },
       owner: {
         actor: { type: "human", id: "profile-owner" },
         assignedBy: { type: "human", id: "profile-admin" },
@@ -430,6 +439,12 @@ describe("sessionsCommand", () => {
       },
       participantCount: 5,
       participants: ids.map((id) => ({ identity: { type: "profile", id } })),
+    });
+    expect(shared?.createdActor).toEqual({
+      type: "human",
+      source: "profile",
+      id: "profile-creator",
+      ...(delegated ? {} : { label: "Creator" }),
     });
     expect(shared).not.toHaveProperty("sharingRole");
   });
@@ -486,7 +501,6 @@ describe("sessionsCommand", () => {
     expect(child).not.toHaveProperty("sessionFile");
     for (const key of ["agent:main:uncolored", "agent:main:cleared"]) {
       const row = payload.sessions?.find((session) => session.key === key);
-      expect(row).toBeDefined();
       expect(row).not.toHaveProperty("color");
     }
   });
@@ -538,11 +552,10 @@ describe("sessionsCommand", () => {
     const store = await writeStore(
       {
         "agent:main:newest": { sessionId: "newest", updatedAt: Date.now(), model: "test:opus" },
-        "agent:main:oldest": {
-          sessionId: "oldest",
+        "agent:main:oldest": makeSession("oldest", {
           updatedAt: Date.now() - 120_000,
           model: "test:opus",
-        },
+        }),
       },
       "sessions-limit-all",
     );
@@ -582,8 +595,7 @@ describe("sessionsCommand", () => {
       humanOutput: message,
       machineOutput: message,
     });
-    expect(logs).toEqual([]);
-    expect(errors).toEqual([]);
+    expect([...logs, ...errors]).toEqual([]);
     expect(runtimeExit).not.toHaveBeenCalled();
     expect(listSessionEntries).not.toHaveBeenCalled();
   });

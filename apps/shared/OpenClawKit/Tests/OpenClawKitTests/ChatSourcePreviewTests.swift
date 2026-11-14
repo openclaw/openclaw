@@ -250,6 +250,65 @@ struct ChatSourcePreviewTests {
         #expect((projector.project([answer])[answer.id] ?? []).isEmpty)
     }
 
+    @Test func `incremental projection matches a fresh projection and reuses unchanged replies`() throws {
+        let session = "https://gateway.example.com/chat/main/session"
+        let searchID = UUID()
+        let search = { (title: String) in
+            self.tool(
+                self.searchPayload([self.row(self.first, title: title), self.row(self.second), self.row(session)]),
+                name: "web_search",
+                id: searchID)
+        }
+        let fetch = self.fetch(self.second, final: self.second, title: "Fetched")
+        let answer = self.answer("[a](\(self.first)) [b](\(self.second)) [c](\(session))")
+        let otherSearch = self.search([self.row(self.first, title: "Other run")], run: "other-run")
+        let otherAnswer = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "[a](\(self.first))", mimeType: nil, fileName: nil, content: nil)],
+            timestamp: 3, transcriptRunID: "other-run", stopReason: "stop", phase: "final_answer")
+        let thirdSearch = self.search([self.row(self.second, title: "Third run")], run: "third-run")
+        let thirdAnswer = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "[b](\(self.second))", mimeType: nil, fileName: nil, content: nil)],
+            timestamp: 4, transcriptRunID: "third-run", stopReason: "stop", phase: "final_answer")
+        let context = try OpenClawChatSourceContext(
+            gatewayURL: #require(URL(string: "https://gateway.example.com/")), basePath: "", publicOrigin: nil)
+        let original = [search("Original"), fetch, answer, otherSearch, otherAnswer]
+        let steps: [(messages: [OpenClawChatMessage], context: OpenClawChatSourceContext?)] = [
+            (original, nil),
+            (original + [self.call("read")], nil),
+            ([search("Edited"), fetch, answer, otherSearch, otherAnswer], nil),
+            ([search("Edited"), answer, otherSearch, otherAnswer], nil),
+            ([search("Edited"), answer, otherAnswer, otherSearch], nil),
+            ([search("Edited"), answer, otherAnswer, otherSearch], context),
+            ([search("Edited"), fetch, answer, otherSearch, otherAnswer], context),
+            ([search("Edited"), fetch, otherSearch, otherAnswer], context),
+            (original, nil),
+            (original, context),
+            (original + [thirdSearch, thirdAnswer], context),
+        ]
+        // Replies whose cards must be reused (true) or rebuilt (false) at a step.
+        let reuse: [Int: [UUID: Bool]] = [
+            1: [answer.id: true, otherAnswer.id: true],
+            2: [answer.id: false, otherAnswer.id: true],
+            9: [answer.id: false, otherAnswer.id: false],
+            10: [answer.id: true, otherAnswer.id: true],
+        ]
+        var projector = ChatSourcePreviewProjector()
+        var previous: [UUID: [ChatSourcePreview]] = [:]
+        for (index, step) in steps.enumerated() {
+            let incremental = projector.project(step.messages, context: step.context)
+            var fresh = ChatSourcePreviewProjector()
+            #expect(incremental == fresh.project(step.messages, context: step.context), "step \(index)")
+            for (id, reused) in reuse[index] ?? [:] {
+                let before = previous[id]?.withUnsafeBufferPointer(\.baseAddress)
+                let after = incremental[id]?.withUnsafeBufferPointer(\.baseAddress)
+                #expect(before != nil && after != nil && (before == after) == reused, "step \(index)")
+            }
+            previous = incremental
+        }
+    }
+
     @Test func `inline results and JSON result text retain invocation and canonical run ownership`() throws {
         let payload = self.searchPayload([self.row(self.first, snippet: "The <think> tag is literal source content.")])
         let answer = self.answer("[source](\(self.first))")
@@ -304,6 +363,81 @@ struct ChatSourcePreviewTests {
             ]), answer,
         ])[answer.id] ?? []
         #expect(result.map(\.url.absoluteString) == [self.second, self.first])
+    }
+
+    @Test @MainActor func `Markdown citations across work preserve the intact envelope`() {
+        let source = OpenClawChatMessage(role: "assistant", content: [
+            .init(type: "text", text: "[First](\(self.first))"),
+            .init(type: "toolCall", id: "call", name: "read"),
+            .init(type: "tool_result", text: "Recorded", id: "call"),
+            .init(type: "text", text: "[Second](\(self.second))"),
+        ], timestamp: 3, transcriptRunID: self.runID, phase: "final_answer")
+        let state = ChatSourcePreviewState()
+        state.update([self.search([self.row(self.first), self.row(self.second)]), source])
+        #expect(state.previews(for: source).count == 2)
+        let cards = source.workPresentationParts.map { state.previews(for: $0).map(\.url.absoluteString) }
+        #expect(cards == [[self.first, self.second]])
+        #expect(source.workPresentationParts.map(\.content) == [source.content])
+    }
+
+    @Test @MainActor func `split presentation scopes cards to its own citations`() {
+        let source = OpenClawChatMessage(role: "assistant", content: [
+            .init(type: "toolCall", id: "first-call", name: "read"),
+            .init(type: "tool_result", text: "Recorded first", id: "first-call"),
+            .init(type: "text", text: "Read \(self.first) and \(self.second)."),
+            .init(type: "toolCall", id: "second-call", name: "read"),
+            .init(type: "tool_result", text: "Recorded second", id: "second-call"),
+        ], timestamp: 3, transcriptRunID: self.runID, phase: "final_answer")
+        let state = ChatSourcePreviewState()
+        state.update([self.search([self.row(self.first), self.row(self.second)]), source])
+        #expect(state.previews(for: source).count == 2)
+        let parts = source.workPresentationParts
+        #expect(parts.count == 3)
+        #expect(parts.map(\.presentationBlockIndex) == [0, 2, 3])
+        let cards = parts.map { state.previews(for: $0).map(\.url.absoluteString) }
+        #expect(cards == [[], [self.first, self.second], []])
+    }
+
+    @Test @MainActor func `split row cards follow each row's visible text across repeated renders`() {
+        func split(_ text: String, id: UUID = UUID(), run: String? = nil) -> OpenClawChatMessage {
+            OpenClawChatMessage(id: id, role: "assistant", content: [
+                .init(type: "toolCall", id: "call", name: "read"),
+                .init(type: "tool_result", text: "Recorded", id: "call"),
+                .init(type: "text", text: text),
+            ], timestamp: 3, transcriptRunID: run ?? self.runID, phase: "final_answer")
+        }
+        let state = ChatSourcePreviewState()
+        let cited = split("Read \(self.first).")
+        let uncited = split("Read \(self.first).", run: "other-run")
+        let search = self.search([self.row(self.first), self.row(self.second)])
+        state.update([search, cited, uncited])
+        let render = { (messages: [OpenClawChatMessage]) in
+            messages.flatMap(\.workPresentationParts).map { state.previews(for: $0).map(\.url.absoluteString) }
+        }
+        for _ in 0..<3 {
+            #expect(render([cited, uncited]) == [[], [self.first], [], []])
+        }
+
+        let revised = split("Read \(self.second).", id: cited.id)
+        #expect(render([revised]) == [[], []])
+        state.update([search, revised])
+        #expect(render([revised]) == [[], [self.second]])
+
+        // Same row and content; each step changes one footer input of the visible text from the step before.
+        func footer(_ stopReason: String?, cites url: String? = nil, ownsFooter: Bool = true) -> OpenClawChatMessage {
+            var part = OpenClawChatMessage(
+                id: cited.id, role: "assistant", content: [.init(type: "text", text: "")], timestamp: 3,
+                transcriptRunID: self.runID, stopReason: stopReason, errorMessage: "See \(url ?? self.second).")
+            part.presentationBlockIndex = 5
+            part.presentationOwnsFooter = ownsFooter
+            return part
+        }
+        let cards = { (part: OpenClawChatMessage) in state.previews(for: part).map(\.url.absoluteString) }
+        #expect(cards(footer(nil)).isEmpty)
+        #expect(cards(footer("error")) == [self.second])
+        #expect(cards(footer("error", cites: self.first)).isEmpty)
+        #expect(cards(footer("error")) == [self.second])
+        #expect(cards(footer("error", ownsFooter: false)).isEmpty)
     }
 
     private func answer(_ text: String) -> OpenClawChatMessage {

@@ -1,4 +1,5 @@
 // Anthropic provider tests cover stream events, tools, and message mapping.
+import type { ClientOptions } from "@anthropic-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { AssistantMessage, Context, Model, Tool } from "../types.js";
@@ -10,7 +11,7 @@ import {
 import { makeProviderModel } from "./provider-model.test-support.js";
 
 const anthropicMockState = vi.hoisted(() => ({
-  configs: [] as unknown[],
+  configs: [] as ClientOptions[],
   requestOptions: [] as unknown[],
 }));
 
@@ -23,7 +24,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
       }),
     };
 
-    constructor(config: unknown) {
+    constructor(config: ClientOptions) {
       anthropicMockState.configs.push(config);
     }
   },
@@ -248,9 +249,9 @@ describe("Anthropic provider", () => {
     configureAiTransportHost({});
   });
 
-  it("keeps Cloudflare upstream auth on the Anthropic API key", async () => {
-    const hostFetch: typeof fetch = async () => new Response(null, { status: 500 });
-    configureAiTransportHost({ buildModelFetch: () => hostFetch });
+  it.each([false, true])("keeps auth with host fetch=%s", async (managedFetch) => {
+    const hostFetch = vi.fn<typeof fetch>(async () => new Response(null, { status: 500 }));
+    configureAiTransportHost({ buildModelFetch: () => (managedFetch ? hostFetch : undefined) });
     await streamAnthropic(
       makeAnthropicModel({
         provider: "cloudflare-ai-gateway",
@@ -264,10 +265,16 @@ describe("Anthropic provider", () => {
     expect(anthropicMockState.configs[0]).toMatchObject({
       apiKey: "sk-ant-provider",
       authToken: null,
-      fetch: hostFetch,
+      fetch: managedFetch ? expect.any(Function) : undefined,
       defaultHeaders: { "cf-aig-authorization": "Bearer gateway-token" },
     });
     expect(anthropicMockState.configs[0]).not.toHaveProperty("defaultHeaders.x-api-key");
+    const input = "https://provider.invalid";
+    const init = { method: "POST", body: '{"text":"🦞"}' };
+    if (managedFetch) {
+      await anthropicMockState.configs[0]?.fetch?.(input, init);
+      expect(hostFetch).toHaveBeenCalledWith(input, init);
+    }
   });
   it("keeps sentinel-backed Foundry headers on bearer routing", async () => {
     const sentinel = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
@@ -1001,34 +1008,37 @@ describe("Anthropic provider", () => {
     expect(first[0]).not.toHaveProperty("cache_control");
   });
 
-  it("keeps the relocatable marker out of native Anthropic system blocks", async () => {
-    // Native Anthropic relocates nothing, so the marker must not survive into
-    // the payload while the cache breakpoint still lands on the stable prefix.
-    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
-      {},
-      { stopBeforeNetwork: true },
-      {
-        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Reactions guidance${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Runtime: session=alpha${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`,
-        messages: [user("hello")],
-      },
-    );
-
-    expect(result.stopReason).toBe("error");
-    const system = (capturedPayload as { system?: unknown }).system;
-    const serialized = JSON.stringify(system);
-    expect(serialized).not.toContain("OPENCLAW-RELOCATABLE-BOUNDARY");
-    expect(serialized).not.toContain("OPENCLAW_CACHE_BOUNDARY");
-    expect(system).toEqual([
-      {
-        type: "text",
-        text: "Stable prefix",
-        cache_control: { type: "ephemeral" },
-      },
-      {
-        type: "text",
-        text: "Reactions guidance\nRuntime: session=alpha",
-      },
+  it("checkpoints the system text before the Runtime facts only on a session's opening request", async () => {
+    const systemPrompt = (session: string) =>
+      `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Reactions guidance${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY}Runtime: session=${session}${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}`;
+    const capture = async (session: string, messages: Context["messages"]) =>
+      (
+        await captureSimpleAnthropicPayload(
+          {},
+          { stopBeforeNetwork: true },
+          { systemPrompt: systemPrompt(session), messages },
+        )
+      ).payload as { system: unknown[]; messages: unknown[] };
+    const opening = await capture("alpha", [user("hello")]);
+    expect(opening.system).toEqual([
+      { type: "text", text: "Stable prefix", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "\nReactions guidance", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "\nRuntime: session=alpha" },
     ]);
+    const shared = opening.system[1] as { text: string };
+    const owned = opening.system[2] as { text: string };
+    expect(shared.text + owned.text).toBe("\nReactions guidance\nRuntime: session=alpha");
+    expect((opening.system as Array<{ text: string }>).map((block) => block.text).join("")).toBe(
+      "Stable prefix\nReactions guidance\nRuntime: session=alpha",
+    );
+    const another = await capture("beta", [user("hello")]);
+    expect(another.system.slice(0, 2)).toEqual(opening.system.slice(0, 2));
+    expect(another.system[2]).toEqual({ type: "text", text: "\nRuntime: session=beta" });
+    expect(JSON.stringify(opening.messages).split('"cache_control"')).toHaveLength(2);
+    const reply = makeAnthropicAssistantMessage([{ type: "text", text: "hi" }]);
+    const later = await capture("alpha", [user("hello"), reply, user("again")]);
+    expect(later.system[1]).toEqual({ type: "text", text: "\nReactions guidance" });
+    expect(JSON.stringify(later.messages).split('"cache_control"')).toHaveLength(3);
   });
 
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {

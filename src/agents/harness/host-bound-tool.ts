@@ -1,3 +1,7 @@
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../../../packages/agent-core/src/internal-hooks.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import {
@@ -6,11 +10,7 @@ import {
 } from "../agent-tool-source-execution-guard.js";
 import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
 import { rewrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
-import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-} from "../runtime/internal-hooks.js";
-import { registerTrustedToolNoStartError } from "../tool-result-error.js";
+import { markToolExecutionNotStarted as registerTrustedToolNoStartError } from "../tool-effect-receipt.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { wrapToolWithGatewayCallerIdentity } from "../tools/gateway-caller-context.js";
 import type { AgentWorkspaceReadiness } from "../workspace-readiness.js";

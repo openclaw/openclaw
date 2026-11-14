@@ -2,12 +2,10 @@ import { randomUUID } from "node:crypto";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type WebSocket from "ws";
 import { sleepWithAbort } from "../infra/backoff.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import type { captureWsEventAsync } from "../proxy-capture/runtime.js";
-import type {
-  RealtimeVoiceBridge,
-  RealtimeVoiceBridgeCreateRequest,
-  RealtimeVoiceCloseOptions,
-} from "../talk/provider-types.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../talk/provider-contexts.js";
+import type { RealtimeVoiceBridge, RealtimeVoiceCloseOptions } from "../talk/provider-types.js";
 import { RealtimeVoiceSessionLifecycle } from "../talk/realtime-session-lifecycle.js";
 import type { RealtimeVoiceSessionConnection } from "../talk/realtime-session-lifecycle.js";
 
@@ -345,6 +343,7 @@ export class RealtimeVoiceWebSocketTransport<Event extends RealtimeWireEvent> {
       return;
     }
     const socket = this.ws;
+    materializeErrorStack(error);
     this.terminalError = error;
     if (!this.lifecycle.failure(connection)) {
       return;
@@ -629,13 +628,15 @@ export type {
   InternalRealtimeVoiceProviderCapabilities,
 } from "../talk/provider-internal.js";
 export type {
+  RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceBrowserSessionCreateRequest,
+} from "../talk/provider-contexts.js";
+export type {
   OpenAICompatibleRealtimeAudioFormat,
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBargeInOptions,
   RealtimeVoiceBridge,
-  RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceBrowserSession,
-  RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceTool,

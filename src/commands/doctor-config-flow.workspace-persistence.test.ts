@@ -125,7 +125,7 @@ it.each([
   { included: true, otherRepair: false, value: false },
   { included: true, otherRepair: false, value: true },
 ])(
-  "persists collaborative steering without overriding authored config (included=$included, other repair=$otherRepair, value=$value)",
+  "keeps steering defaults runtime-only and preserves authored config (included=$included, other repair=$otherRepair, value=$value)",
   async ({ included, otherRepair, value }) => {
     await withQueueDefaultHome(async (home) => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
@@ -160,7 +160,7 @@ it.each([
         if (included) {
           expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
         }
-        // A later root-owned health repair must coexist with an included queue default.
+        // A later root-owned repair must leave included steering policy untouched.
         if (!otherRepair) {
           ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 18880 } };
         }
@@ -168,17 +168,14 @@ it.each([
         expect(ctx.configWriteRefusal).toBeUndefined();
         const saved = await readConfigFileSnapshot();
         expect(saved.valid).toBe(true);
-        expect(saved.sourceConfig.messages?.queue?.allowCollaborativeSteering).toBe(value ?? false);
+        expect(saved.sourceConfig.messages?.queue?.allowCollaborativeSteering).toBe(value);
+        expect(saved.runtimeConfig.messages?.queue?.allowCollaborativeSteering).toBe(value ?? true);
         expect(saved.sourceConfig.gateway?.port).toBe(otherRepair ? undefined : 18880);
         expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(before);
         if (included) {
           expect(saved.parsed).toHaveProperty("messages", { $include: "./messages.json" });
           expect(saved.sourceConfig.messages?.responsePrefix).toBe("keep-prefix");
-          if (value === undefined) {
-            expect(await fs.readFile(`${includePath}.bak`, "utf8")).toBe(includeRaw);
-          } else {
-            expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
-          }
+          expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
         }
         if (otherRepair) {
           expect(saved.parsed).toHaveProperty("agents.entries.main", {
@@ -324,7 +321,7 @@ it(
       expect(await readText(`${configPath}.bak`)).toBe(original);
 
       const saved = await readJson(configPath);
-      expect(saved.messages?.queue?.allowCollaborativeSteering).toBe(false);
+      expect(saved.messages?.queue?.allowCollaborativeSteering).toBeUndefined();
       expect(saved.agents).toMatchObject({ ownership: "explicit", defaults });
       expect(saved.agents.entries.ops).toEqual({
         memory: { search: entries.ops.memorySearch },
@@ -383,44 +380,76 @@ it(
   ),
 );
 
-it(
-  "repairs workspace and migrates heartbeat cadence through persistence",
-  withHome(async (home) => {
-    const configPath = await writeConfig(home, {
-      agents: {
-        list: [
-          {
-            id: " Ops ",
-            workspace: null,
-            heartbeat: { every: "30m", activeHours: { start: "99:99", end: "17:00" } },
+it.each(["agent", "defaults"] as const)(
+  "retains invalid %s heartbeat hours until corrected through persistence",
+  (scope) =>
+    withHome(async (home) => {
+      const perAgent = scope === "agent";
+      const invalid = perAgent ? "6:00" : "9:00";
+      const corrected = perAgent ? "06:00" : "09:00";
+      const expectedHours = perAgent
+        ? { start: "22:00", end: "06:00", timezone: "user" }
+        : { start: "09:00", end: "17:00", timezone: "user" };
+      const night = {
+        id: "night",
+        workspace: null,
+        heartbeat: { activeHours: { start: "22:00", end: invalid } },
+      };
+      const configPath = await writeConfig(home, {
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: perAgent ? "30m" : undefined,
+              target: "none",
+              activeHours: perAgent
+                ? { start: "08:00", end: "20:00" }
+                : { start: invalid, end: "17:00" },
+            },
           },
-        ],
-      },
-    });
-    expect((await readConfigFileSnapshot()).valid).toBe(false);
-    await using ctx = await prepareDoctorContext(configPath);
-    expect(ctx.configResult.shouldWriteConfig).toBe(true);
-    expect(ctx.cfg.agents?.entries?.ops).toEqual({});
-    await runInitialConfigWriteHealth(ctx);
-
-    const saved = await readJson(configPath);
-    expect(saved.agents.entries.ops).toEqual({});
-    expect(saved.agents).not.toHaveProperty("list");
-    expect((await readConfigFileSnapshot()).valid).toBe(true);
-    const storePath = resolveCronJobsStorePathFromConfig(saved);
-    const migrated = await loadCronJobsStore(storePath);
-    expect(migrated.jobs).toHaveLength(1);
-    expect(migrated.jobs[0]).toMatchObject({
-      agentId: "ops",
-      enabled: true,
-      schedule: { kind: "every", everyMs: 30 * 60 * 1000 },
-      payload: { kind: "agentTurn", skipIfScratchEmpty: true },
-      idleOnly: true,
-    });
-    expect(migrated.jobs[0]?.activeHours).toBeUndefined();
-    await expectSettled(configPath);
-    expect(await loadCronJobsStore(storePath)).toEqual(migrated);
-  }),
+          list: [{ id: "main", default: true }, ...(perAgent ? [night] : [])],
+        },
+      });
+      const original = await readText(configPath);
+      const storePath = resolveCronJobsStorePathFromConfig({});
+      {
+        await using ctx = await prepareDoctorContext(configPath);
+        await runInitialConfigWriteHealth(ctx);
+        expect(ctx.configWriteRefusal).toBe("validation");
+        expect(await readText(configPath)).toBe(original);
+        expect((await loadCronJobsStore(storePath)).jobs).toEqual([]);
+        const diagnostic = ctx.configResult.warnings?.join("\n") ?? "";
+        expect(diagnostic).toContain(
+          perAgent
+            ? "agents.entries.night.heartbeat.activeHours.end"
+            : "agents.defaults.heartbeat.activeHours.start",
+        );
+        expect(diagnostic).toContain(JSON.stringify(invalid));
+        expect(diagnostic).toContain("openclaw doctor --fix");
+      }
+      await fs.writeFile(
+        configPath,
+        original.replace(JSON.stringify(invalid), JSON.stringify(corrected)),
+      );
+      await writeInitial(configPath);
+      const saved = await readConfigFileSnapshot();
+      expect(saved.valid).toBe(true);
+      expect(saved.config.agents?.defaults).not.toHaveProperty("heartbeat");
+      expect(saved.config.agents?.entries?.[perAgent ? "night" : "main"]).not.toHaveProperty(
+        "heartbeat",
+      );
+      const migrated = await loadCronJobsStore(storePath);
+      expect(migrated.jobs).toHaveLength(1);
+      expect(migrated.jobs[0]).toMatchObject({
+        agentId: perAgent ? "night" : "main",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 30 * 60 * 1000 },
+        payload: { kind: "agentTurn", skipIfScratchEmpty: true },
+        idleOnly: true,
+        activeHours: expectedHours,
+      });
+      await expectSettled(configPath);
+      expect(await loadCronJobsStore(storePath)).toEqual(migrated);
+    })(),
 );
 
 it(
