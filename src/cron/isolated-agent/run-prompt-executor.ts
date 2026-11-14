@@ -47,6 +47,7 @@ import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { isCommandStyleCronMessage } from "./command-style-prompt.js";
 import {
   assertCronCandidateSandboxPlacement,
+  assertCronCliAccessProgram,
   assertCronRuntimeAuthorityCandidate,
   resolveCliChildAbortSignal,
   resolveCronSandboxPlacement,
@@ -487,7 +488,12 @@ export function createCronPromptExecutor(
             suppressNextUserMessagePersistence:
               userTurnTranscriptRecorder.hasPersisted() || userTurnTranscriptRecorder.isBlocked(),
           }) satisfies Partial<Parameters<CronEmbeddedRuntime["runCronEmbeddedAgent"]>[0]>;
+        const cyberAccessProgram =
+          runOptions.cyberAccessProgram ??
+          params.job.cyberAccessProgram ??
+          params.cronSession.sessionEntry.cyberAccessProgram;
         if (cliExecution) {
+          assertCronCliAccessProgram(cyberAccessProgram, providerOverride);
           const allowCliAuthProfileForwarding = cliBackendAcceptsAuthProfileForwarding({
             provider: executionProvider,
             config: params.cfgWithAgentDefaults,
@@ -653,10 +659,7 @@ export function createCronPromptExecutor(
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: runOptions.modelFallbacksOverride,
           resolvedModelSelection: runOptions.resolvedModelSelection,
-          cyberAccessProgram:
-            runOptions.cyberAccessProgram ??
-            params.job.cyberAccessProgram ??
-            params.cronSession.sessionEntry.cyberAccessProgram,
+          cyberAccessProgram,
           authProfileId: runOptions.authProfileId ?? params.liveSelection.authProfileId,
           authProfileIdSource: runOptions.authProfileId
             ? "user"
