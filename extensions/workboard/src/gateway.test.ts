@@ -493,6 +493,16 @@ describe("workboard gateway methods", () => {
       { title: "Check labels", labels: `valid, ${"x".repeat(41)}` },
       { error: { message: "labels must be 40 characters or fewer." } },
     ],
+    [
+      "create",
+      { title: "Too many labels", labels: Array.from({ length: 13 }, (_, index) => "l" + index) },
+      { error: { message: "labels supports at most 12 entries." } },
+    ],
+    [
+      "update",
+      { patch: { labels: Array.from({ length: 13 }, (_, index) => "l" + index) } },
+      { error: { message: "labels supports at most 12 entries." } },
+    ],
     ["create", { title: "Card", metadata: invalidMetadata }, { error: { message: metadataError } }],
     ["update", { patch: { metadata: invalidMetadata } }, { error: { message: metadataError } }],
   ] as const)("validates %s at the card RPC boundary", async (action, input, expected) => {
