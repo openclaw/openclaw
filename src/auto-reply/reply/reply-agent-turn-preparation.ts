@@ -566,6 +566,12 @@ export async function prepareReplyAgentTurn<TConfigured>(
               // checkpoint result. A queued source must not bypass this memory write.
               beforeCompaction: async (entry) => {
                 await admitReplyMaintenance(turn, replySessionKey, assertAdmissionCurrent);
+                try {
+                  await preparation.opts.onReplyPreparation?.("context");
+                } catch (error) {
+                  logVerbose(`reply preparation feedback failed: ${formatErrorMessage(error)}`);
+                }
+                assertAdmissionCurrent();
                 const flushed = await tracePhase("reply.memory_flush", () =>
                   runMemoryFlushIfNeeded({
                     ...preparation,

@@ -6,6 +6,7 @@ import { createPreparationRun as createRun } from "./reply-agent-turn-preparatio
 const state = vi.hoisted(() => ({
   admit: vi.fn(),
   preflight: vi.fn(),
+  flush: vi.fn(),
   resolveConfig: vi.fn(async (config: unknown) => config),
 }));
 
@@ -27,6 +28,7 @@ vi.mock("./reply-turn-admission.js", async (importOriginal) => ({
 vi.mock("./agent-runner-memory.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-runner-memory.js")>()),
   runSessionCompactionIfNeeded: state.preflight,
+  runMemoryFlushIfNeeded: state.flush,
 }));
 
 const { prepareReplyAgentTurn } = await import("./reply-agent-turn-preparation.js");
@@ -130,5 +132,37 @@ it.each([null, "aborted_by_user", "aborted_for_restart"] as const)(
       expect(spies.fail).toHaveBeenCalledExactlyOnceWith("run_failed", failure);
     }
     expect(state.preflight).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["success", "failed feedback", "aborted"] as const)(
+  "awaits context feedback before the memory checkpoint: %s",
+  async (outcome) => {
+    const events: string[] = [];
+    const controller = new AbortController();
+    const { operation } = createOperation();
+    Object.assign(operation, { abortSignal: controller.signal });
+    state.admit.mockResolvedValue({ status: "owned", operation });
+    const entry = { sessionId: "session", updatedAt: 0 };
+    state.preflight.mockImplementation(async (params) => params.beforeCompaction(entry));
+    state.flush.mockImplementation(async () => {
+      events.push("checkpoint");
+      return { sessionEntry: entry, outcome: "completed" };
+    });
+    const onReplyPreparation = vi.fn(async () => {
+      await Promise.resolve();
+      events.push("context");
+      if (outcome === "aborted") {
+        controller.abort();
+      } else if (outcome === "failed feedback") {
+        throw new Error("feedback unavailable");
+      }
+    });
+    const result = await prepare({ opts: { onReplyPreparation } });
+    expect(onReplyPreparation).toHaveBeenCalledExactlyOnceWith("context");
+    expect(events).toEqual(outcome === "aborted" ? ["context"] : ["context", "checkpoint"]);
+    expect(state.flush).toHaveBeenCalledTimes(outcome === "aborted" ? 0 : 1);
+    assert(result.kind === "admitted");
+    expect(Boolean(result.turn.preflightError)).toBe(outcome === "aborted");
   },
 );
