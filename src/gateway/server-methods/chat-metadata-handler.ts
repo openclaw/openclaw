@@ -26,6 +26,10 @@ import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
 import { prepareChatMetadataSessionRead } from "./chat-metadata-session-read.js";
 import { createPreparedReadHandler } from "./prepared-read.js";
+import {
+  GatewayRequestCancelledError,
+  rethrowGatewayRequestCancelledError,
+} from "./request-cancelled-error.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { prepareAuthenticatedProfile } from "./users-profile-access.js";
@@ -49,11 +53,15 @@ export async function resolveChatMetadataReadParams(
   const userInput = client?.authenticatedUserId;
   const isRequestCurrent = () =>
     !signal?.aborted &&
+    !client?.connectionSignal?.aborted &&
     readOperatorRolePolicyRevision() === roleRevision &&
     readUserProfileAliasRevision() === aliasRevision &&
     client?.authenticatedUserProfile?.profileId === profileInput &&
     client?.authenticatedUserId === userInput;
   const assertRequestCurrent = () => {
+    if (client?.connectionSignal?.aborted) {
+      throw new GatewayRequestCancelledError();
+    }
     if (!isRequestCurrent() || context.getRuntimeConfig() !== cfg) {
       throw new PreparedModelRuntimePublicationSupersededError(
         "Chat metadata access changed while preparing its metadata. Retry the request.",
@@ -234,6 +242,7 @@ export const handleChatMetadataRequest = createPreparedReadHandler(
     }
   },
   (error, { respond }) => {
+    rethrowGatewayRequestCancelledError(error);
     if (error instanceof SessionMutationAuthorizationChangedError) {
       respond(false, undefined, error.error);
       return;
