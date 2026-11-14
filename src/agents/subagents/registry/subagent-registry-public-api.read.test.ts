@@ -1,12 +1,28 @@
 import { aroundEach, expect, it, vi } from "vitest";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawSwarmToolGroups,
+  createSwarmCollectorWriteAuthority,
+} from "../../openclaw-tools.swarm.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  createAgentsWaitTool,
+  withNativeSubagentCollectorOwner,
+} from "../../tools/agents-wait-tool.js";
+import {
+  consumeSwarmStructuredOutput,
+  createStructuredOutputTool,
+  peekSwarmStructuredOutput,
+} from "../../tools/structured-output-tool.js";
+import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
 import type { PreparedSubagentRunsRead } from "./subagent-registry-read-snapshot.js";
 import {
   persistRegistryFixture,
+  loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import {
@@ -110,6 +126,175 @@ it("uses the replacement owner published while collector payload hydration is pe
     read.mockRestore();
   }
 });
+
+it("retains a valid late collector result after the missing-output completion freezes", async () => {
+  const runId = "late-structured-output";
+  const entry = createRun(runId, {
+    execution: { status: "terminal", endedAt: 200, outcome: { status: "ok" } },
+    collectorCompletion: undefined,
+    outputSchema: {
+      type: "object",
+      properties: { answer: { type: "number" } },
+      required: ["answer"],
+    },
+  });
+  const runs = subagentRuns;
+  runs.set(runId, entry);
+  let grantCurrent = true;
+  const tool = createOpenClawSwarmToolGroups({
+    effectiveRequesterAgentId: "main",
+    runSessionKey: entry.childSessionKey,
+    runId,
+    swarmCollector: true,
+    swarmOutputSchema: entry.outputSchema,
+    assertCollectorWriteAuthority: createSwarmCollectorWriteAuthority({
+      admission: {
+        childSessionKey: entry.childSessionKey,
+        childAgentId: "main",
+        admittedRunId: runId,
+      },
+      isGrantCurrent: () => grantCurrent,
+    }),
+  }).structuredOutput[0]!;
+  const waitTool = createAgentsWaitTool({ agentId: "main", agentSessionKey: "agent:main:main" });
+  const wait = () =>
+    withNativeSubagentCollectorOwner(
+      waitTool,
+      "wait",
+      {
+        currentSessionKeys: new Set(["agent:main:main"]),
+        currentAgentId: "main",
+        assertCurrent: () => {
+          if (!grantCurrent) {
+            throw new Error("requester retired");
+          }
+        },
+      },
+      () => waitTool.execute("wait", { ids: [runId], timeoutSeconds: 0 }),
+    );
+  updateSwarmCollectorCompletion(entry, {}, { entry: undefined });
+  persistRegistryFixture(runs);
+  expect(entry.collectorCompletion).toEqual({
+    status: "failed",
+    schemaError: "structured_output was not called",
+  });
+  try {
+    expect((await wait()).details).toMatchObject({
+      completed: [{ runId, status: "failed", schemaError: "structured_output was not called" }],
+    });
+    expect((await tool.execute("late", { result: { answer: 42 } })).details).toEqual({
+      status: "recorded",
+    });
+    expect(loadSubagentRegistryFromSqlite().get(runId)?.collectorCompletion).toEqual({
+      status: "done",
+      structured: { answer: 42 },
+    });
+    grantCurrent = false;
+    await expect(tool.execute("revoked", { result: { answer: 43 } })).rejects.toThrow(
+      "grant is no longer active",
+    );
+    grantCurrent = true;
+    await expect(tool.execute("duplicate", { result: { answer: 43 } })).rejects.toThrow(
+      "collector run is unavailable",
+    );
+    runs.clear();
+    for (let read = 0; read < 2; read += 1) {
+      expect((await wait()).details).toMatchObject({
+        completed: [{ runId, status: "done", structured: { answer: 42 } }],
+        pending: [],
+      });
+    }
+    expect(peekSwarmStructuredOutput(runId)).toBeUndefined();
+    grantCurrent = false;
+    await expect(wait()).rejects.toThrow("requester retired");
+    expect(loadSubagentRegistryFromSqlite().get(runId)?.collectorCompletion?.structured).toEqual({
+      answer: 42,
+    });
+  } finally {
+    consumeSwarmStructuredOutput(runId);
+  }
+});
+
+it("leaves a frozen missing-output failure unchanged when its late result cannot commit", async () => {
+  const runId = "uncommitted-collector";
+  const entry = createRun(runId, {
+    execution: { status: "terminal", outcome: { status: "ok" } },
+    collectorCompletion: { status: "failed", schemaError: "structured_output was not called" },
+  });
+  const runs = new Map([[runId, entry]]);
+  persistRegistryFixture(runs);
+  const api = createReadApi(runs);
+  const tool = createStructuredOutputTool({
+    runId,
+    schema: { type: "object" },
+    onStateChange: (state) => api.recordSwarmStructuredOutput({ runId }, state),
+  });
+  await expect(tool.execute("invalid", { result: 42 })).rejects.toThrow(
+    "collector run is unavailable",
+  );
+  const rejectedWrite = vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockRejectedValueOnce(new Error("sqlite unavailable"));
+  try {
+    await expect(tool.execute("late", { result: { answer: 42 } })).rejects.toThrow(
+      "sqlite unavailable",
+    );
+    expect(loadSubagentRegistryFromSqlite().get(runId)?.collectorCompletion).toEqual(
+      entry.collectorCompletion,
+    );
+    expect(runs.get(runId)?.collectorCompletion).toEqual(entry.collectorCompletion);
+    expect(peekSwarmStructuredOutput(runId)).toBeUndefined();
+  } finally {
+    rejectedWrite.mockRestore();
+  }
+});
+
+it.each([
+  { execution: { status: "terminal", outcome: { status: "error", error: "completed" } } },
+  { execution: { status: "terminal", outcome: { status: "error", error: "provider failed" } } },
+  { execution: { status: "terminal", outcome: { status: "timeout" } } },
+  { collectorCompletion: { status: "killed", schemaError: "structured_output was not called" } },
+  { collectorCompletion: { status: "failed", schemaError: "invalid type" } },
+  {
+    collectorCompletion: {
+      status: "failed",
+      schemaError: "structured_output was not called",
+      structured: { answer: 7 },
+    },
+  },
+  {
+    collectorCompletion: {
+      status: "failed",
+      schemaError: "structured_output was not called",
+      reason: "yielded_without_result",
+    },
+  },
+] satisfies Partial<SubagentRunRecord>[])(
+  "preserves a terminal failure that is not solely missing output: %j",
+  async (overrides) => {
+    const runId = "failed-collector";
+    const entry = createRun(runId, {
+      execution: { status: "terminal", outcome: { status: "ok" } },
+      collectorCompletion: { status: "failed", schemaError: "structured_output was not called" },
+      ...overrides,
+    });
+    const runs = new Map([[runId, entry]]);
+    const api = createReadApi(runs);
+    persistRegistryFixture(runs);
+    const tool = createStructuredOutputTool({
+      runId,
+      schema: { type: "object" },
+      onStateChange: (state) => api.recordSwarmStructuredOutput({ runId }, state),
+    });
+    await expect(tool.execute("late", { result: { answer: 42 } })).rejects.toThrow(
+      "collector run is unavailable",
+    );
+    expect(loadSubagentRegistryFromSqlite().get(runId)?.collectorCompletion).toEqual(
+      entry.collectorCompletion,
+    );
+    expect(peekSwarmStructuredOutput(runId)).toBeUndefined();
+  },
+);
 
 it("counts retained children without preparing unrelated descendant graphs", async () => {
   const activeChildren = 4;
