@@ -3,7 +3,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as cron from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { enqueueCommandInLane, setCommandLaneConcurrency } from "../process/command-queue.js";
+import {
+  enqueueCommandInLane,
+  getCommandLaneSnapshot,
+  setCommandLaneConcurrency,
+} from "../process/command-queue.js";
 import * as work from "../process/gateway-work-admission.js";
 import { CommandLane } from "../process/lanes.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
@@ -11,7 +15,7 @@ import * as clocks from "../test-utils/gateway-scheduler-clock.js";
 import { createTestCronOperatorSource } from "./execution-context.test-support.js";
 import { handOver, start, stop } from "./service/ops-lifecycle.js";
 import { waitForCronRunQueue } from "./service/run-queue.js";
-import { resolveCronRunSlots } from "./service/run-slots.js";
+import { resolveCronRunSlots, watchCronRunSlotPushback } from "./service/run-slots.js";
 import { startCronScheduler } from "./service/scheduler-actor.js";
 import { captureCronSchedulerWakeForTest } from "./service/scheduler-actor.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
@@ -504,6 +508,16 @@ it("runs as many automations as the agent limit leaves free of conversations", a
   }
 });
 
+const rateLimited = () =>
+  emitAgentEvent({
+    runId: "attempt",
+    stream: "lifecycle",
+    data: {
+      phase: "error",
+      errorObservation: { provider: "stand-in", failoverReason: "rate_limit" },
+    },
+  });
+
 it("halves automation's sessions on a provider rate limit and adds a slot back each minute", async () => {
   let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
   const dueAtMs = nowMs + 1_000;
@@ -529,15 +543,6 @@ it("halves automation's sessions on a provider rate limit and adds a slot back e
   const sessions = Array.from({ length: 22 }, () =>
     enqueueCommandInLane(CommandLane.CronNested, async () => await finish.promise),
   );
-  const rateLimited = () =>
-    emitAgentEvent({
-      runId: "attempt",
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        errorObservation: { provider: "stand-in", failoverReason: "rate_limit" },
-      },
-    });
   const tickAfter = async (ms: number) => {
     vi.setSystemTime(Date.now() + ms);
     await running.wake(state);
@@ -637,5 +642,40 @@ it("runs a fired payload when a conversation turn ending frees a run slot", asyn
     await Promise.all(turns);
     await waitForCronRunQueue(state);
     stop(state);
+  }
+});
+
+it("starts the quiet minute again on pushback that cannot lower the limit", async () => {
+  const cronConfig = { dynamicConcurrency: true };
+  setCommandLaneConcurrency(CommandLane.Main, 30);
+  setCommandLaneConcurrency(CommandLane.CronNested, 30);
+  const ends = Array.from({ length: 9 }, () => createDeferred());
+  const sessions = ends.map((end) =>
+    enqueueCommandInLane(CommandLane.CronNested, async () => await end.promise),
+  );
+  const inFlight = () => getCommandLaneSnapshot(CommandLane.CronNested).activeCount;
+  const after = (ms: number) => vi.setSystemTime(Date.now() + ms);
+  const stopWatch = watchCronRunSlotPushback();
+  try {
+    await vi.waitFor(() => expect(inFlight()).toBe(9));
+    // Nine automation sessions and a rate limit: automation drops to its floor of eight.
+    rateLimited();
+    expect(resolveCronRunSlots(cronConfig)).toBe(8);
+    ends[0]?.resolve();
+    await sessions[0];
+    expect(inFlight()).toBe(8);
+
+    // Another rate limit at eight sessions cannot lower the limit, but the next slot still
+    // needs a full minute without pushback.
+    after(50_000);
+    rateLimited();
+    after(10_000);
+    expect(resolveCronRunSlots(cronConfig)).toBe(8);
+    after(50_000);
+    expect(resolveCronRunSlots(cronConfig)).toBe(9);
+  } finally {
+    stopWatch();
+    ends.forEach((end) => end.resolve());
+    await Promise.all(sessions);
   }
 });
