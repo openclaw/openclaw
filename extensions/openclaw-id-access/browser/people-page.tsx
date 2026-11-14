@@ -34,12 +34,12 @@ import {
 } from "./people-error.js";
 import { memberName, removalNote, roleName } from "./people-format.js";
 import { createPeopleMotion } from "./people-motion.js";
+import { OperationError } from "./people-operation-error.js";
 import { observePeople } from "./people-refresh.js";
 import {
   InviteForm,
   Members,
   PendingRequests,
-  OperationError,
   type RemovedMemberNotice,
 } from "./people-sections.js";
 import type { Invite, Link, Member, MemberDevice, RemovalSummary, StatusResult } from "./types.js";
