@@ -117,6 +117,7 @@ it("sanitizes DM, group, and media-caption text before the Urbit poke", async ()
     "https://source.example/image.png",
     expect.objectContaining({ shipUrl: baseUrl, shipName: "~zod" }),
     1024 * 1024,
+    expect.anything(),
   );
 
   const expectText = (index: number, included: string[], excluded: string[]) => {

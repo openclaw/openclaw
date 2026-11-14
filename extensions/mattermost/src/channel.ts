@@ -404,6 +404,7 @@ async function sendMattermostContent(
     cfg: ctx.cfg,
     accountId: ctx.accountId ?? undefined,
     mediaUrl: content.mediaUrl,
+    mediaAccess: ctx.mediaAccess,
     mediaLocalRoots: ctx.mediaLocalRoots ?? ctx.mediaAccess?.localRoots,
     mediaReadFile: ctx.mediaReadFile ?? ctx.mediaAccess?.readFile,
     ...(ctx.mediaAccess?.workspaceDir ? { workspaceDir: ctx.mediaAccess.workspaceDir } : {}),

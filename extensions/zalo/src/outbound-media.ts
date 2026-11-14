@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   createHostedOutboundMediaStore,
@@ -69,6 +70,7 @@ export async function prepareHostedZaloMediaUrl(params: {
   webhookUrl: string;
   webhookPath?: string;
   maxBytes: number;
+  mediaAccess?: OutboundMediaAccess;
   proxyUrl?: string;
 }): Promise<string> {
   const routePath = `${resolveHostedZaloMediaRoutePrefix({
@@ -82,6 +84,7 @@ export async function prepareHostedZaloMediaUrl(params: {
     routePath,
     publicBaseUrl,
     maxBytes: params.maxBytes,
+    mediaAccess: params.mediaAccess,
     ...(params.proxyUrl ? { proxyUrl: params.proxyUrl } : {}),
   });
 }

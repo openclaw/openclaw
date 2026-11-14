@@ -20,6 +20,7 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import { type HistoryEntry, createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
@@ -757,7 +758,9 @@ export async function monitorZalouserProvider(options: ZalouserMonitorOptions) {
               await sendMessageZalouser(chatId, text, {
                 profile,
                 mediaMaxBytes,
-                ...(mediaUrl ? { mediaUrl } : {}),
+                ...(mediaUrl
+                  ? { mediaUrl, mediaAccess: resolveOutboundMediaAccessForConfig(config) }
+                  : {}),
                 isGroup,
                 textMode: "markdown",
                 textChunkMode: chunkMode,
