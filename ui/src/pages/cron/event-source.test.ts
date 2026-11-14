@@ -33,6 +33,7 @@ const source = {
   error: null,
   events: [definition],
   servers: ["deployments"],
+  serversError: null,
   subscriptions: [],
   statusError: null,
   onRefresh: vi.fn(),

@@ -26,7 +26,8 @@ export type McpEventSubscription = {
 };
 export type CronEventSourceView = {
   available: boolean;
-  servers: string[];
+  servers: string[] | null;
+  serversError: string | null;
   loading: boolean;
   error: string | null;
   events: McpEventDefinition[];

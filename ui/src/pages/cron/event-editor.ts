@@ -67,7 +67,10 @@ export function createCronEventEditor(deps: CronEventEditorDependencies) {
     }
     scopeKey = key;
     if (deps.canManage()) {
-      void deps.context().runtimeConfig.ensureLoaded();
+      const config = deps.context().runtimeConfig;
+      void (force && !config.state.configSnapshot && config.state.lastError
+        ? config.refresh()
+        : config.ensureLoaded());
     }
     void source.load({
       client: connection.client,
@@ -108,17 +111,12 @@ export function createCronEventEditor(deps: CronEventEditorDependencies) {
         cron.cronForm.eventSource === "mcp-events" &&
         deps.isConnected() &&
         canDiscover;
+      const config = active ? deps.context().runtimeConfig.state : null;
+      const servers = summarizeMcpServers(config?.configSnapshot?.config ?? null);
       return {
         available: canDiscover,
-        servers: active
-          ? (
-              summarizeMcpServers(
-                deps.context().runtimeConfig.state.configSnapshot?.config ?? null,
-              ) ?? []
-            )
-              .filter((server) => server.enabled)
-              .map((server) => server.name)
-          : [],
+        servers: servers?.filter((server) => server.enabled).map((server) => server.name) ?? null,
+        serversError: servers === null ? (config?.lastError ?? null) : null,
         loading: source.loading,
         error: source.error,
         events: source.events,

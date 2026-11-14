@@ -87,7 +87,7 @@ it("does not read runtime config while the event editor is inactive", () => {
     cron.cronCreateOpen = createOpen;
     editor.sync();
     expect(editor.view.available).toBe(true);
-    expect(editor.view.servers).toEqual([]);
+    expect(editor.view.servers).toBeNull();
   }
   expect(configRead).not.toHaveBeenCalled();
   expect(request).not.toHaveBeenCalled();
