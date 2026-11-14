@@ -108,12 +108,8 @@ it("reports scratch progress and deferrals before GC and preserves completed rem
         errors: [expect.stringContaining("synthetic custody unavailable")],
       },
     });
-    expect(fixture.onError).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("Scratch cleanup deferred:"),
-    );
-    expect(fixture.onError).toHaveBeenCalledWith(
-      expect.stringContaining("synthetic custody unavailable"),
-    );
+    expect(fixture.onError).not.toHaveBeenCalled();
+    expect(formatWorktreeGcResult(owner.request())).toContain("synthetic custody unavailable");
     const stopping = owner.stop();
     release.resolve(completedResult());
     await stopping;
@@ -131,6 +127,32 @@ it("reports scratch progress and deferrals before GC and preserves completed rem
   } finally {
     await dirs.cleanup();
   }
+});
+
+it("reports counted scratch deferrals with a bounded sample only in the completion summary", async () => {
+  vi.mocked(prepareScratchMaintenanceTargets).mockResolvedValueOnce({
+    targets: Array.from({ length: 17 }, (_, index) => ({
+      root: `/synthetic/scratch-${index}`,
+      kind: "checkout" as const,
+      isLive: () => false,
+      prepare: async () => {
+        throw new Error("synthetic custody unavailable");
+      },
+    })),
+    release: () => {},
+  });
+  await using fixture = maintenanceFixture();
+  fixture.start().request();
+  await fixture.run();
+  expect(fixture.onError).not.toHaveBeenCalled();
+  const result = fixture.onComplete.mock.calls[0]![0];
+  expect(result.scratch.deferred).toBe(17);
+  expect(result.scratch.errors).toHaveLength(16);
+  const summary = formatWorktreeGcResult(result);
+  expect(summary).toContain("deferred 17");
+  expect(summary).toContain("scratch cleanup deferred: /synthetic/scratch-0:");
+  expect(summary).toContain("scratch cleanup deferred: /synthetic/scratch-15:");
+  expect(summary).not.toContain("/synthetic/scratch-16:");
 });
 
 function maintenanceFixture(config: OpenClawConfig = {}) {
@@ -204,11 +226,11 @@ it.each([
   if (reason === "host IO pressure") {
     expect(fixture.onError).not.toHaveBeenCalled();
     const result = fixture.onComplete.mock.calls[0]![0];
-    expect(result.scratchDeferred).toBe("host IO pressure");
+    expect(result.scratchDeferred).toBe("io-pressure");
     expect(Value.Check(WorktreesGcResultSchema, result)).toBe(true);
     expect(formatWorktreeGcResult(result)).toContain("scratch cleanup deferred: host IO pressure");
     expect(result.outcome).toBe(outcome);
-    expect(owner.request({ jobId: receipt.jobId }).scratchDeferred).toBe("host IO pressure");
+    expect(owner.request({ jobId: receipt.jobId }).scratchDeferred).toBe("io-pressure");
   } else {
     expect(fixture.onError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(reason));
   }
@@ -243,7 +265,7 @@ it("preserves scratch progress when host IO pressure arrives between deletion ba
     expect(fixture.onComplete).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         scratch: expect.objectContaining({ filesRemoved: 128, bytesRemoved: 640, errors: [] }),
-        scratchDeferred: "host IO pressure",
+        scratchDeferred: "io-pressure",
       }),
     );
     expect(await fs.readdir(scratch)).toHaveLength(1);
@@ -305,6 +327,7 @@ function warmPoolDemand() {
 }
 
 beforeEach(() => {
+  vi.mocked(prepareScratchMaintenanceTargets).mockReset();
   vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(async () => false);
   vi.spyOn(managedWorktrees, "gc").mockResolvedValue(completedResult());
   vi.spyOn(managedWorktrees, "maintainGit").mockResolvedValue();

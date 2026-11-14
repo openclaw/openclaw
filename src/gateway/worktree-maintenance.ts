@@ -290,13 +290,10 @@ export function startWorktreeMaintenance(params: {
                 } catch (error) {
                   assertCurrent();
                   if (error === scratchDeferred) {
-                    current.scratchDeferred = "host IO pressure";
+                    current.scratchDeferred = "io-pressure";
                   } else {
                     params.onError(`Scratch cleanup failed: ${String(error)}`);
                   }
-                }
-                for (const error of current.scratch?.errors ?? []) {
-                  params.onError(`Scratch cleanup deferred: ${error}`);
                 }
                 // Scratch consumes fresh commit counters; preserve their backoff for GC admission.
                 if (scratchPressure) {
