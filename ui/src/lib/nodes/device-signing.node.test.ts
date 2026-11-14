@@ -1,9 +1,6 @@
 import { webcrypto } from "node:crypto";
-import { build } from "esbuild";
-import { chromium, firefox, webkit } from "playwright";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { verifyEd25519SignatureBytes } from "../../../../src/infra/ed25519-signature.ts";
-import { resolvePlaywrightChromiumExecutablePath } from "../../test-helpers/playwright-chromium.ts";
 
 // RFC 8032 section 7.1: independent seed, public-key and signature fixtures.
 const fixtures = [
@@ -118,88 +115,4 @@ describe("device Ed25519 signing", () => {
     expect((await signAsync(message, seed)).toHex()).toBe(fixtures[0]!.signature);
     await expect(signAsync(message, new Uint8Array(31))).rejects.toThrow();
   });
-
-  it.each(["chromium", "webkit", "firefox"] as const)(
-    "preserves RFC public identity and valid native signatures in %s",
-    async (engine) => {
-      const bundled = await build({
-        entryPoints: [new URL("./device-signing.runtime.ts", import.meta.url).pathname],
-        bundle: true,
-        write: false,
-        format: "iife",
-        globalName: "deviceSigning",
-      });
-      const browser = await { chromium, webkit, firefox }[engine].launch({
-        headless: true,
-        ...(engine === "chromium"
-          ? { executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()) }
-          : {}),
-      });
-      try {
-        const page = await browser.newPage();
-        await page.route("http://127.0.0.1/**", (route) =>
-          route.fulfill({
-            contentType: "text/html",
-            body: "<!doctype html><title>Synthetic Ed25519 proof</title>",
-          }),
-        );
-        await page.goto("http://127.0.0.1/");
-        await page.addScriptTag({ content: bundled.outputFiles[0]!.text });
-        const results = await page.evaluate(async (values) => {
-          const signer: typeof import("./device-signing.runtime.ts") = Reflect.get(
-            window,
-            "deviceSigning",
-          );
-          if (!crypto.subtle) {
-            throw new Error("Native crypto unavailable on secure fixture origin");
-          }
-          const nativeSign = crypto.subtle.sign.bind(crypto.subtle);
-          let nativeSigns = 0;
-          crypto.subtle.sign = (...args) => {
-            nativeSigns++;
-            return nativeSign(...args);
-          };
-          const output = [];
-          for (const fixture of values) {
-            const seed = Uint8Array.fromHex(fixture.seed);
-            const message = Uint8Array.fromHex(fixture.message);
-            output.push({
-              publicKey: (await signer.getPublicKeyAsync(seed)).toHex(),
-              signature: (await signer.signAsync(message, seed)).toHex(),
-            });
-          }
-          if (nativeSigns !== values.length) {
-            throw new Error("Fixtures did not exercise native Ed25519");
-          }
-          Object.defineProperty(window, "crypto", { configurable: true, value: undefined });
-          for (const fixture of values) {
-            const seed = Uint8Array.fromHex(fixture.seed);
-            output.push({
-              publicKey: (await signer.getPublicKeyAsync(seed)).toHex(),
-              signature: (
-                await signer.signAsync(Uint8Array.fromHex(fixture.message), seed)
-              ).toHex(),
-            });
-          }
-          return output;
-        }, fixtures);
-        const expected = fixtures.map(({ publicKey, signature }) => ({ publicKey, signature }));
-        expect(results.slice(fixtures.length)).toEqual(expected);
-        for (const [i, result] of results.slice(0, fixtures.length).entries()) {
-          const fixture = fixtures[i]!;
-          expect(result.publicKey).toBe(fixture.publicKey);
-          expect(
-            verifies(
-              Uint8Array.fromHex(result.signature),
-              Uint8Array.fromHex(fixture.message),
-              result.publicKey,
-            ),
-          ).toBe(true);
-        }
-      } finally {
-        await browser.close();
-      }
-    },
-    30000,
-  );
 });

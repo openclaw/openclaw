@@ -17,6 +17,8 @@ import { startFlakyNetworkProxy } from "./flaky-network-proxy.ts";
 // BOOT_OUT stays in .artifacts; BOOT_PAIRS defaults to 20. BOOT_ENGINES selects
 // chromium,webkit,firefox. BOOT_RTT_MS adds TCP round-trip latency (default 0).
 // BOOT_TRACE=1 is diagnostic, never timing proof.
+// Report first UI readiness and connected readiness separately: cached UI may
+// render before hello. A completed sample always includes successful connect.
 // BOOT_VERIFY_NATIVE=50 instead proves native signatures reach real Gateway admission;
 // it adds instrumentation and must not be used for timing claims.
 // Service workers are blocked to match the engine census. No model is invoked.
@@ -36,6 +38,7 @@ type BootProbe = {
   events: Array<{ event: string; atMs: number }>;
   sockets: Array<{ createdMs: number; openMs: number }>;
   readyMs: number;
+  connectedReadyMs: number;
   transcriptMs: number;
   composerMs: number;
   navigationOffsetMs: number;
@@ -288,11 +291,22 @@ function probe(profileStyles: boolean, nativeProof: boolean) {
     events: [],
     sockets: [],
     readyMs: 0,
+    connectedReadyMs: 0,
     transcriptMs: 0,
     composerMs: 0,
     navigationOffsetMs: performance.timeOrigin - origin,
   };
   Reflect.set(window, "__liveBoot", data);
+  function notifyConnectedReady() {
+    const connect = data.rpcs.find((rpc) => rpc.method === "connect" && rpc.ok);
+    if (data.readyMs && connect && !data.connectedReadyMs) {
+      data.connectedReadyMs = Math.max(data.readyMs, connect.responseMs);
+      console.debug("control-ui-live-boot:connected-ready-notify");
+      if (profileStyles) {
+        console.timeStamp("control-ui-live-boot:connected-ready");
+      }
+    }
+  }
   const nativeSignatures = new Set<string>();
   if (nativeProof) {
     const subtle = crypto.subtle;
@@ -358,6 +372,9 @@ function probe(profileStyles: boolean, nativeProof: boolean) {
               f.payload?.initialHistory?.payload?.messages?.length ??
               f.payload?.messages?.length ??
               null;
+            if (r.method === "connect" && r.ok) {
+              notifyConnectedReady();
+            }
           }
         } else if (f.type === "event") {
           data.events.push({ event: f.event, atMs: at });
@@ -384,6 +401,7 @@ function probe(profileStyles: boolean, nativeProof: boolean) {
     if (data.transcriptMs && data.composerMs) {
       data.readyMs = Math.max(data.transcriptMs, data.composerMs);
       console.debug("control-ui-live-boot:ready-notify");
+      notifyConnectedReady();
       if (profileStyles) {
         console.timeStamp("control-ui-live-boot:ready");
       }
@@ -564,7 +582,8 @@ try {
               ? await startEngineMeasurement(page, engine, { trace: true })
               : null;
             const readyNotification = page.waitForEvent("console", {
-              predicate: (message) => message.text() === "control-ui-live-boot:ready-notify",
+              predicate: (message) =>
+                message.text() === "control-ui-live-boot:connected-ready-notify",
               timeout: 30000,
             });
             const hostLoad = loadavg();
@@ -616,6 +635,7 @@ try {
                 variant,
                 state,
                 readyMs: data.readyMs,
+                connectedReadyMs: data.connectedReadyMs,
                 connect: data.rpcs.find((r) => r.method === "connect"),
                 errors,
               }),
