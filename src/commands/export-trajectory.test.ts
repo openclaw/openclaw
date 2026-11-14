@@ -103,6 +103,29 @@ it("points missing session key users at the sessions command", async () => {
   expectNoSessionLookup();
 });
 
+// Control-bearing filenames are POSIX-only; Windows cannot create this output target.
+it.skipIf(process.platform === "win32").each([false, true])(
+  "renders the exported path without changing its bytes (json: %s)",
+  async (json) => {
+    const output = "café\nFORGED\u001b[2J\u0007\u0085\u202e🦀";
+    await run({ output, json });
+    const logged = runtime.log.mock.calls.map(([value]) => String(value)).join("\n");
+    if (json) {
+      expect(JSON.parse(logged)).toMatchObject({
+        displayPath: `.openclaw/trajectory-exports/${output}`,
+        sessionId: "session-1",
+        eventCount: 2,
+      });
+    } else {
+      expect(logged).toContain("📦 Bundle: .openclaw/trajectory-exports/café\\nFORGED🦀\n");
+      expect(logged).toContain("🧵 Session: session-1\n📊 Events: 2\n");
+      for (const control of ["\u0007", "\u001b", "\u0085", "\u202e"]) {
+        expect(logged).not.toContain(control);
+      }
+    }
+  },
+);
+
 it.each([
   ["malformed JSON", Buffer.from("not json", "utf8").toString("base64url"), "is invalid JSON"],
   ["a non-object JSON value", encode([]), "must be a JSON object"],
