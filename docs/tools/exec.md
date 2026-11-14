@@ -77,7 +77,7 @@ Key/value environment overrides merged on top of the inherited environment.
 </ParamField>
 
 <ParamField path="yieldMs" type="number" default="10000">
-Return a running process handle after this delay (ms). On the Gateway and in its sandbox, an ordinary yielded command remains owned by its request: the browser's Stop button and typed `/stop` cancel it. Normal model completion leaves it running.
+Return a running process handle after this delay (ms), at most 120000; larger values are capped and the running result says so. On the Gateway and in its sandbox, an ordinary yielded command remains owned by its request: the browser's Stop button and typed `/stop` cancel it. Normal model completion leaves it running.
 </ParamField>
 
 <ParamField path="background" type="boolean" default="false">
@@ -163,12 +163,13 @@ Notes:
 - Important: sandboxing is **off by default**. If sandboxing is off, implicit `host=auto` resolves to `gateway`. Explicit `host=sandbox` requests are still rejected instead of silently running on the gateway host. Enable sandboxing or use `host=gateway` with approvals.
 - Python script preflight checks for common shell-syntax mistakes only inspect files inside the effective `workdir` boundary. If a script path resolves outside `workdir`, the file check is skipped. JavaScript source is left to Node, which returns its normal diagnostics and exit code; statements before a runtime error may already have executed. Separate restrictions on ambiguous Python/Node interpreter commands still apply. Preflight skips entirely when `host=gateway` and the effective policy is `security=full` with `ask=off`.
 - For long-running work that starts now, start it once. When enabled, automatic completion wake can happen after the command exits. New output while the command is still running does not start another turn. Use `process` for logs, status, input, or intervention. Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.
+- When the command's exit will start a turn in this conversation, the running result says so and tells the agent to end the turn if only waiting remains, instead of polling or starting another command that waits for the same result. With `tools.exec.notifyOnExitEmptySuccess=false`, the wake needs output or a failure, so that advice applies only when the command prints its result; a command that may succeed silently is still collected with `process poll`. An idle `process poll` of such a command repeats the guidance. The running result also lists the other background commands still running in the same conversation, because the turn-start snapshot does not show commands started later in the same turn.
 
 - When `tools.exec.notifyOnExit=false`, a running result explicitly says that automatic completion wake is disabled, in both its text and structured `followUp`. Later `process poll`, `log`, and `list` results preserve that guidance while the command is running, using the policy captured when it started. If the task needs the result, collect it with `process poll` and a timeout before ending the turn, unless another continuation is already arranged. A running process or active session goal does not arrange that continuation.
 - Running, completed, and failed results preserve execution warnings in structured `warningText` as well as visible text, so Code Mode callers can follow guidance such as using a noninteractive command when sandbox PTY is unavailable. Calls without warnings omit this field.
 - Before a Gateway restart, a background command continuation keeps the original requester's still-current authority, including permitted reviewer models. Another participant's permissions do not replace it, and revoked authority prevents further execution. Adopted durable completions after restart are new system input under the owning session principal's current authority; requester continuations are not restored.
 - When an approved async command completes, its continuation uses the normal agent run timeout from `agents.defaults.timeoutSeconds`. The follow-up observer can finish waiting while the accepted agent run continues.
-- Hidden subagent sessions do not receive automatic background-exec wakes; visible spawned sessions do. Collect the result with `process poll` before yielding without another completion source.
+- Hidden subagent sessions do not receive automatic background-exec wakes; visible spawned sessions do. Their running and `process` results give manual-collection guidance instead of a wake promise. Collect the result with `process poll` before yielding without another completion source.
 - The process owner tracks agent-started background commands. Use the returned process session ID to inspect output, poll, or stop a command; its completion can wake the agent.
 - For work that should happen later or on a schedule, use cron instead of `exec` sleep/delay patterns.
 
@@ -372,7 +373,7 @@ Run noninteractive work that survives a Gateway restart on a supported Linux hos
 { "tool": "exec", "command": "npm run build", "background": true, "durable": true }
 ```
 
-Use `process poll` for on-demand status and bounded waits when no automatic completion wake is available. Avoid rapid status loops; pass a timeout while waiting for a result the current task needs. If automatic completion wake is enabled, the command can wake the session after it exits. New output while it is still running does not wake the session.
+Use `process poll` for on-demand status and bounded waits when no automatic completion wake is available. Avoid rapid status loops; pass a timeout (at most 30000 ms) while waiting for a result the current task needs. If the running result says the command's exit wakes this conversation, end the turn instead of waiting; the exit starts the next turn. New output while it is still running does not wake the session.
 
 Send keys (tmux-style):
 
