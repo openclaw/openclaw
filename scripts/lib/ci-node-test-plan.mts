@@ -649,7 +649,6 @@ const STORAGE_MODULE_WORK_SECONDS = new Map<string, number>([
   ["src/tui/tui-last-session.test.ts", 5.299],
   ["src/worker/worker.chat-abort.test.ts", 15.867],
   ["src/agents/bash-tools.exec-background-followup.test.ts", 2.969],
-  ["src/channels/message-access/operator-authority.test.ts", 31.775],
   ["src/agents/subagents/registry/subagent-registry.persistence.test.ts", 23.639],
   ["src/auto-reply/reply/session.acp-reset-routing.test.ts", 8.938],
   ["src/templates/package-update.test.ts", 4.164],
