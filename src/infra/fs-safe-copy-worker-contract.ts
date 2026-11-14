@@ -2,6 +2,7 @@ import type { FsSafeNativeMode } from "@openclaw/fs-safe/config";
 import type { CloneFileMetadata, TreeCloneBackend } from "@openclaw/fs-safe/copy";
 import type { FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 import type { DarwinAclInspection } from "@openclaw/fs-safe/permissions";
+import type { FileStorePruneOptions } from "@openclaw/fs-safe/store";
 import type {
   WorkspaceFilesystemCommand,
   WorkspaceFilesystemReadCommand,
@@ -10,6 +11,7 @@ import type {
 } from "../agents/workspace-filesystem.types.js";
 import type { WorktreeWorkerAuthority } from "../agents/worktrees/types.js";
 import type { ScratchTreeResult } from "./scratch-cleanup-tree.js";
+import type { NativeWorkerFailure } from "./worker-native-error.js";
 export type { CloneFileMetadata } from "@openclaw/fs-safe/copy";
 
 export type FsSafeCopyRead =
@@ -29,17 +31,16 @@ export type FsSafeCopyWrite =
   | { type: "remove"; destination: string }
   | { type: "copy"; source: string; destination: string };
 
-export type FsSafeStoreRemove = {
-  type: "remove-store-file";
-  rootDir: string;
-  relativePath: string;
-  nativeMode: FsSafeNativeMode;
-};
+export type FsSafeStoreOperation = { rootDir: string } & (
+  | { type: "remove-store-file"; relativePath: string }
+  | { type: "prune-store"; options: FileStorePruneOptions }
+);
+export type FsSafeStoreCommand = FsSafeStoreOperation & { nativeMode: FsSafeNativeMode };
 
 export type FsSafeFilesystemCommand =
   | WorkspaceFilesystemCommand
   | WorkspaceFilesystemReadCommand
-  | FsSafeStoreRemove;
+  | FsSafeStoreCommand;
 export type FsSafeStoreReply = Extract<FsSafeCopyReply, { type: "written" | "failed" }>;
 export type FsSafeFilesystemReply =
   | WorkspaceFilesystemReply
@@ -94,5 +95,6 @@ export type FsSafeCopyReply =
       message: string;
       code?: string;
       fsSafeCode?: FsSafeErrorCode;
+      cause?: NativeWorkerFailure;
       copyDetails?: ProvisionCopyDetails;
     };

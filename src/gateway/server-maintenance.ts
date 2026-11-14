@@ -2,6 +2,7 @@ import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coe
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { formatWorktreeGcResult } from "../agents/worktrees/gc-result.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { pruneRegisteredAgentToolUsage } from "../config/sessions/tool-usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasAgentRunContextExecutionOwner,
@@ -22,6 +23,7 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queue-media-spool.js";
 import { generateSecureInt } from "../infra/secure-random.js";
+import { reclaimAbandonedSqliteSnapshots } from "../infra/sqlite-readonly-worker.js";
 import { checkTelemetryUpdate } from "../infra/telemetry.js";
 import { cleanOldMedia, pruneOutboundMedia, prunePlaybackTranscodeCache } from "../media/store.js";
 import {
@@ -41,6 +43,7 @@ import {
 } from "./channel-thaw-restart.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import type { HealthSummary } from "./health/types.js";
+import { cleanupManagedOutgoingMediaRecords } from "./managed-image-attachments.js";
 import {
   chatAbortMarkerTimestampMs,
   type ChatRunEntry,
@@ -441,7 +444,6 @@ export function startGatewayMaintenanceTimers(params: {
 
   scheduleMedia("tool-usage-retention", async () => {
     try {
-      const { pruneRegisteredAgentToolUsage } = await import("../config/sessions/tool-usage.js");
       if (mediaScheduler.signal.aborted || isGatewayWorkAdmissionClosed()) {
         return;
       }
@@ -463,8 +465,6 @@ export function startGatewayMaintenanceTimers(params: {
 
   scheduleMedia("sqlite-snapshots", async () => {
     try {
-      const { reclaimAbandonedSqliteSnapshots } =
-        await import("../infra/sqlite-snapshot-reclamation.js");
       const result = await reclaimAbandonedSqliteSnapshots(mediaScheduler.signal);
       if (result.removed || result.skipped) {
         params.logHealth.info(
@@ -574,7 +574,6 @@ export function startGatewayMaintenanceTimers(params: {
   });
 
   const runManagedOutgoingMediaGc = async () => {
-    const { cleanupManagedOutgoingMediaRecords } = await import("./managed-image-attachments.js");
     return await cleanupManagedOutgoingMediaRecords({
       hasActiveSessionRun: (sessionKey, agentId) => {
         const cfg = params.getRuntimeConfig();

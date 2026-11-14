@@ -19,7 +19,10 @@ import {
   getOpenClawAgentDatabaseValidationForTransfer,
 } from "./openclaw-agent-db-validation-cache.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
-import type { OpenClawAgentDatabaseAdmissionExecution } from "./openclaw-agent-execution-admission-contract.js";
+import type {
+  AgentDatabaseRequestExecutionSource,
+  OpenClawAgentDatabaseAdmissionExecution,
+} from "./openclaw-agent-execution-admission-contract.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 
 /** The existing executor owns cold admission; the native callback retains the SDK handle contract. */
@@ -29,6 +32,7 @@ export async function withWorkerAdmission<T>(
   signal: AbortSignal | undefined,
   run: (preparation: "native" | "worker") => Promise<T>,
   borrowedExecution?: OpenClawAgentDatabaseAdmissionExecution,
+  onRegistryChange?: AgentDatabaseRequestExecutionSource["onRegistryChange"],
 ): Promise<T> {
   const pathname = resolveOpenClawAgentSqlitePath(options);
   assertAgentCreationClaimCurrent(options);
@@ -106,6 +110,7 @@ export async function withWorkerAdmission<T>(
     }
     const source: Parameters<typeof execution.prepare>[0] = {
       assertCurrent: assertAdmission,
+      onRegistryChange,
       createAdmission: (binding) => () => ({
         nativeLocations: binding.nativeLocations,
         admission: createSqliteWorkerOperationAdmission((request, grant) => {

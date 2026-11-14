@@ -379,12 +379,21 @@ export function createSqliteDatabaseDescriptorOwner(
     try {
       let retained = state.registry.forLocation(location);
       if (!retained) {
+        let physicalIdentity = observedIdentity;
+        if (physicalIdentity === undefined && threadId !== 0) {
+          const observed = fs.statSync(location, { bigint: true });
+          if (!observed.isFile()) {
+            return undefined;
+          }
+          physicalIdentity = identity(observed);
+        }
+        // Native workers identify the file so the host can reuse retained descriptor custody.
         exchange(
           location,
           undefined,
           false,
-          observedIdentity !== undefined && threadId !== 0
-            ? { identity: observedIdentity, canonicalPath: fs.realpathSync.native(location) }
+          physicalIdentity !== undefined && threadId !== 0
+            ? { identity: physicalIdentity, canonicalPath: fs.realpathSync.native(location) }
             : undefined,
         );
         retained = state.registry.forLocation(location);

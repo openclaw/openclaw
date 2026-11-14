@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createAgentCleanupScope } from "../../agents/run-cleanup-timeout.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
+import * as stateOwner from "../../infra/gateway-state-owner.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabaseDisposal from "../../state/openclaw-agent-db-disposal.js";
@@ -95,7 +96,7 @@ it("holds state ownership until an in-flight sibling settles after progress reje
   }
 });
 
-it("retains the staged directory and releases state ownership when database disposal reports failure", async () => {
+it("retains failed probe custody until disposal is explicitly settled", async () => {
   const params = await probeParams(1);
   const original = new Error("synthetic database disposal failure");
   let stagedDir: string | undefined;
@@ -113,26 +114,49 @@ it("retains the staged directory and releases state ownership when database disp
       }
       return closed;
     });
+  const borrow = stateOwner.tryBorrowGatewayStateOwner;
+  let retained: ReturnType<typeof borrow>;
+  vi.spyOn(stateOwner, "tryBorrowGatewayStateOwner").mockImplementation((databasePath) => {
+    const lease = borrow(databasePath);
+    if (lease) {
+      retained = lease;
+    }
+    return lease;
+  });
   const cleanup = createAgentCleanupScope();
   try {
     await expect(cleanup.run(() => runAuthProbes(params))).rejects.toMatchObject({
       cause: original,
     });
     expect(fs.existsSync(stagedDir!)).toBe(true);
-    expect(
-      agentDatabase
-        .listOpenClawRegisteredAgentDatabases({ env: state.env })
-        .some((entry) => entry.path.startsWith(stagedDir! + path.sep)),
-    ).toBe(false);
-    await expectOwnership(false);
+    await expectOwnership(true);
     expect(cleanup.outcome).toBe("uncertain");
+    expect(() => agentDatabase.listOpenClawRegisteredAgentDatabases({ env: state.env })).toThrow(
+      "maintenance ownership without an active schema lease or maintenance scope",
+    );
+    if (!retained) {
+      throw new Error("Failed probe cleanup did not retain its actual state lease");
+    }
+    expect(
+      retained.run(() =>
+        agentDatabase
+          .listOpenClawRegisteredAgentDatabases({ env: state.env })
+          .some((entry) => entry.path.startsWith(stagedDir! + path.sep)),
+      ),
+    ).toBe(false);
   } finally {
     close.mockRestore();
     if (stagedDir) {
-      await dispose(path.join(stagedDir, "openclaw-agent.sqlite"), { env: state.env });
-      await fs.promises.rm(stagedDir, { recursive: true, force: true });
+      const settle = async () => {
+        await dispose(path.join(stagedDir, "openclaw-agent.sqlite"), { env: state.env });
+        await fs.promises.rm(stagedDir, { recursive: true, force: true });
+      };
+      // The fixture observes the real retained lease; only settled disposal releases it.
+      await (retained ? retained.run(settle) : settle());
     }
+    retained?.release();
   }
+  await expectOwnership(false);
 });
 
 it("does not acquire probe state from a closed caller scope", async () => {

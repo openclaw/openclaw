@@ -29,7 +29,6 @@ import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import * as agentExecution from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { setTestEnvValue } from "../test-utils/env.js";
@@ -191,15 +190,15 @@ describe("client voice session worker contract", () => {
           throw sourceError;
         },
       }));
-      const capture = agentExecution.captureOpenClawAgentDatabaseExecutionAsync;
+      const capture = voiceWriters.captureClientVoiceSessionWriter;
       const captureSpy = vi
-        .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecutionAsync")
-        .mockImplementation(async (...args): ReturnType<typeof capture> => {
-          const execution = await capture(...args);
-          failCleanup(execution, writerError, () => {
+        .spyOn(voiceWriters, "captureClientVoiceSessionWriter")
+        .mockImplementation((params) => {
+          const writer = capture(params);
+          failCleanup(writer, writerError, () => {
             released.push("writer");
           });
-          return execution;
+          return writer;
         });
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const runId = "acknowledged-cleanup-consult";

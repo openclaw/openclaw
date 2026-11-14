@@ -54,10 +54,21 @@ vi.mock("../../state/openclaw-agent-db.js", async (importOriginal) => {
         : actual.getOpenClawAgentDatabaseIfOpen(request),
   };
 });
-vi.mock("../../state/openclaw-agent-db-identity.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/openclaw-agent-db-identity.js")>()),
-  readOpenClawAgentDatabaseIdentity: () => ({ filename: options.path }),
-}));
+vi.mock("../../state/openclaw-agent-db-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/openclaw-agent-db-identity.js")>();
+  return {
+    ...actual,
+    readOpenClawAgentDatabaseIdentity: (): ReturnType<
+      typeof actual.readOpenClawAgentDatabaseIdentity
+    > => ({
+      identity: "synthetic-file",
+      birthtime: undefined,
+      incarnation: "synthetic-connection",
+      filename: options.path,
+      canonicalPath: options.path,
+    }),
+  };
+});
 vi.mock("../../state/openclaw-agent-db-validation-cache.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/openclaw-agent-db-validation-cache.js")>()),
   getOpenClawAgentDatabaseValidation: () => undefined,

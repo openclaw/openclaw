@@ -44,7 +44,6 @@ import {
 } from "./session-transcript-anchor-read.kernel.js";
 import { readSessionTranscriptHydrationRequest } from "./session-transcript-hydration-read.worker.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
-import * as targetWorker from "./session-transcript-read-worker-runtime.js";
 import { historyLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
@@ -792,10 +791,24 @@ it("rejects a physical replacement while target discovery is suspended", async (
   await replaceTranscriptEvents(scope, events);
   await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
   const gate = replacementGate();
-  const resolve = targetWorker.resolveSessionSqliteTargetInWorker;
-  using _ = vi
-    .spyOn(targetWorker, "resolveSessionSqliteTargetInWorker")
-    .mockImplementation(async (...args) => gate.hold(await resolve(...args)));
+  const run = historyLane.pool.run.bind(historyLane.pool);
+  using _ = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+    const input = args[0];
+    let completedDiscovery = false;
+    const reply = await run(async () => {
+      const request = typeof input === "function" ? await input() : input;
+      completedDiscovery =
+        request.kind === "session-store-target" &&
+        Array.isArray(request.request.registeredDatabases);
+      return request;
+    }, args[1]);
+    if (!completedDiscovery) {
+      return reply;
+    }
+    expect(reply).toMatchObject({ ok: true, value: { kind: "session-store-target" } });
+    expect(reply).not.toHaveProperty("value.readError");
+    return gate.hold(reply);
+  });
   await gate.rejects(
     readAnchor({ ...scope, entryId: "question" }),
     async () => {

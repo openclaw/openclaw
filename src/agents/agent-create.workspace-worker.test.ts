@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { readConfigFileSnapshotForWrite, registerConfigWriteListener } from "../config/config.js";
-import type { FsSafeStoreRemove, FsSafeStoreReply } from "../infra/fs-safe-copy-worker-contract.js";
+import type {
+  FsSafeStoreCommand,
+  FsSafeStoreReply,
+} from "../infra/fs-safe-copy-worker-contract.js";
 import * as filesystemWorker from "../infra/fs-safe-filesystem-worker.js";
 import * as fsSafe from "../infra/fs-safe.js";
 import * as snapshots from "../infra/sqlite-readonly-worker.js";
@@ -18,6 +21,8 @@ import { prepareAgentAuthProfileRowsRead } from "./auth-profiles/sqlite-read.js"
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import type {
   WorkspaceFilesystemCommand,
+  WorkspaceFilesystemReadCommand,
+  WorkspaceFilesystemReadReply,
   WorkspaceFilesystemReply,
 } from "./workspace-filesystem.types.js";
 import * as workspaceModule from "./workspace.js";
@@ -54,11 +59,21 @@ function holdDuring(state: Awaited<ReturnType<typeof createState>>, stage: "root
     const run = filesystemWorker.runFsSafeFilesystemTask;
     type Options = Parameters<typeof run>[1];
     function intercept(
+      command: WorkspaceFilesystemReadCommand,
+      options?: Options,
+    ): Promise<WorkspaceFilesystemReadReply>;
+    function intercept(
       command: WorkspaceFilesystemCommand,
       options?: Options,
     ): Promise<WorkspaceFilesystemReply>;
-    function intercept(command: FsSafeStoreRemove, options?: Options): Promise<FsSafeStoreReply>;
-    function intercept(command: WorkspaceFilesystemCommand | FsSafeStoreRemove, options?: Options) {
+    function intercept(command: FsSafeStoreCommand, options?: Options): Promise<FsSafeStoreReply>;
+    function intercept(
+      command: WorkspaceFilesystemReadCommand | WorkspaceFilesystemCommand | FsSafeStoreCommand,
+      options?: Options,
+    ) {
+      if (command.type === "workspace-read") {
+        return run(command, options);
+      }
       if (command.type !== "workspace") {
         return run(command, options);
       }

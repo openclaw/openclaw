@@ -108,7 +108,9 @@ function prepareAdmissionTurn(
           readIdentities.set(location, identity);
           keys.add(`${identity.key}:${identity.birthtime ?? ""}`);
         }
-        keys.add(`family:${path.dirname(canonicalPath)}`);
+        if (!identity || !hasSqliteDatabaseSchemaAdmissionForIdentity(identity)) {
+          keys.add(`family:${path.dirname(canonicalPath)}`);
+        }
       }
       return { turn: reserveAdmissionTurn(keys), prepared: { readIdentities } };
     } finally {

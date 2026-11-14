@@ -200,30 +200,27 @@ function skillRefreshShape(
   const nextTurn = withLeadingSystemMessage(raw[3]);
   // Within the write's turn the cacheable prefix stays byte-identical; history only appends.
   assertStableProviderPrefix(before, sameTurn, { label: "same turn after skill write" });
-  // The next turn keeps tools, cache key and every earlier history item byte-identical...
-  // The latest turn's runtime-context message is turn-scoped and never replayed (existing
-  // contract), so the replayed prefix is the write turn's history without it.
-  const replayed = turnEnd.history.filter(
-    (item) => !item.includes('"text":"OpenClaw runtime context:'),
-  );
-  expect(turnEnd.history.length - replayed.length).toBe(1);
-  assertStableProviderPrefix({ ...turnEnd, history: replayed, system: nextTurn.system }, nextTurn, {
-    label: "next turn after skill write",
-  });
-  // ...and the system prompt changes only by the new skill's skills-list entry.
-  const next = nextTurn.system;
-  const at = next.indexOf(description);
-  const entryStart = next.lastIndexOf("<skill>", at);
-  const entryEnd = next.indexOf("</skill>", at) + "</skill>".length;
-  // Entries are newline-indented; in JSON bytes the separator reads as an escaped newline.
-  const separator = "\\n  ";
-  const withoutEntry = [
-    next.slice(0, entryStart) + next.slice(entryEnd + separator.length),
-    next.slice(0, entryStart - separator.length) + next.slice(entryEnd),
-  ];
+  // Refreshes append instructions without rewriting the admitted system or history.
+  assertStableProviderPrefix(turnEnd, nextTurn, { label: "next turn after skill write" });
+  const updates = nextTurn.history
+    .slice(turnEnd.history.length)
+    .filter((item) => item.includes("System prompt update.") && item.includes(description));
+  expect(updates).toHaveLength(1);
+  const update = updates[0]!;
+  const catalog = (item: string) => item.match(/<available_skills>(.*?)<\/available_skills>/)?.[1];
+  const entries = (item: string) =>
+    [...(catalog(item)?.matchAll(/<skill>.*?<\/skill>/g) ?? [])].map(([entry]) => entry);
+  const previous = [turnEnd.system, ...turnEnd.history].findLast((item) => catalog(item));
+  const previousEntries = previous ? entries(previous) : [];
+  const nextEntries = entries(update);
+  const added = nextEntries.filter((entry) => entry.includes(description));
+  expect(added).toHaveLength(1);
   return {
-    onlyEntryAdded: at > 0 && withoutEntry.includes(turnEnd.system),
-    entry: next.slice(entryStart, entryEnd),
+    onlyEntryAdded:
+      nextEntries.length === previousEntries.length + 1 &&
+      JSON.stringify(nextEntries.filter((entry) => entry !== added[0])) ===
+        JSON.stringify(previousEntries),
+    entry: added[0]!,
   };
 }
 

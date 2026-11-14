@@ -321,10 +321,8 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
           .mockRejectedValueOnce(new Error("projection writer unavailable")),
       () =>
         vi
-          .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
-          .mockImplementationOnce(() => {
-            throw new Error("projection writer admission unavailable");
-          }),
+          .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecutionAsync")
+          .mockRejectedValueOnce(new Error("projection writer admission unavailable")),
     ]) {
       const unavailableStatus = makeUnavailable();
       try {
@@ -332,6 +330,7 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
           ...golden,
           indexing: true,
         });
+        expect(unavailableStatus).toHaveBeenCalledOnce();
         expect(isSessionTranscriptIndexReconcileRunning({ ...database, env: state.env })).toBe(
           false,
         );

@@ -201,15 +201,10 @@ export function bindSessionPendingInputSources(
     throw new Error("Collected input exceeds the Gateway payload limit");
   }
   const aggregateInputId = randomUUID();
-  const aggregate = ownerReceipt({
+  const aggregateOwner: SessionPendingInputOwner = {
     ...first,
     // Source owners release their admission closures when settlement completes.
     assertCurrent: assertSessionPendingInputLifetimeCurrent.bind(undefined, first),
-    assertReadCurrent() {
-      for (const source of sources) {
-        assertSessionPendingInputLifetimeCurrent(source);
-      }
-    },
     assertMentionInvitationCurrent: undefined,
     authority: undefined,
     requesterOrigin: undefined,
@@ -219,7 +214,13 @@ export function bindSessionPendingInputSources(
     messageJson,
     sources,
     finish: finishPendingInputSources.bind(undefined, sources),
-  });
+  };
+  // A timer's owner must not retain this scope's original settlement receipts.
+  aggregateOwner.assertReadCurrent = assertSessionPendingInputLifetimeCurrent.bind(
+    undefined,
+    aggregateOwner,
+  );
+  const aggregate = ownerReceipt(aggregateOwner);
   aggregate.settled = async () => {
     const results = await Promise.allSettled(receipts.map(async (receipt) => receipt.settled?.()));
     throwIfSettledRejected(results, "Failed to settle collected input custody");

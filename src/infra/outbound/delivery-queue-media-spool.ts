@@ -2,7 +2,6 @@
 // whose producer-owned source may disappear before retry.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { fileStore } from "@openclaw/fs-safe/store";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { hasNonEmptyString as isNonEmptyMediaSource } from "@openclaw/normalization-core/string-coerce";
@@ -20,7 +19,7 @@ import {
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
 import { ignoreMissingPath } from "../errno.js";
-import { runFsSafeFilesystemTask } from "../fs-safe-filesystem-worker.js";
+import { runFsSafeStoreOperation } from "../fs-safe-filesystem-worker.js";
 import { FsSafeError } from "../fs-safe.js";
 import { generateSecureUuid } from "../secure-random.js";
 import { peekSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
@@ -52,17 +51,11 @@ function openSpoolStore(stateDir: string | undefined, maxBytes?: number) {
 
 async function removeSpoolArtifact(relativePath: string, stateDir?: string): Promise<void> {
   // Terminal cleanup retains its own task after the originating request loses authority.
-  const reply = await runFsSafeFilesystemTask({
+  await runFsSafeStoreOperation({
     type: "remove-store-file",
     rootDir: resolveDeliveryQueueMediaDir(stateDir),
     relativePath,
-    nativeMode: getFsSafeNativeConfig().mode,
   });
-  if (reply.type === "failed") {
-    throw reply.fsSafeCode
-      ? new FsSafeError(reply.fsSafeCode, reply.message)
-      : Object.assign(new Error(reply.message), { code: reply.code });
-  }
 }
 
 function resolveArtifactExtension(source: string): string {

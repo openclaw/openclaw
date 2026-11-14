@@ -1,13 +1,32 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { isMainThread } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
-import { reclaimAbandonedSqliteSnapshots } from "./sqlite-snapshot-reclamation.js";
+import {
+  createSqliteReadOnlyWorkerScope,
+  reclaimAbandonedSqliteSnapshots,
+} from "./sqlite-readonly-worker.js";
 import {
   acquireSqliteSnapshotReadToken,
   createSqliteSnapshotStagingTokenSync,
 } from "./sqlite-snapshot-staging.js";
+
+// mock-isolation: Observe the real child's physical close; keep native execution unchanged.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const { mockChildProcesses } = await import("./sqlite-readonly.test-support.js");
+  return mockChildProcesses(actual);
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
@@ -43,7 +62,11 @@ function strand(root: string, idleMs: number, hold?: "creator" | "reader") {
     }
   }
   age(outer.directory, idleMs);
-  return { directory: outer.directory, release };
+  return {
+    directory: outer.directory,
+    payload: path.join(child.directory, "database.sqlite"),
+    release,
+  };
 }
 
 describe.skipIf(process.platform === "win32")("abandoned SQLite snapshot reclamation", () => {
@@ -71,10 +94,20 @@ describe.skipIf(process.platform === "win32")("abandoned SQLite snapshot reclama
 
   it("reclaims day-old copies stranded beside this installation's namespace", async () => {
     const { own, parent, foreign } = installation();
+    expect(isMainThread).toBe(true);
+    {
+      using observed = observeMainThreadFs();
+      expect(await sweep()).toEqual({ removed: 0, bytes: 0, skipped: 0 });
+      expect(observed.calls()).toEqual({});
+    }
     const stranded = [strand(foreign, hours(25)), strand(parent, hours(25))];
     const ownCopy = strand(own, hours(1));
 
-    expect(await sweep()).toMatchObject({ removed: 3, skipped: 0 });
+    {
+      using observed = observeMainThreadFs();
+      expect(await sweep()).toMatchObject({ removed: 3, skipped: 0 });
+      expect(observed.calls()).toEqual({});
+    }
     for (const { directory } of [...stranded, ownCopy]) {
       expect(fs.existsSync(directory)).toBe(false);
     }
@@ -113,4 +146,97 @@ describe.skipIf(process.platform === "win32")("abandoned SQLite snapshot reclama
     expect(fs.existsSync(creator.directory)).toBe(false);
     expect(fs.existsSync(reader.directory)).toBe(false);
   });
+
+  it.for(["caller", "scope"] as const)(
+    "joins the real installation sweep before %s cancellation settles",
+    async (ending, { signal }) => {
+      const { own, foreign } = installation();
+      const abandoned = strand(own, hours(1));
+      const held = strand(foreign, hours(25), "reader");
+      const root = tempDirs.make("sqlite-sweep-cancel-");
+      const preload = path.join(root, "hold-retirement.mjs");
+      fs.writeFileSync(
+        preload,
+        `import fs from "node:fs";
+const remove = fs.rmSync;
+fs.rmSync = (target, ...args) => {
+  if (process.argv.includes("staging-sweep") && target === ${JSON.stringify(abandoned.payload)}) {
+    fs.writeFileSync(${JSON.stringify(path.join(root, "ready"))}, "ready");
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+  }
+  return remove(target, ...args);
+};
+`,
+      );
+      const option = process.versions.bun ? "BUN_OPTIONS" : "NODE_OPTIONS";
+      const previous = process.env[option];
+      vi.stubEnv(
+        option,
+        [
+          previous,
+          `${process.versions.bun ? "--preload" : "--import"}=${pathToFileURL(preload).href}`,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+      const entered = createDeferred();
+      const watcher = fs.watch(root, (_event, filename) => {
+        if (filename === "ready") {
+          entered.resolve();
+        }
+      });
+      const scope = createSqliteReadOnlyWorkerScope();
+      const controller = new AbortController();
+      const reason = new Error("snapshot maintenance stopped");
+      vi.mocked(execFile).mockClear();
+      const pending = scope.run(() => reclaimAbandonedSqliteSnapshots(controller.signal));
+      void pending.catch(() => {});
+      let closing: Promise<void> | undefined;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(entered.promise, pending, "sweep settled before retirement"),
+          signal,
+        );
+        const launched = vi
+          .mocked(execFile)
+          .mock.calls.findIndex(([, args]) => args?.includes("staging-sweep"));
+        const result = vi.mocked(execFile).mock.results[launched];
+        if (result?.type !== "return") {
+          throw new Error("real sweep child was not captured");
+        }
+        const child = result.value;
+        let closed = false;
+        child.once("close", () => {
+          closed = true;
+        });
+        const settled = pending.catch((error: unknown) => {
+          expect(closed).toBe(true);
+          throw error;
+        });
+        if (ending === "caller") {
+          controller.abort(reason);
+        } else {
+          closing = scope.close();
+        }
+        await withinTest(
+          expect(settled).rejects.toThrow(ending === "caller" ? reason.message : "scope closed"),
+          signal,
+        );
+        await closing;
+        expect(child.signalCode).toBe("SIGKILL");
+        expect(fs.readFileSync(abandoned.payload, "utf8")).toBe("copied bytes");
+        expect(fs.readFileSync(held.payload, "utf8")).toBe("copied bytes");
+        vi.stubEnv(option, previous);
+        age(abandoned.directory, hours(1));
+        expect(await sweep()).toMatchObject({ removed: 1, skipped: 1 });
+        expect(fs.existsSync(abandoned.directory)).toBe(false);
+        expect(fs.existsSync(held.directory)).toBe(true);
+      } finally {
+        watcher.close();
+        controller.abort(reason);
+        await Promise.allSettled([pending, closing, scope.close()]);
+        held.release();
+      }
+    },
+  );
 });

@@ -1,3 +1,5 @@
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import type {
   WorkspaceFilesystemCommand,
   WorkspaceFilesystemReadCommand,
@@ -8,11 +10,13 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {
   FsSafeFilesystemCommand,
   FsSafeFilesystemReply,
-  FsSafeStoreRemove,
+  FsSafeStoreCommand,
+  FsSafeStoreOperation,
   FsSafeStoreReply,
 } from "./fs-safe-copy-worker-contract.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { decodeNativeWorkerFailure } from "./worker-native-error.js";
 import { WorkerTaskError, WorkerTaskPool } from "./worker-task-pool.js";
 import type { WorkerTaskOptions } from "./worker-task-pool.types.js";
 
@@ -31,7 +35,7 @@ export function runFsSafeFilesystemTask(
   options?: Options,
 ): Promise<WorkspaceFilesystemReply>;
 export function runFsSafeFilesystemTask(
-  command: FsSafeStoreRemove,
+  command: FsSafeStoreCommand,
   options?: Options,
 ): Promise<FsSafeStoreReply>;
 export function runFsSafeFilesystemTask(
@@ -60,4 +64,19 @@ export function runFsSafeFilesystemTask(
     },
   ));
   return pool.run(command, options);
+}
+
+/** Keep store mutation checks and native policy inside the existing filesystem owner. */
+export async function runFsSafeStoreOperation(command: FsSafeStoreOperation): Promise<void> {
+  const reply = await runFsSafeFilesystemTask({
+    ...command,
+    nativeMode: getFsSafeNativeConfig().mode,
+  });
+  if (reply.type === "failed") {
+    const options =
+      reply.cause === undefined ? undefined : { cause: decodeNativeWorkerFailure(reply.cause) };
+    throw reply.fsSafeCode
+      ? new FsSafeError(reply.fsSafeCode, reply.message, options)
+      : Object.assign(new Error(reply.message, options), { code: reply.code });
+  }
 }

@@ -250,6 +250,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/session-pr-currency-measure.ts|typescript/unbound-method|1",
         // The subscription probe forwards track with the original AsyncWorkScope receiver.
         "scripts/perf/session-pr-subscriptions-measure.ts|typescript/unbound-method|1",
+        // The resource probe forwards the live pool receiver and restores the exact captured method.
+        "scripts/perf/skill-resource-admission-measure.mjs|typescript/unbound-method|1",
         // The admission-charge probe forwards runTask with the original pool receiver.
         "scripts/perf/state-read-worker-bench.ts|typescript/unbound-method|1",
         // Backup attribution forwards the native SQLite receiver and restores both methods in finally.

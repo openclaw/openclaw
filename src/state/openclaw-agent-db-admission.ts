@@ -60,7 +60,10 @@ import {
   INCOGNITO_AGENT_SQLITE_BASENAME,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
-import type { OpenClawAgentDatabaseAdmissionExecution } from "./openclaw-agent-execution-admission-contract.js";
+import type {
+  AgentDatabaseRequestExecutionSource,
+  OpenClawAgentDatabaseAdmissionExecution,
+} from "./openclaw-agent-execution-admission-contract.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   observeOpenClawDatabaseMaintenanceResource,
@@ -286,8 +289,18 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
     assertCurrent?: () => void,
     signal?: AbortSignal,
+    onRegistryChange?: AgentDatabaseRequestExecutionSource["onRegistryChange"],
   ): Promise<T> {
-    const run = () => runAgentDatabaseAsync(inputOptions, operation, assertCurrent, signal);
+    const run = () =>
+      runAgentDatabaseAsync(
+        inputOptions,
+        operation,
+        assertCurrent,
+        signal,
+        undefined,
+        undefined,
+        onRegistryChange,
+      );
     const scope = getOpenClawDatabaseMaintenanceScope();
     return scope ? scope.run(run) : run();
   }
@@ -329,6 +342,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     signal?: AbortSignal,
     prepared?: "native" | "worker",
     execution?: OpenClawAgentDatabaseAdmissionExecution,
+    onRegistryChange?: AgentDatabaseRequestExecutionSource["onRegistryChange"],
   ): Promise<T> {
     signal?.throwIfAborted();
     assertCurrent?.();
@@ -361,8 +375,17 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
         assertCurrent,
         signal,
         (preparation) =>
-          runAgentDatabaseAsync(options, operation, assertCurrent, signal, preparation, execution),
+          runAgentDatabaseAsync(
+            options,
+            operation,
+            assertCurrent,
+            signal,
+            preparation,
+            execution,
+            onRegistryChange,
+          ),
         execution,
+        onRegistryChange,
       );
     }
     const existing = cache.pending.get(pathname);
@@ -371,8 +394,26 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     }
     if (existing?.controller.signal.aborted) {
       return existing.promise.then(
-        () => runAgentDatabaseAsync(options, operation, assertCurrent, signal, prepared, execution),
-        () => runAgentDatabaseAsync(options, operation, assertCurrent, signal, prepared, execution),
+        () =>
+          runAgentDatabaseAsync(
+            options,
+            operation,
+            assertCurrent,
+            signal,
+            prepared,
+            execution,
+            onRegistryChange,
+          ),
+        () =>
+          runAgentDatabaseAsync(
+            options,
+            operation,
+            assertCurrent,
+            signal,
+            prepared,
+            execution,
+            onRegistryChange,
+          ),
       );
     }
     const pending =

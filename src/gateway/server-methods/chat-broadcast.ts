@@ -228,6 +228,7 @@ export function broadcastChatTerminal(params: ChatTerminalBroadcastParams & Chat
   ) {
     return;
   }
+  params.context.chatRunState?.flushPendingText(params.runId);
   markChatAbortTerminalOutcome(params.terminalEntry);
   broadcastChatFrame(params);
   params.context.agentRunSeq.delete(params.runId);

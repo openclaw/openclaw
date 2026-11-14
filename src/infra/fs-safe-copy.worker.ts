@@ -23,12 +23,13 @@ import type {
   FsSafeCopyRead,
   FsSafeCopyReply,
   FsSafeCopyWrite,
-  FsSafeStoreRemove,
+  FsSafeStoreCommand,
   FsSafeProvisionCopy,
   ProvisionCopyDetails,
 } from "./fs-safe-copy-worker-contract.js";
 import { normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
 import type { ScratchTreeRequest } from "./scratch-cleanup-tree.js";
+import { encodeNativeWorkerFailure } from "./worker-native-error.js";
 
 async function cloneRefsDirectory(
   source: string,
@@ -80,6 +81,9 @@ function failure(error: unknown): FsSafeCopyReply {
     type: "failed",
     message: error instanceof Error ? error.message : String(error),
     ...(error instanceof FsSafeError ? { fsSafeCode: error.code } : {}),
+    ...(error instanceof Error && error.cause !== undefined
+      ? { cause: encodeNativeWorkerFailure(error.cause) }
+      : {}),
     ...(error instanceof Error && "code" in error && typeof error.code === "string"
       ? { code: error.code }
       : {}),
@@ -114,7 +118,6 @@ if (parentPort) {
   const { assertWorkspaceFilesystemEvidence } = await import("../agents/workspace-state-guard.js");
   const { withWorkerFsSafeNativeMode } = await import("./worker-fs-safe.js");
   const { workerMutationAssertion } = await import("./worker-mutation-authority.js");
-  const { encodeNativeWorkerFailure } = await import("./worker-native-error.js");
   const { serveWorkerTasks } = await import("./worker-task-server.js");
   configureFsSafeNative(nativeConfig);
   serveWorkerTasks<
@@ -123,7 +126,7 @@ if (parentPort) {
     | FsSafeProvisionCopy
     | WorkspaceFilesystemCommand
     | WorkspaceFilesystemReadCommand
-    | FsSafeStoreRemove
+    | FsSafeStoreCommand
     | ScratchTreeRequest
   >(async (command, channel, control) => {
     let copyDetails: ProvisionCopyDetails | undefined;
@@ -147,12 +150,16 @@ if (parentPort) {
             }),
           );
         }
+        case "prune-store":
         case "remove-store-file":
           return await control.runNativeSection<FsSafeCopyReply>(() =>
             withWorkerFsSafeNativeMode(command.nativeMode, async () => {
-              await fileStore({ rootDir: command.rootDir, dirMode: 0o700, mode: 0o600 }).remove(
-                command.relativePath,
-              );
+              const store = fileStore({ rootDir: command.rootDir, dirMode: 0o700, mode: 0o600 });
+              if (command.type === "prune-store") {
+                await store.pruneExpired(command.options);
+              } else {
+                await store.remove(command.relativePath);
+              }
               return { type: "written" };
             }),
           );

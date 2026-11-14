@@ -141,6 +141,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-state-db.postgres.test.ts",
   "src/state/openclaw-state-db-open.postgres.test.ts",
   "src/state/openclaw-state.worker.settlement.test.ts",
+  "src/state/openclaw-state.worker.summary.test.ts",
   "src/state/openclaw-state-read.worker.test.ts",
   "src/state/openclaw-state-read.gateway-owner.test.ts",
   "src/state/openclaw-agent-db.postgres.test.ts",
