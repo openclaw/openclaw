@@ -486,8 +486,8 @@ export async function withCronManagementGrant<T>(
     {
       identity,
       assertActive,
-      ...(entry.scope.callerOrigin.kind === "local"
-        ? { callerOrigin: { kind: "local" as const } }
+      ...(entry.scope.callerOrigin.kind !== "unknown"
+        ? { callerOrigin: { ...entry.scope.callerOrigin } }
         : {}),
       channelRequester: channelRequestersByScope.get(entry.scope),
       execPolicy: entry.execPolicy,
