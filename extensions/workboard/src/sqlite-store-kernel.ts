@@ -465,6 +465,9 @@ function readBoard(row: Row): PersistedWorkboardBoard {
   const orchestration = parseJson(row.orchestration_json) as
     | PersistedWorkboardBoard["board"]["orchestration"]
     | undefined;
+  // sessions_spec holds the kind-specific column spec: Sessions columns, or Cards presentation.
+  // SAFETY: Cards board registration serializes the validated columns unchanged.
+  const columns = parseJson(row.sessions_spec) as PersistedWorkboardBoard["board"]["columns"];
   return {
     version: 1,
     board: definedFields({
@@ -473,6 +476,7 @@ function readBoard(row: Row): PersistedWorkboardBoard {
       ...(kind === "sessions"
         ? { sessions: normalizeWorkboardSessionsBoardSpec(parseJson(row.sessions_spec)) }
         : {}),
+      ...(kind !== "sessions" && columns ? { columns } : {}),
       name: stringValue(row, "name"),
       description: stringValue(row, "description"),
       icon: stringValue(row, "icon"),
@@ -511,7 +515,7 @@ class WorkboardSqliteBoardStore implements SyncStore<WorkboardKeyedStore<Persist
         sessions_spec: () =>
           board.kind === "sessions"
             ? jsonValue(normalizeWorkboardSessionsBoardSpec(board.sessions))
-            : null,
+            : jsonValue(board.columns),
         automation_job_id: () => bindNull(board.automationJobId),
         default_workspace_json: () => jsonValue(board.defaultWorkspace),
         orchestration_json: () => jsonValue(board.orchestration),
@@ -519,7 +523,8 @@ class WorkboardSqliteBoardStore implements SyncStore<WorkboardKeyedStore<Persist
         updated_at: () => board.updatedAt,
         archived_at: () => bindNull(board.archivedAt),
       },
-      ["kind", "sessions_spec"],
+      // Sessions specs change only through sessionsBoard.update; Cards columns through upsert.
+      board.kind === "sessions" ? ["kind", "sessions_spec"] : ["kind"],
     );
     runSqliteImmediateTransactionSync(this.db, () => {
       const existing = this.lookup(key)?.board;

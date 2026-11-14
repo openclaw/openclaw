@@ -5,12 +5,12 @@ import { SelectPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
 import { createElementRefs } from "../../lib/element-refs.ts";
+import { workboardColumnPresentation } from "../../lib/workboard/board-presentation.ts";
 import type {
   WorkboardCard,
   WorkboardStatus,
   WorkboardUiState,
 } from "../../lib/workboard/types.ts";
-import { formatStatusLabel } from "./view-helpers.tsx";
 import { workboardPopoverRef } from "./view-popover.ts";
 import type { WorkboardSelectOption } from "./workboard-select.ts";
 export type ActiveFilter = {
@@ -140,9 +140,10 @@ export function StatusTabs(props: StatusFilterProps) {
     void props.revision;
     return props.state;
   };
+  const presentation = createMemo(() => workboardColumnPresentation(state()));
   return (
     <div class="workboard-status-tabs" role="group" aria-label={t("workboard.fieldStatus")}>
-      <For each={[undefined, ...state().statuses]} keyed={(status) => status}>
+      <For each={[undefined, ...presentation().statuses]} keyed={(status) => status}>
         {(status) => (
           <button
             type="button"
@@ -160,7 +161,7 @@ export function StatusTabs(props: StatusFilterProps) {
               props.onChange?.();
             }}
           >
-            {status() === undefined ? t("workboard.allStatuses") : formatStatusLabel(status()!)}
+            {status() === undefined ? t("workboard.allStatuses") : presentation().label(status()!)}
           </button>
         )}
       </For>
@@ -183,11 +184,12 @@ export function MobileStatusPicker(
     }
     return result;
   });
+  const presentation = createMemo(() => workboardColumnPresentation(state()));
   const selected = createMemo(() =>
-    state().statuses.filter((status) => state().statusFilter.has(status)),
+    presentation().statuses.filter((status) => state().statusFilter.has(status)),
   );
   const label = () =>
-    selected().length ? selected().map(formatStatusLabel).join(", ") : t("workboard.allWork");
+    selected().length ? selected().map(presentation().label).join(", ") : t("workboard.allWork");
   const popoverId = "workboard-status-popover";
   return (
     <div class="workboard-mobile-status">
@@ -216,7 +218,7 @@ export function MobileStatusPicker(
         aria-label={t("workboard.fieldStatus")}
         ref={workboardPopoverRef("start")}
       >
-        <For each={[undefined, ...state().statuses]} keyed={(status) => status}>
+        <For each={[undefined, ...presentation().statuses]} keyed={(status) => status}>
           {(status) => (
             <button
               class="workboard-status-option"
@@ -243,7 +245,7 @@ export function MobileStatusPicker(
                 )}
               </span>
               <span>
-                {status() === undefined ? t("workboard.allWork") : formatStatusLabel(status()!)}
+                {status() === undefined ? t("workboard.allWork") : presentation().label(status()!)}
               </span>
               <span class="workboard-mobile-status__count">
                 {status() === undefined ? props.cards.length : (counts().get(status()!) ?? 0)}
@@ -293,6 +295,11 @@ function DisplayChoice<Field extends "viewMode" | "layout" | "emptyColumnMode">(
     void props.revision;
     return props.state;
   };
+  // The empty-column choice follows the board default until the viewer picks one.
+  const selected = () =>
+    props.field === "emptyColumnMode"
+      ? workboardColumnPresentation(state()).emptyColumnMode
+      : state()[props.field];
   return (
     <div class="workboard-filter-choice">
       <span class="workboard-filter-section__label">{t(`workboard.${props.labelKey}`)}</span>
@@ -300,9 +307,9 @@ function DisplayChoice<Field extends "viewMode" | "layout" | "emptyColumnMode">(
         <For each={props.options} keyed={(option) => option[0]}>
           {(option) => (
             <button
-              class={["btn", { "is-active": state()[props.field] === option()[0] }]}
+              class={["btn", { "is-active": selected() === option()[0] }]}
               type="button"
-              aria-pressed={state()[props.field] === option()[0] ? "true" : "false"}
+              aria-pressed={selected() === option()[0] ? "true" : "false"}
               aria-label={t(`workboard.${option()[3] ?? option()[1]}`)}
               title={t(`workboard.${option()[3] ?? option()[1]}`)}
               onClick={() => {

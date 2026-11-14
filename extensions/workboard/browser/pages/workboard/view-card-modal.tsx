@@ -5,6 +5,10 @@ import { icons } from "../../components/icons.tsx";
 import { WorkboardErrorToast } from "../../components/toast.tsx";
 import { t } from "../../i18n/index.ts";
 import {
+  workboardColumnPresentation,
+  workboardDefaultDraftStatus,
+} from "../../lib/workboard/board-presentation.ts";
+import {
   changedDraftPayload,
   draftPayload,
   resetDraftState,
@@ -29,7 +33,6 @@ import {
   workboardMutationContext,
   workboardViewState,
   renderPriorityIcon,
-  formatStatusLabel,
   isWorkboardSessionChoice,
   type WorkboardProps,
 } from "./view-helpers.tsx";
@@ -86,7 +89,7 @@ const workboardTemplates = [
 export function openCreateModal(
   state: WorkboardUiState,
   props: Pick<WorkboardProps, "agentsList" | "defaultAgentId" | "scopeAgentId">,
-  status: WorkboardStatus = "todo",
+  status: WorkboardStatus = workboardDefaultDraftStatus(workboardColumnPresentation(state)),
 ) {
   resetDraftState(state);
   state.draftStatus = status;
@@ -175,11 +178,16 @@ function CardModalContent(props: WorkboardProps) {
   const commentValue = liveInputValue(commentBody);
   const visibleError = () => workboardErrorMessage(state(), props.pageError);
   const sessions = () => props.sessions.filter(isWorkboardSessionChoice);
-  const statusOptions = () =>
-    state().statuses.map((status) => ({
+  const statusOptions = () => {
+    const presentation = workboardColumnPresentation(state());
+    const statuses = presentation.statuses.includes(state().draftStatus)
+      ? presentation.statuses
+      : [state().draftStatus, ...presentation.statuses];
+    return statuses.map((status) => ({
       value: status,
-      label: formatStatusLabel(status),
+      label: presentation.label(status),
     }));
+  };
   const priorityOptions = () =>
     WORKBOARD_PRIORITIES.map((priority) => ({
       value: priority,

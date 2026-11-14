@@ -384,10 +384,79 @@ export type WorkboardAutomation = {
   launch?: WorkboardLaunchState;
 };
 
+export const WORKBOARD_EMPTY_COLUMN_MODES = ["show", "collapse", "hide"] as const;
+export type WorkboardEmptyColumnMode = (typeof WORKBOARD_EMPTY_COLUMN_MODES)[number];
+
+/**
+ * Presentation of a Cards board's status columns. Card statuses, lifecycle sync and
+ * dispatch keep using native statuses; this only selects, orders and names columns.
+ */
+export type WorkboardCardsBoardColumns = {
+  /** Display order. Statuses left out are shown together in an "Other statuses" lane. */
+  visible: WorkboardStatus[];
+  labels?: Partial<Record<WorkboardStatus, string>>;
+  /** Viewer default; a viewer's own toolbar choice overrides it for the page session. */
+  emptyColumnMode?: WorkboardEmptyColumnMode;
+};
+
+const MAX_COLUMN_LABEL_LENGTH = 40;
+
+function isStatus(value: unknown): value is WorkboardStatus {
+  return WORKBOARD_STATUSES.some((status) => status === value);
+}
+
+/** Validates Cards board columns at the write boundary; throws a user-facing message. */
+export function parseWorkboardCardsBoardColumns(value: unknown): WorkboardCardsBoardColumns {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("board columns must be an object with a visible status list.");
+  }
+  // SAFETY: The checks above exclude null, arrays and primitives; fields are read as unknown.
+  const { visible, labels, emptyColumnMode } = value as Record<string, unknown>;
+  if (
+    !Array.isArray(visible) ||
+    visible.length === 0 ||
+    !visible.every(isStatus) ||
+    new Set(visible).size !== visible.length
+  ) {
+    throw new Error(
+      `board columns.visible must list 1-${WORKBOARD_STATUSES.length} unique statuses: ${WORKBOARD_STATUSES.join(", ")}.`,
+    );
+  }
+  const parsedLabels: Partial<Record<WorkboardStatus, string>> = {};
+  if (labels !== undefined) {
+    if (typeof labels !== "object" || labels === null || Array.isArray(labels)) {
+      throw new Error("board columns.labels must map statuses to labels.");
+    }
+    for (const [status, label] of Object.entries(labels)) {
+      if (!isStatus(status)) {
+        throw new Error(`board columns.labels has an unknown status: ${status}.`);
+      }
+      const trimmed = typeof label === "string" ? label.trim() : "";
+      if (!trimmed || trimmed.length > MAX_COLUMN_LABEL_LENGTH) {
+        throw new Error(
+          `board column label for ${status} must be 1-${MAX_COLUMN_LABEL_LENGTH} characters.`,
+        );
+      }
+      parsedLabels[status] = trimmed;
+    }
+  }
+  const mode = WORKBOARD_EMPTY_COLUMN_MODES.find((candidate) => candidate === emptyColumnMode);
+  if (emptyColumnMode !== undefined && !mode) {
+    throw new Error("board columns.emptyColumnMode must be show, collapse or hide.");
+  }
+  return {
+    visible: [...visible],
+    ...(Object.keys(parsedLabels).length ? { labels: parsedLabels } : {}),
+    ...(mode ? { emptyColumnMode: mode } : {}),
+  };
+}
+
 export type WorkboardBoardMetadata = {
   id: string;
   kind?: "cards" | "sessions";
   sessions?: WorkboardSessionsBoardSpec;
+  /** Cards boards only; absent means every status in the default order. */
+  columns?: WorkboardCardsBoardColumns;
   name?: string;
   description?: string;
   icon?: string;

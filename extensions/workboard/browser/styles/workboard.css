@@ -977,6 +977,80 @@
   grid-template-columns: repeat(7, minmax(var(--workboard-appearance-target), 1fr));
 }
 
+.workboard-columns-editor {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 16px 0 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.workboard-columns-editor legend {
+  float: left;
+  padding: 0;
+  font-weight: 600;
+}
+
+.workboard-columns-editor__help {
+  clear: both;
+  margin: 0;
+  color: var(--muted);
+  font-size: calc(0.74rem * var(--control-ui-text-scale));
+}
+
+.workboard-columns-editor__rows {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workboard-columns-editor__row {
+  display: grid;
+  grid-template-columns: auto minmax(84px, 0.6fr) minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.workboard-columns-editor__row--hidden .workboard-columns-editor__status,
+.workboard-columns-editor__row--hidden .settings-input {
+  opacity: 0.55;
+}
+
+.workboard-columns-editor__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: calc(0.8rem * var(--control-ui-text-scale));
+}
+
+.workboard-columns-editor .settings-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.workboard-columns-editor__move--up svg {
+  transform: rotate(180deg);
+}
+
+.workboard-columns-editor__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.workboard-columns-editor__footer label {
+  display: grid;
+  gap: 6px;
+  font-size: calc(0.8rem * var(--control-ui-text-scale));
+}
+
 .workboard-board-draft__appearance .session-menu__color-choice,
 .workboard-board-draft__appearance .session-menu__icon-choice {
   width: 100%;
@@ -1725,6 +1799,15 @@
 
 .workboard-column--done {
   --workboard-column-accent: var(--ok);
+}
+
+.workboard-column__other-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 4px 2px;
+  color: var(--muted);
+  font-size: calc(0.72rem * var(--control-ui-text-scale));
 }
 
 .workboard-column__header h2 {

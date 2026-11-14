@@ -4,6 +4,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
+import { workboardColumnPresentation } from "../../lib/workboard/board-presentation.ts";
 import {
   isActiveWorkboardCard,
   nextWorkboardCardPosition,
@@ -33,7 +34,6 @@ import {
   canMutate,
   cardHasUnresolvedStartedRun,
   engineBlockedByRuntime,
-  formatStatusLabel,
   workboardMutationContext,
   workboardViewState,
   type WorkboardProps,
@@ -71,10 +71,12 @@ export function CardMoveControl(input: {
   };
 }) {
   const state = workboardViewState(() => input.workboard);
+  const presentation = createMemo(() => workboardColumnPresentation(state()));
+  // A card in a status the board leaves out keeps that status as its current choice.
   const statuses = createMemo(() =>
-    state().statuses.includes(input.card.status)
-      ? state().statuses
-      : [input.card.status, ...state().statuses],
+    presentation().statuses.includes(input.card.status)
+      ? presentation().statuses
+      : [input.card.status, ...presentation().statuses],
   );
   const StatusSelect = () => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -117,7 +119,7 @@ export function CardMoveControl(input: {
         <For each={statuses()} keyed={(status) => status}>
           {(status) => (
             <option value={status()} selected={status() === input.card.status}>
-              {formatStatusLabel(status())}
+              {presentation().label(status())}
             </option>
           )}
         </For>

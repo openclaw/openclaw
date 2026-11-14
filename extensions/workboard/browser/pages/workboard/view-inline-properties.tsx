@@ -14,6 +14,7 @@ import { AgentPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
 import { listen } from "../../lib/listener.ts";
+import { workboardColumnPresentation } from "../../lib/workboard/board-presentation.ts";
 import { normalizeDraftLabels } from "../../lib/workboard/card-state.ts";
 import { updateWorkboardCardProperties } from "../../lib/workboard/mutations.ts";
 import { getWorkboardState } from "../../lib/workboard/runtime.ts";
@@ -27,7 +28,6 @@ import { buildAssignableAgentPickerOptions } from "./agent-filter.ts";
 import { moveCardToStatus } from "./view-card-actions.tsx";
 import {
   formatPriorityLabel,
-  formatStatusLabel,
   PriorityIcon,
   workboardMutationContext,
   workboardViewState,
@@ -187,10 +187,11 @@ export function InlineStatus(input: {
   disabled: boolean;
 }) {
   const state = workboardViewState(() => input.workboard);
+  const presentation = createMemo(() => workboardColumnPresentation(state()));
   const statuses = createMemo(() =>
-    state().statuses.includes(input.card.status)
-      ? state().statuses
-      : [input.card.status, ...state().statuses],
+    presentation().statuses.includes(input.card.status)
+      ? presentation().statuses
+      : [input.card.status, ...presentation().statuses],
   );
   return (
     <PropertyPicker<WorkboardStatus>
@@ -200,7 +201,7 @@ export function InlineStatus(input: {
         value: input.card.status,
         options: statuses().map((status) => ({
           value: status,
-          label: formatStatusLabel(status),
+          label: presentation().label(status),
           icon: () => <span class={["workboard-status-dot", `workboard-status-dot--${status}`]} />,
         })),
         disabled: input.disabled || !input.workboard.connected || !input.workboard.client,

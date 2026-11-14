@@ -2,6 +2,7 @@ import type {
   WorkboardBoardSummary,
   WorkboardCard,
   WorkboardCardCursor,
+  WorkboardEmptyColumnMode,
   WorkboardPriority,
   WorkboardStatus,
   WorkboardTemplateId,
@@ -89,7 +90,8 @@ export type WorkboardUiState = {
   showArchived: boolean;
   layout: "comfortable" | "compact";
   viewMode: "board" | "list";
-  emptyColumnMode: "show" | "collapse" | "hide";
+  /** The viewer's toolbar choice for this page session; null follows the board default. */
+  emptyColumnMode: WorkboardEmptyColumnMode | null;
   collapsedStatuses: Set<WorkboardStatus>;
   expandedEmptyStatuses: Set<WorkboardStatus>;
   lastRefreshAt: number | null;

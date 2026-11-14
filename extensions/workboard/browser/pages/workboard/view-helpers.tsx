@@ -8,6 +8,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { icons } from "../../components/icons.tsx";
 import { workboardLocale } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
+import { formatStatusLabel } from "../../lib/workboard/board-presentation.ts";
 import {
   getWorkboardState,
   workboardMutationsReady,
@@ -22,7 +23,6 @@ import type {
   WorkboardExecutionEngine,
   WorkboardLifecycle,
   WorkboardPriority,
-  WorkboardStatus,
   WorkboardUiState,
 } from "../../lib/workboard/types.ts";
 import { agentDisplayName, findCardAgent, type WorkboardAgentsList } from "./agent-filter.ts";
@@ -115,8 +115,6 @@ const lifecycleCopy = {
   ambiguous: ["workboard.lifecycleAmbiguous", "workboard.lifecycleAmbiguousDetail", "blocked"],
   unlinked: ["workboard.lifecycleUnlinked", "workboard.lifecycleUnlinkedDetail", "idle"],
 } as const satisfies Record<ReturnType<typeof getCardSessionState>, LifecycleCopy>;
-
-export const formatStatusLabel = (status: WorkboardStatus) => t(`workboard.status.${status}`);
 
 export const formatPriorityLabel = (priority: WorkboardPriority) =>
   priority.charAt(0).toUpperCase() + priority.slice(1);
