@@ -7,6 +7,7 @@ import {
 } from "../config/sessions/session-source-authority.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context-store.js";
 import { isGatewayWorkerApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
+import { runOutsideGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import {
@@ -182,11 +183,14 @@ export async function withInProcessGatewayDispatch<T>(
     // Only preparation refusals prove method work was never entered. Errors
     // from the callback may follow effects and must retain their original form.
     preparationComplete = true;
-    // Autonomous turns establish their own transcript writer and must not retain
-    // the caller's tool authority after that invocation closes.
+    // Autonomous turns establish their own transcript writer and request fence and
+    // must not retain the caller's tool or request authority after that invocation
+    // closes: a cron-root parent's fence expires when its run ends.
     return method === "agent"
       ? await runWithoutOwnedSessionTranscriptWrites(() =>
-          runOutsideOperatorToolGatewayAuthority(() => run(resolved)),
+          runOutsideOperatorToolGatewayAuthority(() =>
+            runOutsideGuardedFetchRequestAuthority(() => run(resolved)),
+          ),
         )
       : await run(resolved);
   } catch (error) {
