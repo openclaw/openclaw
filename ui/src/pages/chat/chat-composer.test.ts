@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -12,6 +12,8 @@ import {
   resetComposerFixture,
   renderComposerInto,
 } from "./chat-composer.test-support.ts";
+import { createComposerDictationOptions } from "./components/chat-composer-dictation-options.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import type { ChatQuestionCard } from "./components/chat-question-card.ts";
 import { MockDictationAudioContext } from "./talk/input.test-support.ts";
@@ -511,6 +513,46 @@ it("shows an actionable error status and returns the microphone to idle on start
   expect(query(".chat-send-btn--dictating")).toBeNull();
   expect(query(".chat-send-btn--voice")).not.toBeNull();
 });
+
+it.each([false, true])(
+  "clears only the recovered dictation notice (newer error: %s)",
+  async (newerError) => {
+    const view = renderComposer({});
+    const state = getChatComposerState(view.props.paneId);
+    assert.isNotNull(state.microphonePicker);
+    const setError = (error: string | null) =>
+      state.updatePresentation((draft) => {
+        draft.dictationError = error;
+      });
+    const options = createComposerDictationOptions(
+      view.props,
+      state,
+      state.microphonePicker,
+      setError,
+    );
+    const dismiss = options.onError("Original transcription failure", {
+      kind: "interrupted",
+      preservesText: false,
+    });
+    await waitForSolid(() =>
+      expect(view.container.textContent).toContain("Original transcription failure"),
+    );
+    if (newerError) {
+      // Same-tick replacement must survive the old recording's success callback.
+      setError("New unrelated composer error");
+    }
+    expect(dismiss).toBeTypeOf("function");
+    if (typeof dismiss === "function") {
+      dismiss();
+    }
+    await waitForSolid(() => {
+      expect(view.container.textContent).not.toContain("Original transcription failure");
+      expect(state.presentation.dictationError).toBe(
+        newerError ? "New unrelated composer error" : null,
+      );
+    });
+  },
+);
 
 it("keeps every concurrent gateway question reachable", async () => {
   const { query } = renderComposer({

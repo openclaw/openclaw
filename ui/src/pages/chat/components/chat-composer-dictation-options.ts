@@ -64,7 +64,14 @@ export function createComposerDictationOptions(
         failure.kind === "interrupted" && failure.preservesText
           ? t("chat.composer.dictationInterruptedRecovery")
           : t("chat.composer.dictationStartRecovery");
-      setError(`${message} ${recovery}`);
+      const error = `${message} ${recovery}`;
+      setError(error);
+      return () =>
+        state.updatePresentation((draft) => {
+          if (draft.dictationError === error) {
+            draft.dictationError = null;
+          }
+        });
     },
     onDictationUnavailable: devicePicker.handleOpen,
     onTap,

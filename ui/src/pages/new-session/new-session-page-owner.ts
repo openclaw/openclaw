@@ -215,7 +215,10 @@ export class NewSessionPageOwner {
       isConnected: () => this.gateway.connected,
       canCommit: () => !this.submission.submitting && !this.submission.pendingPlacement.sessionKey,
       onMessage: (message) => this.setMessageFromUser(message),
-      onError: (message) => this.submission.setError(message),
+      onError: (message) => {
+        this.submission.setError(message);
+        return () => this.submission.clearError(message);
+      },
       onSubmit: () => void this.submit(),
     });
     // Dictation receipts reconcile draft availability before the page projection reads it.
