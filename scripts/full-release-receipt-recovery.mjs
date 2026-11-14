@@ -39,6 +39,7 @@ import {
   PREPARED_NPM_MANIFEST,
   validatePreparedNpmRelease,
 } from "./plugin-npm-prepared-release.mjs";
+import { createReleaseEvidenceClient } from "./release-ci-summary.mjs";
 import {
   revalidateQualificationAdmissionAuthority,
   verifyReleaseQualificationOperators,
@@ -283,7 +284,6 @@ async function readPayload(repository, artifact, workflowSha, deps, mode, provid
 // the original successful seal. Admission omits it and verifies every payload byte.
 export async function verifyOriginalReceiptQualification(requestValue, dependencies = {}) {
   const request = validateReceiptRecoveryRequest(requestValue);
-  const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
   const client = dependencies.client ?? createReleaseEvidenceClient(request.repository);
   const deps = { client, token: process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN };
   const authenticatedPayloads = dependencies.authenticatedPayloads;
@@ -971,7 +971,6 @@ async function main() {
       },
       childRuns: Object.fromEntries(ROLES.map((role) => [role, request.children[role].runId])),
     };
-    const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
     const client = createReleaseEvidenceClient(request.repository);
     await revalidateReceiptRecoveryRuns(request, client, verified.children);
     client.verifyQualificationAdmission({

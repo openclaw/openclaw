@@ -1,5 +1,8 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
@@ -751,5 +754,66 @@ describe("receipt-backed aggregate recovery", () => {
     expect(
       steps.some((step: { uses?: string }) => step.uses?.includes("full-release-validation")),
     ).toBe(false);
+  });
+});
+
+describe("receipt recovery CLI", () => {
+  it("reaches candidate validation after authenticating admission", () => {
+    const directory = mkdtempSync(join(tmpdir(), "receipt-recovery-cli-"));
+    try {
+      const preload = join(directory, "github.mjs");
+      writeFileSync(
+        preload,
+        `
+        import childProcess from "node:child_process";
+        import { syncBuiltinESMExports } from "node:module";
+        childProcess.execFileSync = (command, args) => {
+          if (command !== "gh") throw new Error("Unexpected subprocess");
+          const endpoint = args[1];
+          if (endpoint.includes("/compare/")) return JSON.stringify({ status: "identical" });
+          if (endpoint.endsWith("/actions/runs/900")) return JSON.stringify({
+            id: 900, run_attempt: 1, repository: { full_name: "openclaw/openclaw" },
+            head_sha: "c".repeat(40), head_branch: "main",
+            path: ".github/workflows/full-release-receipt-recovery.yml",
+            event: "workflow_dispatch", status: "in_progress", conclusion: null,
+            actor: { id: 1, login: "operator", type: "User" },
+            triggering_actor: { id: 1, login: "operator", type: "User" }
+          });
+          if (endpoint.endsWith("/collaborators/operator/permission")) return JSON.stringify({
+            permission: "write", user: { id: 1, login: "operator" }
+          });
+          throw new Error("Unexpected GitHub request: " + endpoint);
+        };
+        syncBuiltinESMExports();
+      `,
+      );
+      const request = fixture().recovery;
+      request.candidateBinding.request.targetSha = "invalid";
+      const result = spawnSync(
+        process.execPath,
+        ["--import", preload, "scripts/full-release-receipt-recovery.mjs", "admit"],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          timeout: 15_000,
+          env: {
+            ...process.env,
+            GH_TOKEN: "",
+            GITHUB_TOKEN: "",
+            RUNNER_TEMP: directory,
+            GITHUB_RUN_ID: "900",
+            GITHUB_RUN_ATTEMPT: "1",
+            GITHUB_REF: "refs/heads/main",
+            GITHUB_SHA: "c".repeat(40),
+            RECEIPT_RECOVERY_REQUEST: JSON.stringify(request),
+          },
+        },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Receipt recovery: original candidate must retain C=Q");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
