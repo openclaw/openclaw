@@ -299,22 +299,37 @@ it.each([false, true])("keeps pages across row events; retires late pages: %s", 
   expect(cardTitles(element)).toEqual(["Old"]);
 });
 
-it("renders the route host and filters by search and author and sorts cards by title", async () => {
-  const authoredRow = (key: string, name: string, updatedAt: number, id: string, label: string) =>
-    row(`agent:main:dashboard:${key}`, name, {
-      updatedAt,
-      createdActor: { type: "human", id, label },
-    });
+it("labels and filters session attribution with creator, owner, and agent fallbacks", async () => {
   const data = routeData(
-    authoredRow("zulu", "Zulu monitor", 30, "peter", "Peter"),
-    authoredRow("alpha", "Alpha signals", 10, "mira", "Mira"),
+    row("agent:main:dashboard:zulu", "Zulu monitor", {
+      updatedAt: 30,
+      createdActor: { type: "human", id: "peter", label: "Peter" },
+      owner: { actor: { type: "agent", id: "writer", label: "Writer" } },
+    }),
+    row("agent:main:dashboard:alpha", "Alpha signals", {
+      updatedAt: 10,
+      owner: { actor: { type: "human", id: "mira", label: "Mira" } },
+    }),
+    row("agent:writer:dashboard:beta", "Beta metrics", { updatedAt: 20, agentId: "writer" }),
+    row("agent:main:dashboard:gamma", "Gamma metrics", { updatedAt: 15 }),
   );
   const { container } = await mountDashboard(undefined, data);
   flush();
 
   const element = container.querySelector<HTMLElement>("openclaw-dashboards-page")!;
-  expect(cardTitles(element)).toEqual(["Zulu monitor", "Alpha signals"]);
+  expect(cardTitles(element)).toEqual([
+    "Zulu monitor",
+    "Beta metrics",
+    "Gamma metrics",
+    "Alpha signals",
+  ]);
   expect(element.querySelector(".dashboard-preview")?.hasAttribute("inert")).toBe(true);
+  expect(
+    Array.from(
+      element.querySelectorAll(".dashboard-card__author-name"),
+      (label) => label.textContent,
+    ),
+  ).toEqual(["Session: Peter", "Session: writer", "Session: main", "Session: Mira"]);
 
   element.querySelector<HTMLButtonElement>('button[aria-label="Search dashboards"]')!.click();
   flush();
@@ -323,24 +338,38 @@ it("renders the route host and filters by search and author and sorts cards by t
   expect(cardTitles(element)).toEqual(["Alpha signals"]);
 
   changeValue(search, "");
-  element.querySelector<HTMLButtonElement>('button[aria-label="Filter by author"]')!.click();
+  element
+    .querySelector<HTMLButtonElement>('button[aria-label="Filter by session attribution"]')!
+    .click();
   await waitForSolid(() =>
     expect(document.querySelector(".dashboards-authors__row")).not.toBeNull(),
   );
-  const mira = [...document.querySelectorAll<HTMLLabelElement>(".dashboards-authors__row")].find(
-    (label) => label.textContent?.includes("Mira"),
-  )!;
+  const options = [...document.querySelectorAll<HTMLLabelElement>(".dashboards-authors__row")];
+  const mira = options.find((label) => label.textContent?.includes("Mira"))!;
   mira.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
   flush();
   expect(cardTitles(element)).toEqual(["Alpha signals"]);
-  expect(element.querySelector(".dashboard-card__author")?.textContent).toContain("Mira");
+  expect(element.querySelector(".dashboard-card__author")?.textContent).toContain("Session: Mira");
+  mira.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
+  flush();
+  const writer = options.find((label) => label.textContent?.includes("writer"))!;
+  writer.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
+  flush();
+  expect(cardTitles(element)).toEqual(["Beta metrics"]);
 
-  element.querySelector<HTMLButtonElement>('button[aria-label="Remove author filter"]')!.click();
+  element
+    .querySelector<HTMLButtonElement>('button[aria-label="Remove session attribution filter"]')!
+    .click();
   flush();
   element.querySelector<HTMLButtonElement>('button[aria-label="Display"]')!.click();
   await waitForSolid(() =>
     expect(document.querySelector("#dashboards-display select")).not.toBeNull(),
   );
   changeValue(document.querySelector<HTMLSelectElement>("#dashboards-display select")!, "title");
-  expect(cardTitles(element)).toEqual(["Alpha signals", "Zulu monitor"]);
+  expect(cardTitles(element)).toEqual([
+    "Alpha signals",
+    "Beta metrics",
+    "Gamma metrics",
+    "Zulu monitor",
+  ]);
 });

@@ -145,7 +145,7 @@ it.each([
     />
   ));
 
-  const trigger = container.querySelector('button[aria-label="Filter by author"]');
+  const trigger = container.querySelector('button[aria-label="Filter by session attribution"]');
   expect(trigger?.classList.contains("active")).toBe(active);
 });
 

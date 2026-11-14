@@ -150,7 +150,7 @@ export function DashboardEntry(props: DashboardEntryProps) {
     <>
       {renderSessionOwnerChip(author().avatar, "row")}
       <HoverMarquee
-        content={authorName()}
+        content={t("dashboardsPage.byAuthor", { author: authorName() })}
         class="dashboard-card__author-name"
         options={{ stationary: true, host: () => entry }}
       />
