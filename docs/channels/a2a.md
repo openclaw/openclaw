@@ -28,7 +28,7 @@ Add the bundled plugin to your OpenClaw configuration and define a separate bear
 }
 ```
 
-Set `A2A_HERMES_TOKEN` to a strong, unique secret in the gateway environment, then restart the gateway. Use your externally reachable HTTPS origin as `advertisedUrl` when the gateway runs behind a reverse proxy. If omitted, the plugin derives the advertised origin from the incoming discovery request.
+Set `A2A_HERMES_TOKEN` to a strong, unique secret in the gateway environment, then restart the gateway. Use your externally reachable HTTPS origin as `advertisedUrl` when the gateway runs behind a reverse proxy. If omitted, the plugin derives the advertised origin from the incoming discovery request: the `Host` header, with `https` when the connection uses TLS or when the direct peer is listed in `gateway.trustedProxies` and sends `X-Forwarded-Proto: https`.
 
 ## Discover the Agent Card
 

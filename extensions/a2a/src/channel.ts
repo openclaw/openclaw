@@ -12,6 +12,7 @@ import {
   defineChannelMessageAdapter,
   waitUntilAbort,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isTrustedProxyAddress } from "openclaw/plugin-sdk/core";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { sendJsonNoStore as writeJsonResponse } from "openclaw/plugin-sdk/http-response-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
@@ -106,13 +107,19 @@ function resolvePeerName(request: IncomingMessage, config: A2aChannelConfig): st
   return undefined;
 }
 
-function resolveRequestOrigin(request: IncomingMessage): string {
-  const encrypted = "encrypted" in request.socket && request.socket.encrypted;
+function resolveRequestOrigin(request: IncomingMessage, trustedProxies?: string[]): string {
+  const forwardedProto = request.headers["x-forwarded-proto"];
+  // Only a configured trusted proxy may report the client-facing scheme, and only to upgrade it.
+  const secure =
+    ("encrypted" in request.socket && request.socket.encrypted) ||
+    (isTrustedProxyAddress(request.socket.remoteAddress, trustedProxies) &&
+      typeof forwardedProto === "string" &&
+      forwardedProto.trim().toLowerCase() === "https");
+  const scheme = secure ? "https" : "http";
   try {
-    return new URL(`${encrypted ? "https" : "http"}://${request.headers.host ?? "localhost"}`)
-      .origin;
+    return new URL(`${scheme}://${request.headers.host ?? "localhost"}`).origin;
   } catch {
-    return `${encrypted ? "https" : "http"}://localhost`;
+    return `${scheme}://localhost`;
   }
 }
 
@@ -275,7 +282,10 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
           const instanceName =
             (agentIds[0] ? resolveAgentConfig(config, agentIds[0])?.name?.trim() : undefined) ||
             "OpenClaw";
-          const advertisedOrigin = a2aConfig.advertisedUrl ?? resolveRequestOrigin(request);
+          const trustedProxies = runtime.config.current().gateway?.trustedProxies;
+          const advertisedOrigin =
+            a2aConfig.advertisedUrl ??
+            resolveRequestOrigin(request, trustedProxies ? [...trustedProxies] : undefined);
           return {
             name: instanceName,
             description: "OpenClaw agent gateway using the Agent2Agent protocol.",
