@@ -22,6 +22,10 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../infra/outbound/deliver-types.js";
 import type {
   MessageActionInput,
   MessageActionResult,
@@ -393,6 +397,79 @@ describe("message tool queued gateway delivery", () => {
     expect(sentIdempotencyKey(runMessageAction, 0)).toBeDefined();
     expect(sentIdempotencyKey(runMessageAction, 1)).toBe(sentIdempotencyKey(runMessageAction, 0));
   });
+});
+
+describe("message tool unconfirmed delivery", () => {
+  const matrixFailure = (sentBeforeError: boolean, queueCustody?: "held" | "released") => {
+    const error = new OutboundDeliveryError(
+      "message failed: MatrixError: [429] Server is unavailable",
+      {
+        cause: new Error("MatrixError: [429] Server is unavailable"),
+        sentBeforeError,
+      },
+    );
+    if (queueCustody) {
+      error.queueCustody = queueCustody;
+    }
+    return error;
+  };
+
+  it("names reconciliation only when the queue still holds the send", async () => {
+    const error = matrixFailure(true, "held");
+    const { tool } = createFailingMessageTool(error);
+    const result = await tool.execute("send", { action: "send", message: "hello" });
+    expect(result.details).toMatchObject({
+      status: "delivery_unconfirmed",
+      delivered: false,
+      message:
+        "Delivery could not be confirmed: message failed: MatrixError: [429] Server is unavailable. The gateway owns reconciliation and the send may already have been delivered; do not resend it.",
+    });
+  });
+
+  it.each([undefined, "released"] as const)(
+    "does not promise a queued retry when custody is %s",
+    async (queueCustody) => {
+      const error = matrixFailure(true, queueCustody);
+      const { tool } = createFailingMessageTool(error);
+      const result = await tool.execute("send", { action: "send", message: "hello" });
+      expect(result.details).toMatchObject({
+        status: "delivery_unconfirmed",
+        delivered: false,
+        message:
+          "Delivery could not be confirmed: message failed: MatrixError: [429] Server is unavailable. No queued retry owns it, so the send may already have reached the recipient; check it before resending.",
+      });
+    },
+  );
+
+  it("keeps a failed attempt that provably did not send as an error", async () => {
+    const error = matrixFailure(false);
+    const { tool } = createFailingMessageTool(error);
+    await expect(tool.execute("send", { action: "send", message: "hello" })).rejects.toBe(error);
+  });
+
+  it.each([false, true])(
+    "preserves earlier delivery uncertainty when a later attempt is rejected: %s",
+    async (sentBeforeError) => {
+      const rejection = new PlatformMessageNotDispatchedError("MatrixError: [403] M_FORBIDDEN", {
+        cause: new Error("MatrixError: [403] M_FORBIDDEN"),
+        retryable: false,
+      });
+      const error = new OutboundDeliveryError("message failed: MatrixError: [403] M_FORBIDDEN", {
+        cause: rejection,
+        sentBeforeError,
+      });
+      error.queueCustody = "held";
+      const { tool } = createFailingMessageTool(error);
+      if (!sentBeforeError) {
+        await expect(tool.execute("send", { action: "send", message: "hello" })).rejects.toBe(
+          error,
+        );
+        return;
+      }
+      const result = await tool.execute("send", { action: "send", message: "hello" });
+      expect(result.details).toMatchObject({ status: "delivery_unconfirmed", delivered: false });
+    },
+  );
 });
 
 it.each(["read", "edit", "delete", "pin", "unpin"] as const)(

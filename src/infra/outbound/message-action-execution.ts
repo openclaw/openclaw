@@ -31,6 +31,7 @@ import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citati
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
+import { isOutboundDeliveryError } from "./deliver-types.js";
 import {
   createChannelActionContext,
   type MessageActionInput,
@@ -105,7 +106,26 @@ export function projectMessageActionPartialDelivery(error: unknown) {
       };
 }
 
-export function projectGatewayQueuedDeliveryResult(error: unknown) {
+/**
+ * A send the model must not blindly repeat. An attempt that failed after it
+ * started may already have landed, so it reports as unknown rather than failed.
+ * Only a held queue row can own reconciliation: a direct send that bypassed the
+ * queue has no row to reconcile, so it reports unverified custody instead of
+ * promising a Gateway retry. A later rejected attempt cannot disprove a
+ * previous attempt recorded as possibly sent by the delivery owner.
+ */
+export function projectDeliveryOutcomeResult(error: unknown) {
+  if (isOutboundDeliveryError(error) && error.sentBeforeError && error.results.length === 0) {
+    const retainedQueueCustody = error.queueCustody === "held";
+    const owner = retainedQueueCustody
+      ? "The gateway owns reconciliation and the send may already have been delivered; do not resend it."
+      : "No queued retry owns it, so the send may already have reached the recipient; check it before resending.";
+    return {
+      status: "delivery_unconfirmed",
+      delivered: false as const,
+      message: `Delivery could not be confirmed: ${formatErrorMessage(error)}. ${owner}`,
+    };
+  }
   if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
     return undefined;
   }

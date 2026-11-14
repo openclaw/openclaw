@@ -19,7 +19,7 @@ import {
   validateExplicitMessageAccountSelection,
 } from "../../infra/outbound/message-account-selection.js";
 import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
-import { projectGatewayQueuedDeliveryResult } from "../../infra/outbound/message-action-execution.js";
+import { projectDeliveryOutcomeResult } from "../../infra/outbound/message-action-execution.js";
 import { hasAcceptedMessageActionResult } from "../../infra/outbound/message-action-result-acceptance.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { enforceMessageActionAllowlist } from "../../infra/outbound/outbound-policy.js";
@@ -632,7 +632,7 @@ function* createMessageToolSteps(
               // Queue-owned retry: the gateway already holds the durable row and
               // caches this outcome under the same idempotency key, so a model resend
               // of the same content collapses instead of minting a second send.
-              const queuedDelivery = projectGatewayQueuedDeliveryResult(error);
+              const queuedDelivery = projectDeliveryOutcomeResult(error);
               if (queuedDelivery) {
                 return jsonResult(queuedDelivery);
               }

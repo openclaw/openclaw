@@ -1,3 +1,5 @@
+import { MatrixError } from "matrix-js-sdk/lib/http-api/errors.js";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
@@ -107,6 +109,65 @@ describe("performMatrixRequest", () => {
       }
     });
   });
+
+  it.each([false, true])(
+    "classifies a real SDK forbidden send conservatively after redirect=%s",
+    async (redirect) => {
+      const { MatrixClient } = await import("../sdk.js");
+      const sendPaths: string[] = [];
+      await withServer(
+        (request, response) => {
+          request.resume();
+          const path = new URL(request.url ?? "/", "http://localhost").pathname;
+          if (request.method === "PUT") {
+            sendPaths.push(path);
+            if (redirect && sendPaths.length === 1) {
+              response.writeHead(307, { location: "/redirected-send" });
+              response.end();
+              return;
+            }
+            response.writeHead(403, { "content-type": "application/json" });
+            response.end(JSON.stringify({ errcode: "M_FORBIDDEN", error: "Cannot send to room" }));
+            return;
+          }
+          response.writeHead(404, { "content-type": "application/json" });
+          response.end(JSON.stringify({ errcode: "M_NOT_FOUND" }));
+        },
+        async (url) => {
+          const client = new MatrixClient(url, "fixture-token", {
+            userId: "@fixture:example.org",
+            deviceId: "fixture",
+            encryption: false,
+            autoBootstrapCrypto: false,
+            ssrfPolicy: { allowPrivateNetwork: true },
+          });
+          try {
+            const result = client.sendMessage("!room:example.org", {
+              msgtype: "m.text",
+              body: "wire rejection fixture",
+            });
+            if (redirect) {
+              await expect(result).rejects.toBeInstanceOf(MatrixError);
+              expect(sendPaths).toHaveLength(2);
+              expect(sendPaths[1]).toBe("/redirected-send");
+            } else {
+              await expect(result).rejects.toMatchObject({
+                retryable: false,
+                cause: expect.any(MatrixError),
+              });
+              await expect(result).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
+              expect(sendPaths).toHaveLength(1);
+            }
+            expect(decodeURIComponent(sendPaths[0] ?? "")).toMatch(
+              /^\/_matrix\/client\/v3\/rooms\/!room:example.org\/send\/m.room.message\/.+$/,
+            );
+          } finally {
+            await client.stopWithoutPersist();
+          }
+        },
+      );
+    },
+  );
 
   it("preserves an encoded nested proxy prefix through the real HTTP transport", async () => {
     await withJsonServer({ user_id: "@bot:example.org" }, async (url, requests) => {

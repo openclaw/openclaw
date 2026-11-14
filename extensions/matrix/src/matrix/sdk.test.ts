@@ -147,6 +147,7 @@ type MatrixJsClientStub = TypedClientMembers & {
 };
 
 function createMatrixJsClientMethods(client: EventEmitter) {
+  let transactionId = 0;
   const classicSyncStop = vi.fn(() => {
     queueMicrotask(() => {
       client.emit("sync", SyncState.Stopped, SyncState.Syncing, undefined);
@@ -179,6 +180,7 @@ function createMatrixJsClientMethods(client: EventEmitter) {
     getAccountDataFromServer: vi.fn(async () => null),
     setAccountData: vi.fn(async () => {}),
     getRoomIdForAlias: vi.fn(async () => ({ room_id: "!resolved:example.org" })),
+    makeTxnId: vi.fn(() => `sdk-generated-transaction-${++transactionId}`),
     sendMessage: vi.fn(async () => ({ event_id: "$sent" })),
     resendEvent: vi.fn(async () => ({ event_id: "$resent" })),
     sendEvent: vi.fn(async () => ({ event_id: "$sent-event" })),
