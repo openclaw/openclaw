@@ -166,7 +166,6 @@ export type {
   OAuthCredential,
 } from "../agents/auth-profiles.js";
 export {
-  isFailedOAuthRefreshFence,
   isPendingOAuthRefreshFence,
   isSameOAuthRefreshGeneration,
 } from "../agents/auth-profiles/oauth-refresh-marker.js";

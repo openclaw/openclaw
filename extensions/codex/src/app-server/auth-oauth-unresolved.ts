@@ -1,7 +1,5 @@
-import {
-  isFailedOAuthRefreshFence,
-  type AuthProfileCredential,
-} from "openclaw/plugin-sdk/agent-runtime";
+import type { AuthProfileCredential } from "openclaw/plugin-sdk/agent-runtime";
+import { isFailedOAuthRefreshFence } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { CodexAppServerAuthProfileUnavailableError } from "./auth-profile-recovery.js";
 
 /** A terminally failed refresh needs a fresh sign-in; retrying could replay a consumed refresh token. */
