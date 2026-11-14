@@ -892,7 +892,7 @@ describe("runReplyAgent messaging tool dedupe", () => {
     {
       state: "missing",
       routed: true,
-      outcome: "missing",
+      outcome: "deduped",
       text: "hello world!",
       sourceReplyFinal: undefined,
     },
@@ -904,7 +904,7 @@ describe("runReplyAgent messaging tool dedupe", () => {
       sourceReplyFinal: undefined,
     },
     { state: undefined, routed: true, outcome: "deduped", text: "Done", sourceReplyFinal: false },
-    { state: "missing", routed: true, outcome: "missing", text: "Done", sourceReplyFinal: false },
+    { state: "missing", routed: true, outcome: "deduped", text: "Done", sourceReplyFinal: false },
     { state: undefined, routed: false, outcome: "reply", text: "Done", sourceReplyFinal: false },
     { state: undefined, routed: true, outcome: "deduped", text: "✅", sourceReplyFinal: false },
     {

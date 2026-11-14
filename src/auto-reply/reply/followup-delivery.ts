@@ -5,7 +5,6 @@ import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
-  resolveExplicitFinalSourceReplyDeliveryEvidence,
   resolveSourceReplyDelivery,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
@@ -42,6 +41,7 @@ import {
 import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import {
+  canCompleteMessagingToolDuplicate,
   resolveAutomationReplyState,
   retainAutomationReasoningWithFinal,
 } from "./automation-reply-payloads.js";
@@ -255,14 +255,6 @@ export async function resolveFollowupDeliveryDecision(params: {
     return { kind: "suppress" as const, reason: "silent" as const };
   }
   const completedSourceDelivery = hasCompletedSourceReplyDeliveryEvidence(result);
-  // A terminal payload can confirm an earlier progress send as its final answer.
-  // Explicit delivery custody and unfinished/failed turns remain authoritative.
-  const canCompleteFromMessagingToolDuplicate =
-    result.sourceReplyDeliveryState === undefined &&
-    (resolveExplicitFinalSourceReplyDeliveryEvidence(result) === undefined ||
-      (successfulTerminal &&
-        !pendingContinuation &&
-        sourcePolicy.sourceReplyDeliveryMode !== "message_tool_only"));
   const assistantFinalText = normalizeAssistantFinalDeliveryText(
     result.meta?.finalAssistantVisibleText ?? "",
   );
@@ -272,13 +264,19 @@ export async function resolveFollowupDeliveryDecision(params: {
     sentMediaUrls: result.messagingToolSentMediaUrls,
     sentTargets: result.messagingToolSentTargets,
     sentTexts: result.messagingToolSentTexts,
-    onDeliveredTerminalDuplicate: canCompleteFromMessagingToolDuplicate
-      ? () => {
-          if (completion.outcome !== "blocked") {
-            completion = resolveReplyCompletion(terminalReplyExpectation, "delivered");
-          }
-        }
-      : undefined,
+    onDeliveredTerminalDuplicate: () => {
+      if (
+        canCompleteMessagingToolDuplicate({
+          result,
+          completion,
+          successfulTerminal,
+          pendingContinuation,
+          sourceReplyDeliveryMode: sourcePolicy.sourceReplyDeliveryMode,
+        })
+      ) {
+        completion = resolveReplyCompletion(terminalReplyExpectation, "delivered");
+      }
+    },
   });
   if (!completedSourceDelivery && completion.outcome === "delivered") {
     await opts?.onObservedReplyDelivery?.();
