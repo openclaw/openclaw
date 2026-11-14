@@ -17,9 +17,13 @@ import {
   hasBundledPluginPublicSurface,
   loadBundledPluginPublicSurfaceModuleSync,
 } from "../plugin-sdk/facade-runtime.js";
-import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  withPluginMetadataSnapshotScope,
+} from "../plugins/current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { extractModelCompat } from "../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtime.js";
@@ -40,6 +44,7 @@ import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import { acquireReadOnlyPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { retainRuntimePluginWork } from "./runtime-plugin-work.js";
 import { createToolAccessDiagnostics } from "./tool-access-diagnostics.js";
+import { appendDeclaredPluginToolAccess } from "./tool-access-diagnostics.plugins.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
   buildReadableToolsByName,
@@ -386,7 +391,9 @@ export async function resolveEffectiveToolInventory(
     }));
   const diagnostics = createToolAccessDiagnostics({ profiles: capabilityProfile.policy.profiles });
   let githubPreviewUnavailable = false;
+  let diagnosticMetadata: PluginMetadataSnapshot | undefined;
   const effectiveTools = await withGatewayToolInventoryScope(params.cfg, workspaceDir, async () => {
+    diagnosticMetadata = getCurrentPluginMetadataSnapshot({ config: params.cfg, workspaceDir });
     const tools = await createOpenClawCodingToolsInternalAsync(
       {
         ...params,
@@ -461,12 +468,19 @@ export async function resolveEffectiveToolInventory(
     notices.push(CODEX_GITHUB_PREVIEW_UNAVAILABLE_NOTICE);
   }
   const groups = buildEffectiveToolInventoryGroups(entries);
+  const toolAccess = diagnostics.finish(entries.map((entry) => entry.id));
+  appendDeclaredPluginToolAccess({
+    diagnostics: toolAccess,
+    config: params.cfg,
+    capabilityProfile,
+    metadataSnapshot: diagnosticMetadata,
+  });
 
   return {
     agentId,
     profile,
     groups,
-    toolAccess: diagnostics.finish(entries.map((entry) => entry.id)),
+    toolAccess,
     ...(notices.length > 0 ? { notices } : {}),
   };
 }

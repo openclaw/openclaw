@@ -7,6 +7,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { publicPluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { defineToolPlugin, getToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
+import { createCapturedPluginRegistration } from "../plugins/captured-registration.js";
+import { resolvePluginModuleExport } from "../plugins/module-export.js";
 import { defaultRuntime } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
@@ -687,6 +689,35 @@ describe("plugin authoring commands", () => {
     expect(fs.existsSync(projectDir)).toBe(false);
     await runPluginsInitCommand("valid-feature", opts);
     expect(readJson(projectDir, "openclaw.plugin.json").id).toBe("valid-feature");
+  });
+
+  it("scaffolds an invocable tool and preserves deliberately authored profile grants", async () => {
+    const projectDir = path.join(tempDirs.make("openclaw-tool-init-"), "project");
+    await runPluginsInitCommand("fixture-tools", { directory: projectDir });
+    fs.mkdirSync(path.join(projectDir, "node_modules"));
+    fs.symlinkSync(
+      path.resolve("node_modules/typebox"),
+      path.join(projectDir, "node_modules/typebox"),
+      "dir",
+    );
+    const entryPath = path.join(projectDir, "src/index.ts");
+    const { entry } = await loadToolPlugin({ rootDir: projectDir, entryPath });
+    const captured = createCapturedPluginRegistration({ id: "fixture-tools" });
+    resolvePluginModuleExport(entry).register?.(captured.api);
+    expect(
+      await captured.tools[0]?.execute("call-fixture", { input: "known input" }),
+    ).toMatchObject({
+      details: { input: "known input" },
+    });
+    const manifestPath = path.join(projectDir, "openclaw.plugin.json");
+    const manifest = readJson(projectDir, "openclaw.plugin.json");
+    expect(manifest.toolMetadata).toBeUndefined();
+    writeJsonFile(manifestPath, { ...manifest, toolMetadata: { echo: { profiles: ["coding"] } } });
+    await runPluginsBuildCommand({ root: projectDir, entry: entryPath });
+    await runPluginsValidateCommand({ root: projectDir, entry: entryPath });
+    expect(readJson(projectDir, "openclaw.plugin.json").toolMetadata).toEqual({
+      echo: { profiles: ["coding"] },
+    });
   });
 
   it("finishes init with an absolute directory after the launch directory is removed", async () => {

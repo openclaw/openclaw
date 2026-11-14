@@ -667,16 +667,33 @@ export default defineToolPlugin({
     const testSource = `import { describe, expect, it } from "vitest";
 import entry from "./index.js";
 import { getToolPluginMetadata } from "openclaw/plugin-sdk/tool-plugin";
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 
 describe(${idLiteral}, () => {
   it("declares tool metadata", () => {
     expect(getToolPluginMetadata(entry)?.tools.map((tool) => tool.name)).toEqual(["echo"]);
+  });
+
+  it("invokes echo with the runtime argument order", async () => {
+    const captured = createCapturedPluginRegistration({ id: entry.id });
+    entry.register(captured.api);
+    const echo = captured.tools.find((tool) => tool.name === "echo");
+    expect(await echo?.execute("call-1", { input: "hello" })).toMatchObject({
+      details: { input: "hello" },
+    });
   });
 });
 `;
     const readmeSource = `# ${name}
 
 Simple OpenClaw tool plugin.
+
+Validation checks metadata consistency, not session access. After installing, invoke
+\`echo\` with known input in your intended agent session and check the result.
+Restricted profiles such as \`coding\` and \`messaging\` need a matching manifest
+\`toolMetadata.echo.profiles\` grant or an operator \`tools.alsoAllow: ["echo"]\` entry.
+\`tools.allow\` alone does not widen a profile, and explicit denies still apply.
+See https://docs.openclaw.ai/plugins/tool-plugins#tool-does-not-appear-after-install.
 
 ## Build
 
