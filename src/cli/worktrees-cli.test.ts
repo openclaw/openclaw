@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -88,6 +89,29 @@ describe("worktrees cli", () => {
     await expect(run([command, "worktree-id", ...flags])).rejects.toThrow(error);
     expect([remove, lossless, restore, create].some((spy) => spy.mock.calls.length)).toBe(false);
   });
+
+  it.each([
+    ["remove", "--exact-state"],
+    ["restore", "--recover-exact-state"],
+  ] as const)(
+    "rejects unreadable exact-state file content before mutation",
+    async (command, flag) => {
+      const dir = tempDirs.make("openclaw-exact-state-");
+      const badJson = path.join(dir, "bad.json");
+      await fs.writeFile(badJson, "{ not valid json !!!");
+      const wrongShape = path.join(dir, "wrong.json");
+      await fs.writeFile(wrongShape, JSON.stringify({ ownerKind: "manual" }));
+      const remove = vi.spyOn(owner, "remove");
+      const restore = vi.spyOn(owner, "restore");
+      for (const file of [badJson, wrongShape]) {
+        await expect(run([command, "worktree-id", flag, file])).rejects.toMatchObject({
+          humanOutput: `Cannot read exact-state request ${file}. Choose a readable regular JSON file and retry.`,
+          machineOutput: `Cannot read exact-state request ${file}. Choose a readable regular JSON file and retry.`,
+        });
+      }
+      expect([remove, restore].some((spy) => spy.mock.calls.length)).toBe(false);
+    },
+  );
 
   it("requires an exact pending commit and returns recovery's actual outcome", async () => {
     const snapshot = "a".repeat(40);
