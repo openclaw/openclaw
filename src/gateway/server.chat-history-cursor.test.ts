@@ -381,20 +381,33 @@ describe("chat.history cursor catch-up", () => {
       parentId = eventId;
     }
     const avatarUrls: string[] = [];
+    let cursor = cached.payload?.deltaCursor;
     for (const byte of [1, 2]) {
       expect(setAvatar(profile.id, new Uint8Array([byte]), "image/png").ok).toBe(true);
       const { avatarRevision } = userProfileList.getUserProfileDisplay(profile.id);
       const avatarUrl = buildControlUiUserAvatarPath(profile.id, avatarRevision);
       avatarUrls.push(avatarUrl);
+      expect(await callChat(context, "chat.history", { cursor })).toMatchObject({
+        ok: true,
+        payload: { kind: "reset" },
+      });
       const history = await callChat<History>(context, "chat.history");
       expect(history.ok).toBe(true);
-      expect(history.payload?.messages).toHaveLength(4);
-      expectSenderDisplay(history.payload?.messages.slice(-3) ?? [], profile.id, avatarUrl);
+      expect(history.payload?.messages).toHaveLength(3 + byte);
+      expectSenderDisplay(history.payload?.messages.slice(1) ?? [], profile.id, avatarUrl);
+      const eventId = "profile-delta-" + byte;
+      await appendMessage(storePath, eventId, parentId, {
+        role: "user",
+        content: "after profile refresh",
+        __openclaw: { senderIdentity: { type: "profile", id: profile.id } },
+      });
+      parentId = eventId;
       const delta = await callChat<Delta>(context, "chat.history", {
-        cursor: cached.payload?.deltaCursor,
+        cursor: history.payload?.deltaCursor,
       });
       expect(delta).toMatchObject({ ok: true, payload: { kind: "delta" } });
-      expect(delta.payload?.messages).toHaveLength(3);
+      expect(delta.payload?.messages).toHaveLength(1);
+      cursor = delta.payload?.deltaCursor;
       expectSenderDisplay(
         delta.payload?.messages.map(({ message }) => message) ?? [],
         profile.id,
