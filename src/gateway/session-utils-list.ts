@@ -675,6 +675,13 @@ export async function listProjectedSessions(params: {
             context?.getCommittedRuntimeConfig?.() ?? cfg,
             client,
           );
+          if (!params.acceptsSerializedJson) {
+            // Object readers own response containers and person counts, not the frozen selection.
+            result.owners = result.owners?.slice();
+            if (result.people) {
+              result.people = result.people.map((person) => ({ ...person }));
+            }
+          }
           if (client !== undefined) {
             result.defaults.modelSelectionTarget = resolveGatewayModelSelectionPolicy({
               callerScopes: client?.connect?.scopes ?? [],
