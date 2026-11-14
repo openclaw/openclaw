@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SESSION_EXEC_OVERRIDES_NOTE } from "../infra/exec-approvals-effective.js";
 import * as execApprovals from "../infra/exec-approvals.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 
 const {
@@ -81,6 +82,23 @@ describe("exec approvals CLI", () => {
     expect(runtimeLogs.filter((line) => line.includes(SESSION_EXEC_OVERRIDES_NOTE))).toHaveLength(
       1,
     );
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("prints no snapshot that lands after Ctrl+C", async () => {
+    const work = new AsyncWorkScope();
+    // The Gateway snapshot read settles only after the command scope begins closing.
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "exec.approvals.get") {
+        work.beginClose();
+        return nativeSnapshot;
+      }
+      return { config: { tools: { exec: { security: "full", ask: "off" } } } };
+    });
+
+    await work.run(() => runApprovalsCommand(["approvals", "get", "--gateway", "--json"]));
+
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
     expect(runtimeErrors).toHaveLength(0);
   });
 

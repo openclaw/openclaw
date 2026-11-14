@@ -17,7 +17,6 @@ import type {
   ExecApprovalGrantsListResult,
   ExecApprovalGrantsRevokeResult,
   ExecApprovalStandingGrant,
-  ExecApprovalsNodeSetParams,
 } from "../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import {
   getTerminalTableWidth,
@@ -36,13 +35,13 @@ import {
 import {
   redactExecApprovals,
   type ExecApprovalsAgent,
-  type ExecApprovalsDefaults,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
 import { classifyExecAllowlistScope } from "../infra/exec-command-resolution.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   EXEC_APPROVALS_STDIN_MAX_BYTES,
   formatCliError,
@@ -50,49 +49,29 @@ import {
   renderEffectivePolicyTable,
   runApprovalsAction,
 } from "./exec-approvals-cli.shared.js";
-import { loadSnapshotLocal, saveSnapshotLocal } from "./exec-approvals-local.js";
+import { saveSnapshotLocal } from "./exec-approvals-local.js";
 import { registerNativeExecApprovalsCli } from "./exec-approvals-native-cli.js";
+import {
+  isFileApprovalsSnapshot,
+  isNativeApprovalsSnapshot,
+  loadSnapshot,
+  loadSnapshotTarget,
+  type ApprovalsTargetSource,
+  type ExecApprovalsCliOpts,
+  type ExecApprovalsSnapshot,
+  type NativeExecApprovalAction,
+  type NativeExecApprovalPolicy,
+} from "./exec-approvals-snapshot.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
-import { nodesCallOpts, resolveCliNodeId } from "./nodes-cli/rpc.js";
-import type { NodesRpcOpts } from "./nodes-cli/types.js";
+import { nodesCallOpts } from "./nodes-cli/rpc.js";
 import { parseOptionalPositiveInteger } from "./parse-positive-integer.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
-
-type FileExecApprovalsSnapshot = Awaited<ReturnType<typeof loadSnapshotLocal>> & {
-  resolvedDefaults?: Required<ExecApprovalsDefaults>;
-};
-
-type NativeExecApprovalPolicy = NonNullable<ExecApprovalsNodeSetParams["native"]>;
-type NativeExecApprovalRule = NativeExecApprovalPolicy["rules"][number];
-type NativeExecApprovalAction = NativeExecApprovalRule["action"];
-type NativeExecApprovalsSnapshot =
-  | {
-      enabled: true;
-      hash: string;
-      baseHash?: string;
-      defaultAction: NativeExecApprovalAction;
-      rules: NativeExecApprovalRule[];
-      constraints?: Record<string, boolean>;
-    }
-  | { enabled: false; message?: string };
-type ExecApprovalsSnapshot = FileExecApprovalsSnapshot | NativeExecApprovalsSnapshot;
 
 type ConfigSnapshotLike = {
   config?: OpenClawConfig;
 };
-type ApprovalsTargetSource = "gateway" | "node" | "local";
 const APPROVALS_GET_DEFAULT_TIMEOUT_MS = 60_000;
-
-type ExecApprovalsCliOpts = NodesRpcOpts & {
-  node?: string;
-  gateway?: boolean;
-  file?: string;
-  stdin?: boolean;
-  agent?: string;
-  reason?: string;
-  expiresInDays?: string;
-};
 
 type PendingApprovalCliEntry = NonNullable<ReturnType<typeof readPendingApprovalEntry>>;
 
@@ -114,61 +93,11 @@ async function readApprovalsFile(filePath: string): Promise<string> {
   }
 }
 
-async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string | null> {
-  const nodeTarget = normalizeOptionalString(opts.node) ?? "";
-  if (opts.gateway && nodeTarget) {
-    // Reject the ambiguous pair so a targeted --node write cannot silently
-    // fall back to the gateway approvals policy.
-    throw new Error("Pass only one of --gateway or --node.");
-  }
-  if (opts.gateway) {
-    return null;
-  }
-  if (!nodeTarget) {
-    return null;
-  }
-  return await resolveCliNodeId(opts, nodeTarget);
-}
-
-async function loadSnapshot(
-  opts: ExecApprovalsCliOpts,
-  nodeId: string | null,
-): Promise<ExecApprovalsSnapshot> {
-  const method = nodeId ? "exec.approvals.node.get" : "exec.approvals.get";
-  const params = nodeId ? { nodeId } : {};
-  return (await callGatewayFromCli(method, opts, params)) as ExecApprovalsSnapshot;
-}
-
-function isFileApprovalsSnapshot(
-  snapshot: ExecApprovalsSnapshot,
-): snapshot is FileExecApprovalsSnapshot {
-  return "file" in snapshot;
-}
-
-function isNativeApprovalsSnapshot(
-  snapshot: ExecApprovalsSnapshot,
-): snapshot is NativeExecApprovalsSnapshot {
-  return "enabled" in snapshot;
-}
-
 function parseNativeAction(value: unknown, label: string): NativeExecApprovalAction {
   if (value === "allow" || value === "deny" || value === "prompt") {
     return value;
   }
   throw new Error(`${label} must be allow, deny, or prompt.`);
-}
-
-async function loadSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
-  snapshot: ExecApprovalsSnapshot;
-  nodeId: string | null;
-  source: ApprovalsTargetSource;
-}> {
-  if (!opts.gateway && !opts.node) {
-    return { snapshot: await loadSnapshotLocal(), nodeId: null, source: "local" };
-  }
-  const nodeId = await resolveTargetNodeId(opts);
-  const snapshot = await loadSnapshot(opts, nodeId);
-  return { snapshot, nodeId, source: nodeId ? "node" : "gateway" };
 }
 
 function requireTrimmedNonEmpty(value: string, message: string): string {
@@ -955,8 +884,22 @@ export function registerExecApprovalsCli(program: Command) {
     .option("--node <node>", "Target node id/name/IP")
     .option("--gateway", "Force gateway approvals", false)
     .action(async (opts: ExecApprovalsCliOpts) => {
+      // Reads stop with the command; nothing they settle to is printed after Ctrl+C.
+      const signal = getAsyncWorkSignal();
       await runApprovalsAction(opts, async () => {
-        const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
+        let target: Awaited<ReturnType<typeof loadSnapshotTarget>>;
+        try {
+          target = await loadSnapshotTarget(opts, signal);
+        } catch (error) {
+          if (signal?.aborted) {
+            return;
+          }
+          throw error;
+        }
+        if (signal?.aborted) {
+          return;
+        }
+        const { snapshot, nodeId, source } = target;
         const nativePolicy = isNativeApprovalsSnapshot(snapshot);
         const configLoad = nativePolicy
           ? { config: null, timedOut: false }
