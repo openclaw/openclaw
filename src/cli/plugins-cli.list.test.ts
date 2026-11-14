@@ -10,7 +10,6 @@ import type { PluginRegistryStatusReport, PluginStatusReport } from "../plugins/
 import { createCompatibilityNotice, createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { ExpectedCliError } from "./expected-cli-error.js";
 import {
   buildPluginCompatibilityNoticesMock,
   withPluginDiagnosticsReportForInspectionMock as withDiagnostics,
@@ -362,19 +361,14 @@ describe("plugins cli list", () => {
     "reports persisted replacement differences after stale refresh (json=%s)",
     async (json) => {
       refreshRegistry.mockResolvedValue({ plugins: [] });
-      const differences = mockRegistryInspection(
-        "/plugins/demo/index.js",
-        "/plugins/demo/dist/index.js",
-      );
+      const differences = mockRegistryInspection("/plugins/demo/index.js", "/plugins/demo/dist/index.js");
       const command = plugins("registry", "--refresh", ...(json ? ["--json"] : []));
       if (!json) {
-        const error = await command.catch((err: unknown) => err);
-        // The root CLI error path prints an expected error's reason and hides a plain
-        // Error behind the generic line, so the stale-refresh refusal must be expected.
-        expect(error).toBeInstanceOf(ExpectedCliError);
-        expect((error as ExpectedCliError).humanOutput).toMatch(
-          /demo: record changed; persisted \/plugins\/demo\/index\.js; derived \/plugins\/demo\/dist\/index\.js.*openclaw plugins registry --refresh/su,
-        );
+        await expect(command).rejects.toMatchObject({
+          humanOutput: expect.stringMatching(
+            /demo: record changed; persisted \/plugins\/demo\/index\.js; derived \/plugins\/demo\/dist\/index\.js.*openclaw plugins registry --refresh/su,
+          ),
+        });
         return;
       }
       await expect(command).rejects.toThrow();
