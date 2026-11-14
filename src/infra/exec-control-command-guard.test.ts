@@ -1,4 +1,6 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   detectUnsafeExecControlShellCommand,
   rejectUnsafeExecControlShellCommand,
@@ -25,5 +27,127 @@ describe("exec control command guard", () => {
     await expect(rejectUnsafeExecControlShellCommand(command)).rejects.toThrow(
       /exceeds the command explanation work limit/,
     );
+  });
+
+  it("rejects control bytes that hide later exec control commands", async () => {
+    const command = "echo hi\v# ; /approve abc123 allow-once";
+
+    await expect(detectUnsafeExecControlShellCommand(command)).resolves.toBe(
+      "unsupported-control-character",
+    );
+    await expect(rejectUnsafeExecControlShellCommand(command)).rejects.toThrow(
+      /unsupported control characters/,
+    );
+    await expect(detectUnsafeExecControlShellCommand("\vecho hi")).resolves.toBe(
+      "unsupported-control-character",
+    );
+  });
+
+  it.each([
+    ['echo hi; openclaw channels login\n"', "channel-login", /interactive OpenClaw channel login/],
+    ["ls !(*.txt); /approve abc allow-once", "approve", /exec cannot run \/approve/],
+    [
+      "echo ${${x%.*}##*/}; openclaw channels login",
+      "channel-login",
+      /interactive OpenClaw channel login/,
+    ],
+  ] as const)(
+    "checks commands recovered from a partial parse: %s",
+    async (command, kind, message) => {
+      await expect(detectUnsafeExecControlShellCommand(command)).resolves.toBe(kind);
+      await expect(rejectUnsafeExecControlShellCommand(command)).rejects.toThrow(message);
+    },
+  );
+
+  it("leaves unrelated syntax errors to normal shell and approval handling", async () => {
+    await expect(detectUnsafeExecControlShellCommand('echo hi\n"')).resolves.toBe(null);
+  });
+
+  it("keeps PowerShell CRLF commands eligible for control-command inspection", async () => {
+    const ordinary = "Write-Output 1\r\nWrite-Output 2";
+    const protectedCommand = "Write-Output 1\r\n/approve abc123 allow-once";
+
+    await expect(
+      detectUnsafeExecControlShellCommand(ordinary, { platform: "win32" }),
+    ).resolves.toBe(null);
+    await expect(
+      detectUnsafeExecControlShellCommand(protectedCommand, { platform: "win32" }),
+    ).resolves.toBe("approve");
+    await expect(detectUnsafeExecControlShellCommand(ordinary)).resolves.toBe(
+      "unsupported-control-character",
+    );
+    await expect(
+      detectUnsafeExecControlShellCommand("Write-Output 1\ropenclaw channels login", {
+        platform: "win32",
+      }),
+    ).resolves.toBe("unsupported-control-character");
+  });
+
+  it("rejects raw control bytes even when quoted or decoded, but leaves inert text alone", async () => {
+    for (const command of [
+      String.raw`bash -c $'echo hi\v# ; /approve abc123 allow-once'`,
+      String.raw`bash -c $'printf "a\rb"'`,
+      "printf '%s' 'a\rb'",
+      'printf "a\fb"',
+    ]) {
+      await expect(detectUnsafeExecControlShellCommand(command)).resolves.toBe(
+        "unsupported-control-character",
+      );
+    }
+    for (const command of [
+      String.raw`printf 'a\rb'`,
+      String.raw`printf $'a\vb'`,
+      "printf 'a\tb\n'",
+      // Protected-looking data in quotes, comments, and heredoc bodies is not a command.
+      `printf '%s' 'a # /approve abc123 allow-once' "openclaw channels login"`,
+      "echo ok # /approve abc123 allow-once",
+      "cat <<'EOF'\n\t/approve abc123 allow-once\nopenclaw channels login\nEOF",
+    ]) {
+      await expect(detectUnsafeExecControlShellCommand(command)).resolves.toBe(null);
+    }
+  });
+
+  it("inspects two nested shell wrappers and rejects a third", async () => {
+    const wrap = (command: string) => `bash -c '${command.replaceAll("'", `'\\''`)}'`;
+
+    await expect(
+      detectUnsafeExecControlShellCommand(wrap(wrap("/approve abc123 allow-once"))),
+    ).resolves.toBe("approve");
+    await expect(detectUnsafeExecControlShellCommand(wrap(wrap("printf nested")))).resolves.toBe(
+      null,
+    );
+    await expect(
+      detectUnsafeExecControlShellCommand(
+        wrap(wrap(String.raw`bash -c $'echo safe\v#; /approve abc123 allow-once'`)),
+      ),
+    ).resolves.toBe("incomplete-analysis");
+  });
+
+  it("inspects commands up to 128 KiB and rejects longer ones", async () => {
+    const atLimit = "/approve abc123 allow-once #".padEnd(128 * 1024, "x");
+
+    await expect(detectUnsafeExecControlShellCommand(atLimit)).resolves.toBe("approve");
+    await expect(detectUnsafeExecControlShellCommand(`${atLimit}x`)).resolves.toBe(
+      "incomplete-analysis",
+    );
+    await expect(rejectUnsafeExecControlShellCommand(`${atLimit}x`)).rejects.toThrow(
+      /file tool or script file/,
+    );
+    // Control bytes are checked before size, so oversized text cannot hide them.
+    await expect(
+      detectUnsafeExecControlShellCommand(`echo${" ".repeat(128 * 1024)}\v#; /approve abc`),
+    ).resolves.toBe("unsupported-control-character");
+  });
+
+  it("keeps live-state denial for commands padded with safe whitespace", async () => {
+    await withTempDir("openclaw-exec-control-", async (root) => {
+      const stateDir = path.join(root, "state");
+      const database = path.join(stateDir, "state", "openclaw.sqlite");
+      const command = `${" ".repeat(128 * 1024)}echo ok; sqlite3 ${JSON.stringify(database)} 'select 42'`;
+
+      await expect(
+        detectUnsafeExecControlShellCommand(command, { stateDir, workdir: root }),
+      ).resolves.toBe("live-state-sqlite");
+    });
   });
 });

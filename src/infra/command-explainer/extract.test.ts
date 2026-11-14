@@ -190,7 +190,6 @@ describe("command explainer tree-sitter runtime", () => {
     ],
     ["bash -c 'printf λ🦀'", ["printf", "λ🦀"], "printf λ🦀"],
     ['bash -c "printf a\\\nb"', ["printf", "ab"], "printf a\\\nb"],
-    ['bash -c "printf a\\\r\nb"', ["printf", "ab"], "printf a\\\r\nb"],
     ["bash -c 'cat <<EOF\nλ🦀\nEOF'", ["cat"], "cat"],
   ])("preserves decoded argv and wrapper source spans: %s", async (source, argv, rawCommand) => {
     const explanation = await explainShellCommand(source);
@@ -200,6 +199,12 @@ describe("command explainer tree-sitter runtime", () => {
     expect(source.slice(command.span.startIndex, command.span.endIndex)).toBe(rawCommand);
     expect(command.span.startIndex).toBe(source.indexOf(rawCommand));
     expect(command.span.startPosition).toEqual({ row: 0, column: source.indexOf(rawCommand) });
+  });
+
+  it("rejects CRLF shell text rather than normalizing it as a continuation", async () => {
+    await expect(explainShellCommand('bash -c "printf a\\\r\nb"')).rejects.toThrow(
+      "unsupported control characters",
+    );
   });
 
   it("normalizes static shell words before classifying commands", async () => {

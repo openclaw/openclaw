@@ -7,6 +7,10 @@ const require = createRequire(import.meta.url);
 
 export type BashCommandParser = (source: string) => TreeSitter.Tree;
 
+export class CommandExplanationUnsupportedControlCharacterError extends Error {}
+export class CommandExplanationSourceSizeLimitError extends Error {}
+export class CommandExplanationParseTimeoutError extends Error {}
+
 let parserPromise: Promise<BashCommandParser> | null = null;
 const MAX_COMMAND_EXPLANATION_SOURCE_CHARS = 128 * 1024;
 const MAX_COMMAND_EXPLANATION_PARSE_MS = 500;
@@ -35,9 +39,7 @@ function parseBashForCommandExplanation(
   parser: TreeSitter.Parser,
   source: string,
 ): TreeSitter.Tree {
-  if (source.length > MAX_COMMAND_EXPLANATION_SOURCE_CHARS) {
-    throw new Error("Shell command is too large to explain");
-  }
+  assertExplainableShellSource(source);
   const deadlineMs = performance.now() + MAX_COMMAND_EXPLANATION_PARSE_MS;
   let timedOut = false;
   const tree = parser.parse(source, null, {
@@ -49,11 +51,24 @@ function parseBashForCommandExplanation(
   if (!tree) {
     parser.reset();
     if (timedOut) {
-      throw new Error(
+      throw new CommandExplanationParseTimeoutError(
         `tree-sitter-bash timed out after ${MAX_COMMAND_EXPLANATION_PARSE_MS}ms while parsing shell command`,
       );
     }
     throw new Error("tree-sitter-bash returned no parse tree");
   }
   return tree;
+}
+
+export function assertExplainableShellSource(source: string): void {
+  // tree-sitter treats these as whitespace, but POSIX shells treat them as word bytes.
+  // Reject the whole source, including decoded wrapper payloads, rather than rewrite it.
+  if (/[\r\v\f]/u.test(source)) {
+    throw new CommandExplanationUnsupportedControlCharacterError(
+      "Shell command contains unsupported control characters",
+    );
+  }
+  if (source.length > MAX_COMMAND_EXPLANATION_SOURCE_CHARS) {
+    throw new CommandExplanationSourceSizeLimitError("Shell command is too large to explain");
+  }
 }

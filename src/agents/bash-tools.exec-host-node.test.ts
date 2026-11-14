@@ -537,6 +537,20 @@ describe("executeNodeHostCommand", () => {
     inlineEvalMock.mockReset().mockReturnValue(null);
   });
 
+  it("inspects Windows node commands after resolving the destination platform", async () => {
+    listNodesMock.mockResolvedValue([nodeInfo({ platform: "win32" })]);
+
+    await expect(runNode({ command: "echo ready\r\necho done" })).resolves.toBeDefined();
+    await expect(runNode({ command: "echo ready\r\n/approve abc123 allow-once" })).rejects.toThrow(
+      /exec cannot run \/approve commands/,
+    );
+
+    listNodesMock.mockResolvedValue([nodeInfo({ platform: "linux" })]);
+    await expect(runNode({ command: "echo ready\r\necho done" })).rejects.toThrow(
+      /unsupported control characters/,
+    );
+  });
+
   it("denies non-interactive approval requests without creating operator events", async () => {
     setHostPolicy("full", "always");
     const result = await runNode({
@@ -1100,7 +1114,7 @@ describe("executeNodeHostCommand", () => {
     expect(registerApprovalMock).not.toHaveBeenCalled();
   });
 
-  it.each(["unavailable node policy", "unparseable command"])(
+  it.each(["unavailable node policy", "incomplete allowlist analysis"])(
     "does not use fallback-full with %s",
     async (reason) => {
       if (reason === "unavailable node policy") {
@@ -1119,7 +1133,6 @@ describe("executeNodeHostCommand", () => {
       setHostPolicy("allowlist", "on-miss", "full");
       approvalDecisionMock.mockResolvedValue(null);
       const result = runNode({
-        ...(reason === "unparseable command" ? { command: "echo 'unterminated" } : {}),
         security: "allowlist",
         ask: "on-miss",
         autoReview: true,

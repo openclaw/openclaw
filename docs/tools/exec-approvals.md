@@ -511,6 +511,13 @@ Examples:
 - `~/.local/bin/*`
 - `/opt/homebrew/bin/rg`
 
+Ordinary spaces, tabs, and line feeds remain eligible for automatic allowlist
+matching. Commands with syntax the parser cannot fully analyze cannot satisfy
+automatic allowlist matching, but OpenClaw still checks the commands it recovers
+for protected operations before normal approval handling. Some commands are
+rejected before allowlist matching in every security mode; see
+[Exec tool](/tools/exec#parameters).
+
 ### Restricting arguments with argPattern
 
 Add `argPattern` when an allowlist entry should match a binary and a
