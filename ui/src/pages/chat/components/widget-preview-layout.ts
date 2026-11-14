@@ -1,3 +1,4 @@
+import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
 import type { CanvasToolPreview } from "../../../lib/chat/tool-cards.ts";
 import type { ChatWidgetLayout } from "../session-message-cache.ts";
 
@@ -30,6 +31,22 @@ export function widgetPreviewLayoutKey(preview: CanvasToolPreview): string {
     : preview.sandbox !== "strict" && isManagedCanvasDocumentPreview(preview)
       ? `canvas:${preview.viewId!.trim()}`
       : `frame:${preview.url?.trim() || preview.viewId?.trim()}`;
+}
+
+/**
+ * Only scripted canvas documents hold a reservation until the sandbox reports painted
+ * content; other frames load untitled, so their placeholders stay untitled too.
+ */
+export function widgetReservationTitle(
+  preview: CanvasToolPreview,
+  embedSandboxMode: EmbedSandboxMode | undefined,
+): string | undefined {
+  return !preview.mcpApp &&
+    preview.sandbox !== "strict" &&
+    embedSandboxMode !== "strict" &&
+    isManagedCanvasDocumentPreview(preview)
+    ? preview.title?.trim()
+    : undefined;
 }
 
 /** The lazy placeholder and admitted widget must reserve the same saved geometry. */

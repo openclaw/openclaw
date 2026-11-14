@@ -179,6 +179,15 @@ describe("widget-card", () => {
     ).toBe("700px");
     expect(host.querySelector("iframe")).toBeNull();
     expect(actionButton(host)).toBeNull();
+    // Only scripted canvas documents hold a title until the sandbox reports painted content.
+    expect(host.querySelector(".chat-tool-card__reservation")).toBeNull();
+    const titled = mountWidget(
+      documentPreview("titled-widget", { viewId: "titled-widget", title: "Team metric 12" }),
+      { mediaReadAllowed: false },
+    );
+    expect(titled.querySelector(".chat-tool-card__reservation")?.textContent).toBe(
+      "Team metric 12",
+    );
 
     mountWidget(preview, { mediaReadAllowed: true, widgetLayout }, host);
     expect(host.querySelector('[data-content-kind="canvas-html"]')).toBe(shell);

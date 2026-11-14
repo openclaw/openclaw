@@ -2,7 +2,7 @@ import { lazy, Show } from "solid-js";
 import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import type { ToolCardContentProps } from "./chat-tool-card-types.ts";
-import { widgetPreviewHeight } from "./widget-preview-layout.ts";
+import { widgetPreviewHeight, widgetReservationTitle } from "./widget-preview-layout.ts";
 
 const Images = lazy(() => import("./chat-message-images-solid.tsx"), {
   export: "MessageImages",
@@ -93,10 +93,15 @@ export function ToolPreview(
               <div
                 class="chat-tool-card__preview"
                 aria-hidden="true"
+                data-content-kind={preview().mcpApp ? "mcp-app" : "canvas-html"}
                 style={{
                   "min-height": `${widgetPreviewHeight(preview(), props.options?.widgetLayout)}px`,
                 }}
-              />
+              >
+                <Show when={widgetReservationTitle(preview(), props.options?.embedSandboxMode)}>
+                  {(title) => <div class="chat-tool-card__reservation">{title()}</div>}
+                </Show>
+              </div>
             )}
           </Show>
           <Show when={props.options?.rawText}>

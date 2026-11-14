@@ -790,6 +790,16 @@
 
 .chat-tool-card__preview[data-content-kind="canvas-html"] {
   border-radius: 0;
+  outline: 1px solid var(--border);
+}
+
+/* Covers the reserved preview box; its sibling or a mounted iframe holds the space. */
+.chat-tool-card__reservation {
+  position: absolute;
+  inset: 0;
+  padding: 20px;
+  background: var(--bg);
+  font-weight: 600;
 }
 
 /* MCP Apps are responsive documents, so give them the assistant column instead

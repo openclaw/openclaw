@@ -105,7 +105,7 @@ describe("Canvas widget view", () => {
     const root = host.attachShadow({ mode: "open" });
     const view = mount(client, "cv_inline", root);
     await settle(view);
-    expect(view.querySelector<HTMLElement>('[role="status"]')?.style.minHeight).toBe("420px");
+    expect(view.querySelector<HTMLElement>('[aria-hidden="true"]')?.style.minHeight).toBe("420px");
     await vi.advanceTimersByTimeAsync(100);
     root.dispatchEvent(new Event("scroll"));
     await vi.advanceTimersByTimeAsync(100);
@@ -621,7 +621,7 @@ describe("Canvas widget view", () => {
     expect(client.request).toHaveBeenCalledTimes(3);
   });
 
-  it("keeps a slow authenticated read alive after the loading notice", async () => {
+  it("keeps a slow authenticated read alive behind its titled reservation", async () => {
     vi.useFakeTimers();
     const slowRead = createDeferred<CanvasDocumentViewResult>();
     client.request.mockReturnValue(slowRead.promise);
@@ -629,8 +629,8 @@ describe("Canvas widget view", () => {
     view.preferredHeight = 520;
     await settle(view);
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(notice(view)).toContain("reconnects automatically");
-    expect(view.querySelector<HTMLElement>('[role="status"]')?.style.minHeight).toBe("520px");
+    expectRecovering(view);
+    expect(view.querySelector<HTMLElement>('[aria-hidden="true"]')?.style.minHeight).toBe("520px");
     await vi.advanceTimersByTimeAsync(5_000);
     slowRead.resolve(documentView);
     await settle(view);
