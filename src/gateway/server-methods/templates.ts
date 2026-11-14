@@ -5,6 +5,7 @@ import {
   validateTemplatesCatalogPreviewParams,
   validateTemplatesCatalogSearchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { ClawHubRequestError } from "../../infra/clawhub-client.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   ClawHubSourceError,
@@ -28,7 +29,13 @@ function mapClawHubError(error: unknown) {
     return errorShape(ErrorCodes.FORBIDDEN, error.message);
   }
   const message =
-    error instanceof ClawHubSourceError ? error.message : "ClawHub catalog is unavailable.";
+    error instanceof ClawHubSourceError
+      ? error.message
+      : error instanceof ClawHubRequestError && error.status === 404
+        ? error.requestPath.includes("/versions/")
+          ? "This Template version is not on ClawHub. Choose another version."
+          : "This Template is not on ClawHub. Check the name or browse the catalog."
+        : "ClawHub catalog is unavailable.";
   log.error(
     `ClawHub Template request failed: ${error instanceof Error ? error.message : String(error)}`,
   );
