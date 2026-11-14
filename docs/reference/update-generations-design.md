@@ -539,19 +539,21 @@ older release, with no download when that release is still retained. See
 These are proposals, not permission to open them.
 
 1. **B1, candidate-owned rehearsal.** Merged as #197922.
-2. **Linked-root readiness, no layout change.** Each of these is its own pull
-   request, and none changes what an existing installation does:
-   - a published-driver cell with a linked root, in review as #198489;
-   - a slot resolver that finds the link's own path, as a pure function;
-   - a packaging test that fails if the `bin` launcher text changes;
-   - the link lifecycle (capture, switch, verify, sweep), built and tested but
-     not yet called.
+2. **Linked-root readiness, no layout change.** A published-driver cell with a
+   linked root, in review as #198489, and the recorded design for the switch.
+   Nothing an existing installation can observe.
 3. **A shared release installer.** Make the node host a caller of it.
    `openclaw update status` reports prepared and retained releases.
 4. **Adoption and the switch on the `install-cli.sh` prefix and the durable
-   service copy.** The run record field, interrupted handoff reading through
-   the link, and target resolution wired together with the switch, which is
-   the first change an installation can observe. Release identity, rollback,
+   service copy.** The slot resolver and the link lifecycle (capture, switch,
+   verify, sweep) land here with their first caller, so no unused code reaches
+   `main` ahead of it. `resolveOpenClawInstallationRootSync` already recovers
+   the stable path for the Gateway and is the owner to extend; it misses a
+   start through the `bin` launcher. With them come the run record field,
+   interrupted handoff reading through the link, and target resolution wired
+   together with the switch, which is the first change an installation can
+   observe. The switch refuses before any change when the candidate's launcher
+   text differs from the installed one. Release identity, rollback,
    leases, and collection. This slice also gives the node host its missing
    collection and a liveness rule for `activation.lock`.
 5. **Retire what a linked root makes unnecessary,** after measuring: the
