@@ -94,6 +94,24 @@ describe("worktrees cli", () => {
     }
     expect(mutations.some((spy) => spy.mock.calls.length)).toBe(false);
   });
+
+  it("names a missing source checkout instead of failing generically", async () => {
+    const create = vi.spyOn(owner, "create");
+    const repoRoot = `${tempDirs.make("openclaw-missing-worktree-source-")}/missing`;
+    const pending = run(["create", repoRoot]);
+    const message = `Source checkout not found: ${repoRoot}. Pass the path to an existing git checkout.`;
+    await expect(pending).rejects.toThrow(message);
+    expect(create).not.toHaveBeenCalled();
+    expect(
+      formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: await pending.catch((cause: unknown) => cause),
+        argv: ["node", "openclaw", "worktrees", "create"],
+        env: {},
+      }),
+    ).toEqual([message]);
+  });
+
   it("requires an exact pending commit and returns recovery's actual outcome", async () => {
     const snapshot = "a".repeat(40);
     const result: Awaited<ReturnType<ManagedWorktreeService["recoverRemoval"]>> = {
