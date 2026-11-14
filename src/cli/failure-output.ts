@@ -23,7 +23,7 @@ import { ExpectedCliError } from "./expected-cli-error.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
 import { exitAfterSignalExitBarriers } from "./signal-exit-barrier.js";
 
-export { ExpectedCliError } from "./expected-cli-error.js";
+export { ExpectedCliError, throwExpectedCliError } from "./expected-cli-error.js";
 
 export function handleCliUncaughtException(error: unknown, argv?: string[]): void {
   if (isUncaughtExceptionHandled(error)) {
