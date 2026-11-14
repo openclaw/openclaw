@@ -15,10 +15,6 @@ import {
   validatePublicationSourceBinding,
 } from "./full-release-publication-contract.mjs";
 import {
-  RECEIPT_RECOVERY_WORKFLOW,
-  verifyReceiptRecoveryAuthority,
-} from "./full-release-receipt-recovery.mjs";
-import {
   normalizeReleaseCoveragePolicy,
   isSplitChangelogEvidenceDelta,
   SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
@@ -27,6 +23,10 @@ import {
 } from "./full-release-validation-policy.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
+import {
+  RECEIPT_RECOVERY_WORKFLOW,
+  verifyReceiptRecoveryAuthority,
+} from "./lib/release-evidence-identity.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import { createReleaseEvidenceClient, validateReleaseRunEvidence } from "./release-ci-summary.mjs";
 import { qualificationAdmissionContract } from "./release-qualification-coverage.mjs";
@@ -370,7 +370,9 @@ export function validateFullReleaseValidationEvidence({
   if (manifest.publicationAdmissionContract !== registryContract) {
     throw new Error("Publication evidence differs from its immutable registry-admission contract.");
   }
+  // Recovery authenticates the original admission separately in strict evidence below.
   if (
+    !receiptRecovery &&
     qualificationAdmissionContract(workflowSource) === "1" &&
     sourceAdmission?.validationPurpose === "publish" &&
     !sourceAdmission.qualificationAdmission

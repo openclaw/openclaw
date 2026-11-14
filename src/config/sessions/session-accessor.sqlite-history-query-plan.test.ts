@@ -32,6 +32,7 @@ import {
   persistHistory,
   useHistoryEventScope,
 } from "./session-accessor.sqlite-history.test-support.js";
+import { selectTranscriptAppendState } from "./session-accessor.sqlite-transcript-state.queries.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
@@ -411,4 +412,31 @@ it("looks up nested activity anchors without scanning unrelated transcript ident
   ).toEqual([1, 1, undefined]);
   expect(anchorSearches).toHaveLength(1);
   expect(anchorSearches[0]).toMatch(/\(session_id=\? AND event_id=\?\)/u);
+});
+
+it("probes the append parent without transcript event statistics", async () => {
+  const { scope, database } = await seedHistory("append-parent-plan");
+  insertSyntheticHistory(database, scope.sessionId, 200);
+  // A long-lived database analyzed identities but never transcript_events, which let
+  // the planner drive the parent probe from every event and sort the projections.
+  database.db.exec("ANALYZE");
+  database.db.exec("DELETE FROM sqlite_stat1");
+  const stat = database.db.prepare("INSERT INTO sqlite_stat1 (tbl, idx, stat) VALUES (?, ?, ?)");
+  for (const [idx, value] of [
+    ["sqlite_autoindex_transcript_event_identities_1", "6284704 251 1"],
+    ["idx_agent_transcript_event_identity_sequence", "6284704 251 1"],
+    ["idx_agent_transcript_event_sequence", "6284704 251 48 1"],
+  ] as const) {
+    stat.run("transcript_event_identities", idx, value);
+  }
+  database.db.exec("ANALYZE sqlite_schema");
+  const { sql, parameters } = selectTranscriptAppendState(database, scope, true).compile();
+  const plan = database.db
+    .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+    .all(...(parameters as string[]))
+    .map(({ detail }) => String(detail));
+  expect(plan).not.toContainEqual(expect.stringMatching(/TEMP B-TREE/u));
+  expect(plan).toContainEqual(
+    expect.stringMatching(/^SEARCH te USING INDEX \S+ \(session_id=\? AND seq=\?\)$/u),
+  );
 });

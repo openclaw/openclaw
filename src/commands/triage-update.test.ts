@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vit
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeTriageUpdateFailure } from "../infra/update-failure-report-artifact.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
-import { readTriageUpdateFailure } from "./triage-update.js";
+import { readTriageUpdateFailure, sanitizeTriageUpdateFailure } from "./triage-update.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type Failure = Parameters<typeof writeTriageUpdateFailure>[0];
@@ -141,7 +141,7 @@ describe("update failure triage diagnostics", () => {
         reason: "Package install failed",
         before: { version: "2026.8.1" },
         recovery: result.recovery,
-        steps: [{ name: "step-1" }, { name: "step-2" }, { name: "step-3" }],
+        steps: [{ name: "step-0" }, { name: "step-2" }, { name: "step-3" }],
       },
     });
     for (const included of [
@@ -160,6 +160,113 @@ describe("update failure triage diagnostics", () => {
     if (process.platform !== "win32") {
       expect((await fs.stat(outputPath)).mode & 0o777).toBe(0o600);
     }
+  });
+
+  const failedStep = (name: string, details: Partial<Result["steps"][number]> = {}) => ({
+    name,
+    command: "openclaw update",
+    cwd: home,
+    durationMs: 1,
+    exitCode: 1,
+    stderrTail: `${name} failed`,
+    ...details,
+  });
+
+  it("keeps the failure that started recovery when recovery steps also fail", async () => {
+    const { failure } = await write({
+      reason: "state-migrated-no-rollback",
+      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      steps: [
+        failedStep("candidate-doctor-lint", { exitCode: 0 }),
+        failedStep("database rollback"),
+        failedStep("gateway migration recovery"),
+        failedStep("package-backup-retention"),
+        failedStep("gateway recovery verification"),
+      ],
+    });
+
+    expect(failure).toMatchObject({
+      omittedDetails: 1,
+      result: {
+        steps: [
+          { name: "database rollback" },
+          { name: "package-backup-retention" },
+          { name: "gateway recovery verification" },
+        ],
+      },
+    });
+  });
+
+  it("drops middle failures before the triggering one when the prompt budget is exceeded", () => {
+    const noisy = (label: string) => `${label} ${'\\"'.repeat(1_000)}`;
+    const recorded = sanitizeTriageUpdateFailure(
+      {
+        error: "Update failed",
+        result: {
+          status: "error",
+          mode: "npm",
+          steps: ["trigger", "middle-1", "middle-2", "latest"].map((name) =>
+            failedStep(name, {
+              stderrTail: noisy(`${name} stderr`),
+              stdoutTail: noisy(`${name} stdout`),
+              failureFacts: Array.from({ length: 2 }, (_, index) => ({
+                check: `${name}/check-${index}`.padEnd(120, "-"),
+                code: "doctor-failed",
+                message: `${name} fact ${index}`.padEnd(190, "."),
+              })),
+            }),
+          ),
+        },
+      },
+      { env, stateDir },
+    );
+
+    expect("result" in recorded && recorded.result.steps.map((step) => step.name)).toEqual([
+      "trigger",
+      "latest",
+    ]);
+  });
+
+  it("keeps the latest failure when a lint inventory record follows it under the artifact budget", () => {
+    const noisy = (label: string) => `${label} ${'\\"'.repeat(1_000)}`;
+    const failing = (name: string) =>
+      failedStep(name, {
+        stderrTail: noisy(`${name} stderr`),
+        stdoutTail: noisy(`${name} stdout`),
+        failureFacts: Array.from({ length: 5 }, (_, index) => ({
+          check: `${name}/check-${index}`.padEnd(120, "-"),
+          code: "doctor-failed",
+          message: `${name} fact ${index}`.padEnd(190, "."),
+          affectedKey: `${name}.key.${index}`.padEnd(120, "k"),
+          location: `${name}/location/${index}`.padEnd(150, "l"),
+          // Sized so the artifact budget forces exactly one record out.
+          packageSpec: `${name}-package@${index}`.padEnd(128, "p"),
+        })),
+      });
+    const recorded = sanitizeTriageUpdateFailure(
+      {
+        error: "Update failed",
+        result: {
+          status: "error",
+          mode: "npm",
+          steps: [
+            failing("trigger"),
+            failing("latest"),
+            failedStep("candidate-doctor-lint", {
+              exitCode: 0,
+              doctorLintFindings: [{ checkId: "core/config", message: "Config warning" }],
+            }),
+          ],
+        },
+      },
+      { env, stateDir },
+      "artifact",
+    );
+
+    expect(recorded).toMatchObject({
+      omittedDetails: 1,
+      result: { steps: [{ name: "trigger" }, { name: "latest" }] },
+    });
   });
 
   it("preserves a post-install activation error even when the core update succeeded", async () => {

@@ -6,6 +6,7 @@ import {
   onSettled,
   Show,
   useContext,
+  type Element as SolidElement,
 } from "solid-js";
 import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
 import {
@@ -61,11 +62,7 @@ import {
   ComposerWidthEdge,
   prepareComposerWidthEdge,
 } from "../chat/components/chat-composer-width-ref.tsx";
-import {
-  NewSessionPlusMenu,
-  NewSessionSelectionStatus,
-  StartControl,
-} from "./composer-capability-controls.tsx";
+import { NewSessionPlusMenu, StartControl } from "./composer-capability-controls.tsx";
 import type { NewSessionComposerOptions } from "./composer-options.ts";
 import { createComposerPlaceholder } from "./composer-placeholder.ts";
 import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
@@ -439,6 +436,7 @@ function NewSessionComposerInput(props: {
 }
 
 export function NewSessionComposer(props: {
+  contextControls?: SolidElement;
   options: NewSessionComposerOptions;
   surroundings?: () => Pick<LobsterComposerElements, "root" | "obstacles"> | undefined;
 }) {
@@ -637,9 +635,6 @@ export function NewSessionComposer(props: {
               />
             </Show>
             {options().permissionControl}
-            <Show when={!options().nativeTerminal}>
-              <NewSessionSelectionStatus options={options()} />
-            </Show>
           </div>
           <div class="agent-chat__composer-trail">
             <div class="agent-chat__composer-controls">
@@ -680,6 +675,7 @@ export function NewSessionComposer(props: {
         </div>
       </div>
       <ComposerWidthEdge options={options} />
+      <div class="new-session-page__context-tray">{props.contextControls}</div>
     </div>
   );
 }

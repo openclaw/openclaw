@@ -19,6 +19,7 @@ import { prepareTaskPublicationSessions } from "./control-ui-session-task-prs.js
 import { captureOwnGitHubPullRequestReader } from "./github-publication-inspect-reader.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import {
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
@@ -347,7 +348,7 @@ export function createControlUiSessionPrRead(params: {
         capture.profileVersion === profileVersion &&
         capture.profile === client.preparedSessionProfile &&
         !client.internal?.operatorRunAuthority &&
-        (!cfg.gateway?.roles ||
+        (!isNamedOperatorRoleEnforcementEnabled(cfg) ||
           actorKind === "system" ||
           (actorProfile && client.preparedSessionProfile?.aliases.has(actorProfile)))
       ) {

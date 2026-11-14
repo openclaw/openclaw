@@ -164,9 +164,11 @@ their structured file-log record, with cause and error-code details when
 available. Long summaries are truncated. The record retains its write timing
 and store fields.
 
-### Slow SQLite transcript hydration
+### Slow SQLite transcript hydration and appends
 
-Slow `sessions.transcript-hydration.*` read transactions and
+Slow transcript, session metadata, trajectory, audit writer, and knowledge transactions
+(`session.transcript.*`, `sessions.transcript-*`, `session.metadata.*`, `trajectory.*`,
+`audit.writer.*`, and `knowledge.*`), `session context snapshot read`, and
 `session.lifecycle.delete` include native statement attribution on the existing
 slow-hold warning. `statementExecutionMs` sums native execution calls;
 `callbackOtherMs` is the remaining callback wall time, including JavaScript,

@@ -194,6 +194,12 @@ suite.define(() => {
           ).toEqual({ enabled: true, requestType: "function" });
           const fullscreenButton = panel.locator(".desktop-fullscreen-button");
           expect(await fullscreenButton.getAttribute("aria-label")).toBe("Enter fullscreen");
+          expect(
+            await fullscreenButton.evaluate((button) => {
+              const style = getComputedStyle(button);
+              return [style.width, style.height, style.borderTopWidth, style.backgroundColor];
+            }),
+          ).toEqual(["28px", "28px", "0px", "rgba(0, 0, 0, 0)"]);
           await fullscreenButton.hover();
           await captureDesktopProof(page, panel, `${theme}-hover`);
           await fullscreenButton.focus();

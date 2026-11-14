@@ -101,7 +101,7 @@ it("shows no duration when zero runtime cannot label completed work", async () =
   rerender();
   await flushDeferredRowPrune();
   expect(text(".chat-activity-group__label")).toBe("Worked");
-  expect(text(".chat-turn-recap")).toBe("42 output tokens");
+  expect(text(".chat-turn-recap")).toBeUndefined();
 });
 
 it.each([

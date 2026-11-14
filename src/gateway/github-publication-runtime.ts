@@ -19,6 +19,7 @@ import type {
 export function createGitHubPublicationRuntime(params: {
   placements: WorkerSessionPlacementStore;
   environments?: Parameters<typeof createGitHubPublicationCoordinator>[0]["environments"];
+  prepareRepositoryIntegration?: import("./repository-publication-integration.js").PrepareRepositoryPublicationIntegration;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   loadSessionRuntime: Parameters<typeof reportGitHubPublicationTranscript>[0];
   warn: (message: string) => void;

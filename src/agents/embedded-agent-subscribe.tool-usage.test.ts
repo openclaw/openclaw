@@ -31,6 +31,19 @@ function recordingSink() {
   } satisfies RunToolUsageRecorder;
 }
 
+function mcpTool(server: string, name: string, details: Record<string, unknown> = {}) {
+  const result = {
+    ...createStubTool(name),
+    execute: async () => ({ content: [], details: { mcpServer: server, ...details } }),
+  };
+  setPluginToolMeta(result, {
+    pluginId: "bundle-mcp",
+    optional: false,
+    mcp: { serverName: server, safeServerName: server, toolName: name, operation: "tool" },
+  });
+  return result;
+}
+
 function tool(name: string, pluginId?: string) {
   const result = {
     ...createStubTool(name),
@@ -101,10 +114,12 @@ describe("usage at the embedded completion boundary", () => {
       await runtime.call("openclaw:core:exec", {}, { parentToolCallId: "code-mode" });
       await direct("exec", "code-mode");
       await runtime.call("mcp:bundle-mcp:lookup", {}, { parentToolCallId: "remote" });
+      // The same-named MCP lookalike counts under its own exact identity.
       expect(recorder.record.mock.calls).toEqual([
         ["openclaw:notes:lookup"],
         ["openclaw:notes:lookup"],
         ["openclaw:core:exec"],
+        ["mcp:bundle-mcp:lookup"],
       ]);
       emit({ type: "turn_end", message: { role: "assistant", content: [] }, toolResults: [] });
       await subscription.waitForPendingEvents();
@@ -149,19 +164,102 @@ describe("usage at the embedded completion boundary", () => {
     expect(recorder.record.mock.calls).toEqual([["openclaw:notes:lookup"]]);
   });
 
-  it("does not bind client, MCP, or ambiguous bare-name ownership", () => {
-    const mcp = tool("remote");
-    setPluginToolMeta(mcp, { pluginId: "bundle-mcp", optional: false });
+  it("binds exact MCP identities but never client or ambiguous bare-name ownership", () => {
     const bindings = bindToolUsageIds(
       [
         tool("lookup", "first"),
         tool("lookup", "second"),
         tool("client_shadow", "notes"),
-        mcp,
+        mcpTool("granola", "granola__list_meetings"),
+        mcpTool("granola", "shared"),
+        tool("shared", "notes"),
+        mcpTool("granola", "granola__client_app"),
         tool("read"),
       ],
-      ["client_shadow"],
+      ["client_shadow", "granola__client_app"],
     );
-    expect([...bindings]).toEqual([["read", "openclaw:core:read"]]);
+    expect([...bindings]).toEqual([
+      ["granola__list_meetings", "mcp:granola:granola__list_meetings"],
+      ["read", "openclaw:core:read"],
+    ]);
+  });
+
+  it("counts successful direct, dispatched, and Code Mode MCP calls by catalog id", async () => {
+    const meetings = mcpTool("granola", "granola__list_meetings");
+    const failing = mcpTool("granola", "granola__get_transcript", { status: "error" });
+    const dispatch = tool("dispatch_action");
+    const codeMode = markCodeModeControlTool(tool("exec"));
+    const recorder = recordingSink();
+    const manager = SessionManager.inMemory();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "mcp-usage",
+      agentId: "main",
+      toolUsageRecorder: recorder,
+      toolUsageIdsByName: bindToolUsageIds([meetings, dispatch, codeMode], []),
+      codeModeExecToolNames: new Set(["exec"]),
+      sessionExtras: { sessionManager: manager },
+    });
+    const catalogRef = createToolSearchCatalogRef();
+    applyToolCatalogCompaction({
+      tools: [dispatch, meetings, failing],
+      enabled: true,
+      catalogRef,
+      isVisibleControlTool: (candidate) => candidate === dispatch,
+    });
+    const runtime = new ToolSearchRuntime(
+      {
+        catalogRef,
+        executeTool: createSubscribedToolSearchExecutor({
+          attempt: { runId: "mcp-usage" },
+          runSignal: new AbortController().signal,
+          sessionManager: manager,
+          subscription,
+          isCurrent: () => true,
+          isReplaySafeTool: () => true,
+          nestedToolActivityState: { scopeId: "mcp-usage", successfulToolNames: new Set() },
+        }),
+      },
+      resolveToolSearchConfig({ tools: { toolSearch: true } }),
+    );
+    const direct = async (toolName: string, toolCallId: string) => {
+      emit({ type: "tool_execution_start", toolName, toolCallId, args: {} });
+      emit({
+        type: "tool_execution_end",
+        toolName,
+        toolCallId,
+        executionStarted: true,
+        isError: false,
+        result: { content: [], details: { mcpServer: "granola" } },
+      });
+      await subscription.waitForPendingEvents();
+    };
+    try {
+      await direct("granola__list_meetings", "direct-mcp");
+      await runtime.call("granola__list_meetings", {}, { parentToolCallId: "dispatch" });
+      await direct("dispatch_action", "dispatch");
+      await runtime.call(
+        "mcp:granola:granola__list_meetings",
+        {},
+        {
+          parentToolCallId: "code-mode",
+        },
+      );
+      await runtime.call(
+        "mcp:granola:granola__get_transcript",
+        {},
+        {
+          parentToolCallId: "code-mode",
+        },
+      );
+      await direct("exec", "code-mode");
+      expect(recorder.record.mock.calls).toEqual([
+        ["mcp:granola:granola__list_meetings"],
+        ["mcp:granola:granola__list_meetings"],
+        ["mcp:granola:granola__list_meetings"],
+      ]);
+    } finally {
+      subscription.unsubscribe();
+      clearToolSearchCatalog({ catalogRef });
+    }
   });
 });

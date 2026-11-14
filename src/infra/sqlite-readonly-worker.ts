@@ -1,4 +1,4 @@
-import { execFile, spawnSync } from "node:child_process";
+import childProcess from "node:child_process";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { formatByteSize } from "@openclaw/normalization-core";
@@ -11,6 +11,7 @@ import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import type { PreservedOrphanTaskDelivery } from "../state/openclaw-state-db-task-delivery-recovery-preservation.js";
+import { readCustodiedDrainedSqliteSource } from "../state/openclaw-state-maintenance-context.js";
 import {
   assertChildRuntimeAvailable,
   classifyChildRuntimeFailure,
@@ -329,7 +330,9 @@ export function runSqliteReadOnlyWorker(
     (inputOptions.mode === "auth-profile-rows" || inputOptions.mode === "operation") &&
     inputOptions.source === "canonical" &&
     isArtifactPreservingStateRead("agent", pathname)
-      ? { ...inputOptions, artifactPreserving: true }
+      ? inputOptions.mode === "auth-profile-rows" && readCustodiedDrainedSqliteSource(pathname)
+        ? { ...inputOptions, artifactPreserving: true, immutable: true }
+        : { ...inputOptions, artifactPreserving: true }
       : inputOptions;
   return runScopedSqliteInspection(options.signal, (signal) => {
     const scope = readOnlyWorkerScope.getStore();
@@ -439,7 +442,7 @@ export function runOneShotSqliteInspection<T>(params: {
     };
     let stopped = false;
     let nativeClosed = false;
-    const child = execFile(
+    const child = childProcess.execFile(
       process.execPath,
       params.argv,
       {
@@ -542,7 +545,7 @@ export function runSqliteReadOnlyWorkerSync(
 ): string | BackupEngine | boolean {
   assertChildRuntimeAvailable();
   const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
-  const result = spawnSync(
+  const result = childProcess.spawnSync(
     process.execPath,
     sqliteReadOnlyWorkerArgv(pathname, { mode, stagingRoot, expectedSourceIdentity }).argv,
     {

@@ -536,6 +536,7 @@ describe("projects vitest config", () => {
   it.each([
     "test/plugins/deep-research-recovery.gateway.test.ts",
     "test/plugins/deep-research-routing.gateway.test.ts",
+    "src/gateway/server/ws-connection/connect-role-catalog.test.ts",
   ])("routes %s through the Gateway database owner exactly once", (file) => {
     const project = "test/vitest/vitest.gateway-database-workers.config.ts";
     expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);

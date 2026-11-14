@@ -20,7 +20,8 @@ const { mocks, createDoctorConfig } = await import("./doctor-health.test-support
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawn: vi.fn(actual.spawn), spawnSync: vi.fn(actual.spawnSync) };
+  const mocked = { ...actual, spawn: vi.fn(actual.spawn), spawnSync: vi.fn(actual.spawnSync) };
+  return { ...mocked, default: mocked };
 });
 vi.mock("../infra/sqlite-wal-filesystem.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-wal-filesystem.js")>()),

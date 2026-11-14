@@ -2916,6 +2916,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server/ws-connection/connect-device-pairing.test.ts",
   "src/gateway/server/ws-connection/connect-hello.setup-completion.test.ts",
   "src/gateway/server/ws-connection/connect-hello.update-scope.test.ts",
+  "src/gateway/server/ws-connection/connect-role-catalog.test.ts",
   "src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts",
   "src/gateway/server/ws-connection/update-report-authority.server.test.ts",
   "src/gateway/session-access-authority.test.ts",

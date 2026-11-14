@@ -197,7 +197,11 @@ async function startProofProvider() {
       if (parentContinuationSeen) {
         // Compacted history must neither respawn the child nor fabricate its completion.
         // The "awaiting delivery" roster is status, not delivery; only the completion event counts.
-        const currentInput = JSON.stringify(Array.isArray(body.input) ? body.input.at(-1) : body);
+        // Prompt updates are appended after a turn's input, so read everything since the last reply.
+        const input = body.input as Array<{ role?: string }>;
+        const currentInput = JSON.stringify(
+          input.slice(input.findLastIndex((item) => item.role === "assistant") + 1),
+        );
         const hasChildCompletion =
           currentInput.includes("[Internal task completion event]") &&
           currentInput.includes("qa-timeout-recovery-child") &&

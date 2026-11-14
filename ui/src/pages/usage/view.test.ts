@@ -220,7 +220,7 @@ describe("renderUsage", () => {
         flush();
         expect(averageCostSummary(container)).toEqual({
           hint: missing
-            ? "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range."
+            ? "Average cost per message with reported pricing. Some sessions have no cost data."
             : "Average cost per message when providers report costs.",
           value,
         });
@@ -506,9 +506,7 @@ describe("renderUsage", () => {
       )
       ?.querySelector(".usage-summary-value");
     expect(messagesValue?.textContent?.trim()).toBe("100");
-    expect(container.textContent).toContain(
-      "Cost data is missing for some or all sessions in this range.",
-    );
+    expect(container.textContent).toContain("Some sessions have no cost data.");
     expect(texts(container, ".usage-metric-badge strong", false)).toEqual(["1.0K", "$10.00", "1"]);
     const firstDay = container.querySelector(".daily-bar-wrapper");
     expect(firstDay?.getAttribute("aria-label")).toContain("May 1, 2026");

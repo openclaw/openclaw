@@ -199,27 +199,9 @@ function fastModeOptionValue(value: ReturnType<typeof formatFastModeValue>): Fas
   return value === "auto" || value === "ultrafast" ? value : value === "on";
 }
 
-// Discovery progress does not change the saved selection or disable known models.
-function CatalogFeedback(props: {
-  discovering: boolean;
-  saved?: boolean;
-  error?: string;
-  onRetry: () => void;
-}): JSX.Element {
+function CatalogFeedback(props: { error?: string; onRetry: () => void }): JSX.Element {
   return (
     <>
-      {props.discovering ? (
-        <div class="model-providers__catalog-progress" role="status" aria-live="polite">
-          <span class="btn__spinner" aria-hidden="true" />
-          <span>
-            {t(
-              props.saved
-                ? "modelProviders.defaults.savedDiscoveringMore"
-                : "modelProviders.defaults.discoveringMore",
-            )}
-          </span>
-        </div>
-      ) : undefined}
       {props.error ? (
         <div class="model-providers__catalog-progress" role="alert" aria-live="polite">
           <span>{props.error}</span>
@@ -254,12 +236,8 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
             reset();
           };
           return (
-            <Loading
-              fallback={<CatalogFeedback discovering saved={props.defaultsSaved} onRetry={retry} />}
-            >
+            <Loading>
               <CatalogFeedback
-                saved={props.defaultsSaved}
-                discovering={isPending(read) || Boolean(props.catalogDiscovering)}
                 error={isPending(read) ? undefined : formatUiError(failure())}
                 onRetry={retry}
               />
@@ -267,22 +245,7 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
           );
         }}
       >
-        <Loading
-          fallback={
-            <CatalogFeedback
-              saved={props.defaultsSaved}
-              discovering={Boolean(receipt()) || Boolean(props.catalogDiscovering)}
-              onRetry={() => props.onCatalogRetry()}
-            />
-          }
-        >
-          {latest(read)}
-          <CatalogFeedback
-            saved={props.defaultsSaved}
-            discovering={isPending(read) || Boolean(props.catalogDiscovering)}
-            onRetry={() => props.onCatalogRetry()}
-          />
-        </Loading>
+        <Loading>{latest(read)}</Loading>
       </Errored>
     </div>
   );

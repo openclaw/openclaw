@@ -839,7 +839,7 @@ describe("message tool group thread replies", () => {
           await send({ message: "Progress", final: false });
           await send({ message: "Original before hook" });
           await send({ message: "Other room before hook", target: "999" });
-          await send({ message: "Pass-through hook" });
+          await send({ message: `${"a".repeat(3_986)}🥐 Pass-through hook` });
           await send({ message: "Cancelled by hook" });
           await send({ message: "Other room", target: "999" });
           await send({ message: "Other thread", target: "123", threadId: "99" });
@@ -869,7 +869,7 @@ describe("message tool group thread replies", () => {
         "Nested rewritten notification",
         "**Reviewer**\nRewritten visible final",
         "Rewritten visible final",
-        "**Reviewer**\nPass-through hook",
+        `**Reviewer**\n${"a".repeat(3_986)}🥐 Pass-through hook`,
         "Other room",
         "Other thread",
         "Top-level send",
@@ -882,7 +882,7 @@ describe("message tool group thread replies", () => {
       expect(recordReply.mock.calls).toEqual([
         [{ text: "Final reply" }],
         [{ text: "**Reviewer**\nRewritten visible final" }],
-        [{ text: "**Reviewer**\nPass-through hook" }],
+        [{ text: `**Reviewer**\n${"a".repeat(3_986)}` }],
         [{ text: "NO_REPLY" }],
         [{ mediaUrl: "https://example.com/group-thread.png" }],
         [{ text: "Edited final" }],

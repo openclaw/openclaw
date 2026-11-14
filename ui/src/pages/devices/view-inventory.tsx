@@ -73,7 +73,9 @@ export function DeviceInventoryContent(props: DevicesProps & { pending: boolean 
         <button
           class="btn"
           title={
-            props.connected && !props.canManagePairing ? t("devices.readOnly.pairingRequired") : ""
+            props.connected && !props.canManagePairing
+              ? t("devices.readOnly.pairingRequiredTooltip")
+              : ""
           }
           disabled={props.inventorySaving || !props.connected || !props.canManagePairing}
           onClick={() => props.onInventoryCleanup(stale().map(toRemovalRequest))}

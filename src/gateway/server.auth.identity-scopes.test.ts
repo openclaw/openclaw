@@ -997,3 +997,20 @@ test.each<[string, GatewayAuthConfig, ConnectOptions, string[]]>([
     expectScopes(connected, scopes);
   });
 });
+
+test("keeps Tailscale identity scopes without a named-role cap when only definitions exist", async () => {
+  testTailscaleWhois.value = { login: "peter", name: "Peter" };
+  await configureTailscale(
+    { identityScopes: { peter: ["operator.write"] } },
+    {
+      definitions: { guest: role([], "none", []) },
+    },
+  );
+  await withIdentityServer(async ({ tailscale }) => {
+    const { connected } = await tailscale("peter", { scopes: ["operator.read"] });
+    expect(connected.ok, JSON.stringify(connected)).toBe(true);
+    expect(responseAuth(connected)?.scopes).toEqual(expect.arrayContaining(READ_WRITE));
+    expect(responseAuth(connected)?.sessionCap).toBeUndefined();
+    expect(responseAuth(connected)?.deviceToken).toBeTruthy();
+  });
+});

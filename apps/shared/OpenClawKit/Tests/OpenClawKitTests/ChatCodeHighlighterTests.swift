@@ -117,4 +117,31 @@ struct ChatCodeHighlighterTests {
         #expect(String(highlighted.characters) == code)
         #expect(!ChatCodeHighlighter.isWithinHighlightLimits(code))
     }
+
+    @Test @MainActor func `cache pressure retains recently displayed highlights and evicts only one`() {
+        var storage = ChatCodeHighlightCache.Storage()
+        var builds = 0
+        func makeValue() -> AttributedString {
+            builds += 1
+            return AttributedString("highlighted")
+        }
+
+        for index in 0..<160 {
+            _ = storage.value(for: "swift\u{0}let value = \(index)", create: makeValue)
+        }
+        // The oldest insertion is still visible; another consumer adds a new block.
+        _ = storage.value(for: "swift\u{0}let value = 0", create: makeValue)
+        _ = storage.value(for: "swift\u{0}let value = 160", create: makeValue)
+        #expect(builds == 161)
+
+        _ = storage.value(for: "swift\u{0}let value = 0", create: makeValue)
+        for index in 2...160 {
+            _ = storage.value(for: "swift\u{0}let value = \(index)", create: makeValue)
+        }
+        #expect(builds == 161)
+
+        // The least recently used entry must be gone: retention remains bounded.
+        _ = storage.value(for: "swift\u{0}let value = 1", create: makeValue)
+        #expect(builds == 162)
+    }
 }
