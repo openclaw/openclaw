@@ -122,6 +122,21 @@ describe("portable Template schema conformance", () => {
     ).toBe(true);
   });
 
+  it.each(["Avatars\\Agent.png", "Avatars/Agent.png"])(
+    "stores the declared destination for avatar %s",
+    (avatar) => {
+      const result = parseTemplateManifest({
+        ...baseManifest,
+        agent: { ...baseManifest.agent, identity: { avatar } },
+        workspace: { files: [{ source: "workspace/avatar.png", path: "avatars/agent.png" }] },
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        manifest: { agent: { identity: { avatar: "avatars/agent.png" } } },
+      });
+    },
+  );
+
   it("requires portable cron timezone, session, field count, and delivery", () => {
     const valid = {
       id: "daily",
