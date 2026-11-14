@@ -78,8 +78,8 @@ Trade-off: K_gw now vouches for a root change, so whoever holds K_gw (the machin
 the claw. Moving a claw to new machine keys is a separate operation, not designed yet.
 
 Owner device certificates have **no expiry unless the person approving the device enters
-one** (`expires_at: null`). A device stops being an owner when it is removed from the claw's
-allowlist.
+one** (`expires_at: null`). A device stops being an owner when its certificate expires or
+it is removed from the claw's allowlist.
 
 `ownerDeviceCertBody` is the certificate builder approvers use: `expires_at` defaults to
 null, and an explicit expiry must be after the issue time. Approval UIs (SAS approval, owner
@@ -112,6 +112,7 @@ Not modeled here (Gateway work): pending-redemption expiry after 7 days, and per
 2. Link: `https://<host>/join#i=<invite_id>.<base64url secret>&r=<fp(R) hex>`. The fragment
    never reaches a server.
 3. The invitee signs in, makes D_I and W_I, and mails a self-signed `InviteRedemption` with
+   required display `label` and
    `proof = HMAC-SHA-256(proof key, "openclaw/invite-proof/v1\0" || JCS({ account_id,
    claw_id, device_pub, invite_id, peer_key }))`.
 4. The Gateway verifies (`verifyInviteRedemption`): self-signature, invite match, expiry,
@@ -187,6 +188,36 @@ Manual verification on an existing claw:
 5. For a test browser, revoke its named device from the original browser's **Your devices**
    afterward. Confirm that its remote connection ends. Do not revoke the original device,
    reset the profile, or paste a recovery kit to make this test pass.
+
+## Member devices
+
+An approved invite redemption records its signed `device_pub` and required `label` in
+`MemberRecord.devices[peer_key]`, with `approved_by: { kind: "invite", invite_id }`.
+The pending invite keeps both fields until approval. Labels are untrusted display text,
+bounded to 256 UTF-16 code units like owner labels. A peer without this metadata still
+connects but cannot sign; remove and re-invite it. There is no claim or migration path.
+
+Members approve their own additional devices without an owner step or an invite. Reuse the
+owner SAS commitment, transcript, six-digit code and all five mailbox steps unchanged:
+N sends `start` to `"self"`; E is an admitted device of the same account. After the user
+confirms the code, E signs `add_member_device { account_id, peer_key, device_pub, label }`
+with its D and submits it over the tunnel **before** sending `sealed`. The sealed handoff
+carries the same pinning contents as owner SAS. There is no member recovery kit: losing
+every device requires a fresh invite from the owner, and no owner setting disables approval.
+
+The device inherits its member's current role. R and owners with `manage_members` may also
+add one. Unknown accounts, full device lists, peer keys listed anywhere and signing keys
+already used by an owner or member device are refused. A member cannot add to another account.
+A successful add publishes the snapshot and sends owners `member_device_added` with the
+new peer key's fingerprint. SnapshotMember is unchanged; device metadata stays at the Gateway.
+
+Members may sign only `add_member_device` and `revoke_device`, directly over the tunnel,
+never through the mailbox. They may revoke another device of their own account, not the
+signing device. Removing a member peer key by any signer also removes every device of that
+member whose `approved_by: { kind: "member_device", device_fp }` chain leads to it,
+transitively, disconnecting and invalidating tokens for all removed peers. Invite and owner
+approvals (`{ kind: "owner", by: "root" | fp(D) }`) are independent roots of that member tree.
+`remove` and `set_role` keep their owner-only behavior.
 
 ## Kit enrollment (spec 6.2)
 
@@ -317,6 +348,13 @@ a node-invite node. Its node is an implementation detail bound to that same appr
 - **Removing the device removes its node:** a Revocation of the device (directly or through the
   device that approved it) and an inactivity drop of the device remove the bound node with the
   usual node-removal events. A node from an invite is never bound to its approver.
+- **An explicit expiry covers both keys:** when the device certificate expires, its human and
+  bound node keys lose admission together. The Gateway closes their sessions, retires ID-derived
+  node pairings and omits the node from snapshots and active listings. Independently approved
+  descendant devices and invite-enrolled nodes keep their own lifetimes. Renew before expiry
+  to retain the node's existing pairing; after expiry cleanup, certificate renewal alone does
+  not restore the consumed automatic pairing. Pair the node explicitly again, or remove its
+  listing and enroll it again.
 
 ### Node authority and lifecycle
 

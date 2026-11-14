@@ -168,7 +168,7 @@ it("retires a consumed personal-account model before the next configured draft",
   expect(f.model()).toContain("anthropic/alternate@");
   f.control.retireDraftSelection();
   expect(f.model()).toBe("");
-  expect(f.accountToggle()?.textContent).toContain("Automatic");
+  expect(f.accountToggle()?.textContent).toContain("Account: Auto");
 });
 
 it("keeps a personal account when Default uses the role-permitted provider rather than the agent default", async () => {
@@ -370,7 +370,7 @@ it("selects a usable retained account after refresh failure without changing sav
   f.select("automatic");
   await vi.waitFor(() => expect(f.blocked()).toContain("No account is available for this model."));
   expect(f.model()).toBe("");
-  expect(f.accountToggle()?.textContent).toContain("Automatic");
+  expect(f.accountToggle()?.textContent).toContain("Account: Auto");
   expect(f.savePreference).not.toHaveBeenCalled();
   expect(
     f.request.mock.calls.some(([method]) => /users\.(selectModelAccount|prefs\.set)/.test(method)),
@@ -403,7 +403,7 @@ it("retires a pending personal-account preview when the user identity changes", 
   await completion;
   await vi.waitFor(() => expect(f.blocked()).toContain("No account is available for this model."));
   expect(f.model()).toBe("");
-  expect(f.accountToggle()?.textContent).toContain("Automatic");
+  expect(f.accountToggle()?.textContent).toContain("Account: Auto");
 });
 
 it("retains its neutral auth gate through pending, rejected and failed refreshes, isolated from a session projection", async () => {

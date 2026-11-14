@@ -250,6 +250,20 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     },
     signers["device-1"],
   );
+  const memberDeviceChange = await signStatement(
+    "MembershipChange",
+    {
+      ...change.body,
+      target: {
+        op: "add_member_device",
+        account_id: "acct_bob",
+        peer_key: iroh("peer-1"),
+        device_pub: pub("device-5"),
+        label: "Bob phone",
+      },
+    },
+    signers["device-1"],
+  );
   const guestInvite = await signStatement(
     "InviteCap",
     { ...invite.body, role: "guest" },
@@ -325,6 +339,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       device_pub: pub("invitee"),
       peer_key: iroh("invitee"),
       proof: bytesToHex(await sha256(utf8("placeholder proof; see invites vectors"))),
+      label: "Bob browser",
       requested_at: VECTOR_ISSUED_AT,
     },
     signers.invitee,
@@ -514,6 +529,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       vector("root signs server binding seq 2 (new server key)", "owner", binding2),
       vector("owner device-2 signs invite", "owner", invite),
       vector("owner device-1 adds member", "owner", change),
+      vector("owner adds member device", "owner", memberDeviceChange),
       vector("owner invites opaque guest role", "owner", guestInvite),
       vector("owner approves exact guest role", "owner", guestAdd),
       vector("owner changes opaque role", "owner", guestRoleChange),

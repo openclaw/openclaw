@@ -188,7 +188,7 @@ it("uses the same favorite across runtimes while retaining distinct row identiti
   await waitForSolid(() => expect(Object.hasOwn(view.entries, key)).toBe(false));
 });
 
-it("freezes provider order and rail membership until reopening", async () => {
+it("updates Favorites immediately while retaining provider row order until reopening", async () => {
   const view = await mount({}, undefined, {
     modelOptions: [
       modelOption("openai", "default", { isDefault: true }),
@@ -199,7 +199,7 @@ it("freezes provider order and rail membership until reopening", async () => {
       modelOption("anthropic", "sonnet"),
     ],
   });
-  view.container.querySelector<HTMLButtonElement>("[data-chat-model-more-toggle]")!.click();
+  expect(view.container.querySelector("[data-chat-model-more-toggle]")).toBeNull();
   await waitForSolid(() => expect(view.star()).toBeDefined());
   const before = rowValues(view.container);
   expect(before).toEqual([
@@ -217,7 +217,10 @@ it("freezes provider order and rail membership until reopening", async () => {
   view.star().click();
   await waitForSolid(() => expect(view.entries[key]).toEqual([model]));
   expect(rowValues(view.container)).toEqual(before);
-  expect(view.container.querySelector('[data-chat-model-provider-toggle="$favorites"]')).toBeNull();
+  await selectProvider(view.container, "$favorites");
+  expect(rowValues(view.container)).toEqual([model]);
+  await selectProvider(view.container, "openai");
+  expect(rowValues(view.container)).toEqual(before);
   await reopen(view);
   expect(rowValues(view.container)).toEqual([
     "openai/default",
@@ -235,11 +238,17 @@ it("freezes provider order and rail membership until reopening", async () => {
   expect(rowValues(view.container)).toEqual([model]);
   view.star().click();
   await waitForSolid(() => expect(Object.hasOwn(view.entries, key)).toBe(false));
-  expect(rowValues(view.container)).toEqual([model]);
-  await waitForSolid(() => expect(view.star().getAttribute("aria-pressed")).toBe("false"));
-  expect(tabs[0]?.getAttribute("aria-selected")).toBe("true");
-  await reopen(view);
-  expect(view.container.querySelector('[data-chat-model-provider-toggle="$favorites"]')).toBeNull();
+  await waitForSolid(() =>
+    expect(
+      view.container.querySelector('[data-chat-model-provider-toggle="$favorites"]'),
+    ).toBeNull(),
+  );
+  expect(
+    view.container
+      .querySelector('[data-chat-model-provider-toggle="openai"]')
+      ?.getAttribute("aria-selected"),
+  ).toBe("true");
+  expect(view.params.onModelSelect).not.toHaveBeenCalled();
 });
 
 it("returns focus to search when removing the last focused favorite copy", async () => {

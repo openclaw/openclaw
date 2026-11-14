@@ -1,8 +1,7 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import http from "node:http";
 import { createRequire } from "node:module";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { consumeResponseBytes } from "@openclaw/normalization-core";
@@ -13,8 +12,9 @@ import {
   Response as UndiciResponse,
   setGlobalDispatcher,
 } from "undici";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   PROXY_FIXTURE_HOST as TARGET_HOST,
   PROXY_FIXTURE_PAYLOAD as PAYLOAD,
@@ -40,6 +40,8 @@ import { createHttp1EnvHttpProxyAgent, createHttp1ProxyAgent } from "./undici-ru
 const undiciTimers: { tick: (delay: number) => void } = createRequire(import.meta.url)(
   "undici/lib/util/timers.js",
 );
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const TARGET_URL = `https://${TARGET_HOST}/media`;
 const HTTP_URL = `http://${TARGET_HOST}/media`;
@@ -352,7 +354,7 @@ it.each(["flat array", "inherited object"])(
 it("keeps supplied-env managed TLS on the HTTPS proxy hop", () =>
   withProxyFixture(async (fixture) => {
     const { httpsProxy, connections, certificate } = fixture;
-    const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-socks-ca-"));
+    const dir = tempDirs.make("openclaw-socks-ca-");
     const caFile = path.join(dir, "ca.pem");
     await writeFile(caFile, certificate);
     const dispatcher = envProxy(fixture, { httpsProxy }, undefined, {
@@ -360,15 +362,12 @@ it("keeps supplied-env managed TLS on the HTTPS proxy hop", () =>
       OPENCLAW_PROXY_ACTIVE: "1",
       OPENCLAW_PROXY_CA_FILE: caFile,
     });
-    try {
+    await withDispatcher(dispatcher, async () => {
       for (const url of [HTTP_URL, TARGET_URL]) {
         await expectPayload(dispatcher, url);
       }
       expect(connections).toEqual([`socks:${TARGET_HOST}`, `https:${TARGET_HOST}`]);
-    } finally {
-      await dispatcher.destroy();
-      await rm(dir, { recursive: true, force: true });
-    }
+    });
   }));
 
 it("routes mixed TLS proxies with HTTP/1 ALPN", () =>

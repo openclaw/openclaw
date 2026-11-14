@@ -591,7 +591,7 @@ export function createOpenClawIdService(params: {
     const owner = await getAuthority();
     await handleTunnelApiRequest(req, res, peerKey, {
       isAdmitted: async (key) => isOpenClawIdTunnelPrincipalAdmitted(await owner.resolvePeer(key)),
-      membership: (key) => owner.ownerView(key),
+      membership: async (key) => (await owner.memberView(key)) ?? (await owner.ownerView(key)),
       prepareOwnerCheck: (key) => owner.prepareOwnerPeerCheck(key),
       submit: async (statement) => applyResult(await owner.submit(statement, "tunnel")),
       registerInvite: async (input) => {
