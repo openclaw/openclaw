@@ -4,6 +4,9 @@ import {
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID,
 } from "./defaults.js";
 
+// The pinned macOS runtime names its unified-memory GPU MTL0 (--list-devices).
+export const LLAMA_CPP_METAL_DEVICE = "MTL0";
+
 export type ManagedLlamaModel = {
   id: string;
   path: string;
@@ -92,6 +95,11 @@ const PRESET_KEY_ALIASES: Record<string, string> = {
   LLAMA_ARG_N_PARALLEL: "parallel",
   dev: "device",
   LLAMA_ARG_DEVICE: "device",
+  ngl: "gpu-layers",
+  "n-gpu-layers": "gpu-layers",
+  LLAMA_ARG_N_GPU_LAYERS: "gpu-layers",
+  "no-mmproj-offload": "mmproj-offload",
+  LLAMA_ARG_MMPROJ_OFFLOAD: "mmproj-offload",
   sm: "split-mode",
   LLAMA_ARG_SPLIT_MODE: "split-mode",
 
@@ -102,6 +110,7 @@ const PRESET_KEY_ALIASES: Record<string, string> = {
 export function assertMediaPresetLimits(
   args: readonly string[],
   models: readonly { contextSize: number; imageMaxTokens: number }[],
+  backend: "cpu" | "metal" = "cpu",
 ): void {
   const limits: Record<string, number> = {
     "ctx-size": Math.min(...models.map((model) => model.contextSize)),
@@ -112,6 +121,19 @@ export function assertMediaPresetLimits(
     const [option = "", inlineValue] = args[index]!.split("=", 2);
     const name = option.replace(/^--?/u, "").replaceAll("_", "-");
     const key = PRESET_KEY_ALIASES[name] ?? name;
+    if (backend === "metal") {
+      const value = inlineValue ?? args[index + 1];
+      if (
+        ((key === "device" || key === "mmproj-device") && value !== LLAMA_CPP_METAL_DEVICE) ||
+        (key === "gpu-layers" && Number(value) === 0) ||
+        name === "no-mmproj-offload" ||
+        (key === "mmproj-offload" && inlineValue === "false")
+      ) {
+        throw new Error(
+          `Router option ${option} disables the selected Metal backend. Remove it or move CPU settings into the existing model's preset section, then retry local media setup. Existing configuration is unchanged.`,
+        );
+      }
+    }
     const limit = limits[key];
     if (limit === undefined) {
       continue;
@@ -236,6 +258,9 @@ export function buildLlamaServerPreset(
               device: assertIniValue(model.device, "llama.cpp device"),
               "mmproj-device": assertIniValue(model.device, "llama.cpp projector device"),
               "split-mode": "none",
+              ...(model.device === LLAMA_CPP_METAL_DEVICE
+                ? { "gpu-layers": "999", "mmproj-offload": "true" }
+                : {}),
             }
           : {}),
       },

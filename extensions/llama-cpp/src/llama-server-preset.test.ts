@@ -3,7 +3,11 @@ import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { withMockedPlatform } from "openclaw/plugin-sdk/test-node-mocks";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildLlamaServerPreset, type LlamaServerPresetOptions } from "./llama-server-preset.js";
+import {
+  assertMediaPresetLimits,
+  buildLlamaServerPreset,
+  type LlamaServerPresetOptions,
+} from "./llama-server-preset.js";
 import { prepareManagedLlamaServer } from "./managed-server.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -130,5 +134,90 @@ describe("managed embedding capacity through server preparation", () => {
     if (source === "process") {
       expect(await prepareCandidatePreset(root, presetPath)).not.toMatch(/parallel|ctx-size/u);
     }
+  });
+});
+
+describe("managed media backend settings", () => {
+  const mediaModel = {
+    id: "vision",
+    path: "/models/vision.gguf",
+    projectorPath: "/models/projector.gguf",
+    contextSize: 8192,
+    imageMaxTokens: 1024,
+  };
+
+  it.each([
+    ["ngl", "no-mmproj-offload"],
+    ["n-gpu-layers", "mmproj-offload"],
+    ["LLAMA_ARG_N_GPU_LAYERS", "LLAMA_ARG_MMPROJ_OFFLOAD"],
+  ])(
+    "overrides inherited CPU settings and the %s alias for Metal media",
+    (gpuAlias, projectorAlias) => {
+      const global =
+        "[*]\ndevice = none\nmmproj-device = none\ngpu-layers = 0\nmmproj-offload = false\n\n";
+      const preset = buildLlamaServerPreset(
+        `version = 1\n\n${global}[vision]\ndev = none\nmmdev = none\n${gpuAlias} = 0\n${projectorAlias} = false\n`,
+        {
+          chatModel: { mode: "preserve" },
+          mediaModels: [{ ...mediaModel, device: "MTL0" }],
+        },
+      );
+      const section = preset.slice(preset.indexOf("[vision]"));
+      expect(preset).toContain(global);
+      expect(section).toContain("device = MTL0\nmmproj-device = MTL0\n");
+      expect(section).toContain("gpu-layers = 999\nmmproj-offload = true\n");
+      expect(section).not.toMatch(
+        /^(?:dev|mmdev|ngl|n-gpu-layers|LLAMA_ARG_N_GPU_LAYERS|no-mmproj-offload)\s*=/mu,
+      );
+    },
+  );
+
+  it("keeps existing GPU layer and offload settings for CPU media", () => {
+    const preset = buildLlamaServerPreset(
+      "version = 1\n\n[vision]\nn-gpu-layers = 7\nmmproj-offload = false\n",
+      {
+        chatModel: { mode: "preserve" },
+        mediaModels: [{ ...mediaModel, device: "none" }],
+      },
+    );
+    expect(preset).toContain("n-gpu-layers = 7\nmmproj-offload = false\n");
+    expect(preset).toContain("device = none\nmmproj-device = none\n");
+    expect(preset).not.toContain("gpu-layers = 999");
+  });
+
+  it.each([
+    ["--device", "none"],
+    ["-dev", "none"],
+    ["--dev=none"],
+    ["--mmproj-device=none"],
+    ["-mmdev", "none"],
+    ["--gpu-layers", "0"],
+    ["-ngl", "0"],
+    ["--n-gpu-layers=0"],
+    ["--no-mmproj-offload"],
+    ["--mmproj-offload=false"],
+  ])("rejects a router option that overrides Metal media: %j", (...args) => {
+    expect(() => assertMediaPresetLimits(args, [mediaModel], "metal")).toThrow(
+      "disables the selected Metal backend",
+    );
+    expect(() => assertMediaPresetLimits(args, [mediaModel], "cpu")).not.toThrow();
+  });
+
+  it("accepts compatible Metal options while retaining media limits", () => {
+    const args = [
+      "--device=MTL0",
+      "--mmproj-device",
+      "MTL0",
+      "-ngl",
+      "999",
+      "--ctx-size=8192",
+      "--image-max-tokens=1024",
+      "-np",
+      "1",
+    ];
+    expect(() => assertMediaPresetLimits(args, [mediaModel], "metal")).not.toThrow();
+    expect(() =>
+      assertMediaPresetLimits([...args, "--ctx-size=8193"], [mediaModel], "metal"),
+    ).toThrow("exceeds the local media limit (8192)");
   });
 });
