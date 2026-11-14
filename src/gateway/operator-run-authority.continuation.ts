@@ -5,11 +5,16 @@ import {
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { runOutsideReleasedPluginInvocationScope } from "../plugins/plugin-instance-scope.js";
 
+const independentContinuationAuthorities = new WeakSet<AdmittedRunOperatorAuthority>();
+
 /** Only an accepting continuation may leave its released producer's invocation scope. */
 export function bindIndependentContinuationAuthority(source: AdmittedRunOperatorAuthority) {
+  if (independentContinuationAuthorities.has(source)) {
+    return source;
+  }
   const retain = source.retain;
   const readRoleFacts = source.readCurrentRoleFacts;
-  return createAdmittedRunOperatorAuthority({
+  const authority = createAdmittedRunOperatorAuthority({
     ...source,
     assertCurrent: composeSessionSourceAssertion(
       [source.assertCurrent],
@@ -23,4 +28,6 @@ export function bindIndependentContinuationAuthority(source: AdmittedRunOperator
       return source.modelPolicy;
     },
   });
+  independentContinuationAuthorities.add(authority);
+  return authority;
 }
