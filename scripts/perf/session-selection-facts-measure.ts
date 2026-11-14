@@ -38,6 +38,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { buildSubagentSessionListReadIndex } from "../../src/agents/subagents/registry/subagent-registry-read.js";
+import { createSessionIdentityProjection } from "../../src/gateway/session-identity-projection.js";
 import { readSessionListSelectionFacts } from "../../src/gateway/session-list-target.js";
 import type { Row, SelectionChange } from "../../src/gateway/session-row-projection-record.js";
 import { createProfileSessionEntryFilter } from "../../src/gateway/session-sharing-read.js";
@@ -94,13 +95,28 @@ const sharing = createProfileSessionEntryFilter(
   (actor) => actor?.id === "synthetic",
 );
 const now = Date.UTC(2026, 9, 27);
+const pulseBoundaries = Array.from({ length: 13 }, (_, index) => Date.UTC(2025, 10 + index, 1));
 const cfg = { agents: { entries: { main: {}, ops: {} } } };
 const agents = new Set(["main", "ops"]);
 const storePath = "/synthetic/selection-facts-measure.sqlite";
-const context = buildSessionListRowMetadataContext({
-  now,
-  subagentRuns: buildSubagentSessionListReadIndex(now, [], new Map()),
-});
+const context = {
+  ...buildSessionListRowMetadataContext({
+    now,
+    subagentRuns: buildSubagentSessionListReadIndex(now, [], new Map()),
+    userProfileIdentityById: new Map([
+      [
+        "synthetic",
+        {
+          kind: "resolved",
+          profileId: "synthetic",
+          label: "Synthetic",
+          avatarUrl: "/synthetic/avatar",
+        },
+      ],
+    ]),
+  }),
+  identityProjection: createSessionIdentityProjection(),
+};
 const scope = {
   agentId: undefined,
   path: storePath,
@@ -209,6 +225,7 @@ for (const name of workloads) {
               ? {
                   limit: 100,
                   includePeople: true,
+                  activityPulseBoundaries: pulseBoundaries,
                   excludeSubagents: true,
                   excludeDock: true,
                   archived: "all",
@@ -224,9 +241,11 @@ for (const name of workloads) {
                 },
         entries: selected.entries,
         entriesSorted: true,
+        ownerFirstActorId: name === "page" ? "synthetic" : undefined,
         getTarget: selected.get,
         configuredAgentIds: agents,
         getRowContext: () => context,
+        userProfileIdentityById: context.userProfileIdentityById,
         involvementKeys: selected.involvementKeys,
         partitions: selected.partitions,
         retained,
@@ -285,6 +304,17 @@ for (const name of workloads) {
     observer.disconnect();
   }
   const expected = digest(rows.map((row) => [row.key, row.entry]));
+  if (queryShape) {
+    assert(filtered);
+    assert(filtered.ownerFacet.some((owner) => owner.id === "synthetic"));
+    if (name === "sidebar") {
+      assert(
+        filtered.ownerSessionCounts?.some(
+          (count) => count.profileId === "synthetic" && count.open > 0,
+        ),
+      );
+    }
+  }
   for (const owner of owners) {
     assert.equal(digest(owner.read().entries("all")), expected, `${name}: stale published entry`);
   }

@@ -201,15 +201,25 @@ export class ConnectionSessionRows {
         const delta = diff(previous.fields, fields, row);
         const patchHeader = { ...header, base: previous.version };
         const prefix = JSON.stringify(patchHeader).slice(0, -1);
-        // Joining replaces the delta opening brace with a comma of the same byte width.
-        const patchBytes = Buffer.byteLength(prefix) + delta.utf8Bytes;
+        const prefixBytes = Buffer.byteLength(prefix);
+        let serialized = delta.encoding;
+        if (!serialized) {
+          const json = JSON.stringify({ ...patchHeader, ...delta.patch });
+          // Keep a view of the first encoding, not a second large body string.
+          delta.encoding = serialized = {
+            suffix: json.slice(prefix.length),
+            utf8Bytes: Buffer.byteLength(json) - prefixBytes,
+            headers: new Map([[prefix, json]]),
+          };
+        }
+        const patchBytes = prefixBytes + serialized.utf8Bytes;
         // Each serialized member needs at least `"":0,` (five bytes), plus the outer braces.
         if (patchBytes < 5 * fields.fieldCount + 1 || patchBytes < fullRowByteLength(row, header)) {
           result = { ...patchHeader, ...delta.patch };
-          encoding = delta.encodings.get(prefix);
+          encoding = serialized.headers.get(prefix);
           if (encoding === undefined) {
-            encoding = `${prefix},${delta.json.slice(1)}`;
-            delta.encodings.set(prefix, encoding);
+            encoding = `${prefix}${serialized.suffix}`;
+            serialized.headers.set(prefix, encoding);
           }
         }
       }

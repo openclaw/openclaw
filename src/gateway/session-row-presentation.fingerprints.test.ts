@@ -135,7 +135,9 @@ it("retains nested publication facts across real transcript writes without hidin
         .mock.calls.filter(([, encoded]) => typeof encoded === "string" && /^[{[]/.test(encoded));
       expect(nestedHashes).toHaveLength(0);
       current.forEach(({ row, fields }, index) => {
-        expect(createSessionRowDeltaDiffer()(previous[index]!.fields, fields, row).json).toBe(
+        expect(
+          JSON.stringify(createSessionRowDeltaDiffer()(previous[index]!.fields, fields, row).patch),
+        ).toBe(
           JSON.stringify({ set: { updatedAt: Date.now(), snapshotAt: Date.now() }, remove: [] }),
         );
       });
@@ -152,9 +154,9 @@ it("retains nested publication facts across real transcript writes without hidin
     });
     const changed = await read();
     changed.forEach(({ row, fields }, index) => {
-      expect(createSessionRowDeltaDiffer()(previous[index]!.fields, fields, row).json).toBe(
-        JSON.stringify({ set: { toolOverrides: replacement }, remove: [] }),
-      );
+      expect(
+        JSON.stringify(createSessionRowDeltaDiffer()(previous[index]!.fields, fields, row).patch),
+      ).toBe(JSON.stringify({ set: { toolOverrides: replacement }, remove: [] }));
     });
     setUserProfileRole(profiles[2]!.id, "write");
     prepareGatewayRecipientProfile(clients[2]!);
