@@ -394,7 +394,7 @@ it.each([false, true])(
       { ...base, params: { ...base.params, ...runParams } },
       () => {},
     );
-    queue.push({ text: "Hook snapshot", key: "hook:snapshot" });
+    queue.push({ text: "Hook snapshot", key: "hook:snapshot", timestamp: 1 });
     await queue.drain();
     await queue.strand();
     expect(await transcriptMessages(target)).toMatchObject([{ display, stopReason: "aborted" }]);
