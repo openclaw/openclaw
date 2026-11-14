@@ -493,18 +493,7 @@ async function runCompileCheck(extensionIds: string[], selectedPreparation: bool
     args: string[];
     inputReceipt: string;
   }[] = [];
-  // Source bytes are a cold-cache scheduling hint, never a coverage selector.
-  // Include the package's implementation even when its config starts at public barrels.
-  const orderedExtensions = projects
-    .map((project) =>
-      Object.assign(project, {
-        sourceBytes: collectFilesSync(join(repoRoot, "extensions", project.extensionId), {
-          includeFile: (file) => classifyBundledExtensionSourcePath(file).isProductionSource,
-        }).reduce((total, file) => total + statSync(file).size, 0),
-      }),
-    )
-    .toSorted((left, right) => right.sourceBytes - left.sourceBytes);
-  const steps = orderedExtensions
+  const steps = projects
     .map(({ extensionId, config }, index) => {
       const inputReceipt = resolveBoundaryInputReceiptPath(extensionId);
       const args = [
@@ -537,6 +526,10 @@ async function runCompileCheck(extensionIds: string[], selectedPreparation: bool
       rmSync(recordPath, { force: true });
       rmSync(inputReceipt, { force: true });
       return {
+        // Source bytes only schedule stale compiles; fresh receipts need no weight.
+        sourceBytes: collectFilesSync(join(repoRoot, "extensions", extensionId), {
+          includeFile: (file) => classifyBundledExtensionSourcePath(file).isProductionSource,
+        }).reduce((total, file) => total + statSync(file).size, 0),
         label: extensionId,
         onStart() {
           process.stdout.write(`[${index + 1}/${extensionIds.length}] ${extensionId}\n`);
@@ -554,9 +547,10 @@ async function runCompileCheck(extensionIds: string[], selectedPreparation: bool
         args,
         env: compilerEnv,
         timeoutMs: 120_000,
-      } satisfies BoundaryStep;
+      } satisfies BoundaryStep & { sourceBytes: number };
     })
-    .filter((step) => step !== null);
+    .filter((step) => step !== null)
+    .toSorted((left, right) => right.sourceBytes - left.sourceBytes);
   if (!verboseFreshLogs && skippedCompileCount > 0) {
     process.stdout.write(
       formatSkippedCompileProgress({
