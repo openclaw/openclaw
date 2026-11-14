@@ -206,3 +206,73 @@ it.each([
     );
   },
 );
+
+it.each([
+  { starterModel: undefined, saved: false },
+  { starterModel: "keyed/model-b", saved: true },
+])(
+  "replaces a key whose provider is not the agent model only with a model to test (starter: $starterModel)",
+  async ({ starterModel, saved }) => {
+    const stateDir = tempDirs.make();
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", agentDir);
+    const working = { type: "api_key" as const, provider: "keyed", key: "working-key" };
+    await upsertAuthProfileWithLock({ profileId: "keyed:default", credential: working, agentDir });
+    const config: OpenClawConfig = {
+      agents: { entries: { main: {} }, defaults: { model: "primary/model-a" } },
+    };
+    const method: ProviderAuthMethod = {
+      id: "api-key",
+      label: "Keyed provider key",
+      kind: "api_key",
+      starterModel,
+      wizard: { choiceId: "keyed-api-key" },
+      run: async () => {
+        throw new Error("Interactive setup must not run.");
+      },
+      runNonInteractive: async ({ agentDir: setupAgentDir }) => {
+        await upsertAuthProfileWithLock({
+          profileId: "keyed:default",
+          credential: { ...working, key: "replacement-key" },
+          agentDir: setupAgentDir,
+        });
+        return config;
+      },
+    };
+    providerChoice.mockReturnValue({
+      provider: { id: "keyed", pluginId: "keyed", label: "Keyed provider", auth: [method] },
+      method,
+      wizard: method.wizard,
+    });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const operation = applyNonInteractivePluginProviderChoice({
+      nextConfig: config,
+      baseConfig: config,
+      authChoice: "provider-plugin:keyed:api-key",
+      opts: {},
+      runtime,
+      target: { agentId: "main", agentDir, workspaceDir: stateDir },
+      resolveApiKey: async () => ({ key: "replacement-key", source: "flag" }),
+      toApiKeyCredential: () => null,
+    });
+
+    const profiles = () => loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles;
+    if (!saved) {
+      await expect(operation).rejects.toThrow(
+        "Setup could not choose a Keyed provider model to test the new key, so the key was not saved and your connection is unchanged. If you trust this key, replace the current key with it without a test (for a key kept in a secret reference, update the secret instead):\nopenclaw models auth paste-api-key --provider keyed --agent main",
+      );
+      expect(profiles()).toEqual({ "keyed:default": working });
+      return;
+    }
+    await expect(operation).resolves.toBeNull();
+    expect(Object.entries(profiles())).toContainEqual([
+      expect.stringMatching(/^keyed:setup-/),
+      expect.objectContaining({
+        key: "replacement-key",
+        setup: expect.objectContaining({ replacement: true, modelRef: "keyed/model-b" }),
+      }),
+    ]);
+    expect(runtime.error.mock.calls.flat().join("\n")).toContain("openclaw models auth activate");
+  },
+);
