@@ -108,7 +108,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-repository-publication-restart.test.ts",
   "src/gateway/github-repository-publication-snapshot.test.ts",
   "src/gateway/github-repository-publication-workflows.test.ts",
-  "src/gateway/github-repository-publication.test.ts",
   "src/gateway/github-shared-publication-events.test.ts",
   "src/gateway/github-shared-publication-read.test.ts",
   "src/gateway/github-shared-publication-relevance.test.ts",

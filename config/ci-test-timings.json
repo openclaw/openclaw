@@ -4372,7 +4372,6 @@
       "ui/src/e2e/session-management.group-defaults.e2e.test.ts": 66,
       "ui/src/e2e/session-management.group-identity.e2e.test.ts": 40,
       "ui/src/e2e/session-management.group-return.e2e.test.ts": 19,
-      "ui/src/e2e/session-management.groups.e2e.test.ts": 45,
       "ui/src/e2e/session-management.hidden-run-read.e2e.test.ts": 38,
       "ui/src/e2e/session-management.mutation-scope.e2e.test.ts": 38,
       "ui/src/e2e/session-management.nested-archive.e2e.test.ts": 19,
