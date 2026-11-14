@@ -13,7 +13,12 @@ import {
   type OwnerDeviceNode,
   type StatementSigner,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { createOpenClawIdAuthority } from "./authority.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.js";
 import {
   linkedClaw,
   nowSeconds,
@@ -107,6 +112,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("owner certificate expiry at the Gateway", () => {
@@ -272,6 +278,11 @@ describe("owner certificate expiry at the Gateway", () => {
   it.each(["unconfigured", "failed"] as const)(
     "expires recovered owner and member sources once while remote access is %s",
     async (remoteState) => {
+      setRuntimeConfigSnapshot({
+        gateway: {
+          roles: { definitions: { operator: structuredClone(MEMBER_ROLE_PRESETS.operator) } },
+        },
+      });
       const claw = await linkedClaw();
       const memberKey = formatIrohEndpointKey(randomBytes(32));
       const add = await claw.sign({
