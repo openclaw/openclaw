@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 import { registerNodesCli } from "./nodes-cli.js";
 import { callNodesGatewayCli } from "./nodes-cli/rpc.js";
 
@@ -75,8 +76,11 @@ describe("nodes-cli coverage", () => {
   };
   const methods = () => callGateway.mock.calls.map(([call]) => call.method);
 
-  function expectPairingError(requestId: string) {
-    const output = runtimeErrors.join("\n");
+  // approve and reject own machine output, so the root renderer prints only an expected error's text.
+  async function expectPairingError(args: readonly string[] | string, requestId: string) {
+    const error = await parseNodes(args).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(ExpectedCliError);
+    const output = (error as ExpectedCliError).humanOutput;
     expect(output).toContain(`Unknown node pairing requestId: ${requestId}`);
     expect(output).toContain("openclaw nodes pending");
     expect(output).not.toContain("GatewayClientRequestError: unknown requestId");
@@ -146,14 +150,12 @@ describe("nodes-cli coverage", () => {
   it("explains unknown nodes approve request ids with the current pending requests", async () => {
     callGateway.mockResolvedValueOnce(pairingList("current-request"));
 
-    await expectFailure(
+    const output = await expectPairingError(
       "nodes approve stale-request --url wss://gateway.example.test --token secret-token",
+      "stale-request",
     );
-
-    const output = expectPairingError("stale-request");
     expect(output).toContain("Pending requestIds: current-request");
     expectSafeConnectionHint(output);
-    expect(output).not.toContain("nodes approve failed: Error:");
     expect(methods()).toEqual(["node.pair.list"]);
   });
 
@@ -162,9 +164,10 @@ describe("nodes-cli coverage", () => {
       .mockResolvedValueOnce(pairingList("expired-request"))
       .mockRejectedValueOnce(missingRequest());
 
-    await expectFailure(["nodes", "approve", "expired-request"]);
-
-    const output = expectPairingError("expired-request");
+    const output = await expectPairingError(
+      ["nodes", "approve", "expired-request"],
+      "expired-request",
+    );
     expect(output).not.toContain("No pending node pairing requests are currently visible.");
     expect(output).not.toContain("Pending requestIds:");
     expect(methods()).toEqual(["node.pair.list", "node.pair.approve"]);
@@ -214,11 +217,10 @@ describe("nodes-cli coverage", () => {
   it("explains unknown nodes reject request ids without leaking connection credentials", async () => {
     callGateway.mockRejectedValueOnce(missingRequest());
 
-    await expectFailure(
+    const output = await expectPairingError(
       "nodes reject stale-request --url wss://gateway.example.test --token secret-token",
+      "stale-request",
     );
-
-    const output = expectPairingError("stale-request");
     expectSafeConnectionHint(output);
     expect(methods()).toEqual(["node.pair.reject"]);
   });
