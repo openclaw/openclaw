@@ -44,10 +44,10 @@ import { resolveScheduledRunMemoryReceipt } from "../execution-context-registry.
 import { prepareCronRunAdmission } from "../run-admission.js";
 import { prepareCronRunInference } from "../run-inference.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
-import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { isCommandStyleCronMessage } from "./command-style-prompt.js";
 import {
   assertCronCandidateSandboxPlacement,
+  assertCronCliAccessProgram,
   assertCronRuntimeAuthorityCandidate,
   resolveCliChildAbortSignal,
   resolveCronSandboxPlacement,
@@ -266,6 +266,7 @@ export function createCronPromptExecutor(
         provider: params.liveSelection.provider,
         model: params.liveSelection.model,
         requestedRouteResolution: "resolved",
+        cyberAccessProgram: params.job.cyberAccessProgram,
         agentDir: params.agentDir,
         userLockedAuthProfileId:
           params.liveSelection.authProfileIdSource === "user"
@@ -314,22 +315,6 @@ export function createCronPromptExecutor(
         const preparedSessionPersisted = canReusePreparedSession;
         canReusePreparedSession = false;
         params.lifecycle.beginAttempt();
-        const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) =>
-          params.onExecutionStarted?.({
-            ...info,
-            ...(runOptions.isFallbackRetry ? { isFallback: true } : {}),
-            provider: providerOverride,
-            model: modelOverride,
-          });
-        const notifyExecutionPhase = (
-          info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
-            Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,
-        ) =>
-          params.onExecutionPhase?.({
-            ...info,
-            provider: providerOverride,
-            model: modelOverride,
-          });
         attemptMediaTaskIds = getGeneratedMediaTaskIdsForSessionKey(params.runSessionKey);
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
@@ -364,9 +349,7 @@ export function createCronPromptExecutor(
             modelOverride,
             candidateRuntime,
           );
-          if (runtimeCatalog.length > 0) {
-            thinkingCatalog = runtimeCatalog;
-          }
+          thinkingCatalog = runtimeCatalog.length > 0 ? runtimeCatalog : thinkingCatalog;
         }
         // Revalidate the candidate without rewriting the durable thinking preference.
         const { level: candidateThinkLevel } = resolveThinkingSelection({
@@ -475,8 +458,19 @@ export function createCronPromptExecutor(
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
             messageToolFinalByDefault: sourceDelivery.messageTool.finalByDefault,
             scheduledToolPolicy,
-            onExecutionStarted: notifyExecutionStarted,
-            onExecutionPhase: notifyExecutionPhase,
+            onExecutionStarted: (info?: { lifecycleGeneration?: string }) =>
+              params.onExecutionStarted?.({
+                ...info,
+                ...(runOptions.isFallbackRetry ? { isFallback: true } : {}),
+                provider: providerOverride,
+                model: modelOverride,
+              }),
+            onExecutionPhase: (info) =>
+              params.onExecutionPhase?.({
+                ...info,
+                provider: providerOverride,
+                model: modelOverride,
+              }),
             bootstrapContextMode,
             bootstrapContextRunKind: "cron",
             bootstrapPromptWarningSignaturesSeen,
@@ -493,7 +487,12 @@ export function createCronPromptExecutor(
             suppressNextUserMessagePersistence:
               userTurnTranscriptRecorder.hasPersisted() || userTurnTranscriptRecorder.isBlocked(),
           }) satisfies Partial<Parameters<CronEmbeddedRuntime["runCronEmbeddedAgent"]>[0]>;
+        const cyberAccessProgram =
+          runOptions.cyberAccessProgram ??
+          params.job.cyberAccessProgram ??
+          params.cronSession.sessionEntry.cyberAccessProgram;
         if (cliExecution) {
+          assertCronCliAccessProgram(cyberAccessProgram, providerOverride);
           const allowCliAuthProfileForwarding = cliBackendAcceptsAuthProfileForwarding({
             provider: executionProvider,
             config: params.cfgWithAgentDefaults,
@@ -668,8 +667,7 @@ export function createCronPromptExecutor(
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: runOptions.modelFallbacksOverride,
           resolvedModelSelection: runOptions.resolvedModelSelection,
-          cyberAccessProgram:
-            runOptions.cyberAccessProgram ?? params.cronSession.sessionEntry.cyberAccessProgram,
+          cyberAccessProgram,
           authProfileId: runOptions.authProfileId ?? params.liveSelection.authProfileId,
           authProfileIdSource: runOptions.authProfileId
             ? "user"

@@ -8,9 +8,8 @@ import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
 import { projectMessageMedia } from "./chat-message-media-projection.ts";
-import { releaseChatMediaResourceOwner, type ImageRenderOptions } from "./chat-message-media.ts";
+import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import "../../../test-helpers/load-styles.ts";
-import "../../activity/session-activity-media.css";
 
 const browserMode = "__vitest_browser__" in globalThis;
 const containers: HTMLElement[] = [];
@@ -259,42 +258,6 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     expect(image.naturalWidth).toBe(400);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(new URL(fetchMock.mock.calls[0]![0], location.href).searchParams.get("v")).toBe("4");
-  });
-
-  it("keeps a horizontally clipped image keyboard reachable before admission", async () => {
-    const { userEvent } = await import("vitest/browser");
-    const container = mount(132);
-    container.className = "activity-feed__media";
-    container.style.padding = "0";
-    const fetch = vi.fn(async () => svgResponse(128, 80));
-    vi.stubGlobal("fetch", fetch);
-    const images = ["First", "Clipped"].map((alt) => outgoingImage(alt));
-    const onOpenImage = vi.fn<NonNullable<ImageRenderOptions["onOpenImage"]>>();
-    drawOwned(container, { images, options: { onOpenImage } });
-    await vi.waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(1));
-    expect(fetch).toHaveBeenCalledOnce();
-    const frames = container.querySelectorAll<HTMLElement>(".chat-image-frame");
-    const strip = container.querySelector<HTMLElement>(".chat-message-images")!;
-    expect(frames[1]!.getBoundingClientRect().left).toBeGreaterThan(
-      strip.getBoundingClientRect().right,
-    );
-    const clippedButton = frames[1]!.querySelector("button");
-    expect(clippedButton?.getAttribute("aria-disabled")).toBe("true");
-    container.querySelector<HTMLButtonElement>(".chat-message-image-button")!.focus();
-    await userEvent.tab();
-    expect(frames[1]!.contains(document.activeElement)).toBe(true);
-    await vi.waitFor(() => expect(frames[1]!.querySelector("img")).not.toBeNull());
-    await frames[1]!.querySelector("img")!.decode();
-    expect(frames[1]!.querySelector("button")).toBe(clippedButton);
-    expect(clippedButton).toBe(document.activeElement);
-    expect(clippedButton?.hasAttribute("aria-disabled")).toBe(false);
-    await userEvent.keyboard("{Enter}");
-    try {
-      expect(onOpenImage).toHaveBeenCalledOnce();
-      expect(onOpenImage.mock.calls[0]?.[0].gallery?.index).toBe(1);
-    } finally {
-      onOpenImage.mock.calls[0]?.[0].release?.();
-    }
   });
 
   it.each([

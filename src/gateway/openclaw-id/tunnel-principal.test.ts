@@ -11,7 +11,7 @@ import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.j
 import { authorizeWsControlUiGatewayConnect, authorizeHttpGatewayConnect } from "../auth.js";
 import type { GatewayIngressAttribution } from "../ingress-attribution.js";
 import { createOpenClawIdAuthority } from "./authority.js";
-import { MEMBER_ROLE_PRESETS } from "./member-role-presets.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
 import { linkedClaw } from "./openclaw-id.test-support.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,

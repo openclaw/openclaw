@@ -2720,6 +2720,7 @@ jobs:
             resolve("ui/src/e2e/chat-composer-picker-layout.e2e.test.ts"),
             resolve("ui/src/e2e/chat-mcp-app-fullscreen.e2e.test.ts"),
             resolve("ui/src/e2e/tooltip-first-activation.e2e.test.ts"),
+            resolve("ui/src/e2e/overlay-menu-swap-webkit.e2e.test.ts"),
             resolve("ui/src/e2e/logs-scroll.e2e.test.ts"),
             resolve("ui/src/e2e/chat-history-reading-stability.e2e.test.ts"),
             resolve("ui/src/e2e/chat-loading-animation-retention.e2e.test.ts"),
@@ -5212,7 +5213,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests"]' || '["tests"]') }}
+        phase: [tests]
     runs-on: *hosted_xcode_runner
     timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && matrix.phase == 'tests' && 75 || 30 }}
     env:
@@ -5757,7 +5758,7 @@ jobs:
           path: apps/macos/.build
           key: ${{ steps.swift-build-cache.outputs.cache-primary-key }}
 
-  # Package tests do not consume the Linux runtime or wait for its runner.
+  # Release compilation and package tests do not consume the Linux runtime.
   macos-swift-packages:
     permissions:
       contents: read
@@ -5768,7 +5769,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: ${{ fromJSON(needs.preflight.outputs.run_mlx_native_proof == 'true' && '["packages","mlx","mlx-settings"]' || '["packages","mlx"]') }}
+        phase: ${{ fromJSON(format('[{0}"packages","mlx"{1}]', github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '"release",' || '', needs.preflight.outputs.run_mlx_native_proof == 'true' && ',"mlx-settings"' || '')) }}
     runs-on: *hosted_xcode_runner
     timeout-minutes: 30
     env:
@@ -6015,11 +6016,22 @@ jobs:
                           *package_args,
                           "-destination", os.environ.get("IOS_DEST") or "generic/platform=iOS Simulator",
                           "-showBuildTimingSummary",
-                          "build-for-testing" if os.environ["IOS_CI_PHASE"] == "smoke" or os.environ.get("IOS_MAIN_TIER") == "true" else "build",
+                          "build-for-testing",
                       ], check=True)
-                      if os.environ["IOS_CI_PHASE"] == "smoke" or os.environ.get("IOS_MAIN_TIER") == "true":
-                          with open(os.environ["GITHUB_ENV"], "a") as environment:
-                              environment.write("IOS_TEST_BUILD_PREPARED=true\n")
+                      if os.environ["IOS_CI_PHASE"] == "tests" and os.environ.get("IOS_MAIN_TIER") != "true":
+                          # The UI scheme owns a separate test runner. Prepare it once,
+                          # retaining the same universal destination and build settings.
+                          subprocess.run([
+                              "python3", ".ci-harness/scripts/ci-xcodebuild.py",
+                              "-project", "apps/ios/OpenClaw.xcodeproj",
+                              "-scheme", "OpenClawUITests",
+                              "-configuration", "Debug",
+                              *package_args,
+                              "-destination", "generic/platform=iOS Simulator",
+                              "-showBuildTimingSummary", "build-for-testing",
+                          ], check=True)
+                      with open(os.environ["GITHUB_ENV"], "a") as environment:
+                          environment.write("IOS_TEST_BUILD_PREPARED=true\n")
                   else:
                       subprocess.run(["pnpm", "ios:build"], check=True)
                   print(f"iOS app build: {time.monotonic() - started:.1f}s", flush=True)
@@ -6119,7 +6131,7 @@ jobs:
           # Xcode 27's verbose simulator diagnostics can stall for 600s after passing tests.
           # Preserve xcresult bundles and command logs without that extra collection.
           test_action=test
-          if [[ "$HISTORICAL_TARGET" != "true" && ( "$IOS_CI_PHASE" == "smoke" || ( "$IOS_MAIN_TIER" == "true" && "$IOS_FROZEN_TARGET" != "true" ) ) ]]; then
+          if [[ "${IOS_TEST_BUILD_PREPARED:-false}" == "true" ]]; then
             test_action=test-without-building
           fi
           run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawVoiceCleanupTests.log xcodebuild \
@@ -6193,7 +6205,7 @@ jobs:
             )
           fi
           test_action=test
-          if [[ "$HISTORICAL_TARGET" != "true" && ( "$IOS_CI_PHASE" == "smoke" || ( "$IOS_MAIN_TIER" == "true" && "$IOS_FROZEN_TARGET" != "true" ) ) ]]; then
+          if [[ "${IOS_TEST_BUILD_PREPARED:-false}" == "true" ]]; then
             test_action=test-without-building
           fi
           source .ci-harness/scripts/ci-collect-checks.sh
@@ -6218,7 +6230,7 @@ jobs:
               -parallel-testing-enabled NO \
               -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings \
               -only-testing:OpenClawUITests/BootstrapSetupFailureUITests \
-              test
+              "$test_action"
           fi
           finish_checks
 

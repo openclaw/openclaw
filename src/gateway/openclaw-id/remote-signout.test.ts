@@ -12,7 +12,7 @@ import { verifyDeviceToken } from "../../infra/device-pairing-tokens.js";
 import { getPairedDevice } from "../../infra/device-pairing.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { MEMBER_ROLE_PRESETS } from "./member-role-presets.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
 import { linkedClaw } from "./openclaw-id.test-support.js";
 import { createOpenClawIdService } from "./service.js";
 

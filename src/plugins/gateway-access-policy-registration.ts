@@ -10,7 +10,11 @@ import type {
 } from "./gateway-access-policy.types.js";
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
-import { pluginInvocationContext, type PluginInstanceHandle } from "./plugin-instance-scope.js";
+import {
+  pluginInvocationContext,
+  runOutsidePluginInvocationScope,
+  type PluginInstanceHandle,
+} from "./plugin-instance-scope.js";
 
 const accessInstances = new WeakMap<PluginGatewayAccessAuthority, PluginInstanceHandle>();
 
@@ -25,9 +29,12 @@ export function assertBoundGatewayAccessDecision(
     return assertCurrent();
   }
   const scope = pluginInvocationContext.getStore();
-  // enter() performs this lookup even for an active call: closed scopes must refuse.
-  scope?.lookup(instance);
   assertOperatorAccessDecision(decision, assertCurrent, scope, pluginInstanceInvocation.getStore());
+}
+
+/** Policy evaluation owns fresh admission; a caller's finished turn conveys no authority. */
+function runAccessPolicy<T>(instance: PluginInstanceHandle, run: () => T): T {
+  return runOutsidePluginInvocationScope(() => instance.run(run));
 }
 
 // Native AbortSignal composition stores internal WeakRefs. Recursively proxying
@@ -71,7 +78,7 @@ function bindAccessSignal(
     try {
       // Reading/projecting a plugin-owned reason can execute accessors or Proxy
       // traps. It retains ordinary admission even though native cleanup does not.
-      instance.run(() => {
+      runAccessPolicy(instance, () => {
         reason = instance.wrap(source.reason);
       });
     } catch {
@@ -116,7 +123,7 @@ function bindAccessAuthority(
     },
     assertCurrent: () => {
       try {
-        return instance.run(assertCurrent);
+        return runAccessPolicy(instance, assertCurrent);
       } catch (error) {
         if (instance.disposing || instance.lifecycle.signal.aborted) {
           failureCause ??= "plugin-lifetime-retired";
@@ -141,13 +148,15 @@ export function bindPluginGatewayAccessPolicy(
   }
   const bound: PluginGatewayAccessPolicy = {
     authorize(context) {
-      return instance.run(() => bindAccessAuthority(policy.authorize(context), instance));
+      return runAccessPolicy(instance, () =>
+        bindAccessAuthority(policy.authorize(context), instance),
+      );
     },
   };
-  const resume = instance.run(() => policy.resume);
+  const resume = runAccessPolicy(instance, () => policy.resume);
   if (resume) {
     bound.resume = (context) =>
-      instance.run(() => bindAccessAuthority(resume.call(policy, context), instance));
+      runAccessPolicy(instance, () => bindAccessAuthority(resume.call(policy, context), instance));
   }
   return bound;
 }

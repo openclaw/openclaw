@@ -12,7 +12,7 @@
 //   POST /_openclaw-id/v1/signout     no body                 end this peer's browser credentials
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
-import { decodeInviteProofKey } from "./invites-view.js";
+import { decodeInviteProfile, decodeInviteProofKey } from "./invites-view.js";
 
 /** Path prefix the tunnel API owns on the claw origin. */
 const TUNNEL_API_PREFIX = "/_openclaw-id/v1/";
@@ -33,6 +33,7 @@ export type TunnelApiOwner = {
   registerInvite: (input: {
     cap: unknown;
     proofKey: Uint8Array;
+    existingProfileId?: string;
   }) => Promise<AuthorityAccepted | AuthorityRefusal>;
   /** Registers an owner-signed NodeInviteCap with its proof key. */
   registerNodeInvite: (
@@ -206,5 +207,14 @@ export async function handleTunnelApiRequest(
     );
     return;
   }
-  await answerWrite(res, owner, await owner.registerInvite({ cap: body.cap, proofKey }));
+  const profile = decodeInviteProfile(body.existingProfileId);
+  if ("ok" in profile) {
+    sendError(res, 400, profile.code, profile.detail);
+    return;
+  }
+  await answerWrite(
+    res,
+    owner,
+    await owner.registerInvite({ cap: body.cap, proofKey, ...profile }),
+  );
 }

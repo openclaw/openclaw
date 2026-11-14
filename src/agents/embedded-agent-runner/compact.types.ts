@@ -7,7 +7,7 @@ import type { ExecToolDefaults } from "../bash-tools.exec-types.js";
 import type { AgentHarnessCompactionSourceAuthority } from "../harness/host-source-authority.js";
 import type { ModelCallUrgency } from "../run-trigger.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
-import type { CompactionRequestConstraints } from "../sessions/compaction/request-budget.js";
+import type { CompactionRequestConstraints } from "../sessions/compaction/request-budget.types.js";
 import type { CompactionAppendPersistenceAsync } from "../sessions/session-compaction-persistence.js";
 import type { AcceptedCompactionSuccessor } from "./compaction-successor.js";
 import type { PreparedCompactionSession } from "./run/compaction-accounting-bridge.js";

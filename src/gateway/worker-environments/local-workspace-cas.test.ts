@@ -35,6 +35,7 @@ import {
   createLocalWorkspaceManifestTree,
   localWorkspaceManifestRootReference,
 } from "./local-workspace-manifest-tree.js";
+import { readLocalWorkspaceCommit } from "./local-workspace-publication.js";
 import {
   localWorkspaceReadOperations,
   mutateLocalWorkspaceProjection,
@@ -702,4 +703,28 @@ it("releases sweep read pages for checkpoints while retaining live and concurren
   });
   const next = localWorkspaceReadOperations["localWorkspace.sweepCandidates"]({ epoch }, reader);
   expect(next.candidates.paths.map(localWorkspaceDigestReference)).toEqual([livePaths.digest]);
+});
+
+it("distinguishes committed deletion from unknown or mismatched mutation coverage", () => {
+  const worktreeId = randomUUID();
+  const previous = { ...localWorkspaceProjectionFixture(worktreeId, "/synthetic"), revision: 0 };
+  const mutation = { kind: "delete" as const, revision: 0 };
+  expect(readLocalWorkspaceCommit(null, worktreeId, mutation, previous)).toBeUndefined();
+  expect(() => readLocalWorkspaceCommit(undefined, worktreeId, mutation, previous)).toThrow(
+    "coverage is incomplete",
+  );
+  for (const receipt of [
+    null,
+    { worktree_id: randomUUID(), revision: 1 },
+    { worktree_id: worktreeId, revision: 2 },
+  ]) {
+    expect(() =>
+      readLocalWorkspaceCommit(
+        receipt,
+        worktreeId,
+        { kind: "update", revision: 0, patch: {} },
+        previous,
+      ),
+    ).toThrow("commit identity is invalid");
+  }
 });
