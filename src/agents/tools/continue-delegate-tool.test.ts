@@ -147,8 +147,9 @@ describe("continue_delegate tool", () => {
       "the delegate is queued for dispatch after this response completes, after delaySeconds, or when this session compacts, and it can elect further continue_work turns or branch with continue_delegate within chain limits.",
     );
     expect(description).toContain(
-      "If sessions_spawn is available, use it for an immediate worker you supervise and collect yourself; if sessions_yield is available, use it to wait for a delegate you already started.",
+      "For an immediate worker you supervise yourself, use an available direct-spawn tool. To wait for a delegate already started, use an available yield tool.",
     );
+    expect(description).not.toMatch(/sessions_spawn|sessions_yield/);
     expect(description).toContain(
       "Set model to choose a delegate model; omit it to use the configured subagent model, or inherit this session's model when none is configured.",
     );

@@ -1003,18 +1003,15 @@ describe("RFC §2.2/§2.6 tool and token forms converge on one custody record (�
   });
 });
 
-describe("continue_delegate receipts mean accepted, not completed", () => {
-  it("returns the scheduled receipt before any child spawns; the turn's end spawns it", async () => {
-    await withGateway(async (gateway) => {
-      const receipt = await gateway
-        .delegateTool("accepted-run")
-        .execute("accepted-call", { task: "audit the ledger" });
-      expect(receipt?.details).toMatchObject({ status: "scheduled" });
-      expect(spawnedTasks()).toEqual([]);
-
-      await gateway.completeTurn({ runId: "accepted-run", finalText: "turn done" });
-      expect(spawnedTasks()).toEqual([expect.stringContaining("audit the ledger")]);
-    });
+it("continue_delegate receipt precedes child spawn at turn end", async () => {
+  await withGateway(async (gateway) => {
+    const receipt = await gateway
+      .delegateTool("accepted-run")
+      .execute("accepted-call", { task: "audit the ledger" });
+    expect(receipt?.details).toMatchObject({ status: "scheduled" });
+    expect(spawnedTasks()).toEqual([]);
+    await gateway.completeTurn({ runId: "accepted-run", finalText: "turn done" });
+    expect(spawnedTasks()).toEqual([expect.stringContaining("audit the ledger")]);
   });
 });
 

@@ -151,8 +151,6 @@ describe("continue_delegate cross-session targeting gate", () => {
   });
 
   it("disabled refuses an explicit target naming a tree member, while fanoutMode=tree passes", async () => {
-    // The gate reads the targeting form, not tree membership: naming the
-    // dispatcher's requester (an ancestor) is refused; fanoutMode=tree is admitted.
     setRuntimeConfigSnapshot(continuationConfig("disabled"));
     seedSubagentRunForReadTest({
       runId: "tree-member-run",
@@ -160,7 +158,6 @@ describe("continue_delegate cross-session targeting gate", () => {
       requesterSessionKey: "agent:main:root",
     });
     expect(listAncestorSessionKeys(DISPATCHING_SESSION)).toContain("agent:main:root");
-
     await expect(
       executeContinueDelegate({
         crossSessionTargeting: "disabled",
@@ -171,7 +168,6 @@ describe("continue_delegate cross-session targeting gate", () => {
       executeContinueDelegate({ crossSessionTargeting: "disabled", args: { fanoutMode: "tree" } }),
     ).resolves.toMatchObject({ status: "scheduled", fanoutMode: "tree" });
   });
-
   it("case 8: enabled allows targetSessionKey for another session", async () => {
     const result = await executeContinueDelegate({
       crossSessionTargeting: "enabled",

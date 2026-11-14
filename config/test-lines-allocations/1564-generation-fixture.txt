@@ -1,2 +1,0 @@
-# Four test lines inherited from the composed #1564 generation fixture at c6276079.
-4

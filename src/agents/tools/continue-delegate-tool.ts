@@ -95,7 +95,7 @@ const ContinueDelegateToolSchema = Type.Object({
       description:
         "Optional provider/model override for the spawned delegate (e.g. github-copilot/claude-sonnet-4.6). " +
         'Omitted or "default" = use the configured subagent model, or inherit the parent session\'s model when none is configured. ' +
-        "Same form as sessions_spawn's model param.",
+        "Use a provider/model identifier.",
     }),
   ),
   attachments: Type.Optional(
@@ -109,7 +109,7 @@ const ContinueDelegateToolSchema = Type.Object({
       {
         maxItems: 50,
         description:
-          "Inline snapshots mounted into the new child workspace. Uses the same limits and safety policy as sessions_spawn attachments.",
+          "Inline snapshots mounted into the new child workspace under the standard attachment limits and safety policy.",
       },
     ),
   ),
@@ -264,7 +264,7 @@ export function createContinueDelegateTool(opts: {
       "Delegate a bounded objective into a continuation tree: the delegate is queued for dispatch after this response completes, after delaySeconds, or when this session compacts, and it can elect further continue_work turns or branch with continue_delegate within chain limits.",
       "You run only when an inbound message arrives, a scheduled automation fires, or a continuation you armed wakes you; a delegate is how work continues beside you or after you end the turn.",
       "Use it instead of exec sleeps, polling loops, or relaying a hand-off by hand: the gateway handles timing, chain limits, and delivery.",
-      "If sessions_spawn is available, use it for an immediate worker you supervise and collect yourself; if sessions_yield is available, use it to wait for a delegate you already started.",
+      "For an immediate worker you supervise yourself, use an available direct-spawn tool. To wait for a delegate already started, use an available yield tool.",
       "Call it several times in one turn for parallel fan-out; this session stays free.",
       "Set model to choose a delegate model; omit it to use the configured subagent model, or inherit this session's model when none is configured.",
       'mode="silent" enriches your next natural turn without waking you or posting to the channel; mode="silent-wake" also wakes you to act on it; when context pressure rises, mode="post-compaction" stages a bounded handoff now and starts the delegate when this session compacts, to carry working state across it.',

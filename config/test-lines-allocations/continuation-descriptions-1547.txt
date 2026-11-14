@@ -1,3 +1,2 @@
-# #1547: 69 net lines of focused description, targeting, and dispatch-timing tests.
-# The 4 inherited generation-fixture lines at composed base c6276079 have a separate allocation.
-69
+# #1547: exact 66-line growth for description, targeting, and dispatch-timing tests.
+66

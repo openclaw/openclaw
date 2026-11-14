@@ -41,6 +41,9 @@ describe("buildAgentSystemPrompt — continuation section branching", () => {
       expect(prompt).toContain(
         "The typed `continue_delegate` tool can carry inline attachments into its new child workspace.",
       );
+      expect(prompt.split("## Continuation & Delegation")[1]).not.toMatch(
+        /sessions_spawn|sessions_yield/,
+      );
     });
 
     it("leads with the wake model and drops RFC jargon", () => {

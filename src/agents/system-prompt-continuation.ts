@@ -30,7 +30,11 @@ export function buildContinuationLines(
       "If you end a turn without arming one, nothing else wakes you.",
       "- Your own next turn, for concrete work left in this session: `continue_work` (or CONTINUE_WORK).",
       "- Work that should run beside you or later: `continue_delegate`.",
-      "- Waiting for a delegate or sub-agent already running: `sessions_yield`; its result wakes you.",
+      ...(availableTools.has("sessions_yield")
+        ? [
+            "- Waiting for a delegate or sub-agent already running: `sessions_yield`; its result wakes you.",
+          ]
+        : []),
       "",
       "### Self-elected turns",
       ...(availableTools.has("continue_work")
@@ -89,9 +93,13 @@ export function buildContinuationLines(
             "",
           ]
         : []),
-      "### When to use CONTINUE_DELEGATE vs sessions_spawn",
-      "Use sessions_spawn for immediate, explicit workers you want to manage directly, for ACP",
-      "runtime spawns, or when the shard needs explicit spawn-time controls such as cwd or threads.",
+      ...(availableTools.has("sessions_spawn")
+        ? [
+            "### When to use CONTINUE_DELEGATE vs sessions_spawn",
+            "Use sessions_spawn for immediate, explicit workers you want to manage directly, for ACP",
+            "runtime spawns, or when the shard needs explicit spawn-time controls such as cwd or threads.",
+          ]
+        : []),
       ...(availableTools.has("continue_delegate")
         ? [
             "The typed `continue_delegate` tool can carry inline attachments into its new child workspace.",
@@ -108,22 +116,26 @@ export function buildContinuationLines(
       "  - Chain tracking — gateway enforces cost cap and depth limit across linked dispatches",
       "",
       "Do not use `exec`, shell sleeps, or manual `openclaw ...` commands to imitate delayed",
-      "delegate scheduling when `continue_delegate` or `sessions_spawn` already fits the job.",
+      `delegate scheduling when ${availableTools.has("sessions_spawn") ? "`continue_delegate` or `sessions_spawn`" : "`continue_delegate`"} already fits the job.`,
       "",
-      "### Cooperative yield",
-      "Use `sessions_yield` to end your turn immediately, aborting any queued tool calls.",
-      "The session parks until an external event (subagent result, user message) arrives.",
-      "This is useful after dispatching delegates when you should stop and wait for results,",
-      "rather than requesting another turn on a timer.",
-      "",
-      "**Do NOT pair `sessions_yield` with `message`-tool or other delivery-tool calls in the",
-      "same response.** `sessions_yield` aborts queued tool-calls, including in-flight",
-      "`message`-tool deliveries, before their bodies reach the channel. Result: empty",
-      "placeholder lines on channel (e.g. `\u2709\ufe0f Message`, `\u23f8\ufe0f Yield`) while",
-      "your composed prose-body is dropped. For a routine clean turn-end where you have",
-      "nothing more to do, fire no yield tool — the framework ends your turn naturally",
-      "once all queued tool-calls complete. Reserve `sessions_yield` for the explicit",
-      "wait-on-external-event case it was built for (subagent results, delegate returns).",
+      ...(availableTools.has("sessions_yield")
+        ? [
+            "### Cooperative yield",
+            "Use `sessions_yield` to end your turn immediately, aborting any queued tool calls.",
+            "The session parks until an external event (subagent result, user message) arrives.",
+            "This is useful after dispatching delegates when you should stop and wait for results,",
+            "rather than requesting another turn on a timer.",
+            "",
+            "**Do NOT pair `sessions_yield` with `message`-tool or other delivery-tool calls in the",
+            "same response.** `sessions_yield` aborts queued tool-calls, including in-flight",
+            "`message`-tool deliveries, before their bodies reach the channel. Result: empty",
+            "placeholder lines on channel (e.g. `\u2709\ufe0f Message`, `\u23f8\ufe0f Yield`) while",
+            "your composed prose-body is dropped. For a routine clean turn-end where you have",
+            "nothing more to do, fire no yield tool — the framework ends your turn naturally",
+            "once all queued tool-calls complete. Reserve `sessions_yield` for the explicit",
+            "wait-on-external-event case it was built for (subagent results, delegate returns).",
+          ]
+        : []),
       "",
       "### Context pressure",
       "When you receive a [system:context-pressure] event, your context window is approaching capacity.",
