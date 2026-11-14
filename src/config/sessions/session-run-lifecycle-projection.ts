@@ -10,6 +10,7 @@ import {
   isAcpSessionKey,
   isCronSessionKey,
   isSubagentSessionKey,
+  parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import type { ProviderReviewTerminalFact } from "../../sessions/provider-review-terminal.js";
 import { buildUpdatedSessionGoalStatus } from "./goals-transitions.js";
@@ -117,7 +118,11 @@ export function restartResumeSkipReason(sessionKey: string, entry?: SessionEntry
   if (entry?.archivedAt !== undefined) {
     return "archived";
   }
-  return entry?.incognito ? "incognito" : undefined;
+  if (entry?.incognito) {
+    return "incognito";
+  }
+  // A2A owns interrupted Task outcomes; a generic chat input loses that task correlation.
+  return parseAgentSessionKey(sessionKey)?.rest.startsWith("a2a:") ? "task-owner" : undefined;
 }
 
 function isFiniteTimestamp(value: unknown): value is number {

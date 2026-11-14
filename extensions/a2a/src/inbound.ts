@@ -18,7 +18,9 @@ export async function dispatchA2aInbound(params: {
   messageId: string;
   peerName: string;
   text: string;
+  assertAuthority: () => void;
 }): Promise<void> {
+  params.assertAuthority();
   const reportPersistenceError = (error: unknown) => {
     logError(`A2A task persistence failed: ${String(error)}`);
   };
@@ -57,6 +59,7 @@ export async function dispatchA2aInbound(params: {
     dmPolicy: "allowlist",
     allowFrom: Object.keys(params.account.config.peers ?? {}),
   });
+  params.assertAuthority();
   if (ingress.ingress.admission !== "dispatch") {
     await params.store.reject(params.taskId, "A2A peer was blocked by channel ingress policy");
     return;
@@ -68,6 +71,7 @@ export async function dispatchA2aInbound(params: {
     cfg: params.config,
     route,
   });
+  params.assertAuthority();
   const body = buildEnvelope({
     channel: "A2A",
     from: params.peerName,
@@ -126,11 +130,13 @@ export async function dispatchA2aInbound(params: {
   };
   deliverQueuedReply.ownsCompletion = (channel) => channel === "a2a";
 
+  let runCompleted = false;
   const dispatch = await params.channelRuntime.inbound.dispatch({
     cfg: params.config,
     channel: "a2a",
     accountId: params.account.accountId,
     route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
+    assertAuthority: params.assertAuthority,
     ctxPayload,
     delivery: {
       deliver: async (payload, info) => {
@@ -148,6 +154,7 @@ export async function dispatchA2aInbound(params: {
       sourceReplyDeliveryMode: "automatic",
       onQueuedFollowupReplyBatch: deliverQueuedReply,
       onAgentRunTerminalOutcome: (outcome) => {
+        runCompleted = outcome === "completed";
         if (outcome === "failed") {
           void params.store.fail(params.taskId, "Agent run failed").catch(reportPersistenceError);
         }
@@ -162,7 +169,8 @@ export async function dispatchA2aInbound(params: {
     );
   } else if (!dispatch.dispatched) {
     await params.store.fail(params.taskId, "A2A channel accepted the turn without dispatching it");
-  } else if (!dispatch.dispatchResult.deferredToActiveRun) {
+  } else if (!dispatch.dispatchResult.deferredToActiveRun && runCompleted) {
+    // Shutdown can return before execution; only the run owns proof of completion.
     await params.store.complete(params.taskId, undefined);
   }
 }

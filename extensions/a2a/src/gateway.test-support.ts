@@ -10,7 +10,10 @@ import {
 import { vi } from "vitest";
 import { setA2aChannelRuntime } from "./runtime.js";
 import * as taskStores from "./task-store.js";
-import { createTerminalStoreFixture } from "./task-store.test-support.js";
+import {
+  createPendingStoreFixture,
+  createTerminalStoreFixture,
+} from "./task-store.test-support.js";
 import type { A2aChannelConfig, ResolvedA2aChannelAccount } from "./types.js";
 
 export function createA2aGatewayFixture(
@@ -19,6 +22,7 @@ export function createA2aGatewayFixture(
     config?: A2aChannelConfig;
     version?: string;
     terminalStore?: ReturnType<typeof createTerminalStoreFixture>;
+    pendingStore?: ReturnType<typeof createPendingStoreFixture>;
   } = {},
 ) {
   const registry = createTestRegistry([]);
@@ -30,6 +34,9 @@ export function createA2aGatewayFixture(
   vi.spyOn(taskStores, "openTerminalStore").mockReturnValue(
     options.terminalStore ?? createTerminalStoreFixture(),
   );
+  vi.spyOn(taskStores, "openPendingStore").mockReturnValue(
+    options.pendingStore ?? createPendingStoreFixture(),
+  );
   setA2aChannelRuntime(runtime);
   const controller = new AbortController();
   const account: ResolvedA2aChannelAccount = {
@@ -40,6 +47,10 @@ export function createA2aGatewayFixture(
     unresolvedPeers: [],
     unresolvedOutboundPeers: [],
   };
+  vi.mocked(runtime.config.current).mockReturnValue({
+    ...options.cfg,
+    channels: { ...options.cfg?.channels, a2a: account.config },
+  });
   const statusPatchSink = vi.fn();
   const ctx = createStartAccountContext({
     account,

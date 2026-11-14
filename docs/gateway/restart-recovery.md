@@ -751,6 +751,9 @@ does not prove that a reply reached its channel.
 - Idle or finished sessions.
 - Sub-agent children independently of their root requester.
 - Cron occurrences and ACP/external-harness work, which keep their own owners.
+- A2A Task sessions. Their channel retains the original interrupted Task outcome;
+  core settles the interrupted run and queued inputs without adding a chat resume
+  input. Inspect uncertain effects before submitting a new Task.
 - Deleted or archived sessions, and human-owned sessions whose current principal
   cannot be admitted.
 - Gateway terminal PTYs and background OS processes.
