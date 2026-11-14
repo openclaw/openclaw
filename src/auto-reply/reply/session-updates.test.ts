@@ -127,6 +127,7 @@ describe("ensureSkillSnapshot", () => {
 
     expect(updateSessionEntryMock).toHaveBeenCalledWith(
       {
+        agentId: "main",
         storePath: "/tmp/sessions.json",
         sessionKey,
       },
@@ -193,4 +194,48 @@ describe("ensureSkillSnapshot", () => {
       expect(sessionStore[sessionKey]).toEqual(result.sessionEntry);
     },
   );
+
+  it("preserves a non-default agent's global entry when persisting skills", async () => {
+    const sessionKey = "global";
+    const storePath = path.join(TEST_WORKSPACE_DIR, "shared-sessions.json");
+    const sessionEntry = {
+      sessionId: "work-session",
+      updatedAt: 10,
+      userStoppedAt: 5,
+      userStoppedSessionId: "work-session",
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const sessionEntryHandle = createReplySessionEntryHandle({
+      sessionEntry,
+      sessionKey,
+      sessionStore,
+    });
+
+    // Work owns the row; main has no global row (session.scope global, a non-default agent).
+    updateSessionEntryMock.mockImplementationOnce(async (scope, operation) =>
+      scope.agentId === "work" ? { ...sessionEntry, ...operation.patch } : null,
+    );
+
+    const result = await ensureSkillSnapshot({
+      agentId: "work",
+      sessionEntry,
+      sessionEntryHandle,
+      sessionStore,
+      sessionKey,
+      sessionId: sessionEntry.sessionId,
+      storePath,
+      isFirstTurnInSession: false,
+      workspaceDir: TEST_WORKSPACE_DIR,
+      cfg: {},
+    });
+
+    expect(updateSessionEntryMock).toHaveBeenCalledWith(
+      { agentId: "work", storePath, sessionKey },
+      expect.objectContaining({ kind: "fields" }),
+      expect.any(Object),
+    );
+    expect(result.sessionEntry).toMatchObject(sessionEntry);
+    expect(sessionEntryHandle.getCurrent()).toBe(result.sessionEntry);
+    expect(sessionStore[sessionKey]).toBe(result.sessionEntry);
+  });
 });

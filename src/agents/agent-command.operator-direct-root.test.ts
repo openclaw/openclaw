@@ -1,10 +1,16 @@
-/** Tests the direct chat type a local operator's root session records at creation. */
+/**
+ * Tests the session facts a command turn reads and records: a local operator's root chat type,
+ * and a user's Stop, which an `agent` RPC turn leaves recorded for a turn that states it.
+ */
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { resolveMemoryAudienceFromEntry } from "../plugins/memory-audience.js";
 import {
   agentCommand,
+  agentCommandFromGatewayIngress,
+  compactionTestRuntime,
   compactionTestState as state,
+  GATEWAY_INGRESS_ARGS,
   findCompactionSessionEntry as findStoredSessionEntry,
   makeCompactionResult as makeResult,
   registerAgentCommandCompactionTestHooks,
@@ -61,5 +67,33 @@ describe("agentCommand operator direct root", () => {
     const { entry } = await runLocalRoot();
 
     expect(entry.chatType).toBeUndefined();
+  });
+});
+
+describe("agentCommand user Stop", () => {
+  it.each([
+    { name: "a plain agent turn", opts: {} },
+    {
+      name: "an exec-approval follow-up",
+      opts: {
+        inputProvenance: { kind: "inter_session", sourceTool: "exec_approval_followup" },
+      },
+    },
+  ] as const)("leaves a recorded Stop past $name for an admitted reply", async ({ opts }) => {
+    const sessionId = "stopped-session";
+    const target = { sessionKey: "agent:main:rpc-stop", storePath: requireStorePath() };
+    const stop = { userStoppedAt: 5, userStoppedSessionId: sessionId };
+    await compactionTestRuntime.replaceSessionEntry(target, { sessionId, updatedAt: 1, ...stop });
+    state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text: "ok" }));
+
+    await agentCommandFromGatewayIngress(
+      { ...target, sessionId, message: "next ask", allowModelOverride: false, ...opts },
+      ...GATEWAY_INGRESS_ARGS,
+    );
+
+    // The turn runs as sent; reply admission or a queued turn states the Stop later.
+    const attempt = state.runAgentAttemptMock.mock.calls[0]?.[0];
+    expect(attempt?.body).toBe("next ask");
+    expect(compactionTestRuntime.loadSessionEntry(target)).toMatchObject(stop);
   });
 });

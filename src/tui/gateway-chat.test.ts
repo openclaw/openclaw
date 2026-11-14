@@ -420,6 +420,33 @@ describe("GatewayChatClient", () => {
     );
   });
 
+  it("sends a user's Stop flag and drops only what an older Gateway rejects", async () => {
+    const { client, request } = mockClient();
+    const result = { ok: true, aborted: true, runIds: ["run-main"] };
+    request
+      .mockResolvedValueOnce(result)
+      .mockRejectedValueOnce(legacyParameterError("chat.abort", "userInitiated"))
+      .mockResolvedValueOnce(result)
+      .mockRejectedValueOnce(legacyParameterError("chat.abort", "userInitiated"))
+      .mockRejectedValueOnce(legacyParameterError("chat.abort", "preserveSideRuns"))
+      .mockResolvedValueOnce(result);
+
+    const stop = { sessionKey: "main", userInitiated: true } as const;
+    await client.abortChat({ ...stop, runId: "run-main" });
+    // A Gateway before the flag keeps side runs; a protocol v4 one gets its shipped shape.
+    await expect(client.abortChat(stop)).resolves.toEqual(result);
+    await expect(client.abortChat(stop)).resolves.toEqual(result);
+    expectRequests(
+      request,
+      ["chat.abort", { ...stop, runId: "run-main" }],
+      ["chat.abort", { ...stop, preserveSideRuns: true }],
+      ["chat.abort", { sessionKey: "main", preserveSideRuns: true }],
+      ["chat.abort", { ...stop, preserveSideRuns: true }],
+      ["chat.abort", { sessionKey: "main", preserveSideRuns: true }],
+      ["chat.abort", { sessionKey: "main" }],
+    );
+  });
+
   it.each([true, false])(
     "retries legacy creation with succeedsParent=%s",
     async (succeedsParent) => {

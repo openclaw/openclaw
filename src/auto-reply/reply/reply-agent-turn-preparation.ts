@@ -62,6 +62,7 @@ import {
 } from "./reply-source-admission.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import type { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
+import { claimUserStopForAdmittedTurn } from "./reply-user-stop.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import type { TypingController } from "./typing.js";
 
@@ -95,6 +96,8 @@ export type AdmittedFollowupTurn = {
   memoryFlushAttempted?: boolean;
   preflightFailurePayload?: ReplyPayload;
   preflightError?: Error;
+  /** This turn claimed a user's recorded Stop, so the prompt it runs opens with the note. */
+  userStopClaimed?: boolean;
   releaseSourceAdmission?: () => Promise<void>;
 };
 
@@ -675,6 +678,8 @@ export async function prepareReplyAgentTurn<TConfigured>(
           return { kind: "skipped", reason: "goal-inactive", operation } as const;
         }
       }
+      // Claimed last: every route above leaves a recorded Stop for the turn that runs.
+      turn.userStopClaimed = await claimUserStopForAdmittedTurn(turn);
       // Only a returned turn transfers presentation cleanup to the runner.
       queuedFollowupAdmitted = false;
       releaseSourceAdmission = undefined;

@@ -27,6 +27,7 @@ import {
 import {
   isExplicitRunStopSource,
   notifySessionRunStopped,
+  type SessionRunStopReceipt,
 } from "../../sessions/session-run-stopped.js";
 import {
   waitForChatAbortAcknowledgment,
@@ -389,10 +390,18 @@ export function prepareChatSessionAbort(
     }
     // Accepted Stop with confirmed authority. The notification never precedes this gate, so a
     // rejected Stop announces nothing.
+    let userStop: SessionRunStopReceipt | undefined;
     if (params.announceRunStopped === true && isExplicitRunStopSource(params.stopSource)) {
-      notifySessionRunStopped({
+      userStop = notifySessionRunStopped({
         source: params.stopSource,
-        sessions: [{ agentId: params.agentId, sessionKey: params.sessionKey }],
+        sessions: [
+          {
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            storePath,
+            sessionId: params.requiredSessionId ?? params.sessionId,
+          },
+        ],
         runIds: selectedRunIds,
       });
     }
@@ -422,6 +431,7 @@ export function prepareChatSessionAbort(
         return cancel();
       },
       afterParent,
+      userStop: () => userStop,
     } satisfies Omit<SessionStopRequest, "source" | "mutation">;
     stopExecution =
       params.stopSource === "mutation"

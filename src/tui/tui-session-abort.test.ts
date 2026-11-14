@@ -78,6 +78,7 @@ it.each([
     await h.abortActive();
     expect(h.abortChat).toHaveBeenCalledWith({
       sessionKey,
+      userInitiated: true,
       ...(global ? { agentId: "work" } : {}),
     });
     expect(h.state.pendingSubmit).toBeNull();
@@ -215,6 +216,7 @@ it.each([
   });
   expect(h.abortChat).toHaveBeenCalledWith({
     sessionKey: initialKey,
+    userInitiated: true,
     ...(initialKey === "global" ? { agentId: "main" } : {}),
   });
   if (initialKey === nextKey && initialKey !== "global") {
@@ -261,7 +263,10 @@ it.each([false, true])(
     });
     await h.abortActive(explicit ? { preferActive: true } : undefined);
     if (explicit) {
-      expect(h.abortChat).toHaveBeenCalledWith({ sessionKey: "agent:main:main" });
+      expect(h.abortChat).toHaveBeenCalledWith({
+        sessionKey: "agent:main:main",
+        userInitiated: true,
+      });
       expect(h.setActivityStatus).toHaveBeenCalledWith("aborted");
     } else {
       expect(h.abortChat).not.toHaveBeenCalled();

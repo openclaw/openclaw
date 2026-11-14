@@ -418,6 +418,14 @@ export function hasOperationBackendRunId(operation: ReplyOperation, runId: strin
   return controllerStorage.backendRunIdsByOperation.get(operation)?.has(runId) === true;
 }
 
+export function listOperationBackendRunIds(operation: ReplyOperation): string[] {
+  return [...(controllerStorage.backendRunIdsByOperation.get(operation) ?? [])];
+}
+
+export function getOperationSessionTarget(operation: ReplyOperation) {
+  return controllerStorage.controllerEntryByOperation.get(operation)?.target;
+}
+
 export function getAttachedBackendAttachment(operation: ReplyOperation) {
   const entry = controllerStorage.controllerEntryByOperation.get(operation);
   return entry?.active === operation && entry.attachment?.operation === operation

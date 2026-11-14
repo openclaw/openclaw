@@ -12,7 +12,10 @@ import {
   stopSession,
   type SessionStopHookContext,
 } from "../../sessions/session-controller.stop.js";
-import { notifySessionRunStopped } from "../../sessions/session-run-stopped.js";
+import {
+  notifySessionRunStopped,
+  type SessionRunStopReceipt,
+} from "../../sessions/session-run-stopped.js";
 import { abortChatRunById, createChatAbortSignalReason, type ChatAbortOps } from "../chat-abort.js";
 import { abortControlledSubagents } from "./chat-abort-descendants.js";
 
@@ -60,7 +63,7 @@ export async function stopExactClientRun(params: {
    * commits. Absent for non-chat callers such as realtime talk, which keep their own Stop
    * contract.
    */
-  stoppedSession?: { agentId?: string; sessionKey: string };
+  stoppedSession?: { agentId?: string; sessionKey: string; storePath?: string; sessionId?: string };
   /** Records only this captured run's committed cancellation. */
   onAborted?: () => void;
 }): Promise<ExactClientRunStopResult> {
@@ -83,9 +86,11 @@ export async function stopExactClientRun(params: {
       throw new Error("Run changed before cancellation; retry Stop.");
     }
   };
+  let userStop: SessionRunStopReceipt | undefined;
   try {
     await stopSession({
       source: "client-run",
+      userStop: () => userStop,
       capture,
       assertCurrent,
       reason: createChatAbortSignalReason("rpc", params.userInitiated),
@@ -109,7 +114,7 @@ export async function stopExactClientRun(params: {
             // Announce before the run commits cancellation, so consumers act before its own
             // completion arrives. The notification never fails Stop.
             if (params.stoppedSession) {
-              notifySessionRunStopped({
+              userStop = notifySessionRunStopped({
                 source: "client-run",
                 sessions: [params.stoppedSession],
                 runIds: [runId],
