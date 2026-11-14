@@ -13,6 +13,20 @@ const channels = {
 const observedConnections = new WeakSet<SqlConnection>();
 let statementTiming: ((sql: string, durationMs: number, rows?: number) => void) | undefined;
 
+/**
+ * Slow holds of these operations name their statements: session writes hold the writer in
+ * front of streaming turns, and long transcript reads hold back WAL checkpoints.
+ */
+export function attributesSqliteStatements(operationLabel: string): boolean {
+  return (
+    operationLabel.startsWith("session.transcript.") ||
+    operationLabel.startsWith("sessions.transcript-") ||
+    operationLabel.startsWith("session.metadata.") ||
+    operationLabel === "session.lifecycle.delete" ||
+    operationLabel === "session context snapshot read"
+  );
+}
+
 /** Synchronous diagnostic scope; hashes identify normalized statements without logging SQL. */
 export function startSqliteStatementTiming(collectGc = false) {
   const previous = statementTiming;
