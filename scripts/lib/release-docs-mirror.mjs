@@ -6,6 +6,8 @@ import { changelogEntryPath } from "./release-changelog.mjs";
 
 const releaseDocsMirrorMarker = "openclaw-docs-mirror-v1";
 const markdown = createDocsMarkdown({ html: false });
+const completeFrontmatter =
+  /^---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)(?:[ \t]+(?:#[^\r\n]*)?)?[ \t]*(?:\r?\n|$)/u;
 const callouts = new Set(["Note", "Warning", "Tip", "Info", "Check", "Say", "Banner", "Update"]);
 const wrappers = new Set(["AccordionGroup", "Accordion", "details", ...callouts]);
 
@@ -202,9 +204,7 @@ export function flattenReleaseDocs(sourceText, source, { version } = {}) {
   const { data, content } = parseFrontmatter(sourceText);
   if (
     /^---[ \t]*\r?\n/.test(sourceText.replace(/^\uFEFF/, "")) &&
-    !/^---[ \t]*\r?\n[\s\S]*?\r?\n---(?:[ \t]*\r?\n|[ \t]*$)/.test(
-      sourceText.replace(/^\uFEFF/, ""),
-    )
+    !completeFrontmatter.test(sourceText.replace(/^\uFEFF/, ""))
   ) {
     throw new Error(`${source}: unterminated frontmatter`);
   }

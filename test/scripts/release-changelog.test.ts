@@ -232,6 +232,19 @@ describe("release docs mirrors", () => {
     expect(f.cli("--check").status).toBe(1);
   });
 
+  it.each([
+    ["LF annotated delimiter", "\n--- # end\n"],
+    ["CRLF document-end delimiter", "\r\n... # end\r\n"],
+  ])("renders a release page with a %s", (_name, closing) => {
+    const options = mirrorFixture();
+    fs.writeFileSync(
+      path.join(options.rootDir, source),
+      `---\ntitle: "Release title"${closing}\n# Release title\n\nExact prose.\n`,
+    );
+    expect(docs.renderReleaseDocsMirror(options)).toContain("### Release title");
+    expect(docs.renderReleaseDocsMirror(options)).toContain("Exact prose.");
+  });
+
   it("preserves intentional detail paragraphs, literal code and non-inline disclosures", () => {
     const literal = [
       '  ```md\n  <details class="release-source-inline">\n  <summary>More details</summary>\n',
