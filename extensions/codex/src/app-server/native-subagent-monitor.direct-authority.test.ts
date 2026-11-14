@@ -41,6 +41,53 @@ async function directFixture(options: ParentOptions = {}) {
   const owner = await registerDirect(f.monitor, { claimDirectChild, ...options });
   return { ...f, owner, release, claimDirectChild };
 }
+
+async function hookRelayFixture(runId: string) {
+  const host = await createAdmittedHostCapabilityTestFixture({ runId });
+  const relay = createCodexNativeHookRelay({
+    options: { enabled: true },
+    events: ["pre_tool_use"],
+    agentId: undefined,
+    sessionId: runId,
+    sessionKey: undefined,
+    config: {},
+    runId,
+    attemptTimeoutMs: 30_000,
+    startupTimeoutMs: 1_000,
+    turnStartTimeoutMs: 1_000,
+    loopDetectionPreToolUseRelay: false,
+    signal: new AbortController().signal,
+    hostCapabilities: host.hostCapabilities,
+    onPreToolUseFailure: () => {},
+  });
+  if (!relay) {
+    throw new Error("native hook relay missing");
+  }
+  onTestFinished(async () => {
+    relay.unregister();
+    await relay.drain();
+    host.closeHost();
+    host.closeAdmission();
+  });
+  await relay.ready;
+  const invokeChildHook = (threadId: string) =>
+    invokeNativeHookRelay(
+      {
+        provider: "codex",
+        relayId: relay.relayId,
+        generation: relay.generation,
+        event: "pre_tool_use",
+        rawPayload: {
+          agent_id: threadId,
+          tool_name: "Bash",
+          tool_input: { command: "printf child" },
+        },
+      },
+      AbortSignal.timeout(1_000),
+    );
+  return { host, relay, invokeChildHook };
+}
+
 const testModel = (model: string) => ({ provider: "test-provider", model });
 const mainRequester = {
   requesterSessionKey: "agent:main:main",
@@ -197,8 +244,13 @@ describe("CodexNativeSubagentMonitor", () => {
 
   it("retains nested admitted work and fences only the cancelled execution across regrant", async () => {
     const { client, monitor, captureSource } = monitorFixture();
+    const { host, relay, invokeChildHook } = await hookRelayFixture("native-nested");
+    onTestFinished(() => monitor.dispose());
     const source = modelSource(["model-a", "model-b"]);
-    const parent = await registerDirect(monitor, { modelSource: source });
+    const parent = await registerDirect(monitor, {
+      modelSource: source,
+      claimDirectChild: relay.claimDirectChild,
+    });
     parent.bindTurn("parent-turn");
     for (const child of ["child-a", "child-b"]) {
       await notifyChildStarted(client, "parent-thread", child);
@@ -230,13 +282,29 @@ describe("CodexNativeSubagentMonitor", () => {
     });
     expect(sibling.nativeReviewRequired).toBe(false);
     expect(sibling.source).toBe(source);
+    relay.authorizeRetentionAfterSuccessfulYield();
+    relay.unregister();
+    await parent.unregister();
+    host.closeHost();
+    host.closeAdmission();
+    await notifyChildStarted(client, "child-a", "cancelled-grandchild");
+    await client.item(
+      directSpawnItem("v2", "child-a", "cancelled-grandchild"),
+      "child-a-turn",
+      "child-a",
+    );
+    await expect(invokeChildHook("cancelled-grandchild")).rejects.toThrow(
+      "native hook relay retained invocation not allowed",
+    );
     await notifyChildStarted(client, "child-b", "grandchild", "/root/child-b/grandchild");
+    await expect(invokeChildHook("grandchild")).rejects.toThrow(
+      "native hook relay retained invocation not allowed",
+    );
     await client.item(directSpawnItem("v2", "child-b", "grandchild"), "child-b-turn", "child-b");
     await client.notify({
       method: "turn/started",
       params: { threadId: "grandchild", turn: { id: "grandchild-turn" } },
     });
-    await parent.unregister();
     const nested = await captureSource({
       threadId: "grandchild",
       turnId: "grandchild-turn",
@@ -245,6 +313,17 @@ describe("CodexNativeSubagentMonitor", () => {
       rootTurnId: "parent-turn",
     });
     expect(nested.source).toBe(source);
+    sibling.cancel();
+    await expect(invokeChildHook("grandchild")).resolves.toMatchObject({ exitCode: 0 });
+    await client.completeTurn({
+      threadId: "grandchild",
+      turnId: "grandchild-turn",
+      status: "completed",
+      items: [agentMessage("nested-final", "Nested result", "final_answer")],
+    });
+    await expect(invokeChildHook("grandchild")).rejects.toThrow(
+      "native hook relay retained invocation not allowed",
+    );
     first.release();
     sibling.release();
     nested.release();
@@ -400,35 +479,7 @@ describe("CodexNativeSubagentMonitor", () => {
 
   it("observes completed V1 children again when a parent starts follow-up work", async () => {
     const { client, runtime, monitor } = monitorFixture();
-    const host = await createAdmittedHostCapabilityTestFixture({
-      runId: "native-followup-v1",
-    });
-    const relay = createCodexNativeHookRelay({
-      options: { enabled: true },
-      events: ["pre_tool_use"],
-      agentId: undefined,
-      sessionId: "native-followup-v1",
-      sessionKey: undefined,
-      config: {},
-      runId: "native-followup-v1",
-      attemptTimeoutMs: 30_000,
-      startupTimeoutMs: 1_000,
-      turnStartTimeoutMs: 1_000,
-      loopDetectionPreToolUseRelay: false,
-      signal: new AbortController().signal,
-      hostCapabilities: host.hostCapabilities,
-      onPreToolUseFailure: () => {},
-    });
-    if (!relay) {
-      throw new Error("native hook relay missing");
-    }
-    onTestFinished(async () => {
-      relay.unregister();
-      await relay.drain();
-      host.closeHost();
-      host.closeAdmission();
-    });
-    await relay.ready;
+    const { relay, invokeChildHook } = await hookRelayFixture("native-followup-v1");
     const claimDirectChild = vi.fn(relay.claimDirectChild);
     const onDirectChildAccepted = vi.fn();
     const owner = await registerDirect(monitor, {
@@ -453,22 +504,7 @@ describe("CodexNativeSubagentMonitor", () => {
     });
     expect(claimDirectChild).toHaveBeenCalledTimes(2);
     expect(onDirectChildAccepted).toHaveBeenCalledOnce();
-    await expect(
-      invokeNativeHookRelay(
-        {
-          provider: "codex",
-          relayId: relay.relayId,
-          generation: relay.generation,
-          event: "pre_tool_use",
-          rawPayload: {
-            agent_id: "child-thread",
-            tool_name: "Bash",
-            tool_input: { command: "printf followup" },
-          },
-        },
-        AbortSignal.timeout(1_000),
-      ),
-    ).resolves.toMatchObject({ exitCode: 0 });
+    await expect(invokeChildHook("child-thread")).resolves.toMatchObject({ exitCode: 0 });
     await owner.unregister();
     await client.finishTurn(
       "followup-turn",
