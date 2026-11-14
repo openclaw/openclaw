@@ -147,6 +147,21 @@ See [iOS app setup](/platforms/ios) and [Android connection setup](/platforms/an
 
 ## Troubleshooting
 
+### Serve startup reports non-interactive sudo failed
+
+The Gateway cannot answer a sudo password prompt. On the Gateway host, grant Tailscale operator access to the user that runs the Gateway. If that is your current shell user, run this once in an interactive terminal:
+
+```bash
+sudo tailscale set --operator=$USER
+openclaw gateway restart
+```
+
+If the Gateway runs as a different user, replace `$USER` with that account. Then check `tailscale serve status` again. See [Tailscale prerequisites and limits](/gateway/tailscale#tailscale-prerequisites-and-limits).
+
+### The phone cannot resolve the Serve hostname
+
+Confirm that Tailscale is connected on the phone and that its **Use Tailscale DNS** setting is enabled, as well as MagicDNS in the tailnet admin console. Retry the full `https://<host>.<tailnet>.ts.net` URL in the phone's browser before troubleshooting OpenClaw authentication. If the hostname resolves but the request times out, check the TCP `443` policy grant below.
+
 ### The URL times out from other devices
 
 Run the same `curl` command on the Gateway host. If the host returns `200` while other tailnet devices time out, add or narrow the tailnet policy grant for TCP `443`.
@@ -162,6 +177,17 @@ Update Tailscale and confirm that your installed client build exposes the curren
 ### Tailscale identity headers are not accepted
 
 Confirm that `gateway.auth.allowTailscale` is `true` and that the request arrives through the Serve URL. Direct loopback, LAN, raw tailnet-IP, and custom reverse-proxy requests do not qualify for Tailscale identity-header auth.
+
+### Android says Connected (operator offline) although the browser works
+
+Android uses separate operator and node connections. This status means the node is connected while the operator connection used for chat and UI actions is offline. Browser access through Tailscale identity headers does not establish Android operator authentication or device approval.
+
+1. Open **Settings → Gateway** and read the authentication or pairing error for the selected Gateway.
+2. For **Gateway token needed**, enter the required Gateway token or edit the connection. For an invalid saved credential or setup code, generate a fresh mobile setup code in **Control UI → Devices → Pair device** or with `openclaw qr`, using the secure `wss://<host>.<tailnet>.ts.net` endpoint. In **Settings → Gateway → Manual Gateway → Replace setup**, paste the code, tap **Connect**, and review the confirmation. Replacement clears saved setup credentials and device tokens and may require node approval again; **Add Gateway** retains an existing Gateway's credentials.
+3. If approval is requested, review and approve the device using the displayed instructions. Node approval and operator access are separate; approving the node alone does not resolve an operator authentication failure.
+4. Tap **Reconnect** and confirm that the operator connection is online.
+
+See [Android connection setup](/platforms/android#connection-runbook) for setup codes, authentication, and pairing steps. A missing token requires restoring the credential; this symptom alone does not explain why it was missing.
 
 ## Related
 
