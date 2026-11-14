@@ -91,8 +91,9 @@ example, `Edit the deployment manifest and redeploy. https://example.org/gateway
 ## Feedback and bug reports
 
 Open **Help** from the sidebar account menu to **Report a bug** or **Suggest a feature**.
-Connection and chat error notices also offer **Report a bug**. These links open the
-matching public GitHub issue form; they do not submit an issue.
+Connection error notices also offer **Report a bug**, as do chat error notices for
+failures OpenClaw cannot explain. These links open the matching public GitHub issue
+form; they do not submit an issue.
 
 Only the issue template and a fixed **Control UI** title are prefilled. OpenClaw does
 not attach error text, diagnostics, logs, conversations, configuration, identifiers,

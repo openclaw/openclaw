@@ -36,6 +36,8 @@ export function createChatErrorState() {
       chatError = { message };
       publish();
     },
+    /** Pass the raw failure as detail when the message is not our own explanation of it:
+     * the notice then offers its details and bug reporting. */
     setRecoverableChatError(message: string, detail?: unknown): () => void {
       const error = { message, detail };
       lastError = chatError = error;

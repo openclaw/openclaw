@@ -295,8 +295,7 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
         }
       } catch (error) {
         if (isCurrent()) {
-          state.chatError = formatUiError(error);
-          state.lastError = state.chatError;
+          state.setRecoverableChatError(formatUiError(error), error);
         } else if (
           pending &&
           !ownsTarget() &&

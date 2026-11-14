@@ -432,6 +432,8 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       if (!isCurrent()) {
         return;
       }
+      // The repository prompt explains its own failure; any other one keeps its raw detail.
+      let explained = false;
       if (operation.action === "dismiss") {
         // A resolved event confirms removal even if its RPC response was lost.
         if (operation.resolved) {
@@ -457,6 +459,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         };
         this.setTaskSuggestionOperation(suggestion.id, operation);
         if (repository) {
+          explained = true;
           void scope.client
             .request<ProjectsListResult>("projects.list", {})
             .then((result) => {
@@ -475,11 +478,12 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
             });
         }
       }
+      const clearError = scope.state.setRecoverableChatError(
+        formatUiError(error),
+        explained ? undefined : error,
+      );
       if (operation.action === "accept") {
-        operation.clearError = scope.state.setRecoverableChatError(formatUiError(error));
-      } else {
-        scope.state.lastError = formatUiError(error);
-        scope.state.chatError = scope.state.lastError;
+        operation.clearError = clearError;
       }
     } finally {
       if (this.tasks.operations.get(suggestion.id) === operation) {

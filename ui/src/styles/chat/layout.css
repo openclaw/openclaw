@@ -40,10 +40,44 @@ openclaw-pending-session-create {
   margin-block-start: -4px;
 }
 
+/* Recovery leads; reporting follows as a quiet link, only where the source asks for it. */
+.chat-error__actions {
+  min-height: 28px;
+}
+
+.chat-error__actions > .report-issue-link {
+  color: var(--muted);
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 400;
+  line-height: calc(18px * var(--control-ui-text-scale));
+  white-space: nowrap;
+}
+
+.chat-error__actions > .report-issue-link:hover {
+  color: var(--text-strong);
+}
+
 /* The long discard label would squeeze the message into a sliver on phones. */
 @media (max-width: 560px) {
   .chat-error .app-toast__content > .chat-error__actions:has(> .chat-error__discard) {
     grid-row: auto;
+    grid-column: 1 / -1;
+    justify-self: start;
+    margin-block-start: 6px;
+  }
+
+  /* Recovery stays beside the title; the report link takes the last row instead. */
+  .chat-error .app-toast__content > .chat-error__actions--report {
+    display: contents;
+  }
+
+  .chat-error__actions--report > :not(.report-issue-link) {
+    grid-row: 1;
+    grid-column: 2;
+    margin-block-start: -4px;
+  }
+
+  .chat-error__actions--report > .report-issue-link {
     grid-column: 1 / -1;
     justify-self: start;
     margin-block-start: 6px;
