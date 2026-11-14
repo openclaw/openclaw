@@ -34,6 +34,7 @@ export function resolveConfigObserveSuspiciousReasons(params: {
   gatewayMode: string | null;
   parsed: unknown;
   lastKnownGood?: ConfigObserveSuspiciousBaseline;
+  getBaselineContentBytes?: () => number | null;
 }): string[] {
   const reasons: string[] = [];
   const baseline = params.lastKnownGood;
@@ -41,7 +42,15 @@ export function resolveConfigObserveSuspiciousReasons(params: {
     return reasons;
   }
   if (baseline.bytes >= 512 && params.bytes < Math.floor(baseline.bytes * 0.5)) {
-    reasons.push(`size-drop-vs-last-good:${baseline.bytes}->${params.bytes}`);
+    const baselineContentBytes = params.getBaselineContentBytes?.();
+    const currentContentBytes = Buffer.byteLength(JSON.stringify(params.parsed) ?? "", "utf8");
+    if (
+      baselineContentBytes === null ||
+      baselineContentBytes === undefined ||
+      currentContentBytes < Math.floor(baselineContentBytes * 0.5)
+    ) {
+      reasons.push(`size-drop-vs-last-good:${baseline.bytes}->${params.bytes}`);
+    }
   }
   // ConfigMap seeds and operator-authored configs need not contain writer metadata.
   if (baseline.gatewayMode && !params.gatewayMode) {
