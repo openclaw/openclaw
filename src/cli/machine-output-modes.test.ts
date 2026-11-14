@@ -46,3 +46,9 @@ it("treats config set --json as parse-only except for JSON dry-run reports", () 
   expect(isConfigSetJsonParseOnly([...set, "18789", "--json"])).toBe(true);
   expect(isConfigSetJsonParseOnly([...set, "18789", "--dry-run", "--json"])).toBe(false);
 });
+
+it("reserves config explain stdout for machine output", () => {
+  expect(isConfigMachineOutput(["node", "openclaw", "config", "explain", "gateway.port"])).toBe(
+    true,
+  );
+});
