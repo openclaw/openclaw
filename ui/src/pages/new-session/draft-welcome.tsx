@@ -62,7 +62,7 @@ export function DraftWelcome(props: {
     <ChatWelcome
       {...options()}
       assistantNameControl={props.assistantNameControl}
-      composer={memberWelcome.composer(() => props.composer)}
+      composer={memberWelcome.active() ? memberWelcome.step() : props.composer}
       preparedRecents={recents()}
     />
   );

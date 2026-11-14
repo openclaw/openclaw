@@ -1,7 +1,9 @@
+import type { UsersPrefsGetResult } from "../../../../packages/gateway-protocol/src/schema/users.ts";
 // A member's first arrival over the tunnel: they land on a new session, and the page asks who
 // they are before it offers a composer. The Gateway names a member from their OpenClaw ID
-// email until they choose a name, so a chosen name ends it. Name and photo stay in this
-// Gateway's profile.
+// email until they choose a name. A chosen name ends it, and so does their answer, which is
+// kept with their Gateway profile so a name equal to the email's local part is not asked
+// about again on another device. Name and photo stay in this Gateway's profile.
 import { openClawIdEmailDisplayName } from "../../../../src/shared/openclaw-id-email-display-name.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
@@ -10,7 +12,10 @@ import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { OpenClawIdStatusResult } from "./types.ts";
 
-// The tunnel origin belongs to one claw, so the account alone scopes the answer.
+/** The profile preference that records the member's answer (named themselves or skipped). */
+export const MEMBER_WELCOME_ANSWERED_PREFERENCE_KEY = "ui.openclawId.memberWelcomeAnswered";
+// This browser's copy of the answer, for a profile whose preferences cannot be read or written.
+// The tunnel origin belongs to one claw, so the account alone scopes it.
 const ANSWERED_KEY_PREFIX = "openclaw.openclawId.memberWelcome.v1:";
 // Set while this browser's last connection was due no welcome, so its composer shows at once.
 const SETTLED_KEY = "openclaw.openclawId.memberWelcome.settled.v1";
@@ -61,6 +66,31 @@ export function memberWelcomeOwner(gateway: ApplicationGateway) {
   return owner;
 }
 
+// Browser storage is a convenience here: a full or blocked store must not keep the welcome up.
+function remember(write: (storage: Storage) => void): void {
+  try {
+    const storage = getSafeLocalStorage();
+    if (storage) {
+      write(storage);
+    }
+  } catch {
+    // The in-memory state already holds the answer.
+  }
+}
+
+async function answeredInProfile(client: GatewayBrowserClient): Promise<boolean> {
+  try {
+    const result = await client.request<UsersPrefsGetResult>("users.prefs.get", {
+      keys: [MEMBER_WELCOME_ANSWERED_PREFERENCE_KEY],
+    });
+    return (
+      result.status === "ok" && result.entries[MEMBER_WELCOME_ANSWERED_PREFERENCE_KEY] === true
+    );
+  } catch {
+    return false;
+  }
+}
+
 function createMemberWelcomeOwner(gateway: ApplicationGateway) {
   const storage = getSafeLocalStorage();
   const listeners = new Set<() => void>();
@@ -72,11 +102,9 @@ function createMemberWelcomeOwner(gateway: ApplicationGateway) {
       : { kind: "none" };
   const publish = (next: MemberWelcomeState) => {
     state = next;
-    if (next.kind === "due") {
-      storage?.removeItem(SETTLED_KEY);
-    } else if (next.kind === "none") {
-      storage?.setItem(SETTLED_KEY, "1");
-    }
+    remember((store) =>
+      next.kind === "due" ? store.removeItem(SETTLED_KEY) : store.setItem(SETTLED_KEY, "1"),
+    );
     listeners.forEach((listener) => listener());
   };
   const reconcile = () => {
@@ -96,16 +124,15 @@ function createMemberWelcomeOwner(gateway: ApplicationGateway) {
     client = next;
     void next
       .request<OpenClawIdStatusResult>("openclawId.status", {})
-      .then((status) => {
-        if (client !== next) {
-          return;
-        }
+      .then(async (status) => {
         const welcome = memberWelcomeFor(status);
-        publish(
-          welcome && !storage?.getItem(ANSWERED_KEY_PREFIX + welcome.accountId)
-            ? { kind: "due", client: next, self, welcome }
-            : { kind: "none" },
-        );
+        const due =
+          welcome !== null &&
+          !storage?.getItem(ANSWERED_KEY_PREFIX + welcome.accountId) &&
+          !(await answeredInProfile(next));
+        if (client === next) {
+          publish(due ? { kind: "due", client: next, self, welcome } : { kind: "none" });
+        }
       })
       .catch(() => {
         // A connection that cannot read its status gets the ordinary composer.
@@ -133,11 +160,19 @@ function createMemberWelcomeOwner(gateway: ApplicationGateway) {
         }
       };
     },
-    /** The member named themselves or skipped: remembered in this browser. */
+    /** The member named themselves or skipped: remembered with their profile and in this browser. */
     answer() {
       if (state.kind === "due") {
-        storage?.setItem(ANSWERED_KEY_PREFIX + state.welcome.accountId, "1");
+        const { client: answering, welcome } = state;
         publish({ kind: "none" });
+        remember((store) => store.setItem(ANSWERED_KEY_PREFIX + welcome.accountId, "1"));
+        void answering
+          .request("users.prefs.set", {
+            entries: { [MEMBER_WELCOME_ANSWERED_PREFERENCE_KEY]: true },
+          })
+          .catch(() => {
+            /* This browser still remembers; another device asks once more. */
+          });
       }
     },
   };

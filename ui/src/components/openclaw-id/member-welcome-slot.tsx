@@ -16,7 +16,10 @@ export function createMemberWelcomeSlot(pageContext: () => ApplicationContext | 
   // The bootstrap config can arrive after a page mounts, so the Labs switch is read reactively.
   const config = createMemo(() => {
     const context = pageContext();
-    return context ? { context, view: projectApplicationConfig(context.config) } : undefined;
+    // Standalone leaves and tests can supply an application without a config owner.
+    return context?.config
+      ? { context, view: projectApplicationConfig(context.config) }
+      : undefined;
   });
   const enabledContext = createMemo(() => {
     const current = config();
@@ -59,11 +62,5 @@ export function createMemberWelcomeSlot(pageContext: () => ApplicationContext | 
     /** The welcome replaces the page hint and hides starter prompts, which would send a message. */
     options: <T extends { hint?: JSX.Element; hideSecondaryContent?: boolean }>(options: T): T =>
       active() ? { ...options, hint: undefined, hideSecondaryContent: true } : options,
-    /** The welcome while it stands in; otherwise the given composer. */
-    composer: (composer: () => JSX.Element) => (
-      <Show when={active()} fallback={composer()}>
-        {step()}
-      </Show>
-    ),
   };
 }

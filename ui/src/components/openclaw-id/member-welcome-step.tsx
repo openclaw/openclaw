@@ -13,7 +13,7 @@ import type { MemberWelcomeState } from "../../lib/openclaw-id/member-welcome.ts
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
-import { processProfileAvatar } from "../../pages/profile/avatar-processing.ts";
+import { processProfileAvatar, ProfileAvatarError } from "../../pages/profile/avatar-processing.ts";
 import { userProfileAvatarUrl } from "../../pages/profile/profile-avatar-url.ts";
 import { clawNameFromHostname } from "./claw-name.ts";
 
@@ -43,7 +43,17 @@ export function MemberWelcomeStep(props: {
     try {
       await work;
     } catch (cause) {
-      setError(formatUiError(cause, failed));
+      setError(
+        cause instanceof ProfileAvatarError
+          ? t(
+              cause.code === "source-too-large"
+                ? "openclawId.welcomePhotoSourceTooLarge"
+                : cause.code === "too-large"
+                  ? "openclawId.welcomePhotoTooLarge"
+                  : "openclawId.welcomePhotoInvalid",
+            )
+          : formatUiError(cause, failed),
+      );
     } finally {
       setBusy(false);
     }
