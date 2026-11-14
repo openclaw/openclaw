@@ -119,7 +119,7 @@ export function PeopleControl(props: {
   view: PeopleView;
   people: readonly ActivityPerson[];
   selectedPerson: PresenceViewer | null;
-  totalSessions: number;
+  totalSessions: number | undefined;
 }) {
   let anchor!: HTMLButtonElement;
   let popover: PopoverHandle | undefined;

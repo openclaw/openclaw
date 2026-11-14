@@ -234,7 +234,7 @@ export function projectSessionActivity(result: SessionsListResult | undefined) {
     matchedCount: result?.totalCount ?? visible.length,
     people,
     sessions: visible,
-    timeCount: result?.peopleSessionCount ?? visible.length,
+    timeCount: result ? (result.peopleSessionCount ?? visible.length) : undefined,
   };
 }
 
