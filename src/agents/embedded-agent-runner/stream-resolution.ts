@@ -7,6 +7,7 @@ import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { admitProviderRateLimitStream } from "../../llm/provider-rate-limit-stream.js";
 import "../ai-transport-runtime-host.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
+import { refreshAnthropicWorkloadIdentityApiKey } from "../anthropic-workload-identity.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
@@ -63,7 +64,10 @@ export async function resolveEmbeddedAgentApiKey(params: {
 }): Promise<string | undefined> {
   const resolvedApiKey = params.resolvedApiKey?.trim();
   if (resolvedApiKey) {
-    return resolvedApiKey;
+    // Workload identity tokens expire within minutes; a run can outlive the one it started with.
+    return params.provider === "anthropic"
+      ? await refreshAnthropicWorkloadIdentityApiKey(resolvedApiKey)
+      : resolvedApiKey;
   }
   return params.authStorage ? await params.authStorage.getApiKey(params.provider) : undefined;
 }

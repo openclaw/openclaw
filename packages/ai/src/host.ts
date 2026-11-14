@@ -147,6 +147,12 @@ export interface AiTransportHost {
   ): typeof fetch | undefined;
   /** Resolves host-owned process-local secret sentinel substrings immediately before egress. */
   resolveSecretSentinel(value: string): string;
+  /**
+   * True when a resolved Anthropic credential is a workload identity federation access
+   * token. These share the subscription OAuth token prefix but must be sent as plain
+   * bearer tokens without subscription-only identity headers.
+   */
+  isAnthropicWorkloadIdentityToken(value: string): boolean;
   /** Resolves visible headers and host-private request overrides before plugin handoff. */
   unwrapModelTransportSentinels?<T extends Model>(model: T, boundary: string): T;
   /** Redacts transport diagnostic text before logging. */
@@ -242,6 +248,7 @@ const inertAiTransportHost: ActiveAiTransportHost = {
   runInDetachedAsyncContext: (run) => run(),
   buildModelFetch: () => undefined,
   resolveSecretSentinel: (value) => value,
+  isAnthropicWorkloadIdentityToken: () => false,
   redactToolPayloadText: (text) => text,
   normalizeAnthropicInlineContentBlocks: async (content) => [...content],
   resolveOpenAIStrictToolSetting: (_model, options) =>
