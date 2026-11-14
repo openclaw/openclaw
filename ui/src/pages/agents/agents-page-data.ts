@@ -13,6 +13,7 @@ export type AgentsPageData = Omit<AgentsState, "agentsLoading" | "agentsError" |
     chatModelCatalogRead: Promise<void> | null;
     identityDraft: AgentIdentityDraft;
     identitySaving: boolean;
+    modelImpact: string | null;
     identityOutcome: Promise<AgentIdentityOutcome> | null;
     cron: CronState;
     sessionKey: string;

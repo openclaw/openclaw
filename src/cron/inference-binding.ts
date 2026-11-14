@@ -69,6 +69,19 @@ export function resolveCronRuntimeSessionEntry<
     : entry;
 }
 
+/** Shared runtime drift decision; another provider selects its own credentials live. */
+export function resolveCronInferenceCandidateMismatch(
+  binding: CronInferenceBinding,
+  candidate: { provider: string; runtime?: string },
+): "runtime" | undefined {
+  if (candidate.provider !== binding.provider) {
+    return undefined;
+  }
+  return binding.runtime && candidate.runtime && candidate.runtime !== binding.runtime
+    ? "runtime"
+    : undefined;
+}
+
 /** Names a binding's account and captured runtime for scheduled-run errors. */
 export function describeCronInferenceBinding(binding: CronInferenceBinding): string {
   return binding.runtime

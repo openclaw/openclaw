@@ -17,6 +17,8 @@ import { NonEmptyString } from "./primitives.js";
 // Gateway Protocol schema module defines protocol validation shapes.
 import { stringLiteralUnion } from "./string-literal-union.js";
 
+export * from "./cron-model-impact.js";
+
 /**
  * Cron scheduler protocol schemas.
  *

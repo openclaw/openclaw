@@ -13,6 +13,8 @@ import { createAgentConfigActions } from "./agent-config-actions.ts";
 import { createAgentsPageLifetime } from "./agents-page-lifetime.ts";
 import { createAgentSkillsReset, type AgentSkillsState } from "./skills.ts";
 
+const lifetime = Promise.withResolvers<void>().promise;
+
 describe("createAgentSkillActions", () => {
   it("snapshots reported skills without learned Workshop skills on the first toggle", async () => {
     const report: SkillStatusReport = {
@@ -37,6 +39,8 @@ describe("createAgentSkillActions", () => {
         getReport: () => report,
         canUpdate: () => true,
         onPrimaryChanged: () => undefined,
+        modelChangeScope: () => lifetime,
+        onModelImpact: () => undefined,
       }).skills;
       actions.onToggle("main", "weather", false);
 
