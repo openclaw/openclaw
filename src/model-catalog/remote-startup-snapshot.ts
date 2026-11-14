@@ -13,7 +13,7 @@ export function readRemoteModelCatalogStartupPublication():
   | ActiveRemoteModelCatalog
   | null
   | undefined {
-  // This module owns the environment entry and only publishes serialized catalog data.
+  // SAFETY: This module owns the key and only publishes the Publication shape below.
   const publication = getEnvironmentData(STARTUP_SNAPSHOT_KEY) as Publication | undefined;
   if (publication === undefined) {
     return undefined;
@@ -21,11 +21,11 @@ export function readRemoteModelCatalogStartupPublication():
   if (publication.catalog !== undefined) {
     return publication.catalog;
   }
-  const catalog = publication.bytes
-    ? (JSON.parse(
-        Buffer.from(publication.bytes.buffer).toString("utf8"),
-      ) as ActiveRemoteModelCatalog)
+  const decoded = publication.bytes
+    ? JSON.parse(Buffer.from(publication.bytes.buffer).toString("utf8"))
     : null;
+  // SAFETY: These shared bytes encode the validated catalog passed to this module's publisher.
+  const catalog = decoded as ActiveRemoteModelCatalog | null;
   // Non-enumerable data stays local, including when this worker spawns another.
   // All source/built copies in this isolate share the publication's exact identity.
   Object.defineProperty(publication, "catalog", { value: catalog });

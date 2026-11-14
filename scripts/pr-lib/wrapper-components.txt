@@ -1568,6 +1568,7 @@ src/model-catalog/manifest-planner.ts
 src/model-catalog/remote-bundle.ts
 src/model-catalog/remote-config.ts
 src/model-catalog/remote-overlay.ts
+src/model-catalog/remote-startup-snapshot.ts
 src/model-catalog/remote-store.ts
 src/plugin-sdk/channel-route.ts
 src/plugin-sdk/doctor-migration-plan-adapter.ts

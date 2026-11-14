@@ -238,6 +238,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/plugin-transform-preload.mjs|typescript/unbound-method|1",
         // The provider probe forwards native methods with their original receivers.
         "scripts/perf/provider-request-prepare-measure.ts|typescript/unbound-method|3",
+        // Node worker ports have no browser target origin.
+        "scripts/perf/remote-catalog-inheritance-measure.mjs|unicorn/require-post-message-target-origin|1",
         // SQLite observers preserve native methods for restoration and forward each live receiver.
         "scripts/perf/schema-crossing-observer.ts|@typescript-eslint/unbound-method|1",
         // Native transaction timing forwards the live receiver and restores the original method.
