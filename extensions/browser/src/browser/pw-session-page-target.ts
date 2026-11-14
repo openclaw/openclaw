@@ -13,16 +13,27 @@ const targetInfoReads = new WeakMap<Page, Promise<PageTargetInfo | null>>();
 // Ephemeral engines reuse native target IDs after disconnect. Never let a ref
 // from one connection select a replacement page on the next connection.
 const connectionNamespaces = new WeakMap<BrowserContext, string>();
+const connectionClosingContexts = new WeakSet<BrowserContext>();
 
-export function markConnectionScopedBrowser(browser: Browser): void {
+export function markConnectionScopedBrowser(
+  browser: Browser,
+  closePageClosesConnection: boolean,
+): void {
   const namespace = randomUUID();
   for (const context of browser.contexts()) {
     connectionNamespaces.set(context, namespace);
+    if (closePageClosesConnection) {
+      connectionClosingContexts.add(context);
+    }
   }
 }
 
 export function isConnectionScopedPage(page: Page): boolean {
   return connectionNamespaces.has(page.context());
+}
+
+export function pageCloseClosesConnection(page: Page): boolean {
+  return connectionClosingContexts.has(page.context());
 }
 
 export function isConnectionScopedTargetId(targetId: string | undefined): boolean {

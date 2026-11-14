@@ -155,6 +155,27 @@ describe("pw-session getPageForTargetId", () => {
     expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["lightpanda", "kitesurf"] as const)(
+    "closes only the Kitesurf page but retires a single-page Lightpanda connection (%s)",
+    async (engine) => {
+      const endpoint = "ws://127.0.0.1:9222/";
+      const bundle = installBrowser([{ targetId: "first" }, { targetId: "second" }]);
+      const tabs = await listPagesViaPlaywright({ cdpUrl: endpoint, engine });
+      await closePageByTargetIdViaPlaywright({ cdpUrl: endpoint, targetId: tabs[0]!.targetId });
+      if (engine === "lightpanda") {
+        expect(bundle.browserClose).toHaveBeenCalledOnce();
+        expect(bundle.pageActions[0]!.close).not.toHaveBeenCalled();
+      } else {
+        expect(bundle.browserClose).not.toHaveBeenCalled();
+        expect(bundle.pageActions[0]!.close).toHaveBeenCalledOnce();
+        expect(bundle.pageActions[1]!.close).not.toHaveBeenCalled();
+        await expect(
+          getPageForTargetId({ cdpUrl: endpoint, targetId: tabs[1]!.targetId }),
+        ).resolves.toBe(bundle.pages[1]);
+      }
+    },
+  );
+
   it("stale Lightpanda page cleanup closes its captured browser, not the same-URL successor", async () => {
     const endpoint = "ws://127.0.0.1:9222/";
     const first = installBrowser([{ targetId: "reused-target" }]);

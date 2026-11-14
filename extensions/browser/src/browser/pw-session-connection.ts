@@ -463,7 +463,7 @@ export async function connectBrowser(
         browser.on("disconnected", onDisconnected);
         const engineAdapter = resolveBrowserEngine(engine);
         if (engineAdapter.descriptor.sessionScope === "connection") {
-          markConnectionScopedBrowser(browser);
+          markConnectionScopedBrowser(browser, engineAdapter.closePageClosesConnection === true);
         }
         // Relay connections drive the user's visible Chrome, which shows its own dialogs.
         const headless =
