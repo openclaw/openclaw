@@ -684,16 +684,24 @@ it.runIf(process.platform !== "win32")(
   },
 );
 
-it("resolves relative configured PATH entries from the MCP stdio cwd", async () => {
-  const appDir = path.join(workspaceDir, "app");
-  const binDir = path.join(appDir, "node_modules", ".bin");
-  const commandPath = path.join(binDir, "docs-mcp");
+it.each([
+  ["app", "node_modules/.bin"],
+  ...(process.platform === "win32"
+    ? []
+    : [
+        ["app ", "node_modules/.bin"],
+        ["app", " bin "],
+        ["app", " "],
+      ]),
+])("resolves literal MCP cwd %j and relative PATH %j", async (directory, pathEntry) => {
+  const appDir = path.join(workspaceDir, directory);
+  const commandPath = path.join(appDir, pathEntry, "docs-mcp");
   await writeExecutable(commandPath);
 
   await setServer({
     command: "docs-mcp",
     cwd: appDir,
-    env: { PATH: "node_modules/.bin" },
+    env: { PATH: pathEntry },
   });
   mockLog.mockClear();
 
