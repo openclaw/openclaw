@@ -11,6 +11,7 @@ import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { resolveModelExtraParamSources } from "./model-extra-params.js";
 import { resolveProviderFastModeRequestCapabilities } from "./provider-attribution.js";
+import { resolveProviderModelMaterializationAuthMode } from "./provider-model-route-auth.js";
 
 /** Capture light policy with the private catalog owner; published row reads cannot load plugins. */
 export function createModelSpeedPolicyResolver(params: {
@@ -47,6 +48,7 @@ export function createModelSpeedPolicyResolver(params: {
   const prepare = (
     entry: ModelCatalogEntry,
     evaluation: ModelAuthAvailabilityEvaluation,
+    authMode: string | undefined,
     runtimeId?: string,
   ): {
     supportsFastMode?: boolean;
@@ -83,7 +85,7 @@ export function createModelSpeedPolicyResolver(params: {
       modelId: entry.id,
       api: route.api,
       baseUrl: route.baseUrl,
-      authMode: evaluation.selectedAuthMode,
+      authMode,
       runtimeId: runtimeId ?? entry.nativeRuntime,
       modelParams: entry.params,
       params: Object.assign({}, defaultParams, modelParams, agentModelParams, agentParams),
@@ -127,7 +129,10 @@ export function createModelSpeedPolicyResolver(params: {
       return {};
     }
     const { api, baseUrl } = evaluation.selectedRoute ?? entry;
-    const authMode = evaluation.selectedAuthMode;
+    // Profiles report "api_key", unprofiled config/env keys "api-key"; policies see one spelling.
+    const authMode =
+      resolveProviderModelMaterializationAuthMode(evaluation.selectedAuthMode) ??
+      evaluation.selectedAuthMode;
     const variants = prepared.get(entry) ?? [];
     const existing = variants.find(
       (variant) =>
@@ -139,7 +144,7 @@ export function createModelSpeedPolicyResolver(params: {
     if (existing) {
       return existing.policy;
     }
-    const policy = prepare(entry, evaluation, runtimeId);
+    const policy = prepare(entry, evaluation, authMode, runtimeId);
     variants.push({ api, baseUrl, authMode, runtimeId, policy });
     prepared.set(entry, variants);
     return policy;
