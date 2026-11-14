@@ -2183,7 +2183,6 @@
     "src/agents/embedded-agent-runner.run-embedded-agent.auth-profile-rotation.e2e.test.ts": 11,
     "src/agents/embedded-agent-runner.run-embedded-agent.fault-sequences.e2e.test.ts": 3,
     "src/agents/model-fallback.reply-entry.e2e.test.ts": 3,
-    "src/agents/model-fallback.run-embedded.e2e.test.ts": 9,
     "src/agents/sandbox-agent-config.agent-specific-sandbox-config.e2e.test.ts": 3,
     "src/agents/sandbox/fs-bridge.backend.e2e.test.ts": 1,
     "src/agents/subagents/announce/subagent-announce.format.e2e.test.ts": 1,
@@ -2384,7 +2383,6 @@
         "includePatterns": [
           "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
           "src/agents/prepared-model-catalog-worker.integration.test.ts",
-          "src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts",
           "src/agents/tool-surface-plan.provider-catalog.integration.test.ts"
         ],
         "pretestBuildMode": "runtime",
