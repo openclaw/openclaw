@@ -425,7 +425,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/placement-dispatch-shutdown.test.ts",
   "src/gateway/worker-environments/placement-dispatch-staged-results.test.ts",
   "src/gateway/worker-environments/placement-dispatch-transport-authority.test.ts",
-  "src/gateway/worker-environments/placement-dispatch.test.ts",
   "src/gateway/worker-environments/placement-empty-reserve.test.ts",
   "src/gateway/worker-environments/placement-force-abandon.test.ts",
   "src/gateway/worker-environments/placement-force-destroy.test.ts",
