@@ -72,7 +72,12 @@ describe("catalog model normalization", () => {
     const normalize = createProviderModelNormalizer({});
     for (const id of ["first", "second", "third"]) {
       expect(
-        normalize(createDemoResolvedModelContext({ modelId: id, model: { ...MODEL, id } })),
+        normalize(
+          createDemoResolvedModelContext({
+            modelId: id,
+            model: { ...MODEL, id, api: "openai-completions" },
+          }),
+        ),
       ).toMatchObject({ id, name: `${id} normalized`, api: "openai-responses" });
     }
     expect(normalizeResolvedModel).toHaveBeenCalledTimes(3);
@@ -148,10 +153,11 @@ describe("catalog model normalization", () => {
     ]);
     const model = createProviderModelNormalizer({})(
       createDemoResolvedModelContext({
-        model: { ...MODEL },
+        model: { ...MODEL, api: "openai-completions" },
       }),
     );
     expect(model).toMatchObject({ provider: "other", id: "renamed", api: "openai-responses" });
+    expect(transport).toHaveBeenCalledOnce();
     expect(transport).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "other",
