@@ -218,7 +218,6 @@ it.each([
       expect(owner.signal.aborted).toBe(false);
       const remote = synced.remoteWorkspaceDir;
       const remoteFiles = workspaceFiles(remote);
-      // Initial inventory selection is covered by workspace-sync-tunnel.test.ts.
       // Keep unowned targets here for the node reconciliation collision boundary.
       await createStagedInputOwnershipFixture(remote);
       let baseManifestRef = synced.manifestRef;

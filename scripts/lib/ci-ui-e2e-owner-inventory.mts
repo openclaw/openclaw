@@ -671,15 +671,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/pages/chat/chat-pane.ts"],
   ),
   pageWatch(
-    "ui/src/e2e/chat-rail-columns.e2e.test.ts",
-    ["chat", "terminal"],
-    [
-      "ui/src/components/tooltip.ts",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-      "ui/src/pages/chat/components/chat-session-rail.ts",
-    ],
-  ),
-  pageWatch(
     "ui/src/e2e/chat-reasoning-visibility.e2e.test.ts",
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts"],
@@ -849,11 +840,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/chat-startup-progress.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-stop-response-ownership.e2e.test.ts", ["chat"]),
-  pageWatch(
-    "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts",
-    ["chat"],
-    ["ui/src/pages/chat/chat-page.tsx", "ui/src/pages/chat/chat-pane.ts"],
-  ),
   pageWatch("ui/src/e2e/chat-submit-responsiveness.e2e.test.ts", ["chat"]),
   pageWatch(
     "ui/src/e2e/chat-swarm-history.e2e.test.ts",
@@ -1411,16 +1397,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/new-session-page.incognito-navigation.e2e.test.ts",
     ["chat", "config", "new-session"],
     ["ui/src/pages/new-session/new-session-page-entry.ts"],
-  ),
-  pageWatch(
-    "ui/src/e2e/new-session-page.instant-thread.e2e.test.ts",
-    ["chat", "new-session"],
-    [
-      "ui/src/pages/chat/chat-page.tsx",
-      "ui/src/pages/chat/chat-pane.ts",
-      "ui/src/pages/chat/pending-session-create.ts",
-      "ui/src/pages/new-session/new-session-page-entry.ts",
-    ],
   ),
   pageWatch(
     "ui/src/e2e/new-session-page.model-catalog.e2e.test.ts",

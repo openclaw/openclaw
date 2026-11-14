@@ -86,7 +86,7 @@ describe("specialized Vitest discovery", () => {
     const files = [
       "ui/src/e2e/example.e2e.test.ts",
       "ui/src/e2e/board-fixture.e2e.test.ts",
-      "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts",
+      "ui/src/e2e/chat-pasted-text-show-in-text-field.e2e.test.ts",
       "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
     ];
     writeTestFiles(root, files);

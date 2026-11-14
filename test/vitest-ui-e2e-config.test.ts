@@ -25,7 +25,7 @@ afterEach(() => {
 
 const standaloneFile = "ui/src/e2e/board-fixture.e2e.test.ts";
 const bundledFile = "ui/src/e2e/mount-fallback.e2e.test.ts";
-const serialBundledFile = "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts";
+const serialBundledFile = "ui/src/e2e/chat-pasted-text-show-in-text-field.e2e.test.ts";
 const workboardFile = "ui/src/pages/workboard/workboard-distribution.e2e.test.ts";
 const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",

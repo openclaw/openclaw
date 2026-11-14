@@ -5474,7 +5474,6 @@
 ["src/infra/worker-task-pool.cleanup.test.ts","./temp-artifact-cleanup.js","0ff0c0b0da42f80c7c504d64a56807a06a5aa6c83277ce1830d5c28e77bfa898",1]
 ["src/infra/worker-task-pool.cleanup.test.ts","./temp-artifact-cleanup.js","0ff0c0b0da42f80c7c504d64a56807a06a5aa6c83277ce1830d5c28e77bfa898",2]
 ["src/infra/worker-task-pool.owned.test.ts","./runtime-worker-url.js","71ceb2402386f8ecba22ab4b1ebe94f8a2070f45a1a507035cac3328eb4aca20",1]
-["src/infra/worker-task-pool.preparation.test.ts","./runtime-worker-url.js","71ceb2402386f8ecba22ab4b1ebe94f8a2070f45a1a507035cac3328eb4aca20",1]
 ["src/llm/providers/stream-wrappers/openai.test.ts","../../../logging/subsystem.js","f268d9983c20784f7595f6dbb8dcbbac68c47bd100036b153f2c6534abb55f7b",1]
 ["src/llm/utils/oauth/openai-chatgpt.test.ts","../../../plugin-sdk/facade-runtime.js","9b8be14dde3d0cfcf0722334446d167bc66b21a36a5056f325953c480531be37",1]
 ["src/llm/utils/oauth/openai-chatgpt.test.ts","../../../plugins/provider-openai-chatgpt-oauth.js","89ab8a052d6a704b9496f9bb7c31d8b1a56c532a1a170c989dcf1b98cd003ab8",1]
