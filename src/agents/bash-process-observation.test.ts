@@ -122,7 +122,7 @@ it.each([
 it("marks only running processes whose exit still continues a captured chat", () => {
   const target = { agentId: "main", sessionKey: scope.scopeKeys[0]! } as const;
   const waiter = Object.assign(seed("waiter"), { notifyOnExit: true, notifySessionTarget: target });
-  Object.assign(seed("no-destination"), { notifyOnExit: true });
+  Object.assign(seed("no-destination"), { notifyOnExit: true, notifySessionTarget: undefined });
   Object.assign(seed("stopping"), {
     notifyOnExit: true,
     notifySessionTarget: target,

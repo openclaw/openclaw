@@ -605,13 +605,6 @@ export function markBackgrounded(session: ProcessSession) {
   }
 }
 
-/** Whether this process's exit starts a turn in its originating conversation. Hidden subagents have no target. */
-export function hasExitWake(
-  session: Pick<ProcessSession, "notifyOnExit" | "notifySessionTarget">,
-): boolean {
-  return session.notifyOnExit === true && session.notifySessionTarget !== undefined;
-}
-
 /** Retains the precise completion-event removal handle on its process owner. */
 export function recordNotifyOnExitRemoval(
   session: ProcessSession,

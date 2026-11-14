@@ -14,13 +14,13 @@ import {
 import {
   compareProcessSessionStartOrder,
   getSession,
-  hasExitWake,
   listFinishedSessions,
   listRunningSessions,
   processSessionInstanceId,
   tail,
   type ProcessSession,
 } from "./bash-process-registry.js";
+import { hasExitWake } from "./bash-tools.exec-output.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 
 export type ProcessObservationScope = { scopeKeys: readonly string[]; agentId: string };
