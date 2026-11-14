@@ -12,8 +12,9 @@ import {
   readDatabaseRecords,
   seedDatabase,
 } from "./sdk/idb-persistence.test-helpers.js";
+import { clearTestUndiciRuntimeDepsOverride, stubRuntimeFetch } from "./sdk/undici.test-support.js";
 
-export { clearTestUndiciRuntimeDepsOverride, stubRuntimeFetch } from "./sdk/undici.test-support.js";
+export { clearTestUndiciRuntimeDepsOverride, stubRuntimeFetch };
 
 export const KEY_UPLOAD_FENCE_MODES = [
   "fresh-device-restart",
