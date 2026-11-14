@@ -96,7 +96,8 @@ export function cronUpdateNarrowsTrustedJob(
   return (
     job.scheduledToolPolicy?.mode === "trusted" &&
     callerScope !== undefined &&
-    !callerScope.manageAll &&
+    // Management grants cannot supply the missing requester workspace owner.
+    (!callerScope.manageAll || !job.owner?.sessionKey) &&
     Object.keys(patch).some((key) => !TRUSTED_LIFECYCLE_PATCH_KEYS.has(key))
   );
 }
