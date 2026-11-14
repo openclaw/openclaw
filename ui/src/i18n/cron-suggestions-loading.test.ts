@@ -67,10 +67,10 @@ it("loads payload validation copy with the payload owner", async () => {
 
 it("loads run outcome copy with the feedback owner", async () => {
   const { manager } = await loadI18n();
-  expect(manager.t("cron.runNotStarted.notDue")).toBe("cron.runNotStarted.notDue");
+  expect(manager.t("cron.runNotStarted.alreadyRunning")).toBe("cron.runNotStarted.alreadyRunning");
 
   const { cronRunNotStartedMessage } = await import("../lib/cron/run-feedback.ts");
-  expect(cronRunNotStartedMessage({ ok: true, ran: false, reason: "not-due" })).toBe(
-    "This automation is not due yet.",
+  expect(cronRunNotStartedMessage({ ok: true, ran: false, reason: "already-running" })).toBe(
+    "This automation is already running.",
   );
 });
