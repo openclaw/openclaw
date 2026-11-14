@@ -371,7 +371,6 @@ fs.writeSync = function(...args) {
   }
   return Reflect.apply(originalWrite, this, args);
 };
-require("node:module").syncBuiltinESMExports();
 `,
       );
       const entered = createDeferred();
