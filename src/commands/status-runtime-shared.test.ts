@@ -2,6 +2,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealthSafe,
@@ -356,5 +357,39 @@ describe("status-runtime-shared", () => {
 
     expect(result).toMatchObject({ health: { error: "connection refused" }, lastHeartbeat: null });
     expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("forwards the work signal to deep gateway reads", async () => {
+    const scope = new AsyncWorkScope();
+
+    await scope.run(() => resolveStatusGatewayHealthSafe(gatewayParams()));
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "health", signal: scope.signal }),
+    );
+  });
+
+  it("propagates an interrupt instead of reporting a request failure", async () => {
+    const scope = new AsyncWorkScope();
+    const reason = new DOMException("interrupted", "AbortError");
+    mocks.callGateway.mockImplementation(async () => {
+      scope.beginClose(reason);
+      throw reason;
+    });
+
+    await expect(scope.run(() => resolveStatusGatewayHealthSafe(gatewayParams()))).rejects.toBe(
+      reason,
+    );
+  });
+
+  it("does not let JSON health suppression swallow an interrupt", async () => {
+    const scope = new AsyncWorkScope();
+    const reason = new DOMException("interrupted", "AbortError");
+    mocks.callGateway.mockImplementation(async () => {
+      scope.beginClose(reason);
+      throw reason;
+    });
+
+    await expect(scope.run(() => snapshot({ suppressHealthErrors: true }))).rejects.toBe(reason);
   });
 });
