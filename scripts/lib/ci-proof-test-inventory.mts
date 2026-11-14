@@ -2796,7 +2796,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server.catalog-sharing.test.ts",
   "src/gateway/server.catalog-startup.test.ts",
   "src/gateway/server.channels.test.ts",
-  "src/gateway/server.chat-abort-dispatch-rejection.test.ts",
   "src/gateway/server.chat-abort-settlement.test.ts",
   "src/gateway/server.chat-adopted-failure.test.ts",
   "src/gateway/server.chat-cli-auth.test.ts",
