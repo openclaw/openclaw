@@ -2989,16 +2989,16 @@ describe("chat model controls", () => {
       onThinkingSelect,
     });
 
-    const modelOption = Array.from(
-      container.querySelectorAll<HTMLElement>("[data-chat-model-option]"),
-    ).find(
-      (button) =>
-        button.getAttribute("aria-selected") === "false" && button.dataset.chatModelOption !== "",
+    const modelOption = expectDefined(
+      container.querySelector<HTMLElement>(
+        '[data-chat-model-option]:not([data-chat-model-option=""])[aria-selected="false"]',
+      ),
+      "unselected model option",
     );
-    expect(modelOption).toBeInstanceOf(HTMLButtonElement);
-    modelOption?.click();
+    expect(modelOption.getAttribute("role")).toBe("option");
+    modelOption.click();
     expect(onModelSelect).toHaveBeenCalledWith(
-      modelOption?.dataset.chatModelOption,
+      modelOption.dataset.chatModelOption,
       "main",
       undefined,
     );
