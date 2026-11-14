@@ -543,7 +543,12 @@ export function assertProjectWorktreeStartupLog(log, start) {
 }
 
 export function assertProjectWorktreeStartupPreservation(actual, original, expectedWorkspace) {
-  assert.deepEqual(actual.shared, original.shared);
+  const withWorktreeDefaults = (shared) => ({
+    ...shared,
+    // The published baseline predates the nullable worktree GC protection column.
+    worktrees: shared.worktrees.map((row) => Object.assign({ gc_protection_json: null }, row)),
+  });
+  assert.deepEqual(withWorktreeDefaults(actual.shared), withWorktreeDefaults(original.shared));
   assert.deepEqual(actual.agent.transcript, original.agent.transcript);
   assert.equal(actual.agent.sessions.length, original.agent.sessions.length);
   for (const row of actual.agent.sessions) {
