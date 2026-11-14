@@ -771,12 +771,14 @@ When an agent run starts, OpenClaw:
   to pass secrets into sandboxed runs.
 </Warning>
 
-For the bundled `claude-cli` backend, sessions without library selections
-materialize eligible skills as a temporary Claude Code plugin, passed via
-`--plugin-dir`. Sessions with library selections use OpenClaw's prompt catalog
-and pinned revision paths instead. OpenClaw omits `--plugin-dir` for those
-sessions to keep Claude's native skill aliases from conflicting with library
-command identities. Other CLI backends use the prompt catalog only.
+Managed local turns on the bundled `claude-cli` backend use OpenClaw's bounded
+prompt catalog and do not load a native Claude skill plugin. On execution paths
+that retain native plugins, sessions without library selections can materialize
+eligible skills as a temporary Claude Code plugin via `--plugin-dir`, provided
+the snapshot contains a materialized skill. Sessions with library selections use
+OpenClaw's prompt catalog and pinned revision paths instead. OpenClaw omits
+`--plugin-dir` for those sessions to keep native skill aliases from conflicting
+with library command identities. Other CLI backends use the prompt catalog only.
 
 ## Snapshots and refresh
 
@@ -884,6 +886,13 @@ OpenClaw actions and Gateway startup still refresh skills immediately.
 The prompt contains a bounded skill directory. Skills omitted by the prompt
 budget remain discoverable through `skills_search` when that tool is enabled.
 Small catalogs continue to appear in full.
+
+`skills_search` and `skills_read` are available to the embedded runner, the Codex
+harness, and Gateway cloud worker turns when tool policy permits them. Managed
+local `claude-cli` turns currently expose neither tool and do not offer Claude's
+native `Skill` tool. Skills omitted by `skills.limits.maxSkillsPromptChars` or
+`skills.limits.maxSkillsInPrompt` therefore have no skill-discovery fallback on
+those turns.
 
 When search is available, the agent is instructed to check for a relevant skill
 before work involving files, specialized tools, or a reusable workflow.
