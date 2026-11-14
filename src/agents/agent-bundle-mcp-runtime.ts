@@ -17,6 +17,7 @@ import { createSessionMcpRuntimeParts } from "./agent-bundle-mcp-runtime-parts.j
 import type {
   BundleMcpSession,
   CreateSessionMcpRuntime,
+  McpServerBackoffState,
   ServerMcpRuntime,
 } from "./agent-bundle-mcp-runtime-shared.js";
 import type { McpRequestOptions, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
@@ -47,16 +48,11 @@ import {
   type NativeMcpClientContext,
 } from "./native-mcp-runtime.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
+import { isTrustedToolInputError, ToolAuthorizationError } from "./tool-input-error.js";
 
 const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
 const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
 const BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS = 5_000;
-
-type McpServerBackoffState = {
-  session: BundleMcpSession;
-  failures: number;
-  retryAfterMs?: number;
-};
 
 function projectBundleMcpCatalogFailure(
   catalog: McpToolCatalog | undefined,
@@ -235,6 +231,10 @@ function createServerMcpRuntime(
       }
       return result;
     } catch (error) {
+      // A refused local grant never reached the configured server.
+      if (error instanceof ToolAuthorizationError && isTrustedToolInputError(error)) {
+        throw error;
+      }
       const {
         lifecycle: { isMcpHttpSessionExpired },
         errors: { redactMcpDiagnosticError },

@@ -1,0 +1,2 @@
+# Real loopback caller refusal must not pause a healthy configured MCP server.
+63
