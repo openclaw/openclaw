@@ -13,13 +13,9 @@ function item(
   return { itemId: kind, turnId: "turn", kind, status: "inProgress", revision: 1, ...extra };
 }
 
-it.each([false, true])("finalizes only background reminder work (tool=%s)", async (withTool) => {
-  const reachedReminder = createDeferred<void>();
-  const release = createDeferred<void>();
-  const completed = createDeferred<TurnOutcome>();
-  const order: string[] = [];
+function fixtureParams(order: string[] = []): AgentHarnessAttemptParamsV2 {
   const authStorage = AuthStorage.inMemory();
-  const params: AgentHarnessAttemptParamsV2 = {
+  return {
     runId: "run-finalization",
     sessionId: "session-finalization",
     workspaceDir: "/tmp/muse-events-test",
@@ -56,6 +52,50 @@ it.each([false, true])("finalizes only background reminder work (tool=%s)", asyn
       waitForApproval: async () => undefined,
     },
   };
+}
+
+it.each([false, true])(
+  "carries MSP's cutOff mark as the incomplete-reply stop reason (cutOff=%s)",
+  async (cutOff) => {
+    const groups: unknown[] = [];
+    const params = fixtureParams();
+    const completed = createDeferred<TurnOutcome>();
+    const turn: Turn = {
+      turnId: "turn",
+      observedStart: true,
+      completed: completed.promise,
+      async *deltas() {},
+      async *items() {
+        yield item("agentMessage", { status: "completed", text: "Partial answer: one", cutOff });
+        completed.resolve({
+          kind: "completed",
+          observedStart: true,
+          params: {
+            sessionId: "native",
+            turnId: "turn",
+            terminal: "completed",
+            sourceRange: {
+              first: { id: "event-1", sequence: 1 },
+              last: { id: "event-1", sequence: 1 },
+              stream: { id: "native", kind: "session" },
+            },
+            viewCursor: "1",
+          },
+        });
+      },
+    };
+    await consumeTurn(turn, params, async (_itemId, group) => void groups.push(group[0]));
+    expect(groups).toHaveLength(1);
+    expect((groups[0] as { stopReason?: string }).stopReason).toBe(cutOff ? "length" : "stop");
+  },
+);
+
+it.each([false, true])("finalizes only background reminder work (tool=%s)", async (withTool) => {
+  const reachedReminder = createDeferred<void>();
+  const release = createDeferred<void>();
+  const completed = createDeferred<TurnOutcome>();
+  const order: string[] = [];
+  const params = fixtureParams(order);
   const turn: Turn = {
     turnId: "turn",
     observedStart: true,

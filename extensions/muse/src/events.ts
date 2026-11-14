@@ -184,7 +184,16 @@ export async function consumeTurn(
         await emitField(item, "text", item.text ?? "");
         // The completed item is authoritative; streamed deltas only drive live UI.
         visibleText += item.text ?? "";
-        messages.push(assistantMessage(params, [{ type: "text", text: item.text ?? "" }]));
+        // MSP marks a partial reply committed by a failed run as `cutOff`; the host already
+        // treats `stopReason: "length"` as incomplete, so carry the mark instead of an
+        // ordinary "stop" that would present half an answer as the whole one.
+        messages.push(
+          assistantMessage(
+            params,
+            [{ type: "text", text: item.text ?? "" }],
+            item.cutOff === true ? "length" : "stop",
+          ),
+        );
       } else if (item.kind === "reasoning") {
         if (item.summary) {
           for (const [index, value] of item.summary.entries()) {
