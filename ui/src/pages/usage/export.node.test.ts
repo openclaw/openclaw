@@ -199,6 +199,11 @@ it("records the effective request even when the selection changes while exportin
   const params = request.mock.calls[0]?.[1];
   const exported = JSON.parse(download.mock.calls[0]?.[1] ?? "{}");
   expect(params).toMatchObject({
+    startDate: "2026-09-28",
+    endDate: date,
+    groupBy: "instance",
+    selectedDays: [date],
+    selectedHours: [8],
     selectedSessions: [selected.key],
     mode: exported.context.timeZone.mode,
     timeZone: exported.context.timeZone.timeZone,
