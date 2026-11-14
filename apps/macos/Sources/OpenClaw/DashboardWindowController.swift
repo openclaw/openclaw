@@ -73,6 +73,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     let webView: DashboardWebView
     let documentHost: ControlUIDocumentHost
     let nativeBrowser: DashboardNativeBrowserHost
+    #if DEBUG
+    // Diagnostic-only: observes the completed real owner call without replacing WebKit policy.
+    var _testNativeBrowserFailureCompleted: (@MainActor (WKWebView, Bool) -> Void)?
+    #endif
     private let messageHandler: DashboardMessageHandler
     let deviceSettingsMessageHandler: DashboardDeviceSettingsMessageHandler
     /// The canonical Dashboard mount URL supplied by the manager. WebKit route
@@ -1463,6 +1467,10 @@ extension DashboardWindowController {
     func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: Error) {
         if self.nativeBrowser.owns(webView) {
             self.nativeBrowser.navigationDidFail(for: webView, error: error)
+            #if DEBUG
+            self._testNativeBrowserFailureCompleted?(
+                webView, DashboardNativeBrowserHost.isDeliberateInterruption(error as NSError))
+            #endif
             return
         }
         guard webView === self.webView else { return }

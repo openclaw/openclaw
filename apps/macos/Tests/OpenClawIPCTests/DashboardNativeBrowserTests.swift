@@ -644,31 +644,55 @@ struct DashboardNativeBrowserFailureTests {
         let browser = try #require(controller.nativeBrowser.browserTab(for: webView))
         try await TestWait.state("loaded article") { !webView.isLoading && webView.title == "Article" }
 
-        let expectedPath: String
+        let expectedPath = trigger == "replacement" ? "/plain" : "/article"
+        let failureCompleted = AsyncTestGate()
+        var sawFailureCompletion = false
+        var sawDeliberateInterruption = false
+        func snapshot(_ stage: String) {
+            // Fixed stages and booleans only; never print URLs, error text, titles, or configuration.
+            print("Browser cancellation boundary trigger=\(trigger) stage=\(stage) " +
+                "completed=\(sawFailureCompletion) deliberate=\(sawDeliberateInterruption) " +
+                "loading=\(webView.isLoading) expectedPage=\(webView.url?.path == expectedPath) " +
+                "ownerMatchesWebView=\(controller.nativeBrowser.state.tabs.first?.url == webView.url?.absoluteString) " +
+                "failureUI=\(browser.failureView != nil)")
+        }
+        controller._testNativeBrowserFailureCompleted = { completedWebView, deliberate in
+            guard completedWebView === webView, !sawFailureCompletion else { return }
+            sawFailureCompletion = true
+            sawDeliberateInterruption = deliberate
+            snapshot("owner-completed")
+            failureCompleted.open()
+        }
+        defer { controller._testNativeBrowserFailureCompleted = nil }
+        snapshot("before-trigger")
         switch trigger {
         case "download":
             try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/archive.bin"))
-            expectedPath = "/article"
         case "stop":
             try controller.nativeBrowser.navigate(tabId: "mac-article", url: stalled.url("/pending"))
             // An accepted TCP connection can precede the HTTP request and navigation.
             try await requestReceived.wait("HTTP request reaches the stalled server")
             try controller.nativeBrowser.perform(.stop, tabId: "mac-article")
-            expectedPath = "/article"
         default:
             try controller.nativeBrowser.navigate(tabId: "mac-article", url: stalled.url("/pending"))
             // An accepted TCP connection can precede the HTTP request and navigation.
             try await requestReceived.wait("HTTP request reaches the stalled server")
             try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/plain"))
-            expectedPath = "/plain"
         }
+        snapshot("after-trigger")
         do {
+            // Retain the old readiness observation to expose a premature assertion boundary.
             try await TestWait.state("\(trigger) settles") { !webView.isLoading && webView.url?.path == expectedPath }
+            snapshot("old-readiness")
+            try await failureCompleted.wait("real controller failure completes")
+            try #require(sawDeliberateInterruption)
+            // Replacement may still be loading when the cancelled predecessor completes.
+            try await TestWait.state("\(trigger) settles after cancellation") {
+                !webView.isLoading && webView.url?.path == expectedPath
+            }
+            snapshot("completed-readiness")
         } catch {
-            // Separate the conjunction on failure without changing the Stop contract.
-            print("Browser interruption \(trigger): loading=\(webView.isLoading), " +
-                "path=\(webView.url?.path ?? "nil"), title=\(webView.title ?? "nil"), " +
-                "failureUI=\(browser.failureView != nil), expectedPath=\(expectedPath)")
+            snapshot("wait-failed")
             throw error
         }
         #expect(browser.failureView == nil, "\(trigger)")
