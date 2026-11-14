@@ -25,7 +25,7 @@ trust. Bootstrap credentials are not passed to the certificate-update command.
 
 ## The setup command
 
-`settings.setup` runs on a cold machine after readiness and before repository preparation and enrollment. Provision replay can repeat it, so make it idempotent. Snapshot forks skip it because their compatible image already contains its filesystem results. Use repository `postStartCommand` for processes that must start on each new worker.
+`settings.setup` runs on a cold machine after readiness and before repository preparation and enrollment. Provisioning retries can run it again, so make it safe to repeat. Snapshot forks skip it because their compatible image already contains its filesystem results. Use repository `postStartCommand` for processes that must start on each new worker.
 
 Do not install OpenClaw globally or maintain a versioned runtime/plugin URL in setup. Bootstrap supplies the Gateway's runtime and required plugins. For additional packages, account for image initialization: wait for cloud-init and use your package manager's lock-wait option to avoid failing the first dispatch on a held lock. Setup or enrollment failures report an error and stop the incomplete lease.
 
