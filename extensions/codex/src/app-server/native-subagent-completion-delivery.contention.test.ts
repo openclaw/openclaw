@@ -14,6 +14,7 @@ import {
   createRuntime,
   nativeCompletionNotification,
   notifyChildStarted,
+  observeCompletionAttempts,
   registerParent,
 } from "./native-subagent-monitor.test-support.js";
 import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
@@ -219,4 +220,43 @@ describe("native completion settlement", () => {
       }
     },
   );
+});
+
+it("serializes terminal sibling handoffs for the same detached parent", async () => {
+  const client = createClient();
+  const runtime = createRuntime();
+  const monitor = new CodexNativeSubagentMonitor(client.client, runtime);
+  const attempts = observeCompletionAttempts();
+  const entered = createDeferred<void>();
+  const release = createDeferred<void>();
+  runtime.deliverAgentHarnessCompletion.mockImplementationOnce(async () => {
+    entered.resolve();
+    await release.promise;
+    return { delivered: true, path: "direct" };
+  });
+  const parent = await registerParent(monitor);
+  try {
+    await notifyChildStarted(client, "parent-thread", "child-a");
+    await notifyChildStarted(client, "parent-thread", "child-b");
+    for (const [agentPath, childResult] of [
+      ["child-a", "first"],
+      ["child-b", "second"],
+    ]) {
+      await client.notify(nativeCompletionNotification({ agentPath, result: childResult }));
+    }
+    await parent.unregister();
+    await entered.promise;
+    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledOnce();
+    release.resolve();
+    await attempts.settle();
+    expect(
+      runtime.deliverAgentHarnessCompletion.mock.calls.map(([request]) => request.result),
+    ).toEqual(["first", "second"]);
+  } finally {
+    release.resolve();
+    await attempts.settle();
+    await parent.unregister();
+    await monitor.dispose();
+    client.close();
+  }
 });

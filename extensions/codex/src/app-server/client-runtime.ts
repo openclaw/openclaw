@@ -12,6 +12,7 @@ import * as threadClosure from "./client-thread-closure.js";
 import {
   createThreadOwnerToken,
   isThreadBackgroundOnly,
+  isThreadIdleAvailable,
   waitForThreadBackgroundCleanup,
   releaseThreadProtection,
   forgetThreadOwnership,
@@ -622,6 +623,10 @@ export function hasCodexAppServerLiveThread(
   threadId: string,
 ): boolean {
   return hasThreadOwnership(configuredClients.get(client), threadId);
+}
+
+export function hasIdleCodexThread(client: CodexAppServerClient, threadId: string): boolean {
+  return isThreadIdleAvailable(configuredClients.get(client), threadId);
 }
 
 export function isCodexAppServerLiveThreadClaimed(

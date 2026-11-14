@@ -16,6 +16,20 @@ export type ThreadReleaseTransition = {
   invalidated?: boolean;
 };
 
+/** A warm continuation must consume an idle, fully published subscription. */
+export function isThreadIdleAvailable(
+  runtime: ThreadOwnershipState | undefined,
+  id: string,
+): boolean {
+  return Boolean(
+    runtime &&
+    !runtime.closed &&
+    !runtime.releasingThreads.has(id) &&
+    !runtime.claimedThreads.has(id) &&
+    runtime.retainedThreads.has(id),
+  );
+}
+
 /** Background custody can survive projection replacement only under its creation policy. */
 export function isThreadBackgroundOnly(
   runtime: ThreadOwnershipState | undefined,

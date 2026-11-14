@@ -26,6 +26,8 @@ import type { DeliveryContext } from "./subagent-announce-origin.js";
 type DirectAnnounceResponseContext = {
   params: {
     sourceTool?: string;
+    directIdempotencyKey?: string;
+    requireVisibleReply?: boolean;
     expectsCompletionMessage: boolean;
     requesterIsSubagent: boolean;
   };
@@ -171,6 +173,16 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         hasFinalMessagingToolDelivery,
         directAnnounceResult?.meta?.finalAssistantVisibleText,
       );
+    }
+    if (
+      requesterCompletedSuccessfully &&
+      directAnnounceResult?.meta?.yielded === true &&
+      params.sourceTool === "agent_harness_completion" &&
+      params.directIdempotencyKey?.startsWith("announce:codex-native:") &&
+      !params.requireVisibleReply
+    ) {
+      // Native input was consumed successfully; the yielded parent owns its later answer.
+      return { delivered: true, path: "direct" };
     }
     const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(
       directAnnounceResult?.deliveryStatus,

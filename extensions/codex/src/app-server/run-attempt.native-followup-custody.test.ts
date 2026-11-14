@@ -452,6 +452,17 @@ it("reports an earlier turn's unsettled native child to a later turn's sessions_
     });
     expect(result.pendingChildren).toHaveLength(1);
     await completeTurn(second);
+    const completion = observeCompletionAttempts();
+    try {
+      await childTurn("child-running", "Running child result");
+      await completion.settle();
+      expect(delivery.mock.calls.map(([call]) => call.childSessionKey)).toEqual([
+        "codex-thread:child-settled",
+        "codex-thread:child-running",
+      ]);
+    } finally {
+      completion.restore();
+    }
   } finally {
     harness.close();
     for (const host of hosts) {
