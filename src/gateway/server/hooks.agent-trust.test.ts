@@ -305,12 +305,14 @@ describe("dispatchAgentHook trust handling", () => {
     { name: "account removed before queued run", accountId: "removed", rejectAt: 2 },
   ])("validates $name at its delivery boundary", async ({ accountId, rejectAt }) => {
     let validations = 0;
-    validateExplicitMessageAccountSelectionMock.mockImplementation(({ accountId }) => {
-      if (++validations === rejectAt) {
-        throw new Error(`Unknown account "${accountId}" for channel telegram.`);
-      }
-      return accountId as string | undefined;
-    });
+    validateExplicitMessageAccountSelectionMock.mockImplementation(
+      ({ accountId: selectedAccountId }) => {
+        if (++validations === rejectAt) {
+          throw new Error(`Unknown account "${String(selectedAccountId)}" for channel telegram.`);
+        }
+        return selectedAccountId as string | undefined;
+      },
+    );
     if (!rejectAt) {
       runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
         status: "ok",

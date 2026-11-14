@@ -580,7 +580,7 @@ describe("gateway broadcaster", () => {
     for (const key of allRecipients) {
       expectSentEvents(
         context[key],
-        events.filter(([, , recipients]) => recipients.includes(key)).map(([event]) => event),
+        events.filter((entry) => entry[2].includes(key)).map(([event]) => event),
       );
     }
   });

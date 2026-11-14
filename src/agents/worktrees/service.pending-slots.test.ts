@@ -896,7 +896,7 @@ describe("managed worktree pending slots", () => {
 
   it.each(["worker"] as const)(
     "reclaims a crashed owner's slot while retaining an uncertain %s checkout for recovery",
-    async (kind) => {
+    async () => {
       config.worktreeMaxCount = 1;
       const execute = gitExec.executeGitCommand;
       const failure = new SqliteWorkerError(

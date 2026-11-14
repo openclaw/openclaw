@@ -776,7 +776,12 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     });
     const cleanupAdmittedRun = vi.fn(work.release);
     const activeRunCleanup = vi.fn(registration.cleanup);
-    const broadcast = vi.fn(() => getTerminalSessionWorkAdmissionRelease(target));
+    let broadcastAdmissionRelease:
+      | ReturnType<typeof getTerminalSessionWorkAdmissionRelease>
+      | undefined;
+    const broadcast = vi.fn((..._args: unknown[]) => {
+      broadcastAdmissionRelease = getTerminalSessionWorkAdmissionRelease(target);
+    });
     const dedupe = new Map();
     rpcSourceTesting.set(
       "compat-owner-run",
@@ -847,7 +852,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         expect.objectContaining({ runId: clientRunId, state: "error" }),
         expect.anything(),
       );
-      await expect(broadcast.mock.results[0]?.value).resolves.toBeUndefined();
+      await expect(broadcastAdmissionRelease).resolves.toBeUndefined();
       expect(activeRunCleanup).toHaveBeenCalledExactlyOnceWith();
       expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
     } finally {

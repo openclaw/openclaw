@@ -195,7 +195,7 @@ it.each(["rpc", "message-by-id"] as const)(
   "reads archived %s history without restoring or reading cold metadata on the caller",
   async (transport) => {
     await withHistoryState(async (state) => {
-      using _clock = vi.spyOn(Date, "now").mockReturnValue(1_750_000_000_000);
+      using _ = vi.spyOn(Date, "now").mockReturnValue(1_750_000_000_000);
       const fixture = await createSessionColdStorageFixture(state.statePath("cold-history.sqlite"));
       if (transport === "rpc") {
         await replaceTranscriptEvents(fixture.scope, [

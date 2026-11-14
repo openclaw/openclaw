@@ -47,7 +47,7 @@ async function transcriptFixture(
   plainFirstRow = false,
   ordinary: boolean | "retained" | "data-only" = false,
   viewportHeight = 600,
-  completedFrame: boolean = false,
+  completedFrame = false,
   retainStride = 1,
   streamingTail = false,
 ) {

@@ -486,7 +486,11 @@ it.each(["sharing", "incognito", "replacement", "owner"] as const)(
   },
 );
 
-it.each(realtimeStarts.flatMap((start) => [false, true].map((sandbox) => ({ ...start, sandbox }))))(
+it.each(
+  realtimeStarts.flatMap((start) =>
+    [false, true].map((sandbox) => Object.assign({}, start, { sandbox })),
+  ),
+)(
   "$method retains the identified creator and required isolation (sandbox=$sandbox)",
   async ({ sandbox, ...start }) => {
     setRole(

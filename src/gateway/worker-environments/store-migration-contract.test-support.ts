@@ -140,16 +140,17 @@ export function registerWorkerStoreMigrationTests(version: 36 | 38 | 39) {
           schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
         });
         expect(database.db.prepare(rowsSql).all()).toEqual(
-          before.map((row) => ({
-            ...row,
-            ...(version === 36 ? { resource_receipt_json: null } : {}),
-            ...(version !== 39 ? { retention_json: null } : {}),
-            provision_source_json:
-              ["requested", "provisioning"].includes(String(row.state)) ||
-              (row.state === "bootstrapping" && row.owner_epoch === 0)
-                ? '{"kind":"unavailable"}'
-                : null,
-          })),
+          before.map((row) =>
+            Object.assign({}, row, {
+              ...(version === 36 ? { resource_receipt_json: null } : {}),
+              ...(version !== 39 ? { retention_json: null } : {}),
+              provision_source_json:
+                ["requested", "provisioning"].includes(String(row.state)) ||
+                (row.state === "bootstrapping" && row.owner_epoch === 0)
+                  ? '{"kind":"unavailable"}'
+                  : null,
+            }),
+          ),
         );
         if (version !== 36) {
           expect(

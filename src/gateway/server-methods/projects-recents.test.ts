@@ -188,7 +188,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     }
     {
       const entries = Object.entries;
-      using enumeration = vi.spyOn(Object, "entries").mockImplementation((value) => {
+      using _ = vi.spyOn(Object, "entries").mockImplementation((value) => {
         expect(Object.hasOwn(value, "agent:main:other-0")).toBe(false);
         return entries(value);
       });
