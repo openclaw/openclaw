@@ -7,7 +7,7 @@ describe("model catalog JSON", () => {
       providers: {
         fixture: {
           baseUrl: "https://example.test/v1",
-          models: [{ id: 'quoted\"//,}', name: "line\nnext" }],
+          models: [{ id: 'quoted"//,}', name: "line\nnext" }],
         },
       },
     };
