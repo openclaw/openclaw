@@ -11,6 +11,7 @@ import { inspectTemplateBundledSkill } from "./bundled-skill-metadata.js";
 import { snapshotTemplateDependencyDirectory } from "./dependency-directory.js";
 import { templateDependencyInventory } from "./dependency-inventory.js";
 import { digestTemplateBytes } from "./digest.js";
+import { resolveTemplateLocalPath } from "./path-containment.js";
 import {
   isCanonicalClawHubPackageName,
   isExactSemVer,
@@ -236,10 +237,10 @@ async function resolveSource(
 ): Promise<
   { ok: true; source: ResolvedTemplateSource } | { ok: false; diagnostics: TemplateDiagnostic[] }
 > {
-  const inputPath = resolve(path);
-  const inputStat = await stat(inputPath).catch(() => undefined);
-  if (!inputStat) {
-    return fileFailure("read_failed", `Could not resolve Template source ${inputPath}.`);
+  const inputPath = await resolveTemplateLocalPath(path).catch(() => undefined);
+  const inputStat = inputPath ? await stat(inputPath).catch(() => undefined) : undefined;
+  if (!inputPath || !inputStat) {
+    return fileFailure("read_failed", `Could not resolve Template source ${resolve(path)}.`);
   }
   if (inputStat.isDirectory()) {
     const sourceRoot = await fsSafeRoot(inputPath);
@@ -255,7 +256,7 @@ async function resolveSource(
     return fileFailure("unsupported_source", "Template source must be a file or directory.");
   }
 
-  if (basename(inputPath) !== TEMPLATE_MARKDOWN_FILENAME) {
+  if (basename(path) !== TEMPLATE_MARKDOWN_FILENAME) {
     return fileFailure(
       "unsupported_manifest_format",
       "Template manifests must be named CLAW.md and contain YAML frontmatter; JSON manifests are not supported.",
@@ -267,7 +268,7 @@ async function resolveSource(
     ok: true,
     source: {
       kind: "development",
-      name: `local:${basename(inputPath)}`,
+      name: `local:${basename(path)}`,
       version: "0.0.0-development",
       packageRoot,
       manifestPath,

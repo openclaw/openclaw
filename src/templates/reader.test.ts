@@ -1,5 +1,5 @@
-import { link, realpath, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { link, mkdir, realpath, rename, symlink, writeFile } from "node:fs/promises";
+import { dirname, join, sep } from "node:path";
 import { afterEach, assert, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildTemplateAddPlan } from "./lifecycle.js";
@@ -44,6 +44,45 @@ async function sourceFixture(kind: "package" | "manifest") {
 }
 
 describe("Template source reader", () => {
+  it.each(["package", "manifest", "manifest alias"] as const)(
+    "reads filesystem-selected %s inputs",
+    async (kind) => {
+      const fixture = await sourceFixture(kind === "package" ? "package" : "manifest");
+      const root = dirname(fixture.path);
+      const directory = tempDirs.make("openclaw-template-path-");
+      let source: string;
+      if (kind === "manifest alias") {
+        const target = join(root, "source.md");
+        await rename(fixture.path, target);
+        source = join(directory, "CLAW.md");
+        await symlink(target, source, "file");
+      } else {
+        await mkdir(join(root, "nested"));
+        const alias = join(directory, "selected");
+        await symlink(
+          join(root, "nested"),
+          alias,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        source = `${alias}${sep}..${kind === "manifest" ? `${sep}CLAW.md` : ""}`;
+      }
+      expect(await readTemplateManifestFile(source)).toMatchObject({
+        ok: true,
+        source: { packageRoot: await realpath(root) },
+        manifest: { agent: { name: "Café" } },
+      });
+    },
+  );
+
+  it.each(["missing", "package.json"])(
+    "refuses an unreachable source through %s/..",
+    async (entry) => {
+      const { source } = await sourceFixture("manifest");
+      const input = `${dirname(source)}${sep}${entry}${sep}..${sep}CLAW.md`;
+      expectReadError(await readTemplateManifestFile(input), "read_failed");
+    },
+  );
+
   it.each([
     { kind: "package", code: "invalid_json" },
     { kind: "manifest", code: "invalid_template_markdown_utf8" },
