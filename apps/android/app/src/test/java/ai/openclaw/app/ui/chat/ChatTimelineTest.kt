@@ -19,6 +19,41 @@ import org.junit.Test
 
 class ChatTimelineTest {
   @Test
+  fun commentaryStylingFollowsWorkDisclosureWithoutChangingFinalAnswers() {
+    val messages =
+      listOf(
+        textMessage("user", "user", "Question"),
+        textMessage("work", "assistant", "Checking now"),
+        textMessage("answer", "assistant", "Finished").copy(phase = "final_answer"),
+      )
+    val unfinished = prepareChatHistory(messages.dropLast(1), "agent:main:main", "agent:main:main")
+    val provisional =
+      unfinished
+        .buildTimeline(1, emptyList(), null)
+        .items
+        .filterIsInstance<ChatTimelineItem.Message>()
+        .single { it.message.id == "work" }
+    assertTrue(provisional.isCommentary)
+    val history = prepareChatHistory(messages, "agent:main:main", "agent:main:main")
+    val live = history.buildTimeline(1, emptyList(), null).items.filterIsInstance<ChatTimelineItem.Message>()
+    assertTrue(live.single { it.message.id == "work" }.isCommentary)
+    assertEquals(false, live.single { it.message.id == "answer" }.isCommentary)
+    val collapsed = history.buildTimeline(0, emptyList(), null).items
+    assertEquals(listOf("answer", "user"), collapsed.filterIsInstance<ChatTimelineItem.Message>().map { it.message.id })
+    val expanded = history.buildTimeline(0, emptyList(), null, expandedWorkKeys = history.workSpans.map { it.key }.toSet()).items
+    assertTrue(expanded.filterIsInstance<ChatTimelineItem.Message>().single { it.message.id == "work" }.isCommentary)
+    for (phase in listOf(null, "commentary", "final_answer")) {
+      val stream =
+        history
+          .buildTimeline(1, emptyList(), "Live text", streamingAssistantPhase = phase)
+          .items
+          .filterIsInstance<ChatTimelineItem.StreamingAssistant>()
+          .single()
+      assertEquals(phase, stream.phase)
+    }
+  }
+
+  @Test
   fun preparedQuietHistoryKeepsRawDetailsAndUnknownOutcomes() {
     val quiet = ChatToolActivity("wait", "process", "action: poll", "raw result", false)
     val unknown = ChatAgentActivity("tool:unknown", "tool", "end", "Outcome unknown", toolCallId = "unknown")
