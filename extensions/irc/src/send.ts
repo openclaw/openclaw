@@ -14,7 +14,7 @@ import { convertMarkdownTables, stripMarkdown } from "openclaw/plugin-sdk/text-c
 import { resolveIrcAccount } from "./accounts.js";
 import { connectIrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
-import { normalizeIrcMessagingTarget } from "./normalize.js";
+import { isChannelTarget, normalizeIrcMessagingTarget } from "./normalize.js";
 import { getOptionalIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -86,7 +86,7 @@ export async function sendIrcMessages(
   const results: SendIrcResult[] = [];
   try {
     opts.abortSignal?.throwIfAborted();
-    if (target.startsWith("#") || target.startsWith("&")) {
+    if (isChannelTarget(target)) {
       await effect.initiate(() => {
         opts.abortSignal?.throwIfAborted();
         if (!client.isReady()) {

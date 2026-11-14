@@ -130,6 +130,87 @@ describe("IRC durable ingress", () => {
     });
   });
 
+  it("delivers a row admitted with the pre-change direct lane key as a group message", async () => {
+    await withQueue(async (queue, start) => {
+      const dispatch = vi.fn<IrcIngressDispatch>(async (_message, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      await queue.enqueue(
+        "legacy:modeless:1",
+        {
+          version: 1,
+          eventId: "legacy:modeless:1",
+          receivedAt: Date.now(),
+          connectionEpoch: "connection-legacy",
+          connectedNick: "bot",
+          rawLine: ":alice!ident@example.org PRIVMSG +modeless :hello",
+        },
+        { laneKey: "direct:alice" },
+      );
+      const ingress = start(queue, dispatch);
+      try {
+        await ingress.waitForIdle();
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
+          target: "+modeless",
+          rawTarget: "+modeless",
+          isGroup: true,
+          text: "hello",
+        });
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
+  it("does not accept a row without a stored lane key", async () => {
+    await withQueue(async (queue, start) => {
+      const dispatch = vi.fn<IrcIngressDispatch>(async (_message, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      await queue.enqueue("legacy:null-lane:1", {
+        version: 1,
+        eventId: "legacy:null-lane:1",
+        receivedAt: Date.now(),
+        connectionEpoch: "connection-legacy",
+        connectedNick: "bot",
+        rawLine: ":alice!ident@example.org PRIVMSG #room :hello",
+      });
+      const ingress = start(queue, dispatch);
+      try {
+        await ingress.waitForIdle();
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
+  it("classifies an RFC 2812 +modeless channel PRIVMSG as a group conversation", async () => {
+    await withQueue(async (queue, start) => {
+      const dispatch = vi.fn<IrcIngressDispatch>(async (_message, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const ingress = start(queue, dispatch);
+      try {
+        await ingress
+          .openConnection("connection-modeless")
+          .accept(":alice!ident@example.org PRIVMSG +modeless :hello", "bot");
+        await ingress.waitForIdle();
+        expect(dispatch).toHaveBeenCalledTimes(1);
+        expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
+          target: "+modeless",
+          rawTarget: "+modeless",
+          senderNick: "alice",
+          text: "hello",
+          isGroup: true,
+        });
+      } finally {
+        await ingress.stop();
+      }
+    });
+  });
+
   it("keeps a completion tombstone for the same local event id", async () => {
     await withQueue(async (queue) => {
       const dispatch = vi.fn<IrcIngressDispatch>(async (_message, lifecycle) => {
