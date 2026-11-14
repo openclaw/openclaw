@@ -47,6 +47,7 @@ import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { ComposerDictationStatus } from "../chat/components/chat-voice-activity.tsx";
 import { DirectDictationView } from "../chat/components/direct-dictation-view.tsx";
+import { DraftAgentArc } from "./agent-arc.tsx";
 import { CatalogBar } from "./catalog-target-view.tsx";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
@@ -521,6 +522,7 @@ function renderPageContent(host: PageHost, shell: NewSessionPageProps) {
             <DraftAgentSelect page={page} />
           </Show>
         ));
+        const assistantAvatarControl = children(() => <DraftAgentArc page={page} />);
         const welcomeHint = children(() => (
           <Show when={!catalog.isTarget(page().data)} fallback={page().welcomeHint()}>
             <NewSessionWelcomeHint
@@ -576,6 +578,7 @@ function renderPageContent(host: PageHost, shell: NewSessionPageProps) {
                         sessions={page().context?.sessions}
                         options={{ ...page().welcomeOptions(), hint: welcomeHint() }}
                         assistantNameControl={assistantNameControl()}
+                        assistantAvatarControl={assistantAvatarControl()}
                         composer={<Draft />}
                       />
                     }

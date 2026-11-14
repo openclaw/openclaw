@@ -88,6 +88,7 @@ const enNewSessionSetup = {
     worktreeNameClearUnconfirmed: runtime.worktreeNameClearUnconfirmed,
     agent: "Agent",
     agents: "Agents",
+    switchAgent: "Switch to {name}",
     where: "Where",
     gatewayNamed: "This computer · {name}",
     cloudWorker: "Cloud device · {profile}",
