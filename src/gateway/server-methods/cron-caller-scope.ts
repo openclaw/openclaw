@@ -313,9 +313,19 @@ export function readCronCallerScope(
 
 /** Management access can reauthorize origin, but cannot lend another account native identity. */
 export function resolveCronRequesterProvenanceForJob(
-  job: Pick<CronJob, "owner">,
+  job: Pick<CronJob, "owner" | "scheduledToolPolicy">,
   callerScope: CronCallerScope | undefined,
 ): CronToolsAllowProvenance | undefined {
+  // An admin manages an ownerless operator job; it does not become a requester
+  // job in the admin chat. In particular, an unknown-origin surface capture
+  // would require an owner workspace that this job has never had.
+  if (
+    callerScope?.manageAll &&
+    job.scheduledToolPolicy?.mode === "trusted" &&
+    !job.owner?.sessionKey
+  ) {
+    return undefined;
+  }
   const provenance = callerScope?.toolsAllowProvenance;
   if (!provenance?.channelRequester) {
     return provenance;
