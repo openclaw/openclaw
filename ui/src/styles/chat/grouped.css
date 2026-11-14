@@ -142,6 +142,8 @@
    whether its content is visible, hidden or absent, so revealing it never moves
    the next turn and every group ends the same distance above the turn gap. */
 .chat-group-footer {
+  -webkit-user-select: none;
+  user-select: none;
   --chat-action-gap: var(--chat-footer-offset);
   position: relative;
   display: flex;

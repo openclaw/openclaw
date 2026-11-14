@@ -77,9 +77,9 @@
   overflow-y: auto;
   overflow-x: hidden;
   overflow-anchor: none;
-  /* Only message text opts in; selecting across turns must not paint layout or media. */
-  -webkit-user-select: none;
-  user-select: none;
+  /* Blank transcript space keeps native selection and click-to-deselect behavior. */
+  -webkit-user-select: text;
+  user-select: text;
   scrollbar-gutter: stable both-edges;
   /* The pane header owns the titlebar and native drag surface. No horizontal
      padding: macOS overlay scrollbars render inside the
@@ -288,6 +288,8 @@ div.chat-thread:where(.chat-thread--annotations) {
 /* Avatar Styles. Identity avatars are circles everywhere (sidebar, pickers,
    profile, native apps); square tiles expose opaque avatar corners. */
 .chat-avatar {
+  -webkit-user-select: none;
+  user-select: none;
   width: 36px;
   height: 36px;
   aspect-ratio: 1;
