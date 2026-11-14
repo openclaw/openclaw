@@ -1,0 +1,2 @@
+# Preparation-only discovery must retire on idle and critical pressure without interrupting pending work. Exact net regression growth.
+25

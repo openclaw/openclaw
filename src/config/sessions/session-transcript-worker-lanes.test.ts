@@ -15,6 +15,7 @@ import {
   historyLane,
   maintenanceLane,
   projectionLane,
+  prepareSessionStoreCandidatesInWorker,
   targetDiscoveryLane,
   transcriptSearchLane,
   withSessionHistoryWorkerReadCandidates,
@@ -52,6 +53,30 @@ function input() {
 
 const prewarmed = { ok: true as const, value: { kind: "prewarm" as const } };
 const absent = { ok: true as const, value: false };
+
+it.each(["idle", "critical"])("retires preparation-only discovery workers on %s", async (mode) => {
+  const pressure = channel("openclaw.memory.critical");
+  const reply = createDeferredCore<unknown>();
+  observed.run.mockReturnValueOnce(reply.promise);
+  const preparing = prepareSessionStoreCandidatesInWorker({ storePath: input().database.path });
+  try {
+    pressure.publish(true);
+    expect(observed.rotate).not.toHaveBeenCalled();
+    reply.resolve({ ok: true, value: { kind: "session-target-prepare", candidates: [] } });
+    await preparing;
+    if (mode === "idle") {
+      await vi.advanceTimersByTimeAsync(90_000);
+    } else {
+      pressure.publish(true);
+      await targetDiscoveryLane.rotation;
+    }
+    expect(observed.rotate).toHaveBeenCalledOnce();
+    expect(pressure.hasSubscribers).toBe(false);
+  } finally {
+    reply.resolve({ ok: true, value: { kind: "session-target-prepare", candidates: [] } });
+    await preparing;
+  }
+});
 
 it("keeps native close conservative until an unqualified reader is retired", async () => {
   const pool = createSessionTranscriptHistoryPool();
