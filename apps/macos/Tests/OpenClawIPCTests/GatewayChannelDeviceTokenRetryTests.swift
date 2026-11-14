@@ -333,4 +333,64 @@ struct GatewayChannelDeviceTokenRetryTests {
             await channel.shutdown()
         }
     }
+
+    @Test func `explicit token mismatch without a stored device token pauses reconnect`() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        try await DeviceIdentityStore.withStateDirectory(tempDir) {
+            // A new route has no device token yet, but the gateway still offers the device-token retry.
+            let recorder = ConnectAuthRecorder()
+            let session = GatewayTestWebSocketSession(taskFactory: {
+                GatewayTestWebSocketTask(
+                    sendHook: { _, message, sendIndex in
+                        if sendIndex == 0 { recorder.append(from: message) }
+                    },
+                    receiveHook: { task, receiveIndex in
+                        if receiveIndex == 0 {
+                            return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                        }
+                        return .data(GatewayWebSocketTestSupport.connectAuthFailureData(
+                            id: task.snapshotConnectRequestID() ?? "connect",
+                            detailCode: GatewayConnectAuthDetailCode.authTokenMismatch.rawValue,
+                            canRetryWithDeviceToken: true,
+                            recommendedNextStep: "retry_with_device_token"))
+                    })
+            })
+            let channel = try GatewayChannelActor(
+                url: #require(URL(string: "ws://127.0.0.1:18789")),
+                token: "wrong-shared-token",
+                session: WebSocketSessionBox(session: session),
+                connectOptions: GatewayConnectOptions(
+                    role: "operator",
+                    scopes: ["operator.read"],
+                    caps: [],
+                    commands: [],
+                    permissions: [:],
+                    clientId: "openclaw-macos-test",
+                    clientMode: "ui",
+                    clientDisplayName: "macOS Test",
+                    includeDeviceIdentity: true))
+            await channel._test_setConnectFailureBackoffWaitHandler {}
+
+            do {
+                try await channel.connect()
+                Issue.record("expected the wrong shared token to be rejected")
+            } catch let error as GatewayConnectAuthError {
+                // No device token can be retried, so the rejection is final for these credentials.
+                #expect(error.detail == .authTokenMismatch)
+                #expect(!error.canRetryWithDeviceToken)
+                #expect(error.isNonRecoverable)
+                let problem = GatewayConnectionProblemMapper.map(error: error)
+                #expect(problem?.pauseReconnect == true)
+                #expect(problem?.actionLabel == "Update gateway token")
+            }
+            let auth = try #require(recorder.auth(at: 0))
+            #expect(auth["token"] as? String == "wrong-shared-token")
+            #expect(auth["deviceToken"] == nil)
+            await channel.shutdown()
+        }
+    }
 }
