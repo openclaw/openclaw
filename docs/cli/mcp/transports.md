@@ -119,7 +119,7 @@ Native MCP OAuth sessions live in the owner-only shared SQLite database at `<sta
 
 Upgrades from the retired `<state-dir>/mcp-oauth/*.json` store are handled only by `openclaw doctor --fix`. Runtime code never reads, writes, or falls back to those files.
 
-Until shared credentials are available, OpenClaw omits only that MCP server from the agent runtime instead of failing the agent turn. The operator, or an agent with shell access, can then run `openclaw mcp login <name>` and use the server on a later turn.
+Until shared credentials are available, OpenClaw omits only that MCP server from the agent runtime instead of failing the agent turn. The operator can then run `openclaw mcp login <name>` and use the server on a later turn. Because login writes into the owner-only store, it requires exclusive offline state ownership: stop the Gateway first, or run it in a session whose state no Gateway owns. A shell alone is not enough while a Gateway is running.
 
 If a server rejects a token with `insufficient_scope`, OpenClaw preserves the requested scope and asks for `openclaw mcp login <name>` instead of repeating a refresh that cannot grant new scope. That login starts a new authorization request while keeping the previous token until replacement credentials are saved.
 
