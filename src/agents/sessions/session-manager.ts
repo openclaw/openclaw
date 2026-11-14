@@ -73,15 +73,13 @@ import type {
   FileEntry,
   SessionEntry,
 } from "./session-manager-types.js";
-import type {
-  SessionManagerBoundedContext,
-  SessionManagerBoundedContextLimits,
-  SessionManagerPersistenceTarget,
-  SessionManagerTranscriptCohort,
-} from "./session-manager-view-types.js";
 import {
   sessionManagerFromCompactionSource,
   sessionManagerReadTranscriptBranch,
+  type SessionManagerBoundedContext,
+  type SessionManagerBoundedContextLimits,
+  type SessionManagerPersistenceTarget,
+  type SessionManagerTranscriptCohort,
 } from "./session-manager-view-types.js";
 import {
   appendSessionTranscriptNote,
@@ -488,13 +486,9 @@ export class SessionManager extends SessionManagerBranching {
     target: SessionTranscriptRuntimeTarget,
     options: { cwd?: string; signal?: AbortSignal; metadataOnly?: boolean } = {},
   ) {
-    const { compaction, context } = await readSessionManagerCompaction(target, options);
-    const header = findSessionTranscriptHeader(context.events);
-    const cwd = options.cwd ?? header?.cwd ?? process.cwd();
+    const { cwd, context, ...compaction } = await readSessionManagerCompaction(target, options);
     return {
       ...compaction,
-      eventCount: context.totalEvents,
-      metadataOnly: options.metadataOnly === true && context.truncated,
       sessionManager: new SessionManager(cwd, compaction.sessionTarget, context.events, context),
     };
   }
