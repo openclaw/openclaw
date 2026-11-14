@@ -16,6 +16,22 @@ function expectInvalid(result: ReturnType<typeof parseTemplateManifest>, path: s
 }
 
 describe("portable Template schema conformance", () => {
+  it.each(["Brief me", [""], ["   "], [12]])(
+    "rejects invalid conversation starters %j",
+    (recommendedPrompts) => {
+      expectInvalid(
+        parseTemplateManifest({
+          ...baseManifest,
+          agent: { ...baseManifest.agent, recommendedPrompts },
+        }),
+        "$.agent.recommendedPrompts" +
+          (Array.isArray(recommendedPrompts) && typeof recommendedPrompts[0] !== "string"
+            ? "[0]"
+            : ""),
+      );
+    },
+  );
+
   it("preserves optional portable categories", () => {
     const result = parseTemplateManifest({ ...baseManifest, categories: ["travel", "personal"] });
     expect(result).toMatchObject({ ok: true, manifest: { categories: ["travel", "personal"] } });

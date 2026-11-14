@@ -122,6 +122,20 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
         );
       }
     };
+    const publishAgentReady = (agentId: string, sessionKey: string) => {
+      if (options.client?.connId) {
+        context.broadcastToConnIds(
+          "templates.add.progress",
+          {
+            requestId: options.req.id,
+            stage: "agent-ready",
+            agentId,
+            sessionKey,
+          },
+          new Set([options.client.connId]),
+        );
+      }
+    };
     try {
       assertTemplatesLabsEnabled(context.getRuntimeConfig());
       assertTemplatesLabsEnabled(
@@ -253,18 +267,10 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
         },
         onAgentReady: async ({ agentId, sessionKey }) => {
           assertCurrent();
-          if (options.client?.connId) {
-            context.broadcastToConnIds(
-              "templates.add.progress",
-              {
-                requestId: options.req.id,
-                stage: "agent-ready",
-                agentId,
-                sessionKey,
-              },
-              new Set([options.client.connId]),
-            );
+          if (params.initialPrompt) {
+            return;
           }
+          publishAgentReady(agentId, sessionKey);
           await startAgentOnboardingConversation(options, agentId, sessionKey, "template");
         },
         onSetupEvent: async (event) => {
@@ -351,6 +357,34 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           });
         },
       });
+      // BOOTSTRAP.md is seeded only after the shared installer finishes. The
+      // selected-task opening must run here before the composer is released.
+      if (params.initialPrompt && result.status === "complete" && result.sessionKey) {
+        const { agentId, sessionKey } = result;
+        try {
+          assertCurrent();
+          await startAgentOnboardingConversation(
+            options,
+            agentId,
+            sessionKey,
+            "template",
+            params.initialPrompt,
+          );
+          publishAgentReady(agentId, sessionKey);
+        } catch {
+          respond(true, {
+            ...result,
+            status: "partial",
+            agentRetained: true,
+            error: {
+              code: "template_setup_failed",
+              message:
+                "Installation finished, but setup did not produce an opening reply. Continue in the retained agent conversation; do not add another copy.",
+            },
+          });
+          return;
+        }
+      }
       respond(true, result);
     } catch (error) {
       log.error(

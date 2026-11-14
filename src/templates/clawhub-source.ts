@@ -82,6 +82,7 @@ export type ClawHubTemplateCatalogDetail = ClawHubTemplateCatalogEntry & {
   version: string;
   agentName?: string;
   agentDescription?: string;
+  recommendedPrompts?: string[];
   workspaceFiles: number;
   skills: number;
   plugins: number;
@@ -376,7 +377,7 @@ export async function readClawHubTemplateDetail(
       );
     }
     const summary = parseTemplateManifestSummary(release.version.templateManifestSummary);
-    const { contents } = await readClawHubTemplateContents(
+    const { contents, recommendedPrompts } = await readClawHubTemplateContents(
       {
         ...params,
         packageName: pkg.name,
@@ -393,6 +394,7 @@ export async function readClawHubTemplateDetail(
       version,
       ...(summary.name ? { agentName: summary.name } : {}),
       ...(summary.description ? { agentDescription: summary.description } : {}),
+      ...(recommendedPrompts?.length ? { recommendedPrompts } : {}),
       workspaceFiles: contents.instructions.length,
       skills: contents.skills.length,
       plugins: contents.integrations.filter((item) => item.kind === "plugin").length,
@@ -445,6 +447,7 @@ async function readClawHubTemplateContents(
   },
 ): Promise<{
   contents: ClawHubTemplateCatalogDetail["contents"];
+  recommendedPrompts?: string[];
   preview?: ClawHubTemplateCatalogPreview;
 }> {
   const artifactResponse =
@@ -546,6 +549,7 @@ async function readClawHubTemplateContents(
         return {
           ok: true as const,
           value: {
+            recommendedPrompts: manifest.agent.recommendedPrompts,
             contents: {
               instructions: describedInstructions,
               skills: describedSkills,

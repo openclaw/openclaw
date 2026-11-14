@@ -51,6 +51,7 @@ class TemplatesCatalogModel {
   consentWarning: string | null = null;
   reviewPlan: TemplateAddReviewPlan | null = null;
   private riskAcknowledged = false;
+  private initialPrompt: string | undefined;
   private preparedPlan: TemplateAddReviewPlan | null = null;
   gateway!: ReturnType<typeof useGatewayPage>;
   disposed = false;
@@ -83,6 +84,7 @@ class TemplatesCatalogModel {
     this.reviewPlan = null;
     this.preparedPlan = null;
     this.riskAcknowledged = false;
+    this.initialPrompt = undefined;
   }
 
   dispose() {
@@ -199,6 +201,7 @@ class TemplatesCatalogModel {
     this.reviewPlan = null;
     this.preparedPlan = null;
     this.riskAcknowledged = false;
+    this.initialPrompt = undefined;
   }
 
   refresh() {
@@ -289,11 +292,15 @@ class TemplatesCatalogModel {
       }
       // Navigation disposes this page. The application handoff, not the dialog,
       // retains the request and releases pending chat at the agent-ready receipt.
-      void addTemplateAgent(this.context, source, plan, this.riskAcknowledged).catch(
-        (error: unknown) => {
-          showToast({ severity: "error", message: formatUiError(error), durationMs: 12_000 });
-        },
-      );
+      void addTemplateAgent(
+        this.context,
+        source,
+        plan,
+        this.riskAcknowledged,
+        this.initialPrompt,
+      ).catch((error: unknown) => {
+        showToast({ severity: "error", message: formatUiError(error), durationMs: 12_000 });
+      });
     } catch (error) {
       if (isCurrent()) {
         this.addError = formatUiError(error);
@@ -366,6 +373,12 @@ class TemplatesCatalogModel {
       onRetryDetail: () => this.loadDetail(),
       onConfirm: () => {
         this.riskAcknowledged = false;
+        this.initialPrompt = undefined;
+        return this.add();
+      },
+      onSelectPrompt: (prompt) => {
+        this.riskAcknowledged = false;
+        this.initialPrompt = prompt;
         return this.add();
       },
       onConfirmConsent: () => {
@@ -377,11 +390,13 @@ class TemplatesCatalogModel {
         this.consentWarning = null;
         this.reviewPlan = null;
         this.riskAcknowledged = false;
+        this.initialPrompt = undefined;
       },
       onConfirmReview: () => this.add(this.reviewPlan, true),
       onCancelReview: () => {
         this.reviewPlan = null;
         this.riskAcknowledged = false;
+        this.initialPrompt = undefined;
       },
     };
   }
@@ -473,6 +488,10 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
       detailRequest={detailRequest()}
       applying={applying() && view().applying}
       onConfirm={() => mutate(view().onConfirm)}
+      onSelectPrompt={(prompt) => {
+        const select = view().onSelectPrompt;
+        mutate(() => select(prompt));
+      }}
       onConfirmConsent={() => mutate(view().onConfirmConsent)}
       onConfirmReview={() => mutate(view().onConfirmReview)}
     />

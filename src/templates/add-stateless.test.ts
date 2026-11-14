@@ -103,6 +103,39 @@ describe("stateless Template Add", () => {
     });
   };
 
+  it("installs welcome metadata as ordinary agent configuration", async () => {
+    const manifestPath = path.join(stateDir, "source", "CLAW.md");
+    await writeFile(
+      manifestPath,
+      [
+        "---",
+        "schemaVersion: 1",
+        "agent:",
+        "  id: briefing",
+        "  description: Follows your repositories.",
+        "  recommendedPrompts:",
+        "    - Set up a repository",
+        "    - Brief me on recent changes",
+        "---",
+        "Follow tracked projects.",
+        "",
+      ].join("\n"),
+    );
+    const read = await readTemplateManifestFile(manifestPath);
+    assert(read.ok, JSON.stringify(read.diagnostics));
+    source = read;
+    const plan = await buildPlan();
+    expect(plan.blockers).toEqual([]);
+    const result = await apply(plan);
+    expect(result.status, JSON.stringify(result.error)).toBe("complete");
+    expect(config.agents.entries).toMatchObject({
+      briefing: {
+        description: "Follows your repositories.",
+        recommendedPrompts: ["Set up a repository", "Brief me on recent changes"],
+      },
+    });
+  });
+
   it("builds a declared skill folder and discovers its exact supporting bytes after Add", async () => {
     const root = path.join(stateDir, "source");
     const skill = path.join(root, "bundles", "incident-guide");

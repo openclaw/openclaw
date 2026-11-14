@@ -23,6 +23,27 @@ beforeEach(() => {
 
 afterAll(closeSessionSqliteDatabasesForTest);
 
+test("projects welcome metadata only for its configured agent", async () => {
+  const { agents } = await listAgentsForGateway({
+    agents: {
+      entries: {
+        briefing: {
+          description: " Follows your repositories. ",
+          recommendedPrompts: ["Set up a repository", "Brief me"],
+        },
+        plain: {},
+      },
+    },
+  });
+  expect(agents.find((agent) => agent.id === "briefing")).toMatchObject({
+    description: "Follows your repositories.",
+    recommendedPrompts: ["Set up a repository", "Brief me"],
+  });
+  const plain = agents.find((agent) => agent.id === "plain");
+  expect(plain).not.toHaveProperty("description");
+  expect(plain).not.toHaveProperty("recommendedPrompts");
+});
+
 type ModelCase = {
   name: string;
   cfg: OpenClawConfig;

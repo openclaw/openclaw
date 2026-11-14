@@ -77,6 +77,8 @@ export class AgentSelectionRequiredError extends Error {
 /** Per-agent config after applying agent defaults and normalizing scalar fields. */
 export type ResolvedAgentConfig = {
   name?: string;
+  description?: string;
+  recommendedPrompts?: AgentEntry["recommendedPrompts"];
   workspace?: string;
   workspaceFileMode?: AgentEntry["workspaceFileMode"];
   agentDir?: string;
@@ -453,6 +455,8 @@ export function resolveAgentConfig(
   const agentDefaults = cfg.agents?.defaults;
   return {
     name: entry.name,
+    description: entry.description,
+    recommendedPrompts: entry.recommendedPrompts,
     workspace: entry.workspace,
     workspaceFileMode: entry.workspaceFileMode ?? agentDefaults?.workspaceFileMode,
     agentDir: entry.agentDir,

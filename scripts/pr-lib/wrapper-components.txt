@@ -893,6 +893,7 @@ src/config/zod-schema.messages.ts
 src/config/zod-schema.model-compat.ts
 src/config/zod-schema.node-host.ts
 src/config/zod-schema.proxy.ts
+src/config/zod-schema.recommended-prompts.ts
 src/config/zod-schema.root-shape.ts
 src/config/zod-schema.root-support.ts
 src/config/zod-schema.sandbox.ts
@@ -2607,6 +2608,7 @@ packages/gateway-protocol/src/schema/environments.ts
 packages/gateway-protocol/src/schema/model-account-selection.ts
 packages/gateway-protocol/src/schema/model-catalog.ts
 packages/gateway-protocol/src/schema/model-runtime-options.ts
+packages/gateway-protocol/src/schema/recommended-prompts.ts
 packages/gateway-protocol/src/schema/secrets.ts
 packages/gateway-protocol/src/schema/session-classification.ts
 packages/gateway-protocol/src/schema/sessions-activity-summary.ts

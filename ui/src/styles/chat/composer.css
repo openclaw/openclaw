@@ -3602,7 +3602,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   gap: 8px;
 }
 
-.agent-chat__welcome-identity-copy > :is(h2, .agent-chat__hint) {
+.agent-chat__welcome-identity-copy > * {
   margin: 0;
 }
 

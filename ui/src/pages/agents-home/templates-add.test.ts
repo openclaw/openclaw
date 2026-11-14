@@ -20,6 +20,35 @@ beforeEach(setupAgentsHomePageTest);
 afterEach(cleanupAgentsHomePageTest);
 
 describe("Template Add", () => {
+  it.each(["detail", "modal"] as const)(
+    "carries a %s prompt through consent without sending a separate chat message",
+    async (surface) => {
+      const apply = createDeferredCore();
+      const { find, request, context } = createAddSurface(surface, {
+        templatesEnabled: true,
+        riskConsentRequired: true,
+        applyWait: apply.promise,
+        recommendedPrompts: ["Set up a repository"],
+      });
+      await waitForSolid(() =>
+        expect(find(".plugin-recommended-prompts__prompt")).toHaveProperty("disabled", false),
+      );
+      find(".plugin-recommended-prompts__prompt")!.click();
+      await waitForSolid(() => expect(find(".templates-trust-warning")).not.toBeNull());
+      expect(
+        request.mock.calls.filter(([method]) => method === "templates.add.apply"),
+      ).toHaveLength(0);
+      find(".templates-add-consent__actions .btn.primary")!.click();
+      await waitForSolid(() =>
+        expect(
+          request.mock.calls.find(([method]) => method === "templates.add.apply")?.[1],
+        ).toMatchObject({ initialPrompt: "Set up a repository", acknowledgeClawHubRisk: true }),
+      );
+      expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+      apply.resolve();
+      await waitForSolid(() => expect(context.chatSubmissions.creating).toBe(false));
+    },
+  );
   it.each([
     { surface: "detail", outcome: "prepared" },
     { surface: "detail", outcome: "failed" },

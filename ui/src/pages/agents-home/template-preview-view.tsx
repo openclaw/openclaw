@@ -8,6 +8,7 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
+import { PluginRecommendedPrompts } from "../plugins/recommended-prompts.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplateAddFeedback } from "./templates-detail-view.tsx";
@@ -174,6 +175,18 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                     when={category()}
                     fallback={
                       <div class="template-preview__contents">
+                        <PluginRecommendedPrompts
+                          id={identity()?.packageName ?? "template"}
+                          name={props.view.detail?.agentName ?? identity()?.displayName ?? ""}
+                          iconUrl={identity()?.iconUrl}
+                          prompts={props.view.detail?.recommendedPrompts}
+                          disabled={
+                            !props.view.canAdd ||
+                            Boolean(props.view.consentWarning || props.view.reviewPlan)
+                          }
+                          busy={props.view.applying}
+                          onSelect={(prompt) => void props.view.onSelectPrompt(prompt)}
+                        />
                         <For each={categories}>
                           {(item) => (
                             <button

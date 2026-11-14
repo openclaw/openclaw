@@ -1,0 +1,4 @@
+# PR #197402: 294 net lines for optional config and Template Add preservation,
+# protocol/agent-list isolation, selected-agent welcome behavior, and browser
+# submission, incognito, responsive layout, and terminal retargeting coverage.
+294

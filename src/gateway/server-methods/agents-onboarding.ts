@@ -27,7 +27,10 @@ import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
 } from "../../shared/transcript-only-openclaw-assistant.js";
 import { verifySetupInferenceConfig } from "../../system-agent/setup-inference-turn.js";
-import { TEMPLATE_AGENT_OPENING_MESSAGE } from "../../templates/conversation.js";
+import {
+  TEMPLATE_AGENT_OPENING_MESSAGE,
+  templateAgentSetupMessage,
+} from "../../templates/conversation.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
@@ -341,11 +344,12 @@ export async function startAgentOnboardingConversation(
   agentId: string,
   sessionKey: string,
   opening: "new-agent" | "template" = "new-agent",
+  initialPrompt?: string,
 ): Promise<void> {
   const releaseAuthorization = options.sessionMutationAuthorization?.retain?.();
   using _ = { [Symbol.dispose]: () => releaseAuthorization?.() };
   let response: Parameters<GatewayRequestHandlerOptions["respond"]> | undefined;
-  const runId = `agents.create:${agentId}:${opening === "template" ? "template-greeting" : "onboarding-question"}`;
+  const runId = `agents.create:${agentId}:${opening === "template" ? (initialPrompt ? "template-setup" : "template-greeting") : "onboarding-question"}`;
   try {
     await runOutsideAsyncWorkScope(() =>
       handleTrustedInternalChatSend(
@@ -357,7 +361,9 @@ export async function startAgentOnboardingConversation(
             agentId,
             message:
               opening === "template"
-                ? TEMPLATE_AGENT_OPENING_MESSAGE
+                ? initialPrompt
+                  ? templateAgentSetupMessage(initialPrompt)
+                  : TEMPLATE_AGENT_OPENING_MESSAGE
                 : [
                     "A short introduction has already been saved in this agent’s conversation. Ask the user in plain text: What role would you like me to take on?",
                     "Offer these four single-agent roles: Chief of staff (coordinates work and priorities), Researcher (finds and summarizes evidence), Writer (turns notes and sources into drafts), and Reviewer (checks work against requirements). Invite the user to describe a different role if they prefer. Do not offer a team. Ask only about the role in this opening turn; do not ask for their goal or mention a later follow-up yet. End the message there and wait for their reply.",
@@ -379,8 +385,12 @@ export async function startAgentOnboardingConversation(
         undefined,
         {
           transcript: { display: false },
-          toolsAllow: [],
-          ...(opening === "template" ? { deferWorkspaceBootstrap: true as const } : {}),
+          ...(opening === "template" && initialPrompt
+            ? {}
+            : {
+                toolsAllow: [],
+                ...(opening === "template" ? { deferWorkspaceBootstrap: true as const } : {}),
+              }),
         },
       ),
     );
@@ -388,12 +398,12 @@ export async function startAgentOnboardingConversation(
       throw new Error(formatErrorMessage(response[2]));
     }
     if (opening === "template") {
-      // Admission is not model output. The shared installer must not finish
-      // deferrable setup before this ordinary chat owner publishes its greeting.
+      // Admission is not model output. Wait for the first visible reply, not
+      // completion of bootstrap questions that require later user answers.
       const terminal = await waitForAgentJob({ runId, source: "chat", timeoutMs: 120_000 });
       if (terminal?.status !== "ok" || terminal.terminalReply?.disposition !== "visible") {
         throw new Error(
-          `Template opening did not produce a visible greeting: ${terminal?.error ?? terminal?.status ?? "timed out waiting for chat completion"}. The agent and conversation were kept.`,
+          `Template opening did not produce a visible opening reply: ${terminal?.error ?? terminal?.status ?? "timed out waiting for chat completion"}. The agent and conversation were kept.`,
         );
       }
     }

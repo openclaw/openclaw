@@ -276,6 +276,42 @@ limited to 1 MiB, package metadata to 256 KiB, and workspace files have
 per-file and aggregate limits. Selected files become package content, so
 review them for secrets before building or publishing.
 
+### Welcome description and conversation starters
+
+Templates can reuse the optional `agent.description` metadata and define
+`agent.recommendedPrompts` directly in `CLAW.md` frontmatter:
+
+```yaml
+agent:
+  id: project-briefing
+  name: Project briefing
+  description: Follows your repositories and briefs you on meaningful changes, proposals, and decisions.
+  recommendedPrompts:
+    - Set up a repository
+    - Brief me on recent changes
+    - Show my tracked projects
+```
+
+Add copies these fields into the ordinary agent's configuration. The Control UI
+shows the description on its new-chat welcome screen and uses the recommended
+prompts as clickable user messages. Opening the screen sends nothing.
+
+The Template detail page and install preview also show these prompts. Selecting
+one starts the normal Add flow, including any trust and capability reviews. Once
+installation finishes, the agent is instructed to complete `BOOTSTRAP.md` first,
+asking questions and waiting for answers as needed, then address the selected
+prompt in that same conversation. No separate follow-up queue is created;
+sequencing is part of the agent's setup instructions, not a runtime guarantee.
+Plain Add without a selected prompt keeps its existing opening behavior.
+
+Both fields are optional. An unset or empty prompt list keeps the existing welcome
+defaults and adds no install-page choices. Like plugin `recommendedPrompts`, a list
+has at most three nonempty strings, each at most 128 Unicode code points after
+whitespace normalization. Metadata is declared in `CLAW.md`, not in
+`profiles/openclaw.yml`.
+See [agent welcome settings](/gateway/config-agents/entries-and-multi-agent#chat-welcome)
+for the display variants.
+
 <a id="inspect-and-preview"></a>
 
 ## Inspect and Add

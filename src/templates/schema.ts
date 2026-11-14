@@ -8,6 +8,7 @@ import {
   resolveToolProfilePolicy,
 } from "../agents/tool-policy-shared.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { RecommendedPromptsSchema } from "../config/zod-schema.recommended-prompts.js";
 import { computeNextRunAtMs } from "../cron/schedule.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
@@ -108,6 +109,7 @@ const agentIdentitySchema = z
     id: agentId,
     name: optionalString,
     description: optionalString,
+    recommendedPrompts: RecommendedPromptsSchema.optional(),
     identity: identitySchema.optional(),
   })
   .strict();
