@@ -16,8 +16,9 @@ function resolveGatewaySecretOption(
 }
 
 function warnGatewaySecretCliFlag(flag: "--token" | "--password"): void {
+  // End the sentence on the flag: console redaction masks a word after --token or --password.
   defaultRuntime.error(
-    `Warning: ${flag} can be exposed via process listings. Prefer ${flag}-file or environment variables.`,
+    `Warning: process listings can expose ${flag}. Prefer ${flag}-file or environment variables.`,
   );
 }
 

@@ -640,7 +640,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   }
   if (toOptionString(opts.password)) {
     defaultRuntime.error(
-      "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+      "Warning: process listings can expose --password. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
     );
   }
   const tokenRaw = toOptionString(opts.token);
