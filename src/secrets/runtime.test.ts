@@ -3,14 +3,21 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.ts";
+import { noteRuntimeAuthProfileStorePersistedMutation } from "../agents/auth-profiles/runtime-snapshots.js";
 import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import { getRuntimeConfigSnapshotRefreshHandler } from "../config/runtime-snapshot.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { assertSecretOwnerAvailable } from "./runtime-degraded-state.js";
-import { activateSecretsRuntimeSnapshotState } from "./runtime-state.js";
-import { activateSecretsRuntimeSnapshot } from "./runtime.js";
+import {
+  activateSecretsRuntimeSnapshotState,
+  clearSecretsRuntimeSnapshotState,
+} from "./runtime-state.js";
+import {
+  activateSecretsRuntimeSnapshot,
+  refreshActiveSecretsRuntimeSnapshotForConfig,
+} from "./runtime.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
 const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
@@ -108,6 +115,84 @@ function expectSandboxWarning(snapshot: Snapshot, code: string): void {
 }
 
 describe("secrets runtime snapshot", () => {
+  it("resolves exec providers once across repeated auth-store revision invalidations", async () => {
+    const root = tempDirs.make("openclaw-refresh-auth-revision-");
+    const callLogPath = path.join(root, "calls.log");
+    const providerScript = [
+      'const fs = require("node:fs");',
+      "process.stdin.resume();",
+      'process.stdin.on("end", () => {',
+      `  fs.appendFileSync(${JSON.stringify(callLogPath)}, "call\\n");`,
+      '  process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { "models/openai": "sk-test" } }));',
+      "});",
+      "",
+    ].join("\n");
+    const config = (port: number) =>
+      asConfig({
+        gateway: { mode: "local", port },
+        secrets: {
+          providers: {
+            vault: {
+              source: "exec",
+              command: process.execPath,
+              args: ["-e", providerScript],
+              passEnv: ["PATH"],
+              timeoutMs: 5_000,
+              noOutputTimeoutMs: 5_000,
+            },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: { source: "exec", provider: "vault", id: "models/openai" },
+              models: [],
+            },
+          },
+        },
+      });
+    const calls = async () =>
+      (await fs.readFile(callLogPath, "utf8").catch(() => "")).split("\n").filter(Boolean).length;
+    let invalidateNextAuthStoreLoad = false;
+    let authStoreInvalidations = 0;
+    let authStoreLoads = 0;
+    const loadAuthStore = () => {
+      authStoreLoads += 1;
+      if (invalidateNextAuthStoreLoad && authStoreInvalidations < 3) {
+        authStoreInvalidations += 1;
+        noteRuntimeAuthProfileStorePersistedMutation(undefined, {
+          credentialsChanged: true,
+          stateChanged: false,
+          profileIds: [],
+        });
+      }
+      return { version: 1, profiles: {} };
+    };
+
+    activateSecretsRuntimeSnapshot(
+      await prepareSnapshot({
+        config: config(18789),
+        env: { PATH: process.env.PATH ?? "" },
+        agentDirs: [root],
+        includeAuthStoreRefs: true,
+        loadAuthStore,
+        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+      }),
+    );
+    const initialCalls = await calls();
+    invalidateNextAuthStoreLoad = true;
+    const result = await refreshActiveSecretsRuntimeSnapshotForConfig({
+      sourceConfig: config(19001),
+      includeAuthStoreRefs: true,
+    });
+    const refreshProviderCalls = (await calls()) - initialCalls;
+    expect(authStoreInvalidations).toBe(3);
+    expect(authStoreLoads).toBeGreaterThan(2);
+    expect(result).toBe(true);
+    expect(refreshProviderCalls).toBe(1);
+  });
+
   it("retains resolved credentials for UI edits but re-resolves explicit and changed-input refreshes", async () => {
     const secretFile = path.join(tempDirs.make("openclaw-ui-secret-"), "secrets.json");
     await fs.writeFile(secretFile, JSON.stringify({ apiKey: "prepared-value" }), { mode: 0o600 });
