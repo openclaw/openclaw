@@ -1673,8 +1673,8 @@ AFTER_CD
               frozen_target: String(frozen),
             },
             steps: {
-              node_setup: { outcome: "success", outputs: {} },
-              bun_setup: { outcome: "success", outputs: {} },
+              node_setup: { outcome: "success" as const, outputs: {} },
+              bun_setup: { outcome: "success" as const, outputs: {} },
             },
           };
           const lintRuns = evaluateWorkflowExpression(lint.env.FORMAT_CHECK, context);
