@@ -143,7 +143,6 @@ const enNewSessionSetup = {
     worktreeName: "Name",
     worktreeNamePlaceholder: "From session title",
     worktreeBranchNote: "Creates branch {branch} in a separate checkout.",
-    worktreeBranchFromTitleNote: "Uses the session title if blank.",
     worktreeNameInvalid: "Use lowercase letters, digits, and dashes.",
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
