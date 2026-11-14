@@ -107,17 +107,27 @@ suite.define(() => {
     });
   });
 
-  it("renders the MCP server load as a skeleton", async () => {
-    await withPage(async (page) => {
-      await installMockGateway(page, { heldMethods: ["config.get"] });
-      await page.goto(`${suite.server.baseUrl}settings/mcp`);
-      await waitForControlUiRoute(page, {
-        pathname: "/settings/mcp",
-        routeId: "mcp",
+  it.each(["config.get", "config.schema"])(
+    "keeps MCP loading inside its sections while %s is pending",
+    async (method) => {
+      await withPage(async (page) => {
+        const gateway = await installMockGateway(page, { heldMethods: [method] });
+        await page.goto(suite.server.baseUrl + "settings/mcp");
+        await waitForControlUiRoute(page, { pathname: "/settings/mcp", routeId: "mcp" });
+        await gateway.waitForRequest(method);
+        if (method === "config.get") {
+          await expectLoadingState(page.locator(".mcp-server-list"));
+        }
+        expect(await page.locator(".config-loading").count()).toBe(0);
+        await expectLoadingState(page.locator("#config-section-panel"));
+        await gateway.resolveDeferred(method);
+        await expect
+          .poll(() => page.locator("#config-section-panel .settings-loading-skeleton").count())
+          .toBe(0);
+        expect(await page.locator(".mcp-server-list").isVisible()).toBe(true);
       });
-      await expectLoadingState(page.locator(".mcp-server-list"));
-    });
-  });
+    },
+  );
 
   it("renders the Plugins catalog load as a skeleton", async () => {
     await withPage(async (page) => {

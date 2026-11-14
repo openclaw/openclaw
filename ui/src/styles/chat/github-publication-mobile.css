@@ -266,6 +266,10 @@
   opacity: 0.6;
 }
 
+.github-publication-mobile__actions .chat-pr__create:disabled[aria-busy="true"] {
+  opacity: 1;
+}
+
 .github-publication-mobile__heading {
   display: flex;
   align-items: center;
