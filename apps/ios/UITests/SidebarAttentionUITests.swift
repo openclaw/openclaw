@@ -46,19 +46,51 @@ final class SidebarAttentionUITests: XCTestCase {
         XCTAssertTrue(review.waitForExistence(timeout: 15), app.debugDescription)
         let parent = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Website refresh")).firstMatch
         XCTAssertTrue(parent.waitForExistence(timeout: 10))
-        let grandchild = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Family grandchild")).firstMatch
+        let grandchild = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Family grandchild"))
+            .firstMatch
         XCTAssertTrue(grandchild.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Pending review")).count, 1)
         self.capture(app, named: "family-expanded")
+        if environment["FAMILY_PLACEMENT_PROOF"] == "1" {
+            review.press(forDuration: 1)
+            XCTAssertTrue(app.buttons["Rename…"].waitForExistence(timeout: 5))
+            for title in ["Pin", "Unpin", "Move to Group"] {
+                XCTAssertFalse(
+                    app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch.exists,
+                    title)
+            }
+            self.capture(app, named: "family-sidebar-child-menu")
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.85)).tap()
+            let all = app.buttons["All Sessions…"]
+            if !all.isHittable { app.swipeUp() }
+            XCTAssertTrue(all.waitForExistence(timeout: 5))
+            all.tap()
+            let childRow = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Pending review, chat,"))
+                .firstMatch
+            XCTAssertTrue(childRow.waitForExistence(timeout: 10), app.debugDescription)
+            self.capture(app, named: "family-sessions-upgrade")
+            childRow.press(forDuration: 1)
+            XCTAssertTrue(app.buttons["Rename…"].waitForExistence(timeout: 5))
+            for title in ["Pin", "Unpin", "Move to Group"] {
+                XCTAssertFalse(
+                    app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch.exists,
+                    title)
+            }
+            self.capture(app, named: "family-sessions-child-menu")
+            return
+        }
+
         let collapse = app.buttons["Hide Sub-sessions"].firstMatch
         XCTAssertTrue(collapse.waitForExistence(timeout: 10))
-        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: collapse.frame.midX, dy: parent.frame.midY)).tap()
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: collapse.frame.midX, dy: parent.frame.midY))
+            .tap()
         XCTAssertTrue(review.waitForNonExistence(timeout: 5))
         XCTAssertTrue(grandchild.waitForNonExistence(timeout: 5))
         self.capture(app, named: "family-collapsed")
         let expand = app.buttons["Show Sub-sessions"].firstMatch
         XCTAssertTrue(expand.waitForExistence(timeout: 5))
-        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: expand.frame.midX, dy: parent.frame.midY)).tap()
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: expand.frame.midX, dy: parent.frame.midY))
+            .tap()
         XCTAssertTrue(review.waitForExistence(timeout: 5))
         XCTAssertTrue(grandchild.waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Pending review")).count, 1)

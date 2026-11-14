@@ -324,7 +324,8 @@ public enum ChatSessionSidebarModel {
             .filter { $0.depth > 0 }.map(\.id))
     }
 
-    static func tree(
+    /// Resolve roster ancestry without applying sidebar visibility or status filters.
+    public static func tree(
         from sessions: [OpenClawChatSessionEntry],
         identity: (OpenClawChatSessionEntry) -> String = { $0.key }) -> [Node]
     {

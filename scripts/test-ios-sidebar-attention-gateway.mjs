@@ -391,6 +391,7 @@ wss.on("connection", (ws) => {
               displayName: "Pending review",
               label: "Pending review",
               category: "Other",
+              pinned: process.env.FAMILY_PLACEMENT_PROOF === "1",
               childSessions: ["agent:main:attention-grandchild"],
               kind: "direct",
               updatedAt: created - 60000,
