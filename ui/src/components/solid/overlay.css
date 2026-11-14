@@ -631,7 +631,7 @@ a.oc-menu-item[href] {
    trying position fallbacks while another surface opens (openclaw/openclaw#196820).
    A closing surface is only fading out, so it may return to its primary side for that
    exit. !important overrides the surface-specific fallback lists. */
-.oc-overlay[data-phase="closing"] {
+[data-phase="closing"] {
   position-try-fallbacks: none !important;
 }
 
