@@ -121,9 +121,17 @@ if (!isMainThread) {
             models,
           },
         });
+        const constructorMs = performance.now() - started;
+        let onlineMs;
+        worker.once("online", () => {
+          onlineMs = performance.now() - started;
+        });
         active.push(worker);
         const [result] = await once(worker, "message");
-        readyMs += performance.now() - started;
+        result.readyMs = performance.now() - started;
+        result.constructorMs = constructorMs;
+        result.onlineMs = onlineMs;
+        readyMs += result.readyMs;
         const hostCpu = process.threadCpuUsage(hostCpuBefore);
         result.cpuMs += (hostCpu.user + hostCpu.system) / 1000;
         if (index < readers) assert.equal(result.checksum, expected);
@@ -139,6 +147,8 @@ if (!isMainThread) {
           readers,
           models,
           hostLoad,
+          hostLoadAfter: loadavg(),
+          workerSamples: results,
           readyMs,
           cpuMs:
             (publishCpu.user + publishCpu.system) / 1000 +
