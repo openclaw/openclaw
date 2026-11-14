@@ -153,6 +153,7 @@ const enNewSessionSetup = {
     dictate: "Dictate",
     readingAttachment: "Reading attachment",
     start: "Start session",
+    backgroundSend: "Background",
     created: "Session created",
     startInTerminal: "Start in terminal",
     nativeTerminalHint:

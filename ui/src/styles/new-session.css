@@ -808,6 +808,13 @@ div.new-session-page__project-search {
   border-radius: var(--radius-md);
 }
 
+.new-session-page__start-shortcuts {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .new-session-page__start-submit.new-session-page__start-submit--busy svg {
   animation: btn-spinner-spin 2.25s linear infinite;
 }
