@@ -3325,7 +3325,6 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       "android-version",
       "android-pin-version",
       "docker-release-policy",
-      "docker-release-artifacts",
       "full-release-validation-at-sha",
       "ios-version",
       "openclaw-npm-extended-stable-release",
@@ -3566,12 +3565,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^\.github\/workflows\/docker-release(?:-prepare)?\.yml$/u,
-    [
-      "src/dockerfile.test.ts",
-      "docker-channel-promote",
-      "docker-release-artifacts",
-      "vercel-container-registry-publish",
-    ],
+    ["src/dockerfile.test.ts", "docker-channel-promote", "vercel-container-registry-publish"],
   ],
   [/^\.github\/workflows\/install-smoke\.yml$/u, ["install-smoke-no-push-workflow", installDocker]],
   [
@@ -3595,7 +3589,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^\.github\/workflows\/openclaw-release-publish\.yml$/u,
-    [packageAcceptance, "docker-release-artifacts", "vercel-container-registry-publish"],
+    [packageAcceptance, "vercel-container-registry-publish"],
   ],
   [/^\.github\/workflows\/package-acceptance\.yml$/u, [packageAcceptance]],
   [
