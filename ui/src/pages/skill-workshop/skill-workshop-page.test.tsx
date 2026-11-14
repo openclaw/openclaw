@@ -464,6 +464,28 @@ it("reviews a draft as a diff against the live skill, applies it, and follows th
   });
 });
 
+it("keeps unchanged draft instructions neutral while support files still need review", async () => {
+  const request = gateway({
+    list: { ...list, drafts: [draftFor(SKILL)] },
+    read: (params: RequestParams & { draftId?: string }) => ({
+      ...skillRead,
+      files: params.draftId ? ["SKILL.md", "references/rollback.md"] : ["SKILL.md"],
+      content:
+        params.filePath === "references/rollback.md"
+          ? "Rollback with make undo."
+          : skillRead.content,
+    }),
+  });
+  const page = await mount(request, draftAccess);
+  await click(page, "Drafts 1");
+  await waitText(page, "This version matches today’s instructions.");
+  expect(page.textContent).not.toContain("Discard it.");
+  await click(page, "references/rollback.md");
+  await waitText(page, "Rollback with make undo.");
+  expect(button(page, "Apply")?.disabled).toBe(false);
+  expect(button(page, "Discard")?.disabled).toBe(false);
+});
+
 it("shows only the drafts list on the Drafts tab of an agent with no learned skills", async () => {
   const request = gateway({
     list: { ...list, skills: [], archived: [], drafts: [draftFor("new-skill")] },

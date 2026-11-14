@@ -452,7 +452,6 @@ export function Diff(props: {
   after: string;
   beforeLabel: string;
   afterLabel: string;
-  sameText?: string;
   tooLargeText?: string;
   /** Which side to show when there is no line diff; `before` unless set. */
   fallbackSide?: "before" | "after";
@@ -466,7 +465,7 @@ export function Diff(props: {
           <p class="sw-diff__same">
             {lines() === null
               ? (props.tooLargeText ?? t("skillWorkshop.viewer.diffTooLarge"))
-              : (props.sameText ?? t("skillWorkshop.viewer.noDiff"))}
+              : t("skillWorkshop.viewer.noDiff")}
           </p>
           <MarkdownHtml
             class="sw-markdown chat-text"
