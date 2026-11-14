@@ -1,5 +1,9 @@
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agents/agent-runtime-id.js";
+import type { SessionMaintenanceRequest } from "../../agents/session-maintenance/run.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureAgentRunLifecycleGeneration } from "../../infra/agent-events.js";
 import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
@@ -13,18 +17,24 @@ import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import type { TalkClientRunAuthority } from "./client-run-authority.js";
 import { isTalkConsultSourceCurrent } from "./run-ownership.js";
 
 const loadTalkAgentExecution = createLazyRuntimeModule(async () => {
-  const [embeddedAgent, admission] = await Promise.all([
+  const [embeddedAgent, admission, maintenance, catalog] = await Promise.all([
     import("../../agents/embedded-agent.js"),
     import("../../agents/admitted-run-context.js"),
+    import("../../agents/session-maintenance/run.js"),
+    import("../../agents/model-catalog.runtime.js"),
   ]);
   return {
     runEmbeddedAgent: embeddedAgent.runEmbeddedAgent,
+    loadProviderScopedThinkingCatalog: catalog.loadProviderScopedThinkingCatalog,
+    createSessionMaintenanceFollowup: maintenance.createSessionMaintenanceFollowup,
+    scheduleSessionMaintenance: maintenance.scheduleSessionMaintenance,
     createOperationalRunInstanceRef: admission.createOperationalRunInstanceRef,
     prepareAgentRunAdmission: admission.prepareAgentRunAdmission,
   };
@@ -106,6 +116,7 @@ export function createTalkClientAgentRuntime(params: {
     assertSourceCurrent();
     // One execution consumes this consultation's registration, never a later retry.
     sourceAcquired = params.getRegisteredSource !== undefined;
+    let scheduleMaintenance: (() => void) | undefined;
     return await withSessionTurn(
       {
         sessionKey,
@@ -162,9 +173,20 @@ export function createTalkClientAgentRuntime(params: {
             // Provider-owned work can outlive or replace its audio transport. Unlike
             // chat-backed Talk, it has no independent Chat terminal delivery; hiding
             // its final transcript would lose the answer when no spoken replacement arrives.
-            return await execution.runEmbeddedAgent({
+            const startedAt = Date.now();
+            const runLifecycleGeneration = captureAgentRunLifecycleGeneration(runParams.runId);
+            let auth: { authProfileId?: string; authProfileIdSource?: "auto" | "user" } | undefined;
+            let compactionRequestBudget: SessionMaintenanceRequest["compactionRequestBudget"];
+            const result = await execution.runEmbeddedAgent({
               ...runParams,
               preparedRunAdmission,
+              // Consults have no reply pipeline, so they own the post-turn upkeep typed turns get.
+              onSuccessfulAuthProfile: (authProfileId) => {
+                auth = { authProfileId };
+              },
+              onCompactionRequestBudget: (budget) => {
+                compactionRequestBudget = budget;
+              },
               // Speech is mirrored separately. Keep generated input in current-turn custody,
               // but never display it or replay it as a later user request.
               userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
@@ -187,6 +209,81 @@ export function createTalkClientAgentRuntime(params: {
                 },
               }),
             });
+            const agentMeta = result.meta?.agentMeta;
+            const { agentDir } = runParams;
+            if (
+              auth &&
+              agentDir &&
+              agentMeta?.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID &&
+              !agentMeta.compactionCount &&
+              !result.meta?.aborted &&
+              !result.meta?.yielded &&
+              !result.meta?.error &&
+              !result.payloads?.some((payload) => payload.isError) &&
+              config.agents?.defaults?.compaction?.enabled !== false
+            ) {
+              // Read while the turn is admitted: its revision and catalog fence the upkeep.
+              // Optional preparation must never replace the completed consult's answer.
+              const entry = await agentRuntime.session
+                .getSessionEntryAsync({ agentId, storePath, sessionKey, readConsistency: "latest" })
+                .catch(() => undefined);
+              if (entry?.sessionId === sessionId) {
+                // Maintenance budgets the completed route's window from its admitted catalog.
+                const thinkingCatalog = await execution
+                  .loadProviderScopedThinkingCatalog({
+                    config,
+                    provider: agentMeta.provider,
+                    model: agentMeta.model,
+                    agentRuntime: OPENCLAW_AGENT_RUNTIME_ID,
+                    agentId,
+                    agentDir,
+                    workspaceDir: runParams.workspaceDir,
+                  })
+                  .catch(() => undefined);
+                const request: SessionMaintenanceRequest = {
+                  prepared: { cfg: config, sessionKey, storePath, timeoutMs: runParams.timeoutMs },
+                  followupRun: execution.createSessionMaintenanceFollowup({
+                    run: {
+                      agentId,
+                      agentDir,
+                      workspaceDir: runParams.workspaceDir,
+                      cwd: runParams.cwd,
+                      messageProvider: runParams.messageProvider,
+                      agentAccountId: runParams.agentAccountId,
+                      thinkLevel: runParams.thinkLevel,
+                      thinkingCatalog,
+                      verboseLevel: "off",
+                      timeoutMs: runParams.timeoutMs,
+                      senderIsOwner: runParams.senderIsOwner,
+                      conversationToolPolicy: runParams.conversationToolPolicy,
+                    },
+                    sessionEntry: entry,
+                    cfg: config,
+                    sessionKey,
+                    provider: agentMeta.provider,
+                    model: agentMeta.model,
+                    auth: {
+                      authProfileId: auth.authProfileId,
+                      authProfileIdSource: auth.authProfileId
+                        ? auth.authProfileId === entry.authProfileOverride?.trim()
+                          ? resolveCollapsedSessionAuthPinSource(entry)
+                          : "auto"
+                        : undefined,
+                    },
+                  }),
+                  sessionId,
+                  lifecycleRevision: entry.lifecycleRevision,
+                  lifecycleGeneration: runLifecycleGeneration,
+                  startedAt,
+                  agentHarnessId: agentMeta.agentHarnessId,
+                  compactionRequestBudget,
+                };
+                // The consult's work scope closes when it returns; upkeep owns its own root.
+                scheduleMaintenance = () =>
+                  runOutsideAsyncWorkScope(() => execution.scheduleSessionMaintenance(request));
+              }
+            }
+            return result;
           } finally {
             // Accepted terminal writes commit under this admission; abort still closes it immediately.
             try {
@@ -200,7 +297,7 @@ export function createTalkClientAgentRuntime(params: {
           retained?.release();
         }
       },
-    );
+    ).finally(() => scheduleMaintenance?.());
   };
   Object.defineProperty(agentRuntime, "runEmbeddedAgent", {
     configurable: true,
