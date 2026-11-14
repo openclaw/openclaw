@@ -303,6 +303,9 @@ describe("receipt-backed aggregate recovery", () => {
     ).rejects.toThrow("child verification reached");
     expect(verifyChild).toHaveBeenCalledOnce();
     expect(verifyChild.mock.calls[0]?.[2]?.deadlineMs).toBe(now + 600_000);
+    expect(verifyChild.mock.calls[0]?.[1]?.policyTargetVersion).toBe(
+      recovery.candidateBinding.package.version,
+    );
   });
 
   it("bounds Docker transfers and reconstructs recovery payloads from live metadata", async () => {
@@ -336,7 +339,7 @@ describe("receipt-backed aggregate recovery", () => {
         };
         return {
           selection,
-          run: {},
+          run: { status: "completed", conclusion: "success" },
           jobs: [],
           receipt: {
             jobs: coverage.requiredJobs.map((name) => ({
@@ -693,6 +696,22 @@ describe("receipt-backed aggregate recovery", () => {
     };
     await revalidateReceiptRecoveryRuns(recovery, client);
     expect(new Set(calls).size).toBe(8);
+    const normalCi = recovery.children.normalCi;
+    if (!normalCi) {
+      throw new Error("fixture is missing the normal CI child");
+    }
+    const waivedRun = normalCi.runId;
+    const failedClient = {
+      getRun: async (id: string) => ({
+        ...(await client.getRun(id)),
+        conclusion: id === waivedRun ? "failure" : "success",
+      }),
+    };
+    await expect(revalidateReceiptRecoveryRuns(recovery, failedClient)).rejects.toThrow(
+      "current attempt changed",
+    );
+    const verifiedChildren = [{ runId: waivedRun, conclusion: "failure" }];
+    await revalidateReceiptRecoveryRuns(recovery, failedClient, verifiedChildren);
     attempt = 2;
     await expect(revalidateReceiptRecoveryRuns(recovery, client)).rejects.toThrow(
       "current attempt changed",
