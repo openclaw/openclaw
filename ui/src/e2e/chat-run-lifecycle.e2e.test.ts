@@ -451,7 +451,7 @@ suite.define(() => {
     expect(await page.locator(".chat-turn-recap").allTextContents()).not.toEqual(
       expect.arrayContaining([expect.stringContaining("Done in")]),
     );
-    expect(await page.locator(".chat-turn-recap").textContent()).toBe("42 output tokens");
+    expect(await page.locator(".chat-turn-recap").count()).toBe(0);
     await gateway.setSessionsListResponse({ sessions: [completedSession] });
 
     await page.reload();

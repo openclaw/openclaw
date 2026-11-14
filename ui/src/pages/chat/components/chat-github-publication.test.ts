@@ -239,10 +239,14 @@ it.each(["system-configured", "agent-override", null] as const)(
   },
 );
 
-it.each([false, true])(
-  "offers radio account choices, disambiguating matching logins only: %s",
-  async (sameLogin) => {
-    const shared = { source: "agent-override" as const, accountId: 1, login: "agent-bot" };
+it.each([
+  [false, "agent-override", "Own account"],
+  [true, "agent-override", "Own account"],
+  [true, "system-configured", "Shared agent account"],
+] as const)(
+  "offers radio account choices, disambiguating matching logins only: %s (%s)",
+  async (sameLogin, sharedSource, sourceLabel) => {
+    const shared = { source: sharedSource, accountId: 1, login: "agent-bot" };
     const personal = personalAccount(sameLogin ? shared.login : "alice-tools");
     const onSelect = vi.fn();
     const options = { shared, personal, pendingPersonal: null, latestShared: null };
@@ -266,7 +270,8 @@ it.each([false, true])(
     ]);
     expect(choices[0]?.textContent).toContain("@agent-bot");
     expect(choices[1]?.textContent).toContain(sameLogin ? "@agent-bot" : "@alice-tools");
-    expect(menu?.textContent?.includes("Agent override")).toBe(sameLogin);
+    expect(menu?.textContent?.includes(sourceLabel)).toBe(sameLogin);
+    expect(menu?.textContent).not.toMatch(/System GitHub|Agent override/);
     expect(menu?.textContent?.includes("My GitHub")).toBe(sameLogin);
     expect(menu?.textContent).not.toContain("applies only to this explicit Publish PR action");
     expect(choices[0]?.querySelector(".oc-menu-item__details svg")).not.toBeNull();

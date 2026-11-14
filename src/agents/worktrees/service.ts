@@ -18,6 +18,7 @@ import {
 } from "./capacity.js";
 import { ensureEmptyWorktreeSource, removeUnusedEmptyWorktreeSource } from "./empty-source.js";
 import { hasWorktreeUnknownOutcome, WorktreePendingContentionError } from "./errors.js";
+import type { WorktreeOrphanFailures } from "./gc-artifacts.js";
 import { collectRetiredWorktreeArtifacts } from "./gc-artifacts.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
 import { autoRemovalProtectionReason, type WorktreeCleanupDeferrals } from "./gc-protection.js";
@@ -63,6 +64,7 @@ import {
   materializeRepositoryWorktree,
   prepareWarmWorktree,
 } from "./repository-setup.js";
+import { IDLE_GC_MS } from "./retention.js";
 import {
   captureWorktreeRunEndContext,
   withWorktreeRunEnd,
@@ -120,7 +122,6 @@ export {
   type WorktreeRemovalFailureReason,
 } from "./removal-errors.js";
 
-export const IDLE_GC_MS = 7 * 24 * 60 * 60 * 1000; // Idle worktrees remain restorable after automatic cleanup.
 export const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // Snapshot refs expire with their registry affordance.
 export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -164,9 +165,7 @@ export class ManagedWorktreeService {
   private readonly getConfig: ServiceOptions["getConfig"];
   private readonly capacity: ReturnType<typeof createWorktreeCapacityOwner>;
   private readonly cleanupDeferrals: WorktreeCleanupDeferrals = new Map();
-  private readonly orphanCleanupFailures: Parameters<
-    typeof collectRetiredWorktreeArtifacts
-  >[0]["orphanFailures"] = new Map();
+  private readonly orphanCleanupFailures: WorktreeOrphanFailures = new Map();
   readonly maintainGit: ReturnType<typeof createWorktreeGitMaintenance>;
 
   constructor(options: ServiceOptions = {}) {
@@ -1020,6 +1019,7 @@ export class ManagedWorktreeService {
         getConfig: this.getConfig,
         records,
         expiresBefore: now - SNAPSHOT_RETENTION_MS,
+        retryDeferred: params.retryDeferred,
         progress,
         orphanFailures: this.orphanCleanupFailures,
         withAllocationLease: (run) =>

@@ -49,6 +49,7 @@ export type SessionRecentConversationTurn = SessionRecentConversationText & {
 
 export type ReadRecentSessionConversationTextOptions = {
   beforeTimestampMs?: number;
+  deliveryOnly?: boolean;
   includeCronDirectDeliveryContext?: boolean;
   includeMessageToolSourceReplies?: boolean;
   limit?: number;
@@ -63,10 +64,15 @@ export type ReadRecentSessionConversationTurnOptions = ReadRecentSessionConversa
   candidateMessageIds?: readonly string[];
 };
 
+type ExtractedRecentConversationText = {
+  deliveryOnly: boolean;
+  entry: SessionRecentConversationTurn;
+};
+
 function extractRecentConversationText(
   event: TranscriptEvent,
   options: ReadRecentSessionConversationTurnOptions = {},
-): SessionRecentConversationTurn | undefined {
+): ExtractedRecentConversationText | undefined {
   const parsed = asOptionalRecord(event);
   const message = asOptionalRecord(parsed?.message);
   if (
@@ -84,12 +90,15 @@ function extractRecentConversationText(
     !Array.isArray(deliveryMirror) &&
     "kind" in deliveryMirror &&
     deliveryMirror.kind === CRON_DIRECT_DELIVERY_CONTEXT_KIND;
-  if (
-    message.role === "assistant" &&
-    isTranscriptOnlyOpenClawAssistantMessage(message) &&
-    !includeCronDirectDeliveryContext &&
-    !(options.includeMessageToolSourceReplies && readTerminalSourceReplyDeliveryMirror(message))
-  ) {
+  const transcriptOnlyAssistant =
+    message.role === "assistant" && isTranscriptOnlyOpenClawAssistantMessage(message);
+  const deliveryOnly =
+    transcriptOnlyAssistant &&
+    (includeCronDirectDeliveryContext ||
+      Boolean(
+        options.includeMessageToolSourceReplies && readTerminalSourceReplyDeliveryMirror(message),
+      ));
+  if (transcriptOnlyAssistant && !deliveryOnly) {
     return undefined;
   }
   const upstreamUserText =
@@ -139,7 +148,7 @@ function extractRecentConversationText(
       entry.isCompletedAnswer = true;
     }
   }
-  return entry;
+  return { deliveryOnly, entry };
 }
 
 /** Select recent text inside the caller's single transcript snapshot. */
@@ -159,7 +168,7 @@ export function readRecentTranscriptConversationText(
   // retain their platform context instead of turning this into an unbounded scan.
   const maxMessages = pending ? MAX_VISIBLE_MESSAGE_MAX_MESSAGES : Number.POSITIVE_INFINITY;
   let remainingBytes = MAX_VISIBLE_MESSAGE_MAX_BYTES;
-  const recent: SessionRecentConversationTurn[] = [];
+  const recent: ExtractedRecentConversationText[] = [];
   for (
     let offset = 0;
     offset < maxMessages && (pending ? pending.size > 0 : recent.length < limit);
@@ -176,21 +185,21 @@ export function readRecentTranscriptConversationText(
       ? page.events.slice(page.events.length - page.newestContiguousEventCount)
       : page.events;
     for (const event of events.toReversed()) {
-      const entry = extractRecentConversationText(event.event, options);
+      const extracted = extractRecentConversationText(event.event, options);
       if (
-        entry &&
+        extracted &&
         (options.beforeTimestampMs === undefined ||
-          entry.timestamp === undefined ||
-          entry.timestamp < options.beforeTimestampMs) &&
+          extracted.entry.timestamp === undefined ||
+          extracted.entry.timestamp < options.beforeTimestampMs) &&
         (options.minTimestampMs === undefined ||
-          entry.timestamp === undefined ||
-          entry.timestamp >= options.minTimestampMs)
+          extracted.entry.timestamp === undefined ||
+          extracted.entry.timestamp >= options.minTimestampMs)
       ) {
         // Preserve intervening user rows: they prevent unrelated later answers
         // from suppressing an earlier unanswered candidate.
-        recent.push(entry);
-        if (entry.messageId) {
-          pending?.delete(entry.messageId);
+        recent.push(extracted);
+        if (extracted.entry.messageId) {
+          pending?.delete(extracted.entry.messageId);
         }
         if (pending ? pending.size === 0 : recent.length >= limit) {
           break;
@@ -207,5 +216,7 @@ export function readRecentTranscriptConversationText(
       break;
     }
   }
-  return recent.toReversed();
+  return recent
+    .toReversed()
+    .flatMap(({ deliveryOnly, entry }) => (!options.deliveryOnly || deliveryOnly ? [entry] : []));
 }

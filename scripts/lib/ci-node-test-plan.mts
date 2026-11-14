@@ -4887,7 +4887,8 @@ function createCompactNodeTestShardBundles(
             hostedToolingTailDonation,
             collectTailDonation,
             selectedToolingFiles,
-            compactMode === "push" && options.runnerBackend === "github",
+            options.runnerBackend === "github" &&
+              (compactMode === "push" || options.mainValidation === true),
           )
         : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
     const reducedToolingTier =

@@ -286,7 +286,6 @@ function Toolbar(
           <RefreshButton
             class="cron-refresh"
             label={t("cron.list.refresh")}
-            tooltip={refreshing() ? t("cron.list.refreshing") : t("cron.list.refresh")}
             busy={refreshing()}
             onClick={() => void refresh()}
           />
@@ -651,6 +650,7 @@ function JobRow(
             class="cron-row-run"
             data-test-id={`cron-row-run-${props.job.id}`}
             label={t("cron.actions.runNowJob", { name: displayName() })}
+            tooltip={t("cron.actions.runNow")}
             icon={sessionIcon("play", 12, ROW_GLYPH_STROKE)}
             disabled={props.busy || !props.connected}
             onClick={() => props.onRun(props.job, "force")}

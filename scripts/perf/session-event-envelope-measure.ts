@@ -2,7 +2,7 @@
  * Session event owner microbenchmark: 65 recipients, staggered histories, row deltas,
  * field references and legacy envelopes. Synthetic prepared rows replace only the
  * presentation boundary; the actual event projector and delivery planner run unchanged.
- * The diagnostic sink is inert and access revision fixed; retention accounting still runs.
+ * Access revision is fixed; retention accounting and broadcast diagnostics still run.
  * This measures owner CPU/allocation, not authorization or whole-Gateway latency.
  *
  * node --expose-gc --experimental-test-module-mocks --import ./scripts/tsx.mjs \
@@ -23,9 +23,12 @@
  * --sessions 64 rotates changing rows through the connection-owned delivery histories.
  * --reuse-envelope certifies the fixture's producer-owned envelope for both revisions.
  * --encode-envelopes includes payload encoding once per distinct projected payload.
- * The baseline encoder mirrors the broadcaster's plain-envelope path; the candidate
- * uses its prepared encoder when present. This excludes transport/authorization;
- * session-event-field-order.ts separately compares complete real-broadcaster frames.
+ * The actual broadcaster and frame assembly run with inert socket sinks; use
+ * --broadcast-owner <saved-source.ts> alongside --owner for baseline comparisons.
+ * Histories follow 40/20/10 sidebar/dashboard/chat cohorts with staggered omissions.
+ * --session-kib 128 --clients 70 --audiences 8 --distinct-viewers --source-revisions
+ * exercises large changing session rows. UTF-8 counts and exact complete-frame
+ * digests run in a separate replay, outside CPU/allocation. Compression is excluded.
  * --fields-owner <saved-source.ts> replaces only the field fingerprint owner.
  * --source-revisions replaces materialized rows for each transcript publication;
  * omit it to measure clock/runtime changes over unchanged materialized facts.
@@ -39,6 +42,7 @@
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { readFileSync, writeFileSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
@@ -49,15 +53,17 @@ import { mock } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SessionEventProjection } from "../../src/gateway/server-broadcast-types.js";
+import type { SerializedGatewayFrame } from "../../src/gateway/serialized-json.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
+import type { GatewayWsClient } from "../../src/gateway/server/ws-types.js";
 import type { SessionRowProjection } from "../../src/gateway/session-row-projection.js";
 import type { GatewaySessionRow } from "../../src/gateway/session-utils.types.js";
 import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.js";
 
 const { values } = parseArgs({
   options: {
+    "broadcast-owner": { type: "string", default: "src/gateway/server-broadcast.ts" },
+    "session-kib": { type: "string", default: "0" },
     owner: { type: "string", default: "src/gateway/session-event-projection.ts" },
     "delivery-owner": { type: "string", default: "src/gateway/session-ancestor-references.ts" },
     "fields-owner": { type: "string", default: "src/gateway/session-row-delta-fields.ts" },
@@ -75,6 +81,9 @@ const { values } = parseArgs({
     "yield-events": { type: "boolean", default: false },
   },
 });
+const sessionKiB = Number(values["session-kib"]);
+assert(Number.isSafeInteger(sessionKiB) && sessionKiB >= 0);
+const largeText = "Synthetic 🦞\n".repeat(Math.ceil((sessionKiB * 1024) / 15));
 const events = Number(values.events);
 const clients = Number(values.clients);
 const audiences = Number(values.audiences);
@@ -98,13 +107,17 @@ const fieldsHook = registerHooks({
 let key = "agent:main:stream-envelope";
 let row: GatewaySessionRow;
 let audienceRows: GatewaySessionRow[];
+function audienceFor(client: GatewayClient): number {
+  assert(client.connId);
+  return Number(client.connId.slice("synthetic-".length)) % audiences;
+}
 mock.module(new URL("../../src/gateway/session-row-presentation.ts", import.meta.url), {
   namedExports: {
     prepareSessionRowPublication: () => (client: GatewayClient) => ({
       getAudienceKey: () =>
-        values["distinct-viewers"] ? client.connId : (client.connect.scopes?.[0] ?? "viewer"),
+        values["distinct-viewers"] ? client.connId : String(audienceFor(client)),
       getPresentation: () => ({
-        present: () => audienceRows[Number(client.connect.scopes![0])],
+        present: () => audienceRows[audienceFor(client)],
         sharing: {},
       }),
     }),
@@ -117,16 +130,22 @@ mock.module(new URL("../../src/gateway/session-event-payload.ts", import.meta.ur
     },
   },
 });
-mock.module(new URL("../../src/infra/diagnostic-events.ts", import.meta.url), {
-  namedExports: { emitTrustedDiagnosticEvent: () => {} },
-});
 mock.module(new URL("../../src/gateway/gateway-access-revision.ts", import.meta.url), {
   namedExports: { readGatewayAccessRevision: () => 0 },
 });
 const ownerUrl = new URL("../../src/gateway/session-event-projection.ts", import.meta.url).href;
 const loadedOwnerUrl = `${ownerUrl}?measured-owner`;
+const broadcastUrl = new URL("../../src/gateway/server-broadcast.ts", import.meta.url).href;
+const loadedBroadcastUrl = `${broadcastUrl}?measured-owner`;
 const ownerHook = registerHooks({
   load(url, context, nextLoad) {
+    if (url === loadedBroadcastUrl) {
+      return {
+        format: "module-typescript",
+        source: readFileSync(values["broadcast-owner"], "utf8"),
+        shortCircuit: true,
+      };
+    }
     return url === loadedOwnerUrl
       ? {
           format: "module-typescript",
@@ -139,6 +158,9 @@ const ownerHook = registerHooks({
 const {
   prepareSessionEventProjection,
 }: typeof import("../../src/gateway/session-event-projection.js") = await import(loadedOwnerUrl);
+const { createGatewayBroadcaster }: typeof import("../../src/gateway/server-broadcast.js") =
+  await import(loadedBroadcastUrl);
+const { GatewayClientRegistry } = await import("../../src/gateway/server/client-registry.js");
 ownerHook.deregister();
 const deliveryOwner = path.resolve(values["delivery-owner"]);
 const { ConnectionSessionRows }: typeof import("../../src/gateway/session-ancestor-references.js") =
@@ -221,7 +243,10 @@ const rowFields = freezeTrustedJsonSnapshot({
   activeRunIds: ["synthetic-run"],
   childSessions: ["agent:main:synthetic-child"],
   participants: [],
-  lastAssistantMessage: { text: "Synthetic streamed progress with tool calls", timestamp: 1 },
+  lastAssistantMessage: {
+    text: largeText || "Synthetic streamed progress with tool calls",
+    timestamp: 1,
+  },
 } satisfies Partial<GatewaySessionRow>);
 const materializedRows = Array.from({ length: sessions }, (_, index) =>
   freezeTrustedJsonSnapshot({
@@ -249,17 +274,42 @@ const projection = {
 const peers = Array.from({ length: clients }, (_, index) => ({
   client: {
     connId: `synthetic-${index}`,
+    usesSharedGatewayAuth: false,
+    socket: Object.assign(new EventEmitter(), {
+      readyState: 1,
+      bufferedAmount: 0,
+      send(
+        frame: string | Buffer | SerializedGatewayFrame,
+        options?: { binary: false } | ((error?: Error) => void),
+        done?: (error?: Error) => void,
+      ) {
+        deliveries++;
+        if (activeWireDigest) {
+          if (typeof frame === "string" || Buffer.isBuffer(frame)) {
+            activeWireDigest.update(frame);
+          } else {
+            for (const segment of frame.segments) {
+              activeWireDigest.update(segment);
+            }
+          }
+        }
+        (typeof options === "function" ? options : done)?.();
+      },
+      close() {},
+      terminate() {},
+    }),
     connect: {
+      role: "operator",
       client: { id: "openclaw-control-ui", version: "bench", platform: "bench", mode: "ui" },
       minProtocol: 3,
       maxProtocol: 3,
-      scopes: [String(index % audiences)],
+      scopes: ["operator.admin"],
       caps:
         (index + 1) % 10 === 0
           ? []
           : ["session-row-deltas", ...((index + 1) % 5 ? ["session-event-field-refs"] : [])],
     },
-  } satisfies GatewayClient,
+  } satisfies GatewayWsClient,
   rows: new ConnectionSessionRows(),
 }));
 const references = new Map<GatewayClient, InstanceType<typeof ConnectionSessionRows>>(
@@ -280,39 +330,37 @@ const prepare = prepareSessionEventProjection(
     : undefined,
 );
 
-function encodeEnvelope(result: SessionEventProjection): readonly Buffer[] {
-  if (result.serializePayload) {
-    return result.serializePayload();
-  }
-  // Match serializeFrameField for this fixture's plain, mutable projected envelope.
-  assert(isRecord(result.payload) && result.serializeSession);
-  const envelope = result.payload;
-  const sessionJSON = result.serializeSession();
-  const messageBytes = result.serializeMessage?.();
-  const { session, message } = envelope;
-  envelope.session = undefined;
-  if (messageBytes) {
-    envelope.message = undefined;
-  }
-  let fieldJSON: string;
-  try {
-    fieldJSON = JSON.stringify({ payload: envelope });
-  } finally {
-    envelope.session = session;
-    if (messageBytes) {
-      envelope.message = message;
-    }
-  }
-  const prefix = `,${fieldJSON.slice(1, -2)}${fieldJSON.endsWith("{}}") ? "" : ","}`;
-  const suffix = `"session":${sessionJSON}}`;
-  return messageBytes
-    ? [Buffer.from(prefix), messageBytes, Buffer.from(suffix)]
-    : [Buffer.from(`${prefix}${suffix}`)];
-}
-
 let envelopeEncodings = 0;
-let envelopeBytes = 0;
 let deliveries = 0;
+let activeWireDigest: ReturnType<typeof createHash> | undefined;
+let activeDigest: ReturnType<typeof createHash> | undefined;
+let currentSessionEncoder: unknown;
+let sessionEncodeCounts: Map<unknown, number> | undefined;
+const sessionEncodeHistogram: Record<number, number> = {};
+const broadcaster = createGatewayBroadcaster({
+  clients: new GatewayClientRegistry(peers.map((peer) => peer.client)),
+  canReceiveSessionEvent: () => true,
+  prepareSessionEventProjection: (event, payload, scope) => {
+    const project = prepare(event, payload, scope, context);
+    const encodedPayloads = new Set<unknown>();
+    return (
+      project &&
+      ((client) => {
+        const result = project(client);
+        assert(result);
+        activeDigest?.update(JSON.stringify(result.payload));
+        if (sessionEncodeCounts) {
+          currentSessionEncoder = result.serializeSession;
+        }
+        if (!encodedPayloads.has(result.payload)) {
+          encodedPayloads.add(result.payload);
+          envelopeEncodings++;
+        }
+        return result;
+      })
+    );
+  },
+});
 function publish(
   index: number,
   digest?: ReturnType<typeof createHash>,
@@ -326,7 +374,7 @@ function publish(
     ? freezeTrustedJsonSnapshot({
         ...source,
         lastAssistantMessage: {
-          text: `Synthetic streamed progress with tool calls ${index}`,
+          text: `${largeText || "Synthetic streamed progress with tool calls"} ${index}`,
           timestamp: index,
         },
       })
@@ -360,37 +408,46 @@ function publish(
   audienceRows = Array.from({ length: audiences }, (_, audience) =>
     freezeTrustedJsonSnapshot({ ...row, sharingRole: audience === 0 ? "owner" : "viewer" }),
   );
-  const project = prepare(
-    "sessions.changed",
-    { ...fields, ...row, sessionKey: key, session: row, reason: "send" },
-    { sessionKeys: [key], agentId: "main" },
-    context,
-  );
-  assert(project);
-  const encodedPayloads =
-    values["encode-envelopes"] || wireDigest ? new Map<unknown, readonly Buffer[]>() : undefined;
-  for (const [position, peer] of peers.entries()) {
-    // Staggered delivery creates distinct live histories without growing the recipient set.
-    if (index % 17 === position % 17) {
-      continue;
+  const payload = { ...fields, ...row, sessionKey: key, session: row, reason: "send" };
+  if (values["encode-envelopes"] || wireDigest) {
+    activeDigest = digest;
+    activeWireDigest = wireDigest;
+    sessionEncodeCounts = wireDigest ? new Map() : undefined;
+    broadcaster.broadcastToConnIds(
+      "sessions.changed",
+      payload,
+      new Set(
+        peers.flatMap((peer, position) =>
+          index % 17 === (position % 7 < 4 ? 0 : position % 7 < 6 ? 1 : 2)
+            ? []
+            : [peer.client.connId],
+        ),
+      ),
+    );
+    for (const count of sessionEncodeCounts?.values() ?? []) {
+      sessionEncodeHistogram[count] = (sessionEncodeHistogram[count] ?? 0) + 1;
     }
-    const result = project(peer.client);
-    assert(result);
-    if (encodedPayloads) {
-      let encoded = encodedPayloads.get(result.payload);
-      if (!encoded) {
-        encoded = encodeEnvelope(result);
-        encodedPayloads.set(result.payload, encoded);
-        envelopeBytes += encoded.reduce((bytes, segment) => bytes + segment.byteLength, 0);
-        envelopeEncodings++;
+    sessionEncodeCounts = undefined;
+    currentSessionEncoder = undefined;
+    activeDigest = undefined;
+    activeWireDigest = undefined;
+  } else {
+    const project = prepare(
+      "sessions.changed",
+      payload,
+      { sessionKeys: [key], agentId: "main" },
+      context,
+    );
+    assert(project);
+    for (const [position, peer] of peers.entries()) {
+      if (index % 17 === (position % 7 < 4 ? 0 : position % 7 < 6 ? 1 : 2)) {
+        continue;
       }
-      for (const segment of encoded) {
-        wireDigest?.update(segment);
-      }
+      const result = project(peer.client);
+      assert(result);
+      result.delivered?.(peer.client);
+      deliveries++;
     }
-    digest?.update(JSON.stringify(result.payload));
-    result.delivered?.(peer.client);
-    deliveries++;
   }
 }
 for (let index = 0; index < 200; index++) {
@@ -401,9 +458,10 @@ for (let index = 0; index < 200; index++) {
 }
 for (const peer of peers) {
   peer.rows.clear();
+  peer.rows = new ConnectionSessionRows();
+  references.set(peer.client, peer.rows);
 }
 envelopeEncodings = 0;
-envelopeBytes = 0;
 deliveries = 0;
 global.gc?.();
 const inspector = new Session();
@@ -432,7 +490,8 @@ const elapsedMs = performance.now() - start;
 const cpu = process.threadCpuUsage(cpuStart);
 const memoryAfter = process.memoryUsage();
 const sortedPublicationMs = publicationMs.toSorted((a, b) => a - b);
-const measuredEncoding = { envelopeEncodings, envelopeBytes, deliveries };
+assert(deliveries > 0, "The measured replay must deliver frames");
+const measuredEncoding = { envelopeEncodings, deliveries };
 let sampledBytes: number | undefined;
 if (values.allocations) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -453,15 +512,42 @@ if (global.gc) {
 // Hash in a separate replay so serialization and cryptography do not mask projection savings.
 for (const peer of peers) {
   peer.rows.clear();
+  peer.rows = new ConnectionSessionRows();
+  references.set(peer.client, peer.rows);
 }
 const digest = createHash("sha256");
 const wireDigest = createHash("sha256");
+const utf8 = { encodings: 0, bytes: 0, sessionEncodings: 0, sessionBytes: 0 };
+const fromDescriptor = Object.getOwnPropertyDescriptor(Buffer, "from");
+assert(fromDescriptor);
+const from = Buffer.from.bind(Buffer);
+Buffer.from = new Proxy(from, {
+  apply(target, receiver, args) {
+    if (typeof args[0] === "string") {
+      utf8.encodings++;
+      utf8.bytes += Buffer.byteLength(args[0]);
+      const sessionOffset = args[0].indexOf('"session":');
+      if (sessionOffset >= 0) {
+        utf8.sessionEncodings++;
+        if (sessionEncodeCounts) {
+          sessionEncodeCounts.set(
+            currentSessionEncoder,
+            (sessionEncodeCounts.get(currentSessionEncoder) ?? 0) + 1,
+          );
+        }
+        utf8.sessionBytes += Buffer.byteLength(args[0].slice(sessionOffset));
+      }
+    }
+    return Reflect.apply(target, receiver, args);
+  },
+});
 for (let index = 0; index < events; index++) {
   publish(index, digest, wireDigest);
   if (values["yield-events"]) {
     await setImmediate();
   }
 }
+Object.defineProperty(Buffer, "from", fromDescriptor);
 console.log(
   JSON.stringify({
     owner,
@@ -470,6 +556,9 @@ console.log(
     deliveryOwnerSha256: createHash("sha256").update(readFileSync(deliveryOwner)).digest("hex"),
     node: process.version,
     events,
+    sessionKiB,
+    utf8,
+    sessionEncodeHistogram,
     clients,
     audiences,
     distinctViewers: values["distinct-viewers"],
@@ -485,6 +574,8 @@ console.log(
     threadCpuMs: (cpu.user + cpu.system) / 1000,
     publicationSamples: publicationMs.length,
     publicationP99Ms: sortedPublicationMs[Math.floor(publicationMs.length * 0.99)],
+    publicationP50Ms: sortedPublicationMs[Math.floor(publicationMs.length * 0.5)],
+    publicationsOver180Ms: publicationMs.filter((ms) => ms > 180).length,
     publicationMaxMs: sortedPublicationMs.at(-1),
     sampledBytes,
     payloadDigest: digest.digest("hex"),

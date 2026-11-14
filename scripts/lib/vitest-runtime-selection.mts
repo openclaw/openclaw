@@ -16,10 +16,10 @@ import type { VitestWorkerPreset } from "./vitest-worker-descriptor.mts";
 export const TUI_PTY_BUILT_CLI_CANARY_PATTERN =
   "launches openclaw chat as local mode through a real PTY";
 
-// These built-CLI proofs still read source owners, but their only compiled
-// declarations belong to the production runtime registry.
-const runtimeOnlyBuiltCliFiles = new Set([
+// These E2E proofs need only production declarations in compiled workers.
+const runtimeOnlyE2eFiles = new Set([
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
+  "src/agents/bash-tools.exec-gateway-approval.e2e.test.ts",
   "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts",
   "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
   "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
@@ -111,6 +111,7 @@ const toolingOnlyUnitFiles = new Set([
   "test/control-ui-import-boundary.test.ts",
   "test/extension-test-boundary.test.ts",
   "test/plugin-extension-import-boundary.test.ts",
+  "test/vitest-pr-exempt-retention.test.ts",
   "test/scripts/vitest-prebuilt-ai.test.ts",
   "test/scripts/check-database-worker-ratchet.test.ts",
   "test/scripts/ci-changed-build-selection.test.ts",
@@ -118,6 +119,7 @@ const toolingOnlyUnitFiles = new Set([
   "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
   "test/scripts/ci-changed-node-test-plan.integration.test.ts",
   "test/scripts/ci-workflow-cost.test.ts",
+  "test/scripts/ci-test-timings.test.ts",
   "test/scripts/ci-ui-e2e-selection.test.ts",
   "test/scripts/database-worker-compat.test.ts",
   "test/scripts/eager-import-closure.test.ts",
@@ -184,7 +186,12 @@ export function resolveCiVitestWorkerPreset(
           ),
     );
   return selectVitestWorkerPreset(
-    supports(areRuntimeOnlyVitestUnitFiles, shouldUseRuntimeOnlyVitestWorkers),
+    supports(
+      (files) =>
+        files.length > 0 &&
+        files.every((file) => runtimeOnlyUnitFiles.has(file) || runtimeOnlyE2eFiles.has(file)),
+      shouldUseRuntimeOnlyVitestWorkers,
+    ),
     supports(areToolingOnlyVitestUnitFiles, shouldUseToolingOnlyVitestWorkers),
   );
 }
@@ -240,7 +247,7 @@ export function shouldUseRuntimeOnlyVitestWorkers(
     return false;
   }
   if (config === "test/vitest/vitest.e2e.config.ts") {
-    return files.every((file) => runtimeOnlyBuiltCliFiles.has(file));
+    return files.every((file) => runtimeOnlyE2eFiles.has(file));
   }
   if (
     (config === "test/vitest/vitest.agents-core.config.ts" ||
