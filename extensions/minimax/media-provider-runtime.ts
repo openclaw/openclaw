@@ -85,14 +85,40 @@ function resolveMinimaxGuardedRequestOptions(
     : undefined;
 }
 
-export async function fetchMinimaxResponse(params: {
+type MinimaxFetchParams = {
   stage: ProviderOperationRetryStage;
   url: string;
   init?: RequestInit;
   timeoutMs?: ProviderOperationTimeoutMs;
   requestFailedMessage: string;
   policy: MinimaxRequestPolicy;
-}) {
+};
+
+export async function fetchMinimaxResponse(params: MinimaxFetchParams) {
+  return await fetchMinimaxGuarded(params, resolveMinimaxGuardedRequestOptions(params.policy));
+}
+
+/** Downloads a provider-returned result URL (generated video or music). */
+export async function fetchMinimaxResultDownload(params: Omit<MinimaxFetchParams, "init">) {
+  const { allowPrivateNetwork, dispatcherPolicy } = params.policy;
+  // Result URLs never inherit task credentials or private-network trust; the
+  // opt-in still authorizes the operator's own private proxy host.
+  return await fetchMinimaxGuarded(
+    { ...params, init: { method: "GET" } },
+    {
+      mode: "strict",
+      dispatcherPolicy:
+        allowPrivateNetwork && dispatcherPolicy?.mode === "explicit-proxy"
+          ? { ...dispatcherPolicy, allowPrivateProxy: true }
+          : (dispatcherPolicy ?? { mode: "env-proxy" }),
+    },
+  );
+}
+
+async function fetchMinimaxGuarded(
+  params: MinimaxFetchParams,
+  options: Parameters<typeof fetchWithTimeoutGuarded>[4],
+) {
   return await executeProviderOperationWithRetry({
     provider: "minimax",
     stage: params.stage,
@@ -106,7 +132,7 @@ export async function fetchMinimaxResponse(params: {
           ? timeoutMs
           : undefined,
         fetch,
-        resolveMinimaxGuardedRequestOptions(params.policy),
+        options,
       );
       try {
         await assertOkOrThrowHttpError(result.response, params.requestFailedMessage);
