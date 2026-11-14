@@ -41,6 +41,7 @@ suite.define(() => {
       await suite.withPage(
         { ...createControlUiE2eContextOptions(), viewport: { width: 390, height: 360 } },
         async ({ page }) => {
+          await page.clock.install();
           const status: OpenClawIdStatusResult = {
             status: { state: "on", tunnel: { state: "running", relayOnline: published } },
             channel: "local_operator",
@@ -145,6 +146,7 @@ suite.define(() => {
             .evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().height));
           expect.soft(glyphSizes.every((size) => size <= 32)).toBe(true);
           if (!published) {
+            await page.clock.fastForward(30_000);
             const warning = "Remote access is not connected yet. This claw will keep trying.";
             await dialog.getByRole("button", { name: warning, exact: true }).click();
             await dialog.getByText(warning, { exact: true }).waitFor();

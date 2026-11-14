@@ -78,8 +78,8 @@ Trade-off: K_gw now vouches for a root change, so whoever holds K_gw (the machin
 the claw. Moving a claw to new machine keys is a separate operation, not designed yet.
 
 Owner device certificates have **no expiry unless the person approving the device enters
-one** (`expires_at: null`). A device stops being an owner when it is removed from the claw's
-allowlist.
+one** (`expires_at: null`). A device stops being an owner when its certificate expires or
+it is removed from the claw's allowlist.
 
 `ownerDeviceCertBody` is the certificate builder approvers use: `expires_at` defaults to
 null, and an explicit expiry must be after the issue time. Approval UIs (SAS approval, owner
@@ -317,6 +317,13 @@ a node-invite node. Its node is an implementation detail bound to that same appr
 - **Removing the device removes its node:** a Revocation of the device (directly or through the
   device that approved it) and an inactivity drop of the device remove the bound node with the
   usual node-removal events. A node from an invite is never bound to its approver.
+- **An explicit expiry covers both keys:** when the device certificate expires, its human and
+  bound node keys lose admission together. The Gateway closes their sessions, retires ID-derived
+  node pairings and omits the node from snapshots and active listings. Independently approved
+  descendant devices and invite-enrolled nodes keep their own lifetimes. Renew before expiry
+  to retain the node's existing pairing; after expiry cleanup, certificate renewal alone does
+  not restore the consumed automatic pairing. Pair the node explicitly again, or remove its
+  listing and enroll it again.
 
 ### Node authority and lifecycle
 

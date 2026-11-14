@@ -224,6 +224,7 @@ function ModelOptionButton(
     props.entry.isDefault ? t("chat.modelControls.default") : "",
   );
   const key = createMemo(() => props.rowKey ?? modelPickerOptionKey(props.entry));
+  const modelName = createMemo(() => formatModelLabel(props.entry).toLocaleLowerCase());
   // Query changes should reach only rows whose displayed search facts changed.
   const rank = createMemo(() => search?.row(key())?.rank);
   const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
@@ -297,7 +298,7 @@ function ModelOptionButton(
         .filter(Boolean)
         .join(" ")
         .toLocaleLowerCase()}
-      data-chat-model-name={props.presentation.modelLabel.toLocaleLowerCase()}
+      data-chat-model-name={modelName()}
       data-chat-model-provider-label={providerDisplayLabel(
         props.entry.provider,
       ).toLocaleLowerCase()}
@@ -413,7 +414,7 @@ export function ChatModelPickerOption(props: ChatModelPickerOptionProps) {
   );
 }
 
-export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionProps) {
+function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionProps) {
   const search = useContext(ChatModelSearchContext);
   const key = createMemo(() => `target:${props.groupId}:${props.entry.value}`);
   const rank = createMemo(() => search?.row(key())?.rank);

@@ -350,8 +350,10 @@ describe("chat pane composer controls", () => {
     await waitForSolid(() =>
       expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
     );
-    expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
-      "GPT-5.6 Sol",
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
+        "GPT-5.6 Sol",
+      ),
     );
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
   });
@@ -418,8 +420,11 @@ describe("chat pane composer controls", () => {
       expect(container.querySelectorAll(".chat-composer-model-control")).toHaveLength(1);
       expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
       expect(container.querySelector('[data-chat-permission-select="true"]')).toBeNull();
-      const catalogMessage = container.querySelector(".chat-controls__model-catalog-state");
-      expect(catalogMessage?.textContent).toContain(message);
+      await waitForSolid(() =>
+        expect(
+          container.querySelector(".chat-controls__model-catalog-state")?.textContent,
+        ).toContain(message),
+      );
       expect(
         container.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-disabled"),
       ).toBe(String(!connected));

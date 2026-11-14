@@ -141,6 +141,7 @@ const catalog = {
       dictationStartRecovery: "Check microphone access and transcription settings, then try again.",
       dictationFinalizing: "Finishing dictation…",
       dictationListening: "Listening…",
+      dictationStarting: "Starting microphone…",
       dictationStopAndKeep: "Stop and keep text",
       realtimeTalkCancellationRejected: "Realtime output cancellation was not accepted.",
       realtimeTalkMissingTurnIdentity: "Realtime output is missing its turn identity.",
