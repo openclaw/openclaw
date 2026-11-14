@@ -8,6 +8,10 @@ import { ExitError } from "../runtime.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerCronCli } from "./cron-cli.js";
+import {
+  buildCronCommandShellArgvForGateway,
+  warnIfCronSchedulerDisabled,
+} from "./cron-cli/shared.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 
@@ -877,4 +881,23 @@ it.each([
   await expectCronCommandExit(args);
   expectRuntimeErrorContaining(error);
   expect(callGatewayFromCli).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["warnIfCronSchedulerDisabled", () => warnIfCronSchedulerDisabled({} as never)],
+  [
+    "buildCronCommandShellArgvForGateway",
+    () => buildCronCommandShellArgvForGateway("echo hello", {} as never),
+  ],
+])("passes the async work signal to %s reads", async (_name, run) => {
+  const scope = new AsyncWorkScope();
+  callGatewayFromCli.mockResolvedValueOnce({ enabled: true, platform: "linux" });
+  const running = scope.track(async () => {
+    await run();
+  });
+  await running;
+  await scope.drain();
+  const signal = callGatewayFromCli.mock.calls[0]?.[3]?.signal;
+  // The read must observe the CLI's Ctrl-C signal, or it hangs after SIGINT.
+  expect(signal).toBeInstanceOf(AbortSignal);
 });
