@@ -13,7 +13,6 @@ Enable the plugin before using the command:
 
 ```bash
 openclaw plugins enable workboard
-openclaw gateway restart
 ```
 
 ## Usage
