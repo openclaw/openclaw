@@ -236,12 +236,13 @@ describe("plugin index install records store", () => {
     );
   });
 
-  it("reconciles a persisted package-name record when the JSON5 manifest declares its id", async () => {
+  it("rekeys a persisted package-name record to the JSON5 manifest id and keeps its metadata", async () => {
     const stateDir = makeStateDir();
     const packageName = "@vendor/demo";
     const packageDir = managedPlugin(stateDir, "demo", "2026.5.2", packageName);
     // A strict reader cannot parse this JSON5 manifest, so a released install
-    // records the fallback npm package name as its key.
+    // records the fallback npm package name as its key, with authoritative
+    // metadata the recovery merge must not discard.
     fs.writeFileSync(
       path.join(packageDir, "openclaw.plugin.json"),
       `{
@@ -251,15 +252,24 @@ describe("plugin index install records store", () => {
       }`,
       "utf8",
     );
+    const persisted = npmRecord(packageName, "2026.5.2", packageDir);
     await seedRecords(
       stateDir,
       {
-        [packageName]: npmRecord(packageName, "2026.5.2", packageDir),
+        [packageName]: {
+          ...persisted,
+          integrity: "sha512-persisted",
+          installedAt: "2026-05-02T00:00:00.000Z",
+        },
       },
       [createPluginCandidate(stateDir, "demo")],
     );
     const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
-    expect(loaded.demo).toMatchObject(npmRecord(packageName, "2026.5.2", packageDir));
+    expect(loaded.demo).toMatchObject({
+      ...persisted,
+      integrity: "sha512-persisted",
+      installedAt: "2026-05-02T00:00:00.000Z",
+    });
     expect(loaded[packageName]).toBeUndefined();
   });
 
