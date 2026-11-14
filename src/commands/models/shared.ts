@@ -232,7 +232,7 @@ export function resolveModelsTargetAgent(
 ) {
   const requested = rawAgentId?.trim();
   if (rawAgentId !== undefined && !requested) {
-    throw new Error("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
   const requestedAgentId = requested ? resolveKnownAgentId(cfg, requested) : undefined;
   const resolvedAgentId =

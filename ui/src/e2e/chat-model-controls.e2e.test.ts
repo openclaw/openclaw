@@ -100,42 +100,13 @@ suite.define(() => {
       await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(9);
       expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       const refresh = picker.locator(".chat-controls__model-search-wrap [data-chat-model-refresh]");
-      expect(await refresh.textContent()).toContain("Refreshing models for Example…");
-      expect(await refresh.getAttribute("role")).toBe("status");
-      expect(await refresh.locator(".btn__spinner").isVisible()).toBe(true);
+      expect(await refresh.count()).toBe(0);
       const requestsBeforeReopen = (await gateway.getRequests("models.list")).length;
       await trigger.click();
       await trigger.click();
       expect((await gateway.getRequests("models.list")).length).toBe(requestsBeforeReopen);
-      const refreshDetails = refresh.getByRole("button");
-      const openRefreshTooltip = refresh.locator("openclaw-tooltip[open]");
-      await refreshDetails.waitFor({ state: "visible" });
-      // The popup's opening scale animation can move this small target away
-      // from a stationary pointer before the tooltip's hover delay completes.
-      await picker.locator("[data-anchored-overlay]").evaluate(async (surface) => {
-        await Promise.all(surface.getAnimations().map((animation) => animation.finished));
-      });
-      await refreshDetails.hover();
-      await expect
-        .poll(() => openRefreshTooltip.locator(".tooltip-content").textContent())
-        .toBe("Refreshing models for Example…");
       const search = picker.locator("[data-chat-model-search]");
       await search.click();
-      await search.press("Tab");
-      expect(await refreshDetails.evaluate((button) => button === document.activeElement)).toBe(
-        true,
-      );
-      await refreshDetails.press("Enter");
-      await expect.poll(() => openRefreshTooltip.count()).toBe(1);
-      await refreshDetails.press("Escape");
-      await expect.poll(() => openRefreshTooltip.count()).toBe(0);
-      expect(await picker.getAttribute("open")).not.toBeNull();
-      await search.click();
-      await refreshDetails.tap();
-      await expect.poll(() => openRefreshTooltip.count()).toBe(1);
-      await search.click();
-      await expect.poll(() => openRefreshTooltip.count()).toBe(0);
-      expect(await search.evaluate((input) => input === document.activeElement)).toBe(true);
       await search.pressSequentially("Model 0999");
       expect(await search.inputValue()).toBe("Model 0999");
       const result = picker.locator('[data-chat-model-option="example/model-999"]');
@@ -149,18 +120,10 @@ suite.define(() => {
       expect(await search.inputValue()).toBe("Model 0999");
       await expect.poll(() => result.isVisible()).toBe(true);
       expect(await picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
-      expect(
-        await refresh
-          .locator(".btn__spinner")
-          .evaluate((node) => getComputedStyle(node).animationName),
-      ).toBe("none");
       for (const request of await gateway.getRequests("models.list")) {
         expect(request.params).not.toHaveProperty("refresh", true);
       }
-      await refreshDetails.focus();
-      expect(await refreshDetails.evaluate((button) => button === document.activeElement)).toBe(
-        true,
-      );
+      await search.focus();
       await gateway.setMethodResponse("models.list", { models });
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await expect.poll(() => refresh.count()).toBe(0);

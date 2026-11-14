@@ -74,7 +74,7 @@ async function downloadDatabase(deps: StoreDeps, target: string): Promise<Databa
       });
       // maxOutputLength makes zlib stop inflating at the ceiling rather than
       // allocating whatever the compressed stream claims to expand into.
-      const body = url.endsWith(".gz")
+      const body = new URL(url).pathname.endsWith(".gz")
         ? await gunzipAsync(raw, { maxOutputLength: MAX_DATABASE_BYTES })
         : raw;
       // Parse before publishing so a truncated or HTML error body never replaces
