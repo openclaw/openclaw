@@ -12,6 +12,7 @@ import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 import { getSecurityAuditCommandSecretTargetIds } from "./command-secret-targets.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
 
 type SecurityAuditOptions = {
@@ -72,7 +73,7 @@ export function registerSecurityCli(program: Command) {
           ? rawAuthMode
           : undefined;
       if (rawAuthMode && !authMode) {
-        throw new Error(
+        throwExpectedCliError(
           'Invalid --auth value. Expected "none", "token", "password", or "trusted-proxy".',
         );
       }
@@ -80,12 +81,11 @@ export function registerSecurityCli(program: Command) {
       const password = normalizeOptionalString(opts.password);
       // Explicit runtime auth overrides must include the matching credential.
       if (authMode === "token" && !token) {
-        throw new Error("Invalid --auth token: pass --token <token> for audit auth override.");
+        // Avoid "<flag> <value>" wording here: error redaction masks it as a secret.
+        throwExpectedCliError("--auth token requires --token.");
       }
       if (authMode === "password" && !password) {
-        throw new Error(
-          "Invalid --auth password: pass --password <password> for audit auth override.",
-        );
+        throwExpectedCliError("--auth password requires --password.");
       }
       const auditGatewayAuthOverride: Parameters<
         typeof runSecurityAuditCore
