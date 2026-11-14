@@ -220,3 +220,23 @@ it("passes the run trigger to before_tool_call hooks beside the requester", asyn
   });
   expect(hookRunner.runBeforeToolCall.mock.calls[1]?.[1]).not.toHaveProperty("trigger");
 });
+
+it("forwards toolOwnerPluginId and workspaceDir to before_tool_call hook ctx", async () => {
+  hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+
+  await runBeforeToolCallHook({
+    toolName: "write",
+    params: { path: "/tmp/note.txt", content: "note" },
+    ctx: {
+      agentId: "main",
+      sessionKey: "main",
+      toolOwnerPluginId: "active-memory",
+      workspaceDir: "/tmp/agent-workspace",
+    },
+  });
+
+  expect(hookRunner.runBeforeToolCall.mock.calls[0]?.[1]).toMatchObject({
+    toolOwnerPluginId: "active-memory",
+    workspaceDir: "/tmp/agent-workspace",
+  });
+});

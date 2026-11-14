@@ -23,6 +23,13 @@ export type PluginHookToolContext = {
   sessionKey?: string;
   sessionId?: string;
   runId?: string;
+  /** Plugin id that registered the called tool; absent for core and client-hosted tools. */
+  toolOwnerPluginId?: string;
+  /**
+   * Host workspace for this run, matching the value plugin tool factories received.
+   * Diagnostics-only path fact; not the execution cwd and not an authorization input.
+   */
+  workspaceDir?: string;
   /** Aborts when the owning tool call is cancelled. Hook timeout expiry does not abort this signal. */
   abortSignal?: AbortSignal;
   trace?: DiagnosticTraceContext;
