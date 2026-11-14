@@ -343,6 +343,7 @@ src/plugins/loader.discovery-and-security.test-utils.ts
 src/plugins/loader.hooks-and-runtime.test-utils.ts
 src/plugins/loader.registration.test-utils.ts
 src/plugins/loader.test-harness.ts
+src/plugins/manifest-registry.test.ts
 src/plugins/marketplace.ts
 src/plugins/provider-runtime.test.ts
 src/plugins/sdk-alias.test.ts
