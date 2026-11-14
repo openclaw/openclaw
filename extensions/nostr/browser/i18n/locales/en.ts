@@ -25,7 +25,7 @@ export default {
       profile: "Profile",
       editProfile: "Edit Profile",
       profilePicture: "Profile picture",
-      noProfile: "No profile set.",
+      setupProfile: "Set up Nostr to add or edit a profile.",
       noProfileHint: 'Click "Edit Profile" to add your name, bio, and avatar.',
       name: "Name",
       displayName: "Display Name",

@@ -132,7 +132,7 @@ export function createProfileCard(
       return accountProfile ?? nostr()?.profile ?? null;
     });
     function ProfileSection() {
-      const hasAnyProfileData = () =>
+      const hasDisplayedProfileData = () =>
         profile()?.picture || PROFILE_FIELDS.some((field) => profile()?.[field]);
 
       return (
@@ -140,11 +140,9 @@ export function createProfileCard(
           <SettingsRow
             title={t("channels.nostr.profile")}
             description={
-              hasAnyProfileData() ? undefined : (
-                <>
-                  {t("channels.nostr.noProfile")} {t("channels.nostr.noProfileHint")}
-                </>
-              )
+              hasDisplayedProfileData()
+                ? undefined
+                : t(configured() ? "channels.nostr.noProfileHint" : "channels.nostr.setupProfile")
             }
             control={
               configured() ? (
@@ -154,7 +152,7 @@ export function createProfileCard(
               ) : undefined
             }
           />
-          <Show when={hasAnyProfileData()}>
+          <Show when={hasDisplayedProfileData()}>
             <dl class="settings-kv">
               <Show when={profile()?.picture} keyed>
                 {(picture) => (
