@@ -73,6 +73,9 @@ const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "SessionTranscriptReadFenceError",
   "SqliteWorkerError",
   "SessionCapabilityMetadataChangedError",
+  // Session storage authority; the caller re-admits unstarted work under a fresh lease.
+  "SessionDeliveryGenerationUnavailableError",
+  "SessionDeliveryGenerationRevokedError",
 ]);
 
 export { recordModelFallbackStop } from "./model-fallback-stop.js";

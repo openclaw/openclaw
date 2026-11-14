@@ -41,6 +41,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -51,6 +52,7 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import * as agentExecution from "./agent-runner-execution.js";
+import { clearSessionQueues } from "./queue/cleanup.js";
 import * as routedReplies from "./route-reply.js";
 import { prepareSessionEventDelivery } from "./session-event-delivery.js";
 import {
@@ -254,6 +256,116 @@ it("finalizes a failed-before-reply event after its visitor policy scope closes"
     },
   );
 });
+
+it.for(["queued", "adopting", "stopped", "rotated"] as const)(
+  "re-admits an unstarted wake only while its session lease is unavailable: %s",
+  async (scenario, { signal }) => {
+    await withOpenClawTestState(
+      { label: "session-event-generation-readmission", env: { OPENCLAW_TEST_FAST: "0" } },
+      async (state) => {
+        const config = completionConfig(state.workspaceDir);
+        setRuntimeConfigSnapshot(config);
+        await state.writeConfig(config);
+        openOpenClawStateDatabase();
+        const scope = { agentId: "main", sessionKey: "agent:main:generation-readmission" };
+        const entry = {
+          sessionId: "generation-readmission",
+          lifecycleRevision: "original",
+          permissionMode: "full" as const,
+          updatedAt: Date.now(),
+        };
+        await replaceSessionEntry(scope, entry);
+        const filePath = path.join(state.workspaceDir, "generation-readmission.txt");
+        const queued = scenario === "queued" || scenario === "stopped";
+        const firstStarted = createDeferred();
+        const releaseFirst = createDeferred();
+        const prompts: string[] = [];
+        runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+          prompts.push(params.prompt);
+          if (queued && prompts.length === 1) {
+            await startEmbeddedTurn(params, "reply admission");
+            firstStarted.resolve();
+            await releaseFirst.promise;
+          } else {
+            await attemptRealWrite(params, filePath);
+          }
+          return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+        });
+        const expectedTarget = await captureSessionEventTargetForHost(
+          scope.agentId,
+          scope.sessionKey,
+        );
+        // The command finishes while the agent is still mid-turn, so its wake waits in the queue.
+        const first = queued
+          ? enqueueSessionEventForHost("First admitted work", {
+              ...scope,
+              source: "task",
+              expectedTarget,
+              abortSignal: signal,
+              deliver: false,
+            })
+          : undefined;
+        // A runtime-wide publication retires every prepared lease without changing the row.
+        const invalidateLeases = () => sessionChanges.emit({ all: true, scope: "runtime" });
+        let adoptions = 0;
+        let completion: ReturnType<typeof enqueueSessionEventForHost> | undefined;
+        try {
+          if (first) {
+            await withinTest(firstStarted.promise, signal);
+          }
+          completion = enqueueSessionEventForHost("Background exec completed", {
+            ...scope,
+            source: "exec",
+            sourceTurnId: "exec:generation-process",
+            expectedTarget,
+            abortSignal: signal,
+            deliver: false,
+            // Lands between lease preparation and model start, like a concurrent gateway write.
+            onAdopted: async () => {
+              if (++adoptions > 1 || queued) {
+                return;
+              }
+              if (scenario === "rotated") {
+                await replaceSessionEntry(scope, { ...entry, lifecycleRevision: "rotated" });
+              } else {
+                invalidateLeases();
+              }
+            },
+          });
+          if (first) {
+            await expect(completion.accepted).resolves.toEqual({ ok: true });
+            invalidateLeases();
+            if (scenario === "stopped") {
+              // Stop clears queued work without an error; the dead lease must not revive it.
+              clearSessionQueues([scope.sessionKey]);
+            }
+            releaseFirst.resolve();
+            await withinTest(first.settled, signal);
+          }
+          const outcome = await withinTest(completion.settled, signal);
+          const retried = scenario === "queued" || scenario === "adopting";
+          expect(outcome.executionStarted, outcome.error).toBe(retried);
+          expect(outcome.status === "completed").toBe(retried);
+          // A queued wake's stale lease refuses inside adoption, before the producer callback.
+          expect(adoptions).toBe({ queued: 1, adopting: 2, stopped: 0, rotated: 1 }[scenario]);
+          expect(prompts.filter((prompt) => prompt.includes("Background exec"))).toHaveLength(
+            retried ? 1 : 0,
+          );
+          expect(await fs.readFile(filePath, "utf8").catch(() => undefined)).toBe(
+            retried ? "written\n" : undefined,
+          );
+          expect(completion.cancel()).toBe(false);
+          expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
+        } finally {
+          releaseFirst.resolve();
+          await Promise.allSettled([first?.settled, completion?.settled]);
+          await drainGlobalSingletonLifecycleState("restart");
+          resetSystemEventsForTest();
+        }
+      },
+    );
+  },
+);
 
 it.for([
   "published-deny",
