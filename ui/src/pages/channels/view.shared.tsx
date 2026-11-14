@@ -71,13 +71,16 @@ export function channelProbe(key: string, props: ChannelsProps) {
 }
 
 /** One answer to "does it work", shared by the channel's list row and its dialog. */
-export function resolveChannelHealth(key: string, props: ChannelsProps): ChannelHealth {
+export function resolveChannelHealth(key: string, props: ChannelsProps): ChannelHealth | null {
   const snapshot = props.channels.channelsSnapshot;
+  if (!snapshot) {
+    return null;
+  }
   const display = resolveChannelDisplayState(key, props);
   const failed =
-    snapshot?.statusIssues?.some((issue) => issue.channel === key) ||
+    snapshot.statusIssues?.some((issue) => issue.channel === key) ||
     (typeof display.status?.lastError === "string" && display.status.lastError.trim()) ||
-    resolveChannelAccounts(snapshot?.channelAccounts, key).some((account) => account.lastError) ||
+    resolveChannelAccounts(snapshot.channelAccounts, key).some((account) => account.lastError) ||
     channelProbe(key, props)?.ok === false;
   if (failed) {
     return "attention";
@@ -85,12 +88,20 @@ export function resolveChannelHealth(key: string, props: ChannelsProps): Channel
   if (display.running === true || display.connected === true) {
     return "running";
   }
-  return channelSnapshotEntryIsActive(snapshot ?? null, key) ? "configured" : "notConfigured";
+  return channelSnapshotEntryIsActive(snapshot, key) ? "configured" : "notConfigured";
 }
 
-export function ChannelHealthStatus(params: { health: ChannelHealth }) {
-  const state = () => CHANNEL_HEALTH[params.health];
-  return <SettingsStatus kind={state().kind} label={t(state().labelKey)} />;
+export function ChannelHealthStatus(params: { health: ChannelHealth | null }) {
+  return (
+    <Show when={params.health}>
+      {(health) => (
+        <SettingsStatus
+          kind={CHANNEL_HEALTH[health()].kind}
+          label={t(CHANNEL_HEALTH[health()].labelKey)}
+        />
+      )}
+    </Show>
+  );
 }
 
 export function channelLastActivity(key: string, props: ChannelsProps): string | null {
