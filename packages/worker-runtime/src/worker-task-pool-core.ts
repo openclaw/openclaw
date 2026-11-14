@@ -281,6 +281,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.slots,
       this.resourceClosures,
       (slot) => this.ownedSettlement.retire(slot),
+      runInWorkerPoolContext,
       key,
       this.ownerOptions,
       this.host.observeResourceReply,
