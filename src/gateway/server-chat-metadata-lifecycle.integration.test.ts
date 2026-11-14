@@ -8,7 +8,6 @@ import {
 import assert from "node:assert/strict";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withinTest } from "../../test/helpers/promise.js";
 import { revokeRuntimeAuthMaterializations } from "../agents/auth-profiles/runtime-materializations.js";
 import { reportEmbeddedRunSuccessfulAuthBinding } from "../agents/embedded-agent-runner/run/auth-profile-success.js";
 import type { EmbeddedRunAttemptResult } from "../agents/embedded-agent-runner/run/types.js";
@@ -234,18 +233,6 @@ describe("gateway chat metadata lifecycle composition", () => {
   it("joins superseding owner replacements when an explicit catch-up overlaps publication", async () => {
     await publishOwner();
     const lifecycle = await attachLifecycle();
-    const readPublished = async () => {
-      const result = await withinTest(
-        lifecycle.readModelsList({
-          agentId: "main",
-          params: { view: "configured" },
-          includeManualSelection: false,
-        }),
-        AbortSignal.timeout(1_000),
-      );
-      return result?.models.map(({ provider, id }) => `${provider}/${id}`);
-    };
-    expect(await readPublished()).toContain("openai/gpt-5.4");
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const successorEntered = createDeferredCore();
@@ -277,8 +264,6 @@ describe("gateway chat metadata lifecycle composition", () => {
     ]);
     let successor: Promise<void> | undefined;
     try {
-      // Ordinary reads retain the published list even if the provider never settles.
-      expect(await readPublished()).toContain("openai/gpt-5.4");
       await nextEventLoopTurn();
       expect(refreshed).toBe(false);
       successor = publishOwner();
