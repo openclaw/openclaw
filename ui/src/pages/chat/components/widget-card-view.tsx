@@ -52,6 +52,7 @@ import {
   isManagedCanvasDocumentPreview,
   widgetPreviewHeight,
   widgetPreviewLayoutKey,
+  widgetReservationTitle,
 } from "./widget-preview-layout.ts";
 
 registerEnglishCatalog(registerChatToolWidgetsEnglish);
@@ -362,6 +363,16 @@ function PreviewFrame(props: {
   );
 }
 
+function WidgetReservation(props: { title: string | undefined; height: number }) {
+  return (
+    <div style={{ display: "block", "min-height": `${props.height}px` }}>
+      <Show when={props.title}>
+        <div class="chat-tool-card__reservation">{props.title}</div>
+      </Show>
+    </div>
+  );
+}
+
 function WidgetContent(props: {
   preview: CanvasToolPreview;
   sandbox: string;
@@ -373,10 +384,12 @@ function WidgetContent(props: {
     props.preview.sandbox !== "strict" && isManagedCanvasDocumentPreview(props.preview);
   const layoutKey = () => widgetPreviewLayoutKey(props.preview);
   const height = () => widgetPreviewHeight(props.preview, props.options?.widgetLayout);
+  const reservedTitle = () =>
+    widgetReservationTitle(props.preview, props.options?.embedSandboxMode);
   return (
     <Show
       when={props.options?.mediaReadAllowed !== false}
-      fallback={<div style={{ display: "block", "min-height": `${height()}px` }} />}
+      fallback={<WidgetReservation title={reservedTitle()} height={height()} />}
     >
       <Show
         when={props.preview.mcpApp}
@@ -406,14 +419,7 @@ function WidgetContent(props: {
             {(_managed) => {
               return (
                 <ChatLazyBoundary
-                  fallback={
-                    <div
-                      style={{
-                        display: "block",
-                        "min-height": `${height()}px`,
-                      }}
-                    />
-                  }
+                  fallback={<WidgetReservation title={reservedTitle()} height={height()} />}
                 >
                   <CanvasWidgetMount
                     onElement={props.onExportSource}
