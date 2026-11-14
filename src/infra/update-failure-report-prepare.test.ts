@@ -247,7 +247,7 @@ it("keeps allowlisted stderr causes alongside a classified startup fact", async 
     [
       "Failed phase candidate-gateway-startup: exit 1 (EACCES; Permission denied; plugin load failed: discord)",
     ],
-    /\/private\/customer|private-host|synthetic-secret/u,
+    ["/private/customer", "private-host", "synthetic-secret"],
   );
 });
 

@@ -1,5 +1,8 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import type { stopCanary } from "./update-candidate-canary-process.js";
+import type { UpdateFailureFact } from "./update-failure-facts.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 const mocks = vi.hoisted(() => ({
   owner: vi.fn(),
@@ -47,12 +50,13 @@ const check = (result = activated, gateway?: { remote: boolean; tls: boolean }) 
   });
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   mocks.owner.mockResolvedValue(undefined);
   mocks.entry.mockResolvedValue("/install/dist/index.js");
   mocks.port.mockResolvedValue(43210);
   mocks.launch.mockReturnValue({
-    child: { once: vi.fn().mockReturnThis(), exitCode: 1 },
+    child: { once: vi.fn().mockReturnThis(), exitCode: 1, signalCode: null },
+    failureFacts: [],
     processExited: () => false,
     hasExited: () => false,
     stderrDiagnostic: () => undefined,
@@ -107,4 +111,105 @@ it("settles preparation errors as a failed update so rollback runs", async () =>
   const result = await check();
   expect(result).toMatchObject({ status: "error", reason: "activated-gateway-startup-failed" });
   expect(mocks.launch).not.toHaveBeenCalled();
+});
+
+it("retains facts flushed while stopping the child", async () => {
+  const facts: UpdateFailureFact[] = [];
+  mocks.launch.mockReturnValue({
+    child: { once: vi.fn().mockReturnThis(), exitCode: 1, signalCode: null },
+    failureFacts: facts,
+    processExited: () => true,
+    hasExited: () => true,
+    stderrDiagnostic: () => undefined,
+  });
+  mocks.ready.mockRejectedValue(new Error("Gateway exited"));
+  mocks.stop.mockImplementation(async () => {
+    facts.push({
+      check: "startupz",
+      code: "candidate-startup-failed",
+      message: "plugin load failed",
+    });
+  });
+  const result = await check();
+  expect(result.steps.at(-1)?.failureFacts).toEqual(facts);
+});
+
+it.each(["signal", "timeout"] as const)(
+  "preserves %s before cleanup signals the child",
+  async (kind) => {
+    const child = {
+      once: vi.fn().mockReturnThis(),
+      exitCode: null,
+      signalCode: kind === "signal" ? "SIGTERM" : null,
+    };
+    mocks.launch.mockReturnValue({
+      child,
+      failureFacts: [],
+      processExited: () => kind === "signal",
+      hasExited: () => kind === "signal",
+      stderrDiagnostic: () => undefined,
+    });
+    mocks.ready.mockRejectedValue(
+      kind === "timeout"
+        ? new DOMException("Startup stalled", "TimeoutError")
+        : new Error("Exited"),
+    );
+    mocks.stop.mockImplementation(async () => {
+      child.signalCode = "SIGKILL";
+    });
+    const result = await check();
+    expect(result.status).toBe("error");
+    expect(result.steps.at(-1)).toMatchObject({
+      exitCode: null,
+      termination: kind,
+      ...(kind === "signal" ? { signal: "SIGTERM" } : {}),
+      failureFacts: [
+        { message: kind === "signal" ? "startup crash with signal SIGTERM" : "readiness timeout" },
+      ],
+    });
+  },
+);
+
+it("keeps termination and producer facts within the persisted five-fact bound", async () => {
+  const facts: UpdateFailureFact[] = Array.from({ length: 5 }, (_, index) => ({
+    check: "startupz",
+    code: "candidate-startup-failed",
+    message: `cause-${index}`,
+  }));
+  mocks.launch.mockReturnValue({
+    child: { once: vi.fn().mockReturnThis(), exitCode: null, signalCode: null },
+    failureFacts: facts,
+    processExited: () => false,
+    hasExited: () => false,
+    stderrDiagnostic: () => undefined,
+  });
+  mocks.ready.mockRejectedValue(new DOMException("Startup stalled", "TimeoutError"));
+  const result = await check();
+  expect(result.steps[0]?.failureFacts).toHaveLength(5);
+  expect(result.steps[0]?.failureFacts?.[0]?.message).toBe("readiness timeout");
+  expect(result.steps[0]?.failureFacts?.slice(1)).toEqual(facts.slice(0, 4));
+  expect(result.steps[0]?.termination).toBe("timeout");
+});
+
+it.each([true, false])("retains incomplete cleanup after readiness=%s", async (ready) => {
+  const cleanup: UpdateStepResult = {
+    name: "activated-gateway-startup-cleanup",
+    command: "SIGTERM, SIGKILL",
+    cwd: "/install",
+    durationMs: 1,
+    exitCode: null,
+    advisory: { kind: "recoverable-maintenance", message: "Cleanup remains unconfirmed" },
+  };
+  if (ready) {
+    mocks.ready.mockResolvedValue(undefined);
+  } else {
+    mocks.ready.mockRejectedValue(new Error("Gateway exited"));
+  }
+  mocks.stop.mockImplementation(async ({ recordStep }: Parameters<typeof stopCanary>[0]) => {
+    await recordStep(cleanup);
+  });
+  const result = await check();
+  expect(result.status).toBe(ready ? "ok" : "error");
+  expect(result.steps.at(-1)).toEqual(cleanup);
+  expect(result.steps.at(-2)?.exitCode).toBe(ready ? 0 : 1);
 });

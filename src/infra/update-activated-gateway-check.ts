@@ -7,6 +7,7 @@ import {
   observeUpdateCandidateStartup,
   waitForUpdateCandidateReadiness,
 } from "./update-candidate-canary-readiness.js";
+import { createUpdateFailureFact } from "./update-failure-facts.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
@@ -48,7 +49,9 @@ export async function checkActivatedGatewayStartup(params: {
     return result;
   }
   const started = Date.now();
-  const finish = (step: Omit<UpdateStepResult, "name" | "command" | "cwd" | "durationMs">) => {
+  const cleanupSteps: UpdateStepResult[] = [];
+  type StartupStep = Omit<UpdateStepResult, "name" | "command" | "cwd" | "durationMs">;
+  const finish = (step: StartupStep) => {
     const recorded: UpdateStepResult = {
       name: STEP,
       command: "gateway run",
@@ -56,13 +59,13 @@ export async function checkActivatedGatewayStartup(params: {
       durationMs: Date.now() - started,
       ...step,
     };
-    return recorded.exitCode === 0 || recorded.exitCode === null
-      ? { ...result, steps: [...result.steps, recorded] }
+    return recorded.exitCode === 0 || (recorded.exitCode === null && !recorded.termination)
+      ? { ...result, steps: [...result.steps, recorded, ...cleanupSteps] }
       : {
           ...result,
           status: "error" as const,
           reason: "activated-gateway-startup-failed",
-          steps: [...result.steps, recorded],
+          steps: [...result.steps, recorded, ...cleanupSteps],
         };
   };
   const skipped = (message: string) =>
@@ -126,6 +129,7 @@ export async function checkActivatedGatewayStartup(params: {
   const exited = new AbortController();
   running.child.once("exit", () => exited.abort()).once("error", () => exited.abort());
   let failure: unknown;
+  let step: StartupStep;
   try {
     const timedOut = await waitForUpdateCandidateReadiness({
       port,
@@ -142,24 +146,48 @@ export async function checkActivatedGatewayStartup(params: {
       onEndpoint: () => {},
       capture,
     });
-    if (timedOut) {
-      return finish({ exitCode: 1, stderrTail: timedOut.message });
-    }
-    return finish({ exitCode: 0 });
+    step = timedOut
+      ? { exitCode: 1, stderrTail: timedOut.message, failureFacts: [timedOut.fact] }
+      : { exitCode: 0 };
   } catch (error) {
     failure = error;
-    return finish({
-      exitCode: running.child.exitCode || 1,
+    // Read the observed exit before cleanup sends its own termination signals.
+    const signal = running.child.signalCode;
+    const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+    step = {
+      exitCode: signal || timedOut ? null : running.child.exitCode || 1,
+      ...(signal ? { signal, termination: "signal" } : timedOut ? { termination: "timeout" } : {}),
       stderrTail: [...log, String(error)].join("\n"),
-    });
+      ...(signal || timedOut
+        ? {
+            failureFacts: [
+              createUpdateFailureFact(
+                {
+                  check: "startupz",
+                  code: signal ? "signal" : "candidate-startup-failed",
+                  message: signal ? `startup crash with signal ${signal}` : "readiness timeout",
+                },
+                childEnv,
+              ),
+            ],
+          }
+        : {}),
+    };
   } finally {
     await stopCanary({
       running,
       name: STEP,
       root,
       deadline: Date.now() + 10_000,
-      recordStep: async () => {},
+      recordStep: async (cleanup) => {
+        cleanupSteps.push(cleanup);
+      },
       primaryFailure: failure,
     });
   }
+  // Pipe close flushes the final stderr line and its producer-owned cause facts.
+  if (step.exitCode !== 0 && running.failureFacts.length) {
+    step.failureFacts = [...(step.failureFacts ?? []), ...running.failureFacts].slice(0, 5);
+  }
+  return finish(step);
 }
