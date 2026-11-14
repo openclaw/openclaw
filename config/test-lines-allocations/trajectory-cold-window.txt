@@ -1,0 +1,2 @@
+# Extend the existing rolling-window owner regression across cold UTF-8 and UTF-16 windows, including a cold append below the cap; verifies exact retained rows and payload-row work.
+11
