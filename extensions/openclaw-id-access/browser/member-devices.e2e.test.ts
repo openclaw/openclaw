@@ -27,7 +27,7 @@ suite.define(() => {
           : undefined;
         const gateway = await installNativePluginMockGateway(page, {
           serverBuildId: shell?.buildId,
-          serverVersion: shell?.version,
+          serverVersion: shell?.version ?? undefined,
           nativePlugins: [
             {
               pluginId: "openclaw-id-access",
