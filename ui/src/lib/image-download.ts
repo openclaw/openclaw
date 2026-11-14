@@ -3,7 +3,12 @@ import { downloadBlobFile } from "./download.ts";
 
 function imageDownloadFileName(title: string, mimeType: string): string {
   const type = mimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-  const extension = type === "image/jpeg" ? "jpg" : type.split("/", 2)[1] || "img";
+  const extension =
+    type === "image/svg+xml"
+      ? "svg"
+      : type === "image/jpeg"
+        ? "jpg"
+        : type.split("/", 2)[1] || "img";
   const rawStem = Array.from(title, (character) =>
     character.codePointAt(0)! <= 0x1f || '<>:"/\\|?*'.includes(character) ? "-" : character,
   )
@@ -15,5 +20,10 @@ function imageDownloadFileName(title: string, mimeType: string): string {
 }
 
 export function downloadImageBlob(blob: Blob, title: string): void {
-  downloadBlobFile(imageDownloadFileName(title, blob.type), blob, 30_000);
+  // SVG originals are files, not active documents in the app origin.
+  const payload =
+    blob.type.split(";", 1)[0]?.trim().toLowerCase() === "image/svg+xml"
+      ? new Blob([blob], { type: "application/octet-stream" })
+      : blob;
+  downloadBlobFile(imageDownloadFileName(title, blob.type), payload, 30_000);
 }
