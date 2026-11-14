@@ -20,6 +20,8 @@ import { MEET_URL, meetBrowserState } from "./fixtures.test-helpers.js";
 
 export { captureStdout } from "./fixtures.test-helpers.js";
 
+type GoogleMeetTestPluginService = Parameters<OpenClawPluginApi["registerService"]>[0];
+
 type GoogleMeetTestPluginEntry = {
   register(api: OpenClawPluginApi): void;
 };
@@ -80,6 +82,7 @@ export function setupGoogleMeetPlugin(
   const cliRegistrations: unknown[] = [];
   const nodeHostCommands: unknown[] = [];
   const nodeInvokePolicies: unknown[] = [];
+  const services: GoogleMeetTestPluginService[] = [];
   const nodesList = vi.fn(
     async () =>
       options.nodesListResult ?? {
@@ -192,6 +195,7 @@ export function setupGoogleMeetPlugin(
     registerCli: (_registrar: unknown, opts: unknown) => cliRegistrations.push(opts),
     registerNodeHostCommand: (command: unknown) => nodeHostCommands.push(command),
     registerNodeInvokePolicy: (policy: unknown) => nodeInvokePolicies.push(policy),
+    registerService: (service: GoogleMeetTestPluginService) => services.push(service),
   });
   withPlatform(options.registerPlatform ?? "darwin", () => plugin.register(api));
   return {
@@ -203,6 +207,7 @@ export function setupGoogleMeetPlugin(
     nodesInvoke,
     nodeHostCommands,
     nodeInvokePolicies,
+    services,
     gatewayRequest,
   };
 }
