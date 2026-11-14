@@ -1365,6 +1365,14 @@ describePosix("reviewed workflow equivalence for initial proof admission", () =>
     "unsupported-runtime",
   ])("refuses %s drift without staging preparation evidence", (fault) => {
     const f = fixture();
+    if (fault === "install-input") {
+      // The wrapper fixture omits this real prepare hook. Include it before the
+      // audit so drift exercises dependency identity outside the wrapper closure.
+      const path = "scripts/prepare-git-hooks.mjs";
+      writeFileSync(join(f.repo, path), readFileSync(path));
+      f.git(f.repo, "add", path);
+      f.git(f.repo, "commit", "-qm", "test: include the prepare hook in fixture install inputs");
+    }
     const selected = equivalentMain(f, (repo) => {
       const append = (path: string, value = "\n") =>
         writeFileSync(join(repo, path), readFileSync(join(repo, path), "utf8") + value);

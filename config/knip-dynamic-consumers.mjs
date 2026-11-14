@@ -293,8 +293,58 @@ function prToolingNamedImportEdges(source) {
   // The wrapper supplies quoted argv to these stdin modules. Keep each
   // import and its path argument attached to the same live heredoc launch.
   const edges = new Map();
+  const addImports = (bindings, argument) => {
+    const modulePath = argument?.match(
+      /^\$(?:pr_bootstrap_root\/scripts|script_parent_dir)\/(pr-lib\/[^"\r\n]+\.mjs)$/u,
+    )?.[1];
+    if (!modulePath) {
+      return;
+    }
+    const target = path.resolve("scripts", modulePath);
+    const names = edges.get(target) ?? new Set();
+    for (const binding of bindings.split(",")) {
+      const name = binding.trim().split(/\s*:\s*/u)[0];
+      if (/^[A-Za-z_$][\w$]*$/u.test(name)) {
+        names.add(name);
+      }
+    }
+    edges.set(target, names);
+  };
+  const batch = source.match(
+    /^[ \t]*node[ \t]+--input-type=module[ \t]+-[ \t]+"\$GIT_EXEC"[ \t]+"\$@"[ \t]+<<'EOF_WRAPPER_GIT'\r?\n([\s\S]*?)^EOF_WRAPPER_GIT$/mu,
+  )?.[1];
+  // Only this operation receives the lifetime helper through the shared argv
+  // owner. A disconnected call, binding or import must restore unused exports.
+  if (
+    batch &&
+    /^const \[binary, operation, repository, revision, \.\.\.paths\] = process\.argv\.slice\(2\);$/mu.test(
+      batch,
+    )
+  ) {
+    const materializer = batch.match(
+      /^  \} else if \(operation === "materialize-dependencies"\) \{\n([\s\S]*?)(?=^  \} else)/mu,
+    )?.[1];
+    if (
+      materializer &&
+      /^[ \t]*const \[owner, destination, lifetime\] = paths;$/mu.test(materializer)
+    ) {
+      const call = source
+        .replace(/\\\r?\n[ \t]*/gu, " ")
+        .match(
+          /^[ \t]*pr_batch_wrapper_git[ \t]+materialize-dependencies[ \t]+((?:"[^"\r\n]*"[ \t]*)+)$/mu,
+        )?.[1];
+      const args = [...(call ?? "").matchAll(/"([^"\r\n]*)"/gu)].map((match) => match[1]);
+      for (const match of materializer.matchAll(
+        /^[ \t]*const\s*\{([^{}]+)\}\s*=\s*await\s+import\(\s*\(\s*await\s+import\(["']node:url["']\)\s*\)\.pathToFileURL\(\s*lifetime\s*\)\s*\)\s*;/gmu,
+      )) {
+        if (args.length === 5) {
+          addImports(match[1], args[4]);
+        }
+      }
+    }
+  }
   for (const [, suppliedArgs, , body] of source.matchAll(
-    /^[ \t]*node[ \t]+--input-type=module[ \t]+-[ \t]+((?:"[^"\r\n]*"[ \t]+)+)<<'(EOF_(?:TOOLING|CACHE_RECOVERY))'\r?\n([\s\S]*?)^\2$/gmu,
+    /^[ \t]*node[ \t]+--input-type=module[ \t]+-[ \t]+((?:"[^"\r\n]*"[ \t]+)+)<<'(EOF_CACHE_RECOVERY)'\r?\n([\s\S]*?)^\2$/gmu,
   )) {
     const args = [...suppliedArgs.matchAll(/"([^"\r\n]*)"/gu)].map((match) => match[1]);
     const hasUrlImport =
@@ -305,21 +355,7 @@ function prToolingNamedImportEdges(source) {
       if (!match[2] && !hasUrlImport) {
         continue;
       }
-      const modulePath = args[Number(match[3]) - 2]?.match(
-        /^\$(?:pr_bootstrap_root\/scripts|script_parent_dir)\/(pr-lib\/[^"\r\n]+\.mjs)$/u,
-      )?.[1];
-      if (!modulePath) {
-        continue;
-      }
-      const target = path.resolve("scripts", modulePath);
-      const names = edges.get(target) ?? new Set();
-      for (const binding of match[1].split(",")) {
-        const name = binding.trim().split(/\s*:\s*/u)[0];
-        if (/^[A-Za-z_$][\w$]*$/u.test(name)) {
-          names.add(name);
-        }
-      }
-      edges.set(target, names);
+      addImports(match[1], args[Number(match[3]) - 2]);
     }
   }
   return edges;

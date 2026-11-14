@@ -829,7 +829,9 @@ function prepareProofSource(
   manifestPath,
   coauthorsJson,
 ) {
-  if (archive !== ".local") throw new Error("Proof preparation requires live inputs.");
+  if (archive !== ".local") {
+    throw new Error("Proof preparation requires live inputs.");
+  }
   const predecessor = JSON.parse(predecessorJson);
   if (present(bindingPath) !== Boolean(predecessor) || present(".local/review-transition.json")) {
     throw new Error(
@@ -849,8 +851,9 @@ function prepareProofSource(
     throw new Error("Missing native proof workflow invocation.");
   }
   const captured = Buffer.alloc(held.size);
-  if (fs.readSync(8, captured, 0, captured.length, 0) !== captured.length)
+  if (fs.readSync(8, captured, 0, captured.length, 0) !== captured.length) {
     throw new Error("Incomplete proof workflow invocation.");
+  }
   const selection = JSON.parse(captured);
   const proof = selection.proof;
   if (
@@ -861,8 +864,9 @@ function prepareProofSource(
     proof?.reviewOid !== reviewOid ||
     proof?.provenance?.currentMain !== main ||
     selection.creator !== creator
-  )
+  ) {
     throw new Error("Proof workflow admission changed.");
+  }
   const bytes = Buffer.from(proof.review, "base64");
   const stat = fs.lstatSync(proof.path);
   if (
@@ -870,12 +874,15 @@ function prepareProofSource(
     Object.entries(proof.identity).some(([key, value]) => stat[key] !== value) ||
     !oidPattern.test(reviewOid) ||
     hash(bytes) !== reviewOid
-  )
+  ) {
     throw new Error("Selected proof source review changed.");
+  }
   evidenceReplay.files = {};
   evidenceReplay.directories = {};
   const retention = JSON.parse(inventoryJson);
-  for (const path of retention) readRegular(path);
+  for (const path of retention) {
+    readRegular(path);
+  }
   const meta = JSON.parse(readRegular(".local/pr-meta.json"));
   const incomingReviewOid = hash(readRegular(".local/review.json"));
   const identities = JSON.parse(continuationJson);
@@ -979,8 +986,9 @@ function retainProofSource(
   retain,
 ) {
   const facts = JSON.parse(fs.readFileSync(0, "utf8"));
-  if (JSON.stringify(facts.retention) !== inventoryJson)
+  if (JSON.stringify(facts.retention) !== inventoryJson) {
     throw new Error("Proof retention inventory changed.");
+  }
   const stat = fs.lstatSync(facts.reviewFile.path);
   if (
     !stat.isFile() ||
@@ -989,8 +997,9 @@ function retainProofSource(
     throw new Error("Selected proof source review changed.");
   }
   for (const [path, expected] of Object.entries(facts.files)) {
-    if ((present(path) ? digest(readRegular(path)) : null) !== expected)
+    if ((present(path) ? digest(readRegular(path)) : null) !== expected) {
       throw new Error("Proof preparation input changed: " + path);
+    }
   }
   for (const [path, names] of Object.entries(facts.directories)) {
     if (
@@ -1000,10 +1009,13 @@ function retainProofSource(
       throw new Error("Proof preparation inventory changed.");
     }
   }
-  if (facts.proofSource.workflowAdmission.currentMain !== main)
+  if (facts.proofSource.workflowAdmission.currentMain !== main) {
     throw new Error("Proof checkpoint changed.");
+  }
   checkSource(pr, source, fs.realpathSync("."), root, lockRef, lockOid, facts.snapshot);
-  if (!retain) return;
+  if (!retain) {
+    return;
+  }
   const proof = facts.proofSource;
   if (
     !/^\.local\/prep-evidence\.[A-Za-z0-9]+$/u.test(archive) ||
@@ -1603,10 +1615,10 @@ function create(
   successor,
   signer,
   proofSource,
-  requestedCoauthors = [],
+  requestedCoauthors,
   preparedProof,
 ) {
-  const coauthors = additionalCoauthors(requestedCoauthors);
+  const coauthors = additionalCoauthors(requestedCoauthors === undefined ? [] : requestedCoauthors);
   if (
     ![source, baseline, main].every((value) => oidPattern.test(value)) ||
     (!successor && present(bindingPath))

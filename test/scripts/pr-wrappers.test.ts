@@ -393,30 +393,6 @@ function resolveCommand(command: string): string {
   throw new Error(`command not found in test PATH: ${command}`);
 }
 
-function frozenDependencyKey(
-  fixture: ReturnType<typeof makeMismatchedWrapperRepo>,
-  revision: string,
-  env = fixture.env,
-) {
-  const source = readScript(join(fixture.canonical, "scripts/pr"))
-    .split("<<'EOF_WRAPPER_GIT'\n")[1]!
-    .split("\nEOF_WRAPPER_GIT")[0]!;
-  const result = spawnSync(
-    requireNodeTool("node"),
-    [
-      "--input-type=module",
-      "-",
-      env.OPENCLAW_PR_GIT || resolveCommand("git"),
-      "dependency-key",
-      fixture.canonical,
-      revision,
-    ],
-    { cwd: fixture.canonical, env, input: source, encoding: "utf8" },
-  );
-  expect(result.status, result.stderr).toBe(0);
-  return result.stdout.trim();
-}
-
 function useOfficialOrigin(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) {
   fixture.git(fixture.canonical, [
     "config",
@@ -807,7 +783,8 @@ exit "$status"
       const parked = fixture.gitText(["rev-parse", "HEAD"]);
       fixture.write(
         "scripts/pr-lib/worktree.sh",
-        "list_pr_worktrees() { echo listed; }\ngc_pr_worktrees() { echo collected; }\n",
+        readScript(join(fixture.canonical, "scripts/pr-lib/worktree.sh")) +
+          "\nlist_pr_worktrees() { echo listed; }\ngc_pr_worktrees() { echo collected; }\n",
       );
       fixture.commit(["scripts/pr-lib/worktree.sh"], true);
       // Both callers differ from current main. Its extracted wrapper must reenter
@@ -823,8 +800,13 @@ exit "$status"
           : command === "gc"
             ? [command, "--dry-run"]
             : [command];
-      const result = runWrapper(fixture, args, "linked");
+      const policy = delegatingGitFixture(fixture.root, fixture.env);
+      const result = runWrapper(fixture, args, "linked", { env: policy.env });
       expect(result.status, result.stdout + result.stderr).toBe(0);
+      // Qualified installed packages must not calculate a frozen-install identity.
+      expect(readFileSync(policy.calls, "utf8")).not.toMatch(
+        /\bshow [a-f0-9]{40}:scripts\/pr-lib\/dependency-inputs\.json\b/u,
+      );
       expect(result.stderr).toContain(
         "running wrapper code materialized from the refs/remotes/origin/main trust anchor",
       );
@@ -2286,15 +2268,15 @@ DatabaseSync.prototype.exec = function(sql) {
 import { closeSync, mkdtempSync, openSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
-const [root, archive, revision, retain, prefix, dependencyKey] = process.argv.slice(1);
+const [root, archive, revision, retain, prefix] = process.argv.slice(1);
 const anchor = realpathSync(mkdtempSync(join(root, prefix + process.pid + ".")));
 const extract = spawnSync("tar", ["-xf", archive, "-C", anchor], { encoding: "utf8" });
 if (extract.status !== 0) throw new Error(extract.stderr);
 const fd = openSync(anchor, "r");
 const stdio = ["pipe", "pipe", "pipe", "ignore", "ignore", "ignore", "ignore", "ignore", "ignore", fd];
 const owner = join(anchor, "scripts/pr-lib/materialize-dependencies.mjs");
-const bootstrap = readFileSync(join(anchor, "scripts/pr"), "utf8").split("<<'EOF_TOOLING'\\n")[1].split("\\nEOF_TOOLING")[0];
-const installed = spawnSync(process.execPath, ["--input-type=module", "-", owner, process.cwd(), join(anchor, "node_modules"), revision, join(anchor, "scripts/pr-lib/cache-lifetime.mjs"), dependencyKey], { input: bootstrap, encoding: "utf8", stdio });
+const bootstrap = readFileSync(join(anchor, "scripts/pr"), "utf8").split("<<'EOF_WRAPPER_GIT'\\n")[1].split("\\nEOF_WRAPPER_GIT")[0];
+const installed = spawnSync(process.execPath, ["--input-type=module", "-", process.env.OPENCLAW_PR_GIT, "materialize-dependencies", process.cwd(), revision, owner, join(anchor, "node_modules"), join(anchor, "scripts/pr-lib/cache-lifetime.mjs")], { input: bootstrap, encoding: "utf8", stdio });
 if (installed.status !== 0) throw new Error(installed.stderr);
 const receiptPrefix = "Using frozen scripts/pr dependency installation: ";
 const installation = installed.stderr.split(String.fromCharCode(10)).find(line => line.startsWith(receiptPrefix))?.slice(receiptPrefix.length);
@@ -2331,7 +2313,6 @@ closeSync(fd);
           revision,
           retain,
           ANCHOR_PREFIX,
-          frozenDependencyKey(fixture, revision, env),
         ];
       };
       const materialize = (index: number) => {
@@ -2574,19 +2555,20 @@ closeSync(fd);
           ]).stdout,
         );
         const bootstrap = readScript(join(anchor, "scripts/pr"))
-          .split("<<'EOF_TOOLING'\n")[1]!
-          .split("\nEOF_TOOLING")[0]!;
+          .split("<<'EOF_WRAPPER_GIT'\n")[1]!
+          .split("\nEOF_WRAPPER_GIT")[0]!;
         const result = createdRun(
           anchor,
           [
             "--input-type=module",
             "-",
-            owner,
+            guard.env.OPENCLAW_PR_GIT,
+            "materialize-dependencies",
             fixture.canonical,
-            join(anchor, "node_modules"),
             revision,
+            owner,
+            join(anchor, "node_modules"),
             join(anchor, "scripts/pr-lib/cache-lifetime.mjs"),
-            frozenDependencyKey(fixture, revision, guard.env),
           ],
           bootstrap,
         );

@@ -46,7 +46,9 @@ function inventory(archive) {
     throw new Error("Missing retained preparation evidence.");
   }
   const names = fs.readdirSync(archive).toSorted();
-  if (evidenceReplay.directories) evidenceReplay.directories[archive] = names;
+  if (evidenceReplay.directories) {
+    evidenceReplay.directories[archive] = names;
+  }
   return Object.fromEntries(names.map((name) => [name, digest(readRegular(join(archive, name)))]));
 }
 
@@ -278,8 +280,9 @@ export function baselineProofContinuationRequest(
   archive,
   preparing = false,
 ) {
-  if (preparing && archive !== ".local")
+  if (preparing && archive !== ".local") {
     throw new Error("Invalid live baseline preparation directory.");
+  }
   const request = {
     version: 1,
     pr,
