@@ -5,6 +5,7 @@ import { createOpenClawDelegateToolsForRun } from "./tools/openclaw-delegate-too
 import { createPersonalInstructionsTool } from "./tools/personal-instructions-tool.js";
 import { createPluginsTool } from "./tools/plugins-tool.js";
 import { createPresenceTool } from "./tools/presence-tool.js";
+import { createSkillsStatusTool } from "./tools/skills-status-tool.js";
 
 /** Gateway-owned operations are not standalone embedded-host capabilities. */
 export function createHostedGatewayTools(
@@ -19,6 +20,12 @@ export function createHostedGatewayTools(
   }
   return [
     createPresenceTool({ runId: options?.runId }),
+    createSkillsStatusTool({
+      runId: options?.runId,
+      sessionAgentId,
+      // The logical session key the Gateway resolves; sessionId is the ephemeral UUID.
+      sessionKey: options?.agentSessionKey,
+    }),
     createGatewayTool({
       allowConfigReads: options?.gatewayConfigReadAllowed === true,
       senderIsOwner: options?.senderIsOwner,

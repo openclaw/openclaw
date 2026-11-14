@@ -95,6 +95,7 @@ export const CORE_TOOL_DEFINITIONS = [
   ),
   ...coreTools("sessions", { profiles: ["coding", "messaging"], includeInOpenClawGroup: true }, [
     ["presence", { executionLocation: "gateway", profiles: ["minimal", "coding", "messaging"] }],
+    ["skills_status", { executionLocation: "gateway", profiles: ["coding", "messaging"] }],
     ["sessions"],
     ["sessions_create", { factoryFamily: undefined }],
     ["sessions_list", { replay: "both" }],

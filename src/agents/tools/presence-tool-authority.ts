@@ -20,7 +20,10 @@ export function capturePresenceToolAuthority(options?: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   delegatedAuthority?: AgentRunDelegatedAuthority;
   assertCurrent?: () => void;
+  /** Surface name used in denial messages when another hosted tool reuses the capture. */
+  surfaceName?: string;
 }): () => void {
+  const surface = options?.surfaceName ?? "Presence";
   const caller = getGatewayToolCallerIdentity();
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const inherited = readOperatorToolGatewayAuthority();
@@ -57,7 +60,7 @@ export function capturePresenceToolAuthority(options?: {
     }
     if (sourceScopes !== undefined) {
       if (!operatorScopeSatisfied("operator.read", sourceScopes)) {
-        throw new Error("Presence requires operator.read access.");
+        throw new Error(`${surface} requires operator.read access.`);
       }
       return;
     }
@@ -77,7 +80,7 @@ export function capturePresenceToolAuthority(options?: {
       }
     }
     throw new Error(
-      "Presence requires authenticated Gateway read access or a trusted operator source.",
+      `${surface} requires authenticated Gateway read access or a trusted operator source.`,
     );
   };
 }
