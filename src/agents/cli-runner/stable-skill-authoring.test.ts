@@ -36,4 +36,23 @@ describe("resolveStableCliSkillAuthoring", () => {
     });
     expect(resolveStableCliSkillAuthoring("agent:main:b", undefined)).toBeUndefined();
   });
+
+  it("keeps unsandboxed Workshop available when a workspace listing is only a turn refusal", () => {
+    const refused: SkillLibraryAuthoringCapability = {
+      ...human("workspace", false),
+      turnRefusal: "This turn has no human requester, so the call was not run.",
+      assertWorkspaceCurrent: () => {
+        throw new Error("refused grant must not govern Workshop");
+      },
+    };
+    const internal = resolveStableCliSkillAuthoring("agent:main:cli", refused);
+    expect(internal).not.toBe(refused);
+    expect(internal?.turnRefusal).toContain("no human requester");
+    expect(() => internal?.assertWorkspaceCurrent?.({ sandboxed: false })).not.toThrow();
+    expect(() => internal?.assertWorkspaceCurrent?.({ sandboxed: true })).toThrow(/sandboxed/);
+    expect(() => internal?.assertWorkspaceCurrent?.()).toThrow(/sandboxed/);
+    const remembered = resolveStableCliSkillAuthoring("agent:main:cli", undefined);
+    expect(() => remembered?.assertWorkspaceCurrent?.({ sandboxed: false })).not.toThrow();
+    expect(() => remembered?.assertWorkspaceCurrent?.({ sandboxed: true })).toThrow(/sandboxed/);
+  });
 });

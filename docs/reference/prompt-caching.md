@@ -84,6 +84,12 @@ channel, scheduled, heartbeat, and senderless wake turns retain the same
 Gateway checks current identity, target access, and full operator write authority
 for privileged PR actions when called. Listing an action does not grant it.
 
+Personal skill library listing follows the session's recorded prompt listing, not
+whether the current turn has a human requester. Announce, settle, and steer keep
+the same `skill_library` definition and deferred directory while that listing is
+unchanged. Calls without a human requester are refused at execution. A later
+attributed human turn refreshes the listing when presentation changes.
+
 The `message` description and schema use the session's channel, bound account,
 and configured bindings, not the current turn's source. CLI, restart recovery, and subagent
 announcement turns in the same conversation keep identical definitions,

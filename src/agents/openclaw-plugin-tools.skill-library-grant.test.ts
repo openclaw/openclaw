@@ -14,9 +14,14 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 // A run's personal-library grant governs only plugins that author the agent's own skills
 // (manifest `agentSkillsDir`, as skill-workshop declares); other plugins' tools are untouched.
-it.each(["personal", "workspace"] as const)(
-  "applies the %s library grant only to plugins that author agent skills",
-  async (defaultTarget) => {
+it.each([
+  { defaultTarget: "personal", refused: false },
+  { defaultTarget: "workspace", refused: false },
+  { defaultTarget: "personal", refused: true },
+  { defaultTarget: "workspace", refused: true },
+] as const)(
+  "applies the $defaultTarget library grant only for live turns (refused: $refused)",
+  async ({ defaultTarget, refused }) => {
     const config: OpenClawConfig = {
       agents: { entries: { main: {} } },
       plugins: {
@@ -88,11 +93,16 @@ it.each(["personal", "workspace"] as const)(
         { name },
       );
     }
-    const assertWorkspaceCurrent = vi.fn();
+    const assertWorkspaceCurrent = vi.fn((run?: { sandboxed?: boolean }) => {
+      if (refused && run?.sandboxed) {
+        throw new Error("sandboxed Workshop denied");
+      }
+    });
     const grant: SkillLibraryAuthoringCapability = {
       target: "personal",
       defaultTarget,
       multipleProfiles: defaultTarget === "personal",
+      ...(refused ? { turnRefusal: "No human requester on this turn." } : {}),
       assertWorkspaceCurrent,
       bind: () => {},
       invoke: () => Promise.reject(new Error("The grant test performs no library operation")),
@@ -112,7 +122,7 @@ it.each(["personal", "workspace"] as const)(
         }),
       );
       const names = tools.map((tool) => tool.name);
-      if (defaultTarget === "personal") {
+      if (defaultTarget === "personal" && !refused) {
         // A personal-default requester never gets the agent's own skill authoring.
         expect(names).toEqual(["third_party_note"]);
       } else {
@@ -121,9 +131,41 @@ it.each(["personal", "workspace"] as const)(
       for (const tool of tools) {
         await tool.execute(`${tool.name}-call`, {});
       }
-      // Only the skill author's calls recheck the grant's current administrator authority.
-      expect(assertWorkspaceCurrent).toHaveBeenCalledTimes(defaultTarget === "workspace" ? 1 : 0);
+      // Live grants recheck administrator authority; refused CLI turns retain the
+      // no-grant sandbox guard without suppressing ordinary plugin tools.
+      expect(assertWorkspaceCurrent).toHaveBeenCalledTimes(
+        defaultTarget === "workspace" || refused ? 1 : 0,
+      );
       expect(executed).toEqual(names);
+      if (refused) {
+        const sandboxedTools = withPluginRuntimeRegistryScope(builder.registry, () =>
+          resolveOpenClawPluginToolsForOptions({
+            options: {
+              config,
+              workspaceDir: "/synthetic",
+              agentSessionKey: "agent:main:dashboard:grant",
+              sessionId: "grant-session",
+              runId: "sandboxed-grant-run",
+              sandboxed: true,
+              assertInvocationCurrent: () => {},
+              skillLibraryAuthoring: grant,
+            },
+          }),
+        );
+        expect(sandboxedTools.map((tool) => tool.name)).toEqual([
+          "author_skill",
+          "third_party_note",
+        ]);
+        expect(() =>
+          sandboxedTools.find((tool) => tool.name === "author_skill")!.execute("sandboxed", {}),
+        ).toThrow("sandboxed Workshop denied");
+        await expect(
+          sandboxedTools
+            .find((tool) => tool.name === "third_party_note")!
+            .execute("unaffected", {}),
+        ).resolves.toBeDefined();
+        expect(executed).toEqual([...names, "third_party_note"]);
+      }
     } finally {
       await disposePluginRegistryInstances(builder.registry);
     }

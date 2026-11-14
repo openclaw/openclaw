@@ -755,6 +755,45 @@ describe("Workshop through the OpenClaw tool set", () => {
       }
     },
   );
+
+  it.each(["personal", "workspace"] as const)(
+    "keeps ordinary unsandboxed Workshop with a refused %s library listing",
+    async (defaultTarget) => {
+      const invoke = vi.fn(async () => {
+        throw new Error("refused library invocation");
+      });
+      const listing = {
+        target: "personal" as const,
+        defaultTarget,
+        multipleProfiles: defaultTarget === "personal",
+        turnRefusal: "This turn has no human requester.",
+        bind() {},
+        invoke,
+      };
+      const surface = tools({ sandboxed: false, skillLibraryAuthoring: listing });
+      const library = surface.find((tool) => tool.name === "skill_library");
+      expect(library).toBeDefined();
+      expect((await library!.execute("refused-list", { action: "list" })).details).toMatchObject({
+        gated: true,
+      });
+      expect(invoke).not.toHaveBeenCalled();
+      const workshopTool = surface.find((tool) => tool.name === "skill_workshop");
+      expect(workshopTool).toBeDefined();
+      await workshopTool!.execute("ordinary-create", {
+        action: "create",
+        name: "ordinary",
+        content: skill("ordinary"),
+      });
+      expect(await fs.readFile(path.join(root, "ordinary", "SKILL.md"), "utf8")).toBe(
+        skill("ordinary"),
+      );
+      expect(
+        tools({ sandboxed: true, skillLibraryAuthoring: listing }).some(
+          (tool) => tool.name === "skill_workshop",
+        ),
+      ).toBe(false);
+    },
+  );
 });
 
 function changeField(details: unknown, key: "id" | "versionId"): string {

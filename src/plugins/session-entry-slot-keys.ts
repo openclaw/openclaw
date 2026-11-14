@@ -187,6 +187,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "skillsSnapshot",
   "toolUsageRankingSeed",
   "skillLibrarySelections",
+  "skillLibraryPromptListing",
   "systemPromptReport",
   "pluginDebugEntries",
   "hookExternalContentSource",
