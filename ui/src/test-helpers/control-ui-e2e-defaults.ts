@@ -19,7 +19,10 @@ import type { ChannelsPairingListResult } from "../api/types.ts";
 import type { ControlUiMockPresenceUser } from "./control-ui-e2e-contract.ts";
 
 export const defaultControlUiFeatureMethods = [
+  "agent.identity.get",
   "agents.create",
+  "agents.list",
+  "channels.status",
   "chat.abort",
   "chat.history",
   "chat.send",
@@ -27,11 +30,13 @@ export const defaultControlUiFeatureMethods = [
   "chat.metadata",
   "chat.startup",
   "config.apply",
+  "config.get",
   "config.patch",
   "config.schema",
   "config.set",
   "device.scopes.requestUpgrade",
   "device.scopes.waitUpgrade",
+  "models.list",
   "session.members.add",
   "session.members.list",
   "session.members.listEvidence",

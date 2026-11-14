@@ -162,7 +162,9 @@ async function prepareSessionPrincipalRunAccess(params: {
     // Without roles a profile carries no authority of its own; only the person's recorded
     // authenticated source for this session, revalidated on every use, supplies it.
     const scopes =
-      !isNamedOperatorRoleEnforcementEnabled(cfg) && recorded
+      recorded &&
+      (recorded.authority.openclawIdPrincipal?.kind === "member" ||
+        !isNamedOperatorRoleEnforcementEnabled(cfg))
         ? currentRecordedScopes(recorded.authority)
         : resolveOperatorRolePolicyForAssignment(
             params.profileId,
@@ -179,22 +181,22 @@ async function prepareSessionPrincipalRunAccess(params: {
     // Fresh role-based principals keep their existing admission semantics. A
     // restart may additionally transfer the original authenticated custody;
     // source-less legacy sessions remain non-durable when roles authorize them.
-    if (
-      params.profileId !== GATEWAY_OWNER_PROFILE_ID &&
-      (params.preserveRecordedSource || !isNamedOperatorRoleEnforcementEnabled(getConfig()))
-    ) {
+    if (params.profileId !== GATEWAY_OWNER_PROFILE_ID) {
       recorded = await restoreSessionOperatorSource({
         context: params.context,
         profileId: params.profileId,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
+        memberOnly:
+          !params.preserveRecordedSource && isNamedOperatorRoleEnforcementEnabled(getConfig()),
         assertCurrent: () => params.assertCurrent?.(),
       });
     }
     const scopes = readScopes();
     const access = resolveGatewayOperatorAccessAuthority(params.profileId, getConfig(), {
       requireLivePolicySet: true,
+      openclawIdPrincipal: recorded?.authority.openclawIdPrincipal,
     });
     // A policy adapter identifies the resolved person without manufacturing a transport grant.
     const client: GatewayClient = {
@@ -208,6 +210,7 @@ async function prepareSessionPrincipalRunAccess(params: {
       internal: {
         syntheticClient: true,
         operatorRoleActor: { kind: "operator", profileId: params.profileId },
+        openclawIdPrincipal: recorded?.authority.openclawIdPrincipal,
       },
     };
     const assertPrincipalCurrent = () => {

@@ -76,9 +76,14 @@ import {
 } from "./operator-run-recovery.js";
 import {
   createOperatorRecoveryFixture,
+  expectCurrent,
+  expectRevoked,
   pairedOperator,
   persistDevices,
   recoveryFixture,
+  restoreFixture,
+  type RecoveryFixture,
+  withRecovery,
 } from "./operator-run-recovery.test-support.js";
 import {
   captureOperatorToolGatewayContinuationContext,
@@ -95,29 +100,6 @@ function modelRef(model: string) {
   return { provider: "fixture", model };
 }
 
-function expectCurrent(authority: { signal?: AbortSignal; assertCurrent: () => void }) {
-  expect(authority.signal?.aborted).toBe(false);
-  expect(authority.assertCurrent).not.toThrow();
-}
-
-type RecoveryFixture = Awaited<ReturnType<typeof recoveryFixture>>;
-function withRecovery(
-  run: (
-    fixture: RecoveryFixture,
-    stateDir: string,
-    profile: ReturnType<typeof ensureProfileForEmail>,
-  ) => Promise<void>,
-  overrides: Partial<Parameters<typeof createOperatorRecoveryFixture>[0]> = {},
-) {
-  return withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
-    const profile = ensureProfileForEmail("recovery@example.test");
-    await run(
-      await recoveryFixture(stateDir, profile.id, { device: pairedOperator(), ...overrides }),
-      stateDir,
-      profile,
-    );
-  });
-}
 function acceptedCaller(fixture: RecoveryFixture) {
   const caller = captureGatewayDeviceRevocation(
     fixture.context,
@@ -138,15 +120,6 @@ function acceptedCaller(fixture: RecoveryFixture) {
         hasCurrentClientAuthority: caller.isCurrent,
       }),
   };
-}
-function expectRevoked(authority: { signal?: AbortSignal; assertCurrent: () => void }) {
-  expect(authority.assertCurrent).toThrow();
-  expect(authority.signal?.aborted).toBe(true);
-}
-
-async function restoreFixture(fixture: RecoveryFixture) {
-  const source = expectDefined(await fixture.restore(), "restored operator source");
-  return { ...source, [Symbol.dispose]: source.release };
 }
 
 describe("scheduled authenticated operator source", () => {

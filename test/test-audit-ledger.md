@@ -794,6 +794,49 @@ bootstrap/reset ownership, CA rotation and lazy runtime-loading proof remain in
 their existing cases. This proves the synchronous dispatch ordering under the
 WSL policy fixture; it does not claim live Windows or WSL network coverage.
 
+### Managed proxy CA fixture cleanup
+
+At `9cb3c14855e5a5216148a1c125f9240c5da1f6de`, the supplied-env TLS proxy
+case leaked its CA directory when setup or dispatcher teardown failed. The
+existing auto-cleanup tracker now owns the directory, and the existing dispatcher
+helper owns shutdown. All 17 declarations / 27 cases remain, including the real
+HTTP/SOCKS/TLS payload and routing assertions. Independent preservation review
+found no lost contracts.
+
+The baseline passed 27/27. Temporary probes injected a real certificate-write
+failure and a failure after dispatcher shutdown. Both left the directory present
+at an `afterAll` observation, before runner namespace cleanup. With the repair,
+both directories were absent at the same observation and both original errors
+still failed the test. The probes were removed and the file restored byte for
+byte; the clean candidate passed 27/27. Production changed by 0 lines; the test
+changed by +8/-9 lines. The warm candidate run took 2.92 seconds; the cold baseline
+took 17.87 seconds, so these timings do not establish a speed improvement.
+
+### Managed proxy CA cleanup continuation
+
+At `7e69bf4c26b3cd00789f55ee4f6185af8aa2dbf3`, the shared proxy CA fixture
+spliced every directory from its local list before removal. A removal failure
+aborted cleanup of later directories and dropped their ownership. It now uses
+the canonical auto-cleanup tracker. The synchronous writer, filename, contents,
+and omitted-content missing-file fixture remain unchanged. Test support changes
+by +4/-10 lines; production and the shared tracker are unchanged.
+
+All 22 declarations / 31 cases across managed-proxy-undici, proxy-validation and
+proxy-lifecycle remain. Baseline and candidate pass all 31 cases. The existing
+temp-dir helper suite passes its three portable cases; the Windows-only case
+is skipped on macOS. The combined command took 8.32 seconds on the baseline and
+6.21 seconds on the warm candidate; this is not a speed comparison.
+
+A temporary helper-boundary probe captures the actual registered cleanup hook
+and injects a removal failure for the first of two real directories. The baseline
+reports the error but neither removes the second directory nor retries the first
+on the next cleanup call. The candidate preserves the same error, removes the
+second directory and successfully retries the first after removal is restored.
+Both keep normal CA bytes and missing-file behavior. Probe files were removed and
+instrumentation restored byte for byte. Independent review preserves all coverage;
+the lifecycle credential-redaction substring assertion remains a separate
+source-only follow-up, with no production leak claimed.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.

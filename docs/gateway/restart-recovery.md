@@ -308,14 +308,19 @@ is never reused for an in-process restart. Node exits naturally after owned hand
 close; the native shutdown watchdog kills the process if leaked handles keep it
 alive two seconds past the shutdown deadline. Its worker and main-thread fallback
 share one monotonic deadline, including worker startup time, and report retained
-cleanup owners before forcing exit. After a clean shutdown retires those
+cleanup owners before forcing exit. Shutdown cleanup runs under the Gateway's
+own plugin authority, so a completed requesting invocation cannot prevent memory
+or channel transports from closing. After settled shutdown retires those
 watchdogs, the Gateway command waits one second past its own final cleanup. If a
 leaked handle still keeps the process alive, it prints active resource and handle
 types to stderr, plus details for at most eight handles: stdout/stderr labels, TLS
 servername and remote address, or a child executable (without arguments). Endpoint
 names and executable strings are bounded to 255 characters and JSON escaped. On Linux and macOS, a stop with exit status `0` then ends with `SIGTERM`,
 which supervisors count as a clean stop. A non-zero status, which can be a
-supervisor restart instruction, and Windows keep the report only. A duplicate `SIGTERM` during shutdown is
+supervisor restart instruction, and Windows keep the report only. A recorded
+cleanup rejection with status `1` and no retained work uses `SIGUSR2` after one second,
+so supervisors observe failure; logs and any stability bundle preserve the reason. Pending persistence or
+retained resources still keep the hard deadline. A duplicate `SIGTERM` during shutdown is
 logged once and ignored. That signal exit is accepted, and the supervisor starts
 a fresh Gateway.
 
@@ -660,6 +665,11 @@ A requester yielded for children that restart stopped keeps the ordinary root
 recovery path. Its single resume input reconciles the stopped children's work;
 it is not re-parked waiting for their old executions. A stopped child also needs
 reconciliation when other children still have reachable waits.
+
+The same recovery applies when a child's recorded completion authority belonged
+to the previous process, including a message-waiting or nested child. A saved
+yield is not a reachable wake after that authority retires. The root resumes to
+inspect saved results or explicitly continue the child through current admission.
 
 When an external continuation source is gone, such as a requester that finished
 or was released without continuing its message-waiting child, the wait closes

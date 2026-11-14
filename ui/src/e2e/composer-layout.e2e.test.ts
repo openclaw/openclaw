@@ -25,7 +25,9 @@ suite.define(() => {
           await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}new`);
           const shell = page.locator(".agent-chat__composer-shell");
-          const triggers = page.locator(".new-session-page__triggers");
+          const triggers = page.locator(
+            ".new-session-page__context-tray .new-session-page__triggers",
+          );
           const edge = page.getByRole("separator", { name: "Resize message width", exact: true });
           await shell.hover();
           await edge.waitFor();
@@ -81,7 +83,7 @@ suite.define(() => {
             const box = await trigger.boundingBox();
             expect(box!.x).toBeGreaterThanOrEqual(0);
             expect(box!.x + box!.width).toBeLessThanOrEqual(390);
-            expect(box!.height).toBeGreaterThanOrEqual(44);
+            expect(box!.height).toBe(36);
             await trigger.click({ trial: true });
           }
         },

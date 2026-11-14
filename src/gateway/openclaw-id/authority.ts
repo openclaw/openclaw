@@ -50,14 +50,13 @@ import {
 } from "./claw-store.js";
 import { nextPeopleExpiry } from "./invite-expiry.js";
 import { withSweptInvites, resolveReport, resolvedInvite } from "./invite-sweep.js";
-import { listInviteViews } from "./invites-view.js";
 import {
   canonicalMemberProfiles,
   retainMemberProfiles,
   type OpenClawIdMemberProfiles,
 } from "./member-profiles.js";
-import { createNodeInviteOperations, listNodeInviteViews } from "./node-invites.js";
-import type { OwnerDeviceView } from "./owner-devices-view.js";
+import { readMemberView, readOwnerView } from "./membership-views.js";
+import { createNodeInviteOperations } from "./node-invites.js";
 import { createRebindOperations } from "./rebind-operations.js";
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
 
@@ -627,6 +626,13 @@ export function createOpenClawIdAuthority(
       });
     },
 
+    /** Only this member account's devices, without owner, invite or other-account details. */
+    async memberView(peerKey: string) {
+      const current = await load();
+      const view = await readMemberView(current, currentPeer(peerKey));
+      return record === current ? view : undefined;
+    },
+
     /**
      * What an owner device reaching the claw over the tunnel may read: the seq to
      * sign the next change at, the binding, every active owner device with who
@@ -635,44 +641,8 @@ export function createOpenClawIdAuthority(
      */
     async ownerView(peerKey: string) {
       const current = await load();
-      const state = current?.authority;
-      if (!state) {
-        return undefined;
-      }
-      const nodeInvites = await listNodeInviteViews(current, nowSeconds());
-      // Hashing comparison codes may yield; disclose only the same committed owner view.
-      if (record !== current) {
-        return undefined;
-      }
-      const now = nowSeconds();
-      const owners = activeOwnerDevices(state, now);
-      if (
-        // SAFETY: peerKey is compared by string equality only; a malformed key matches no certificate.
-        !owners.some((device) => device.cert.body.peer_keys.includes(peerKey as IrohEndpointKey))
-      ) {
-        return undefined;
-      }
-      return {
-        claw_id: state.claw_id,
-        seq: state.seq,
-        root_pub: state.anchor.root_pub,
-        binding: current.binding,
-        owner_devices: owners.map((device): OwnerDeviceView => ({
-          cert: device.cert,
-          caps: device.caps,
-          approved_by: device.approved_by,
-        })),
-        members: Object.entries(state.members).map(([account_id, member]) => ({
-          account_id,
-          role: member.role,
-          peer_keys: member.peer_keys,
-        })),
-        invites: listInviteViews(current, now),
-        nodes: Object.entries(state.nodes).map(([peer_key, node]) =>
-          Object.assign({ peer_key }, node),
-        ),
-        node_invites: nodeInvites,
-      };
+      const view = await readOwnerView(current, peerKey);
+      return record === current ? view : undefined;
     },
 
     /**
@@ -768,14 +738,15 @@ export function createOpenClawIdAuthority(
       return due.length > 0 ? Math.min(...due) : undefined;
     },
 
-    /** Peer keys of listed owner devices no longer admitted because their certificate expired. */
+    /** Peer keys of inactive owner devices and their bound nodes, for expiry teardown. */
     async expiredOwnerPeers(): Promise<IrohEndpointKey[]> {
       const state = (await load())?.authority;
       if (!state) {
         return [];
       }
       const now = nowSeconds();
-      const expired = new Set<IrohEndpointKey>();
+      // SAFETY: nodes is keyed by IrohEndpointKey; the admission filter below removes active nodes.
+      const expired = new Set(Object.keys(state.nodes) as IrohEndpointKey[]);
       for (const device of Object.values(state.owner_devices)) {
         if (!isOwnerDeviceActive(device, now)) {
           device.cert.body.peer_keys.forEach((key) => expired.add(key));

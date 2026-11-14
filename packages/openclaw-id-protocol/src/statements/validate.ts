@@ -295,6 +295,13 @@ const V1_BODIES: Record<StatementType, Check> = {
         peer_keys: list(irohKey, 1),
         invite_id: nullable(randomId),
       }),
+      add_member_device: object({
+        op: oneOf(["add_member_device"]),
+        account_id: nonEmptyText,
+        peer_key: irohKey,
+        device_pub: ed25519Key,
+        label: text,
+      }),
       add_node: object({
         op: oneOf(["add_node"]),
         peer_key: irohKey,
@@ -336,6 +343,7 @@ const V1_BODIES: Record<StatementType, Check> = {
     issued_at: seconds,
   }),
   InviteRedemption: object({
+    label: text,
     claw_id: clawId,
     invite_id: randomId,
     account_id: nonEmptyText,
