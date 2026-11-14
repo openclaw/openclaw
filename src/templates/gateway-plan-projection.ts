@@ -19,6 +19,7 @@ import {
 } from "./gateway-disclosure.js";
 import { projectTemplateManifestDisclosure } from "./gateway-manifest-disclosure.js";
 import { digestTemplateMcpServer } from "./mcp.js";
+import { templatePluginAllowlistReviewMessage } from "./plugin-allowlist-blocker.js";
 import { isSafeTemplateRelativePath } from "./schema-portability.js";
 import { mcpServerSchema } from "./schema.js";
 import { collectTemplateSkillWarningReviews } from "./skill-warning-review.js";
@@ -233,6 +234,17 @@ export function plansMatchAcrossSourceRoots(params: {
   );
 }
 
+/** Gateway reviews keep local diagnostics private; allowlist blockers name only the runtime id. */
+function projectPlanBlockerMessage(diagnostic: TemplateAddPlan["blockers"][number]): string {
+  if (diagnostic.code !== "plugin_disabled") {
+    return "Resolve this OpenClaw state conflict before continuing.";
+  }
+  // Preflight sets this field only after displayableTemplatePluginId accepted the id.
+  return diagnostic.allowlistPluginId
+    ? templatePluginAllowlistReviewMessage(diagnostic.allowlistPluginId)
+    : "This plugin is disabled. Enable it in Plugins; reinstall it there first if needed.";
+}
+
 export function projectTemplateAddPlan(
   plan: TemplateAddPlan,
   sourceRoot: string,
@@ -363,10 +375,7 @@ export function projectTemplateAddPlan(
         ...plan.blockers.map((diagnostic) => ({
           code: diagnostic.code,
           path: diagnostic.path,
-          message:
-            diagnostic.code === "plugin_disabled"
-              ? "This plugin is disabled. Enable it in Plugins; reinstall it there first if needed."
-              : "Resolve this OpenClaw state conflict before continuing.",
+          message: projectPlanBlockerMessage(diagnostic),
         })),
         ...effectBlockers,
         ...requestedPolicyBlockers(plan.agent.config, configuredAccess),

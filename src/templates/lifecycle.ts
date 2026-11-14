@@ -61,8 +61,20 @@ function canonicalWorkspacePath(value: string): string {
   return resolvePathViaExistingAncestorSync(resolve(resolveUserPath(value)));
 }
 
-function blocker(code: string, path: string, message: string): TemplateDiagnostic {
-  return { level: "error", code, phase: "plan", path, message };
+function blocker(
+  code: string,
+  path: string,
+  message: string,
+  allowlistPluginId?: string,
+): TemplateDiagnostic {
+  return {
+    level: "error",
+    code,
+    phase: "plan",
+    path,
+    message,
+    ...(allowlistPluginId ? { allowlistPluginId } : {}),
+  };
 }
 
 type PendingWorkspaceFileAction = {
@@ -462,6 +474,7 @@ export async function buildTemplateAddPlan(params: {
           preflight.code ?? "package_install_unavailable",
           declarationPath,
           preflight.message ?? "Package preflight failed.",
+          preflight.allowlistPluginId,
         )
       : pkg.kind === "plugin" &&
           (!preflight.integrity ||

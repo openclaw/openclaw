@@ -39,6 +39,10 @@ import {
   type TemplatePackageReceipt,
 } from "./package-stateless-receipt.js";
 import {
+  displayableTemplatePluginId,
+  templatePluginAllowlistMessage,
+} from "./plugin-allowlist-blocker.js";
+import {
   inspectTemplatePluginCapabilities,
   sourceHostPluginConflict,
 } from "./plugin-capability-probe.js";
@@ -145,6 +149,18 @@ export async function preflightBundledTemplatePlugin(params: {
         rootConfig: config,
       });
       if (!enabled.enabled) {
+        const allowlistPluginId =
+          enabled.reason === "not in allowlist"
+            ? displayableTemplatePluginId(probe.pluginId)
+            : undefined;
+        if (allowlistPluginId) {
+          return {
+            ok: false,
+            code: "plugin_disabled",
+            allowlistPluginId,
+            message: templatePluginAllowlistMessage(dependency.path, allowlistPluginId),
+          };
+        }
         return {
           ok: false,
           code: "plugin_disabled",

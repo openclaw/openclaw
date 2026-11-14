@@ -108,6 +108,27 @@ describe("preflightTemplatePackage isolated plugin inspection", () => {
     ).resolves.toMatchObject({ ok: false, code: "plugin_disabled" });
   });
 
+  it("names the runtime plugin id when only plugins.allow blocks a new plugin", async () => {
+    await expect(
+      preflight({}, { config: { plugins: { allow: ["other-plugin"] } } }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "plugin_disabled",
+      allowlistPluginId: "audit",
+      message:
+        'Plugin @owner/audit@2.0.1 has plugin id "audit", which is not in plugins.allow. Add "audit" to plugins.allow before adding this Template.',
+    });
+  });
+
+  it("does not echo an unsafe runtime plugin id as an allowlist remedy", async () => {
+    const result = await preflight(
+      { pluginId: "audit\u001b[31m" },
+      { config: { plugins: { allow: ["other-plugin"] } } },
+    );
+    expect(result).toMatchObject({ ok: false, code: "plugin_disabled" });
+    expect(result).not.toHaveProperty("allowlistPluginId");
+  });
+
   it("keeps canonical inspection when isolated probe cleanup reports failure", async () => {
     let cleanupFailureInjected = false;
     vi.mocked(tempWorkspace).mockImplementationOnce(async (options) => {

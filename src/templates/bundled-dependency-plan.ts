@@ -77,6 +77,9 @@ export async function planBundledTemplateDependency(params: {
         message: collision
           ? "Bundled skill identity or destination conflicts with another declaration."
           : (preflight.message ?? "Bundled dependency identity is incomplete."),
+        ...(!collision && preflight.allowlistPluginId
+          ? { allowlistPluginId: preflight.allowlistPluginId }
+          : {}),
       }
     : undefined;
   const action: TemplateAddPlanAction = {
