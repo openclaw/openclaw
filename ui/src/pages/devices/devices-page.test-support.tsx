@@ -15,6 +15,7 @@ import {
   deviceSystemInfo,
   deviceDesktopEnvironments,
 } from "../../test-helpers/devices-fixtures.ts";
+import { openDeviceDisclosures } from "../../test-helpers/devices-view.tsx";
 import { createModalDialogTestFixture } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -252,10 +253,13 @@ export async function selectEntryAction(
   await waitForSolid(() => expect(container.textContent).toContain(name));
   const selector = `[data-device-action="${action}"]`;
   const row = [...container.querySelectorAll(".device-entry")].find(
-    (entry) =>
-      entry.querySelector(".settings-row__title")?.textContent === name &&
-      entry.querySelector(selector) !== null,
+    (entry) => entry.querySelector(".settings-row__title")?.textContent === name,
   );
+  if (row instanceof HTMLDetailsElement) {
+    row.open = true;
+    row.dispatchEvent(new Event("toggle"));
+    flush();
+  }
   expectDefined(row?.querySelector<HTMLButtonElement>(selector), `device action ${action}`).click();
   await Promise.resolve();
   flush();
@@ -276,6 +280,7 @@ export function mountPaired(request: Parameters<typeof clientFor>[0]) {
     devicesList: { paired: [pairedDevice], pending: [] },
     nodes: [{ nodeId: "node-1", displayName: "Office Mac" }],
   });
+  openDeviceDisclosures(page.container);
   return { ...page, fixture, client };
 }
 
