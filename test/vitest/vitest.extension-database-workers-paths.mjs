@@ -437,6 +437,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/matrix/src/matrix/monitor/handler.active-turn-steering.test.ts",
   "extensions/matrix/src/matrix/monitor/handler.binding-route.test.ts",
   "extensions/matrix/src/matrix/sdk.test.ts",
+  "extensions/matrix/src/matrix/sdk.key-upload-fence.test.ts",
   "extensions/matrix/src/matrix/monitor/startup-verification.test.ts",
   "extensions/matrix/src/matrix/crypto-unsafe-state-doctor.test.ts",
   "extensions/matrix/src/matrix/sdk/client-discovery-recovery.test.ts",
