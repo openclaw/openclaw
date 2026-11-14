@@ -69,3 +69,32 @@ it("retains scheduled execution provenance without projecting the prompt as a re
   });
   expect(ctx.BodyForAgent).toBe(text);
 });
+
+it.each([undefined, { version: 1 }, { version: 1, snapshot: null }])(
+  "refuses new-session context for an undecodable scheduled authority: %j",
+  (source) => {
+    expect(() =>
+      buildSessionEventContext({
+        cfg: {},
+        agentId: "main",
+        sessionKey: "agent:main:scheduled",
+        text: "work",
+        options: {
+          source: "cron",
+          scheduledAutomation: {
+            job: {
+              ...makeCronJob({}),
+              operatorSource: { executionRevision: "invalid", source } as never,
+            },
+            occurrence: TEST_SCHEDULED_OCCURRENCE,
+            admissionSource: "operator-schedule",
+            assertCurrent() {},
+          },
+        },
+        occurrenceId: "invalid-occurrence",
+        target: { sessionId: "", generation: "current" },
+        assertCurrent() {},
+      }),
+    ).toThrow("Restart recovery operator source");
+  },
+);

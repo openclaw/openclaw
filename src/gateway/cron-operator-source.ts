@@ -132,11 +132,7 @@ export async function restoreCronOperatorSource(params: {
     if (params.signal?.aborted || isAbortError(error)) {
       throw error;
     }
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new CronOperatorSourceError(
-      `The operator authority that created this automation was refused (device, access grant, role or definition changed); recreate it from an authenticated turn. Cause: ${reason}`,
-      { cause: error },
-    );
+    throw new CronOperatorSourceError(error);
   }
 }
 

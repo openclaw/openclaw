@@ -403,9 +403,41 @@ The presets are:
 - `operator`: other people's sessions are writable, all agents are allowed, and
   scopes are `operator.read`, `operator.write`, `operator.approvals`,
   `operator.questions`, and `operator.talk`.
+- `guest`: other people's sessions are viewable, all agents are allowed, and
+  `operator.sessions.write` allows starting and continuing their own work.
+  `sandbox: "required"` runs their sessions' exec and file tools in a per-person
+  sandbox.
 - `viewer`: other people's sessions are viewable, all agents are allowed, and the
   only scope is `operator.sessions.read`. Viewers can read visible conversations,
   but not logs, the private user directory, or Gateway-wide diagnostic catalogs.
+
+Operator remains the default invite role. A sandbox-required member's new sessions,
+forks, checkpoint branches, delegated children, and authorized scheduled or
+recovered work retain the sandbox requirement even without named-role enforcement.
+For those sessions' exec and file tools, an unavailable sandbox backend or failed
+provisioning is an error, not a fallback to a host or node target. The **Access**
+invite form warns when the selected role requires a sandbox and the configured
+Docker or Podman backend is unavailable. See [Sandboxing](/gateway/sandboxing)
+for setup.
+
+The sandbox requirement does not contain every execution path. Before inviting
+someone you do not trust with the machine, review the
+[sandbox exclusions](/gateway/operator-scopes#sandbox-exclusions):
+
+- Select the [QuickJS Code Mode executor](/tools/code-mode/executors#choose-an-executor);
+  the default Node executor runs cells in the Gateway process.
+- Exclude [CLI backends](/gateway/cli-backends) with the role's
+  [modelPolicy](/gateway/operator-scopes#model-policy); their native tools and
+  sandboxing are separate from session exec and file tools.
+- Keep such roles off worker profiles, which can receive the agent's shared
+  GitHub identity independently of the session sandbox setting.
+- Do not add `operator.write` or `operator.admin` if the person must not invoke
+  commands directly on paired nodes outside a session. The stock guest preset
+  has neither scope; node command policy and approvals still apply.
+
+Also review shared transcripts and Gateway-brokered GitHub publication in that
+exclusions list: a session sandbox does not limit what shared conversations reveal
+or what the shared publication account can do.
 
 Presets are ordinary editable definitions, not reserved names or a hardcoded
 permission ceiling. Custom definitions may include `operator.admin`. A member

@@ -84,7 +84,9 @@ export type Link = {
   seq?: number;
   ownerDevices?: OwnerDevice[];
   members?: Member[];
-  roles?: Array<{ name: string; defined: boolean }>;
+  roles?: Array<{ name: string; defined: boolean; requiresSandbox: boolean }>;
+  /** Default engine liveness; null means this backend is not probed here. */
+  sandboxBackend?: { backend: string; available: boolean | null };
   invites?: Invite[];
   nodes?: NodeRecord[];
   nodeInvites?: NodeInvite[];

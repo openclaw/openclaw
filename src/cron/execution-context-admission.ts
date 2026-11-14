@@ -33,6 +33,7 @@ import {
   type ScheduledRequesterRef,
 } from "./execution-context.js";
 import { cronExecutionActor, hasTransferredCronOwner } from "./human-owner.js";
+import { readCronOperatorSnapshot } from "./operator-source-snapshot.js";
 import { type ParentResetWatch, watchParentReset } from "./parent-reset-watch.js";
 import {
   failedScheduledExecution,
@@ -229,6 +230,13 @@ export function assembleScheduledAdmissionFacts(
   parentRow: ScheduledAdmissionFacts["parentRow"],
   owner: boolean | undefined,
 ): ScheduledAdmissionFacts {
+  let operatorSnapshot: ReturnType<typeof readCronOperatorSnapshot>;
+  try {
+    operatorSnapshot = readCronOperatorSnapshot(params.job);
+  } catch {
+    // The context builder reports invalid stored authority and refuses execution.
+    operatorSnapshot = undefined;
+  }
   return {
     trigger: params.trigger,
     ...(params.trigger === "event" ? { ingress: ingressFor(params.ingressBoundary) } : {}),
@@ -241,7 +249,10 @@ export function assembleScheduledAdmissionFacts(
     agentMainSessionKey: resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId }),
     agentSandboxMode: resolveSandboxConfigForAgent(params.cfg, params.agentId).mode,
     ...((params.creatorRoleSandbox ??
-      resolveCreatorSandbox(params.cfg, { actor: cronExecutionActor(params.job) })) === "required"
+      resolveCreatorSandbox(params.cfg, {
+        actor: cronExecutionActor(params.job),
+        openclawIdPrincipal: operatorSnapshot?.openclawIdPrincipal,
+      })) === "required"
       ? { creatorRoleSandbox: "required" as const }
       : {}),
     ...(params.toolsAllow ? { resolvedToolsAllow: params.toolsAllow } : {}),

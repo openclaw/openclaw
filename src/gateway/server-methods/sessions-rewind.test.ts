@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -17,6 +17,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
 import {
   cfg,
   expectCutFailure,
@@ -323,24 +324,41 @@ describe("session message-cut methods", () => {
     expectCutReply(rewind, expect.any(Object));
   });
 
-  it("stamps a required sandbox on a session fork created by a restricted operator", async () => {
-    const { profile, options } = await restrictedOperator(
-      "sandbox-required-fork-creator@example.com",
-      "main",
-      "required",
-    );
-    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+  it.each([false, true])(
+    "stamps a required sandbox on a session fork created by a restricted operator (OpenClaw ID=%s)",
+    async (member) => {
+      const { profile, options } = await restrictedOperator(
+        "sandbox-required-fork-creator@example.com",
+        "main",
+        "required",
+      );
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      if (member) {
+        const config = options.context.getRuntimeConfig();
+        delete config.gateway!.roles!.default;
+        setRuntimeConfigSnapshot(config);
+        const principal = {
+          kind: "member" as const,
+          peerKey: "iroh:guest",
+          accountId: "guest",
+          role: "guest",
+        };
+        options.client.internal = { openclawIdPrincipal: principal };
+        setOpenClawIdTunnelPrincipalLookup(() => principal);
+        onTestFinished(() => setOpenClawIdTunnelPrincipalLookup(undefined));
+      }
 
-    const fork = await invoke("sessions.fork", "user-entry", options);
-    const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
+      const fork = await invoke("sessions.fork", "user-entry", options);
+      const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
 
-    expectReplyFields(fork, { sessionKey: expect.any(String) });
-    expect(await readEntry(forkKey ?? "")).toMatchObject({
-      createdActor: { type: "human", id: profile.id },
-      sandbox: "required",
-    });
-    expect(await readEntry()).not.toHaveProperty("sandbox");
-  });
+      expectReplyFields(fork, { sessionKey: expect.any(String) });
+      expect(await readEntry(forkKey ?? "")).toMatchObject({
+        createdActor: { type: "human", id: profile.id },
+        sandbox: "required",
+      });
+      expect(await readEntry()).not.toHaveProperty("sandbox");
+    },
+  );
 
   it("returns an empty branch list for a not-yet-materialized session", async () => {
     const respond = await invoke("sessions.branches.list", undefined, {

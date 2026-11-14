@@ -59,7 +59,7 @@ export function prepareGatewayOperatorSessionRun(params: {
     scopes: [...params.authority.scopes],
   });
   const creation = resolveSandboxedSessionCreation(
-    { authenticatedUserProfile: { profileId: params.authority.profileId } },
+    { ...client, authenticatedUserProfile: { profileId: params.authority.profileId } },
     params.cfg,
   );
   return {
