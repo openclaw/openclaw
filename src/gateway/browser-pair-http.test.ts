@@ -1,6 +1,4 @@
 import type { IncomingMessage } from "node:http";
-import os from "node:os";
-import path from "node:path";
 import { Readable } from "node:stream";
 import { expect, it } from "vitest";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
@@ -28,22 +26,13 @@ it.each([
 });
 
 it.each([
-  ["the default profile", {}, "ABCD-EFGH", false],
+  ["the default profile", {}, "openclaw pair ABCD-EFGH"],
+  ["a named profile", { OPENCLAW_PROFILE: "work" }, "openclaw pair work:ABCD-EFGH"],
   [
-    "a named profile",
-    {
-      OPENCLAW_PROFILE: "work",
-      OPENCLAW_STATE_DIR: path.join(os.homedir(), ".openclaw-work"),
-      OPENCLAW_CONFIG_PATH: path.join(os.homedir(), ".openclaw-work", "openclaw.json"),
-    },
-    "work:ABCD-EFGH",
-    false,
+    "a container",
+    { OPENCLAW_PROFILE: "work", OPENCLAW_CONTAINER_HINT: "demo" },
+    "openclaw --container demo pair work:ABCD-EFGH",
   ],
-  ["a custom state directory", { OPENCLAW_STATE_DIR: "/srv/openclaw-b" }, "ABCD-EFGH", true],
-])("targets the issuing Gateway on %s", (_name, env, displayCode, commandNeedsGatewayEnv) => {
-  expect(buildBrowserPairCommand("ABCDEFGH", env)).toEqual({
-    displayCode,
-    command: `openclaw pair ${displayCode}`,
-    commandNeedsGatewayEnv,
-  });
+])("targets the issuing Gateway on %s", (_name, env, command) => {
+  expect(buildBrowserPairCommand("ABCDEFGH", env)).toBe(command);
 });

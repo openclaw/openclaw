@@ -68,9 +68,7 @@ function logRequest(request: DevicePairCodeResult): void {
     }
   }
   defaultRuntime.log("");
-  defaultRuntime.log(
-    "Approve only if you opened this page yourself and it shows this code and Browser ID.",
-  );
+  defaultRuntime.log("Approve only if you opened this page yourself and it shows this code.");
   defaultRuntime.log(
     "If someone sent you this code or command, answer no: approving gives their browser administrator control of this Gateway.",
   );

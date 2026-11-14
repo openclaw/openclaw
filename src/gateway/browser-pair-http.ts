@@ -1,10 +1,8 @@
 // Public device-code pairing for browsers that hold no Gateway credential yet.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import os from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { normalizeProfileName } from "../cli/profile-utils.js";
-import { resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   deriveDeviceIdFromPublicKey,
@@ -81,29 +79,16 @@ function verifyBrowserPairProof(action: BrowserPairAction, body: BrowserPairBody
 }
 
 /**
- * The code as shown and the approval command, so a host running several Gateways reaches the issuer.
- * A named profile rides in the code (`work:ABCD-EFGH`); the CLI selects it before loading config.
- * A profile reproduces only its default config location; any other location (OPENCLAW_STATE_DIR,
- * OPENCLAW_CONFIG_PATH, OPENCLAW_HOME) lives in the Gateway's own environment, which the page
- * cannot show, so it says the command needs that environment instead.
+ * The approval command, so a host running several Gateways reaches the issuer: a named profile
+ * rides in the code (`work:ABCD-EFGH`) and the CLI selects it before loading config.
  */
 export function buildBrowserPairCommand(
   code: string,
   env: NodeJS.ProcessEnv = process.env,
-): { displayCode: string; command: string; commandNeedsGatewayEnv: boolean } {
-  const profile = normalizeProfileName(env.OPENCLAW_PROFILE);
-  const displayCode = formatBrowserPairCode(code, profile);
-  return {
-    displayCode,
-    // The code carries the profile, so only a container hint is left to add.
-    command: formatCliCommand(`openclaw pair ${displayCode}`, {
-      ...env,
-      OPENCLAW_PROFILE: undefined,
-    }),
-    commandNeedsGatewayEnv:
-      resolveConfigPath(env) !==
-      resolveConfigPath({ OPENCLAW_PROFILE: profile ?? undefined }, undefined, os.homedir),
-  };
+): string {
+  const displayCode = formatBrowserPairCode(code, normalizeProfileName(env.OPENCLAW_PROFILE));
+  // The code carries the profile, so only a container hint is left to add.
+  return formatCliCommand(`openclaw pair ${displayCode}`, { ...env, OPENCLAW_PROFILE: undefined });
 }
 
 function boundedMetadata(value: string | undefined): string | undefined {
@@ -185,7 +170,12 @@ export async function handleBrowserPairHttpRequest(params: {
           return;
         }
         const { requestId, code, expiresAtMs } = started;
-        sendJson(res, 200, { requestId, code, expiresAtMs, ...buildBrowserPairCommand(code) });
+        sendJson(res, 200, {
+          requestId,
+          code,
+          expiresAtMs,
+          command: buildBrowserPairCommand(code),
+        });
         return;
       }
 

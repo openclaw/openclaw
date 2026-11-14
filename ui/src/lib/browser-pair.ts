@@ -3,7 +3,6 @@
 import {
   BROWSER_PAIR_ROUTE_PREFIX,
   buildBrowserPairPayload,
-  formatBrowserPairDeviceId,
   type BrowserPairAction,
 } from "../../../src/shared/browser-pair.js";
 import {
@@ -23,13 +22,8 @@ export type BrowserPairFailure =
   | "noIdentity"
   | "identityRequired";
 
-type BrowserPairCode = {
-  code: string;
-  browserId: string;
-  /** Issued by the Gateway so code and command target that Gateway's profile. */
-  command: string;
-  commandNeedsGatewayEnv: boolean;
-};
+/** Issued by the Gateway so the command's code names that Gateway's profile. */
+type BrowserPairCode = { command: string };
 export type BrowserPairState =
   | { kind: "idle" | "cancelled" }
   | { kind: "starting" }
@@ -49,9 +43,7 @@ type BrowserPairReply = {
   error?: string;
   status?: string;
   requestId?: string;
-  displayCode?: string;
   command?: string;
-  commandNeedsGatewayEnv?: boolean;
   deviceId?: string;
   deviceToken?: string;
   role?: string;
@@ -119,8 +111,7 @@ export function createBrowserPairSession(params: {
     kind: "waiting" | "reconnecting" | "cancelling" | "cancelFailed" | "alreadyApproved",
     active: Attempt,
   ) => {
-    const { code, browserId, command, commandNeedsGatewayEnv } = active;
-    params.onState({ kind, code, browserId, command, commandNeedsGatewayEnv });
+    params.onState({ kind, command: active.command });
   };
   const fail = (reason: BrowserPairFailure) => {
     stop();
@@ -215,7 +206,7 @@ export function createBrowserPairSession(params: {
         return;
       }
       const body = result?.response.ok ? result.body : undefined;
-      if (!body?.requestId || !body.displayCode || !body.command) {
+      if (!body?.requestId || !body.command) {
         fail(result?.response.status === 429 ? "busy" : "unavailable");
         return;
       }
@@ -224,10 +215,7 @@ export function createBrowserPairSession(params: {
         basePath,
         identity,
         requestId: body.requestId,
-        code: body.displayCode,
-        browserId: formatBrowserPairDeviceId(body.deviceId ?? identity.deviceId),
         command: body.command,
-        commandNeedsGatewayEnv: body.commandNeedsGatewayEnv === true,
       };
       showCode("waiting", attempt);
       void poll(current, attempt);

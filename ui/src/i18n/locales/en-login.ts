@@ -40,8 +40,6 @@ const enLogin = {
       intro:
         "Pair your own browser for administrator access. This is not a guest invitation. Get a code here, then approve it on the Gateway host.",
       runOnGatewayHost: "Run on the Gateway host",
-      commandNeedsGatewayEnv:
-        "This Gateway uses its own state directory or config path. Run the command with the same OPENCLAW_STATE_DIR or OPENCLAW_CONFIG_PATH it was started with, or it may reach a different Gateway.",
       reconnecting: "Connection interrupted. Retrying with the same code…",
       cancelling: "Withdrawing the request on the Gateway…",
       cancelled: "Pairing request withdrawn.",
@@ -54,7 +52,6 @@ const enLogin = {
       getCode: "Get a code",
       starting: "Requesting a pairing code…",
       waiting: "Waiting for approval. Keep this page open.",
-      identity: "Code {code} · Browser ID {id}",
       failure: {
         identityRequired:
           "This Gateway requires a verified identity. Use its normal identity-aware sign-in instead of browser code pairing.",

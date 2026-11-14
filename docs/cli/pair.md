@@ -31,7 +31,7 @@ A browser is asking to pair with administrator access to this Gateway.
   Requested           just now
 ```
 
-**Address** is the peer the Gateway saw. Rows marked `(reported)` come from the requester, so treat them as hints. Compare **Browser ID** with the one on the page in front of you.
+**Address** is the peer the Gateway saw. Rows marked `(reported)` come from the requester, so treat them as hints. Compare **Code** with the command on the page in front of you.
 
 Approve only a code you requested yourself. Anyone can display a code, and approving one someone sent you gives their browser administrator control of your Gateway. Answering no tells the browser it was declined.
 
