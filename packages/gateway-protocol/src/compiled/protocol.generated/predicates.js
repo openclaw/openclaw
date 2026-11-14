@@ -1471,7 +1471,7 @@ var External = [
     /(^action$|^requestId$|^expectedHeadCommit$|^evidence$|^sessionKey$|^agentId$)/u,
     /(^path$|^sha256$|^sizeBytes$)/u,
     /(^action$|^pullRequestUrl$|^requestId$|^expectedHeadCommit$|^title$|^body$|^expectedTitle$|^expectedBody$|^sessionKey$|^agentId$)/u,
-    /(^action$|^publishingSessionKey$|^requestId$|^expectedHeadCommit$|^mergeMethod$|^sessionKey$|^agentId$)/u,
+    /(^action$|^pullRequestUrl$|^publishingSessionKey$|^requestId$|^expectedHeadCommit$|^mergeMethod$|^sessionKey$|^agentId$)/u,
     /(^action$|^conflictsResolved$|^baseCommit$|^sessionKey$|^agentId$)/u,
     /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u,
     /(^sessionKey$|^agentId$|^requestId$)/u,
@@ -16929,6 +16929,9 @@ var External = [
       (unique_1669, unique_1670) => External[848].test(unique_1669) || check_2(value[unique_1669]),
     ) &&
     check_2533(value.action) &&
+    (value.pullRequestUrl === void 0 ||
+      !("pullRequestUrl" in value) ||
+      check_623(value.pullRequestUrl)) &&
     (value.publishingSessionKey === void 0 ||
       !("publishingSessionKey" in value) ||
       check_63(value.publishingSessionKey)) &&
