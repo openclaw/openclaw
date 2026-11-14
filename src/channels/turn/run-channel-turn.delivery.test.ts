@@ -21,6 +21,7 @@ import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-ru
 import type { HookRunner } from "../../plugins/hooks.js";
 import { pluginInstanceInvocation } from "../../plugins/plugin-instance-invocation.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createRuntimeChannel } from "../../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
@@ -816,3 +817,52 @@ describe("channel turn delivery", () => {
     );
   });
 });
+
+it.each(["raw", "prepared", "error"] as const)(
+  "enters the channel owner after the producer scope closes for %s delivery",
+  async (kind) => {
+    const channel = new PluginInstance("telegram");
+    const runtime = createPluginRuntimeStore<PluginRuntime>({ pluginId: "tg", errorMessage: "x" });
+    channel.run(() => runtime.setRuntime(createPluginRuntimeMock()));
+    const callback = vi.fn(() => {
+      expect(runtime.tryGetRuntime()).toBeDefined();
+      return { visibleReplySent: true };
+    });
+    const dispatch: DispatchReplyWithBufferedBlockDispatcher = async (params) => {
+      const scope = new PluginInvocationScope(createEmptyPluginRegistry(), [channel]);
+      const resume = createDeferred();
+      const delivery = scope.run(async () => {
+        await resume.promise;
+        if (kind === "error") {
+          await params.dispatcherOptions.onError?.(new Error("delivery failed"), finalInfo);
+        } else if (kind === "prepared") {
+          const [plan] = createStructuredOutboundPayloadPlan([{ text: "reply" }]);
+          await params.dispatcherOptions.deliverPrepared!(plan!, finalInfo);
+        } else {
+          await params.dispatcherOptions.deliver({ text: "reply" }, finalInfo);
+        }
+      });
+      scope.release();
+      resume.resolve();
+      await delivery;
+      return finalDispatch();
+    };
+    try {
+      await channel.run(() =>
+        runAssembled({
+          dispatchReplyWithBufferedBlockDispatcher: dispatch,
+          delivery: {
+            deliver: async () => callback(),
+            deliverPrepared: async () => callback(),
+            onError: () => {
+              callback();
+            },
+          },
+        }),
+      );
+      expect(callback).toHaveBeenCalledOnce();
+    } finally {
+      await channel.dispose();
+    }
+  },
+);
