@@ -207,6 +207,8 @@ excluded regardless of case. Links, nonregular files, unsafe portable paths,
 overlapping bundled directories, and conflicting skill identities or workspace
 destinations are rejected. Build and Add reject changed source bytes or folder
 membership after review. File modes follow ordinary Template packaging.
+`validate` and `build` also stop at 4,096 folders and unselected files in the
+project, outside `.git` and `node_modules`; selected files do not count toward it.
 
 Use `automations` for scheduled work. The retired `cronJobs` key is rejected;
 move its declarations to `automations` and remove `cronJobs`.
