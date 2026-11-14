@@ -91,6 +91,30 @@ it.each(["multiple-servers", "mixed-capabilities", "missing-description", "disab
   },
 );
 
+it("omits SDK notices from plugin details while retaining actionable errors and warnings", () => {
+  const plugin = createPlugin({
+    error: "Plugin could not load.",
+    compatibilityNotices: [
+      {
+        code: "deprecated-sdk-api",
+        severity: "info",
+        message: "Uses older OpenClaw APIs.",
+        migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
+        apis: [],
+      },
+    ],
+  });
+  const { container } = mount({
+    result: createResult(plugin),
+    error: "Could not refresh plugins.",
+    messages: { "plugin:workboard": { kind: "warning", text: "Plugin action needs attention." } },
+  });
+  expect(container.textContent).not.toContain("Uses older OpenClaw APIs");
+  expect(container.textContent).toContain("Plugin could not load.");
+  expect(container.textContent).toContain("Could not refresh plugins.");
+  expect(container.textContent).toContain("Plugin action needs attention.");
+});
+
 it("does not offer enablement or Settings for an uninstalled plugin", () => {
   const { find } = mount({
     result: createResult(createPlugin({ installed: false, state: "not-installed" })),

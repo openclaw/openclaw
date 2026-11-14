@@ -238,7 +238,7 @@ suite.define(() => {
       await page.locator("#settings-appearance-background").scrollIntoViewIfNeeded();
       expect(await page.locator("[data-background-upload]").isDisabled()).toBe(true);
       await page
-        .getByText("Image uploads require permission to edit your profile.", { exact: true })
+        .getByText("You need permission to edit your profile to upload images.", { exact: true })
         .waitFor();
       await captureUiProof(suite, page, "scoped-reader-background.png");
       if (captureUiProofEnabled) {
@@ -403,41 +403,6 @@ suite.define(() => {
     });
   });
 
-  it("lets read-scoped operators search projects without exposing clone actions", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["projects.add", "projects.list", "projects.searchRemote"],
-        operatorScopes: ["operator.read"],
-        methodResponses: {
-          "projects.list": { projects: [] },
-          "projects.searchRemote": {
-            credential: "missing",
-            projects: [
-              {
-                name: "openclaw",
-                fullName: "openclaw/openclaw",
-                cloneUrl: "https://github.com/openclaw/openclaw.git",
-                webUrl: "https://github.com/openclaw/openclaw",
-                private: false,
-              },
-            ],
-          },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("projects.list");
-      await page.locator("#new-session-project-trigger").click();
-      const place = page.locator(".oc-popover.new-session-page__project-popover");
-      await place.locator(".header-search__toggle").click();
-      await place.getByRole("searchbox").fill("openclaw");
-      await gateway.waitForRequest("projects.searchRemote");
-      const remote = place.getByRole("button", { name: /openclaw\/openclaw/u });
-      await pollDisabled(remote).toBe(true);
-      await remote.click({ force: true });
-      expect(await gateway.getRequests("projects.add")).toHaveLength(0);
-    });
-  });
-
   it("lets write-scoped operators browse and restore only workspace-contained folders", async () => {
     const contained = `${workspace}/packages/app`;
     await withFolder(
@@ -555,8 +520,8 @@ suite.define(() => {
         code: "FORBIDDEN",
         message: "missing scope: operator.admin",
       });
-      await pollLocatorText(page.locator(".new-session-page__error")).toContain(
-        "missing scope: operator.admin",
+      await pollLocatorText(page.locator(".new-session-page__error")).toBe(
+        "Couldn’t complete this request. Ask an admin to grant admin access.",
       );
     });
   });

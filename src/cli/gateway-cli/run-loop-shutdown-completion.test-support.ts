@@ -8,6 +8,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../daemon/launchd-plist.js";
 import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { expectCallCount } from "./run-loop-cleanup.test-support.js";
 import { registerTimedOutGatewayStopTests } from "./run-loop-stop-timeout.test-support.js";
 import {
@@ -39,6 +40,27 @@ async function withHostLifeline(run: (input: PassThrough) => Promise<void>) {
 
 export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): void {
   registerTimedOutGatewayStopTests(f);
+
+  it("reports final shared-state cleanup failure as shutdown instead of rejecting startup", async () => {
+    await f.withRunningGateway(async ({ captureSignal, loopPromise }) => {
+      const state = resolveGlobalMap<string, boolean>(
+        Symbol("failed-shutdown-custody"),
+        (entries) => {
+          if (entries.delete("retained")) {
+            throw new Error("Managed worktree cleanup remains unsettled");
+          }
+        },
+        "shared-state",
+      );
+      state.set("retained", true);
+      const settled = expect(loopPromise).resolves.toBe(1);
+      captureSignal("SIGTERM")();
+      await settled;
+      expect(f.gatewayLog.error).toHaveBeenCalledWith(
+        expect.stringMatching(/shutdown step failed .*Managed worktree cleanup remains unsettled/),
+      );
+    });
+  });
 
   it("exits 0 on SIGTERM after graceful close", async () => {
     const gatewayStateOwner = { release: vi.fn(async () => {}) };
@@ -108,7 +130,7 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
           ).toHaveBeenCalledOnce();
           expectUncalled(f.restartGatewayProcessWithFreshPid, f.respawnGatewayProcessForUpdate);
           // Settled cleanup still bounds a leaked handle that would outlive the loop.
-          expect(f.requestSettledExitWatchdog).toHaveBeenCalledExactlyOnceWith(10_000);
+          expect(f.requestSettledExitWatchdog).toHaveBeenCalledExactlyOnceWith(1_000);
         }, true);
       } finally {
         closing.release();

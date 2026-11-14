@@ -5,6 +5,7 @@ import {
   createSignal,
   merge,
   onSettled,
+  Show,
   untrack,
 } from "solid-js";
 import { listen } from "../../../lib/reactive/listener.ts";
@@ -12,10 +13,8 @@ import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { isChatRunWorking } from "../chat-run-working.ts";
 import { ComposerDictationOwner } from "../composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
-import {
-  createChatComposerContext,
-  createComposerDictationOptions,
-} from "./chat-composer-frame.ts";
+import { createComposerDictationOptions } from "./chat-composer-dictation-options.ts";
+import { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createGoalComposer } from "./chat-composer-goal-mode.tsx";
 import { createComposerPrediction } from "./chat-composer-prediction.ts";
 import { createComposerQuestionPanel } from "./chat-composer-question.tsx";
@@ -27,6 +26,16 @@ import { renderChatComposerView } from "./chat-composer-view.tsx";
 export { resetChatComposerState } from "./chat-composer-state.ts";
 
 export function ChatComposer(props: ChatComposerProps & { questions: ComposerQuestions }) {
+  // Native pane inputs can acquire their final presentation identity after mount.
+  // A new identity needs its own retained state and native textarea binding.
+  return (
+    <Show when={props.paneId} keyed>
+      {(paneId) => <PaneComposer {...props} paneId={paneId} />}
+    </Show>
+  );
+}
+
+function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions }) {
   // A pane owns this component's lifetime; a different pane mounts a different composer.
   const initialPaneId = untrack(() => props.paneId);
   const state = getChatComposerState(initialPaneId);

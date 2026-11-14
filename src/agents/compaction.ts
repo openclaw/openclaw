@@ -10,7 +10,9 @@ import { retryAsync } from "../infra/retry.js";
 import type { ModelRequestHeaders } from "../llm/types.js";
 import { sanitizeCompactionMessages } from "./compaction-planning.js";
 import { isCompactionSummaryRefusal } from "./compaction-summary-refusal.js";
+import { describeCompactionFailure } from "./embedded-agent-runner/compact-reasons.js";
 import { isTimeoutError } from "./failover-error.js";
+import { isRetryableProviderHttpStatus } from "./failover/retry-evidence.js";
 import type {
   AgentMessage,
   CompactionSummaryPrompt,
@@ -109,11 +111,17 @@ export async function summarizeCompactionHistory(params: CompactionSummaryParams
         sleep: (ms) => sleepWithAbort(ms, params.signal),
         // Caller aborts and transport timeouts are terminal; provider-side
         // AbortErrors without caller cancellation remain retryable.
-        shouldRetry: (err) =>
-          !params.signal.aborted &&
-          !isCompactionSummaryRefusal(err) &&
-          !(err instanceof SummaryOutputBudgetError) &&
-          (isAbortError(err) || !isTimeoutError(err)),
+        shouldRetry: (err) => {
+          const { status, reason } = describeCompactionFailure(err);
+          return (
+            !params.signal.aborted &&
+            reason !== "format" &&
+            (status === undefined || isRetryableProviderHttpStatus(status)) &&
+            !isCompactionSummaryRefusal(err) &&
+            !(err instanceof SummaryOutputBudgetError) &&
+            (isAbortError(err) || !isTimeoutError(err))
+          );
+        },
       },
     );
   } catch (err) {

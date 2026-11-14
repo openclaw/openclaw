@@ -354,7 +354,6 @@ describe("model chat and native model ownership", () => {
     for (const observation of [undefined, "codex", "openclaw"]) {
       if (observation) {
         const prepared = prepareSessionUsageUpdate({
-          cfg: fixture.runParams.config,
           modelUsed: "fixture-model",
           providerUsed: "openai",
           agentHarnessId: observation,
@@ -377,9 +376,9 @@ describe("model chat and native model ownership", () => {
               if (!completion || !prepared) {
                 throw new Error("Missing usage completion owner");
               }
-              completion.patch((entry) => ({
+              completion.patch(() => ({
                 kind: "usage",
-                update: { ...prepared.update, estimatedCostUsd: prepared.estimateCost(entry) },
+                update: prepared,
                 updatedAt: Date.now(),
               }));
             },

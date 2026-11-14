@@ -24,11 +24,14 @@ import { formatCliCommand } from "../command-format.js";
 import { measureGatewayBootstrapStep, recordGatewayBootstrapStep } from "../startup-trace.js";
 import type { GatewayRunPreBootstrapOptions } from "./future-config-guard.js";
 import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
+import { findGatewayRunFlagError, type GatewayRunFlagOpts } from "./run-flag-checks.js";
 import type { GatewayRunOpts } from "./run-options.js";
 import { getGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
 type GatewayRunGuardParams = {
-  opts: GatewayRunPreBootstrapOptions & Pick<GatewayRunOpts, "allowUnconfigured" | "dev">;
+  opts: GatewayRunPreBootstrapOptions &
+    GatewayRunFlagOpts &
+    Pick<GatewayRunOpts, "allowUnconfigured" | "dev">;
   runtime: RuntimeEnv;
 };
 
@@ -606,6 +609,13 @@ export async function selectGatewayRunEnvironment(params: GatewayRunGuardParams)
 }
 
 export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams): Promise<boolean> {
+  // Startup preflight refuses missing config; report bad flags first, as run.ts would.
+  const flagError = findGatewayRunFlagError(params.opts);
+  if (flagError) {
+    params.runtime.error(flagError);
+    params.runtime.exit(1);
+    return false;
+  }
   preparedGatewayRunReset = undefined;
   // Stop the early proxy before selection can choose another config/state target. Its lifecycle
   // restores the underlying env snapshot so the selected target's trusted dotenv can replace it.

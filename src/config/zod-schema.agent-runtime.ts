@@ -220,8 +220,12 @@ function createAllowAlsoAllowConflictValidator(message: string) {
   };
 }
 
+const ExecModeSchema = z.enum(["deny", "allowlist", "ask", "auto", "full"]);
+
 const ToolPolicyWithProfileSchema = ToolPolicyBaseSchema.extend({
   profile: ToolProfileSchema,
+  /** Exec ceiling for turns on this provider/model; it can tighten, never loosen. */
+  exec: z.strictObject({ mode: ExecModeSchema.optional() }).optional(),
 }).superRefine(
   createAllowAlsoAllowConflictValidator(
     "tools.byProvider policy cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
@@ -261,7 +265,7 @@ const ToolExecBaseShape = {
   /** Exec host routing (default: auto). */
   host: z.enum(["auto", "sandbox", "gateway", "node"]).optional(),
   /** Normalized exec policy mode. Prefer this over raw security/ask knobs. */
-  mode: z.enum(["deny", "allowlist", "ask", "auto", "full"]).optional(),
+  mode: ExecModeSchema.optional(),
   /** Legacy exec security mode retained when no canonical mode can preserve policy. */
   security: z.enum(["deny", "allowlist", "full"]).optional(),
   /** Legacy exec ask mode retained when no canonical mode can preserve policy. */
@@ -513,6 +517,13 @@ const ElevatedToolsSchema = z
   })
   .optional();
 
+const OpenClawToolConfigSchema = z
+  .strictObject({
+    /** Standing delegated administration grant; false requires exact human approval. */
+    autoApproveChanges: z.boolean().optional(),
+  })
+  .optional();
+
 const MessageToolConfigSchema = z
   .strictObject({
     crossContext: z
@@ -558,6 +569,7 @@ const AgentToolsSchema = z
     /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
     elevated: ElevatedToolsSchema,
     exec: ToolExecSchema,
+    openclaw: OpenClawToolConfigSchema,
     /** Complete per-agent GitHub CLI identity and Git author override. */
     github: AgentGitHubToolIdentitySchema,
     /** Filesystem tool path guards. */
@@ -670,6 +682,7 @@ export const ToolsSchema = z
     /** Elevated exec permissions for the host machine. */
     elevated: ElevatedToolsSchema,
     exec: ToolExecSchema,
+    openclaw: OpenClawToolConfigSchema,
     fs: ToolFsSchema,
     /** Sub-agent tool policy defaults (deny wins; progress_card is always denied). */
     subagents: NestedToolPolicySchema,

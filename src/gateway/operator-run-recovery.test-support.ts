@@ -77,6 +77,7 @@ export async function createOperatorRecoveryFixture(params: {
   clientInfo?: Pick<GatewayClientInfo, "id" | "mode">;
   localOperator?: boolean;
   sourceIngress?: "control-ui" | "internal";
+  openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
 }) {
   let config = params.config;
   const context = params.context;
@@ -92,6 +93,7 @@ export async function createOperatorRecoveryFixture(params: {
   // These facts represent the authenticated handshake, not session attribution.
   client.internal = {
     authenticatedOperator: true,
+    ...(params.openclawIdPrincipal ? { openclawIdPrincipal: params.openclawIdPrincipal } : {}),
     ...(params.localOperator ? { isLocalClient: true } : {}),
     ...(client.connect.client.id === "openclaw-control-ui" &&
     client.connect.scopes?.includes("operator.admin")
@@ -100,7 +102,7 @@ export async function createOperatorRecoveryFixture(params: {
   };
   client.authPolicy = captureGatewayAuthPolicy(config, {
     role: "operator",
-    authMethod: params.tokenlessDevice ? "trusted-proxy" : "token",
+    authMethod: params.tokenlessDevice || params.openclawIdPrincipal ? "trusted-proxy" : "token",
   });
   if (params.sharedGeneration !== undefined) {
     client.usesSharedGatewayAuth = true;

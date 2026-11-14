@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   type AnyAgentTool,
@@ -29,6 +30,7 @@ import { applyBrowserTabToolBinding } from "./browser-tool-binding.js";
 import { createBrowserToolDefinition } from "./browser-tool-description.js";
 import { executeBrowserTabAction } from "./browser-tool-dispatch.js";
 import { createBrowserToolSessionTabs } from "./browser-tool-session-tabs.js";
+import { userHasControlResult, withOperatorActivityNote } from "./browser-tool.operator-control.js";
 import { resolveBrowserBaseUrl, resolveBrowserToolNodeTarget } from "./browser-tool.routing.js";
 import { BROWSER_ACT_REQUEST_KEYS, type BrowserToolCapabilities } from "./browser-tool.schema.js";
 import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
@@ -224,7 +226,15 @@ export function createBrowserTool(
   return {
     ...metadata,
     execute: async (_toolCallId, args, signal) => {
-      opts?.assertInvocationCurrent?.();
+      // Host guards resolve their caller from the async context they run in. Shared CDP
+      // connections deliver navigation events in whichever call's context created them, so
+      // every host check for this request runs in the context this call was admitted in.
+      const runInInvocation = AsyncLocalStorage.snapshot();
+      const bindToInvocation = (assert: (() => void) | undefined) =>
+        assert ? () => runInInvocation(assert) : undefined;
+      const assertInvocationCurrent = bindToInvocation(opts?.assertInvocationCurrent);
+      const assertLocalLoopbackCurrent = bindToInvocation(opts?.assertLocalLoopbackCurrent);
+      assertInvocationCurrent?.();
       let params = binding
         ? applyBrowserTabToolBinding(args as Record<string, unknown>, binding)
         : (args as Record<string, unknown>);
@@ -523,7 +533,11 @@ export function createBrowserTool(
             const options = { profile, timeoutMs: toolTimeoutMs, signal };
             if (action !== "status") {
               const updateBrowser = action === "start" ? browserStart : browserStop;
-              await updateBrowser(proxyRequest ?? baseUrl, options);
+              try {
+                await updateBrowser(proxyRequest ?? baseUrl, options);
+              } catch (error) {
+                return userHasControlResult(error);
+              }
             }
             return jsonResult(await browserStatus(proxyRequest ?? baseUrl, options));
           }
@@ -638,39 +652,49 @@ export function createBrowserTool(
           },
         });
       const dashboardTarget = browserDashboard;
-      const result = await withBrowserRequestScope(
-        {
-          allowLocalLoopback: opts?.allowLocalLoopback === true && !baseUrl && !proxyRequest,
-          assertLocalLoopbackCurrent: opts?.assertLocalLoopbackCurrent,
-          ...(opts?.assertInvocationCurrent
-            ? {
-                assertInvocationCurrent: opts.assertInvocationCurrent,
-                assertCurrent: opts.assertInvocationCurrent,
-              }
-            : {}),
-          ...(dashboardTarget
-            ? {
-                managedOnly: true as const,
-                assertCurrent: async (
-                  admittedProfile?: Parameters<
-                    typeof import("./browser-dashboard.js").assertBrowserDashboardTargetCurrent
-                  >[3],
-                ) => {
-                  const { assertBrowserDashboardTargetCurrent } =
-                    await import("./browser-dashboard.js");
-                  await assertBrowserDashboardTargetCurrent(
-                    dashboardTarget,
-                    opts?.agentId,
-                    { signal },
-                    admittedProfile,
-                  );
-                  opts?.assertInvocationCurrent?.();
-                },
-              }
-            : {}),
-        },
-        dispatchTabAction,
-      );
+      let result: AgentToolResult<unknown>;
+      try {
+        result = await withBrowserRequestScope(
+          {
+            allowLocalLoopback: opts?.allowLocalLoopback === true && !baseUrl && !proxyRequest,
+            assertLocalLoopbackCurrent,
+            ...(assertInvocationCurrent
+              ? {
+                  assertInvocationCurrent,
+                  assertCurrent: assertInvocationCurrent,
+                }
+              : {}),
+            ...(dashboardTarget
+              ? {
+                  managedOnly: true as const,
+                  // Awaited on the request's own chain, never from shared listeners.
+                  assertCurrent: async (
+                    admittedProfile?: Parameters<
+                      typeof import("./browser-dashboard.js").assertBrowserDashboardTargetCurrent
+                    >[3],
+                  ) => {
+                    const { assertBrowserDashboardTargetCurrent } =
+                      await import("./browser-dashboard.js");
+                    await assertBrowserDashboardTargetCurrent(
+                      dashboardTarget,
+                      opts?.agentId,
+                      { signal },
+                      admittedProfile,
+                    );
+                    assertInvocationCurrent?.();
+                  },
+                }
+              : {}),
+          },
+          dispatchTabAction,
+        );
+      } catch (error) {
+        return userHasControlResult(error);
+      }
+      if (!baseUrl && !proxyRequest) {
+        // Host-local routes share operator-control state with the Browser panel.
+        result = await withOperatorActivityNote(result, profile ?? resolvedBrowser.defaultProfile);
+      }
       if (browserDashboard) {
         // Dashboard presentation owns this tab; ordinary preview metadata would steal its panel.
         return { ...result, details: { ...asNullableRecord(result.details), browserDashboard } };

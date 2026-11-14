@@ -20,7 +20,10 @@ export class WhatsAppConnectionOwnerBusyError extends Error {
     public readonly authDir: string,
     options?: ErrorOptions,
   ) {
-    super("Another process owns this WhatsApp connection.", options);
+    super(
+      "WhatsApp connection is locked. If no other process is using it, run openclaw doctor for recovery steps.",
+      options,
+    );
     this.name = "WhatsAppConnectionOwnerBusyError";
   }
 }

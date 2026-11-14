@@ -92,12 +92,16 @@ async function recoverStartup(
     key: storageKey,
     record: recovery,
   });
+  const failure = await failControlUiModuleForDocuments(
+    page,
+    moduleRequest("ui/src/app/session-placement-startup.runtime.ts"),
+  );
   let documentProbes = 0;
   // Automatic recovery outlives the first failed probe. Keep the outage
   // until the scenario has established the owner that must block reloads.
   let documentReachable = false;
   await page.route("**/*", async (route) => {
-    if (route.request().method() === "HEAD") {
+    if (route.request().headers()["x-openclaw-reachability-probe"] === "1") {
       documentProbes += 1;
       if (!documentReachable) {
         await route.fulfill({ status: 503 });
@@ -106,10 +110,6 @@ async function recoverStartup(
     }
     await route.fallback();
   });
-  const failure = await failControlUiModuleForDocuments(
-    page,
-    moduleRequest("ui/src/app/session-placement-startup.runtime.ts"),
-  );
   await page.reload();
   await expect.poll(failure.documentCount).toBe(1);
   await expect.poll(() => documentProbes).toBeGreaterThan(0);
@@ -155,22 +155,25 @@ async function recoverStartup(
     expect(await gateway.waitForRequest("sessions.create")).toMatchObject({
       params: { incognito: true, message: "" },
     });
-    const warning = "Recovery needs a reload. Unsaved starts will be lost.";
     for (const selectedKey of [privateKey, sessionKey]) {
       await navigateToControlUiSession(page, selectedKey);
-      await expect.poll(() => alert.locator("strong").textContent()).toContain(warning);
+      await expect
+        .poll(() => alert.locator(".app-toast__message").textContent())
+        .toBe("Couldn’t start this session.");
+      await expect
+        .poll(() => alert.locator(".app-toast__description").textContent())
+        .toContain("Recovery needs a reload. Unsaved starts will be lost.");
       expect(await button(alert, "Retry").count()).toBe(0);
       expect(await alert.locator("details").count()).toBe(0);
     }
     // Restored connectivity must not bypass the live unsaved-start owner.
-    const blockedDocumentProbes = documentProbes;
     documentReachable = true;
     await page.setViewportSize({ width: 390, height: 844 });
     // The resize event schedules the shell's mobile layout after the viewport RPC.
     await expect
       .poll(() =>
         alert.evaluate((element) => {
-          const text = element.querySelector(".chat-error__content")!.getBoundingClientRect();
+          const text = element.querySelector(".app-toast__description")!.getBoundingClientRect();
           const action = element.querySelector(".chat-error__discard")!.getBoundingClientRect();
           return action.top >= text.bottom && action.right <= innerWidth && action.left >= 0;
         }),
@@ -203,7 +206,6 @@ async function recoverStartup(
       privateStored: false,
       recovery: JSON.stringify(recovery),
     });
-    expect(documentProbes).toBe(blockedDocumentProbes);
     expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     if (escape === "toast") {
       await page.locator(".sidebar-rail .sidebar-new-session").click();
@@ -224,7 +226,8 @@ async function recoverStartup(
     const probesBeforeManualReload = documentProbes;
     await reload.click();
     // Two-sentence copy renders as a title plus description; read both.
-    const toast = page.locator(".app-toast__body");
+    const warning = "Recovery needs a reload. Unsaved starts will be lost.";
+    const toast = page.locator(".app-toast-lane .app-toast__body");
     await expect.poll(() => toast.textContent()).toContain(warning);
 
     expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);

@@ -62,7 +62,7 @@ async function readCompletionProfile(
   const filePath = await fs.realpath(profilePath);
   const { buffer, stat, exactIdentity } = await readRegularFile({ filePath });
   let encoding: CompletionProfileEncoding = "utf8";
-  if (shell === "powershell" && process.platform === "win32") {
+  if (shell === "powershell") {
     const [first, second, third] = buffer;
     if ((first === 0xff && second === 0xfe) || (first === 0xfe && second === 0xff)) {
       encoding = first === 0xff ? "utf16le" : "utf16be";
@@ -433,9 +433,8 @@ export function resolveCompletionProfilePath(shell: CompletionShell): string {
     );
   }
   return appendCompletionProfilePath(
-    home,
+    env.XDG_CONFIG_HOME || appendCompletionProfilePath(home, pathApi, ".config"),
     pathApi,
-    ".config",
     "powershell",
     "Microsoft.PowerShell_profile.ps1",
   );
@@ -661,6 +660,24 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     );
   }
 
+  // Reinstallation must also repair caches emitted by stable releases without losing plugin commands.
+  if (shell === "powershell" && process.platform === "win32") {
+    const { buffer } = await readRegularFile({ filePath: await fs.realpath(cachePath) });
+    const hasBom = /^(efbbbf|fffe|feff)/u.test(buffer.subarray(0, 3).toString("hex"));
+    if (!hasBom && buffer.some((byte) => byte > 0x7f)) {
+      decodeUtf8Input(buffer, `Completion cache ${cachePath}`);
+      await publishOutputFileAtomically({
+        filePath: cachePath,
+        tempPrefix: ".openclaw-completion-cache",
+        writeTemp: async (tempPath) => {
+          await fs.writeFile(tempPath, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), buffer]), {
+            flag: "wx",
+          });
+        },
+      });
+    }
+  }
+
   const profilePath = resolveCompletionProfilePath(shell);
   const homeDir = process.env.HOME || os.homedir();
 
@@ -731,7 +748,15 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       const block = `# OpenClaw Completion\n${formatCompletionSourceLine(shell, cachePath)}`;
       next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
     }
-    if (next === content) {
+    // Windows PowerShell treats BOM-less scripts as ANSI, including literal cache paths.
+    const writeEncoding =
+      shell === "powershell" &&
+      process.platform === "win32" &&
+      encoding === "utf8" &&
+      /\P{ASCII}/u.test(next)
+        ? "utf8bom"
+        : encoding;
+    if (next === content && writeEncoding === encoding) {
       if (!yes) {
         console.log(terminalText`Completion already installed in ${profilePath}`);
       }
@@ -748,7 +773,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       tempPrefix: ".openclaw-completion-profile",
       durable: true,
       writeTemp: async (tempPath) => {
-        await fs.writeFile(tempPath, encodeCompletionProfile(next, encoding), {
+        await fs.writeFile(tempPath, encodeCompletionProfile(next, writeEncoding), {
           flag: "wx",
         });
       },

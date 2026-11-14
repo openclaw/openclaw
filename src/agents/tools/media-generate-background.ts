@@ -200,10 +200,6 @@ export async function prepareMediaGenerationTask<
   resolveProviders: (
     resources: Resources,
   ) => Parameters<typeof resolveCapabilityModelConfigForTool>[0]["providers"];
-  findDuplicate: (
-    sessionKey: string | undefined,
-    request: { prompt: string; agentId?: string },
-  ) => Promise<MediaGenerateActionResult | undefined>;
   signal?: AbortSignal;
   prepare: (context: {
     resources: Resources;
@@ -233,20 +229,8 @@ export async function prepareMediaGenerationTask<
           providers: [],
         })
       : null;
-  const readRequest = async () => {
-    const prompt = readToolStringParam(params.args, "prompt", { required: true });
-    return {
-      prompt,
-      duplicate: await params.findDuplicate(options?.agentSessionKey, {
-        prompt,
-        agentId: options?.requesterAgentId,
-      }),
-    };
-  };
-  const configuredRequest = configuredModel ? await readRequest() : undefined;
-  if (configuredRequest?.duplicate) {
-    return configuredRequest.duplicate;
-  }
+  // Only the tool can identify a duplicate from its complete prepared inputs.
+  const prompt = readToolStringParam(params.args, "prompt", { required: true });
   signal?.throwIfAborted();
   const resources = await params.acquire(
     configuredModel
@@ -274,10 +258,6 @@ export async function prepareMediaGenerationTask<
       throw new ToolInputError(`No ${generationLabel}-generation model configured.`);
     }
     const effectiveCfg = applyAgentDefaultModelConfig(cfg, generationLabel, modelConfig) ?? cfg;
-    const { prompt, duplicate } = configuredRequest ?? (await readRequest());
-    if (duplicate) {
-      return { kind: "result" as const, result: duplicate };
-    }
     signal?.throwIfAborted();
     resources?.assertOpen();
     return params.prepare({ resources, modelConfig, effectiveCfg, prompt, explicitModelConfig });

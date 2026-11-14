@@ -1,8 +1,9 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createMemo, For, Show } from "solid-js";
-import { Icon } from "../../components/solid/icon.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import "../../components/tooltip.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { parseSessionLog, prepareUsageDateRange } from "./helpers.ts";
@@ -147,15 +148,13 @@ export function SessionDetailPanel(props: {
             </>
           ) : undefined}
         </div>
-        <openclaw-tooltip prop:content={t("usage.details.close")}>
-          <button
-            class="btn btn--sm btn--ghost session-detail-close"
-            onClick={() => props.onClose()}
-            aria-label={t("usage.details.close")}
-          >
-            <Icon name="x" />
-          </button>
-        </openclaw-tooltip>
+        <button
+          class="btn btn--sm btn--ghost session-detail-close"
+          onClick={() => props.onClose()}
+          aria-label={t("usage.details.close")}
+        >
+          <Icon name="x" />
+        </button>
       </div>
       {state().includedSessionCount > 0 ? (
         <div class="usage-lineage-note">
@@ -588,8 +587,7 @@ function SessionLogs(props: {
                 </>
               )}
               <label class="usage-filters-inline session-log-has-tools">
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={props.detail.logFilters.hasTools}
                   onChange={(event) =>
                     props.callbacks.onLogFiltersChange({ hasTools: event.currentTarget.checked })

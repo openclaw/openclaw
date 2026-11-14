@@ -50,6 +50,7 @@ export function createActivityPageState(context: ApplicationContext) {
   let runInspector: RunInspectorState = { status: "empty" };
   let presencePayload: PresencePayload | undefined;
   let sessionActivityRevision = -1;
+  let sessionActivityHello = context.gateway.snapshot.hello;
   let inspectorAbort: AbortController | null = null;
   let inspectorRead:
     | {
@@ -103,6 +104,11 @@ export function createActivityPageState(context: ApplicationContext) {
     sourceChanged: boolean,
   ) {
     const nextPresentationScope = gatewayPresentationScope(gateway);
+    const authorityChanged =
+      snapshot.phase === "connected" && snapshot.hello !== sessionActivityHello;
+    if (snapshot.phase === "connected") {
+      sessionActivityHello = snapshot.hello;
+    }
     const identityChanged =
       sourceChanged ||
       nextPresentationScope !== presentationScope ||
@@ -122,11 +128,11 @@ export function createActivityPageState(context: ApplicationContext) {
       presencePayload = presence ? { presence } : undefined;
     }
     syncRunInspector(gateway, snapshot, identityChanged);
-    syncSessionActivity();
+    syncSessionActivity(authorityChanged ? "authority" : "query");
     reconcileSessions();
   }
 
-  function syncSessionActivity(reason: "query" | "retry" = "query") {
+  function syncSessionActivity(reason: "query" | "retry" | "authority" = "query") {
     const snapshot = context.gateway.snapshot;
     // Session-scoped operators may read sessions.list, matching the roster activity store.
     const accessLost =

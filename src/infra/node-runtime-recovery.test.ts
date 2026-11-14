@@ -179,9 +179,9 @@ afterEach(async () => {
   ttyMock.restore();
   if (bunVersionDescriptor) {
     Object.defineProperty(process.versions, "bun", bunVersionDescriptor);
-    Object.defineProperty(process.versions, "node", nodeVersionDescriptor);
     Object.defineProperty(process, "execPath", execPathDescriptor);
   }
+  Object.defineProperty(process.versions, "node", nodeVersionDescriptor);
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   if (home) {
@@ -209,6 +209,30 @@ async function expectRecoveryStarted(options: Parameters<typeof recoverNodeRunti
 }
 
 describe("runtime recovery discovery", () => {
+  it.each([true, false])(
+    "selects only an installed security-patched Node for a certificate-only gap (patched=%s)",
+    async (patched) => {
+      mocks.currentAdmitted = true;
+      Object.defineProperty(process.versions, "node", { value: "24.21.0", configurable: true });
+      const candidate = await writeFixture("bin/node");
+      mocks.admissible.add(candidate);
+      mocks.probe.mockReturnValue({
+        ...probeResult(true),
+        stdout: JSON.stringify({
+          nodeVersion: patched ? "24.22.1" : "24.21.0",
+          sqliteProbe: sqlite(true),
+        }),
+      });
+      if (patched) {
+        await expectRecoveryStarted({ homeDir: home, allowInstall: true });
+        expect(mocks.spawn.mock.calls[0]?.[0]).toBe(candidate);
+      } else {
+        expect(await recoverNodeRuntime({ homeDir: home, allowInstall: true })).toBe(false);
+        expect(mocks.spawn).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it.each([
     { platform: "win32", quote: '"', relative: false, selected: true },
     { platform: "win32", quote: "", relative: false, selected: true },

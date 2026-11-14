@@ -322,17 +322,21 @@ export async function renameSession(
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
+  const canSubmit = () =>
+    readSessionMethodAccess(scope.gateway.snapshot, {
+      method: "sessions.patch",
+      params: { key: session.key, label: null },
+      sessionScope: true,
+      session,
+      allowDeferred: true,
+    }).allowed;
+  if (!canSubmit()) {
+    return;
+  }
   await showInputDialog({
     signal: deps.sessionData.sessionDraftSignal,
     gateway: scope.gateway,
-    canSubmit: () =>
-      readSessionMethodAccess(scope.gateway.snapshot, {
-        method: "sessions.patch",
-        params: { key: session.key, label: null },
-        sessionScope: true,
-        session,
-        allowDeferred: true,
-      }).allowed,
+    canSubmit,
     title: t("sessionsView.renameSessionPrompt"),
     defaultValue: session.renameValue,
     submit: async (value) => {
@@ -466,11 +470,11 @@ export async function assignSessionCategory(
   );
 }
 
-export async function forkSession(
+export async function createChildSession(
   deps: SessionActionHost,
   session: SessionActionRow,
   scope: SidebarSessionMutationScope,
-  options: { title?: string } = {},
+  options: { fork: boolean; title?: string },
 ): Promise<SidebarSessionMutationResult> {
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return "stale";
@@ -479,9 +483,13 @@ export async function forkSession(
   const createParams = {
     parentSessionKey: session.key,
     ...(options.title?.trim() ? { label: options.title.trim() } : {}),
-    fork: true,
-    ...((session.gatewayHasActiveRun ?? session.hasActiveRun)
-      ? { forkFrom: "last-completed" as const }
+    ...(options.fork
+      ? {
+          fork: true,
+          ...((session.gatewayHasActiveRun ?? session.hasActiveRun)
+            ? { forkFrom: "last-completed" as const }
+            : {}),
+        }
       : {}),
     agentId,
   };

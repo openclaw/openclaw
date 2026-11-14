@@ -5,7 +5,10 @@ import type { SessionsUsageResult } from "../../../src/shared/usage-types.js";
 import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
 import { agentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
+import {
+  selectUsageTimeZone,
+  installUsageOverviewGateway as installMockGateway,
+} from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Usage calendar boundaries" });
 const emptyTotals = createEmptyCostUsageTotals();
@@ -21,7 +24,7 @@ function aggregates(
   };
 }
 async function selectLocalDate(page: Page, date: string) {
-  await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("local");
+  await selectUsageTimeZone(page, "local");
   const inputs = await page.locator(".usage-date-input").all();
   expect(inputs).toHaveLength(2);
   for (const input of inputs) {
@@ -124,9 +127,7 @@ suite.define(() => {
           await gateway.waitForRequest("sessions.usage", { match: { agentScope: "all" } });
           for (const { timeZone, date, mode } of calendars) {
             const initialRequests = (await gateway.getRequests("sessions.usage")).length;
-            await page
-              .getByRole("combobox", { name: "Time zone", exact: true })
-              .selectOption(timeZone);
+            await selectUsageTimeZone(page, timeZone);
             await gateway.waitForRequest("sessions.usage", { after: initialRequests });
             for (const [label, days] of [
               ["Today", 1],
@@ -350,7 +351,7 @@ suite.define(() => {
         const expectedBar = (time: string) =>
           `Sep 6, ${time} · 100 tokens · Out 0 · In 100 · CW 0 · CR 0`;
         await expect.poll(barLabels).toEqual([expectedBar("01:00 AM"), expectedBar("11:59 PM")]);
-        await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("utc");
+        await selectUsageTimeZone(page, "utc");
         await expectUsageRange(gateway, date);
         await page.getByRole("button", { name: "Skipped midnight", exact: true }).click();
         await expect.poll(barLabels).toEqual([expectedBar("03:59 AM"), expectedBar("04:00 AM")]);

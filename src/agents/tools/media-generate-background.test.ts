@@ -134,7 +134,6 @@ it.each([
       options: { inputProvenance },
       acquire: async () => undefined,
       resolveProviders: () => [],
-      findDuplicate: async () => undefined,
       prepare: async ({ prompt }) => ({
         kind: "task",
         params: {

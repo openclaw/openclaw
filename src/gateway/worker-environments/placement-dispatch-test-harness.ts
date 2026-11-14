@@ -375,6 +375,14 @@ export async function createHarness(
       };
     }),
     getPreparedCandidates: vi.fn(() => []),
+    refreshPreparedEnvironment: vi.fn(async (request) => {
+      request.assertCurrent();
+      const environment = environments.get(request.environmentId);
+      if (!environment) {
+        throw new Error("Missing prepared test environment");
+      }
+      return environment;
+    }),
     bindPreparedWorkspace: vi.fn(async (request) => ({
       assertCurrent: request.assertCurrent,
       gatewayNamespace: "dispatch-fixture",

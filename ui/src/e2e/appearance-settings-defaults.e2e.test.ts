@@ -422,7 +422,7 @@ suite.define(() => {
       await importer.locator("button.primary").click();
       await expect
         .poll(async () => (await importer.getByRole("alert").textContent())?.trim())
-        .toBe("tweakcn import failed (503).");
+        .toBe("Couldn’t import the theme. Check the link and try again.tweakcn returned HTTP 503.");
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
       await gateway.setMethodResponse(
@@ -431,7 +431,7 @@ suite.define(() => {
       );
       await importer.locator("input").fill("https://tweakcn.com/themes/retry-theme");
       await importer.locator("button.primary").click();
-      await expectText(importer.getByRole("status"), "Imported");
+      await expectText(importer.locator(".settings-theme-import__meta-value"), "Light Green");
       await expectAttribute(page.locator("html"), "data-theme", "custom");
       const importedSettings = await readPersistedSettings(page);
       expect(importedSettings).toMatchObject({
@@ -497,8 +497,8 @@ suite.define(() => {
             };
           })
           .toEqual({ hasCustomTheme: true, theme: "knot" });
-        await expectText(importer.locator(".settings-theme-import__message"), "Imported");
-        await expect.poll(() => importer.getByRole("status").count()).toBe(1);
+        await expectText(importer.locator(".settings-theme-import__meta-value"), "Light Green");
+        await expect.poll(() => importer.locator("input").inputValue()).toBe("");
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       } finally {
         releaseImport();

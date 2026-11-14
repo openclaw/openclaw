@@ -94,6 +94,57 @@ describe("subagent registry context cleanup", () => {
     vi.mocked(loadSubagentSessionEntry).mockReset();
   });
 
+  it.each(["registry", "resolve", "authority", "notify", "dispose"] as const)(
+    "reports the first failing context cleanup phase (%s)",
+    async (phase) => {
+      const failure = new Error("Plugin invocation scope is closed");
+      const dispose = vi.fn(async () => {
+        if (phase === "notify") {
+          throw new Error("secondary disposal failure");
+        }
+        if (phase === "dispose") {
+          throw failure;
+        }
+      });
+      const { cleanup, warn } = createCleanup({
+        async onSubagentEnded() {
+          if (phase === "notify") {
+            throw failure;
+          }
+        },
+        dispose,
+      });
+      if (phase === "registry") {
+        vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(() => {
+          throw failure;
+        });
+      } else if (phase === "resolve") {
+        vi.mocked(resolveContextEngine).mockRejectedValue(failure);
+      }
+      await cleanup.notifyContextEngineSubagentEnded(
+        { childSessionKey: "agent:main:subagent:failed-cleanup", reason: "completed" },
+        {
+          prepareCurrent: async () => {
+            if (phase === "authority") {
+              throw failure;
+            }
+            return true;
+          },
+        },
+      );
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        "context-engine onSubagentEnded failed (best-effort)",
+        {
+          error: { name: "Error", message: failure.message },
+          phase,
+          childSessionKey: "agent:main:subagent:failed-cleanup",
+          reason: "completed",
+        },
+      );
+      expect(dispose).toHaveBeenCalledTimes(phase === "registry" || phase === "resolve" ? 0 : 1);
+    },
+  );
+
   it("completes managed engine notification and disposal under a closed caller scope", async () => {
     const { cleanup, warn } = createCleanup();
     const builder = createTestPluginRegistry();

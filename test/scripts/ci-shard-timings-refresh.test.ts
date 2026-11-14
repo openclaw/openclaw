@@ -57,6 +57,8 @@ function log(shard_name: string, timing_key?: string, files?: string[]) {
 function execute(
   options: {
     after?: typeof run;
+    maxPageSize?: number;
+    failure?: { message: string; count: number };
     jobs?: readonly (typeof job)[];
     logs?: Record<string, string>;
   } = {},
@@ -70,6 +72,8 @@ function execute(
     "fixture.json",
     JSON.stringify({
       run,
+      maxPageSize: options.maxPageSize,
+      failure: options.failure,
       after: options.after ?? run,
       jobs: options.jobs ?? [job],
       logs: options.logs ?? { "1": log("fixture") },
@@ -77,7 +81,7 @@ function execute(
   );
   files.write(
     "gh",
-    `#!${process.execPath}\nconst fs = require('node:fs'); const path = require('node:path'); const root = __dirname; const fixture = JSON.parse(fs.readFileSync(path.join(root, 'fixture.json'))); const endpoint = process.argv[3]; if (endpoint === '--help') { process.stdout.write('--allow-escape-sequences'); process.exit(0); } let result; if (endpoint.endsWith('/actions/runs/321')) { const counter = path.join(root, 'read'); result = fs.existsSync(counter) ? fixture.after : fixture.run; fs.writeFileSync(counter, '1'); } else if (endpoint.includes('/attempts/1/jobs?')) { result = { total_count: fixture.jobs.length, jobs: fixture.jobs }; } else { const id = /jobs\\/(\\d+)\\/logs$/.exec(endpoint)?.[1]; if (!id || !fixture.logs[id]) process.exit(7); process.stdout.write(fixture.logs[id]); process.exit(0); } process.stdout.write(JSON.stringify(result));\n`,
+    `#!${process.execPath}\nconst fs = require('node:fs'); const path = require('node:path'); const root = __dirname; const fixture = JSON.parse(fs.readFileSync(path.join(root, 'fixture.json'))); const endpoint = process.argv[3]; if (endpoint === '--help') { process.stdout.write('--allow-escape-sequences'); process.exit(0); } if (endpoint.includes('/attempts/1/jobs?') && fixture.failure) { const counterPath = path.join(root, 'failures'); const count = fs.existsSync(counterPath) ? Number(fs.readFileSync(counterPath, 'utf8')) : 0; if (count < fixture.failure.count) { fs.writeFileSync(counterPath, String(count + 1)); process.stderr.write(fixture.failure.message); process.exit(1); } } let result; if (endpoint.endsWith('/actions/runs/321')) { const counter = path.join(root, 'read'); result = fs.existsSync(counter) ? fixture.after : fixture.run; fs.writeFileSync(counter, '1'); } else if (endpoint.includes('/attempts/1/jobs?')) { const url = new URL(endpoint, 'https://api.github.com/'); const size = Number(url.searchParams.get('per_page')); const page = Number(url.searchParams.get('page')); if (fixture.maxPageSize && size > fixture.maxPageSize) { process.stderr.write('HTTP 502: jobs page too large'); process.exit(1); } result = { total_count: fixture.jobs.length, jobs: fixture.jobs.slice((page - 1) * size, page * size) }; } else { const id = /jobs\\/(\\d+)\\/logs$/.exec(endpoint)?.[1]; if (!id || !fixture.logs[id]) process.exit(7); process.stdout.write(fixture.logs[id]); process.exit(0); } process.stdout.write(JSON.stringify(result));\n`,
   );
   chmodSync(files.path("gh"), 0o755);
   const script = "scripts/ci-shard-timings-refresh.mts";
@@ -92,6 +96,23 @@ function execute(
   );
   return { result, before, bytes: files.read("timings.json") };
 }
+
+it("collects every job when the API only serves smaller pages", () => {
+  const { result, bytes } = execute({
+    maxPageSize: 50,
+    jobs: Array.from({ length: 252 }, (_, index) => ({
+      ...job,
+      id: index + 1,
+      conclusion: index === 251 ? "success" : "failure",
+    })),
+    logs: { "252": log("last-page") },
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(JSON.parse(bytes).compactGroupSeconds.github).toEqual({
+    ...baseline.compactGroupSeconds.github,
+    "release-full-last-page": 900,
+  });
+});
 
 it.each(["bun-all", "dual-all"])("keeps %s release wall costs separate from Node", (policy) => {
   const runtimeLog =
@@ -191,4 +212,24 @@ it.each([
   expect(result.status).toBe(1);
   expect(result.stderr).toMatch(error);
   expect(bytes).toBe(before);
+});
+
+it.each(["HTTP 502: Server Error", "unexpected EOF"])(
+  "recovers a transient %s without dropping inventory",
+  (message) => {
+    const { result, bytes } = execute({ failure: { message, count: 1 } });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("retry 1/2");
+    expect(JSON.parse(bytes).compactGroupSeconds.github["release-full-fixture"]).toBe(900);
+  },
+);
+
+it.each([
+  ["HTTP 502: Server Error", true],
+  ["HTTP 403: Forbidden", false],
+])("preserves output after persistent %s", (message, retries) => {
+  const { result, before, bytes } = execute({ failure: { message, count: 10 } });
+  expect(result.status).toBe(1);
+  expect(bytes).toBe(before);
+  expect(result.stderr.includes("retry 2/2")).toBe(retries);
 });

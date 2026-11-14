@@ -7,8 +7,13 @@ import {
   isWebchatClient,
 } from "../../utils/message-channel.js";
 import { isGatewayAuthGrantCurrent, isGatewayAuthPolicyCurrent } from "../auth-policy.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  openclawIdSubjectRolePolicy,
+} from "../openclaw-id/tunnel-principal.js";
 import { resolveOperatorRolePolicyForProfile } from "../operator-role-policy.js";
 import { checkGatewayWsBrowserOrigin, normalizeChromeExtensionOrigin } from "../origin-check.js";
+import { resolveProfileActivityViewerId } from "../session-profile-activity-policy.js";
 import { invalidateGatewayPolicyClient } from "./ws-policy-close.js";
 import type { GatewayWsBrowserOrigin, GatewayWsClient } from "./ws-types.js";
 
@@ -35,6 +40,7 @@ export function resolveGatewayWsBrowserOrigin(
     origin: params.origin,
     isLocalClient: params.isLocalClient,
     remoteControlUiIngress: params.remoteControlUiIngress,
+    ...(params.openclawIdTunnel ? { openclawIdTunnel: true } : {}),
   };
 }
 
@@ -49,8 +55,9 @@ export function disconnectDisallowedGatewayPolicyClients(
       | "authPolicy"
       | "authenticatedUserProfile"
       | "internal"
+      | "profileActivity"
     > & {
-      connect?: Pick<ConnectParams, "role" | "scopes">;
+      connect?: GatewayWsClient["connect"];
       socket: Pick<GatewayWsClient["socket"], "close">;
     }
   >,
@@ -66,20 +73,27 @@ export function disconnectDisallowedGatewayPolicyClients(
       continue;
     }
     let roleAuthorityRevoked = false;
+    let currentRole: ReturnType<typeof resolveOperatorRolePolicyForProfile> = undefined;
     if (client.connect?.role === "operator") {
       try {
-        const role = resolveOperatorRolePolicyForProfile(
-          client.authenticatedUserProfile?.profileId,
-          cfg,
+        const principal = client.internal?.openclawIdPrincipal;
+        if (principal?.kind === "owner" && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
+          throw new Error("OpenClaw ID owner authority changed");
+        }
+        // A linked owner device keeps the owner's grants under its person's profile.
+        currentRole = openclawIdSubjectRolePolicy(
+          principal?.kind === "owner" ? principal : undefined,
+          () =>
+            resolveOperatorRolePolicyForProfile(client.authenticatedUserProfile?.profileId, cfg),
         );
         roleAuthorityRevoked =
-          role !== undefined &&
+          currentRole !== undefined &&
           (!roleScopesAllow({
             role: "operator",
             requestedScopes: client.connect.scopes ?? [],
-            allowedScopes: role.scopes,
+            allowedScopes: currentRole.scopes,
           }) ||
-            role.accessPolicyPlugin !==
+            currentRole.accessPolicyPlugin !==
               client.internal?.operatorAccessAuthority?.requiredPolicyPlugin);
       } catch {
         // A retired profile cannot retain its connection's grants.
@@ -93,6 +107,28 @@ export function disconnectDisallowedGatewayPolicyClients(
         message: "gateway policy changed",
         revokeSource: roleAuthorityRevoked || !isGatewayAuthGrantCurrent(client.authPolicy, cfg),
       });
+      continue;
+    }
+    // A presentation refresh fences new requests without revoking accepted work.
+    // Stronger revocation above still runs for retained, already-fenced sources.
+    if (!client.invalidated && client.profileActivity && client.connect) {
+      const viewerId = resolveProfileActivityViewerId(
+        {
+          connect: client.connect,
+          internal: client.internal,
+          authenticatedUserProfile: client.authenticatedUserProfile,
+        },
+        currentRole?.scopes,
+        client.authenticatedUserProfile?.profileId,
+      );
+      if (viewerId !== client.profileActivity.viewerId) {
+        invalidateGatewayPolicyClient(client, {
+          reason: "profile-activity-policy-changed",
+          code: 4001,
+          message: "gateway policy changed",
+          revokeSource: false,
+        });
+      }
     }
   }
 }

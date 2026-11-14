@@ -4,17 +4,21 @@ import { en } from "./en.ts";
 const enGitHubConnections = {
   githubConnections: {
     title: en.githubConnections.title,
-    description: "These accounts are separate from your GitHub sign-in and co-author credit.",
+    description:
+      "Which GitHub account acts for you, and which one each agent uses. Separate from your GitHub sign-in and co-author credit.",
     descriptionMore: "Check the accounts used for agent commands, dashboard data, and publishing.",
+    agentsTitle: "Agent GitHub accounts",
+    agentsDescription:
+      "Each agent uses its own account if it has one, otherwise the shared agent account, for its commands, its dashboard GitHub data, and Publish PR unless you choose My GitHub. Changes apply to new replies; active replies keep their current account.",
     mine: en.githubConnections.mine,
     system: en.githubConnections.system,
-    personalUse: "Publishing",
+    personalUse: "Only when you publish a PR with it. Agents never use it.",
     personalDescription: "Your account when you choose it to publish a PR.",
-    systemUse: "Agent commands, dashboards, publishing",
+    systemUse: "Agents without their own account, including their dashboards and Publish PR",
     systemDescription:
-      "Default account for agent commands, authenticated dashboards, and publishing.",
+      "Used by every agent without its own account for its commands, authenticated dashboard data, and Publish PR unless you choose My GitHub.",
     unboundDescription:
-      "Sign in with a personal profile to connect My GitHub. Admins can still manage System GitHub.",
+      "Sign in with a personal profile to connect My GitHub. Admins can still manage the shared agent account.",
     signInRequired: "Personal sign-in required",
     connected: "Connected",
     disconnected: "Disconnected",
@@ -25,31 +29,41 @@ const enGitHubConnections = {
     manageShort: "Manage",
     changeShort: "Change",
     connectShort: "Connect",
-    viewShort: "View",
     reconnectRequired: "Sign-in required",
     connectMine: "Connect My GitHub",
     changeMine: "Change My GitHub",
-    changeSystem: "Change System GitHub",
+    changeSystem: "Change shared agent account",
+    changeSystemForOne: "Change for 1 agent",
+    changeSystemForMany: "Change for {count} agents",
     disconnectMine: "Disconnect My GitHub",
     disconnect: "Disconnect",
     disconnectDescription:
       "Stops unfinished personal publication. Published work stays intact; revoke the app grant separately in GitHub settings.",
     adminManaged: "Managed by admins",
-    forMe: en.githubConnections.forMe,
-    forSystem: en.githubConnections.forSystem,
-    purposeHint: "Only the selected account changes.",
+    personalSetupHint: "Only My GitHub changes. Agents keep their accounts.",
+    systemSetupHint:
+      "Agents without their own account switch to the new account for new replies, including their dashboard data and Publish PR. Agents with their own account keep it.",
     continue: "Continue with GitHub",
     usage: "Where these accounts are used",
     usageDescription:
       "My GitHub is used only when you choose it to publish a PR. You need write access to the session, and work must be finished and accepted on this computer. Agent commands, model actions, previews, and cloud devices keep the shared account. Finish work on a cloud device and bring it back to this computer before publishing with My GitHub. Connecting My GitHub changes no defaults.",
     details: "Account details",
     agentTitle: "GitHub account",
-    agentFor: "GitHub for {agent}",
     agentDescription:
       "Used for this agent’s commands and dashboard data. Verified confirms the account; repository access is checked when data is requested.",
-    viewAgent: "View agent account",
-    agentOverride: "Agent override",
-    advancedOverride: "Advanced: agent GitHub override",
+    agentsHelp:
+      "An agent with its own account uses it instead of the shared agent account, including for its dashboard data and Publish PR. Giving one agent its own account leaves the shared account and every other agent unchanged.",
+    usesShared: "Uses the shared agent account",
+    ownAccount: "Own account",
+    ownAccountKind: "Own account · {kind}",
+    giveOwnShort: "Give its own account",
+    giveOwn: "Give {agent} its own GitHub account",
+    changeAgent: "Change the GitHub account for {agent}",
+    useSharedFor: "Use the shared agent account for {agent}",
+    agentSetupTitle: "Own account for {agent}",
+    agentSetupHint:
+      "Only {agent} changes. The shared agent account and other agents stay as they are.",
+    saveForAgent: "Save for {agent}",
     manageCommon: "Manage accounts in Profile",
   },
   agentTools: {
@@ -102,14 +116,12 @@ const enGitHubConnections = {
     githubUsePat: "Use a PAT instead",
     githubToken: "Fine-grained PAT",
     githubTokenDesc:
-      "Stored in a private managed GitHub CLI profile; only the setup handoff is removed.",
+      "On GitHub, choose Only select repositories (for example, only your fork) and allow Contents and Pull requests read and write. Stored in a private managed GitHub CLI profile.",
     githubTokenToggle: "Toggle token visibility",
     githubPasteToken: "Paste a fine-grained personal access token first.",
-    githubAuthorName: "Author name",
-    githubAuthorEmail: "Author email",
+    githubAuthorName: "Commit author name (optional)",
+    githubAuthorEmail: "Commit author email (optional)",
     githubConfigure: "Save account",
-    githubConfiguredHere: "Configured here",
-    githubInheritedHere: "Inherited",
     githubKindNative: "GitHub CLI account",
     githubKindPat: "Personal access token",
     githubKindOAuth: "GitHub sign-in",
@@ -119,18 +131,14 @@ const enGitHubConnections = {
     githubRefreshUnavailable: "Unavailable — reconnect required",
     githubRefreshRefreshing: "Refreshing…",
     githubRefreshFailed: "Refresh failed — retrying",
-    githubUseSystemNewRuns: "Use System GitHub",
+    githubUseSystemNewRuns: "Use shared account",
     githubUseNativeNewRuns: "Use GitHub CLI",
-    githubUseSystemConfirmTitle: "Use System GitHub for new replies?",
+    githubUseSystemConfirmTitle: "Use the shared agent account for new replies?",
     githubUseNativeConfirmTitle: "Use the GitHub CLI account for new replies?",
     githubUseSystemConfirmMessage:
-      "New replies from this agent will use System GitHub. Active replies keep their current account until they finish. Revoke the sign-in or personal access token separately on GitHub if needed.",
+      "New replies from this agent will use the shared agent account. Active replies keep their current account until they finish. Revoke the sign-in or personal access token separately on GitHub if needed.",
     githubUseNativeConfirmMessage:
       "New replies without an agent override will use the GitHub CLI account. Active replies keep their current account until they finish. Revoke the sign-in or personal access token separately on GitHub if needed.",
-    githubAgentMutationHint:
-      "Connecting or removing an account below applies to this agent’s new replies.",
-    githubSystemMutationHint:
-      "Connecting or removing an account below applies to new replies using System GitHub.",
   },
 } satisfies TranslationMap;
 

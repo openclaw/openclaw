@@ -32,6 +32,7 @@ import type {
   ProjectedAgentRunState,
 } from "./agent-run-registry.types.js";
 import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage.js";
+import { isOperatorAuthorityUnavailable } from "./operator-authority-error.js";
 
 export type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
 export { getAgentRunContextOwnerStatus } from "./agent-run-registry-state.js";
@@ -429,6 +430,9 @@ function readActiveAgentRunDelegatedAuthority(
       ? authority
       : undefined;
   } catch (error) {
+    if (isOperatorAuthorityUnavailable(error)) {
+      throw error;
+    }
     if (!delegatedAuthorityFailures.has(authority)) {
       delegatedAuthorityFailures.set(authority, { cause: error });
     }

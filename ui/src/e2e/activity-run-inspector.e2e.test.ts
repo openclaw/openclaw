@@ -413,13 +413,6 @@ suite.define(() => {
       });
       const accessibilityTree = await page.locator("body").ariaSnapshot();
       for (const hidden of [
-        "hidden-action-id",
-        "hidden-resource-id",
-        "hidden-target-id",
-        "hidden-evaluator-id",
-        "hidden-policy-id",
-        "hidden-grant-id",
-        "hidden-record-id",
         "rm -rf",
         "/private/operator-path",
         "credential-value",

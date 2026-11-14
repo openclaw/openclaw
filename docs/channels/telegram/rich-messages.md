@@ -39,6 +39,10 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 
     Default: off, for client compatibility — some current Desktop, Web, Android, and third-party clients render accepted rich messages as unsupported. Keep this off unless every client used with the bot can render them. `/status` shows whether the current session has rich messages on or off.
 
+    With rich messages off, tight numbered Markdown lists keep properly indented bullet children attached to their parent without added blank lines. Separate bullet and numbered sections keep their paragraph spacing.
+
+    Caller-authored HTML escapes literal `<` characters without consuming a later supported tag or a closing code tag. A supported start tag without a matching end tag, such as `<b>` mentioned in prose, stays visible as text instead of making Telegram reject the message. Existing tag, attribute, and entity restrictions still apply.
+
     Link previews are on by default. `channels.telegram.linkPreview: false` disables automatic entity detection for rich text. OpenClaw explicitly marks bare URLs so they remain tappable, except URLs containing `&`, which stay plain to avoid Telegram's query-separator encoding issue. Use a labeled Markdown link for those URLs.
 
   </Accordion>
@@ -134,7 +138,9 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 
     Mini App buttons only work in private chats between a user and the bot.
 
-    Callback action values not claimed by a registered plugin interactive handler are passed to the agent as text: `callback_data: <value>`.
+    Buttons with `disabled: true` never send a callback to the agent. With `richMessages` on, they render as Telegram disabled buttons: the label stays in the keyboard and tapping it does nothing. With `richMessages` off, the label moves to the message text instead (a buttons-only edit leaves it out of the keyboard), because older clients show a whole message containing a disabled button as unsupported.
+
+    Callback action values from `message` sends that no registered plugin interactive handler claims are passed to the agent as text: `callback_data: <value>`. Other typed callback controls belong to the plugin that sent them; when no handler claims a tap, Telegram removes the controls and replies "This action is no longer available."
 
     Agent messages created from button clicks use the time OpenClaw received the click, not the original card's send time. Queued or replayed clicks retain that receipt time.
 
@@ -192,6 +198,28 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
     Inline approval buttons also require `channels.telegram.capabilities.inlineButtons` to allow the target surface (`dm`, `group`, or `all`). Approval IDs prefixed with `plugin:` resolve through plugin approvals; others resolve through exec approvals first.
 
     See [Exec approvals](/tools/exec-approvals).
+
+  </Accordion>
+  <Accordion title="Message widgets">
+    Opt in to send `show_widget` as a [Telegram message widget](https://core.telegram.org/bots/widgets) (Bot API 10.4), a small interactive card inside a private chat with the bot:
+
+```json5
+{
+  channels: {
+    telegram: {
+      widgets: true,
+    },
+  },
+}
+```
+
+    Default: off, for client compatibility. Older Telegram clients cannot render widgets, so keep this off unless every client used with the bot is current. The setting also works per account (`channels.telegram.accounts.<id>.widgets`). `/status` shows whether widgets are on. While it is off, `show_widget` behaves as before and taps on earlier widgets are dropped. Private bot chat topics are supported, and widget requests return to the originating topic. Groups, channels, and channel direct-message topics always use the normal widget surfaces.
+
+    - **No network.** Widgets run in Telegram's sandbox without CDNs, libraries, or remote images. The agent draws charts with inline SVG or canvas and inlines images as `data:` URLs.
+    - **Limits.** 32 KB of HTML and 4 KB after compression. There are no text inputs; widgets use buttons.
+    - **Trial run.** Before sending, OpenClaw runs the widget once in QuickJS with a stand-in DOM, its timers, and a tap on every enabled button. Script errors, endless loops, removed elements, unsupported CSS (`vh`, `sticky`, scrolling, `color-mix()`), network use, element and CSS-rule limits, and `request()` outside a tap go back to the agent to fix, and the widget is not sent until they pass. Approximate findings (more than 16 translucent or shadowed elements, `undefined`/`NaN` on screen) are passed to the agent as notes while the widget is still sent. Widgets that use web APIs the trial run does not model, such as `URL`, are sent unchecked.
+    - **Taps.** A widget that calls `TelegramWidget.request(data)` reaches the agent as `widget_request: <data>`. The tap is acknowledged at once. The agent answers by calling `show_widget` with only the new `state` (at most 1,024 bytes), which updates the tapped widget in place without an "edited" mark or a new message. New widget code always sends a new message, and a typed message always starts a new one.
+    - **Rate limits.** Widget code cannot send `/` or `!` commands. Each widget gets at most 10 requests per minute, and the same request text reaches the agent once per minute.
 
   </Accordion>
 </AccordionGroup>

@@ -255,6 +255,14 @@ suite.define(() => {
       await dropdown.locator('[data-value="back"]').click();
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("root");
       await expect
+        .poll(() =>
+          dropdown
+            .locator('.oc-menu-item:visible:not(:disabled):not([aria-disabled="true"])')
+            .first()
+            .evaluate((item) => item === document.activeElement),
+        )
+        .toBe(true);
+      await expect
         .poll(() => dropdown.locator(".oc-menu-item:focus").textContent())
         .toContain("Camera");
       await page.evaluate(() => {
@@ -707,7 +715,7 @@ suite.define(() => {
         expect(await menu.getByRole("menuitem", { name: "Browse connectors" }).count()).toBe(0);
         const addServer = menu.getByRole("menuitem", { name: /Add MCP server/ });
         await expect.poll(() => addServer.isDisabled()).toBe(true);
-        await expect.poll(() => tooltipTitleText(addServer)).toContain("Admin access");
+        await expect.poll(() => tooltipTitleText(addServer)).toContain("admin access");
       });
     },
   );
@@ -772,7 +780,7 @@ suite.define(() => {
           webSearchItem(menu).evaluate((node) => node.getAttribute("aria-checked") === "true"),
         )
         .toBe(false);
-      await expect.poll(() => tooltipTitleText(webSearchItem(menu))).toContain("remove");
+      await expect.poll(() => tooltipTitleText(webSearchItem(menu))).toContain("Remove");
       await gateway.setOnline(false);
       await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(true);
       await expect
@@ -782,7 +790,7 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       await gateway.setOnline(true);
       await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(false);
-      await expect.poll(() => tooltipTitleText(webSearchItem(menu))).toContain("remove");
+      await expect.poll(() => tooltipTitleText(webSearchItem(menu))).toContain("Remove");
       await webSearchItem(menu).click();
       await expect
         .poll(() => latestToolOverrides(gateway))

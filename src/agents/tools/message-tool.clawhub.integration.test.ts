@@ -35,7 +35,12 @@ function skill(displayName: string, ownerHandle: string, official = false) {
   return { slug, installRef: `@${ownerHandle}/${slug}`, ownerHandle, displayName, official };
 }
 
-async function search(clawhub: Record<string, unknown>, message?: string, workspaceDir?: string) {
+async function search(
+  clawhub: Record<string, unknown>,
+  message?: string,
+  workspaceDir?: string,
+  sendParams: Record<string, unknown> = {},
+) {
   setRuntimeConfigSnapshot({});
   const result = await createMessageTool({
     config: {},
@@ -44,7 +49,7 @@ async function search(clawhub: Record<string, unknown>, message?: string, worksp
     currentChannelProvider: "webchat",
     agentSessionKey: "agent:main:webchat:dm:clawhub-proof",
     runId: "clawhub-proof-run",
-  }).execute("clawhub-search", { action: "send", message, clawhub });
+  }).execute("clawhub-search", { action: "send", ...sendParams, message, clawhub });
   const reply = extractMessagingToolSourceReplyPayload(result);
   return { result, reply, recommendations: readClawHubRecommendations(reply?.channelData) };
 }
@@ -97,6 +102,20 @@ it("matches an official skill to its exact linked publisher instead of its displ
     },
   ]);
   expectNotice(result, "Calendar: Available to install.");
+});
+it("preserves a media caption alongside intentional recommendation cards", async () => {
+  const caption = "Screenshot evidence for the recommended capability.";
+  const media = "https://example.com/evidence.png";
+  const { result, reply, recommendations } = await search(
+    { query: "whatsapp", kind: "plugin" },
+    " \t\n",
+    "/workspace",
+    { caption, media },
+  );
+  expect(reply?.text).toBe(caption);
+  expect(reply?.mediaUrls).toEqual([media]);
+  expect(recommendations).toMatchObject([{ name: "WhatsApp", installed: false }]);
+  expectNotice(result, "WhatsApp: Available to install.");
 });
 it("rejects model-supplied installation and official claims", async () => {
   await expect(search({ query: "whatsapp", installed: true, official: true })).rejects.toThrow();

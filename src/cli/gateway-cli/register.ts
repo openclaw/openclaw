@@ -6,6 +6,7 @@ import type { HealthSummary } from "../../commands/health.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type { DiagnosticStabilitySnapshot } from "../../logging/diagnostic-stability.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
@@ -48,11 +49,35 @@ function gatewayCallOpts(cmd: Command): Command {
   );
 }
 
-async function callGatewayReadOnlyCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
+async function callGatewayReadOnlyCli(
+  method: string,
+  opts: GatewayRpcOpts,
+  params?: unknown,
+  signal?: AbortSignal,
+) {
   return await callGatewayFromCliWithTransport(method, opts, params, {
     defaultTimeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS,
     sharedStateMode: "read-only",
+    signal,
   });
+}
+
+/** Ctrl+C owns the exit; a reply that lands after it must not be printed. */
+async function callGatewayReadOnlyCliUnlessAborted(
+  method: string,
+  opts: GatewayRpcOpts,
+  params?: unknown,
+): Promise<{ result: unknown } | undefined> {
+  const signal = getAsyncWorkSignal();
+  let result: unknown;
+  try {
+    result = await callGatewayReadOnlyCli(method, opts, params, signal);
+  } catch (error) {
+    if (!signal?.aborted) {
+      throw error;
+    }
+  }
+  return signal?.aborted ? undefined : { result };
 }
 
 function parseGatewayCallParams(value = "{}"): unknown {
@@ -325,11 +350,15 @@ export function registerGatewayCli(program: Command) {
           if (agentId && opts.allAgents) {
             throw new Error("Use --agent or --all-agents, not both");
           }
-          const summary = (await callGatewayReadOnlyCli("usage.cost", rpcOpts, {
+          const reply = await callGatewayReadOnlyCliUnlessAborted("usage.cost", rpcOpts, {
             days,
             ...(agentId ? { agentId } : {}),
             ...(opts.allAgents ? { agentScope: "all" } : {}),
-          })) as CostUsageSummary;
+          });
+          if (!reply) {
+            return;
+          }
+          const summary = reply.result as CostUsageSummary;
           await printGatewayResult(rpcOpts.json, summary, async (rich) =>
             (await loadCostUsageRenderer()).renderGatewayCostUsageSummary(summary, days, rich),
           );
@@ -343,11 +372,15 @@ export function registerGatewayCli(program: Command) {
       .description("Fetch Gateway health")
       .action(
         gatewayAction(async (opts, command) => {
+          const signal = getAsyncWorkSignal();
           const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(opts, command);
           let result: unknown;
           try {
-            result = await callGatewayReadOnlyCli("health", rpcOpts);
+            result = await callGatewayReadOnlyCli("health", rpcOpts, undefined, signal);
           } catch (error) {
+            if (signal?.aborted) {
+              return;
+            }
             const { emitReachableGatewayAuthDiagnostic, readNonObservingHealthConfig } =
               await import("../../commands/health.js");
             const handled = await emitReachableGatewayAuthDiagnostic({
@@ -361,11 +394,15 @@ export function registerGatewayCli(program: Command) {
               password: rpcOpts.password,
               localPortOverride: rpcOpts.localPortOverride,
               json: Boolean(rpcOpts.json),
+              signal,
             });
             if (handled) {
               return;
             }
             throw error;
+          }
+          if (signal?.aborted) {
+            return;
           }
           if (rpcOpts.json) {
             defaultRuntime.writeJson(result);
@@ -529,7 +566,7 @@ export function registerGatewayCli(program: Command) {
             return;
           }
 
-          const result = await callGatewayReadOnlyCli(
+          const reply = await callGatewayReadOnlyCliUnlessAborted(
             "diagnostics.stability",
             resolveGatewayRpcOptionsWithLocalPort(rpcOpts, command),
             {
@@ -538,8 +575,11 @@ export function registerGatewayCli(program: Command) {
               ...(query.sinceSeq !== undefined ? { sinceSeq: query.sinceSeq } : {}),
             },
           );
-          await printGatewayResult(rpcOpts.json, result, (rich) =>
-            renderStabilitySummary(result as DiagnosticStabilitySnapshot, rich),
+          if (!reply) {
+            return;
+          }
+          await printGatewayResult(rpcOpts.json, reply.result, (rich) =>
+            renderStabilitySummary(reply.result as DiagnosticStabilitySnapshot, rich),
           );
         }, "Gateway stability failed"),
       ),

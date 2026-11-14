@@ -1,11 +1,16 @@
 import childProcess from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   quoteShell,
   runWorkflowShellScript,
   testNodeExecPath,
 } from "./ci-workflow.test-support.js";
+
+const temporary = useAutoCleanupTempDirTracker(afterEach);
 
 describe("workflow fixture child deadline", () => {
   it("completes here-string input and redirected heredoc output handoff", () => {
@@ -50,6 +55,57 @@ describe("workflow fixture child deadline", () => {
           `Workflow fixture command timed out after 500 ms: '${process.platform === "darwin" ? "/bin/bash" : "bash"}' .*run\\.sh'\\nfixture-ready`,
         ),
       );
+    }
+  });
+});
+
+describe("workflow fixture file-backed module stdin", () => {
+  it.each([
+    { operator: ">>", target: '"$GITHUB_ENV"', file: "output with spaces", exit: 0 },
+    { operator: ">", target: "'output with spaces'", file: "output with spaces", exit: 7 },
+    { operator: ">>", target: "output.jsonl", file: "output.jsonl", exit: 0 },
+  ])("preserves redirected module behavior for %j", (row) => {
+    const root = temporary.make("workflow-module-stdin-");
+    const output = path.join(root, row.file);
+    writeFileSync(path.join(root, "value.mjs"), 'export const value = "relative-import";\n');
+    writeFileSync(output, "existing-output\n");
+    const nativeSpawn = childProcess.spawnSync;
+    let stagedScript = "";
+    const spawn = vi
+      .spyOn(childProcess, "spawnSync")
+      .mockImplementation((...args: Parameters<typeof childProcess.spawnSync>) => {
+        const script = args[1]?.[0];
+        if (typeof script === "string") {
+          stagedScript = readFileSync(script, "utf8");
+        }
+        return nativeSpawn(...args);
+      });
+    syncBuiltinESMExports();
+    try {
+      const result = runWorkflowShellScript(
+        `set -euo pipefail
+node --input-type=module ${row.operator} ${row.target} <<'FIXTURE_MODULE'
+import { value } from "./value.mjs";
+console.log(JSON.stringify({ value, literal: "$body", argv: process.argv.slice(1) }));
+process.exitCode = ${row.exit};
+FIXTURE_MODULE
+`,
+        { cwd: root, env: { ...process.env, GITHUB_ENV: output, body: "must-not-expand" } },
+      );
+      expect(result.status, result.stderr).toBe(row.exit);
+      expect(result.stdout).toBe("");
+      expect(stagedScript).not.toContain("<<'FIXTURE_MODULE'");
+      expect(stagedScript).toContain(`${row.operator} ${row.target} < `);
+      expect(readFileSync(output, "utf8")).toBe(
+        `${row.operator === ">>" ? "existing-output\n" : ""}${JSON.stringify({
+          value: "relative-import",
+          literal: "$body",
+          argv: [],
+        })}\n`,
+      );
+    } finally {
+      spawn.mockRestore();
+      syncBuiltinESMExports();
     }
   });
 });

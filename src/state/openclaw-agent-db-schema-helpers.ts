@@ -5,10 +5,12 @@ import {
   hasLegacyMemoryRecallMetadataColumns,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
+import { matchesSqliteMemorySearchFragment } from "../infra/database-engine/sqlite-memory-search-fragments.js";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
+import { createSqliteTableContractReader } from "../infra/sqlite-schema-catalog.js";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
@@ -23,8 +25,9 @@ import {
   SqliteSchemaMismatchError,
   throwSqliteSchemaMismatches,
 } from "../infra/sqlite-schema-issues.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
+import { readMainTableList } from "../infra/sqlite-strict.js";
+import { readSqliteUserVersion, writeSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   AGENT_V14_BOARD_SCHEMA_SQL,
@@ -68,6 +71,66 @@ export {
 } from "./openclaw-agent-db-schema-read.js";
 
 export { getOpenClawAgentMigrationSchema } from "./openclaw-agent-schema-history.js";
+
+const PUBLISHED_MEMORY_FTS_TABLES = ["memory_index_chunks_fts", "memory_index_paths_fts"] as const;
+/** Exact FTS5 module tables. SQLite reports these as shadows; a same-named ordinary table is not one. */
+const FTS5_SHADOW_SUFFIXES = ["config", "content", "data", "docsize", "idx"] as const;
+
+function publishedMemoryFtsMatches(
+  db: DatabaseSync,
+  name: (typeof PUBLISHED_MEMORY_FTS_TABLES)[number],
+): boolean {
+  const catalog = createSqliteTableContractReader(db).readCatalog([], [name]);
+  return (["unicode61", "trigram"] as const).some((tokenizer) => {
+    try {
+      return matchesSqliteMemorySearchFragment(catalog, {
+        kind: name === "memory_index_paths_fts" ? "path-fts" : "body-fts",
+        tableName: name,
+        tokenizer,
+      });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes("Memory search schema has no generated fingerprint")
+      ) {
+        return false;
+      }
+      throw error;
+    }
+  });
+}
+
+function admitPublishedMemoryFtsTables(
+  db: DatabaseSync,
+  pathname: string,
+  present: ReadonlySet<string>,
+  allowed: Set<string>,
+): void {
+  const verified: string[] = [];
+  for (const name of PUBLISHED_MEMORY_FTS_TABLES) {
+    if (!present.has(name)) {
+      continue;
+    }
+    if (!publishedMemoryFtsMatches(db, name)) {
+      throw new SqliteSchemaMismatchError(
+        `Cannot repair v16 validity triggers for ${pathname}: drifted memory FTS table ${name}. Preserve the database and SQLite sidecars before repair.`,
+      );
+    }
+    allowed.add(name);
+    verified.push(name);
+  }
+  if (verified.length === 0) {
+    return;
+  }
+  const shadowNames = new Set(
+    verified.flatMap((name) => FTS5_SHADOW_SUFFIXES.map((suffix) => `${name}_${suffix}`)),
+  );
+  for (const table of readMainTableList(db, { includeInternal: true })) {
+    if (table.type === "shadow" && shadowNames.has(table.name)) {
+      allowed.add(table.name);
+    }
+  }
+}
 
 /** beta.6 wrote v16 before the derived validity column and triggers existed. */
 export function repairAndAssertOpenClawAgentV16Validity(
@@ -117,6 +180,9 @@ export function repairAndAssertOpenClawAgentV16Validity(
     assertSqliteSchemaContains(db, pathname, RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL);
   }
   const tables = new Set([...getCanonicalSqliteTableNames(schemaSql), "state_leases"]);
+  // Lazy memory FTS is owned outside the base agent DDL. Admit a published
+  // definition, then only the shadow tables SQLite attributes to that module.
+  admitPublishedMemoryFtsTables(db, pathname, schema.tables, tables);
   const indexes = new Set([
     ...getCanonicalSqliteNamedIndexNames(schemaSql),
     "idx_agent_state_leases_expiry",
@@ -375,18 +441,25 @@ export function finishAgentSchemaMigration(
   schemaSql: string,
   requiresMaintenance: boolean,
   assertMigration: () => void,
-  integrityTables?: readonly string[],
+  integrity?: { tables: readonly string[]; foreignKeyTables?: readonly string[] },
 ): void {
-  db.exec(`PRAGMA user_version = ${targetVersion};`);
+  writeSqliteUserVersion(db, targetVersion);
   persistAgentSchemaMetadata(db, agentId, targetVersion);
   assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion }, schemaSql);
-  for (const table of integrityTables ?? []) {
+  for (const table of integrity?.tables ?? []) {
     if (tableExists(db, table)) {
       assertSqliteTableIntegrity(db, pathname, table);
     }
   }
-  if (requiresMaintenance && db.prepare("PRAGMA foreign_key_check").all().length > 0) {
-    throw new Error(`Agent schema migration failed foreign key validation for ${pathname}.`);
+  if (requiresMaintenance) {
+    const checks = integrity?.foreignKeyTables?.map(
+      (table) => `PRAGMA foreign_key_check(${quoteSqliteIdentifier(table)})`,
+    ) ?? ["PRAGMA foreign_key_check"];
+    for (const check of checks) {
+      if (db.prepare(check).all().length > 0) {
+        throw new Error(`Agent schema migration failed foreign key validation for ${pathname}.`);
+      }
+    }
   }
   assertMigration();
 }

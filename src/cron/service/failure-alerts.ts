@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+  normalizeOptionalThreadValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailure } from "../../agents/auth-profiles/oauth-refresh-failure.js";
@@ -14,6 +16,10 @@ import { normalizeAnyChannelId } from "../../channels/registry-normalize.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import {
+  resolveCronDeliveryDefaultsScope,
+  resolveCronFailureAlertDefaults,
+} from "../delivery-defaults.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { cronFailureDetailLines } from "../failure-notification-text.js";
 import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
@@ -24,6 +30,7 @@ import type {
   CronJob,
   CronMessageChannel,
   CronRunErrorClassification,
+  CronStoredJob,
 } from "../types.js";
 import { buildCronAutoDisableNotice } from "./auto-disable.js";
 import { buildCronFailureRepairBrief } from "./failure-repair-brief.js";
@@ -102,11 +109,20 @@ function hasFailureRepairOwner(
 /** Resolves effective failure-alert policy from job config, delivery defaults, and global cron config. */
 export function resolveFailureAlert(
   state: {
-    deps: Pick<CronJobPolicyContext["deps"], "cronConfig">;
+    deps: Pick<
+      CronJobPolicyContext["deps"],
+      "cronConfig" | "defaultAgentId" | "resolveDefaultAgentId"
+    >;
     preparedFailureAlert?: CronJobPolicyContext["preparedFailureAlert"];
   },
   job: Pick<CronJob, "delivery" | "failureAlert"> &
-    Partial<Pick<CronJob, "id" | "owner" | "payload" | "schedule">>,
+    Partial<
+      Pick<
+        CronJob,
+        "id" | "owner" | "payload" | "schedule" | "agentId" | "sessionKey" | "sessionTarget"
+      >
+    > &
+    Partial<Pick<CronStoredJob, "createdActor">>,
 ): ResolvedFailureAlert | null {
   const prepared = state.preparedFailureAlert;
   if (prepared) {
@@ -115,7 +131,13 @@ export function resolveFailureAlert(
     }
     return prepared.value;
   }
-  const globalConfig = state.deps.cronConfig?.failureAlert;
+  const defaults = resolveCronDeliveryDefaultsScope(
+    state.deps.cronConfig,
+    job,
+    state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+  );
+  // The owner's agent route replaces the global route fields; tuning stays global.
+  const globalConfig = resolveCronFailureAlertDefaults(defaults);
   const jobConfig = job.failureAlert === false ? undefined : job.failureAlert;
 
   if (job.failureAlert === false) {
@@ -129,6 +151,7 @@ export function resolveFailureAlert(
     (jobConfig.channel !== undefined ||
       jobConfig.to !== undefined ||
       jobConfig.accountId !== undefined ||
+      jobConfig.threadId !== undefined ||
       jobConfig.mode !== undefined),
   );
   const alternateRoute = resolveFailureDestination(
@@ -137,7 +160,7 @@ export function resolveFailureAlert(
     hasJobRoute ? jobConfig : undefined,
   );
   const primaryRoute = hasCanonicalCronDeliveryMode(job.delivery)
-    ? resolveCronDeliveryPlan(job)
+    ? resolveCronDeliveryPlan(job, defaults)
     : undefined;
   const primaryAnnounceRoute =
     primaryRoute?.mode === "announce" && primaryRoute.requested ? primaryRoute : undefined;
@@ -190,15 +213,24 @@ export function resolveFailureAlert(
   const accountId =
     normalizeOptionalString(route?.accountId) ??
     (primaryRecipientMatches ? primaryAnnounceRoute?.accountId : undefined);
-  // A configured failure destination has no thread and stays distinct from a
-  // threaded primary peer unless a job alert names its own recipient.
-  const primaryRouteMatches =
+  // Preserve legacy thread inheritance when no explicit failure thread is set.
+  const primaryThreadFallbackMatches =
     primaryRecipientMatches &&
     accountId === primaryAnnounceRoute?.accountId &&
     (alternateRoute === null ||
       !job.delivery?.failureDestination ||
       primaryAnnounceRoute?.threadId == null ||
       jobConfig?.to !== undefined);
+  const threadId =
+    mode === "announce"
+      ? (normalizeOptionalThreadValue(route?.threadId) ??
+        (primaryThreadFallbackMatches ? primaryAnnounceRoute?.threadId : undefined))
+      : undefined;
+  const primaryRouteMatches =
+    primaryRecipientMatches &&
+    accountId === primaryAnnounceRoute?.accountId &&
+    normalizeOptionalStringifiedId(threadId) ===
+      normalizeOptionalStringifiedId(primaryAnnounceRoute?.threadId);
 
   return {
     after: clampPositiveInt(jobConfig?.after ?? globalConfig?.after, DEFAULT_FAILURE_ALERT_AFTER),
@@ -210,7 +242,7 @@ export function resolveFailureAlert(
     to,
     mode,
     accountId,
-    threadId: primaryRouteMatches ? primaryAnnounceRoute.threadId : undefined,
+    threadId,
     includeSkipped: jobConfig?.includeSkipped ?? globalConfig?.includeSkipped ?? false,
     alternateRoute: alternateRoute !== null && !primaryRouteMatches,
   };
@@ -470,7 +502,10 @@ function maybeEmitFailureAlert(
   ].some(
     (route) =>
       route &&
-      (route.channel !== undefined || route.to !== undefined || route.accountId !== undefined),
+      (route.channel !== undefined ||
+        route.to !== undefined ||
+        route.threadId !== undefined ||
+        route.accountId !== undefined),
   );
   // A recurring job's auto-disable notice goes straight to the route: a repair turn can
   // fail the same way the job did and leave the route silent.

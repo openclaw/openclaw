@@ -1,0 +1,338 @@
+/** @jsxImportSource @solidjs/web */
+// The Access page (titled Remote access): who may reach this claw through
+// OpenClaw ID. Its People section lets the owner invite someone, approve or
+// deny their request, see who is
+// active and what they are running, and remove members. Every change is a
+// statement this browser's owner device signs and sends straight to the
+// Gateway (openclawId.authority); everything shown is read from the Gateway
+// (openclawId.people, which answers only an owner).
+// Owner devices and the recovery kit live in the account menu, not here.
+import { fingerprint, type MemberRole, type PublicKeyText } from "@openclaw/openclaw-id-protocol";
+import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
+import { createSignal, latest, onSettled, Show, untrack } from "solid-js";
+import { createInvite, decideInvite, removeMember } from "./invites.js";
+import { NodeSection } from "./node-section.js";
+import { createNodeInvite, decideNodeInvite, removeNode } from "./nodes.js";
+import { thisOwnerDevice } from "./owner-signing.js";
+import {
+  peopleError,
+  type PeopleError,
+  type PeopleErrorAction,
+  type PeopleOperationError,
+} from "./people-error.js";
+import { memberName, removalNote } from "./people-format.js";
+import { createPeopleMotion } from "./people-motion.js";
+import { observePeople } from "./people-refresh.js";
+import {
+  InviteForm,
+  Members,
+  PendingRequests,
+  OperationError,
+  type RemovedMemberNotice,
+} from "./people-sections.js";
+import type { Invite, Link, Member, StatusResult } from "./types.js";
+
+// Canonical device fingerprints stay available in the request's details disclosure.
+async function pendingFingerprints(invites: Invite[]): Promise<ReadonlyMap<string, string>> {
+  const keys = invites.flatMap((invite) => (invite.pending ? [invite.pending.devicePub] : []));
+  const entries = await Promise.all(
+    keys.map(async (key) => {
+      try {
+        // SAFETY: fingerprint rejects a malformed key, which the catch below drops.
+        return [key, await fingerprint(key as PublicKeyText)] as const;
+      } catch {
+        return undefined;
+      }
+    }),
+  );
+  return new Map(entries.filter((entry) => entry !== undefined));
+}
+
+// The title the host shows for a session, if the session is in its roster.
+function sessionTitleFrom(host: ControlUiHost) {
+  return (sessionKey: string): string | undefined => {
+    const key = host.sessions.normalizeKey(sessionKey);
+    const row = host.sessions.rows.find((candidate) => candidate.key === key);
+    return row?.derivedTitle || row?.displayName || row?.label || undefined;
+  };
+}
+
+/** The Access page for one Control UI host. */
+export function PeoplePage(props: { host: ControlUiHost }) {
+  // The host is fixed for the page's lifetime.
+  const host = untrack(() => props.host);
+  const motion = createPeopleMotion();
+  const [state, setState] = createSignal<StatusResult | null>(null);
+  const [ownDevicePub, setOwnDevicePub] = createSignal<string | null>(null);
+  const [fingerprints, setFingerprints] = createSignal<ReadonlyMap<string, string>>(new Map());
+  const [nowMs, setNowMs] = createSignal(Date.now());
+  const [busy, setBusy] = createSignal(false);
+  const [creatingInvite, setCreatingInvite] = createSignal(false);
+  const [error, setError] = createSignal<PeopleOperationError | null>(null);
+  const [notice, setNotice] = createSignal<RemovedMemberNotice | null>(null);
+  const [readError, setReadError] = createSignal<PeopleError | null>(null);
+  let observer: ReturnType<typeof observePeople> | undefined;
+  let disposed = false;
+  const actionsInFlight = new Set<"invite" | "update">();
+  let refreshedError: PeopleOperationError | null = null;
+
+  // Reads link state (the owner view when this client is an owner) and which
+  // listed owner device, if any, is this browser.
+  const read = async (isCurrent: () => boolean) => {
+    try {
+      const summary = await host.request<StatusResult>("openclawId.status", {});
+      if (!isCurrent()) {
+        return;
+      }
+      const next =
+        summary.owner && summary.link.linked
+          ? {
+              ...summary,
+              link: (await host.request<{ link: Link }>("openclawId.people", {})).link,
+            }
+          : summary;
+      const [own, nextFingerprints] = await Promise.all([
+        thisOwnerDevice(next.link).catch(() => undefined),
+        pendingFingerprints(next.link.invites ?? []),
+      ]);
+      if (!isCurrent()) {
+        return;
+      }
+      await motion.leaveRequests(
+        new Set(
+          (next.link.invites ?? [])
+            .filter((invite) => invite.status === "pending")
+            .map((invite) => invite.inviteId),
+        ),
+      );
+      if (!isCurrent()) {
+        return;
+      }
+      motion.update(() => {
+        setOwnDevicePub(own?.devicePub ?? null);
+        setFingerprints(nextFingerprints);
+        setNowMs(Date.now());
+        setState(next);
+        setReadError(null);
+        if (refreshedError) {
+          const previousError = refreshedError;
+          refreshedError = null;
+          setError((current) => (current === previousError ? null : current));
+        }
+      });
+    } catch (failure) {
+      if (isCurrent()) {
+        motion.update(() => setReadError(peopleError(failure, "load", host.redact)));
+      }
+    }
+  };
+
+  onSettled(() => {
+    observer = observePeople(host, read);
+    return () => {
+      disposed = true;
+      observer?.dispose();
+    };
+  });
+
+  // Runs one owner action, then refreshes; failures stay with their operation. The
+  // action signs against the owner state read now, not the page's last read: the
+  // claw's seq moves on its own (a member's device joining, another owner device),
+  // and a change signed at an old seq is refused.
+  const run = async <T,>(
+    target: PeopleOperationError["target"],
+    action: (link: Link) => Promise<T>,
+    kind: PeopleErrorAction = "update",
+  ): Promise<T | undefined> => {
+    // InviteCap registration has no membership seq; it need not block node or
+    // member actions. Membership changes still run one at a time.
+    const operation = target === "invite" ? "invite" : "update";
+    const setPending = operation === "invite" ? setCreatingInvite : setBusy;
+    if (
+      disposed ||
+      !state()?.link ||
+      actionsInFlight.has(operation) ||
+      !host.connection.connected
+    ) {
+      return undefined;
+    }
+    actionsInFlight.add(operation);
+    setPending(true);
+    motion.update(() => {
+      setError(null);
+      setNotice(null);
+    });
+    try {
+      const { link } = await host.request<{ link: Link }>("openclawId.people", {});
+      if (disposed || !host.connection.connected || !host.connection.canAdmin) {
+        return undefined;
+      }
+      return await action(link);
+    } catch (failure) {
+      if (!disposed) {
+        motion.update(() => setError({ target, ...peopleError(failure, kind, host.redact) }));
+      }
+      return undefined;
+    } finally {
+      actionsInFlight.delete(operation);
+      if (!disposed) {
+        await observer?.refresh();
+        if (!disposed) {
+          setPending(false);
+        }
+      }
+    }
+  };
+
+  const remove = (member: Member) => {
+    const index = Math.max(
+      0,
+      state()?.link.members?.findIndex((row) => row.accountId === member.accountId) ?? 0,
+    );
+    void run(`member:${member.accountId}`, async (link) => {
+      const removal = await removeMember(host.request, link, member.accountId);
+      if (!disposed) {
+        motion.update(() =>
+          setNotice({
+            index,
+            message: removalNote(memberName(member), removal),
+          }),
+        );
+      }
+    });
+  };
+
+  const canManage = () =>
+    Boolean(latest(ownDevicePub)) && host.connection.canAdmin && !latest(busy);
+
+  return (
+    <section class="ocid-access">
+      <header class="ocid-access__header">
+        <h1>Remote access</h1>
+        <p class="ocid-access__hint">
+          Who can reach this claw from other devices through OpenClaw ID. Devices paired with this
+          Gateway are in Settings → Devices.
+        </p>
+      </header>
+      <OperationError error={latest(readError)} page />
+      <Show when={latest(state)}>
+        {(current) => (
+          <Show
+            when={current().status.state !== "off"}
+            fallback={
+              <p class="ocid-access__empty">
+                OpenClaw ID is off. Turn it on in Settings → Labs, then sign in from the account
+                menu.
+              </p>
+            }
+          >
+            <Show
+              when={current().link.linked}
+              fallback={
+                <p class="ocid-access__empty">
+                  Turn on remote access before inviting people. On the computer that runs this claw,
+                  open the account menu and choose Turn on remote access.
+                </p>
+              }
+            >
+              <Show
+                when={current().owner}
+                fallback={
+                  <p class="ocid-access__empty">
+                    Only the owner can see who has access. Open this page from an approved owner
+                    browser.
+                  </p>
+                }
+              >
+                <section class="ocid-access__group" aria-labelledby="ocid-access-people">
+                  <h2 id="ocid-access-people" class="ocid-access__sr-only">
+                    People
+                  </h2>
+                  <Show when={latest(ownDevicePub)}>
+                    <InviteForm
+                      motion={motion}
+                      components={host.components}
+                      disabled={!canManage() || latest(creatingInvite)}
+                      busy={latest(creatingInvite)}
+                      error={latest(error)?.target === "invite" ? latest(error) : null}
+                      locale={host.locale}
+                      onCreate={(email, role: MemberRole) =>
+                        run("invite", (link) => createInvite(host.request, link, email, role))
+                      }
+                    />
+                  </Show>
+                  <PendingRequests
+                    motion={motion}
+                    invites={(current().link.invites ?? []).filter((i) => i.status === "pending")}
+                    fingerprints={latest(fingerprints)}
+                    error={latest(error)}
+                    readOnly={!latest(ownDevicePub)}
+                    disabled={!canManage()}
+                    locale={host.locale}
+                    onRefresh={() => {
+                      refreshedError = latest(error);
+                      void observer?.refresh();
+                    }}
+                    onDecide={(invite, approve) =>
+                      void run(
+                        `request:${invite.inviteId}`,
+                        (link) => decideInvite(host.request, link, invite, approve),
+                        approve ? "approve" : "update",
+                      )
+                    }
+                  />
+                  <Members
+                    motion={motion}
+                    members={current().link.members ?? []}
+                    error={latest(error)}
+                    notice={latest(notice)}
+                    readOnly={!latest(ownDevicePub)}
+                    invites={current().link.invites ?? []}
+                    ownerDevices={current().link.ownerDevices?.length ?? 0}
+                    disabled={!canManage()}
+                    locale={host.locale}
+                    nowMs={latest(nowMs)}
+                    sessionTitle={sessionTitleFrom(host)}
+                    onRemove={remove}
+                  />
+                </section>
+                <Show when={latest(ownDevicePub)}>
+                  <OperationError
+                    error={latest(error)?.target === "nodes" ? latest(error) : null}
+                  />
+                  <NodeSection
+                    host={host}
+                    link={current().link}
+                    disabled={!canManage()}
+                    error={latest(error)?.target === "nodes" ? latest(error)?.message : undefined}
+                    canCreate={Boolean(current().status.tunnel?.relayUrl)}
+                    onCreate={(label) =>
+                      run("nodes", (link) =>
+                        createNodeInvite(
+                          host.request,
+                          link,
+                          label,
+                          current().status.tunnel?.relayUrl ?? "",
+                        ),
+                      )
+                    }
+                    onDecide={(invite, approve) =>
+                      run(
+                        "nodes",
+                        (link) => decideNodeInvite(host.request, link, invite, approve),
+                        approve ? "approve" : "update",
+                      )
+                    }
+                    onRemove={(node) =>
+                      void run("nodes", (link) => removeNode(host.request, link, node))
+                    }
+                  />
+                </Show>
+              </Show>
+            </Show>
+          </Show>
+        )}
+      </Show>
+    </section>
+  );
+}

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -37,10 +38,16 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasInternalHookListeners } from "../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveProjectRegistry } from "../projects/project-registry.js";
+import { listWorkspaceProjects } from "../projects/project-registry.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { generateWorktreeSessionTitle } from "./dashboard-session-title.js";
+import {
+  canRequesterUseRepositoryUrl,
+  hasFullProjectAccess,
+  type ProjectRequester,
+  resolveRequesterProject,
+} from "./project-access.js";
 import { prepareSessionCreateFilesystemRoot } from "./server-methods/session-create-root.js";
 import type {
   PrepareGatewaySessionLifecycle,
@@ -62,13 +69,17 @@ import {
 import type { createRepositoryWorkspaceMutationService } from "./worker-environments/repository-workspace-mutation.js";
 import { forkSessionRepositoryWorkspace } from "./worker-environments/session-repository-checkpoints.js";
 
-/** Resolve registered sources identically for dashboard and native child sessions. */
+/**
+ * Resolve registered sources identically for dashboard and native child sessions.
+ * This hands out source, so restricted requesters get a fresh visibility answer.
+ */
 export async function resolveSessionProjectRoot(
   cfg: OpenClawConfig,
   projectId: string,
   worktree: boolean,
+  requester: ProjectRequester,
 ): Promise<Result<string, ErrorShape>> {
-  const project = await resolveProjectRegistry(cfg, projectId);
+  const project = await resolveRequesterProject(cfg, projectId, requester, { fresh: true });
   if (!project) {
     return invalidSessionRequest(`unknown project id: ${projectId}`);
   }
@@ -194,6 +205,8 @@ export async function prepareSessionWorktree(params: {
       };
     }
     // Registry custody authorizes source-only preparation, not direct host access.
+    // Requester visibility (project-access.ts) is enforced when the session, spawn
+    // or inherited child is created; this admitted turn only materializes that choice.
     // The resulting session is executed through its private sandbox projection.
     if (sandboxRequired && workspace && !withSource) {
       const projectId =
@@ -396,12 +409,39 @@ export async function prepareSessionWorktree(params: {
   }
 }
 
+async function canRequesterInheritParentSource(
+  cfg: OpenClawConfig,
+  source: NonNullable<Awaited<ReturnType<typeof resolveSpawnParentWorktreeSource>>>,
+  requester: ProjectRequester,
+): Promise<boolean> {
+  if (hasFullProjectAccess(requester)) {
+    return true;
+  }
+  if (source.kind === "repository") {
+    return await canRequesterUseRepositoryUrl(cfg, source.repository.url, requester, {
+      fresh: true,
+    });
+  }
+  if (source.projectId) {
+    return (
+      (await resolveRequesterProject(cfg, source.projectId, requester, { fresh: true })) !==
+      undefined
+    );
+  }
+  // A cwd-based worktree has no registry identity; only an agent workspace (a
+  // workspace pseudo-project, governed by roles.agents) is allowed.
+  const root = path.resolve(source.workspace);
+  return listWorkspaceProjects(cfg).some((project) => path.resolve(project.repoRoot) === root);
+}
+
 /** Select and prepare worktree intent while the existing session lifecycle owns the target. */
 export async function prepareSessionWorktreeCreation(params: {
   cfg: OpenClawConfig;
   target: Parameters<PrepareGatewaySessionLifecycle>[0];
   workspace?: string | { kind: "empty" };
   inheritParentKey?: string;
+  /** Inherited children receive the parent's source, so the child's requester must reach it. */
+  projectRequester: ProjectRequester;
   repositoryMutations?: Pick<ReturnType<typeof createRepositoryWorkspaceMutationService>, "fork">;
   projectGitUrl?: string;
   name?: string;
@@ -446,6 +486,14 @@ export async function prepareSessionWorktreeCreation(params: {
           signal,
         })
       : undefined;
+  if (
+    parentSource &&
+    !(await canRequesterInheritParentSource(cfg, parentSource, params.projectRequester))
+  ) {
+    return invalidSessionRequest(
+      "The parent session's project is not available to this requester.",
+    );
+  }
   commitGuard();
   if (parentSource?.kind === "repository") {
     if (name || baseRef) {

@@ -38,6 +38,7 @@ import {
   readLocalWorkspaceSweepCandidates,
   readLocalWorkspaceTree,
 } from "./local-workspace-cas.kernel.js";
+import { sweepLocalWorkspaceManifests } from "./local-workspace-gc.js";
 import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
 import {
   createLocalWorkspaceManifestTree,
@@ -69,6 +70,58 @@ beforeAll(() => {
   env = { ...process.env, OPENCLAW_STATE_DIR: root };
 });
 afterEach(() => vi.restoreAllMocks());
+
+it("settles unchanged manifest sweeps across reopen and resumes after a retirement", async () => {
+  const fixtureEnv = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("workspace-sweep-demand-") };
+  const worktreeId = randomUUID();
+  const rawManifest = serializeWorkerWorkspaceManifest({
+    version: 1,
+    baseCommit: "a".repeat(40),
+    entries: [{ path: "keep.txt", type: "file", mode: 0o644, size: 1, sha256: "b".repeat(64) }],
+  });
+  await withLocalWorkspaceStore({ worktreeId, env: fixtureEnv }, async (store) => {
+    const row = await store.create(localWorkspaceProjectionFixture(worktreeId, root));
+    await store.update(row, {}, undefined, {
+      rawManifest,
+      manifestRef: `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`,
+      buildCacheInputs: [],
+    });
+  });
+  const reads = vi.spyOn(stateRead, "startOpenClawStateReadOperation");
+  const sweep = () =>
+    sweepLocalWorkspaceManifests({
+      env: fixtureEnv,
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+    });
+  await sweep();
+  await sweep();
+  await withLocalWorkspaceStore({ worktreeId, env: fixtureEnv }, async (store) => {
+    await store.update(store.get()!, { paused_runtimes_json: "[]" });
+  });
+  reads.mockClear();
+  await closeOpenClawStateDatabaseAsync();
+  for (let pass = 0; pass < 6; pass++) {
+    await sweep();
+  }
+  expect(
+    reads.mock.calls.filter(([command]) => command.type === "localWorkspace.sweepCandidates"),
+  ).toHaveLength(0);
+  const database = openOpenClawStateDatabase({ env: fixtureEnv });
+  expect(readManifestRows(database.db, worktreeId).map((row) => row.path)).toContain("keep.txt");
+  await withLocalWorkspaceStore({ worktreeId, env: fixtureEnv }, (store) =>
+    store.delete(store.get()!),
+  );
+  reads.mockRejectedValueOnce(new Error("synthetic sweep interrupted"));
+  await expect(sweep()).rejects.toThrow("synthetic sweep interrupted");
+  await closeOpenClawStateDatabaseAsync();
+  await sweep();
+  expect(
+    openOpenClawStateDatabase({ env: fixtureEnv })
+      .db.prepare("SELECT count(*) AS n FROM local_workspace_tree_packs")
+      .get()!.n,
+  ).toBe(0);
+});
 
 function readManifestRows(db: EngineConnection, worktreeId: string) {
   const projection = readProjectionInDatabase(db, worktreeId);
@@ -507,6 +560,7 @@ it("keeps prepared baseline replacement atomic through GC, rollback, and a lost 
       swept = true;
       await scope.execute({ type: "localWorkspace.beginSweep", input: {} });
       const epoch = await scope.execute({ type: "localWorkspace.beginSweep", input: {} });
+      assert(epoch !== null);
       const batch = readLocalWorkspaceSweepCandidates(database.db, epoch);
       expect(batch.packs.length).toBeGreaterThan(0);
       await scope.execute({ type: "localWorkspace.sweepBatch", input: { epoch, batch } });

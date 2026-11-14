@@ -19,7 +19,7 @@ import {
   detectRespawnSupervisorMock as detectSupervisor,
   isRestartEnabledMock as restartEnabled,
   mockGlobalInstallSurface as globalInstall,
-  readGatewayOwnerLeaseMock as ownerLease,
+  readGatewayOwnerLeaseAsyncMock as ownerLease,
   resolveStartupInstallStatusMock as installStatus,
   scheduleGatewayRestartMock as scheduleRestart,
   sendGatewayLifecycleNoticeMock as notice,
@@ -249,9 +249,8 @@ it.each(promptUpdateCases)(
         handoffId: handoff.handoffId,
       });
       if (!supervisor) {
-        expect(ownerLease).toHaveBeenCalledWith({ current: true });
         const owner = expectDefined(
-          ownerLease.mock.results.at(-1)?.value,
+          await ownerLease.mock.results.at(-1)?.value,
           "current foreground Gateway owner",
         );
         expect(owner).toMatchObject({ mode: "foreground", state: "live", pid: process.pid });

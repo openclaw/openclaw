@@ -166,7 +166,7 @@ export async function runEmbeddedFallbackCandidate(
           });
           return flushed.outcome;
         },
-        ...params.scheduledInference?.runParams,
+        ...params.scheduledInference?.runParams(params.provider),
         lifecycleGeneration: params.getLifecycleGeneration(),
         allowGatewaySubagentBinding: true,
         cronCreatorAuthorityCapability: turn.opts?.cronCreatorAuthorityCapability,
@@ -355,7 +355,10 @@ export async function runEmbeddedFallbackCandidate(
           : undefined,
       };
       embeddedRunParams.onSuccessfulAuthProfile = (profileId) => {
-        params.scheduledInference?.runParams.onSuccessfulAuthProfile?.(profileId);
+        const scheduled = params.scheduledInference?.runParams(params.provider);
+        if (scheduled && "onSuccessfulAuthProfile" in scheduled) {
+          scheduled.onSuccessfulAuthProfile?.(profileId);
+        }
         maintenanceAuthProfile = {
           authProfileId: profileId,
           authProfileIdSource: profileId

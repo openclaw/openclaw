@@ -1,18 +1,28 @@
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseScopedWriteTokenForPath as readWriteToken,
+  sqliteSessionIdWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.js";
 import { captureSessionEntryNativeMutationWitness } from "./session-entry-read-ordered.js";
 import type { PreparedSessionEntryWorkerRead } from "./session-entry-read-runtime.types.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 /** Read without reserving the writer; accept only an unchanged snapshot under FIFO custody. */
 export async function readSessionTranscriptCohort<T, R>(
   database: PreparedSessionEntryWorkerRead["database"],
+  scope: Pick<SessionTranscriptReadScope, "sessionId" | "sessionKey">,
   read: () => Promise<T>,
   consume: (value: T) => R,
   assertCurrent: () => void,
   signal: AbortSignal | undefined,
   caller: "history.hydration" | "history.model-context",
 ): Promise<R> {
+  const writeScopes = [
+    ...(scope.sessionKey ? collectSessionEntryLookupKeys(scope.sessionKey) : []),
+    sqliteSessionIdWriteScope(scope.sessionId),
+  ];
   const admitted = <V>(run: (assertOwner: () => void) => V) =>
     runOpenClawAgentWriteAdmission(
       database,
@@ -28,10 +38,10 @@ export async function readSessionTranscriptCohort<T, R>(
       caller,
     );
   const captureMutationWitness = () => {
-    const token = readSqliteDatabaseWriteTokenForPath(database.path);
+    const token = readWriteToken(database.path, writeScopes);
     const assertNative = captureSessionEntryNativeMutationWitness([database]);
     return () => {
-      if (readSqliteDatabaseWriteTokenForPath(database.path) !== token) {
+      if (readWriteToken(database.path, writeScopes) !== token) {
         throw new SessionEntryChangedDuringReadError();
       }
       assertNative();

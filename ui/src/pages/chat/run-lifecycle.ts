@@ -39,7 +39,11 @@ import {
 } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
 import type { ToolStreamHost, ToolStreamState } from "./tool-stream-contract.ts";
-import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
+import {
+  resetToolStream,
+  resetToolStreamRun,
+  retireToolStreamLiveOutput,
+} from "./tool-stream-state.ts";
 
 registerChatQuestionsEnglish();
 
@@ -201,20 +205,34 @@ export function adoptStartedChatRun(
   }
 }
 
+type ChatRunErrorHost = {
+  chatRunError?: ChatRunError | null;
+  chatDismissedRunErrorId?: string | null;
+};
+
 export function setChatRunError(
-  state: { chatRunError?: ChatRunError | null },
+  state: ChatRunErrorHost,
   summary: string,
   runId?: string,
   kind?: ChatRunError["kind"],
 ) {
   chatRunPresentation(state).batch(() => {
     setChatRunOwner(state, runId);
+    if (runId && runId === state.chatDismissedRunErrorId) {
+      return;
+    }
     state.chatRunError = {
       ...(kind ? { kind } : {}),
       summary: redactToolDetail(summary.trim()),
       ...(runId ? { runId } : {}),
     };
   });
+}
+
+/** Hides the current run failure until a different run fails. */
+export function dismissChatRunError(state: ChatRunErrorHost) {
+  state.chatDismissedRunErrorId = state.chatRunError?.runId ?? null;
+  state.chatRunError = null;
 }
 
 type SessionRunHost = {
@@ -313,7 +331,7 @@ async function abortChatRun(state: ChatAbortRunState, intent?: ChatAbortIntent, 
   const captured = intent ?? currentChatAbortIntent(state, client);
   // Session cancellation still answers to the run that owned the Stop action.
   const target = scope ? currentChatAbortIntent(state, client, scope) : captured;
-  const result = await requestChatAbort(client, target);
+  const result = await requestChatAbort(client, { ...target, userInitiated: true });
   return settleChatAbortResponse(state, captured, result);
 }
 
@@ -531,6 +549,9 @@ function applyChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions
 
   if (options.clearIndicators ?? true) {
     clearRunIndicators(host, runId);
+  }
+  if (options.outcome && runId) {
+    retireToolStreamLiveOutput(host, runId);
   }
   if (options.clearLocalRun) {
     host.chatStream = null;

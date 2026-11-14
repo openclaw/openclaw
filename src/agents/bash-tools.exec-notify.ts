@@ -11,7 +11,10 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
+import {
+  enqueueSystemEventWithReceipt,
+  SystemEventQueueFullError,
+} from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
@@ -187,12 +190,19 @@ export async function maybeNotifyOnExit(
     return;
   }
   // Subagent results remain available to process poll and the announce owner.
-  const remove = enqueueSystemEventWithReceipt(
-    eventText,
-    session.agentId ? withSystemEventOwner(eventOptions, session.agentId) : eventOptions,
-    { allowDuplicate: true },
-  );
-  if (remove) {
-    recordNotifyOnExitRemoval(session, remove);
+  try {
+    const remove = enqueueSystemEventWithReceipt(
+      eventText,
+      session.agentId ? withSystemEventOwner(eventOptions, session.agentId) : eventOptions,
+      { allowDuplicate: true },
+    );
+    if (remove) {
+      recordNotifyOnExitRemoval(session, remove);
+    }
+  } catch (error) {
+    if (!(error instanceof SystemEventQueueFullError)) {
+      throw error;
+    }
+    logWarn(`exec: completion ${session.id} was not queued (${error.message}); use process poll.`);
   }
 }

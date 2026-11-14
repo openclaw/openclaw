@@ -371,7 +371,11 @@ export function emitDiagnosticMemorySample(
     options?.thresholds,
     processMemory,
   );
-  if (pressure?.level === "critical") {
+  if (
+    pressure?.level === "critical" ||
+    (processMemory &&
+      processMemory.usedBytes >= Math.floor(processMemory.limitBytes * WARNING_RATIO))
+  ) {
     memoryPressure.publish(undefined);
   }
   if (

@@ -12,6 +12,7 @@ import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-
 import type { UserProfileIdentity } from "../state/user-profiles.types.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import {
   authorizeCurrentOperatorRoleScopes,
   operatorSessionCap,
@@ -30,6 +31,7 @@ import {
   authorizeSessionSharingTarget,
   canManageSessionSharing,
   isGatewayAdmin,
+  isSessionSharingOwnerEquivalent,
   prepareSessionSharingRole,
   resolveSessionVisibility,
   sharingIdentity,
@@ -69,7 +71,8 @@ export function canReceiveSessionEvent(params: {
       (!operatorScopeSatisfied("operator.sessions.read", client.connect.scopes ?? []) ||
         operatorActor?.kind === "system" ||
         operatorScopeSatisfied("operator.read", client.connect.scopes ?? [])) &&
-      (!policyConfig.gateway?.roles || operatorActor?.kind === "system") &&
+      (!isNamedOperatorRoleEnforcementEnabled(policyConfig) ||
+        isSessionSharingOwnerEquivalent(client, operatorActor)) &&
       event !== "session.suggestion" &&
       event !== "session.typing"
     );
@@ -135,7 +138,7 @@ export function prepareSessionSharing(
       entryFilter?.(
         target.storeKey,
         target.entry,
-        Boolean(identity && prepared?.isMember(target, identity.id)),
+        Boolean(sessionCap === "invited" && identity && prepared?.isMember(target, identity.id)),
       ) ?? true,
     roleForTarget,
     authorizeTarget: (target: SessionSharingTarget, role = roleForTarget(target)) =>
@@ -368,7 +371,8 @@ export function prepareProjectedSessionSharing(params: {
   const policy =
     actor?.kind === "system"
       ? undefined
-      : actor?.kind === "operator" && client?.internal?.operatorRunAuthority
+      : actor?.kind === "operator" &&
+          (client?.internal?.operatorRunAuthority || client?.internal?.openclawIdPrincipal)
         ? resolveOperatorRolePolicy(client, cfg)
         : resolveOperatorRolePolicyForAssignment(
             roleProfile?.profileId,
@@ -376,6 +380,10 @@ export function prepareProjectedSessionSharing(params: {
             cfg,
             roleProfile?.githubLogin ?? null,
           );
+  const ownerEquivalent =
+    !identity &&
+    isNamedOperatorRoleEnforcementEnabled(cfg) &&
+    isSessionSharingOwnerEquivalent(client, actor);
   let cacheKey: string | undefined;
   return {
     ...prepareSessionSharing(params, {
@@ -407,12 +415,13 @@ export function prepareProjectedSessionSharing(params: {
         facts[8] === Boolean(client?.authenticatedGitHubIdentitySync) &&
         facts[9] === profile &&
         facts[10] === policy &&
-        facts[11] === Boolean(cfg.gateway?.roles) &&
+        facts[11] === isNamedOperatorRoleEnforcementEnabled(cfg) &&
         facts[12] === (scopes !== undefined) &&
-        facts.length === 13 + (scopes?.length ?? 0)
+        facts[13] === ownerEquivalent &&
+        facts.length === 14 + (scopes?.length ?? 0)
       ) {
         let i = 0;
-        while (i < (scopes?.length ?? 0) && facts[13 + i] === scopes?.[i]) {
+        while (i < (scopes?.length ?? 0) && facts[14 + i] === scopes?.[i]) {
           i++;
         }
         if (i === (scopes?.length ?? 0)) {
@@ -430,7 +439,9 @@ export function prepareProjectedSessionSharing(params: {
         // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
         profile && [...profile.aliases].sort(),
         policy,
-        Boolean(cfg.gateway?.roles),
+        isNamedOperatorRoleEnforcementEnabled(cfg),
+        // Equal effective scopes can retain different source sharing authority.
+        ownerEquivalent,
       ]);
       const next: unknown[] = [
         cfg,
@@ -444,8 +455,9 @@ export function prepareProjectedSessionSharing(params: {
         Boolean(client?.authenticatedGitHubIdentitySync),
         profile,
         policy,
-        Boolean(cfg.gateway?.roles),
+        isNamedOperatorRoleEnforcementEnabled(cfg),
         scopes !== undefined,
+        ownerEquivalent,
       ];
       // Concatenation retains an exact-sized snapshot instead of push's spare capacity.
       projectedSharingKeys.set(viewer, {
@@ -472,11 +484,14 @@ export function createSessionListEntryFilter(
   | undefined {
   const operatorActor = resolveGatewayOperatorRoleActor(params.client);
   const identity = sharingIdentity(params.client, operatorActor);
-  if (isGatewayAdmin(params.client) || (!identity && operatorActor?.kind === "system")) {
+  if (isGatewayAdmin(params.client)) {
     return undefined;
   }
   if (!identity) {
-    return params.cfg?.gateway?.roles ? () => false : undefined;
+    return isNamedOperatorRoleEnforcementEnabled(params.cfg) &&
+      !isSessionSharingOwnerEquivalent(params.client, operatorActor)
+      ? () => false
+      : undefined;
   }
   const sessionCap = prepared
     ? prepared.sessionCap

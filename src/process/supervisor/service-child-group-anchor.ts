@@ -9,7 +9,7 @@ import type * as lineageWriter from "../../node-host/node-worker-lineage-complet
 import { createDeferredCore } from "../../shared/deferred.js";
 import { monotonicNow, remainingMonotonicMs as left } from "../../shared/monotonic-time.js";
 import { enterAgentExecCgroup } from "../linux-exec-cgroup.js";
-import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
+import { spawnWithInheritedOomScore } from "../linux-oom-score-spawn.js";
 import { releaseProcessStdin } from "../release-stdin.js";
 import { serializeBrokerError } from "../spawn-broker/protocol.js";
 import type { SpawnStdioEntry } from "../spawn-secret-input.js";

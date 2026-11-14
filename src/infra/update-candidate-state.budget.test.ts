@@ -271,6 +271,10 @@ it.skipIf(process.platform === "win32").for(["complete", "cancel"] as const)(
           throw error;
         });
       for (const entry of remaining) {
+        if (entry.isFile() && entry.name === "schema-discovery-ownership.json") {
+          await fs.unlink(path.join(stagingRoot, entry.name));
+          continue;
+        }
         if (!entry.isDirectory() || !entry.name.startsWith("openclaw-sqlite-readonly-")) {
           throw unexpectedEntry("staging", entry);
         }
@@ -481,7 +485,8 @@ require("node:module").syncBuiltinESMExports();
           expect(backup.sourceGenerations[file]).toEqual(expect.any(String));
         }
       }
-      expect(await fs.readdir(stagingRoot)).toEqual([]);
+      // Schema publication metadata outlives backup image settlement in this shared staging root.
+      expect(await fs.readdir(stagingRoot)).toEqual(["schema-discovery-ownership.json"]);
       await assertWorkerCacheEmpty();
       expect(await fs.readFile(sentinel, "utf8")).toBe("preserved");
       for (const [index, file] of sources.entries()) {

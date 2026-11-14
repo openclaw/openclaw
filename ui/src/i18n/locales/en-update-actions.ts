@@ -6,6 +6,7 @@ import { en } from "./en.ts";
 const enUpdateActions = {
   updates: {
     adminRequired: "You need admin access to change update settings or start an update.",
+    adminRequiredTooltip: "Admin access required.",
     refreshUnreachable: "Couldn't reach the server",
     refreshBlocked: "Finish pending work first",
     campaign: en.updates.campaign,
@@ -100,7 +101,6 @@ const enUpdateActions = {
       blockedSummary:
         "Couldn’t apply the selected revision to this checkout. Review the update details.",
       blockedWaiting: "Blocked · waiting for active work · {target}",
-      waitingForIdle: en.updates.sidebar.waitingForIdle,
     },
     dialog: {
       disconnected:
@@ -120,12 +120,9 @@ const enUpdateActions = {
     channel: en.updates.channel,
     installKind: en.updates.installKind,
     page: en.updates.page,
-    coalescedRestart: en.updates.coalescedRestart,
     error: en.updates.error,
     checkError: en.updates.checkError,
     status: en.updates.status,
-    verificationFailedWithIdentity: en.updates.verificationFailedWithIdentity,
-    handoffTimeout: en.updates.handoffTimeout,
     outcomeUnknown: en.updates.outcomeUnknown,
     triage: {
       hostHint: en.updates.triage.hostHint,
@@ -146,9 +143,6 @@ const enUpdateActions = {
     },
     failureReasons: en.updates.failureReasons,
     failedAtStep: en.updates.failedAtStep,
-    succeededVersion: en.updates.succeededVersion,
-    succeededCommit: en.updates.succeededCommit,
-    succeeded: en.updates.succeeded,
   },
   chat: {
     updating: "Updating…",
@@ -172,6 +166,7 @@ export const registerUpdateActionsEnglish = Object.assign(
       triage,
       report,
       adminRequired,
+      adminRequiredTooltip,
       refreshUnreachable,
       refreshBlocked,
       holdOneHour,
@@ -180,6 +175,7 @@ export const registerUpdateActionsEnglish = Object.assign(
     const { phase, ...runLabels } = run;
     Object.assign(en.updates, {
       adminRequired,
+      adminRequiredTooltip,
       refreshUnreachable,
       refreshBlocked,
       holdOneHour,

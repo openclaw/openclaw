@@ -68,7 +68,6 @@ const enPluginManagement = {
     thinking: "OpenClaw is thinking",
     earlier: "Earlier",
     requestFailed: "Couldn’t get a reply. Try again.",
-    connectionChanged: "The connection changed. Try again to continue setup.",
     sessionRestarted:
       "{error} OpenClaw started a fresh session; earlier messages remain for context.",
     unsupportedGateway: "This Gateway doesn’t support setup. Update it and reconnect to continue.",
@@ -150,6 +149,12 @@ const enPluginManagement = {
     auditReview: "Review",
     recommendedPrompts: {
       label: "Recommended prompts",
+      enableTitle: "Enable {name} before opening chat?",
+      installTitle: "Install {name} before opening chat?",
+      activationWarning:
+        "Activating a plugin can start background services, including screen capture or mail watchers, and replace your active memory provider. Review its settings first if needed. The prompt will open as an unsent draft.",
+      enableContinue: "Enable and continue",
+      installContinue: "Install and continue",
     },
     compatibilityDeprecatedDated:
       "Uses OpenClaw APIs that retire on {date}. It keeps working until then; check for a plugin update.",
@@ -575,6 +580,7 @@ const enPluginManagement = {
       "Plugin availability changed. Refresh the catalog to see its current state.",
     installDestinationChanged:
       "The connection or admin changed. Install the plugin again to request a new review.",
+    installPausedByUpdate: "Paused while OpenClaw updates",
     installBlockedByUpdate:
       "OpenClaw is updating. Try installing the plugin when the update finishes.",
   },

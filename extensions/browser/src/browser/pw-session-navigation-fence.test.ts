@@ -175,9 +175,11 @@ describe("navigation authority fence lifecycle", () => {
 
   it("removes the paused-request listener before detachment releases interception", async () => {
     let detached = false;
+    const lateCommands: string[] = [];
     const { session, errors, dispose } = await fence({
-      send: async () => {
+      send: async (method) => {
         if (detached) {
+          lateCommands.push(method);
           throw new Error("Invalid InterceptionId");
         }
       },
@@ -191,6 +193,10 @@ describe("navigation authority fence lifecycle", () => {
       },
     });
     expect(await dispose()).toBeUndefined();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(lateCommands).toEqual([]);
     expect(errors).toEqual([]);
     expect(session.listenerCount("Fetch.requestPaused")).toBe(0);
   });
@@ -315,4 +321,77 @@ describe("navigation authority fence lifecycle", () => {
       expect(detach).toHaveBeenCalledOnce();
     },
   );
+
+  describe("page-cancelled interceptions", () => {
+    const stale = new Error(
+      "cdpSession.send: Protocol error (Fetch.continueRequest): Invalid InterceptionId.",
+    );
+
+    it.each([
+      ["policy", undefined],
+      ["document route", async (route: { continue: () => Promise<void> }) => route.continue()],
+    ] as const)("treats a retired id on %s resume as settled", async (_owner, handleDocument) => {
+      vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed").mockResolvedValue(undefined);
+      const { send, errors, dispose, pause } = await fence({
+        send: async (method) => {
+          if (method === "Fetch.continueRequest") {
+            throw stale;
+          }
+        },
+        handleDocument,
+      });
+      pause("cancelled-frame");
+      await vi.waitFor(() =>
+        expect(send).toHaveBeenCalledWith("Fetch.continueRequest", {
+          requestId: "cancelled-frame",
+        }),
+      );
+      await expect(dispose()).resolves.toBeUndefined();
+      expect(errors).toEqual([]);
+      expect(send).not.toHaveBeenCalledWith("Fetch.failRequest", expect.anything());
+    });
+
+    it("still reports a denied document whose id retired before cancellation", async () => {
+      const denial = new Error("navigation blocked by policy");
+      vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed").mockRejectedValue(denial);
+      const { send, errors, dispose, pause } = await fence({
+        send: async (method) => {
+          if (method === "Fetch.failRequest") {
+            throw stale;
+          }
+        },
+      });
+      pause("denied-frame", "http://127.0.0.1/denied");
+      await vi.waitFor(() =>
+        expect(send).toHaveBeenCalledWith("Fetch.failRequest", {
+          requestId: "denied-frame",
+          errorReason: "Aborted",
+        }),
+      );
+      await dispose();
+      expect(errors).toEqual([denial]);
+      expect(send).not.toHaveBeenCalledWith("Fetch.continueRequest", expect.anything());
+    });
+
+    it("surfaces other protocol failures on resume", async () => {
+      vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed").mockResolvedValue(undefined);
+      const failure = new Error(
+        "cdpSession.send: Protocol error (Fetch.continueRequest): Internal error",
+      );
+      const { send, errors, dispose, pause } = await fence({
+        send: async (method) => {
+          if (method === "Fetch.continueRequest") {
+            throw failure;
+          }
+        },
+      });
+      pause("live-request");
+      await vi.waitFor(() => expect(errors).toEqual([failure]));
+      await dispose();
+      expect(send).toHaveBeenCalledWith("Fetch.failRequest", {
+        requestId: "live-request",
+        errorReason: "Aborted",
+      });
+    });
+  });
 });

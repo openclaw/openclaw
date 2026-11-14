@@ -7,6 +7,7 @@ import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entry
 import { resolveBuildInfo } from "../write-build-info.ts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
 import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
+import { vitestWorkerRuntimeAssets } from "./package-root-modules.mts";
 import { createPublicSessionCardAssetsPlugin } from "./public-session-card-assets.mts";
 import { createPublicSessionLocalesPlugin } from "./public-session-locales.mts";
 import { runtimeProcessBuildEntries } from "./runtime-process-build-entries.mts";
@@ -32,7 +33,6 @@ import { useVitestWorkerCache } from "./vitest-worker-cache-policy.mts";
 import {
   runtimeProcessDeclarationEntries,
   vitestWorkerDeclarationEntries,
-  vitestWorkerRuntimeAssets,
 } from "./vitest-worker-declarations.mts";
 import type { VitestWorkerPreset } from "./vitest-worker-descriptor.mts";
 
@@ -119,12 +119,29 @@ async function compileVitestWorkerArtifacts(
   ]) {
     recordInput(path.resolve(root, name));
   }
-  const entry =
-    preset === "runtime"
-      ? { ...runtimeProcessBuildEntries, ...runtimeProcessDeclarationEntries }
-      : { ...vitestWorkerBuildEntries, ...vitestWorkerDeclarationEntries };
-  const preservedSources = preset === "runtime" ? [] : preservedModuleBuildSources;
-  const preservedAssets = preset === "runtime" ? [] : preservedModuleBuildAssets;
+  const entry: Record<string, string> =
+    preset === "tooling"
+      ? {
+          "infra/runtime-process-entrypoints":
+            runtimeProcessDeclarationEntries["infra/runtime-process-entrypoints"],
+          "scripts/script-module-runtime.test-support":
+            vitestWorkerDeclarationEntries["scripts/script-module-runtime.test-support"],
+        }
+      : preset === "runtime"
+        ? { ...runtimeProcessBuildEntries, ...runtimeProcessDeclarationEntries }
+        : { ...vitestWorkerBuildEntries, ...vitestWorkerDeclarationEntries };
+  const preservedSources =
+    preset === "tooling"
+      ? ["scripts/lib/vitest-batch-runner.mts", "scripts/test-projects.mts"]
+      : preset === "runtime"
+        ? []
+        : preservedModuleBuildSources;
+  const preservedAssets =
+    preset === "tooling"
+      ? ["scripts/lib/vitest-worker-bootstrap.mts", "scripts/lib/vitest-worker-descriptor.mts"]
+      : preset === "runtime"
+        ? []
+        : preservedModuleBuildAssets;
   const outDir = path.join(directory, "dist");
   const shouldBundleWorkspaceDependency = (id: string) =>
     (id.startsWith("@openclaw/") || id.startsWith("openclaw/")) &&
@@ -157,11 +174,12 @@ async function compileVitestWorkerArtifacts(
         generateBundle(_options, bundle) {
           for (const input of Object.keys(inputs)) {
             let packageDirectory = path.dirname(input);
-            if (packageDirectories.has(packageDirectory)) {
-              continue;
-            }
-            packageDirectories.add(packageDirectory);
             while (packageDirectory.startsWith(root)) {
+              // A visited ancestor already contributed its nearest package manifest.
+              if (packageDirectories.has(packageDirectory)) {
+                break;
+              }
+              packageDirectories.add(packageDirectory);
               const manifest = path.join(packageDirectory, "package.json");
               if (fs.existsSync(manifest)) {
                 recordInput(manifest);
@@ -182,6 +200,9 @@ async function compileVitestWorkerArtifacts(
   const commonPlugins = createInputPlugins("");
   const sourceHostWorkerEntries = new Set(
     [
+      runtimeProcessEntrypoints.preparedModelCatalog,
+      runtimeProcessEntrypoints.sqliteStore,
+      runtimeProcessEntrypoints.sharedStateStore,
       runtimeProcessEntrypoints.doctorDatabaseEngineInspection,
       runtimeProcessEntrypoints.databaseBackup,
       runtimeProcessEntrypoints.databasePortCommand,
@@ -257,7 +278,7 @@ async function compileVitestWorkerArtifacts(
             },
           ],
           handler(id, importer) {
-            if (preset === "runtime") {
+            if (preset !== "full") {
               return null;
             }
             // Preserve the broadcast fixture's exact native command substitution.
@@ -304,7 +325,7 @@ async function compileVitestWorkerArtifacts(
             },
           ],
           handler(id, importer) {
-            if (preset === "runtime" || !importer || !id.startsWith(".")) {
+            if (preset !== "full" || !importer || !id.startsWith(".")) {
               return null;
             }
             const source = path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts");
@@ -369,6 +390,9 @@ async function compileVitestWorkerArtifacts(
   const compileShared = async () => {
     await build(config);
     reportPhase("shared entries compiled");
+    if (preset === "tooling") {
+      return;
+    }
     for (const [name, source] of Object.entries(entry)) {
       if (!Object.hasOwn(standaloneRuntimeProcessBuildEntries, name)) {
         continue;
@@ -446,7 +470,7 @@ async function compileVitestWorkerArtifacts(
   // Serial preparation measured about 3 GiB RSS; leave headroom for both graphs.
   if (preset === "runtime") {
     await compileShared();
-  } else if (cache && process.availableMemory() >= 8 * 1024 ** 3) {
+  } else if (preset === "full" && cache && process.availableMemory() >= 8 * 1024 ** 3) {
     // These outputs occupy separate subtrees. Join both writers even if one fails.
     const completed = await Promise.allSettled([compileShared(), compilePreservedModules()]);
     const failed = completed.find((result) => result.status === "rejected");
@@ -531,11 +555,16 @@ async function writeVitestWorkerManifest(
 
 if (import.meta.main) {
   try {
-    const preset = process.argv[3] === "--preset=runtime" ? "runtime" : "full";
+    const preset =
+      process.argv[3] === "--preset=tooling"
+        ? "tooling"
+        : process.argv[3] === "--preset=runtime"
+          ? "runtime"
+          : "full";
     const directory = fs.realpathSync(process.argv[2]!);
     const parent = fs.realpathSync(path.join(root, ".artifacts/vitest-workers"));
     if (
-      process.argv.length !== (preset === "runtime" ? 4 : 3) ||
+      process.argv.length !== (preset === "full" ? 3 : 4) ||
       path.dirname(directory) !== parent ||
       !path.basename(directory).startsWith("run-") ||
       fs.readdirSync(directory).some((name) => name !== "package.json")

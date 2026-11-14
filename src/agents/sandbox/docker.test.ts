@@ -322,7 +322,7 @@ it.each([
     "docker",
     DEFAULT_SANDBOX_IMAGE,
     "",
-    `Sandbox image not found: ${DEFAULT_SANDBOX_IMAGE}. Build it with scripts/sandbox-setup.sh before enabling Docker sandboxing. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:trixie-slim.`,
+    `Sandbox image not found: ${DEFAULT_SANDBOX_IMAGE}. Run openclaw doctor --fix to build it before enabling Docker sandboxing. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:trixie-slim.`,
   ],
   [
     "podman",

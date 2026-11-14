@@ -90,7 +90,12 @@ export async function loadCronRuns(
   opts?: { append?: boolean; coalesce?: boolean },
 ): Promise<CronRunsLoadStatus> {
   const client = state.client;
-  if (!client || !state.connected || state.canRefresh?.() === false) {
+  if (
+    !client ||
+    !state.connected ||
+    state.canRefresh?.() === false ||
+    state.canRefreshRuns?.() === false
+  ) {
     return "skipped";
   }
   const scope = state.cronRunsScope;
@@ -185,7 +190,7 @@ export async function loadCronRuns(
   }
 }
 
-export function loadCronRunsForJob(
+export function selectCronRunsForJob(
   state: CronState,
   jobId: string | null,
   runId: string | null = null,
@@ -202,7 +207,10 @@ export function loadCronRunsForJob(
     });
   }
   state.cronRunsJobId = jobId;
-  return loadCronRuns(state);
+  const view = cronRunsViews.get(state);
+  if (!view || !matchesCronRunsView(state, view)) {
+    clearCronRunsPage(state);
+  }
 }
 
 export function updateCronRunsFilter(

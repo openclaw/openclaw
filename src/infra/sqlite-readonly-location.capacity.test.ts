@@ -6,7 +6,7 @@ import { encodeOpenClawStateWorkerError } from "../state/openclaw-state-worker-e
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { markSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
 import * as sqliteCopy from "./sqlite-file-copy.js";
-import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import {
   prepareSqliteReadOnlyCopyInProcess,
   prepareSqliteReadOnlyLocationInProcess,

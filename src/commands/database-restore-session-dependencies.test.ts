@@ -9,7 +9,7 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { captureWorkspaceSnapshot } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import {
   workerWorkspaceResultStaging,
-  readStagedWorkerWorkspaceResult,
+  withStagedWorkerWorkspaceResult,
 } from "../gateway/worker-environments/workspace-result-staging.js";
 import { getNodeSqliteKysely, executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { prepareSkillLibraryBundle, skillLibraryRevisionDir } from "../skills/library/bundle.js";
@@ -381,12 +381,13 @@ it("restores a merged owner's selected revision and checkpoint privately and rep
     ),
   ).toHaveLength(1);
   const artifact = state.statePath("state/repository-workspaces", workspaceId + ".git");
-  const restored = await readStagedWorkerWorkspaceResult(artifact, checkpointRef);
-  const entries = [];
-  for await (const entry of restored.readEntries()) {
-    entries.push(entry);
-  }
-  expect(entries).toHaveLength(1);
+  await withStagedWorkerWorkspaceResult(
+    { root: artifact, stagedResultRef: checkpointRef },
+    async (restored) => {
+      expect(restored.changedEntryCount).toBe(1);
+      expect(await fs.readdir(restored.stagingRoot)).toHaveLength(1);
+    },
+  );
   const database = openOpenClawStateDatabase({ env: state.env });
   expect(
     database.db

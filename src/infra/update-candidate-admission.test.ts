@@ -230,11 +230,7 @@ it.each(["unknown-version", "artifact"] as const)(
     expect(mocks.spawn).toHaveBeenCalledWith(
       "/selected/node",
       [path.join(root, "dist", "index.js"), "update", "admit", "--context", contextPath],
-      expect.objectContaining({
-        cwd: root,
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
-      }),
+      expect.objectContaining({ cwd: root, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }),
     );
     expect(childEnv).toEqual({
       ...preservedEnv,

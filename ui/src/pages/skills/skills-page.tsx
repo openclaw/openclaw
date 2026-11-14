@@ -24,9 +24,9 @@ import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { searchClawHub } from "../../lib/skills/clawhub-search.ts";
 import {
-  acceptSkillsReport,
   closeClawHubDetail,
   createSkillsChangeReloader,
   installFromClawHub,
@@ -89,7 +89,6 @@ export function SkillsPage(props: SkillsPageProps) {
     resolve: (result: PageReadResult) => void;
   } | null = null;
   let routeDataInitialized = false;
-  let routeDataEnabled = true;
   let accessSignature = "";
   const skills = observeState<SkillsState>({
     ...createSkillsData(),
@@ -104,6 +103,7 @@ export function SkillsPage(props: SkillsPageProps) {
     },
   });
   const data = skills.state;
+  const runtimeConfig = projectOwner(context.runtimeConfig, (owner) => owner.state);
   const verdictCompletion = createMemo(() => skills.read().clawhubVerdictsRead);
   const acceptedVerdicts = createMemo(() => skills.read().clawhubVerdicts);
   // Optional verdict enrichment must not hold independent inventory or detail selection.
@@ -252,7 +252,6 @@ export function SkillsPage(props: SkillsPageProps) {
     const previous = data.skillsAgentId;
     reconcileAgentState();
     if (routeDataInitialized && previous !== data.skillsAgentId) {
-      routeDataEnabled = false;
       ensureInitialData();
     }
   };
@@ -420,9 +419,6 @@ export function SkillsPage(props: SkillsPageProps) {
     setSearchCompletion(null);
     searchRequest.reset();
     clearClawHubSearchTimer();
-    if (routeDataInitialized) {
-      routeDataEnabled = false;
-    }
     selectSkill(null);
     Object.assign(data, createSkillsData(), {
       skillsAgentRevision: data.skillsAgentRevision + 1,
@@ -435,15 +431,12 @@ export function SkillsPage(props: SkillsPageProps) {
       return;
     }
     routeDataInitialized = true;
-    routeDataEnabled = true;
     if (!gateway.isRouteDataCurrent(route) || route.agents !== context.agents || !canReadSkills()) {
-      routeDataEnabled = false;
       return;
     }
     const selection = agentSelection().state;
     // A preload may finish after another explicit choice, including an A→B→A switch.
     if (agentSelection().intentRevision !== route.selectionIntentRevision) {
-      routeDataEnabled = false;
       reconcileAgentState();
       return;
     }
@@ -453,17 +446,13 @@ export function SkillsPage(props: SkillsPageProps) {
     }
     reconcileAgentState();
     if (data.skillsAgentId !== route.selectedAgentId) {
-      routeDataEnabled = false;
       return;
     }
-    routeDataEnabled = true;
     retireSkillsReads(data);
     data.skillsLoading = false;
     data.skillsError = route.error;
-    if (route.report) {
-      acceptSkillsReport(data, route.report);
-    } else {
-      data.skillsReport = null;
+    if (!route.error) {
+      void loadSkills(data, { reportRead: route.reportRead });
     }
     if (route.clawhubRef && route.clawhubRef !== data.clawhubDetailRef) {
       openClawHubDetail(route.clawhubRef);
@@ -476,12 +465,7 @@ export function SkillsPage(props: SkillsPageProps) {
     }
     const snapshot = context.gateway.snapshot;
     library.ensureLoaded(snapshot);
-    if (
-      routeDataEnabled ||
-      !routeDataInitialized ||
-      snapshot.phase !== "connected" ||
-      !snapshot.client
-    ) {
+    if (!routeDataInitialized || snapshot.phase !== "connected" || !snapshot.client) {
       return;
     }
     const agentState = context.agents.state;
@@ -492,7 +476,7 @@ export function SkillsPage(props: SkillsPageProps) {
       return;
     }
     reconcileAgentState();
-    if (!data.skillsReport && !data.skillsLoading) {
+    if (!data.skillsReport && !data.skillsLoading && !data.skillsError) {
       void loadSkills(data);
     }
   }
@@ -541,6 +525,10 @@ export function SkillsPage(props: SkillsPageProps) {
   }
 
   function selectSkill(key: string | null) {
+    if (key) {
+      // The dialog needs the stored API key's source; read config only once one opens.
+      void context.runtimeConfig.ensureDisplayLoaded();
+    }
     setLocal((state) => {
       state.skillsDetailKey = key;
       state.skillsDetailTab = "overview";
@@ -613,6 +601,8 @@ export function SkillsPage(props: SkillsPageProps) {
       />
       <SettingsWorkspace>
         <div
+          // Bound layout work for the large installed inventory without containing discovery.
+          style={{ contain: surface() === "settings" ? "layout" : undefined }}
           id={surface() === "discovery" ? PLUGINS_HUB_PANEL_ID : undefined}
           role={surface() === "discovery" ? "tabpanel" : undefined}
           aria-labelledby={surface() === "discovery" ? "plugins-tab-skills" : undefined}
@@ -681,9 +671,16 @@ export function SkillsPage(props: SkillsPageProps) {
                 updateSkillEdit(data, key, value);
               }
             }}
-            onSaveKey={(key) => {
+            apiKeyConfig={{
+              snapshot: () => runtimeConfig.read().configSnapshot,
+              error: () => runtimeConfig.read().lastError,
+              retry: () => void context.runtimeConfig.refreshDisplay(),
+            }}
+            onSaveKey={(key, replaceable) => {
               if (canUpdateSkills()) {
-                void mutations.run(() => saveSkillApiKey(data, key, canUpdateSkills));
+                // Read at save and again at dispatch, from the owner's current snapshot.
+                const current = () => replaceable(context.runtimeConfig.state.configSnapshot, key);
+                void mutations.run(() => saveSkillApiKey(data, key, current, canUpdateSkills));
               }
             }}
             onInstall={(skillKey, name, installId) => {

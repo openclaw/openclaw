@@ -351,8 +351,11 @@ export function createUsagePage(context: ApplicationContext) {
       (projection === "roster" ||
         JSON.stringify(query.selectedSessions) === JSON.stringify(current.selectedSessions)) &&
       (projection === "calendar" ||
-        (JSON.stringify(query.recentKeys) === JSON.stringify(current.recentKeys) &&
-          query.offset === current.offset &&
+        JSON.stringify(query.recentKeys) === JSON.stringify(current.recentKeys)) &&
+      // Chart/filter projections describe the whole selection, not its roster page or order.
+      (projection === "calendar" ||
+        projection === "filterOptions" ||
+        (query.offset === current.offset &&
           query.sort === current.sort &&
           query.sortDirection === current.sortDirection))
     );

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { captureEnv } from "../../test-utils/env.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { expectNoCalls, expectPartialCall } from "./lifecycle-assertions.test-support.js";
 import {
   createHealthyRestartSnapshot,
@@ -348,7 +349,9 @@ describe("runDaemonRestart health checks", () => {
     const restartParams = requireMockCallArg(runServiceRestart, "runServiceRestart");
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
     expect(() => (restartParams.beforeServiceMutation as () => void)()).toThrow(
-      /non-default state dir/,
+      expect.objectContaining({
+        humanOutput: expect.stringMatching(/^Gateway restart blocked: service management skipped/),
+      }),
     );
   });
 
@@ -403,10 +406,16 @@ describe("runDaemonRestart health checks", () => {
     });
   });
 
-  it("rejects --skip-deferral without --safe", async () => {
-    await expect(runDaemonRestart({ json: true, skipDeferral: true })).rejects.toThrow(
-      "--skip-deferral requires --safe",
-    );
+  it.each([
+    [{ skipDeferral: true }, "--skip-deferral requires --safe"],
+    [{ safe: true, force: true }, "--safe cannot be combined with --force"],
+    [{ safe: true, wait: "5s" }, "--safe cannot be combined with --wait"],
+    [{ force: true, wait: "5s" }, "--force cannot be combined with --wait"],
+    [{ safe: true, preserveDefinition: true }, "--preserve-definition requires"],
+  ])("rejects restart flag conflict %o as an expected CLI error", async (opts, message) => {
+    const error = await runDaemonRestart({ json: true, ...opts }).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(ExpectedCliError);
+    expect((error as ExpectedCliError).machineOutput).toContain(message);
     expectNoCalls(callGatewayCli, runServiceRestart);
   });
 
@@ -606,12 +615,6 @@ describe("runDaemonRestart health checks", () => {
     const outcome = await runUnmanagedStop();
 
     expect(service.readCommand).not.toHaveBeenCalled();
-    expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
-      action: "stop",
-      source: "cli",
-      mode: "sigterm",
-      pid: 4300,
-    });
     expect(outcome).toEqual({
       result: "stopped",
       message: "Gateway stop signal sent to unmanaged process on port 39471: 4300.",
@@ -999,9 +1002,11 @@ describe("runDaemonRestart health checks", () => {
       ["start", () => runDaemonStart({ json: true })],
       ["stop", () => runDaemonStop({ json: true })],
       ["uninstall", () => runDaemonUninstall({ json: true })],
-      ["preserved restart", () => runDaemonRestart({ json: true, preserveDefinition: true })],
-    ])("blocks native %s lifecycle access", async (_action, run) => {
-      await expect(run()).rejects.toThrow("gateway lifecycle is managed by an external supervisor");
+      ["restart", () => runDaemonRestart({ json: true, preserveDefinition: true })],
+    ])("blocks native %s lifecycle access", async (action, run) => {
+      await expect(run()).rejects.toMatchObject({
+        humanOutput: expect.stringMatching(`^Gateway ${action} blocked: .*external supervisor`),
+      });
 
       expectNoCalls(
         runServiceStart,

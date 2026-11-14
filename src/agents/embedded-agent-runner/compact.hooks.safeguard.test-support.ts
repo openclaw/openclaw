@@ -228,6 +228,7 @@ export function registerCompactionSafeguardTests({
 
     it.each([
       ["provider timeout", "request timed out", "fallback"],
+      ["provider quota 429", "Provider API error (429): daily token quota exhausted", "fallback"],
       ["intentional quality rejection", undefined, "degrade"],
       ["explicit model timeout", "request timed out", "cancel"],
       // A corrective failure reuses the successful earlier summary on the same model.

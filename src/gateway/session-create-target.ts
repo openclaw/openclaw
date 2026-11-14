@@ -288,7 +288,7 @@ export async function finalizeSessionCreateTarget(
       if (!isDeepStrictEqual(current, expectedEntry)) {
         throw new Error(`created session ${target.key} changed before finalization`);
       }
-      return { initializationPending: undefined };
+      return { initializationPending: undefined, templateInitialization: undefined };
     },
     {
       preserveActivity: true,
@@ -300,4 +300,31 @@ export async function finalizeSessionCreateTarget(
     throw new Error(`created session ${target.key} disappeared before finalization`);
   }
   return finalized;
+}
+
+/** Persist a verified continuation without releasing this exact pending incarnation. */
+export async function checkpointSessionCreateTarget(
+  target: Pick<CreatedGatewaySession, "key" | "storePath">,
+  expectedEntry: InternalSessionEntry,
+  initialization: NonNullable<InternalSessionEntry["templateInitialization"]>,
+  commitGuard: CreateGatewaySessionParams["commitGuard"],
+): Promise<InternalSessionEntry> {
+  const updated = await patchSessionEntryCore(
+    { sessionKey: target.key, storePath: target.storePath },
+    (current) => {
+      if (!current?.initializationPending || !isDeepStrictEqual(current, expectedEntry)) {
+        throw new Error("The pending Template session changed before its configured checkpoint");
+      }
+      return { templateInitialization: structuredClone(initialization) };
+    },
+    {
+      preserveActivity: true,
+      requireWriteSuccess: true,
+      ...sessionEntryCommitGuardOptions(commitGuard),
+    },
+  );
+  if (!updated) {
+    throw new Error("The pending Template session changed before its configured checkpoint");
+  }
+  return updated;
 }

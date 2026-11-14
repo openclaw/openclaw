@@ -26,6 +26,7 @@ import {
   settleUsagePage,
   usageButton,
 } from "./usage-page.test-support.ts";
+import { openUsageDisplay } from "./view-render.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
 
@@ -635,7 +636,10 @@ describe("UsagePage detail requests", () => {
     pending = deferred<SessionsUsageResult>();
     await exportJson();
     await page.updateComplete;
-    usageButton(page, "Current instance").click();
+    const { surface } = openUsageDisplay(page, "Sessions");
+    surface
+      .querySelector<HTMLButtonElement>('[role="menuitemradio"][aria-label="Current instance"]')!
+      .click();
     await page.updateComplete;
     pending.resolve(full);
     await waitForFast(() => expect(refreshButton(page).disabled).toBe(false));

@@ -350,7 +350,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Close", exact: true }).click();
       await page.getByRole("radio", { name: "Team", exact: true }).click();
       await page.getByRole("button", { name: /release-notes Prepare the team's/u }).click();
-      await page.getByText(/only its owner or an admin/u).waitFor();
+      await page.getByText(/only its owner or an authorized admin/u).waitFor();
       // The read-only checks can finish while the reader is still animating in.
       await expectLibraryDialogOpen(page);
       expect(await page.getByRole("button", { name: "Transfer to team" }).count()).toBe(0);

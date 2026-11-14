@@ -259,7 +259,17 @@ export type ChannelSecurityContext<ResolvedAccount = unknown> = {
   account: ResolvedAccount;
 };
 
+/** Display-only native references; never recipients, routing, or sender authority. */
+export type ChannelDisplayMention = {
+  start: number;
+  end: number;
+  senderId: string;
+  fallbackLabel?: string;
+};
+
 export type ChannelMentionAdapter = {
+  /** Return ordered, non-overlapping native ranges using canonical sender IDs. */
+  readDisplayMentions?: (text: string) => readonly ChannelDisplayMention[];
   stripRegexes?: (params: {
     ctx: MsgContext;
     cfg: OpenClawConfig | undefined;

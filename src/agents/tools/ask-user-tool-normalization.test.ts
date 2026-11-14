@@ -66,3 +66,50 @@ it.each([
 ])("rejects %s", (_name, args, error) => {
   expect(() => normalizeAskUserParams(args)).toThrow(error);
 });
+
+it("represents a required manual step through the existing attributed question contract", () => {
+  const result = normalizeAskUserParams({
+    requiredAction: {
+      reason: "The desktop is waiting for a manual device step.",
+      instructions: "Complete the visible step, then return for a fresh check.",
+      url: "https://example.test/manual-step",
+    },
+  });
+  expect(result).toMatchObject({
+    requiredAction: true,
+    questions: [
+      {
+        questionId: "required_action",
+        header: "Manual step",
+        url: "https://example.test/manual-step",
+        isOther: false,
+        options: [{ label: "Ready to recheck" }, { label: "Stop this task" }],
+      },
+    ],
+  });
+  expect(result.questions[0]?.question).toContain("manual device step");
+});
+
+it.each([
+  {
+    requiredAction: {
+      reason: "Blocked",
+      instructions: "Do the manual step",
+      url: "javascript:alert(1)",
+    },
+  },
+  {
+    requiredAction: {
+      reason: "Blocked",
+      instructions: "Do the manual step",
+      url: "https://user:***@example.test/",
+    },
+  },
+  {
+    questions: [question],
+    requiredAction: { reason: "Blocked", instructions: "Do the manual step" },
+  },
+  { requiredAction: { reason: " ", instructions: "Do the manual step" } },
+])("does not offer an invalid or ambiguous recovery action: %j", (args) => {
+  expect(() => normalizeAskUserParams(args)).toThrow();
+});

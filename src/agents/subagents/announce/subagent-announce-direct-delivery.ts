@@ -1,5 +1,6 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
+import { runOutsideAdmittedGenerationScopes } from "../../../auto-reply/reply/queue/drain-admission-scope.js";
 import { bindInProcessSessionRun } from "../../../gateway/in-process-session-run.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import {
@@ -16,7 +17,10 @@ import {
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
-import { resolveEmbeddedRunAbandonment } from "../../embedded-agent-runner/runs.js";
+import {
+  isEmbeddedAgentRunHandleActive,
+  resolveEmbeddedRunAbandonment,
+} from "../../embedded-agent-runner/runs.js";
 import { isReplaySafeTranscriptConflict } from "../../embedded-agent-runner/transcript-conflict.js";
 import {
   hasFailedSubagentNoOutputCompletion,
@@ -76,10 +80,12 @@ function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
 export async function sendSubagentAnnounceDirectly(
   params: SubagentAnnounceDirectParams,
 ): Promise<SubagentAnnounceDeliveryResult> {
-  return withSubagentRequesterDelivery(
-    params.targetRequesterSessionKey,
-    params,
-    sendSubagentAnnounceDirectlyBound,
+  return runOutsideAdmittedGenerationScopes(() =>
+    withSubagentRequesterDelivery(
+      params.targetRequesterSessionKey,
+      params,
+      sendSubagentAnnounceDirectlyBound,
+    ),
   );
 }
 
@@ -338,16 +344,20 @@ async function sendSubagentAnnounceDirectlyBound(
         return sourceOwnerChangedResult();
       }
     }
+    // A cron run keeps its session turn through finalization, so a requester turn queued
+    // after its agent attempt ended would wait out the run; the run reads this row itself.
     if (
       params.expectsCompletionMessage &&
       isCronRunSessionKey(canonicalRequesterSessionKey) &&
-      !resolveRequesterSessionActivity(
-        params.targetRequesterSessionKey,
-        await loadRequesterSessionEntry(params.targetRequesterSessionKey, params.requesterAgentId),
-      ).isActive &&
       !agentMediatedCompletion
     ) {
-      return completionHandoffPendingResult();
+      const { sessionId } = resolveRequesterSessionActivity(
+        params.targetRequesterSessionKey,
+        await loadRequesterSessionEntry(params.targetRequesterSessionKey, params.requesterAgentId),
+      );
+      if (!sessionId || !isEmbeddedAgentRunHandleActive(sessionId)) {
+        return completionHandoffPendingResult();
+      }
     }
     if (params.signal?.aborted) {
       return { delivered: false, path: "none" };

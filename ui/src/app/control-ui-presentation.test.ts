@@ -151,6 +151,36 @@ describe("Control UI accent presentation", () => {
     }
   });
 
+  it("keeps unchanged operator seams free of style writes and preserves accent priority", () => {
+    const root = document.documentElement;
+    root.style.setProperty("--bg", "#ffffff");
+    root.style.setProperty("--bg-content", "#ffffff");
+    applyControlUiPresentation({ environment: null, seamColor: "#123456" });
+    const mutations = new MutationObserver(() => {});
+    mutations.observe(root, { attributes: true, attributeFilter: ["style"] });
+    try {
+      applyControlUiPresentation({ environment: null, seamColor: "#123456" });
+      expect(mutations.takeRecords()).toEqual([]);
+
+      applyControlUiPresentation({ environment: null, seamColor: "#abcdef" });
+      expect(mutations.takeRecords().length).toBeGreaterThan(0);
+      expect(root.style.getPropertyValue("--accent")).toBe("#abcdef");
+
+      applyControlUiAccent("#fbbf24");
+      applyControlUiPresentation({ environment: null, seamColor: "#654321" });
+      expect(root.style.getPropertyValue("--accent")).toBe("#fbbf24");
+      mutations.takeRecords();
+      applyControlUiPresentation({ environment: null, seamColor: "#654321" });
+      expect(mutations.takeRecords()).toEqual([]);
+      expect(root.style.getPropertyValue("--accent")).toBe("#fbbf24");
+
+      applyControlUiAccent();
+      expect(root.style.getPropertyValue("--accent")).toBe("#654321");
+    } finally {
+      mutations.disconnect();
+    }
+  });
+
   it("prioritizes the user accent and restores operator and theme defaults in order", () => {
     const style = document.documentElement.style;
     const sampler = vi

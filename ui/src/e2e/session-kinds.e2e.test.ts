@@ -76,7 +76,9 @@ suite.define(() => {
         await filter.click();
         const popover = page.locator(".sessions-filter-popover:popover-open");
         await popover.waitFor();
-        await popover.getByRole("button", { name: "Filter by key, agent, label, kind…" }).waitFor();
+        await popover
+          .getByRole("searchbox", { name: "Filter by key, agent, label, kind…" })
+          .waitFor();
         await popover.getByRole("radiogroup", { name: "Session state" }).waitFor();
         await expect.poll(() => popover.getAttribute("data-phase")).toBe("open");
         await page.keyboard.press("Escape");
@@ -212,7 +214,6 @@ suite.define(() => {
 
       await openFilters();
       const search = popover.locator(".sessions-filter-popover__search input");
-      await popover.locator(".header-search__toggle").click();
       await search.fill("Pinned");
       expect(await search.inputValue()).toBe("Pinned");
       await expect

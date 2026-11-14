@@ -144,6 +144,7 @@ for (const name of ["unchanged", "presentation", "metadata"] as const) {
       id: records.identity(row),
       key: row.key,
       agentId: row.agentId,
+      storePath: row.storeTarget.storePath,
       row: records.selectionRow(row),
     };
     notifyListeners(listeners, change, (error) => {

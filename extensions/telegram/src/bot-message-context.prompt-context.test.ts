@@ -229,6 +229,60 @@ describe("Telegram prompt composition", () => {
     expect(context[0]).not.toHaveProperty("sessionTranscriptAssistantTextDedupeKeys");
   });
 
+  it.each([undefined, 77])(
+    "keeps automatic DM context in its own topic (thread=%s), including cached reply windows",
+    async (threadId) => {
+      const cfg = config();
+      cfg.channels!.telegram!.autoTopicLabel = false;
+      cfg.channels!.telegram!.dmHistoryLimit = 2;
+      cfg.channels!.telegram!.streaming = { mode: "off" };
+      const bot = await createBot(false, true, cfg, true);
+      const cache = createTelegramMessageCache({
+        scope: resolveTelegramMessageCacheScope(cfg.session!.store!),
+      });
+      const own = (id: number, extra: Partial<Message.TextMessage> = {}) =>
+        message(id, `local ${id}`, {
+          ...(threadId === undefined ? {} : { message_thread_id: threadId }),
+          ...extra,
+        });
+      const foreign = (id: number) => message(id, `other topic ${id}`, { message_thread_id: 88 });
+      for (const msg of [
+        own(1),
+        foreign(10),
+        foreign(11),
+        own(12),
+        own(13),
+        foreign(14),
+        own(15),
+        own(16),
+        own(17),
+        own(20, { reply_to_message: { ...foreign(10), reply_to_message: undefined } }),
+        own(21, { reply_to_message: { ...own(17), reply_to_message: undefined } }),
+      ]) {
+        await cache.record({ accountId: "default", chatId: msg.chat.id, msg });
+      }
+
+      // The current request has no reply: an older cached reply must not pull in another topic.
+      await deliverTelegramUpdate(bot, { update_id: 22, message: own(22) });
+      expect(harness.replySpy).toHaveBeenCalledTimes(1);
+      const observed = harness.replySpy.mock.calls[0]![0];
+      expect(observed.SessionKey).toBe(
+        threadId === undefined ? "agent:main:main" : "agent:main:main:thread:1234:77",
+      );
+      expect(observed.ChannelStructuredContext).toMatchObject([
+        {
+          payload: {
+            messages: [15, 16, 17, 20, 21].map((id) => ({
+              message_id: String(id),
+              body: `local ${id}`,
+            })),
+          },
+        },
+      ]);
+      expect(JSON.stringify(observed.ChannelStructuredContext)).not.toContain("other topic");
+    },
+  );
+
   it("selects user-request history without losing an explicit older reply", async () => {
     const ctx = await buildTelegramMessageContextForTest({
       cfg: config(),

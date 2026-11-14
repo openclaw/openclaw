@@ -78,8 +78,11 @@ function parseInvocation(args, env) {
     words.push(arg);
   }
   const nodeRun = words[0] === "node" && words[1] === "run";
-  const connect = words[0] === "connect" && !words.includes("--service");
-  return nodeRun || connect ? { rootArgs } : null;
+  // Foreground enrollment is supervised like `node run`; it hands back `node run` restart args.
+  const enroll =
+    (words[0] === "connect" || (words[0] === "node" && words[1] === "join")) &&
+    !words.includes("--service");
+  return nodeRun || enroll ? { rootArgs } : null;
 }
 
 function readPackage(packageRoot) {

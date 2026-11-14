@@ -4,11 +4,12 @@ import { copyWithPathPatch } from "../lib/config-form-utils.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import {
   ConfigCollectionDraft,
+  createCollectionDraftSource,
   type ConfigCollectionDraftHandle,
   type ConfigFormCollectionDraftCommit,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
-import { arrayItemSchema } from "./config-form.array-items.ts";
+import { arrayItemSchema, objectPropertyKeys } from "./config-form.array-items.ts";
 import {
   arrayConstraintCandidates,
   arrayInputConstraints,
@@ -137,7 +138,8 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
   );
 
   const labeled = () => props.params.path.length !== 1 && props.params.showLabel !== false;
-  const onlyMap = () => (labeled() && object().fields.length === 0 ? object().additional : null);
+  const onlyMap = () =>
+    labeled() && objectPropertyKeys(props.params.schema).length === 0 ? object().additional : null;
   // Top-level objects, label-less contexts and in-place objects emit sibling settings rows.
   return (
     <Show when={labeled() && !props.params.inlineObject} fallback={fields()}>
@@ -193,7 +195,11 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
   );
 }
 
-function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArrayIdentity) {
+function resolveArrayContent(
+  params: ConfigNodeRenderParams,
+  rows: ConfigFormArrayIdentity,
+  editEntry: (expected: unknown[], dispatch: () => boolean) => boolean,
+) {
   const { schema, value, path, hints, disabled, onPatch, searchCriteria } = params;
   const showLabel = params.showLabel ?? true;
   const showHeaderMeta = params.showHeaderMeta ?? showLabel;
@@ -317,7 +323,7 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
       nextValue[itemIndex] = nextItem.value;
     }
     if (canApplyArrayCandidate(schema, arrayValue, nextValue, true)) {
-      return patch(nextValue, rowIdentities);
+      return editEntry(nextValue, () => patch(nextValue, rowIdentities));
     }
     return false;
   };
@@ -448,8 +454,11 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
   });
   const content = createMemo(() => {
     getLocale();
-    return resolveArrayContent(props.params, identity());
+    return resolveArrayContent(props.params, identity(), (expected, dispatch) =>
+      draftSource.editEntry(expected, dispatch),
+    );
   });
+  const draftSource = createCollectionDraftSource(() => content()?.draftProps.sourceIdentity);
   const entries = createMemo(
     () =>
       content()?.arrayValue.map((item, index) => ({
@@ -535,6 +544,7 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
           </div>
           <ConfigCollectionDraft
             {...current().draftProps}
+            sourceIdentity={draftSource.draftSource()}
             id={current().draftId}
             ref={(handle) => (draft = handle)}
             onCommit={(value) => current().commitDraft(value)}

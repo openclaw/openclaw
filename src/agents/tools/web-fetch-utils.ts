@@ -524,6 +524,11 @@ export function markdownToText(markdown: string): string {
   text = text.replace(/^#{1,6}\s+/gm, "");
   text = text.replace(/^[^\S\n]*[-*+]\s+/gm, "");
   text = text.replace(/^[^\S\n]*\d+\.\s+/gm, "");
+  // Resolve CommonMark backslash escapes only after the structure strips: the
+  // strips above must see the escapes so literal punctuation is not
+  // reinterpreted as headings, lists, or links; hidden code content stays raw
+  // because the final replacement output is not rescanned.
+  text = text.replace(/\\([!-/:-@[-`{-~])/g, "$1");
   // Escaped input NUL pairs stay paired through prose formatting, so only our
   // single-NUL markers can restore code. Replacement output is not rescanned.
   return normalizeWhitespace(text).replace(

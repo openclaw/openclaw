@@ -1,4 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { racePromiseWithAbortSignal, raceWithTimeout } from "@openclaw/retry";
 import type {
   PluginControlUiActivation,
@@ -19,6 +20,7 @@ import type {
   ControlUiSurface,
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { readOfflineStorageScope } from "../app/boot-record.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { i18n } from "../i18n/lib/translate.ts";
@@ -82,6 +84,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private readonly stops: ControlUiDisposer[] = [];
   private client: GatewayBrowserClient | null = null;
   private connectionId: string | null = null;
+  private recoveryScope: string | undefined;
   private refreshGeneration = 0;
   private disposed = false;
   private readonly settingsLifetimes = new Set<AbortController>();
@@ -218,7 +221,13 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     // Plugin generations can change while the server connection and UI owners survive.
     const connectionId =
       snapshot.phase === "connected" ? (snapshot.hello?.server?.connId ?? "") : null;
-    if (this.client === client && this.connectionId === connectionId) {
+    const recoveryScope = readOfflineStorageScope({
+      client,
+      connected: snapshot.phase === "connected",
+    });
+    const recoveryChanged = this.recoveryScope !== recoveryScope;
+    this.recoveryScope = recoveryScope;
+    if (this.client === client && this.connectionId === connectionId && !recoveryChanged) {
       return;
     }
     this.retireOwners();
@@ -310,7 +319,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
               pluginId: descriptor.pluginId,
               revision: descriptor.revision,
               status: "failed",
-              error: grantError.slice(0, 512),
+              error: truncateUtf16Safe(grantError, 512),
             });
           }
         }
@@ -498,7 +507,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
           pluginId: descriptor.pluginId,
           revision: descriptor.revision,
           status: "failed",
-          error: formatUiError(error, "Plugin UI activation failed.").slice(0, 512),
+          error: truncateUtf16Safe(formatUiError(error, "Plugin UI activation failed."), 512),
         };
       }
     } finally {

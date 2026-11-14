@@ -2,7 +2,10 @@ import type { Selectable, Updateable } from "kysely";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
 
-export type LocalWorkspaceProjection = Selectable<DB["local_workspace_projections"]>;
+export type LocalWorkspaceRejectedResult = { ref: string; reason: string; manifestRef?: string };
+export type LocalWorkspaceProjection = Selectable<DB["local_workspace_projections"]> & {
+  rejectedResult?: LocalWorkspaceRejectedResult;
+};
 export type LocalWorkspaceManifestMutation = {
   records: LocalWorkspaceManifestRecord[];
   removed: string[];
@@ -11,15 +14,16 @@ export type LocalWorkspaceManifestMutation = {
   replace?: boolean;
   treeRoot?: string;
   previousTreeRoot?: string | null;
-  fingerprints?: { target: "canonical" | "projection"; blob: string };
+  fingerprints?: { target: "canonical" | "projection"; blob: string; oppositeBlob?: string };
 };
 export type LocalWorkspaceMutation =
-  | { kind: "create"; row: Omit<LocalWorkspaceProjection, "revision"> }
+  | { kind: "create"; row: Omit<LocalWorkspaceProjection, "revision" | "rejectedResult"> }
   | {
       kind: "update";
       revision: number;
       patch: Updateable<DB["local_workspace_projections"]>;
       manifest?: LocalWorkspaceManifestMutation;
+      rejectedResult?: LocalWorkspaceRejectedResult;
     }
   | { kind: "delete"; revision: number };
 
@@ -38,7 +42,7 @@ export type LocalWorkspaceManifestScan = {
   resultingRoot: string;
   treeRoot?: string;
   previousTreeRoot?: string | null;
-  fingerprints?: { target: "canonical" | "projection"; blob: string };
+  fingerprints?: LocalWorkspaceManifestMutation["fingerprints"];
   preparations?: Uint8Array[];
   records: LocalWorkspaceManifestRecord[];
   observation?: LocalWorkspacePreparedUpdate;
@@ -51,9 +55,20 @@ export type LocalWorkspaceManifestScan = {
   buildCacheInputs: string[];
 };
 
+/** A refused result retains its source receipt without remaining eligible for automatic apply. */
+export type LocalWorkspaceCheckpointReceipt =
+  | Omit<LocalWorkspaceManifestScan, "observation" | "preparations">
+  | {
+      kind: "rejected";
+      ref: string;
+      reason: string;
+      manifestRef?: string;
+      checkpoint: string | null;
+    };
+
 export type LocalWorkspaceManifestValue =
   | LocalWorkspaceManifestScan
-  | { kind: "rescan" }
+  | { kind: "rescan"; entryCount?: number }
   | { kind: "materialize"; rawManifest: string; manifestRef: string }
   | {
       kind: "archive";

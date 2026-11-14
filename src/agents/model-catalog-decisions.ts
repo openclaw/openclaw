@@ -553,6 +553,8 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       }),
     accountCatalog: params.accountCatalog,
     prepareSelectedAccountCatalog,
+    hasPinnedAccount: (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
+      pinnedProfileForEntry(entry) !== undefined,
     evaluateEntry,
     evaluateNative,
     snapshot,

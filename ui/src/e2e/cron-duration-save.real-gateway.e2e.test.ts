@@ -333,7 +333,7 @@ catalogSuite.define(() => {
         rejectCatalogReplies = true;
         await publish("held");
         await expect.poll(() => rejected.size).toBeGreaterThan(0);
-        const error = page.locator(".cron-error-banner");
+        const error = page.locator(".callout.danger");
         await error.waitFor({ state: "visible" });
         expect(await error.textContent()).toContain("Catalog transport unavailable");
         await waitForModel("published");

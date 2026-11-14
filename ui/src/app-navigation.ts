@@ -307,7 +307,7 @@ function navigationPresentation(icon: IconName, key: string): NavigationPresenta
 
 const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
   settings: ["settings", "nav.settings", "common.settingsSections"],
-  templates: navigationPresentation("bot", "templates"),
+  templates: navigationPresentation("blobster", "templates"),
   agents: navigationPresentation("bot", "agents"),
   activity: navigationPresentation("activity", "activity"),
   meetings: navigationPresentation("book", "meetings"),
@@ -381,14 +381,17 @@ export function titleForRoute(routeId: NavigationRouteId, translate = t): string
   return translate(titleKey);
 }
 
-/** The title a route's own page shows, which names the actual device on the device route. */
+/** The title a route's own page shows: the actual device on the device route, and the
+ * plugin page's own label on the shared plugin route once that label is known. */
 export function pageTitleForRoute(
   routeId: NavigationRouteId,
   deviceSnapshot?: NativeDeviceSettingsSnapshot | null,
+  pluginPageLabel?: () => string | undefined,
 ): string {
-  return routeId === "device"
-    ? t(deviceSettingsGroupLabelKey(deviceSnapshot))
-    : titleForRoute(routeId);
+  if (routeId === "device") {
+    return t(deviceSettingsGroupLabelKey(deviceSnapshot));
+  }
+  return (routeId === "plugin" && pluginPageLabel?.()) || titleForRoute(routeId);
 }
 
 /** Window/tab title, attention leftmost because tabs truncate from the right.

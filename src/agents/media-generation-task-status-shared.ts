@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -15,7 +16,7 @@ export const MEDIA_GENERATION_DELIVERING_COMPLETION_PROGRESS =
   "Generated media; delivering completion";
 
 export function buildMediaGenerationRequestKey(value: Record<string, unknown>): string {
-  return stableStringify(value);
+  return createHash("sha256").update(stableStringify(value)).digest("hex");
 }
 
 function mediaGenerationSourceMatches(
@@ -109,7 +110,9 @@ async function findDuplicateGuardMediaGenerationTaskForSession(params: {
     return undefined;
   }
   const tasks = listMediaGenerationOperations(sessionKey, params.agentId);
-  const active = selectActiveMediaGenerationTasks(params, tasks)[0];
+  const active = selectActiveMediaGenerationTasks(params, tasks).find(
+    (task) => !params.requestKey || task.requestKey === params.requestKey,
+  );
   if (active || !params.requestKey) {
     return active;
   }

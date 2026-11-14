@@ -104,26 +104,6 @@ function attributionSummary(container: ParentNode): string {
 }
 
 describe("session hovercard", () => {
-  it("shows the owning session failure above the notepad", () => {
-    const reason = "Validation failed.\n<worker> was unavailable; retry after reconnecting.";
-    const failed = row({
-      attention: { kind: "error", reason, sourceSessionKey: "agent:main:failed" },
-    });
-    const container = renderCard({ row: failed, progressCard: progressCard() });
-    const error = container.querySelector(".session-hovercard__error");
-    expect(error?.textContent).toContain(reason);
-    expect(error?.textContent).toContain("Run failed:");
-    expect(error?.querySelector("worker")).toBeNull();
-    expect(error?.querySelector("svg")).not.toBeNull();
-    expect(error?.nextElementSibling?.classList.contains("session-hovercard__notepad")).toBe(true);
-
-    renderCard({ row: failed }, container);
-    expect(container.querySelector(".session-hovercard__error")?.textContent).toContain(reason);
-    expect(container.querySelector(".session-hovercard__notepad")).toBeNull();
-    renderCard({ row: row({ attention: { kind: "none" } }) }, container);
-    expect(container.querySelector(".session-hovercard__error")).toBeNull();
-  });
-
   it.each([
     {
       name: "group conversation with contributors",

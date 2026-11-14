@@ -71,7 +71,7 @@ it("explains an unsupported mention result without exposing schema issues", asyn
   );
   await waitForSolid(() =>
     expect(container.querySelector('[role="alert"]')?.textContent).toBe(
-      "This app couldn’t load resources. Check the app’s settings.",
+      "Couldn’t load this app’s resources. Try again.",
     ),
   );
   expect(request).toHaveBeenCalledWith("mcp.app.mention", {

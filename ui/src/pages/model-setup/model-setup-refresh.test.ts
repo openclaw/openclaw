@@ -29,7 +29,7 @@ const inventory: SystemAgentSetupDetectResult = {
 const manualInput = ".model-setup__manual input";
 const scanButton = (page: ParentNode) =>
   [...page.querySelectorAll<HTMLButtonElement>(".model-setup__intro button")].find(
-    (button) => button.textContent?.trim() === "Check again",
+    (button) => (button.getAttribute("aria-label") ?? button.textContent?.trim()) === "Check again",
   )!;
 const nativeOption = '[role="option"][data-value="acp-opencode/fixture-model"]';
 const catalogScope = { view: "all" as const, agentId: "main" };

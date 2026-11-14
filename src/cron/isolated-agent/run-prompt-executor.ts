@@ -40,6 +40,7 @@ import {
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { resolveCronJobToolPolicyContext } from "../execution-context-admission.js";
+import { resolveScheduledRunMemoryReceipt } from "../execution-context-registry.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
 import { prepareCronRunInference } from "../run-inference.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
@@ -165,6 +166,7 @@ export function createCronPromptExecutor(
     using inferenceLease = new DisposableStack();
     const binding = params.job.inferenceBinding;
     const inference = await prepareCronRunInference({
+      job: params.job,
       binding,
       cfg: params.cfgWithAgentDefaults,
       agentDir: params.agentDir,
@@ -226,6 +228,11 @@ export function createCronPromptExecutor(
       executionIdentity: params.executionIdentity,
     });
     params.onPromptAdmission(cronAdmission);
+    // Sessions this attempt spawns resolve memory through the row's receipt, so
+    // it must name this occurrence's admitted parent before the agent runs.
+    await params.recordScheduledMemoryParent?.(
+      resolveScheduledRunMemoryReceipt(scheduledExecution.result),
+    );
     // Record the cron source fact at its producer for the run's lifetime so
     // exec-approval creation and standing-grant use never infer job identity
     // from session keys or run ids. Cleared when the run settles. A job whose
@@ -531,18 +538,27 @@ export function createCronPromptExecutor(
                         selected,
                       })
                     : Promise.resolve(undefined);
-                // A recorded account runs only when this backend forwards exactly that account.
+                const resolveLiveProfile = () =>
+                  resolveForwardedProfile(
+                    params.liveSelection.authProfileId
+                      ? {
+                          authProfileId: params.liveSelection.authProfileId,
+                          authProfileIdSource:
+                            params.liveSelection.authProfileIdSource === "user" ? "user" : "auto",
+                        }
+                      : undefined,
+                  );
+                // The recorded provider runs only when this backend forwards exactly its account;
+                // other providers select their account live.
                 const authProfileId = inference
-                  ? await inference.resolveCliAuthProfile(resolveForwardedProfile)
-                  : await resolveForwardedProfile(
-                      params.liveSelection.authProfileId
-                        ? {
-                            authProfileId: params.liveSelection.authProfileId,
-                            authProfileIdSource:
-                              params.liveSelection.authProfileIdSource === "user" ? "user" : "auto",
-                          }
-                        : undefined,
-                    );
+                  ? await inference.resolveCliAuthProfile(
+                      providerOverride,
+                      resolveForwardedProfile,
+                      () =>
+                        // A bound job's selection names its recorded account; others select live.
+                        resolveForwardedProfile(undefined),
+                    )
+                  : await resolveLiveProfile();
                 if (trigger === "cron" && !binding && authProfileId) {
                   throw createUnrecordedScheduledAccountRefusal({
                     runtime: executionProvider,
@@ -575,7 +591,7 @@ export function createCronPromptExecutor(
                   assertCurrent: inference
                     ? () => {
                         assertSettlementCurrent();
-                        inference.runParams.authProfileBinding?.assertCurrent();
+                        inference.assertCurrent(providerOverride);
                       }
                     : undefined,
                   nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
@@ -658,7 +674,7 @@ export function createCronPromptExecutor(
           authProfileIdSource: runOptions.authProfileId
             ? "user"
             : params.liveSelection.authProfileIdSource,
-          ...inference?.runParams,
+          ...inference?.runParams(providerOverride),
           // Cron keeps overload failures local while sharing real credential failures.
           authProfileFailurePolicy: runOptions.authProfileFailurePolicy ?? "local_transient",
           verboseLevel: params.resolvedVerboseLevel,

@@ -7,6 +7,10 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  evaluateInstalledPackageBudget,
+  measureInstalledPackageTree,
+} from "../../../check-openclaw-installed-package-budget.mts";
 import { runCancelableCommand } from "../../../lib/cancelable-command.mts";
 import { toErrorObject } from "../../../lib/error-format.mts";
 import { hasUnjoinedWork, runManagedCommand } from "../../../lib/managed-child-process.mts";
@@ -468,6 +472,19 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     assert.equal(recorded.status, "succeeded");
     assert.equal(result.after?.version, build.version);
     assert.deepEqual(readJson(path.join(packageRoot, "dist/build-info.json")), build);
+    // This driver degrades past the walk cap that 2026.9.x updaters enforce, so check the tree
+    // it installed against the release budget those updaters still need.
+    const installedTree = await measureInstalledPackageTree(packageRoot);
+    writeJson("installed-tree", {
+      entries: installedTree.entries,
+      bytes: installedTree.bytes,
+      contributors: installedTree.contributors.slice(0, 10),
+    });
+    assert.deepEqual(
+      evaluateInstalledPackageBudget(installedTree),
+      [],
+      `Installed candidate tree exceeds the release budget (${installedTree.entries} entries, ${installedTree.bytes} bytes); see docs/ci/release-validation/package-acceptance.md#installed-package-tree-budget`,
+    );
     assert.equal(fs.readFileSync(orphanSidecar, "utf8"), orphanSidecarBytes);
     assert.notEqual(
       fs.readFileSync(env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, "utf8"),

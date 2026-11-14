@@ -10,6 +10,17 @@ import { awaitProviderLifecycleCallback } from "./transport-stream-shared.js";
 // immutable byte fragments extend the lifetime of that history.
 const fragments = new WeakMap<object, Blob>();
 
+function encodeMessageFragment(message: unknown, source?: object): Blob {
+  let fragment = source ? fragments.get(source) : undefined;
+  if (!fragment) {
+    fragment = new Blob(["," + JSON.stringify(message)]);
+    if (source) {
+      fragments.set(source, fragment);
+    }
+  }
+  return fragment;
+}
+
 function copyPlainData<T>(value: T, retainFrozen = false, copies = new Map<object, unknown>()): T {
   if (!value || typeof value !== "object") {
     return value;
@@ -102,7 +113,8 @@ export async function applyAnthropicPayloadHook(
   if (!options?.onPayload) {
     return { params };
   }
-  const plain = getAiTransportHost().immutableData?.isPlainData;
+  const immutable = getAiTransportHost().immutableData;
+  const plain = immutable?.isPlainData;
   const snapshot = plain?.(params) ? copyPlainData(params, true) : undefined;
   // Opaque caller values retain their original behavior. Converter-owned plain
   // messages still need detaching when an unrelated envelope value is opaque.
@@ -122,6 +134,16 @@ export async function applyAnthropicPayloadHook(
     (replacement === undefined || replacement === editable) &&
     snapshot !== undefined &&
     samePlainData(snapshot, editable);
+  if (unchanged && !("toJSON" in Object.prototype) && !("toJSON" in Array.prototype)) {
+    // Encode equal editable copies before yielding: hooks may retain and mutate them.
+    // Keep frozen keys, while avoiding the slow JSON path for their frozen arrays.
+    for (let index = 0; index < snapshot.messages.length; index++) {
+      const source = snapshot.messages[index];
+      if (immutable?.isDeeplyFrozenPlainData(source)) {
+        encodeMessageFragment(editable.messages[index], source);
+      }
+    }
+  }
   return {
     // SAFETY: The public payload hook owns its replacement shape.
     params: (replacement === undefined ? editable : replacement) as MessageCreateParamsStreaming,
@@ -162,13 +184,7 @@ export function serializeAnthropicRequestBody(
           message !== null &&
           typeof message === "object" &&
           immutable.isDeeplyFrozenPlainData(message);
-        let fragment = reusable ? fragments.get(message) : undefined;
-        if (!fragment) {
-          fragment = new Blob(["," + JSON.stringify(message)]);
-          if (reusable) {
-            fragments.set(message, fragment);
-          }
-        }
+        const fragment = encodeMessageFragment(message, reusable ? message : undefined);
         parts.push(index === 0 ? fragment.slice(1) : fragment);
       }
     } else {

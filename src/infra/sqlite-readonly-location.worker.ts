@@ -8,13 +8,14 @@ import { routeLogsToStderr } from "../logging/console.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
 import { jsonFieldBatches } from "./json-field-transfer.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "./node-sqlite.js";
 import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import { useConnectionScopedSqliteDatabaseAdmissionFacts } from "./sqlite-database-admission.js";
 import {
   formatSqliteReadOnlyInspectionFailure,
   isSqliteLockError,
+  sqliteExtendedResultCode,
 } from "./sqlite-error-diagnostics.js";
 import { hasVerifiedLiveSqliteOwner } from "./sqlite-live-owner.js";
 import {
@@ -79,6 +80,9 @@ async function inspect(
       mode !== "staged-sync" &&
       mode !== "staged-async" &&
       mode !== "metadata" &&
+      mode !== "backup-engine" &&
+      mode !== "backup-engine-preserving" &&
+      mode !== "state-sqlite-populated" &&
       mode !== "consolidated" &&
       mode !== "task-delivery-recovery" &&
       !isSqliteSnapshotStagingMode(mode)) ||
@@ -90,6 +94,26 @@ async function inspect(
     };
   }
   try {
+    if (mode === "state-sqlite-populated") {
+      const [{ inspectPhysicalStoreInProcess }, { inspectStateSqlite }] = await Promise.all([
+        import("./database-engine/physical-store.js"),
+        import("../state/openclaw-state-db-engine.js"),
+      ]);
+      return {
+        ok: true,
+        hasExistingData: await inspectPhysicalStoreInProcess(pathname, true, (db) => {
+          const facts = inspectStateSqlite(db);
+          return !facts.hasEngineAnchor && facts.hasExistingData;
+        }),
+      };
+    }
+    if (mode === "backup-engine" || mode === "backup-engine-preserving") {
+      const { readBackupEngineInProcess } = await import("./database-engine/physical-store.js");
+      return {
+        ok: true,
+        engine: await readBackupEngineInProcess(pathname, mode === "backup-engine-preserving"),
+      };
+    }
     if (mode === "staging-sweep") {
       const { reclaimSqliteSnapshotsInProcess } = await import("./sqlite-snapshot-reclamation.js");
       return { ok: true, reclamation: await reclaimSqliteSnapshotsInProcess(pathname) };
@@ -233,9 +257,18 @@ async function inspect(
       (isSqliteSnapshotCapacityError(error) ? SQLITE_SNAPSHOT_CAPACITY_PREFIX : "") +
       (contention ? SQLITE_INSPECTION_CONTENTION_PREFIX : "") +
       (allocationRefused ? SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX : "");
+    // Engine probes moved native reads into this child; callers still classify corruption.
+    // Released snapshot modes retain their exact { ok, message } response shape.
+    const errcode =
+      mode === "backup-engine" ||
+      mode === "backup-engine-preserving" ||
+      mode === "state-sqlite-populated"
+        ? sqliteExtendedResultCode(error)
+        : undefined;
     return {
       ok: false,
       message: `${prefix}${formatSqliteReadOnlyInspectionFailure(error)}`,
+      ...(errcode === undefined ? {} : { errcode }),
     };
   }
 }
@@ -429,10 +462,16 @@ function runSession(): void {
         const { readAuthProfileRowsReadOnly } =
           await import("../agents/auth-profiles/sqlite-json.js");
         const openReadOnlyDatabase: AuthProfileReadDatabaseOpener =
-          read.artifactPreserving === true
-            ? (await import("./sqlite-snapshot-source.js")).openSqliteReadOnlyDatabase
-            : (databasePath, options) =>
-                openNodeSqliteDatabase(databasePath, { ...options, readOnly: true });
+          read.immutable === true
+            ? (databasePath, options) =>
+                openNodeSqliteDatabase(resolveImmutableSqliteFileUri(databasePath), {
+                  ...options,
+                  readOnly: true,
+                })
+            : read.artifactPreserving === true
+              ? (await import("./sqlite-snapshot-source.js")).openSqliteReadOnlyDatabase
+              : (databasePath, options) =>
+                  openNodeSqliteDatabase(databasePath, { ...options, readOnly: true });
         if (stopping) {
           return;
         }

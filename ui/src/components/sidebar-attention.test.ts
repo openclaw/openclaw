@@ -224,6 +224,7 @@ describe("sidebar attention refresh ownership", () => {
     overrides: Partial<Pick<ApplicationContext, "agentSelection" | "gateway" | "overlays">> = {},
   ) {
     const sources = {
+      config: { current: { openclawIdEnabled: false }, subscribe: () => () => undefined },
       gateway: {
         snapshot: { phase: "connected", client: null, hello: null },
         connection: { gatewayUrl: "" },

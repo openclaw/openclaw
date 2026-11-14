@@ -5,7 +5,6 @@ import { configFor } from "./model-auth.fixtures.test-support.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   prepareProviderDynamicModel: vi.fn(),
-  resolveProviderModernModelRef: vi.fn(),
   runProviderDynamicModel: vi.fn(),
 }));
 
@@ -16,6 +15,10 @@ vi.mock("./model-discovery-normalize.js", () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => providerRuntimeMocks);
+// mock-isolation: Candidate fixtures supply dynamic hooks without activating provider runtimes.
+vi.mock("../plugins/provider-hook-runtime.js", () => ({
+  resolveProviderRuntimePlugin: vi.fn(() => undefined),
+}));
 
 import { appendLiveModelCandidates } from "./test-helpers/live-model-dynamic-candidates.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
@@ -53,7 +56,6 @@ describe("appendLiveModelCandidates", () => {
   beforeEach(() => {
     normalizeDiscoveredAgentModelMock.mockClear();
     providerRuntimeMocks.prepareProviderDynamicModel.mockReset().mockResolvedValue(undefined);
-    providerRuntimeMocks.resolveProviderModernModelRef.mockReset().mockReturnValue(undefined);
     providerRuntimeMocks.runProviderDynamicModel.mockReset().mockReturnValue(undefined);
   });
 

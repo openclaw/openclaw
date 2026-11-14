@@ -217,6 +217,8 @@ The normal follow-up queue owns these turns. They wait for the previous turn's
 execution and delivery to settle, use normal session admission and permissions,
 and do not appear as new human messages. Queued user input and existing
 child/tool continuations take precedence; the nudge does not run alongside them.
+Children collected within the turn do not block continuation merely because they
+were spawned.
 When a built-in chat Goal yields to children, their settled requester turn
 receives the current Goal context. A normal final returns pursuit to the same
 follow-up queue only after the child completion batch is committed; it does not
@@ -246,17 +248,31 @@ provides the next execution opportunity.
 
 Select **Goal** from the command picker with Enter, Tab, or a click, then type
 the objective and choose **Start goal**. Typing `/goal start` followed by a
-space, or submitting `/goal start` without an objective, also opens Goal mode.
-Sending bare `/goal`, even after dismissing
-the picker, opens the composer instead of adding a command to the conversation.
-An empty objective cannot be submitted.
+space (also `set` or `create`), or submitting an empty creation
+command, also opens Goal mode. Sending bare `/goal` opens the composer instead
+of adding a command to the conversation. An empty objective cannot be submitted.
+
+Shorthand typing opens Goal mode immediately once the objective cannot be a
+supported subcommand: `/goal l` is enough. The command prefix is consumed, so
+`/goal land it` shows only `land it` in the Goal box. Explicit creation starters
+consume the action word too: `/goal start` followed by a space opens an initially
+empty Goal box that stays open while you begin typing.
+
+Deleting the entire command-origin objective returns to command mode with
+`/goal` and a following space repopulated, with the caret at the end. Backspace or Delete in an
+already-empty command-origin Goal box does the same. Valid command prefixes
+such as `/goal sta` keep completion; typing an unambiguous objective enters Goal
+mode again. Complete pasted creation commands follow the same path. Enter
+submits the literal objective immediately, without a timer, and empty objectives
+are never submitted. Explicit management commands such as `/goal status` remain
+commands.
 
 The composer shows a Goal label and an objective prompt so you can see what
-Send will do. The objective is literal text: words such as `clear` and text
-such as `/stop` do not become commands in Goal mode. Escape or Cancel leaves
-the objective as a normal chat draft. Complete pasted commands such as
-`/goal start Fix the tests` and explicit management commands such as
-`/goal status` retain their text-command behavior.
+Send will do. Once in Goal mode, the objective is literal text: words such as
+`clear` and text such as `/stop` do not become commands. Picker-opened
+creation and existing-Goal editing stay in their own modes when emptied.
+Escape or Cancel leaves the current objective as a normal chat draft; canceling
+an existing-Goal edit restores its borrowed conversation draft.
 
 Starting a Goal saves the Goal and its user turn together with the operation
 receipt before acknowledging Send. A failed admission leaves the draft intact and

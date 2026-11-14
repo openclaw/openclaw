@@ -131,12 +131,16 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     : clientIp && !isLoopbackAddress(clientIp)
       ? clientIp
       : undefined;
-  const reportedClientIpSource = resolveNodePairingClientIpSource({
-    reportedClientIp,
-    hasProxyHeaders,
-    remoteIsTrustedProxy: hasProxyHeaders,
-    remoteIsLoopback: isLoopbackAddress(remoteAddr),
-  });
+  // A tunnel device's address is synthetic: it names no host to SSH-verify or trust by range.
+  const reportedClientIpSource =
+    ingressAttribution.kind === "openclaw-id-tunnel"
+      ? "none"
+      : resolveNodePairingClientIpSource({
+          reportedClientIp,
+          hasProxyHeaders,
+          remoteIsTrustedProxy: hasProxyHeaders,
+          remoteIsLoopback: isLoopbackAddress(remoteAddr),
+        });
 
   if (!hostIsLocalish && isLoopbackAddress(remoteAddr) && !hasProxyHeaders) {
     logWsControl.warn(
@@ -425,6 +429,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             isLocalClient,
             enforceOriginCheckForAnyClient,
             remoteControlUiIngress: remoteIngress,
+            openclawIdTunnel: ingressAttribution.kind === "openclaw-id-tunnel",
           }),
           browserRateLimitClientIp,
           authRateLimiter,

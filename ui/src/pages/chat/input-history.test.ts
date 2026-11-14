@@ -6,25 +6,24 @@ import {
   nativeHistoryMessage,
   nativeHistorySeq,
 } from "./chat-pane-history.test-support.ts";
-import { handleChatInputHistoryKey, resetChatInputHistoryNavigation } from "./input-history.ts";
+import { handleChatInputHistoryKey } from "./input-history.ts";
 
-it("refreshes composer recall after leaving a round", async () => {
+it("bounds recall by users and refreshes only after leaving a round", async () => {
+  const seqs = Array.from({ length: 204 }, (_, i) => i + 1);
   const request = vi.fn(async () => ({
-    messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
+    messages: seqs.slice(0, -2).map((seq) => nativeHistoryMessage(seq)),
     hasMore: false,
     sessionId: "session-id",
-    totalMessages: 4,
+    totalMessages: seqs.length,
   }));
-  const { pane, state } = createNativeShowEarlierPane(request);
+  const { pane, state } = createNativeShowEarlierPane(request, 203);
   state.currentSessionId = "session-id";
   state.chatMessage = "Draft to retain";
-  state.chatLocalInputHistoryBySession = {};
-  resetChatInputHistoryNavigation(state);
-  const press = (key: "ArrowUp" | "ArrowDown") =>
+  const press = (key: "ArrowUp" | "ArrowDown", caret = 0) =>
     handleChatInputHistoryKey(state, {
       key,
-      selectionStart: 0,
-      selectionEnd: 0,
+      selectionStart: caret,
+      selectionEnd: caret,
       altKey: false,
       ctrlKey: false,
       metaKey: false,
@@ -34,16 +33,13 @@ it("refreshes composer recall after leaving a round", async () => {
     });
 
   expect(press("ArrowUp").handled).toBe(true);
-  expect(state.chatMessage).toBe("message 3");
+  expect(state.chatMessage).toBe("message 203");
   await pane.loadOlderMessages();
-  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
-  expect(request).toHaveBeenCalledWith(
+  expect(state.chatMessages.map(nativeHistorySeq)).toEqual(seqs);
+  const pageRequest = { sessionKey: state.sessionKey, limit: 1000, cursor: "older-2" };
+  expect(request).toHaveBeenCalledExactlyOnceWith(
     "chat.history",
-    expect.objectContaining({
-      sessionKey: state.sessionKey,
-      limit: 1000,
-      cursor: "older-2",
-    }),
+    expect.objectContaining(pageRequest),
     { signal: expect.any(AbortSignal) },
   );
   // Loading an older page must not change an active traversal's order.
@@ -51,12 +47,16 @@ it("refreshes composer recall after leaving a round", async () => {
   expect(press("ArrowDown").handled).toBe(true);
   expect(state.chatMessage).toBe("Draft to retain");
 
-  expect(press("ArrowUp").handled).toBe(true);
-  expect(state.chatMessage).toBe("message 3");
-  expect(press("ArrowUp").handled).toBe(true);
-  expect(state.chatMessage).toBe("message 1");
-  expect(press("ArrowDown").handled).toBe(true);
-  expect(state.chatMessage).toBe("message 3");
-  expect(press("ArrowDown").handled).toBe(true);
+  for (let seq = 203; seq >= 5; seq -= 2) {
+    expect(press("ArrowUp").handled).toBe(true);
+    expect(state.chatMessage).toBe(`message ${seq}`);
+  }
+  expect(press("ArrowUp").handled).toBe(false);
+  expect(press("ArrowDown", state.chatMessage.length).handled).toBe(true);
+  expect(press("ArrowUp", 1).handled).toBe(false);
+  expect(press("ArrowDown", 1).handled).toBe(false);
+  for (let index = 0; index < 99; index++) {
+    expect(press("ArrowDown", state.chatMessage.length).handled).toBe(true);
+  }
   expect(state.chatMessage).toBe("Draft to retain");
 });

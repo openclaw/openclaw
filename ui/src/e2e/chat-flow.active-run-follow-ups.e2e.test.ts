@@ -110,6 +110,177 @@ async function restoredSteer(name: string, age: number, offset: number, seq: num
 }
 
 suite.define(() => {
+  it("keeps Send now after a long exec sends a pending steer to the follow-up queue", async () => {
+    const { page } = await newChatPage(suite);
+    await page.clock.install();
+    const sessionKey = "agent:main:main";
+    const sessionId = `session:${sessionKey}`;
+    const runId = "long-exec-run";
+    const steerRunId = "waiting-steer";
+    const startedAt = Date.now();
+    const prompt = "Use the shorter approach.";
+    const message = persistedText("user", prompt, { id: "pending:waiting-steer-input" });
+    const input = {
+      id: "waiting-steer-input",
+      runId: steerRunId,
+      message,
+      acceptedAt: startedAt,
+      state: "queued",
+      queued: false,
+      steerNow: { status: "available", tools: ["exec"] },
+    };
+    const history = {
+      sessionId,
+      sessionInfo: {
+        key: sessionKey,
+        activeRunIds: [runId],
+        hasActiveRun: true,
+        status: "running",
+      },
+      messages: [persistedText("user", "Check the project.", { id: "original", seq: 1 })],
+      inFlightRun: {
+        runId,
+        startedAt,
+        text: "",
+        events: [
+          agentEvent(
+            runId,
+            sessionKey,
+            "tool",
+            {
+              name: "exec",
+              phase: "start",
+              toolCallId: "held-exec",
+              args: { command: "sleep 300" },
+            },
+            1,
+            startedAt,
+          ),
+        ],
+      },
+      pendingInputs: { items: [input], total: 1, queuedCount: 0 },
+      inputReceipts: [{ runId: steerRunId, state: "pending", queued: false }],
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: { "chat.startup": history, "chat.history": history },
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const tool = page
+      .locator(".chat-tool-msg-summary")
+      .getByRole("img", { name: "exec", exact: true });
+    const stop = page.getByRole("button", { name: "Stop", exact: true });
+    const user = page.locator(".chat-group.user", { hasText: prompt });
+    const link = user.getByRole("button", { name: "Send now", exact: true });
+    await tool.waitFor();
+    await stop.waitFor();
+    await link.waitFor();
+    const parent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const dir = parent ? createControlUiE2eArtifactDir("steer-fallback", parent) : undefined;
+    const capture = async (stage: string) => {
+      if (dir) {
+        const frame = await takeControlUiScreenshotFrame(page, chatTranscript(page), [tool, stop], {
+          animations: "disabled",
+        });
+        await fs.writeFile(path.join(dir, `${stage}.png`), frame.png);
+      }
+    };
+    await capture("before-timeout");
+    // The Gateway owns the 120-second settlement cap; replay its resulting custody receipt.
+    await page.clock.fastForward(120_000);
+    history.pendingInputs = {
+      items: [{ ...input, queued: true }],
+      total: 1,
+      queuedCount: 1,
+    };
+    history.inputReceipts = [{ runId: steerRunId, state: "pending", queued: true }];
+    const waiting = "The command is still running after two minutes.";
+    history.messages.push(persistedText("assistant", waiting, { id: "waiting", seq: 2 }));
+    await gateway.setMethodResponse("chat.history", history);
+    await gateway.emitGatewayEvent("sessions.changed", {
+      ...history.sessionInfo,
+      sessionKey,
+      reason: "agent.input.settled",
+    });
+    await gateway.waitForRequest("chat.history");
+    await chatTranscript(page).getByText(waiting, { exact: true }).waitFor();
+    await capture("after-timeout");
+    await expectCount(user, 1);
+    await expectCount(page.locator(".chat-queue__item"), 0);
+    await link.waitFor();
+    await user.getByText("Queued", { exact: true }).waitFor();
+    await stop.waitFor();
+    await gateway.setMethodResponse("chat.history", {
+      ...history,
+      pendingInputs: {
+        ...history.pendingInputs,
+        items: [{ ...input, queued: true, steerNow: undefined }],
+      },
+    });
+    await gateway.emitGatewayEvent("sessions.changed", {
+      ...history.sessionInfo,
+      sessionKey,
+      reason: "agent.input.settled",
+    });
+    const queued = page.locator(".chat-queue__item", { hasText: prompt });
+    await queued.getByText("Queued", { exact: true }).waitFor();
+    await expectCount(queued.getByRole("button", { name: "Steer queued message", exact: true }), 0);
+    await stop.waitFor();
+    await capture("followup-queue");
+    await gateway.setMethodResponse("chat.history", {
+      ...history,
+      pendingInputs: {
+        ...history.pendingInputs,
+        items: [{ ...input, queued: true, steerNow: { status: "blocked", tools: ["upload"] } }],
+      },
+    });
+    const settled = { ...history.sessionInfo, sessionKey, reason: "agent.input.steering" };
+    await gateway.emitGatewayEvent("sessions.changed", settled);
+    await user
+      .getByRole("status", {
+        name: "Queued",
+        exact: true,
+      })
+      .waitFor();
+    await expectCount(queued, 0);
+    await expectCount(link, 0);
+    await gateway.setMethodResponse("chat.history", history);
+    await gateway.emitGatewayEvent("sessions.changed", settled);
+    await link.waitFor();
+    await gateway.deferNext("chat.steerNow");
+    await link.click();
+    expect((await gateway.waitForRequest("chat.steerNow")).params).toMatchObject({
+      sessionKey,
+      sessionId,
+      runId: steerRunId,
+    });
+    const consumed = persistedText("user", prompt, {
+      id: "consumed-steer",
+      seq: 3,
+      idempotencyKey: `${steerRunId}:user`,
+      steerTargetRunId: runId,
+    });
+    await gateway.setMethodResponse("chat.history", {
+      ...history,
+      messages: [...history.messages, consumed],
+      pendingInputs: { items: [], total: 0, queuedCount: 0 },
+      inputReceipts: [
+        { runId: steerRunId, state: "consumed", consumedByEventId: "consumed-steer" },
+      ],
+    });
+    await gateway.emitGatewayEvent("session.message", {
+      ...history.sessionInfo,
+      sessionKey,
+      message: consumed,
+      clientRunId: steerRunId,
+      messageId: "consumed-steer",
+      messageSeq: 3,
+    });
+    await gateway.resolveDeferred("chat.steerNow", { status: "interrupted", tools: ["exec"] });
+    await expectCount(link, 0);
+    await expectCount(user, 1);
+    await expectRequestCountStable(gateway, "chat.send", 0);
+  });
+
   it("removes the typed /steer queue chip after consumption while the original run stays active", async () => {
     const { page } = await newChatPage(suite);
     const runId = "active-run";

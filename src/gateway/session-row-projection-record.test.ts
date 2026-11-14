@@ -34,7 +34,13 @@ it("shares singleton index buckets without coupling alias collisions or removals
     byKey: new Map<string, Set<string>>(),
     byParent: new Map<string, Set<string>>(),
   };
-  const first = { ...records.create(target, original), entry: original };
+  const first = {
+    ...records.create(
+      { ...target, key: "agent:main:11111111-1111-4111-8111-111111111111" },
+      original,
+    ),
+    entry: original,
+  };
   first.parents.add("logical:main\0agent:main:parent");
   indexSessionRow(first, indexes);
   const buckets = Object.values(indexes).flatMap((index) => Array.from(index.values()));
@@ -49,6 +55,21 @@ it("shares singleton index buckets without coupling alias collisions or removals
   expect([...indexes.byKey.get("id:session")!]).toEqual([firstId, secondId]);
   expect([...indexes.byKey.get(`key:${first.key}`)!]).toEqual([firstId]);
   expect([...singleton]).toEqual([firstId]);
+  const replaced = {
+    ...first,
+    storedEntry: { ...original, label: "Renamed" },
+    entry: { ...original, sessionId: "replacement", label: "Renamed" },
+    parents: new Set<string>(),
+  };
+  indexSessionRow(replaced, indexes, false, first);
+  expect([...indexes.byAgent.get("main")!]).toEqual([firstId, secondId]);
+  expect([...indexes.byKey.get("id:session")!]).toEqual([secondId]);
+  expect([...indexes.byKey.get("id:replacement")!]).toEqual([firstId]);
+  expect([...indexes.byParent.get("logical:main\0agent:main:parent")!]).toEqual([secondId]);
+  expect(indexes.byKey.has("url-slug:synthetic-session")).toBe(false);
+  expect([...indexes.byKey.get("url-slug:renamed")!]).toEqual([firstId]);
+  indexSessionRow(first, indexes, false, replaced);
+  expect(indexes.byKey.has("url-slug:renamed")).toBe(false);
   indexSessionRow(first, indexes, true);
   expect(indexes.byKey.has(`key:${first.key}`)).toBe(false);
   expect([...indexes.byKey.get("id:session")!]).toEqual([secondId]);

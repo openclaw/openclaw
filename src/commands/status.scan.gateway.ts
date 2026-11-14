@@ -5,6 +5,7 @@ import { resolveConfigPath } from "../config/paths.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { callGateway, isImplicitLocalGatewayTarget } from "../gateway/call.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveMemoryPluginStatus } from "../status/memory-plugin.js";
 import type { StatusSummary } from "../status/summary.js";
 import {
@@ -47,6 +48,7 @@ export async function scanStatusJsonGateway(
   if (!gatewaySnapshot.gatewayReachable) {
     return { gatewaySnapshot };
   }
+  const signal = getAsyncWorkSignal();
   const status = await measureCliCommandStartup(
     "status.gateway-projection",
     () => {
@@ -61,7 +63,11 @@ export async function scanStatusJsonGateway(
         method: "status",
         params: { includeChannelSummary: false, includeCliProjection: true },
         timeoutMs,
+        signal,
       }).catch((error: unknown) => {
+        // A Ctrl+C cancels the pending projection read; keep the canonical abort
+        // outcome instead of recording a degraded projection error.
+        signal?.throwIfAborted();
         projectionError = error instanceof Error ? error.message : String(error);
         return null;
       });

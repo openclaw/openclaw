@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -13,7 +14,10 @@ suite.define(() => {
     { reason: "non-admin", terminalEnabled: true, operatorScopes: ["operator.read"] },
   ])("shows recovery when the terminal is $reason", async (scenario) => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, scenario);
+      const gateway = await installMockGateway(page, {
+        ...scenario,
+        featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
+      });
       await page.goto(`${suite.server.baseUrl}terminal`);
       await waitForControlUiGatewayReady(page);
       await page.locator("openclaw-terminal-page").waitFor();

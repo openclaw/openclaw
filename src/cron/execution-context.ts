@@ -45,7 +45,7 @@ type ScheduledPrincipal =
   | Readonly<{ kind: "parent"; parent: ScheduledParentRef; requester: ScheduledRequesterRef }>
   /** A parent key without its incarnation. Every decision equals the legacy one until bound. */
   | Readonly<{ kind: "unbound-parent"; parentSessionKey: string }>
-  | Readonly<{ kind: "operator"; basis: "trusted-policy" | "unlinked-legacy" }>
+  | Readonly<{ kind: "operator"; basis: "trusted-policy" | "unlinked-legacy" | "operator-source" }>
   | Readonly<{ kind: "ingress"; ingress: ScheduledIngress }>;
 
 type ScheduledPlacement = "child" | "in-session" | "detached";
@@ -227,13 +227,17 @@ export function resolveScheduledPrincipal(
     } catch {
       return { error: "stored operator source is invalid" };
     }
+    const parent = source.kind === "gateway" ? job.sourceConversation : source;
+    if (!parent) {
+      return { kind: "operator", basis: "operator-source" };
+    }
     return {
       kind: "parent",
       parent: {
         agentId: source.agentId,
-        sessionKey: source.sessionKey,
-        sessionId: source.sessionId,
-        ...(source.lifecycleRevision ? { lifecycleRevision: source.lifecycleRevision } : {}),
+        sessionKey: parent.sessionKey,
+        sessionId: parent.sessionId,
+        ...(parent.lifecycleRevision ? { lifecycleRevision: parent.lifecycleRevision } : {}),
       },
       requester: { kind: "operator-source", source },
     };
@@ -297,6 +301,10 @@ function resolveAuthority(
     basis,
     ...(admissionSource ? { admissionSource } : {}),
   });
+  // Resetting resource lineage must not turn a retained non-owner grant into a legacy owner.
+  if (facts.trigger === "cron" && job.operatorSource) {
+    return withSource(facts.requesterCheck?.owner === true, "operator-source");
+  }
   if (facts.trigger === "cron" && hasTransferredCronOwner(job) && !job.operatorSource) {
     const owner = facts.requesterCheck?.owner === true;
     return withSource(owner, owner ? "profile-role" : "none");

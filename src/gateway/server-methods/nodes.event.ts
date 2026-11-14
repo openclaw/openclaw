@@ -7,14 +7,32 @@ import {
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../../infra/node-commands.js";
 import { ApnsRegistrationPairingChangedError } from "../../infra/push-apns-store.errors.js";
 import { NodeWorkerProcessesChangedSchema } from "../../worker/worker-process-observation.js";
-import type { NodeEventContext } from "../server-node-events-types.js";
+import type { NodeEventContext, NodeEventHandleResult } from "../server-node-events-types.js";
 import { resolveDispatchableNodeSession, respondPairingChanged } from "./nodes.shared.js";
 import { respondUnavailableOnThrow } from "./response.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const nodeEventHandlers: GatewayRequestHandlers = {
-  "node.event": async ({ params, respond, context, client }) => {
+  "node.event": async ({ params, respond: sendResponse, context, client }) => {
+    let responded = false;
+    const respond: RespondFn = (...args) => {
+      if (responded) {
+        if (!args[0]) {
+          context.logGateway.warn("node.event failed after its result was sent");
+        }
+        return;
+      }
+      responded = true;
+      sendResponse(...args);
+    };
+    const publishResult = (result: NodeEventHandleResult) => {
+      if (result.reason === "pairing_changed") {
+        respondPairingChanged(respond);
+      } else {
+        respond(true, result, undefined);
+      }
+    };
     if (!assertValidParams(params, validateNodeEventParams, "node.event", respond)) {
       return;
     }
@@ -170,6 +188,7 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
           payloadJSON,
         },
         {
+          onResult: publishResult,
           connId: client?.connId,
           deviceId: client?.connect?.device?.id,
           pairingGeneration: eventPairingGeneration
@@ -221,11 +240,11 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
           },
         },
       );
-      if (result?.reason === "pairing_changed") {
-        respondPairingChanged(respond);
-        return;
+      if (result) {
+        publishResult(result);
+      } else {
+        respond(true, { ok: true }, undefined);
       }
-      respond(true, result ?? { ok: true }, undefined);
     });
   },
 };

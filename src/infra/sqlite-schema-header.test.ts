@@ -15,7 +15,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAgentSchemaInspectionWorker } from "../state/openclaw-agent-schema-inspection-worker.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
-import { inspectSqliteSchemaHeaderInProcess } from "./sqlite-readonly-location.js";
+import { inspectSqliteSchemaHeaderInProcess } from "./sqlite-schema-header-inspection.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>

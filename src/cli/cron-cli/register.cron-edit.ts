@@ -8,6 +8,7 @@ import type { CronJob } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
@@ -28,6 +29,7 @@ import {
 import {
   assertCronCliJobSpec,
   assertCronTimeoutSupported,
+  buildCronCommandShellArgvForGateway,
   parseCronCommandArgv,
   parseCronCommandEnv,
   parseCronNoOutputTimeoutOption,
@@ -39,6 +41,7 @@ import {
   parseCronStringOption,
   warnIfCronSchedulerDisabled,
   requireCronJobId,
+  callCronReadFromCli,
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
 import { readCronPayloadScript, readCronTriggerScript } from "./trigger-options.js";
@@ -61,7 +64,7 @@ type CronEditOptions = GatewayRpcOpts &
 
 async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<CronJobForEdit> {
   try {
-    return (await callGatewayFromCli("cron.get", opts, { id })) as CronJobForEdit;
+    return (await callCronReadFromCli("cron.get", opts, { id })) as CronJobForEdit;
   } catch (error) {
     if (!isUnknownCronGetMethodError(error)) {
       throw error;
@@ -126,6 +129,7 @@ export function registerCronEditCommand(cron: Command) {
         `Failure alert channel (${getCronChannelOptions()})`,
       )
       .option("--failure-alert-to <dest>", "Failure alert destination")
+      .option("--failure-alert-thread-id <id>", "Thread ID for failure alerts")
       .option("--failure-alert-cooldown <duration>", "Minimum time between alerts (e.g. 1h, 30m)")
       .option("--failure-alert-include-skipped", "Count consecutive skipped runs toward alerts")
       .option("--failure-alert-exclude-skipped", "Exclude skips except local-provider outages")
@@ -517,7 +521,11 @@ export function registerCronEditCommand(cron: Command) {
           } else if (payloadKind === "command") {
             payload = {
               kind: "command",
-              argv: commandArgv ?? (commandShell ? ["sh", "-lc", commandShell] : undefined),
+              argv:
+                commandArgv ??
+                (commandShell
+                  ? await buildCronCommandShellArgvForGateway(commandShell, opts)
+                  : undefined),
               cwd: commandCwd,
               env: commandEnv,
               input: hasCommandInput ? opts.commandInput : undefined,
@@ -528,11 +536,9 @@ export function registerCronEditCommand(cron: Command) {
             if (commandEnv) {
               // Diagnostics are best effort; an unavailable snapshot must not block a patch.
               const existing = (await readExistingCronJob().catch(() => undefined))?.payload;
-              if (existing?.kind === "command") {
-                droppedEnvKeys = Object.keys(existing.env ?? {}).filter(
-                  (key) => !Object.hasOwn(commandEnv, key),
-                );
-              }
+              getAsyncWorkSignal()?.throwIfAborted();
+              const stored = existing?.kind === "command" ? Object.keys(existing.env ?? {}) : [];
+              droppedEnvKeys = stored.filter((key) => !Object.hasOwn(commandEnv, key));
             }
           } else if (payloadKind === "script") {
             payload = { kind: "script" };
@@ -636,6 +642,7 @@ export function registerCronEditCommand(cron: Command) {
               "failureAlertAfter",
               "failureAlertChannel",
               "failureAlertTo",
+              "failureAlertThreadId",
               "failureAlertCooldown",
               "failureAlertMode",
               "failureAlertAccountId",
@@ -662,6 +669,9 @@ export function registerCronEditCommand(cron: Command) {
             if (typeof opts.failureAlertChannel === "string") {
               failureAlert.channel =
                 normalizeOptionalLowercaseString(opts.failureAlertChannel) ?? null;
+            }
+            if (typeof opts.failureAlertThreadId === "string") {
+              failureAlert.threadId = normalizeOptionalString(opts.failureAlertThreadId) ?? null;
             }
             if (typeof opts.failureAlertTo === "string") {
               failureAlert.to = normalizeOptionalString(opts.failureAlertTo) ?? null;

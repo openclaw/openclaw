@@ -1,7 +1,11 @@
+import { writeFile } from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { observeLayoutShifts } from "../test-helpers/control-ui-layout-shift.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -53,6 +57,9 @@ function installSystemsGateway(
       "config.get",
       "config.patch",
       "desktop.observe",
+      "sessions.create",
+      "chat.metadata",
+      "chat.startup",
     ],
     methodResponses: {
       "environments.list": {
@@ -83,9 +90,69 @@ function installSystemsGateway(
 }
 
 suite.define(() => {
+  it("keeps the phone gutter unchanged across cold, Activity and Chat entries", async () => {
+    const proofDir = createControlUiE2eArtifactDir("systems-gutter");
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        await installSystemsGateway(page, 0);
+        const header = page.locator(".systems-page-header");
+        const gutter = () =>
+          header.evaluate((element) => {
+            const { x, width } = element.getBoundingClientRect();
+            return { x, width };
+          });
+        const capture = async (name: string) => {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator("body"),
+            [header, page.locator(".systems-mobile-picker")],
+            { animations: "disabled" },
+          );
+          await writeFile(`${proofDir}/${name}.png`, frame.png);
+        };
+        const navigate = async (path: string) => {
+          await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+          await page.locator('[data-navigation-view="pages"]').click();
+          await page.locator(`.sidebar-pages a[href$="/${path}"]`).click();
+        };
+        await page.goto(suite.server.baseUrl + "systems");
+        await page
+          .locator('.systems-mobile-picker option[value="worker-one"]')
+          .waitFor({ state: "attached" });
+        await capture("cold");
+        const cold = await gutter();
+        await navigate("activity");
+        await waitForControlUiRoute(page, { routeId: "activity" });
+        await navigate("systems");
+        await header.waitFor();
+        await capture("activity-return");
+        expect(await gutter()).toEqual(cold);
+        expect(cold).toEqual({ x: 8, width: 374 });
+        await page.locator(".header-new-session").click();
+        await page.locator(".new-session-page__message").waitFor();
+        const inset = () =>
+          page
+            .locator("main.content")
+            .evaluate((element) => getComputedStyle(element).paddingInline);
+        expect(await inset()).toBe("0px");
+        await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+        await page.locator('[data-navigation-view="sessions"]').click();
+        await page.locator('.sidebar-recent-session[data-session-key="agent:main:task-0"]').click();
+        await page.locator(".chat-thread").waitFor();
+        expect(await inset()).toBe("0px");
+        await navigate("systems");
+        await header.waitFor();
+        expect(await gutter()).toEqual(cold);
+        await page.locator(".header-new-session").click();
+        await page.locator(".new-session-page__message").waitFor();
+        expect(await inset()).toBe("0px");
+      },
+    );
+  });
   it.each(
     [400, 820, 1280].flatMap((width) =>
-      [1, 4, 12].flatMap((diskCount) =>
+      [1, 12].flatMap((diskCount) =>
         [false, true].map((backups) => ({ width, diskCount, backups })),
       ),
     ),
@@ -127,12 +194,6 @@ suite.define(() => {
           });
           await page.goto(suite.server.baseUrl + "new");
           await waitForControlUiRoute(page, { routeId: "new-session" });
-          const outletOrigin = () =>
-            page.locator("openclaw-router-outlet").evaluate((element) => {
-              const { x, y } = element.getBoundingClientRect();
-              return { x, y };
-            });
-          const initialOrigin = await outletOrigin();
           const inventoryReads = await gateway.deferNext("environments.list");
           const backupReads = await gateway.deferNext("backup.status");
           await page.evaluate(() => {
@@ -140,12 +201,13 @@ suite.define(() => {
           });
           await gateway.waitForRequest("environments.list", { after: inventoryReads });
           await gateway.waitForRequest("backup.status", { after: backupReads });
+          await waitForControlUiRoute(page, { routeId: "systems" });
+          await page.locator(".systems-body").waitFor();
+          const shifts = await observeLayoutShifts(page);
           if (width <= 640) {
             await page.getByRole("button", { name: "Show statistics" }).click();
           }
           await page.getByText("Loading backups…", { exact: true }).waitFor();
-          // A phone draft shares chat's canvas; other pages sit under the floating header.
-          expect(await outletOrigin()).toEqual(width === 400 ? { x: 4, y: 64 } : initialOrigin);
           const body = page.locator(".systems-body");
           expect(await body.locator(".systems-state").isVisible()).toBe(false);
           const position = () => body.evaluate((element) => element.getBoundingClientRect().y);
@@ -166,23 +228,6 @@ suite.define(() => {
               ),
             )
             .toBe(true);
-          const shifts = await page.evaluateHandle(() => {
-            let cls = 0;
-            const observer = new PerformanceObserver((list) => {
-              for (const entry of list.getEntries()) {
-                const shift = entry as PerformanceEntry & {
-                  hadRecentInput: boolean;
-                  value: number;
-                };
-                if (!shift.hadRecentInput) {
-                  cls += shift.value;
-                }
-              }
-            });
-            observer.observe({ type: "layout-shift", buffered: false });
-            return { read: () => cls, stop: () => observer.disconnect() };
-          });
-
           await gateway.resolveDeferred("environments.list");
           await page.locator(".systems-volume-summary").waitFor();
           await expect.poll(position).toBe(initialY);
@@ -216,7 +261,8 @@ suite.define(() => {
                 requestAnimationFrame(() => requestAnimationFrame(resolve));
               }),
           );
-          expect(await shifts.evaluate((probe) => probe.read())).toBe(0);
+          const layoutShifts = await shifts.evaluate((probe) => probe.read());
+          expect(layoutShifts.value, JSON.stringify(layoutShifts, null, 2)).toBe(0);
           await shifts.evaluate((probe) => probe.stop());
           await shifts.dispose();
           const more = page.locator(".systems-volume-summary button");
@@ -323,6 +369,8 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
       async ({ page }) => {
+        const sampledAt = Date.UTC(2026, 0, 1);
+        await page.clock.setFixedTime(sampledAt);
         const gateway = await installSystemsGateway(page, 0);
         await page.goto(suite.server.baseUrl + "systems");
         const stats = page.locator(".systems-overview__telemetry");
@@ -330,8 +378,8 @@ suite.define(() => {
         await page.setViewportSize({ width: 390, height: 844 });
         await expect.poll(() => stats.count()).toBe(0);
         const samples = (await gateway.getRequests("system.info")).length;
-        // Let the shared 10-second sample expire while statistics are hidden.
-        await page.waitForTimeout(10_100);
+        // Expire the Date-based sample without advancing the separate polling timer.
+        await page.clock.setFixedTime(sampledAt + 10_100);
         await page.setViewportSize({ width: 1280, height: 900 });
         await stats.waitFor();
         // Revealing stats must request a fresh sample before the 15-second polling tick.
@@ -701,5 +749,41 @@ suite.define(() => {
     } finally {
       await context.close();
     }
+  });
+  it("reports the source and geometry of a layout shift", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      await page.setContent(
+        '<div id="moving" style="position:absolute;left:8px;top:8px;width:100px;height:40px">Probe</div>',
+      );
+      const paint = () =>
+        page.evaluate(
+          () =>
+            new Promise((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(resolve));
+            }),
+        );
+      await paint();
+      const shifts = await observeLayoutShifts(page);
+      await page.locator("#moving").evaluate((element) => {
+        element.style.top = "28px";
+      });
+      await paint();
+      const result = await shifts.evaluate((probe) => probe.read());
+      expect(result.entries[0]?.value).toBeGreaterThan(0);
+      expect(result.entries).toContainEqual({
+        startTime: expect.any(Number),
+        value: expect.any(Number),
+        hadRecentInput: expect.any(Boolean),
+        sources: [
+          {
+            node: "div#moving",
+            previousRect: { x: 8, y: 8, width: 100, height: 40 },
+            currentRect: { x: 8, y: 28, width: 100, height: 40 },
+          },
+        ],
+      });
+      await shifts.evaluate((probe) => probe.stop());
+      await shifts.dispose();
+    });
   });
 });

@@ -288,6 +288,12 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
               placement,
               intent: preparedIntent,
               assertCurrent,
+              signal,
+              markPhase: diagnostics?.mark,
+              retainCredentialCleanup,
+              onFallback: (replacement) => {
+                placement = replacement;
+              },
             })
           : undefined;
       assertCurrent();

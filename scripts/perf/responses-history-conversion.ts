@@ -21,6 +21,9 @@
  * immutability proof set. Strings are shared; message/container identities are not.
  * --builder-module <path> selects an adjacent baseline params owner whose converter
  * import points at the matching baseline converter (all other dependencies unchanged).
+ * Assistant fixtures carry response IDs so signed text exercises the real fallback-ID
+ * decision. Compare --messages 200/1000/2000 with and without --frozen to separate
+ * warm projection reuse from per-message conversion of mutable histories.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -223,6 +226,7 @@ for (let turn = 0; turn < Math.max(200, Math.ceil((messageCount ?? 0) / 2)); tur
     provider: model.provider,
     api: model.api,
     model: model.id,
+    responseId: `resp_${turn}`,
     timestamp: turn,
     stopReason: call ? "toolUse" : "stop",
     usage: {

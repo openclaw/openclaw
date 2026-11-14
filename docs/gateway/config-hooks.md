@@ -222,7 +222,9 @@ A transform-provided `sessionKey` is externally derived by default. Only trusted
 code producing a fixed key should mark `sessionKeySource: "static"`; never use
 that marker to bypass policy for a payload-derived key. Transforms execute as
 trusted Gateway code, not in the reader agent's sandbox. They are cached until
-hook configuration reload. Keep modules under the hooks transforms root, not
+hook configuration reload. Reloads reuse unchanged transform modules and their
+module-level state; edited transform source loads a new module. Relative imports
+keep Node's normal module caching behavior. Keep modules under the hooks transforms root, not
 workspace skill directories; move invalid modules there or remove an invalid
 `transformsDir` if doctor reports it.
 
@@ -357,6 +359,8 @@ When `hooks.enabled: true` and `hooks.gmail.account` is set, the Gateway starts
 are available, and renews the watch. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
 Do not start a second foreground watcher on the same listener. Setup output can
 contain tokens; see the [CLI reference](/cli/webhooks).
+
+The watcher probes the selected Gog executable. Gog v0.48.0 and supporting builds use `--token-env` and `--hook-token-env` automatically. Older Gog and inconclusive probes keep the existing connection working through legacy arguments, with one warning per watcher lifecycle; these connections remain affected by local process-argument token exposure until Gog is upgraded. Serve retries never downgrade environment transport. Startup does not upgrade packages. Interactive setup/run and explicit `openclaw doctor --repair` can upgrade eligible, unpinned Homebrew installations; custom wrappers and other installations remain operator-managed. After upgrading Gog, restart the watcher or Gateway. See [compatibility and upgrades](/cli/webhooks#webhooks-gmail-run). A started watcher is not readiness or registration proof.
 
 A successful push or hook response is transport/admission evidence, not proof of
 completed email processing or delivery. Verify the restricted reader through

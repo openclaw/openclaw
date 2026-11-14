@@ -21,6 +21,7 @@ const PROFILE_KEYS = new Set([
   "desktop",
   "idleTimeout",
   "provider",
+  "runSetupScript",
   "setup",
   "setupEnv",
   "setupSecrets",

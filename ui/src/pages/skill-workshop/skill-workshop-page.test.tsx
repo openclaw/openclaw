@@ -202,22 +202,25 @@ it.each([
 describe("without the skill-workshop plugin", () => {
   const pluginMethods = ["plugins.list", "plugins.setEnabled"];
   function pluginGateway(
-    entry: { enabled: boolean } | null,
+    initial: { enabled: boolean } | null,
     setEnabled: () => Promise<unknown> = () => createDeferredCore<unknown>().promise,
   ) {
-    return vi.fn((method: string, params?: unknown) => {
+    let entry = initial;
+    return vi.fn(async (method: string, params?: unknown) => {
       if (method === "plugins.list") {
-        return Promise.resolve({
+        return {
           plugins: entry ? [{ id: "skill-workshop", name: "Skill Workshop", ...entry }] : [],
           diagnostics: [],
           mutationAllowed: true,
-        });
+        };
       }
       if (method === "plugins.setEnabled") {
         expect(params).toEqual({ pluginId: "skill-workshop", enabled: true });
-        return setEnabled();
+        const result = await setEnabled();
+        entry = { enabled: true };
+        return result;
       }
-      return Promise.reject(new Error(`unexpected ${method}`));
+      throw new Error(`unexpected ${method}`);
     });
   }
   const workshopCalls = (request: ReturnType<typeof vi.fn>) =>
@@ -228,8 +231,15 @@ describe("without the skill-workshop plugin", () => {
     const page = await mount(request, { withoutPlugin: true, methods: pluginMethods });
 
     await waitText(page, "Skill Workshop is off");
-    const enable = await click(page, "Turn on Skill Workshop");
-    await waitForSolid(() => expect(enable.disabled).toBe(true));
+    const enable = await waitForSolid(() =>
+      getByRole<HTMLButtonElement>(page, "button", { name: "Turn on Skill Workshop" }),
+    );
+    enable.focus();
+    enable.click();
+    // Busy, but still focusable so keyboard users keep their place.
+    await waitForSolid(() => expect(enable.getAttribute("aria-disabled")).toBe("true"));
+    expect(enable.disabled).toBe(false);
+    expect(document.activeElement).toBe(enable);
     expect(enable.textContent).toBe("Turning on…");
     enable.click();
     flush();
@@ -239,15 +249,56 @@ describe("without the skill-workshop plugin", () => {
     expect(workshopCalls(request)).toEqual([]);
   });
 
-  it("keeps the button and shows why when enabling fails", async () => {
+  it("keeps the button and summarizes an enable failure with collapsed details", async () => {
     const request = pluginGateway({ enabled: false }, () =>
-      Promise.reject(new Error("plugins are disabled globally")),
+      Promise.reject(new Error('plugin "skill-workshop" could not be enabled (plugins disabled)')),
     );
     const page = await mount(request, { withoutPlugin: true, methods: pluginMethods });
 
     const enable = await click(page, "Turn on Skill Workshop");
-    await waitText(page, "plugins are disabled globally");
-    expect(enable.disabled).toBe(false);
+    await waitText(page, "Couldn’t turn on Skill Workshop. Try again.");
+    expect(enable.getAttribute("aria-disabled")).toBeNull();
+    const details = page.querySelector("details");
+    expect(details?.open).toBe(false);
+    expect(details?.textContent).toContain("could not be enabled (plugins disabled)");
+  });
+
+  it("offers a reload when the Gateway turned it on but never published it here", async () => {
+    const timers: Array<{ run: () => void; delay?: number }> = [];
+    const realSetTimeout = globalThis.setTimeout;
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, delay?: number) => {
+      if (delay === 15_000) {
+        timers.push({ run, delay });
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      }
+      return realSetTimeout(run, delay);
+    }) as typeof setTimeout);
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
+    const request = pluginGateway({ enabled: false }, () => Promise.resolve({ ok: true }));
+    const page = await mount(request, { withoutPlugin: true, methods: pluginMethods });
+
+    await click(page, "Turn on Skill Workshop");
+    await waitForSolid(() => expect(timers).toHaveLength(1));
+    expect(text(page, ".sw-plugin-off button")).toBe("Turning on…");
+    timers.shift()?.run();
+    await waitText(page, "Skill Workshop is on. Reload to open it.");
+    expect(button(page, "Reload")).not.toBeNull();
+    expect(button(page, "Turn on Skill Workshop")).toBeNull();
+  });
+
+  it("summarizes a failed plugin check and retries it", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("catalog offline"))
+      .mockResolvedValue({ plugins: [], diagnostics: [], mutationAllowed: true });
+    const page = await mount(request, { withoutPlugin: true, methods: pluginMethods });
+
+    await waitText(page, "Couldn’t check whether Skill Workshop is on.");
+    expect(page.querySelector("details")?.textContent).toContain("catalog offline");
+    await click(page, "Retry");
+    await waitText(page, "Skill Workshop is not part of this OpenClaw install.");
   });
 
   it("tells operators without admin access who can turn it on", async () => {
@@ -260,6 +311,25 @@ describe("without the skill-workshop plugin", () => {
 
     await waitText(page, "An admin can turn it on from Plugins.");
     expect(button(page, "Turn on Skill Workshop")).toBeNull();
+    // Non-admins are not told to turn it on themselves.
+    expect(page.textContent).not.toContain("Turn it on to let");
+  });
+
+  it("does not offer the button when plugins are turned off on the Gateway", async () => {
+    const request = pluginGateway({ enabled: false });
+    const runtimeConfig = createRuntimeConfigStub({
+      sourceConfig: { plugins: { enabled: false } },
+    });
+    const page = await mount(request, {
+      withoutPlugin: true,
+      methods: pluginMethods,
+      runtimeConfig,
+    });
+
+    await waitText(page, "Plugins are turned off on this Gateway.");
+    expect(button(page, "Turn on Skill Workshop")).toBeNull();
+    expect(runtimeConfig.ensureLoaded).toHaveBeenCalled();
+    expect(request.mock.calls.some(([method]) => method === "plugins.setEnabled")).toBe(false);
   });
 
   it.each([

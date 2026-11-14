@@ -3,6 +3,7 @@ import {
   type TemplateDraftReviewChoices,
   type TemplatesDraftsPublishResult,
   type TemplatesDraftsReviewResult,
+  type TemplatesDraftsReviewParams,
   ErrorCodes,
   errorShape,
   validateTemplatesDraftsCreateParams,
@@ -19,6 +20,10 @@ import {
   resolveClawHubBaseUrl,
   type ClawHubFetchOptions,
 } from "../../infra/clawhub-client.js";
+import {
+  fetchClawHubPackageVersion,
+  fetchClawHubPackageSecurity,
+} from "../../infra/clawhub-packages.js";
 import { templateDraftPrompt } from "../../templates/draft-prompt.js";
 import {
   prepareTemplateDraft,
@@ -88,15 +93,141 @@ function reviewToken(
   );
 }
 
+function publicationReceipt(
+  snapshot: { name: string; version: string },
+  publisher: string,
+  baseUrl: string,
+  publicationStatus: "pending" | "published",
+  attemptId?: string,
+): TemplatesDraftsPublishResult {
+  const slug = snapshot.name.split("/").at(-1) ?? snapshot.name;
+  return {
+    name: snapshot.name,
+    version: snapshot.version,
+    url: `${baseUrl}/${encodeURIComponent(publisher)}/templates/${encodeURIComponent(slug)}`,
+    publicationStatus,
+    ...(attemptId ? { attemptId } : {}),
+  };
+}
+
+async function observeTemplatePublication(
+  snapshot: { name: string; version: string; integrity: string },
+  publisher: string,
+  connection: ClawHubFetchOptions & { baseUrl: string },
+  attemptId?: string,
+): Promise<NonNullable<TemplatesDraftsReviewResult["publicationState"]>> {
+  const digest = snapshot.integrity.replace(/^sha256:/, "");
+  const unconfirmed = { status: "unconfirmed" } as const;
+  // Public presence cannot recover the original attempt binding after a lost receipt.
+  if (!attemptId) {
+    return unconfirmed;
+  }
+  try {
+    const attempt = await fetchClawHubJson<{
+      attemptId?: string;
+      name?: string;
+      version?: string;
+      artifactSha256?: string;
+      publicationStatus?: string;
+      status?: string;
+    }>({ ...connection, path: `/api/v1/publish/attempts/${encodeURIComponent(attemptId)}` });
+    if (
+      attempt.attemptId !== attemptId ||
+      attempt.name !== snapshot.name ||
+      attempt.version !== snapshot.version ||
+      attempt.artifactSha256 !== digest
+    ) {
+      return unconfirmed;
+    }
+    if (
+      attempt.publicationStatus === "pending" &&
+      ["pending_checks", "ready_to_finalize", "finalizing"].includes(attempt.status ?? "")
+    ) {
+      return {
+        status: "pending",
+        publication: publicationReceipt(
+          snapshot,
+          publisher,
+          connection.baseUrl,
+          "pending",
+          attemptId,
+        ),
+      };
+    }
+    if (
+      (attempt.publicationStatus === "blocked" ||
+        attempt.publicationStatus === "failed" ||
+        attempt.publicationStatus === "expired") &&
+      attempt.status === attempt.publicationStatus
+    ) {
+      return { status: "failed", reason: attempt.publicationStatus };
+    }
+    if (attempt.publicationStatus !== "published" || attempt.status !== "finalized") {
+      return unconfirmed;
+    }
+    const [release, security] = await Promise.all([
+      fetchClawHubPackageVersion({ ...connection, name: snapshot.name, version: snapshot.version }),
+      fetchClawHubPackageSecurity({
+        ...connection,
+        name: snapshot.name,
+        version: snapshot.version,
+      }),
+    ]);
+    // Exact release reads exclude pending publications. A clean scan alone is not publication proof.
+    if (
+      release.package?.name !== snapshot.name ||
+      release.package.family !== "template" ||
+      release.version?.version !== snapshot.version ||
+      release.version.artifact?.sha256 !== digest ||
+      security.package?.name !== snapshot.name ||
+      security.package.family !== "template" ||
+      security.release?.version !== snapshot.version ||
+      security.release.artifactSha256 !== digest ||
+      security.trust.pending ||
+      security.trust.stale ||
+      security.trust.blockedFromDownload
+    ) {
+      return unconfirmed;
+    }
+    return {
+      status: "published",
+      publication: publicationReceipt(
+        snapshot,
+        publisher,
+        connection.baseUrl,
+        "published",
+        attemptId,
+      ),
+    };
+  } catch {
+    // A missing/invisible version or a read failure never proves that a write did not happen.
+    return unconfirmed;
+  }
+}
+
 async function reviewTemplateDraft(
-  target: DraftTarget,
+  target: DraftTarget &
+    Pick<TemplatesDraftsReviewParams, "checkPublication" | "reviewToken" | "attemptId">,
   options: ClawHubFetchOptions = {},
 ): Promise<TemplatesDraftsReviewResult> {
   const { publisher, connection } = await personalPublisher(options);
   await using snapshot = await prepareTemplateDraft({ ...target, publisher });
+  const token = reviewToken(target, snapshot, publisher, connection.baseUrl);
+  if (
+    (target.reviewToken && target.reviewToken !== token) ||
+    (target.attemptId && (!target.checkPublication || !target.reviewToken))
+  ) {
+    throw new TemplateProjectError(
+      "draft_review_required",
+      "The draft or publisher changed. Review the current files before publishing.",
+    );
+  }
+  const publicationState = target.checkPublication
+    ? await observeTemplatePublication(snapshot, publisher, connection, target.attemptId)
+    : undefined;
   return {
     revision: snapshot.revision,
-    reviewToken: reviewToken(target, snapshot, publisher, connection.baseUrl),
+    reviewToken: token,
     publisher,
     name: snapshot.name,
     displayName: snapshot.displayName,
@@ -105,12 +236,14 @@ async function reviewTemplateDraft(
     items: snapshot.items,
     files: snapshot.files,
     scope: snapshot.scope,
+    ...(publicationState ? { publicationState } : {}),
   };
 }
 
 async function publishTemplateDraft(
   target: DraftTarget & { reviewToken: string },
   assertCurrent: () => void,
+  markPublicationStarted: () => void,
   options: ClawHubFetchOptions = {},
 ): Promise<TemplatesDraftsPublishResult> {
   assertCurrent();
@@ -149,8 +282,10 @@ async function publishTemplateDraft(
     ok?: boolean;
     publicationStatus?: "pending" | "published";
     artifactSha256?: string;
+    attemptId?: string;
   };
   try {
+    markPublicationStarted();
     result = await fetchClawHubJson({
       ...connection,
       path: "/api/v1/packages",
@@ -163,20 +298,28 @@ async function publishTemplateDraft(
       `Publication of ${snapshot.name}@${snapshot.version} was not confirmed. Check that version on ClawHub before trying again.`,
     );
   }
-  if (result.ok !== true || (result.artifactSha256 && result.artifactSha256 !== digest)) {
+  if (
+    !result ||
+    typeof result !== "object" ||
+    result.ok !== true ||
+    (result.artifactSha256 && result.artifactSha256 !== digest)
+  ) {
     throw new TemplateProjectError(
       "publication_unconfirmed",
       `ClawHub did not confirm the reviewed artifact for ${snapshot.name}@${snapshot.version}. Check that version before trying again.`,
     );
   }
-  const slug = snapshot.name.split("/").at(-1) ?? snapshot.name;
-  return {
-    name: snapshot.name,
-    version: snapshot.version,
-    url: `${connection.baseUrl}/${encodeURIComponent(publisher)}/templates/${encodeURIComponent(slug)}`,
-    // Missing scan status is not evidence of public discoverability.
-    publicationStatus: result.publicationStatus === "published" ? "published" : "pending",
-  };
+  return publicationReceipt(
+    snapshot,
+    publisher,
+    connection.baseUrl,
+    result.publicationStatus === "published" && result.artifactSha256 === digest
+      ? "published"
+      : "pending",
+    typeof result.attemptId === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(result.attemptId)
+      ? result.attemptId
+      : undefined,
+  );
 }
 
 function draftAuthority(
@@ -226,19 +369,36 @@ function draftAuthority(
   return { workspaceDir: initialWorkspace, assertCurrent };
 }
 
-function draftError(error: unknown) {
+function draftError(error: unknown, publishing = false, publicationStarted = false) {
+  const known =
+    error instanceof TemplateProjectError || error instanceof TemplatesLabsDisabledError;
+  const code = error instanceof TemplateProjectError ? error.code : "templates_disabled";
+  const unconfirmed = publicationStarted || code === "publication_unconfirmed";
+  const publication =
+    publishing && known
+      ? {
+          retryable: !unconfirmed,
+          details: {
+            templatePublication: {
+              effect: unconfirmed ? "unconfirmed" : "none",
+              code,
+            },
+          },
+        }
+      : {};
   if (
     error instanceof TemplatesLabsDisabledError ||
     (error instanceof TemplateProjectError &&
       ["human_required", "forbidden", "source_forbidden"].includes(error.code))
   ) {
-    return errorShape(ErrorCodes.FORBIDDEN, error.message);
+    return errorShape(ErrorCodes.FORBIDDEN, error.message, publication);
   }
   return errorShape(
     ErrorCodes.INVALID_REQUEST,
     error instanceof TemplateProjectError
       ? error.message
       : "The Template draft could not be processed. Check its contents and try again.",
+    publication,
   );
 }
 
@@ -335,6 +495,9 @@ export const templatesDraftsHandlers: GatewayRequestHandlers = {
         workspaceDir: authority.workspaceDir,
         draftId: params.draftId,
         choices: params.choices,
+        checkPublication: params.checkPublication,
+        reviewToken: params.reviewToken,
+        attemptId: params.attemptId,
       });
       authority.assertCurrent();
       options.respond(true, review);
@@ -346,18 +509,27 @@ export const templatesDraftsHandlers: GatewayRequestHandlers = {
     validateTemplatesDraftsPublishParams,
     async (options) => {
       const { params } = options;
-      const authority = draftAuthority(options, params.agentId);
-      const result = await publishTemplateDraft(
-        {
-          workspaceDir: authority.workspaceDir,
-          draftId: params.draftId,
-          reviewToken: params.reviewToken,
-          choices: params.choices,
-        },
-        authority.assertCurrent,
-      );
-      options.respond(true, result);
+      let publicationStarted = false;
+      try {
+        const authority = draftAuthority(options, params.agentId);
+        const result = await publishTemplateDraft(
+          {
+            workspaceDir: authority.workspaceDir,
+            draftId: params.draftId,
+            reviewToken: params.reviewToken,
+            choices: params.choices,
+          },
+          authority.assertCurrent,
+          () => {
+            publicationStarted = true;
+          },
+        );
+        authority.assertCurrent();
+        options.respond(true, result);
+      } catch (error) {
+        // Once POST starts, even a known authority/cleanup failure cannot prove no write.
+        options.respond(false, undefined, draftError(error, true, publicationStarted));
+      }
     },
-    draftError,
   ),
 };

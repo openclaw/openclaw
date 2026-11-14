@@ -21,6 +21,7 @@ import {
 } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
@@ -53,8 +54,8 @@ import { renderRunInspector as RunInspector } from "./run-inspector-view.tsx";
 import { ACTIVITY_SUMMARY_ENSURE_METHOD } from "./session-activity-owner.ts";
 import { renderSessionActivityView as SessionActivityView } from "./session-activity-view.tsx";
 import { ACTIVITY_PHONE_QUERY } from "./session-activity.ts";
-import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
 import "../../styles/activity.css";
+import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
 
 registerEnglishCatalog(registerActivityEnglish);
 
@@ -222,8 +223,7 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
     function StatusFilter(props: { status: ActivityStatus }) {
       return (
         <label class="activity-status-filter">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={filters.statusFilters[props.status]}
             onChange={(event) =>
               update({

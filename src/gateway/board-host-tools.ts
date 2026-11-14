@@ -1,4 +1,5 @@
 import {
+  type BoardWidgetDataQuery,
   ErrorCodes,
   errorShape,
   type ErrorShape,
@@ -48,6 +49,7 @@ export type BoardRequestAuthority = {
 
 export type BoardCapabilityAuthority = BoardRequestAuthority & {
   boardSession: Required<BoardSessionTarget>;
+  query?: BoardWidgetDataQuery;
   /** Validate the stored grant and start work together; assertActive only checks request liveness. */
   useCurrent: <T>(start: () => T) => Promise<Awaited<T>>;
 };
@@ -78,7 +80,7 @@ export function captureBoardCapabilityAuthority(
   store: BoardStore,
   ticket: string,
   invocation: GatewayHandlerInvocation,
-  capability: string,
+  capability: string | BoardWidgetDataQuery,
 ): BoardCapabilityAuthority {
   const authority = captureBoardRequestAuthority(invocation);
   const claims = verifyBoardViewTicket(ticket);
@@ -102,6 +104,7 @@ export function captureBoardCapabilityAuthority(
   return {
     ...authority,
     boardSession,
+    ...(typeof capability === "string" ? {} : { query: capability }),
     useCurrent: async <T>(start: () => T): Promise<Awaited<T>> =>
       await withAuthorizedBoardWidgetView(
         store,
@@ -117,12 +120,23 @@ export function captureBoardCapabilityAuthority(
               "board widget session identity changed; reload the dashboard",
             );
           }
-          if (
-            !boardWidgetHasGrantedTool(view.document.declared, view.document.grantState, capability)
-          ) {
+          const granted =
+            typeof capability === "string"
+              ? boardWidgetHasGrantedTool(
+                  view.document.declared,
+                  view.document.grantState,
+                  capability,
+                )
+              : view.document.grantState === "granted" &&
+                view.document.declared?.queries?.some(
+                  (query) => JSON.stringify(query) === JSON.stringify(capability),
+                );
+          if (!granted) {
             throw new BoardValidationError(
               "invalid_operation",
-              `board widget tool is not granted: ${capability}`,
+              typeof capability === "string"
+                ? `board widget tool is not granted: ${capability}`
+                : `board widget query is not granted: ${capability.name}`,
             );
           }
           return start();

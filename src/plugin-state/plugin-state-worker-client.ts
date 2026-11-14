@@ -652,3 +652,34 @@ export const listPluginStateInKeyRangeInWorker = createOperation(
   () => [],
 );
 export const movePluginStateEntriesInWorker = createOperation("pluginState.moveEntries");
+
+/**
+ * Confirm committed truth for an indeterminate publication. This bypasses resident views and
+ * queues one bounded committed read on the canonical worker, after the uncertain operation's
+ * own worker work or on a replacement worker after loss. A terminal database failure, missing
+ * database, or worker error rejects so the caller stays denied.
+ */
+export async function confirmPluginStateCommittedInWorker(
+  context: OpenClawStateWorkerContext,
+  scope: { pluginId: string; namespace: string },
+  signal?: AbortSignal,
+): Promise<void> {
+  const { runOpenClawStateWorkerOperation } =
+    await import("../state/openclaw-state-worker-store.js");
+  const result = await runOpenClawStateWorkerOperation(
+    context,
+    (worker) =>
+      worker.execute({
+        type: "pluginState.loadNamespace",
+        // The read only needs to commit-order behind prior work; rows are not retained.
+        input: { pluginId: scope.pluginId, namespace: scope.namespace, maxBytes: 0 },
+      }),
+    { signal, existingOnly: true },
+  );
+  if (result === undefined) {
+    throw new Error("Plugin state committed truth is unavailable");
+  }
+  if (!result.ok) {
+    throw restorePluginStateWorkerFailure(result.error);
+  }
+}

@@ -12,6 +12,7 @@ import { chatMessage } from "./chat-flow.test-support.ts";
 import { board } from "./chat-layout-fixtures.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { captureTopVisibleVirtualRow } from "./virtual-row-anchor.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI dashboard side-panel selection",
@@ -120,7 +121,7 @@ suite.define(() => {
         await page.keyboard.press("ArrowLeft");
         await waitForLayoutSettled(page, ".sidebar-region__primary");
         const width = (await conversation.boundingBox())!.width;
-        const scrollTop = await thread.evaluate((element) => element.scrollTop);
+        const anchor = await captureTopVisibleVirtualRow(thread);
         const capture = async (state: string) => {
           if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
             return;
@@ -163,7 +164,10 @@ suite.define(() => {
         ).toBe(true);
         await waitForLayoutSettled(page, ".sidebar-region__primary");
         expect((await conversation.boundingBox())!.width).toBeCloseTo(width, 0);
-        expect(await thread.evaluate((element) => element.scrollTop)).toBe(scrollTop);
+        expect(await captureTopVisibleVirtualRow(thread)).toMatchObject({
+          key: anchor.key,
+          viewportTop: anchor.viewportTop,
+        });
         await selectChatLayoutAction(page, "Focus");
         await conversation.waitFor({ state: "hidden" });
         await panels.click();

@@ -27,7 +27,6 @@ import {
 } from "../../infra/gateway-processes.js";
 import { captureStalledGatewayStartup } from "../../infra/gateway-startup-owner.js";
 import {
-  assertGatewayServiceMutationAllowed,
   formatExternalSupervisorActionRequired,
   isGatewayExternallySupervised,
   resolveGatewayServiceMutationError,
@@ -62,6 +61,7 @@ import {
   runServiceUninstall,
 } from "./lifecycle-core.js";
 import {
+  assertNativeRestartFlags,
   runSafeGatewayRestart,
   resolveGatewayRestartIntentOptions,
 } from "./lifecycle-safe-restart.js";
@@ -79,7 +79,7 @@ import {
   waitForGatewayHealthyListener,
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
-import { renderGatewayServiceStartHints } from "./shared.js";
+import { assertGatewayServiceActionAllowed, renderGatewayServiceStartHints } from "./shared.js";
 import { repairLoadedGatewayServiceForStart } from "./start-repair.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
@@ -295,7 +295,7 @@ function renderGatewayServiceUninstallHints(): string[] {
 
 /** Uninstall the managed Gateway service after stopping it. */
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
-  assertGatewayServiceMutationAllowed("uninstall the gateway service");
+  assertGatewayServiceActionAllowed("uninstall", "uninstall the gateway service");
   return await runServiceUninstall({
     serviceNoun: "Gateway",
     service: resolveGatewayService(),
@@ -308,7 +308,7 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
 
 /** Start the managed Gateway service, repairing stale service definitions when possible. */
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
-  assertGatewayServiceMutationAllowed("start the gateway");
+  assertGatewayServiceActionAllowed("start", "start the gateway");
   const service = resolveGatewayService();
   const expectedPort = (await resolveGatewayConfigPorts()).explicit;
   return await runServiceStart({
@@ -394,8 +394,17 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
         );
         return;
       }
+      // Health can fail well before the deadline; only a spent deadline is a timeout.
+      const timedOut = health.healthy || health.waitOutcome === "timeout";
       fail(
-        `Gateway start timed out after ${Math.round(deadlineMs / 1000)}s waiting for /healthz and /readyz.`,
+        timedOut
+          ? `Gateway start timed out after ${Math.round(deadlineMs / 1000)}s waiting for /healthz and /readyz.`
+          : formatGatewayRestartFailure({
+              health,
+              port,
+              defaultTimeoutSeconds: Math.round(deadlineMs / 1000),
+              action: "start",
+            }).failMessage,
         [formatCliCommand("openclaw gateway status --deep"), formatCliCommand("openclaw doctor")],
       );
     },
@@ -412,7 +421,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
     return;
   }
   assertGatewayServiceUpdateCurrent();
-  assertGatewayServiceMutationAllowed("stop the gateway");
+  assertGatewayServiceActionAllowed("stop", "stop the gateway");
   const service = resolveGatewayService();
   return await runServiceStop({
     serviceNoun: "Gateway",
@@ -452,14 +461,9 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
   let preserveDefinition = Boolean(opts.preserveDefinition);
   if (preserveDefinition) {
-    assertGatewayServiceMutationAllowed("restart the gateway");
-    if (opts.safe) {
-      throw new Error("--preserve-definition requires a native restart without --safe");
-    }
+    assertGatewayServiceActionAllowed("restart", "restart the gateway");
   }
-  if (opts.skipDeferral && !opts.safe) {
-    throw new Error("--skip-deferral requires --safe");
-  }
+  assertNativeRestartFlags(opts);
   if (isGatewayExternallySupervised()) {
     assertGatewayServiceFallbackAllowed("external-supervisor restart");
     return await runExternalSupervisorRestart(opts);
@@ -506,7 +510,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     },
     readDriftContext: () => ({ config: configPorts.config ?? {}, command: restartContext.command }),
     expectedPort: configuredPort,
-    beforeServiceMutation: () => assertGatewayServiceMutationAllowed("restart the gateway"),
+    beforeServiceMutation: () =>
+      assertGatewayServiceActionAllowed("restart", "restart the gateway"),
     restartOwnedProcess: preserveDefinition
       ? undefined
       : async () => {

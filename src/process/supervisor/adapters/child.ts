@@ -114,6 +114,7 @@ type ChildAdapterInput = ProcessAdapterConstruction & {
   windowsVerbatimArguments?: boolean;
   input?: string;
   prepareInput?: () => void | Promise<void>;
+  prepareTargetSpawn?: () => void | Promise<void>;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
   stderrDestination?: Writable;
@@ -181,6 +182,7 @@ export async function createChildAdapter(
       executionScopeKey: params.executionScopeKey,
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
+      prepareTargetSpawn: params.prepareTargetSpawn,
       initiateSpawn: params.initiateSpawn,
       command: preparedSpawn.command,
       args: preparedSpawn.args,
@@ -232,8 +234,11 @@ export async function createChildAdapter(
   const launchGate = createDeferredCore();
   let windowsFallback: WindowsJobExtinction = { status: "uncertain", reason: "job-unavailable" };
   let tryWindowsJob = true;
-  const spawnChild = () =>
-    spawnAndWait({
+  const spawnChild = async () => {
+    if (params.prepareTargetSpawn) {
+      await params.prepareTargetSpawn();
+    }
+    return spawnAndWait({
       ...(process.platform === "win32"
         ? {
             spawnImpl: (command, args, spawnOptions, initiateSpawn) => {
@@ -247,6 +252,9 @@ export async function createChildAdapter(
                 { ...spawnOptions, signal: params.abortSignal },
                 async (launch) => {
                   await launchGate.promise;
+                  if (params.prepareTargetSpawn) {
+                    await params.prepareTargetSpawn();
+                  }
                   assertCurrent();
                   params.beforeSpawn?.();
                   if (initiateSpawn) {
@@ -285,6 +293,7 @@ export async function createChildAdapter(
       executionScopeKey: params.executionScopeKey,
       options,
     });
+  };
 
   let spawned: Awaited<ReturnType<typeof spawnChild>>;
   try {

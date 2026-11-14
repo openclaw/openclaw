@@ -254,7 +254,7 @@ describe("runCommandWithTimeout", () => {
     ],
     [
       "does not treat combined overflow as selected-stream overflow",
-      "process.stderr.write('abcdefgh'); setImmediate(() => process.stdout.write('x'))",
+      "process.stdout.write('abcdefghx')",
       {
         maxCombinedOutputBytes: 8,
         maxOutputBytes: 16,
@@ -263,8 +263,8 @@ describe("runCommandWithTimeout", () => {
       },
       {
         termination: "exit",
-        stdout: "",
-        stderr: "abcdefgh",
+        stdout: "abcdefgh",
+        stderr: "",
         outputLimitExceeded: undefined,
       },
     ],

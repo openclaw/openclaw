@@ -346,12 +346,6 @@ export function buildPluginAgentTurnPrepareContext(params: {
   const prepend: string[] = [];
   const append: string[] = [];
   params.queuedInjections.forEach((entry) => {
-    if (
-      (entry.placement !== "prepend_context" && entry.placement !== "append_context") ||
-      typeof entry.text !== "string"
-    ) {
-      return;
-    }
     const text = entry.text.trim();
     if (text) {
       (entry.placement === "prepend_context" ? prepend : append).push(text);

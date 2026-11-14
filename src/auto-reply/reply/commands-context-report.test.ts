@@ -281,10 +281,12 @@ describe("buildContextReply", () => {
   });
 
   it("reports native Codex project docs as unverified without OpenClaw limit advice", async () => {
-    const result = await buildContextReply(
-      makeParams("/context detail", false, { nativeUnverified: true }),
-    );
+    const params = makeParams("/context detail", false, { nativeUnverified: true });
+    // Codex base instructions taken from configuration rather than the loaded thread.
+    params.sessionEntry!.systemPromptReport!.systemPrompt.estimatedChars = 400;
+    const result = await buildContextReply(params);
 
+    expect(result.text).toContain("(Project Context 500 chars (~125 tok); estimated 400 chars");
     expect(result.text).toContain(
       "- AGENTS.md: NATIVE/UNVERIFIED | raw(local) 10,000 chars (~2,500 tok) | injected unknown",
     );

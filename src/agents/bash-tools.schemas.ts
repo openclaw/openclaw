@@ -55,7 +55,7 @@ export const execSchema = Type.Object({
   durable: Type.Optional(
     Type.Boolean({
       description:
-        "Survive Gateway restart using Linux systemd user services; requires background or yieldMs. No interactive input or proxy-backed secrets.",
+        "Survive Gateway restart using Linux systemd user services or macOS launchd jobs; requires background or yieldMs. No interactive input or proxy-backed secrets.",
     }),
   ),
   timeoutSeconds: Type.Optional(

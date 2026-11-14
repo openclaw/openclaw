@@ -160,7 +160,7 @@ async function prepare(native = createNativeThread(), usesSupervisionConnection 
     prompt: {
       turnState,
       contextImageGroups: [],
-      buildRenderedCodexDeveloperInstructions: () => "developer instructions",
+      buildRenderedCodexInstructions: () => "developer instructions",
       refreshWorkspaceReferences: (include: boolean) => {
         turnState.codexTurnPromptText = include ? "workspace reference\nuser input" : "user input";
       },

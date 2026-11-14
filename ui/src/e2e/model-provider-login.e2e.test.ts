@@ -39,6 +39,125 @@ async function captureProviderProof(fileName: string, content: Locator): Promise
 }
 
 suite.define(() => {
+  it("anchors text sign-in actions while retaining the stable dialog height", async () => {
+    await suite.withPage(
+      { viewport: { width: 1400, height: 900 }, reducedMotion: "reduce" },
+      async ({ page }) => {
+        const step = {
+          id: "code",
+          type: "text",
+          executor: "client",
+          message: "Enter the verification code.",
+          placeholder: "Verification code",
+        };
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "models.authLogin", "wizard.next"],
+          methodResponses: {
+            "models.authStatus": {
+              ts: 1,
+              providers: [],
+              providerCapabilities: [
+                {
+                  provider: "example",
+                  apiKeySupported: false,
+                  quickApiKeySetup: false,
+                  loginOptions: [
+                    {
+                      id: "example-code",
+                      brandId: "example",
+                      label: "Example code sign-in",
+                      kind: "oauth",
+                      featured: true,
+                    },
+                  ],
+                },
+              ],
+            },
+            "models.authLogin": { done: false, status: "running" },
+            "wizard.next": {
+              sequence: [
+                { done: false, status: "running", step },
+                {
+                  done: false,
+                  status: "running",
+                  error: "Try the code again.",
+                  step: { ...step, message: "Verification instructions. ".repeat(100) },
+                },
+                { done: true, status: "done" },
+              ],
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "settings/model-providers?connect=1");
+        await page.locator('[data-models-login-provider="example"]').click();
+        await page.getByRole("button", { name: "Example code sign-in", exact: true }).click();
+        const wizard = page.locator(".model-setup-wizard");
+        const input = wizard.getByPlaceholder("Verification code");
+        const submit = wizard.getByRole("button", { name: "Submit", exact: true });
+        await input.waitFor();
+        for (const viewport of [
+          { width: 1400, height: 900 },
+          { width: 390, height: 844 },
+        ]) {
+          await page.setViewportSize(viewport);
+          await expect
+            .poll(() =>
+              wizard.evaluate((panel) => {
+                const box = panel.getBoundingClientRect();
+                const form = panel.querySelector("form")!;
+                const label = form.querySelector("label")!;
+                const textStart = document.createRange();
+                textStart.setStart(label.firstChild!, 0);
+                textStart.setEnd(label.firstChild!, 1);
+                const inputBounds = form.querySelector("input")!.getBoundingClientRect();
+                const action = form
+                  .querySelector<HTMLButtonElement>('button[type="submit"]')!
+                  .getBoundingClientRect();
+                return {
+                  height: Math.round(box.height),
+                  labelOffset: Math.round(
+                    textStart.getBoundingClientRect().left - inputBounds.left,
+                  ),
+                  bottom: Math.round(box.bottom - action.bottom),
+                  trailing: Math.round(box.right - action.right),
+                };
+              }),
+            )
+            .toEqual({ height: 420, labelOffset: 0, bottom: 20, trailing: 20 });
+        }
+        await input.fill("first-code");
+        await submit.click();
+        await wizard.getByText("Try the code again.", { exact: true }).waitFor();
+        await page.setViewportSize({ width: 390, height: 360 });
+        await input.scrollIntoViewIfNeeded();
+        await submit.scrollIntoViewIfNeeded();
+        const point = await submit.evaluate((button) => {
+          const box = button.getBoundingClientRect();
+          return (
+            document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2) === button
+          );
+        });
+        expect(point).toBe(true);
+        await input.fill("replacement-code");
+        await gateway.setMethodResponse("models.authStatus", {
+          ts: 2,
+          providers: [
+            {
+              provider: "example",
+              status: "ok",
+              profiles: [{ profileId: "example:verified", type: "oauth", status: "ok" }],
+            },
+          ],
+        });
+        await submit.click();
+        await page.getByRole("status").filter({ hasText: "Provider credentials saved." }).waitFor();
+        expect((await gateway.getRequests("wizard.next")).at(-1)?.params).toMatchObject({
+          answer: { value: "replacement-code" },
+        });
+      },
+    );
+  });
+
   it("loads provider styles and hands first-run API keys to the selected setup method", async () => {
     await suite.withPage(
       {
@@ -260,7 +379,7 @@ suite.define(() => {
           await captureProviderProof(`provider-settings-${origin}.png`, card);
           await page.locator("[data-models-connect]").click();
           const dialog = page.locator("openclaw-modal-dialog");
-          await dialog.getByRole("heading", { name: "Connect a provider", exact: true }).waitFor();
+          await dialog.getByRole("heading", { name: "Add an account", exact: true }).waitFor();
           await dialog.locator('[data-models-login-provider="openai"]').waitFor();
           expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
         },
@@ -321,7 +440,7 @@ suite.define(() => {
               .first()
               .textContent()
           )?.trim(),
-        ).toBe("Save credentials for this agent. Choose the active model separately.");
+        ).toBe("Add an account for this agent. Choose the model separately.");
         await page.getByRole("button", { name: "Example browser sign-in", exact: true }).click();
         const login = await gateway.waitForRequest("models.authLogin");
         const loginParams = login.params;
@@ -667,7 +786,7 @@ suite.define(() => {
         expect(await profiles.first().textContent()).toContain("Codex CLI");
         expect(await profiles.last().textContent()).toContain("alex@example.invalid");
         expect(await profiles.last().textContent()).toContain("Access token expires in 1h");
-        expect(await profiles.last().textContent()).toContain("Credentials configured");
+        expect(await profiles.last().textContent()).toContain("Account added");
         expect(await profiles.last().textContent()).toContain(
           "Access-token expiry alone does not mean you need to sign in again.",
         );

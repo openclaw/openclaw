@@ -37,6 +37,8 @@ export type WebSearchProviderToolExecutionContext = {
   signal?: AbortSignal;
   /** Synchronous caller fence; non-HTTP transports must invoke it before each side effect. */
   assertCurrent?: () => void;
+  /** Host-selected model/profile; model-backed providers preserve matching provider selections. */
+  modelSelection?: { provider: string; model: string; authProfileId?: string };
 };
 
 type WebFetchProviderContext = {

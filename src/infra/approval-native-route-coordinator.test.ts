@@ -250,6 +250,32 @@ describe("createApprovalNativeRouteReporter", () => {
     },
   );
 
+  it("suppresses the DM fallback notice when delivery matches a private topic origin", async () => {
+    const reporter = slackReporter({
+      channel: "telegram",
+      channelLabel: "Telegram",
+      accountId: "default",
+    });
+    const request = createRequest("private-dm-topic", {
+      turnSourceChannel: "telegram",
+      turnSourceTo: "700000001",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: 42,
+    });
+    await reporter.selectRequest(selection(request));
+    await reporter.reportDelivery({
+      ...selection(request),
+      deliveryPlan: {
+        targets: [approverDm("700000001")],
+        originTarget: { to: "700000001", threadId: 42 },
+        notifyOriginWhenDmOnly: true,
+      },
+      deliveredTargets: [{ ...approverDm("700000001"), target: { to: "700000001", threadId: 42 } }],
+    });
+
+    expect(requestGateway).not.toHaveBeenCalled();
+  });
+
   it("does not send a route notice without delivered destinations", async () => {
     const reporter = createApprovalNativeRouteReporter();
     const request = originRequest("no-destinations", "telegram");

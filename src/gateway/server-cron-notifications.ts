@@ -9,7 +9,7 @@ import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-ha
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { CronAgentSelectionRequiredError } from "../cron/agent-id.js";
+import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { commitCronConversationResult } from "../cron/conversation-result.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
@@ -450,12 +450,10 @@ async function sendGatewayCronFailureAlertUnderAdmission(
     mayHaveReachedRecipient ||= reachedRecipient;
   };
   try {
-    const requestedAgentId =
-      normalizeOptionalString(params.job.agentId) ??
-      normalizeOptionalString(params.routing.defaultAgentId);
-    if (!requestedAgentId) {
-      throw new CronAgentSelectionRequiredError();
-    }
+    const requestedAgentId = resolveCronJobEffectiveAgentId(
+      params.job,
+      params.routing.defaultAgentId,
+    );
     const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(requestedAgentId);
     if (params.mode === "webhook") {
       if (!params.to) {

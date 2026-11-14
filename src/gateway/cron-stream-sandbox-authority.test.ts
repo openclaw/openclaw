@@ -3,7 +3,10 @@ import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-contex
 import type { SandboxBackendHandle } from "../agents/sandbox/backend-handle.types.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { bindSandboxPersistentExecCapability } from "../agents/sandbox/persistent-exec.types.js";
-import { bindStreamSandboxContext } from "../agents/sandbox/stream-context.js";
+import {
+  bindStreamSandboxContext,
+  captureCronStreamSandboxTarget,
+} from "../agents/sandbox/stream-context.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
 import {
   loadTranscriptEvents,
@@ -12,6 +15,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
+import { parseCronStreamSandboxTarget } from "../cron/stream-sandbox-target.js";
 import { makeCronStreamSandboxTarget } from "../cron/stream-sandbox.test-support.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -28,6 +32,10 @@ import {
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareCronStreamSandboxAuthority } from "./cron-stream-sandbox-authority.js";
+import {
+  setOpenClawIdTunnelPrincipalLookup,
+  type OpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 
@@ -560,6 +568,75 @@ it.each(["grant revocation", "target replacement"] as const)(
       expect(sandbox?.[Symbol.dispose]).toHaveBeenCalledOnce();
       expect(authority?.signal?.aborted).toBe(true);
       expect(authority?.assertCurrent).toThrow();
+    });
+  },
+);
+
+it.each(["member", "owner"] as const)(
+  "restores a serialized OCID %s sandbox stream with its original peer dependency",
+  async (kind) => {
+    await withAuthorityFixture(async (fixture) => {
+      let principal: OpenClawIdTunnelPrincipal | undefined = {
+        ...(kind === "member"
+          ? { kind, accountId: "stream-member", role: "operator" as const }
+          : { kind }),
+        peerKey: `iroh:${"cd".repeat(32)}`,
+        authority: {
+          clawId: "stream-claw",
+          rootPub: "stream-root",
+          listedSeq: 3,
+          ...(kind === "owner" ? { ownerDevice: "stream-owner" } : {}),
+        },
+      };
+      fixture.target.operator!.openclawIdPrincipal = principal;
+      if (kind === "member") {
+        fixture.config.gateway = {
+          roles: {
+            default: "reader",
+            definitions: {
+              reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+            },
+          },
+        };
+      }
+      const savedTarget = JSON.stringify(fixture.target);
+      const serialized = JSON.parse(savedTarget);
+      expect(parseCronStreamSandboxTarget(serialized)).toEqual(fixture.target);
+      fixture.job.streamSandbox = serialized;
+      setOpenClawIdTunnelPrincipalLookup(() => principal);
+      try {
+        const retained = await fixture.prepare();
+        retained.assertCurrent();
+        const authority = mocks.sandbox.mock.lastCall?.[1];
+        expect(authority?.openclawIdPrincipal).toEqual(principal);
+        const captured = captureCronStreamSandboxTarget({
+          sandbox: retained.sandbox,
+          agentId: fixture.target.agentId,
+          sessionKey: fixture.target.sessionKey,
+          entry: {
+            sessionId: fixture.target.sessionId,
+            updatedAt: 1,
+            lifecycleRevision: fixture.target.lifecycleRevision,
+          },
+        });
+        expect(captured.operator?.openclawIdPrincipal).toEqual(principal);
+        const original = structuredClone(principal);
+        principal = undefined;
+        setOpenClawIdTunnelPrincipalLookup(() => principal);
+        expect(retained.signal.aborted).toBe(true);
+        expect(retained.assertCurrent).toThrow();
+        const calls = mocks.sandbox.mock.calls.length;
+        await expect(fixture.prepare()).rejects.toThrow();
+        expect(mocks.sandbox.mock.calls.length).toBe(calls);
+        principal = { ...original, authority: { ...original.authority!, listedSeq: 4 } };
+        await expect(fixture.prepare()).rejects.toThrow();
+        principal = original;
+        const recovered = await fixture.prepare();
+        recovered.assertCurrent();
+        expect(retained.assertCurrent).toThrow();
+      } finally {
+        setOpenClawIdTunnelPrincipalLookup(undefined);
+      }
     });
   },
 );

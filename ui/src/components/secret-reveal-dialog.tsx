@@ -4,6 +4,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 import { CopyButton } from "./solid/copy-button.tsx";
 import { DialogHeader } from "./solid/dialog-header.tsx";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 
 /** Keep one-time secrets visible until acknowledged, announcing refused dismissal. */
 export function showSecretRevealDialog(options: {
@@ -44,7 +45,9 @@ export function showSecretRevealDialog(options: {
             />
             <div class="oc-dialog__body">
               <Show when={options.callout}>
-                <div class="callout info secret-reveal__callout">{options.callout}</div>
+                <InlineAlert tone="info" class="secret-reveal__callout">
+                  {options.callout}
+                </InlineAlert>
               </Show>
               <Show when={options.secret}>
                 {(secret) => (

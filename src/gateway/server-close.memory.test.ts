@@ -190,7 +190,8 @@ it("settles accepted Memory sync before closing its existing executor", async ({
     expect(chunks.all("memory/shutdown.md")).toEqual([
       { text: expect.stringContaining("Keep the synthetic blue release preference.") },
     ]);
-    expect(cached.get()).toMatchObject({ count: 1 });
+    // Successful publication retires the redundant cache copy of the indexed vector.
+    expect(cached.get()).toMatchObject({ count: 0 });
     expect(live.all(agentPath)).toEqual([]);
   } finally {
     releaseEmbedding.resolve();

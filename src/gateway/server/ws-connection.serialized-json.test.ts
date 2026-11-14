@@ -3,7 +3,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { promisify } from "node:util";
-import { constants, deflateRawSync } from "node:zlib";
+import { constants, createDeflateRaw, deflateRawSync } from "node:zlib";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ClientOptions } from "ws";
@@ -21,6 +21,8 @@ import {
   SerializedJsonPayload,
   serializeGatewayFrame,
 } from "../serialized-json.js";
+import { createGatewayBroadcaster } from "../server-broadcast.js";
+import { GatewayClientRegistry } from "./client-registry.js";
 import { GATEWAY_PER_MESSAGE_DEFLATE, installGatewayDeflateCodec } from "./ws-compression.js";
 import { createGatewayWebSocketTransport } from "./ws-transport.js";
 
@@ -293,3 +295,63 @@ it.each([512, 2048])(
     expect(retained.get(10)).not.toBe(retained.get(15));
   },
 );
+
+it("compresses broadcast audiences once without allocating input-sized output per update", async () => {
+  const clients = new GatewayClientRegistry();
+  const deliveries: string[][] = [];
+  for (let index = 0; index < 20; index++) {
+    const { peer, transport } = await connectTransport({});
+    const received: string[] = [];
+    deliveries.push(received);
+    peer.on("message", (data) => received.push(rawDataToString(data)));
+    clients.add({
+      connId: String(index),
+      preparedRecipientProfileId: index < 17 ? "shared" : index === 17 ? "one" : "two",
+      socket: transport,
+      usesSharedGatewayAuth: false,
+      connect: {
+        minProtocol: 3,
+        maxProtocol: 3,
+        client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "ui" },
+        role: "operator",
+        scopes: ["operator.admin"],
+      },
+    });
+  }
+  const { broadcastToConnIds } = createGatewayBroadcaster({ clients });
+  const connIds = new Set(Array.from(clients, (client) => client.connId));
+  const payloads = ["warm", "first", "second"].map((label) => ({
+    text: `${label} é🦞 `.repeat(2048),
+  }));
+  const publish = (payload: (typeof payloads)[number]) =>
+    broadcastToConnIds("tick", payload, connIds);
+  publish(payloads[0]!);
+  await vi.waitFor(() => expect(deliveries.every((received) => received.length === 1)).toBe(true));
+  const probe = createDeflateRaw();
+  // The native handle is the work boundary used by the Gateway's synchronous codec.
+  const handle = Object.getPrototypeOf(Reflect.get(probe, "_handle")) as {
+    writeSync: (...args: unknown[]) => void;
+  };
+  probe.close();
+  using deflates = vi.spyOn(handle, "writeSync");
+  using buffers = vi.spyOn(Buffer, "allocUnsafe");
+  publish(payloads[1]!);
+  publish(payloads[2]!);
+  // Per update: one shared large segment and prefix/suffix for each of three audiences.
+  expect(deflates).toHaveBeenCalledTimes(14);
+  expect(buffers.mock.calls.filter(([size]) => size >= 16 * 1024)).toHaveLength(0);
+  await vi.waitFor(() => expect(deliveries.every((received) => received.length === 3)).toBe(true));
+  for (const [index, received] of deliveries.entries()) {
+    expect(received).toEqual(
+      payloads.map((payload, update) =>
+        JSON.stringify({
+          type: "event",
+          event: "tick",
+          payload,
+          seq: update + 1,
+          recipientProfileId: index < 17 ? "shared" : index === 17 ? "one" : "two",
+        }),
+      ),
+    );
+  }
+});

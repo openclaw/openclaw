@@ -50,9 +50,8 @@ export const LAB_FEATURES = (
     },
     {
       ...BOOLEAN_GATE,
-      id: "advisor",
-      configPath: ["plugins", "entries", "advisor", "enabled"],
-      settingsPluginId: "advisor",
+      id: "usageRankedToolIndex",
+      configPath: ["agents", "defaults", "experimental", "usageRankedToolIndex"],
     },
     {
       ...BOOLEAN_GATE,
@@ -69,6 +68,13 @@ export const LAB_FEATURES = (
       ...BOOLEAN_GATE,
       id: "hostDesktop",
       configPath: ["desktop", "host", "enabled"],
+      resetScope: null,
+    },
+    {
+      ...BOOLEAN_GATE,
+      id: "openclawId",
+      configPath: ["gateway", "openclawId", "enabled"],
+      // Off writes false and keeps the service URLs an operator configured.
       resetScope: null,
     },
     {

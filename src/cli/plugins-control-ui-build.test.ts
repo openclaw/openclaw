@@ -173,7 +173,12 @@ describe("native plugin browser builds", () => {
     },
   );
 
-  it("preserves esbuild's existing non-Solid JSX compilation", async () => {
+  it("requires author-installed compilers without replacing existing builds", async () => {
+    const missing = await fixture();
+    await fs.unlink(path.join(missing.rootDir, "node_modules/esbuild"));
+    const failure = buildPluginControlUi(missing);
+    await expect(failure).rejects.toHaveProperty("humanOutput");
+    await expect(failure).rejects.toHaveProperty("cause.code", "MODULE_NOT_FOUND");
     const project = await fixture();
     await writeFiles(project.rootDir, {
       "renderer.js":
@@ -185,6 +190,16 @@ describe("native plugin browser builds", () => {
     const declaration = await buildPluginControlUi(project);
     const built = await browserModule(project.rootDir, declaration.entry);
     expect(built.view).toEqual({ tag: "p", props: null, children: ["Existing JSX"] });
+    await writeFiles(project.rootDir, {
+      "view.tsx": "/** @jsxImportSource @solidjs/web */\nexport const view = <p>Ready</p>;",
+      [project.source]: 'export * from "./view.tsx";',
+    });
+    await expect(buildPluginControlUi(project)).rejects.toThrow(
+      "Install @solidjs/compiler in this plugin's devDependencies",
+    );
+    expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
+      path.basename(path.dirname(declaration.entry)),
+    ]);
   });
 
   it("bundles a Solid TSX view with reactive updates and owned disposal", async () => {
@@ -251,21 +266,6 @@ export { flush };
     }
   });
 
-  it("requires the author-installed Solid compiler only for opted-in TSX", async () => {
-    const project = await fixture();
-    const first = await buildPluginControlUi(project);
-    await writeFiles(project.rootDir, {
-      "view.tsx": "/** @jsxImportSource @solidjs/web */\nexport const view = <p>Ready</p>;",
-      [project.source]: 'export * from "./view.tsx";',
-    });
-    await expect(buildPluginControlUi(project)).rejects.toThrow(
-      "Install @solidjs/compiler in this plugin's devDependencies",
-    );
-    expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
-      path.basename(path.dirname(first.entry)),
-    ]);
-  });
-
   it("removes unused dependency loaders without treating text as imports", async () => {
     const project = await fixture();
     await writeFiles(project.rootDir, {
@@ -285,9 +285,7 @@ export { flush };
       [project.source]: 'export const loadPage = () => import("./page.js");',
     });
     await expect(buildPluginControlUi(project)).rejects.toThrow("will not be bundled");
-    await expect(fs.access(path.join(project.rootDir, "dist/control-ui"))).rejects.toThrow(
-      "ENOENT",
-    );
+    await expect(fs.readdir(project.rootDir)).resolves.not.toContain("dist");
   });
 
   it.each([
@@ -299,12 +297,11 @@ export { flush };
   ])("rejects a retained external $name", async ({ source }) => {
     const project = await fixture();
     await write(project.rootDir, project.source, source);
-    await expect(buildPluginControlUi(project)).rejects.toThrow(
-      "must bundle their browser dependencies",
-    );
-    await expect(fs.access(path.join(project.rootDir, "dist/control-ui"))).rejects.toThrow(
-      "ENOENT",
-    );
+    const reason = "must bundle their browser dependencies";
+    const failed = buildPluginControlUi(project);
+    await expect(failed).rejects.toThrow(reason);
+    await expect(failed).rejects.toHaveProperty("humanOutput", expect.stringContaining(reason));
+    await expect(fs.readdir(project.rootDir)).resolves.not.toContain("dist");
   });
 
   it("publishes complete immutable generations and detects stale source", async () => {
@@ -549,7 +546,9 @@ export { flush };
       path.join(project.rootDir, project.source),
       `export { loadDependency } from "./runtime/${file}";\n`,
     );
-    await expect(buildPluginControlUi(project)).rejects.toThrow(diagnostic);
+    const failed = buildPluginControlUi(project);
+    await expect(failed).rejects.toThrow(diagnostic);
+    await expect(failed).rejects.toHaveProperty("humanOutput", expect.stringContaining(diagnostic));
     expect(await fs.readFile(manifestPath, "utf8")).toBe(manifest);
     expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
       path.basename(path.dirname(first.entry)),

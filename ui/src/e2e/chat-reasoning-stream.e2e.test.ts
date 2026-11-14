@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import type { ChatState } from "../pages/chat/chat-state-contract.ts";
+import { rethrowWithControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { newChatPage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -183,9 +185,49 @@ suite.define(() => {
       await worked.waitFor();
       await worked.click();
       await expect.poll(() => worked.getAttribute("aria-expanded")).toBe("true");
-      if (reasoningLevel === "stream") {
-        await rawDetails.click();
-        await expect.poll(() => rawDetails.getAttribute("aria-expanded")).toBe("true");
+      try {
+        if (reasoningLevel === "on") {
+          await expect.poll(() => rawDetails.count()).toBe(0);
+          await expectStepOrder();
+        } else {
+          await rawDetails.waitFor();
+          if ((await rawDetails.getAttribute("aria-expanded")) === "false") {
+            await rawDetails.click();
+          }
+          await expect.poll(() => rawDetails.getAttribute("aria-expanded")).toBe("true");
+        }
+      } catch (error) {
+        await rethrowWithControlUiE2eFailureFacts(page, error, "reasoningFactsRead", () =>
+          rawDetails.evaluateAll((summaries) => {
+            const paneElement = document.querySelector<HTMLElement & { state?: ChatState }>(
+              'openclaw-chat-pane[aria-hidden="false"]',
+            );
+            const state = paneElement?.state;
+            const items = state?.chatReasoning?.items ?? [];
+            const receipts = items.slice(0, 8).filter((item) => item.receipt);
+            const workedSummary = paneElement?.querySelector(
+              ".chat-work-group > .chat-activity-group__summary",
+            );
+            return {
+              stateAvailable: Boolean(state),
+              messages: state?.chatMessages.length ?? 0,
+              toolMessages: state?.chatToolMessages.length ?? 0,
+              toolStreams: state?.toolStreamById.size ?? 0,
+              reasoningItems: items.length,
+              reasoningScanTruncated: items.length > 8,
+              receipts: receipts.length,
+              persistedReceipts: receipts.filter((item) => item.receipt?.persisted).length,
+              hasRun: Boolean(state?.chatRunId),
+              toolGroups: paneElement?.querySelectorAll(".chat-group.tool").length ?? 0,
+              toolCards: paneElement?.querySelectorAll(".chat-tool-msg-summary").length ?? 0,
+              workedCount: paneElement?.querySelectorAll(".chat-work-group").length ?? 0,
+              workedExpanded: workedSummary?.getAttribute("aria-expanded") === "true",
+              rawMatches: summaries.length,
+              rawVisible: summaries[0]?.checkVisibility() ?? false,
+              rawExpanded: summaries[0]?.getAttribute("aria-expanded") === "true",
+            };
+          }),
+        );
       }
       for (const index of [0, 1]) {
         await expect

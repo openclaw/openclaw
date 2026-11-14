@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { CliCredentialRemovedError } from "../../agents/cli-runner/auth-profile-preparation-error.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { MissingProviderAuthError, ProviderAuthError } from "../../agents/model-auth.js";
 import type { TemplateContext } from "../templating.js";
@@ -30,6 +31,40 @@ const providerLoginPresentation = (command: string) => ({
 const PROVIDER_LOGIN_PRESENTATION = providerLoginPresentation("/login openai");
 
 describe("executeAgentTurn: authentication failures", () => {
+  it.each([
+    ["direct", "anthropic:pasted", 'Saved account "anthropic:pasted"'],
+    ["group", "anthropic:pasted", "The selected account"],
+    [
+      "direct",
+      "personal:00000000-0000-0000-0000-000000000001:00000000-0000-0000-0000-000000000002",
+      "Selected personal account",
+    ],
+  ])("delivers removed-account recovery in %s channel replies", async (chatType, id, label) => {
+    const error = new CliCredentialRemovedError(id);
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new Error("private-wrapper", { cause: error }),
+    );
+    state.isInternalMessageChannelMock.mockReturnValue(false);
+    const params = createMinimalRunAgentTurnParams();
+    params.sessionCtx = {
+      ...params.sessionCtx,
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: chatType,
+    };
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    expect(await executeAgentTurn(params)).toMatchObject({
+      kind: "final",
+      payload: {
+        text: `⚠️ ${label} was removed. Select a connected account or sign in again under Models, then retry. OpenClaw did not submit this turn.`,
+        isError: true,
+      },
+    });
+    if (id.startsWith("personal:")) {
+      expect(error.message).not.toContain(id);
+    }
+  });
+
   it("preserves OAuth profile guidance through fallback summaries", async () => {
     const refreshError = new OAuthRefreshFailureError({
       provider: "openai",

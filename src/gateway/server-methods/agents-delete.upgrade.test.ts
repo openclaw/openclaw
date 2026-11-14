@@ -16,7 +16,10 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
 import { runInitialConfigWriteHealth } from "../../flows/doctor-health-contribution-runners.config.js";
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
+import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import { withAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db.js";
+import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { getUserPreferences } from "../../state/user-preferences.test-support.js";
 import { readAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
@@ -216,6 +219,33 @@ it.for([true, false])(
             });
             await assertKeeper();
 
+            await withAgentDatabaseStartupAdmission(async (admission) => {
+              await assertOpenClawDatabasesReady({
+                env: state.env,
+                operation: "gateway-startup",
+                config: getRuntimeConfig(),
+              });
+              const prepare = vi.fn(async () => {});
+              const startupOwner = admission.adopt();
+              try {
+                admission.activate({
+                  isCurrent: () => true,
+                  preparationReady: Promise.resolve(),
+                  openAgent: prepare,
+                  migrateAgent: prepare,
+                  publishAgent: prepare,
+                });
+                await admission.pendingPreparation;
+                expect(readAgentDatabaseAdmissionRefusal("doomed")).toMatchObject({
+                  reason: expect.stringContaining("deleted during startup inspection"),
+                });
+                expect(prepare.mock.calls).not.toContainEqual([
+                  expect.objectContaining({ agentId: "doomed" }),
+                ]);
+              } finally {
+                await startupOwner.stop();
+              }
+            });
             await resumeDeletion();
             signal.throwIfAborted();
             expect(readAgentDeletionJournal("doomed")).toMatchObject({

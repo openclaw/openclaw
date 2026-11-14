@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-candidate-contract.mjs";
+import { verifyReceiptRecoveryAuthority } from "../../scripts/full-release-receipt-recovery.mjs";
 import {
   buildReleaseExecutionPlanArtifact,
   composeReleaseAttemptJobs,
@@ -211,6 +212,9 @@ export function trustedMainPackageFixture({
   const client = {
     verifyQualificationAdmission: () => {
       throw new Error("historical fixture must not request candidate qualification admission");
+    },
+    verifyReceiptRecoveryAuthority(producer: Parameters<typeof verifyReceiptRecoveryAuthority>[1]) {
+      return verifyReceiptRecoveryAuthority("openclaw/openclaw", producer);
     },
     revalidateQualificationAdmissionAuthority: () => {
       throw new Error("historical fixture must not request candidate admission authority");

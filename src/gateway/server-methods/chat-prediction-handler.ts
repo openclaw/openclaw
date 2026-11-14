@@ -43,7 +43,9 @@ function conversationText(messages: unknown[]): string | undefined {
               })
               .join("\n")
           : "";
-    return text.trim() ? [{ role: message.role, text: text.slice(0, 2_000) }] : [];
+    // A reply usually ends with its question or recommendation, so keep the end of long turns.
+    const trimmed = text.trim();
+    return trimmed ? [{ role: message.role, text: trimmed.slice(-2_000) }] : [];
   });
   if (turns.at(-1)?.role !== "assistant" || !turns.some((turn) => turn.role === "user")) {
     return undefined;
@@ -189,10 +191,11 @@ export const chatPredictionHandlers: GatewayRequestHandlers = {
           storePath,
           sessionAgentId: agentId,
           canonicalKey,
-          max: 12,
-          maxHistoryBytes: 24_000,
-          responseHistoryBytes: 24_000,
-          effectiveMaxChars: 2_000,
+          // Tool calls and results share this window; read past them to reach recent dialogue.
+          max: 100,
+          maxHistoryBytes: 200_000,
+          responseHistoryBytes: 200_000,
+          effectiveMaxChars: 8_000,
           toolResultMaxChars: 0,
           offset: undefined,
           messageId: undefined,

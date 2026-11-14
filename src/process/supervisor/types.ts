@@ -135,8 +135,6 @@ type SpawnBaseInput = {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   noOutputTimeoutMs?: number;
-  /** Internal host-exec policy; sandbox transports keep their backend's limits. */
-  memoryLimitBytes?: number;
   /**
    * When false, stdout/stderr are streamed via callbacks only and not retained in RunExit payload.
    */
@@ -166,6 +164,8 @@ export type SpawnInput =
       input?: string;
       /** Prepare input authority at the adapter's stdin delivery boundary. */
       prepareInput?: () => void | Promise<void>;
+      /** Prepare async policy after transport setup, before the target starts. */
+      prepareTargetSpawn?: () => void | Promise<void>;
       stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
       secretInput?: SpawnSecretInput;
       onStdoutRaw?: (chunk: Buffer) => void;
@@ -196,3 +196,23 @@ export interface ProcessSupervisor {
   cancel(runId: string, reason?: TerminationReason): void;
   cancelScope(scopeKey: string, reason?: TerminationReason): void;
 }
+
+export type OwnedRun = {
+  runId: string;
+  scopeKey?: string;
+  terminationReason?: TerminationReason;
+  cancel: (reason: TerminationReason) => void;
+  pending?: Promise<ManagedRun>;
+  waitForExtinction?: () => Promise<ProcessExtinctionResult>;
+  cleanupOwners: ScopeCleanupOwner[];
+};
+
+export type ScopeCleanupOwner = {
+  processTree: ProcessScopeCleanupPolicy;
+  failure?: { error: unknown };
+};
+
+export type StartingScope = {
+  runs: Set<Promise<ManagedRun>>;
+  replacement?: Promise<ManagedRun>;
+};

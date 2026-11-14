@@ -1,10 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { readChildRuntimeViability } from "./child-runtime-viability.js";
 import { onDiagnosticEvent, setDiagnosticsEnabledForProcess } from "./diagnostic-events.js";
 import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.js";
@@ -298,9 +298,11 @@ it("releases callers of close while retired read scopes remain reachable", async
   class RetiredCaller {
     closed = false;
   }
+  const callers: WeakRef<RetiredCaller>[] = [];
   async function retire() {
     const owner = createSqliteReadOnlyWorkerScope();
     const caller = new RetiredCaller();
+    callers.push(new WeakRef(caller));
     const beforeCleanup = () => {
       caller.closed = true;
       return owner.close();
@@ -312,8 +314,7 @@ it("releases callers of close while retired read scopes remain reachable", async
   for (let generation = 0; generation < 20; generation++) {
     retired.push(await retire());
   }
-  await nextTurn();
-  expect(queryObjects(RetiredCaller)).toBe(0);
+  await expectCollected(...callers);
   for (const owner of retired) {
     const signal = owner.run(() => resolveSqliteInspectionSignal());
     expect(signal?.aborted).toBe(true);

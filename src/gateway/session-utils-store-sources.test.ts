@@ -362,19 +362,28 @@ it("retains source preparation until directory or registry ownership changes", a
       directory!.notify(`${path.basename(main.path)}-wal`, "change");
     }
     expect([realpath, stat, readdir].map((spy) => spy.mock.calls)).toEqual([[], [], []]);
-    directory!.notify(path.basename(main.path));
-    const revalidationReads = realpath.mock.calls.length;
-    for (const entry of observedDirectories) {
-      if (entry.active && entry.directory.startsWith(state.root)) {
-        entry.notify();
+    // Separate turns must not repeatedly resolve the same unchanged source paths.
+    for (let turn = 0; turn < 5; turn++) {
+      directory!.notify(path.basename(main.path), "rename");
+      for (const entry of observedDirectories) {
+        if (entry.active && entry.directory.startsWith(state.root)) {
+          entry.notify();
+        }
       }
+      await Promise.resolve();
     }
-    expect(realpath.mock.calls.length).toBe(revalidationReads);
-    await Promise.resolve();
+    expect([realpath, stat, readdir].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
+    expect((await prepareSourcesAsync(params)).request).toBe(first.request);
+    expect(realpath).toHaveBeenCalled();
+    realpath.mockClear();
+    stat.mockClear();
+    readdir.mockClear();
+    await prepareSourcesAsync(params);
+    expect([realpath, stat, readdir].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
     releasedDirectories.length = 0;
     replaceAlias(alias, replacement);
     expect(sourcesOf(first).main).toEqual([]);
-    await prepareSourcesAsync(params);
+    expect((await prepareSourcesAsync(params)).request).not.toBe(first.request);
     expect(realpath).toHaveBeenCalled();
     expect(releasedDirectories).not.toContain(path.dirname(alias));
   });

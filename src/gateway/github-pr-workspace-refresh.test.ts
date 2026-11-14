@@ -19,6 +19,61 @@ describe("imported PR source refresh", () => {
     realWorktree: true,
   });
 
+  it("returns actionable oversized-result errors through the PR tool and permits a smaller retry", async () => {
+    const f = await fixture();
+    const { runCommandBuffered } =
+      await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+    const transport = mocks.runCommand.getMockImplementation()!;
+    // The shared small-workspace fixture caps Git replies at 256 KiB; this
+    // scenario must retain the production owner's manifest/tree byte limits.
+    mocks.runCommand.mockImplementation(
+      async (argv: string[], options: Parameters<typeof runCommandBuffered>[1]) =>
+        argv[0] === "git" && (argv.includes("cat-file") || argv.includes("ls-tree"))
+          ? await runCommandBuffered(argv, options)
+          : await transport(argv, options),
+    );
+    await f.invoke();
+    await fs.writeFile(path.join(f.projection, "saved-note.txt"), "keep this guest work\n");
+    await f.local!.git("-C", f.upstream, "checkout", "topic/existing");
+    const generated = path.join(f.upstream, "generated-fixture");
+    await fs.mkdir(generated);
+    // Cross the public changed-path budget with real Git source files. Buckets
+    // keep Git tree insertion linear without changing the result's file count.
+    for (let index = 0; index < 50_001; index++) {
+      const bucket = path.join(generated, String(Math.floor(index / 1000)));
+      if (index % 1000 === 0) {
+        await fs.mkdir(bucket);
+      }
+      await fs.writeFile(path.join(bucket, `${index}.txt`), "synthetic\n");
+    }
+    await f.local!.git("-C", f.upstream, "add", "-A");
+    await f.local!.git(
+      "-C",
+      f.upstream,
+      "commit",
+      "--quiet",
+      "-m",
+      "Accidentally track generated files",
+    );
+    f.pr.head.sha = await f.local!.git("-C", f.upstream, "rev-parse", "HEAD");
+    f.branch.commit.sha = f.pr.head.sha;
+
+    await expect(f.invoke()).rejects.toThrow(/Workspace result changes .*gitignore/u);
+    expect(await fs.readFile(path.join(f.projection, "saved-note.txt"), "utf8")).toBe(
+      "keep this guest work\n",
+    );
+
+    await fs.rm(generated, { recursive: true });
+    await f.local!.git("-C", f.upstream, "add", "-A");
+    await f.local!.git("-C", f.upstream, "commit", "--quiet", "-m", "Remove generated files");
+    const headCommit = await f.advanceHead({ ".gitignore": "generated-fixture/\n" });
+    expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit });
+    expect(await fs.readFile(path.join(f.projection, "saved-note.txt"), "utf8")).toBe(
+      "keep this guest work\n",
+    );
+    expect(f.writes).toEqual([]);
+  }, 120_000);
+
   it.each([false, true])(
     "recovers a pending refresh before a further PR head (bound runtime=%s)",
     async (boundRuntime) => {

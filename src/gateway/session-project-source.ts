@@ -21,11 +21,12 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runGitReadOperation } from "../infra/git-read-cache.js";
+import { parseProjectGitUrl } from "../projects/project-git-url.js";
 import {
+  listProjectRegistry,
   ProjectCheckoutError,
   resolveProjectCheckout,
   resolveProjectDirectory,
-  resolveProjectRegistry,
   resolveWorkspaceProject,
   selectStoredProjectRegistry,
 } from "../projects/project-registry.js";
@@ -33,11 +34,28 @@ import type { ProjectRegistryRecord } from "../projects/project-registry.types.j
 import type { ExecutionSkillWorkspace } from "../skills/loading/workspace-skill-roots.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
+import { type ProjectRequester, resolveRequesterProject } from "./project-access.js";
 import { prepareSessionCreateFilesystemRoot } from "./server-methods/session-create-root.js";
 import type { PreparedGatewaySessionLifecycle } from "./session-create-service.types.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 import type { GatewaySessionEntryRead } from "./session-utils-store.js";
+
+/** The inspected PR base identifies the project; fork names alone never select local source. */
+export async function resolvePullRequestProjectSource(
+  cfg: OpenClawConfig,
+  source: { host: string; repository: string; requester: ProjectRequester },
+): Promise<ProjectRegistryRecord | undefined> {
+  const matches = (project: ProjectRegistryRecord) =>
+    project.originUrl &&
+    parseProjectGitUrl(project.originUrl, source.host)?.url ===
+      `https://${source.host}/${source.repository.toLowerCase()}.git`;
+  const candidate = (await listProjectRegistry(cfg)).find(matches);
+  const project = candidate
+    ? await resolveRequesterProject(cfg, candidate.id, source.requester, { fresh: true })
+    : undefined;
+  return project && matches(project) ? project : undefined;
+}
 
 export async function resolveSessionProjectRootForRecord(
   project: ProjectRegistryRecord,
@@ -82,11 +100,12 @@ export async function resolveSessionProjectSkillRoot(params: {
   cfg: OpenClawConfig;
   projectId: string;
   targetAgentId: string;
+  requester: ProjectRequester;
   resolveSandboxRequired: () => boolean;
   assertCurrent: () => void;
 }): Promise<ExecutionSkillWorkspace | undefined> {
   params.assertCurrent();
-  const project = await resolveProjectRegistry(params.cfg, params.projectId);
+  const project = await resolveRequesterProject(params.cfg, params.projectId, params.requester);
   params.assertCurrent();
   if (!project) {
     return undefined;
@@ -120,16 +139,20 @@ export async function resolveSessionProjectCheckoutOptions(params: {
   cfg: OpenClawConfig;
   projectId: string;
   targetAgentId: string;
+  requester: ProjectRequester;
   resolveSandboxRequired: () => boolean;
   assertCurrent: () => void;
   signal?: AbortSignal;
   onRefresh?: () => void;
 }): Promise<{ current: boolean; worktree: boolean; refreshing?: boolean }> {
   params.assertCurrent();
-  const project = await resolveProjectRegistry(params.cfg, params.projectId);
+  const project = await resolveRequesterProject(params.cfg, params.projectId, params.requester);
   params.assertCurrent();
   if (!project) {
     return { current: false, worktree: false };
+  }
+  if (project.source === "cloned") {
+    return { current: false, worktree: true };
   }
   const direct = prepareSessionCreateFilesystemRoot({
     cfg: params.cfg,
@@ -164,6 +187,8 @@ export async function resolveSessionProjectCheckoutOptions(params: {
 export type SpawnParentWorktreeSource = {
   kind: "worktree";
   workspace: string;
+  /** Registry project the parent was created from; absent for cwd-based worktrees. */
+  projectId?: string;
   source?: NonNullable<PreparedGatewaySessionLifecycle["pendingWorktree"]>["source"];
   withCurrent: WorktreeSourceStage;
   withRollback?: <T>(run: (assertCurrent: () => void) => Promise<T>) => Promise<T>;
@@ -289,6 +314,7 @@ async function prepareSpawnParentWorktreeSource(
       return {
         kind: "worktree",
         workspace: project.repoRoot,
+        projectId,
         source: { kind: "project", id: projectId },
         withRollback: selection.withRollback,
         withCurrent: async (run, acquisition) =>
@@ -313,6 +339,7 @@ async function prepareSpawnParentWorktreeSource(
     return {
       kind: "worktree",
       workspace: project.repoRoot,
+      projectId,
       source: { kind: "project", id: projectId },
       withCurrent: async (run) => await run({ assertCurrent, signal: options.signal }),
     };
@@ -342,9 +369,11 @@ async function prepareSpawnParentWorktreeSource(
     assertWorktreeCurrent();
   });
   assertCurrent();
+  const projectId = normalizeOptionalString(parent.entry.projectId);
   return {
     kind: "worktree",
     workspace: worktree.repoRoot,
+    ...(projectId ? { projectId } : {}),
     source: { kind: "worktree", id: worktree.id },
     withCurrent: async (run) =>
       await run({

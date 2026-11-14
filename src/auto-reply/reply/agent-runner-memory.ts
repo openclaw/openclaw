@@ -386,7 +386,8 @@ export async function runSessionCompactionIfNeeded(params: {
         agentAccountId: params.followupRun.run.agentAccountId,
         conversationRoutePeerId: params.followupRun.run.conversationRoutePeerId,
         chatType: params.followupRun.run.chatType,
-        skillsSnapshot: entry.skillsSnapshot ?? params.followupRun.run.skillsSnapshot,
+        // The session projection omits runtime catalogs; reuse this turn's hydrated selection.
+        skillsSnapshot: params.followupRun.run.skillsSnapshot ?? entry.skillsSnapshot,
         provider: params.followupRun.run.provider,
         model: params.followupRun.run.model,
         authProfileId: params.followupRun.run.authProfileId,
@@ -840,7 +841,7 @@ export async function runMemoryFlushIfNeeded(
         return result;
       },
     });
-    emitInternalRunUsageDiagnostic(flushExecution.result, {
+    await emitInternalRunUsageDiagnostic(flushExecution.result, {
       config: params.cfg,
       agentId: params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg),
       agentDir: params.followupRun.run.agentDir,

@@ -35,7 +35,7 @@ import { createCronViewJob, createCronViewRun, cronRunsResponse } from "./view.t
 import "./cron-page.tsx";
 
 const cleanups: Array<() => unknown> = [];
-const refreshMethods = ["cron.status", "cron.list", "cron.runs"];
+const refreshMethods = ["cron.status", "cron.list"];
 const schedulerStatus = (jobs = 0) => ({ enabled: true, triggersEnabled: true, jobs });
 
 function deferred<T>(fallback: T) {
@@ -443,16 +443,19 @@ it("coalesces a cron event burst into one trailing refresh of the current page",
       };
       return replies[method] ?? { models: [] };
     },
-    [...refreshMethods, "channels.status"],
+    [...refreshMethods, "cron.runs"],
   );
   const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
   const channels = createChannelCapability(gateway);
   const context = { ...createContext(gateway), acquireChannels: () => channels };
-  const page = createPage(context);
+  const page = createPage(context, { render: true });
   cleanups.push(() => channels.dispose());
   await page.settle();
+  click(page, testId("cron-list-tab-activity"));
+  await page.settle();
   emitEvent(gateway, "cron", {}, 20);
-  expectCalls(request, ["cron.status", "cron.runs", "cron.list", "channels.status"], 1);
+  expectCalls(request, ["cron.status", "cron.runs", "cron.list"], 1);
+  expect(callsFor(request, "channels.status")).toHaveLength(0);
   resume();
   held.resolve();
   await waitForCronPage(() => {
@@ -461,7 +464,7 @@ it("coalesces a cron event burst into one trailing refresh of the current page",
     expect(page.cron.cronRuns).toEqual([freshRun]);
   });
   expectCalls(request, ["cron.status", "cron.runs", "cron.list"], 2);
-  expect(callsFor(request, "channels.status")).toHaveLength(1);
+  expect(callsFor(request, "channels.status")).toHaveLength(0);
 });
 
 it("lets manual Refresh supersede held status and run-history reads", async () => {
@@ -483,10 +486,13 @@ it("lets manual Refresh supersede held status and run-history reads", async () =
   const { page } = mountCronPage(request);
   await waitForCronPage(() => expect(page.cron.cronLoading).toBe(false));
   await page.settle();
+  click(page, testId("cron-list-tab-activity"));
+  await page.settle();
   expect(calls).toEqual({ "cron.status": 1, "cron.runs": 1 });
   const refresh = page.querySelector<HTMLButtonElement>(".cron-refresh");
   expect(refresh).not.toBeNull();
   refresh?.click();
+  await page.settle();
   expect(calls).toEqual({ "cron.status": 2, "cron.runs": 2 });
   await waitForCronPage(() => {
     expect(page.cron.cronStatus?.jobs).toBe(2);
@@ -579,6 +585,43 @@ it("refreshes trigger authoring from scheduler status after reconnect", async ()
   );
   expect(triggerToggle).toBeUndefined();
   expect(page.textContent).toContain("disabled by cron.triggers.enabled");
+});
+
+it("replaces an in-flight inventory read when the connected profile hydrates", async () => {
+  const earlier = deferred<CronJobsListResult>(cronListResponse([]));
+  const currentJob = createCronViewJob("current-profile-job");
+  const fallback = createRequest();
+  let reads = 0;
+  const client = createTestGatewayClient((method) => {
+    if (method === "cron.list") {
+      reads += 1;
+      return reads === 1 ? earlier.promise : cronListResponse([currentJob]);
+    }
+    return fallback(method);
+  });
+  const gateway = createGateway(client, true);
+  gateway.emitSnapshot({
+    hello: {
+      ...operatorHello(["operator.admin"]),
+      features: { events: ["cron.inventory.changed"] },
+    },
+    selfUser: undefined,
+  });
+  const page = createPage(createContext(gateway));
+  await waitForCronPage(() => expect(reads).toBe(1));
+  const state = page.cron;
+  state.cronForm.name = "Retained draft";
+
+  gateway.emitSnapshot({
+    selfUser: { id: "hydrated-profile", identity: { type: "profile", id: "hydrated-profile" } },
+  });
+  earlier.resolve(cronListResponse([createCronViewJob("retired-profile-job")]));
+  await waitForCronPage(() => {
+    expect(page.cron.cronJobs.map((job) => job.id)).toEqual(["current-profile-job"]);
+    expect(page.cron.cronJobsError).toBeNull();
+  });
+  expect(page.cron).toBe(state);
+  expect(state.cronForm.name).toBe("Retained draft");
 });
 
 it.each([false, true])(
@@ -798,7 +841,7 @@ it("defers a hidden mount and reconnect, then catches up once with the current s
   await settle();
   expectCalls(request, refreshMethods, 1);
   expect(request).toHaveBeenCalledWith("cron.list", expect.objectContaining({ agentId: "writer" }));
-  expect(context.acquireChannels(createChannelCapability).refresh).toHaveBeenCalledTimes(1);
+  expect(context.acquireChannels(createChannelCapability).refresh).not.toHaveBeenCalled();
   page.remove();
   request.mockClear();
   visibility("hidden");
@@ -840,9 +883,7 @@ it.each([true, false])(
     expect(request.mock.calls.findLast(([method]) => method === "cron.list")?.[1]).toMatchObject({
       query: "keep my filter",
     });
-    expect(request.mock.calls.findLast(([method]) => method === "cron.runs")?.[1]).toMatchObject({
-      query: "keep my history filter",
-    });
+    expect(callsFor(request, "cron.runs")).toHaveLength(0);
   },
 );
 

@@ -161,7 +161,7 @@ it("reports an incompatible passive catalog executable without Codex routes", as
     severity: "warning",
     path: "/candidate/plugin/codex-native",
     message: expect.stringContaining(
-      "Codex catalog updater cannot run: /candidate/plugin/codex-native is not runnable on this CPU",
+      "Codex cannot run: /candidate/plugin/codex-native is not runnable on this CPU",
     ),
   });
 });
@@ -172,7 +172,7 @@ it("reports a real missing executable during update finalization", async () => {
   expectFinding(await nativeCheck(command).detect(context(config(), "fix")), {
     severity: "warning",
     path: command,
-    message: `Codex catalog updater cannot run: ${command} or its working directory was not found. Repair the executable or working directory and restart the Gateway.`,
+    message: `Codex cannot run: ${command} or its working directory was not found. Repair the executable or working directory and restart the Gateway.`,
   });
 });
 

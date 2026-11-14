@@ -95,6 +95,7 @@ function compactCronListJob(job: CronJob): CronCompactJob {
     lastRunError: job.state.lastError ?? null,
     runningAtMs: job.state.runningAtMs,
     autoDisabled: job.state.autoDisabled,
+    admissionDeferred: job.state.admissionDeferred,
     lastDelivered: job.state.lastDelivered,
     lastDeliveryStatus: job.state.lastDeliveryStatus,
     lastDeliveryError: job.state.lastDeliveryError,

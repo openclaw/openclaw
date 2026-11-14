@@ -162,14 +162,14 @@ it.runIf(process.platform !== "win32").each([true, false])(
       }
       if (workspaceOnly) {
         for (const name of ["write", "edit", "ls"]) {
-          await expect(
-            execute(name, {
-              path: "/data/hop",
-              content: "changed",
-              oldText: visibleContent,
-              newText: "changed",
-            }),
-          ).rejects.toThrow("Path escapes sandbox root");
+          const rejected = execute(name, {
+            path: "/data/hop",
+            content: "changed",
+            oldText: visibleContent,
+            newText: "changed",
+          });
+          await expect(rejected).rejects.toThrow("Path escapes sandbox root");
+          await expect(rejected).rejects.not.toThrow("sessions_spawn");
         }
       }
       await expectFile(workspaceDir, "visible.txt", hiddenContent);

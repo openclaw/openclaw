@@ -71,7 +71,7 @@ describe("website dashboard widget", () => {
     const element = await mount(url);
     expect(element.querySelector("iframe")).toBeNull();
     expect(element.querySelector('[role="alert"]')?.textContent).toContain(
-      "Gateway and Control UI pages cannot be embedded",
+      "Gateway and Control UI pages can’t be embedded in a website widget.",
     );
     expect(element.querySelector("a")?.href).toBe(url);
     element.widget = widget("https://external.example/dashboard");

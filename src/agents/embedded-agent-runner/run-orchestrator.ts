@@ -74,6 +74,7 @@ import { log } from "./logger.js";
 import { createEmbeddedAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import { runPreparedEmbeddedLoop } from "./run-loop.js";
 import { createEmbeddedRunStageSummaryEmitter } from "./run/attempt-stage-timing.js";
+import { publishClaimedSessionWriter } from "./run/compaction-accounting-bridge.js";
 import { withExecutionPhaseDiagnostics } from "./run/execution-phase-diagnostics.js";
 import type {
   RunEmbeddedAgentInternalParams,
@@ -192,6 +193,7 @@ async function runEmbeddedAgentForSession(
         // Native preparation must consume the claim's postimage, not the pre-queue row.
         sessionAdmission = { ...sessionAdmission, entry };
       }
+      publishClaimedSessionWriter(params.onCompactionAccounting, runSessionTarget, entry);
     },
   });
   const { enqueueGlobal, enqueueSession, noteLaneTaskProgress, throwIfAborted } = laneController;
@@ -649,10 +651,10 @@ async function runEmbeddedAgentForSession(
               : run());
             const continuation = refresh.takeContinuation();
             if (refreshed || continuation) {
-              mergeCompletedAgentUsage({
+              await mergeCompletedAgentUsage({
                 usage,
                 diagnosticUsage,
-                agentMeta: result.meta.agentMeta,
+                agentMetas: [result.meta.agentMeta],
                 config: params.config ?? EMPTY_EMBEDDED_AGENT_CONFIG,
                 agentDir: params.agentDir,
               });

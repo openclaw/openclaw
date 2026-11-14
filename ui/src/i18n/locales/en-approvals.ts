@@ -19,8 +19,6 @@ const enApprovals = {
     morePending: "{count} more pending",
     reviewRequest: "Review approval from {agent}: {command}",
     decisionRequest: "{decision}: {command}",
-    agentPendingOne: en.execApproval.agentPendingOne,
-    agentPending: en.execApproval.agentPending,
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
     alwaysAllowHere: "Always allow here",

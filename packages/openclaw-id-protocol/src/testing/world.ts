@@ -9,6 +9,7 @@ import {
   formatIrohEndpointKey,
   type Ed25519PublicKey,
   type IrohEndpointKey,
+  type KeyFingerprint,
 } from "../keys.js";
 import { deriveRootSigner } from "../kit.js";
 import { signStatement } from "../statements/envelope.js";
@@ -17,6 +18,7 @@ import {
   ROOT_EPOCH,
   type MembershipTarget,
   type OwnerCapability,
+  type RevocationKind,
   type SignedStatement,
 } from "../statements/types.js";
 
@@ -71,6 +73,29 @@ export async function signChange(
   return signStatement(
     "MembershipChange",
     { claw_id: state.claw_id, seq, target, issued_at: WORLD_NOW - 10 },
+    signer,
+  );
+}
+
+/** Signs a Revocation of `target` at the claw's current seq (what a signer reading the snapshot sees). */
+export async function signRevocation(
+  state: AuthorityState,
+  signer: StatementSigner,
+  target: KeyFingerprint,
+  kind: RevocationKind = "owner_device",
+  seq = state.seq,
+): Promise<SignedStatement<"Revocation">> {
+  return signStatement(
+    "Revocation",
+    {
+      claw_id: state.claw_id,
+      seq,
+      target_fp: target,
+      target_kind: kind,
+      reason: "test",
+      root_epoch: ROOT_EPOCH,
+      issued_at: WORLD_NOW - 5,
+    },
     signer,
   );
 }

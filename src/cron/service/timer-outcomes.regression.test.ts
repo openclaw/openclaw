@@ -585,21 +585,29 @@ it("sends one notice when an alert route also reports skipped runs", () => {
   expect(deferredNotifications).toEqual([pauseNotice]);
 });
 
-it("sends the pause notice to the agent that owns the gone conversation", () => {
-  const parentSessionKey = "agent:ops:dashboard:parent";
-  const { apply, deferredNotifications } = outcomeFixture(startedAt, {
-    agentId: undefined,
-    sessionKey: parentSessionKey,
-  });
-  apply(parentPause("archived", parentSessionKey));
-  expect(deferredNotifications).toEqual([
-    expect.objectContaining({
-      kind: "auto-disabled",
-      job: expect.objectContaining({ agentId: "ops" }),
-    }),
-  ]);
-  expect(deferredNotifications[0]?.job).not.toHaveProperty("sessionKey");
-});
+it.each(["legacy", "owner"] as const)(
+  "sends a %s pause notice to the agent, not its gone conversation",
+  async (origin) => {
+    const parentSessionKey = "agent:ops:dashboard:parent";
+    const enqueueSessionEvent = vi.fn();
+    const { state, apply, deferredNotifications } = outcomeFixture(
+      startedAt,
+      {
+        agentId: undefined,
+        ...(origin === "owner"
+          ? { owner: { sessionKey: parentSessionKey } }
+          : { sessionKey: parentSessionKey }),
+      },
+      { enqueueSessionEvent },
+    );
+    apply(parentPause("archived", parentSessionKey));
+    await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+    expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
+      "paused: parent archived",
+      expect.objectContaining({ agentId: "ops", sessionKey: undefined, createIfMissing: true }),
+    );
+  },
+);
 
 it("sends the pause notice for a one-shot job too", () => {
   const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {

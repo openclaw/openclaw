@@ -58,6 +58,24 @@ describe("state-dir-gateway-check", () => {
     ).toEqual({ kind: "allow" });
   });
 
+  it.skipIf(process.platform !== "win32")(
+    "treats state and config paths that differ only by case as the same directory",
+    () => {
+      const lowerStateDir = path.join(root, ".openclaw");
+      const upperStateDir = path.join(root, ".OPENCLAW");
+      expect(
+        compareCliGatewayStateDirs({
+          cliStateDir: lowerStateDir,
+          cliConfigPath: path.join(lowerStateDir, "openclaw.json"),
+          gatewayStateDir: upperStateDir,
+          gatewayConfigPath: path.join(upperStateDir, "openclaw.json"),
+          source: "installed Gateway service",
+          mode: "refuse",
+        }),
+      ).toEqual({ kind: "allow" });
+    },
+  );
+
   it("refuses an offline home mismatch using the recorded service environment", async () => {
     const canonicalRoot = await fs.realpath(root);
     const serviceHome = path.join(canonicalRoot, "service-home");

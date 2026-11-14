@@ -28,7 +28,6 @@ export const SESSION_TRANSCRIPT_WORKER_LIMITS = {
 export function createSessionTranscriptHistoryPool(
   maxWorkers = resolveWorkerPoolSize("singleton"),
   onRotationComplete?: () => void,
-  options: { prewarmHistory?: true } = {},
 ) {
   let canCloseNativeResources: boolean | undefined;
   const pool = createOwnedWorkerTaskPool<
@@ -54,7 +53,6 @@ export function createSessionTranscriptHistoryPool(
           options: {
             workerData: {
               databaseEngineSelection: getDatabaseEngineSelection(),
-              ...options,
             },
           },
         };

@@ -6,7 +6,7 @@ import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/conf
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { ManifestOwnerBasePolicyBlockReason } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import type { MemoryHealth } from "../plugins/memory-provider-types.js";
+import type { MemoryHealth } from "../plugins/memory-provider-runtime-types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
 const note = vi.hoisted(() => vi.fn());

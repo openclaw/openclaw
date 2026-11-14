@@ -343,6 +343,7 @@ describe.skipIf(process.platform === "win32")("backup SQLite symbolic link loops
     "refuses a %s loop without publishing an archive",
     backupCase({ layout: "split", prefix: "backup-owned-link-" })(
       async (state, ownership: string) => {
+        await isolateBackupScratch(state);
         if (ownership === "declared plugin") {
           await declarePluginSqliteResources(state, "foreign");
         }

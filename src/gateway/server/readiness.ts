@@ -1,6 +1,10 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
+import {
+  prepareChildRuntimeViability,
+  readChildRuntimeViability,
+  type ChildRuntimeViability,
+} from "../../infra/child-runtime-viability.js";
 import type { AgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -8,23 +12,14 @@ import {
   evaluateChannelHealth,
   type ChannelHealthPolicy,
 } from "../channel-health-policy.js";
+import type { ReadinessChecker, ReadinessResult } from "../health/types.js";
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
-type ReadinessResult = {
-  ready: boolean;
-  coreReady: boolean;
-  failing: string[];
-  suppressed?: string[];
-  uptimeMs: number;
-  eventLoop?: GatewayEventLoopHealth;
-  pluginReload?: GatewayPluginReloadStatus;
-  agentDatabases?: readonly AgentDatabaseAdmissionRefusal[];
-  stateDatabase?: { reason: string };
+export type PreparedReadinessChecker = ReadinessChecker & {
+  prepare: () => Promise<{ publish: () => ReadinessResult }>;
 };
-
-export type ReadinessChecker = () => ReadinessResult;
 
 export type StartupResult =
   | { ok: true; status: "started"; uptimeMs: number }
@@ -104,7 +99,7 @@ export function createReadinessChecker(
     isChatSendAvailable?: () => boolean;
     shouldSkipChannelReadiness?: () => boolean;
   },
-): ReadinessChecker {
+): PreparedReadinessChecker {
   const { channelManager, startedAt } = deps;
   const getStartup = createStartupChecker(deps);
   let cachedAt = 0;
@@ -112,8 +107,9 @@ export function createReadinessChecker(
 
   const readReadiness = (
     agentDatabases: readonly AgentDatabaseAdmissionRefusal[] | undefined,
+    childRuntime: ChildRuntimeViability | undefined,
+    startup: StartupResult,
   ): ReadinessResult => {
-    const startup = getStartup();
     const uptimeMs = startup.uptimeMs;
     const now = startedAt + uptimeMs;
     if (startup.status === "starting") {
@@ -122,7 +118,7 @@ export function createReadinessChecker(
     if (startup.status === "draining") {
       return { ready: false, coreReady: false, failing: ["gateway-draining"], uptimeMs };
     }
-    if (!readChildRuntimeViability().available) {
+    if (!(childRuntime ?? readChildRuntimeViability()).available) {
       return { ready: false, coreReady: false, failing: ["child-runtime"], uptimeMs };
     }
     const stateDatabaseFailure = deps.getStateDatabaseFailure?.();
@@ -168,6 +164,7 @@ export function createReadinessChecker(
     const snapshot = channelManager.getRuntimeSnapshot();
     const globallyAutostartSuppressed = channelManager.getAutostartSuppression() !== null;
     const failing: string[] = [];
+    const degraded: string[] = [];
     const suppressed: string[] = [];
 
     for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
@@ -187,6 +184,9 @@ export function createReadinessChecker(
           channelId,
         };
         const health = evaluateChannelHealth(accountSnapshot, policy);
+        if (health.reason === "reconnect-grace" && !degraded.includes(channelId)) {
+          degraded.push(channelId);
+        }
         if (!health.healthy && autostartSuppressed && health.reason === "not-running") {
           if (!suppressed.includes(channelId)) {
             suppressed.push(channelId);
@@ -205,19 +205,39 @@ export function createReadinessChecker(
       ready: failing.length === 0,
       coreReady: true,
       failing,
+      ...(degraded.length > 0 ? { degraded } : {}),
       ...(suppressed.length > 0 ? { suppressed } : {}),
     };
     return { ...cachedState, uptimeMs };
   };
-  return () => {
-    const agentDatabases = deps.getAgentDatabaseAdmissionRefusals?.();
-    const result = readReadiness(agentDatabases);
+  const read = (childRuntime?: ChildRuntimeViability, startup?: StartupResult) => {
+    const refusals = deps.getAgentDatabaseAdmissionRefusals?.();
+    const agentDatabases = refusals?.filter(({ code }) => code !== "agent-deletion");
+    const agentDeletions = refusals?.filter(({ code }) => code === "agent-deletion");
+    const result = readReadiness(agentDatabases, childRuntime, startup ?? getStartup());
     const getEventLoopHealth = deps.getEventLoopHealth;
     const eventLoop = getEventLoopHealth?.();
     return {
       ...result,
       ...(agentDatabases?.length ? { agentDatabases } : {}),
+      ...(agentDeletions?.length ? { agentDeletions } : {}),
       ...(eventLoop ? { eventLoop } : {}),
     };
   };
+  return Object.assign(read, {
+    prepare: async () => {
+      const startup = getStartup();
+      if (startup.status !== "started") {
+        return {
+          publish: () => {
+            const current = getStartup();
+            // An unprepared refusal cannot become ready without observing the runtime.
+            return read(undefined, current.status === "started" ? startup : current);
+          },
+        };
+      }
+      const childRuntime = await prepareChildRuntimeViability();
+      return { publish: () => read(childRuntime.publish()) };
+    },
+  });
 }

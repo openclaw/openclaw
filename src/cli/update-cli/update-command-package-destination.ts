@@ -3,8 +3,7 @@ import path from "node:path";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
 import { hasErrnoCode } from "../../infra/errno.js";
-import { resolveCanonicalPath } from "../../infra/package-update-manager-preflight.js";
-import { pathEntryExists } from "../../infra/path-existence.js";
+import { pathEntryExists, realpathOrResolve } from "../../infra/path-existence.js";
 import { isPathStrictlyInside } from "../../infra/path-guards.js";
 import {
   UPDATE_DESTINATION_RECOVERY,
@@ -83,7 +82,7 @@ export async function inspectNpmGlobalDestination(
     const command = serviceInspection?.command ?? null;
     const ownsPackage =
       packageRootReal !== null &&
-      ((await resolveCanonicalPath(root)) === packageRootReal ||
+      ((await realpathOrResolve(root)) === packageRootReal ||
         (await gatewayServiceCommandUsesRoot({ root: packageRootReal, command })) === true);
     const ownsLauncher =
       !launcherPresent ||

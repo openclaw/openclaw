@@ -263,6 +263,7 @@ Vitest without dropping coverage. Production sources remain free to change and
 are still exercised. Extra Vitest arguments, including cache-warming collection,
 retain the existing Vitest path.
 
+Shared fingerprints include the pinned Bun manifest and PostgreSQL test-root guard.
 A changed shared setup fingerprint invalidates the entire native cohort.
 Refreshing those fingerprints requires fresh qualification of the retained
 entries; tests without matching proof keep their Vitest coverage.
@@ -289,7 +290,9 @@ and worker budgets. The shared Vitest config resolves `ws` to the installed
 package so imports and mocks use the same module identity on both runtimes.
 
 Control UI uses three native shards and three workers per row, including
-exact-target Full Release Validation dispatches. The runtime partition applies
+exact-target Full Release Validation dispatches. Partial PR unit selections target
+three files per row, up to the same three-row cap; full UI owners keep three shards.
+The runtime partition applies
 after Vitest selects a shard, preserving original file ownership. Files with
 Node-only heap or WeakRef contracts keep Node coverage; the remaining selection
 uses Bun. `dual-all` runs the original shard on Node before its Bun portion.
@@ -1055,9 +1058,12 @@ extra compiler pass runs to populate it. Archive upload cost and consumer hit
 rates still need CI measurement.
 
 Source-only Linux Node 24 shards can restore compiled Vitest workers from the
-protected cache warmer. The warmer prepares one generation before SDK or runtime
-builds change package resolution, joins the preparation owner, and publishes only
-the retained cache. PR jobs restore it without publishing. Consumers enable
+protected cache warmer. The warmer prepares separate full, runtime, and tooling
+generations before SDK or runtime builds change package resolution, joins each
+preparation owner, and publishes each retained slot in its own archive. The
+manifest uses the worker owner's selection rules to hint which archive to restore;
+unknown or mixed selections restore the full archive. Execution recomputes the
+preset and validates the restored generation before reuse. PR jobs restore it without publishing. Consumers enable
 reuse only when an archive exists; cold runners keep ordinary fresh compilation.
 The worker owner verifies source and dependency bytes, compiler identity,
 resolution topology, environment, output inventory, and the exact checkout and
@@ -1116,6 +1122,14 @@ remains the explicit operator override for attempting a different budget.
 sizes. Budget violations do not prevent artifact generation. The separate
 `control-ui-performance` job enforces the budgets without blocking other jobs
 from building or testing the same source.
+
+Both the absolute check and `ui:check-performance:base` normalize generated
+asset hashes before measuring gzip and Brotli budgets. Asset stems, extensions,
+and code stay intact, so a rename alone cannot consume the budget. The report's
+compressed budget numbers are normalized; its separate **served** gzip, Brotli,
+and raw sizes describe the bytes on the wire, including identity fallback when
+a compression sidecar is absent. JSON metrics use `gzipBytes`/`brotliBytes` for
+budgets and `servedGzipBytes`/`servedBrotliBytes` for transfer sizes (schema 2).
 
 Every production UI build checks generated protocol validators before building
 or reusing cached output. After changing a schema used by the Control UI, run

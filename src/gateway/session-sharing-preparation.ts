@@ -161,7 +161,15 @@ export async function prepareSessionMutationFacts(
   const changed = (change: SessionRowChange) => {
     if ("all" in change) {
       if (isSessionStoreTopologyChange(change)) {
-        if (beforeDiscovery) {
+        // Another agent's admission cannot revoke this retained logical/physical store pair.
+        if (
+          beforeDiscovery ||
+          (facts?.target &&
+            typeof change.scope === "object" &&
+            change.scope.agentId &&
+            change.scope.agentId !== agentId &&
+            change.scope.agentId !== facts.sourceAgentId)
+        ) {
           return;
         }
         if (isOpenClawAgentDatabaseRegistryChange(change) && assertRegistryPublication) {
@@ -188,6 +196,18 @@ export async function prepareSessionMutationFacts(
         change.scope.agentId &&
         change.scope.agentId !== agentId
       ) {
+        return;
+      }
+      if (
+        change.scope === "sessions" &&
+        change.factsInvalidated === undefined &&
+        change.runtimeSession === undefined &&
+        active &&
+        !invalidated &&
+        facts?.target != null
+      ) {
+        // Committed writers install entry and membership before this catalog notification.
+        // The next assertion still checks the retained physical source and current facts.
         return;
       }
       invalidate();

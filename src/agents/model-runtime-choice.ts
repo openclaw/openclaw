@@ -384,6 +384,8 @@ export async function preparePublishedModelRuntimeChoice(params: {
   if (!published) {
     return { kind: "unavailable", message: unavailable };
   }
+  // A sign-in after Gateway start must reach selection without a model-list read first.
+  await published.recheckNativeLogin?.();
   let nativeCatalog: ModelCatalogSnapshot | undefined;
   if (params.prepareNativeCatalog) {
     const configuredEntry = findModelInCatalog(

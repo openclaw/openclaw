@@ -498,7 +498,7 @@ it("loads optional English copy at each view boundary while keeping shared label
   await manager.setLocale("de");
   for (const [key, copy, load] of [
     ["aboutPage.linkDocs", "Docs", () => import("../pages/about/view.tsx")],
-    ["dashboardsPage.live", "Live", () => import("../pages/dashboards/view.tsx")],
+    ["dashboardsPage.running", "Updating now", () => import("../pages/dashboards/view.tsx")],
     [
       "usage.providerUsage.balance",
       "Balance",

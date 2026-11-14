@@ -117,8 +117,8 @@ it.each([
     await waitForFast(() =>
       expect(mounted.container.querySelector(".settings-row")).not.toBeNull(),
     );
-    const dialog = mounted.container.querySelector(".skill-library-dialog")!;
     const { dialog: nativeDialog } = await getRenderedModalDialog(mounted.container);
+    const dialog = mounted.container.querySelector(".skill-library-dialog")!;
     const row = mounted.container.querySelector(".settings-row")!;
     const button = (label: string) => buttonIn(dialog, label);
     const before = action === "disable" ? "Disable" : "Share with team";
@@ -163,6 +163,7 @@ it("keeps removal confirmation outside mutation presentation", async () => {
   const confirm = vi.mocked(showConfirmDialog).mockResolvedValue(false);
   const mounted = mountLibrary(library, true);
   flush();
+  await getRenderedModalDialog(mounted.container);
   const remove = buttonIn(mounted.container, "Remove skill");
   remove.click();
   flush();
@@ -183,6 +184,7 @@ it.each(["files", "clawhub"])(
     }
     const mounted = mountLibrary(library);
     flush();
+    await getRenderedModalDialog(mounted.container);
     const dialog = mounted.container.querySelector(".skill-library-dialog")!;
     const submit = dialog.querySelector<HTMLButtonElement>('button[type="submit"]')!;
     const reading = createDeferred<ArrayBuffer>();
@@ -222,12 +224,13 @@ it.each(["files", "clawhub"])(
     });
   },
 );
-it("disables import while disconnected without losing the local selection", () => {
+it("disables import while disconnected without losing the local selection", async () => {
   const { library, connection } = harness();
   library.setImportOpen(true);
   library.state.importSelection = [new File(["# Skill"], "SKILL.md")];
   const view = mountLibrary(library, true);
   flush();
+  await getRenderedModalDialog(view.container);
   const submit = view.container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
   expect(submit.disabled).toBe(false);
   connection.publish({ ...connection.gateway.snapshot, phase: "reconnecting" });
@@ -477,12 +480,13 @@ it("settles support-file saves after caller retirement and retains their baselin
 });
 
 it("hides pickers and prevents file reads while leaving manual editing available", async () => {
+  onTestFinished(installDialogPolyfill());
   const { library, config, request } = harness();
   const read = vi.fn(async () => new ArrayBuffer(1));
   config.current.uploadsEnabled = false;
   library.setImportOpen(true);
-  const container = document.createElement("div");
-  mountSolid(() => <SkillLibrary library={library} navigationActions={null} />, { container });
+  const { container } = mountLibrary(library);
+  await getRenderedModalDialog(container);
   expect(container.querySelector('input[type="file"]')).toBeNull();
   await library.importFiles([fileWithReader("SKILL.md", read)]);
   expect(read).not.toHaveBeenCalled();

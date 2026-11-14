@@ -131,10 +131,10 @@ const experimental = (values: Record<string, unknown>) => ({
   gateway: { controlUi: { experimental: values } },
 });
 const codeMode = (value: unknown) => ({ tools: { codeMode: value } });
-const advisor = (value: Record<string, unknown>) => ({ plugins: { entries: { advisor: value } } });
 const hostDesktop = (value: Record<string, unknown>) => ({ desktop: { host: value } });
 const workerDesktop = (desktop: boolean) => ({ cloudWorkers: { desktop } });
 const hostEnabled = (enabled: boolean) => hostDesktop({ enabled });
+const openclawId = (value: Record<string, unknown>) => ({ gateway: { openclawId: value } });
 
 async function startSave(title = "Code Mode", config?: Record<string, unknown>) {
   const mounted = await mountPage(config ?? codeMode({ enabled: false }));
@@ -220,13 +220,6 @@ describe("LabsPage", () => {
       hostDesktop({ enabled: true, managed: false, port: 5908, passwordFile: "/tmp/vnc-password" }),
       hostEnabled(false),
     ],
-    [
-      "Advisor",
-      "advisor",
-      false,
-      advisor({ enabled: true, config: { everyToolCalls: 3 } }),
-      advisor({ enabled: null }),
-    ],
     // Labs offers Auto/Off; force-on stays a config-only power-user state.
     ["Code Mode", "codeMode", true, codeMode({ enabled: false }), codeMode({ enabled: "auto" })],
     ["Code Mode", "codeMode", true, codeMode(false), codeMode(null)],
@@ -240,7 +233,14 @@ describe("LabsPage", () => {
       hostEnabled(true),
     ],
     ["Cloud device desktop", "workerDesktop", true, workerDesktop(false), workerDesktop(true)],
-    ["Advisor", "advisor", true, {}, advisor({ enabled: true })],
+    ["OpenClaw ID remote access", "openclawId", true, {}, openclawId({ enabled: true })],
+    [
+      "OpenClaw ID remote access",
+      "openclawId",
+      false,
+      openclawId({ enabled: true, relayUrl: "https://relay.example.test/" }),
+      openclawId({ enabled: false }),
+    ],
     ["Code Mode", "codeMode", false, {}, codeMode({ enabled: false })],
     [
       "Code Mode",
@@ -260,6 +260,15 @@ describe("LabsPage", () => {
       expect(runtimeConfig.refresh).not.toHaveBeenCalled();
     },
   );
+
+  it("shows OpenClaw ID as a flag only, pointing to the account menu", async () => {
+    const { page } = await mountPage(openclawId({ enabled: true }));
+    const toggle = labToggle(page, "OpenClaw ID remote access");
+    expect(toggle.checked).toBe(true);
+    expect(page.textContent).toContain("from the account menu");
+    expect(page.textContent).not.toContain("Make reachable");
+    expect(page.textContent).not.toContain("Invite someone");
+  });
 
   it("does not publish a retired save failure after a same-client reconnect", async () => {
     const { gateway, page, runtimeConfig, pendingPatch, toggle } = await startSave();
@@ -301,26 +310,6 @@ describe("LabsPage", () => {
     await waitForSolid(() => expect(toggle.checked).toBe(false));
     pendingPatch.reject(new Error("Retired save failed"));
     await waitForSolid(() => expect(page.querySelector('[role="alert"]')).toBeNull());
-  });
-
-  it("opens Advisor settings from Configure without toggling the lab", async () => {
-    const { page, context, runtimeConfig } = await mountPage({}, "/ui");
-    const link = labRow(page, "Advisor").querySelector<HTMLAnchorElement>(
-      '.settings-row__control a[aria-label="Configure Advisor"]',
-    );
-    expect(link?.textContent?.trim()).toBe("Configure");
-    expect(link?.getAttribute("href")).toBe("/ui/settings/plugins/advisor?view=settings");
-
-    link!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
-
-    expect(context.navigate).toHaveBeenCalledExactlyOnceWith("plugin-settings", {
-      pathname: "/ui/settings/plugins/advisor",
-      search: "?view=settings",
-      hash: "",
-    });
-    // The row toggles on plain clicks; its own links must not flip the switch.
-    expect(labToggle(page, "Advisor").checked).toBe(false);
-    expect(runtimeConfig.patch).not.toHaveBeenCalled();
   });
 
   it("does not narrate the default in the row", async () => {

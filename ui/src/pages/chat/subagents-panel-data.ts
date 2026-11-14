@@ -1,7 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { NativeSubagentsSnapshot } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createSidebarNarration } from "../../components/app-sidebar-session-narration.ts";
 import { readSidebarToolActivity } from "../../components/sidebar-tool-activity.ts";
@@ -10,15 +10,8 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
-import {
-  childSessionListQuery,
-  fetchChildSessionRows,
-} from "../../lib/sessions/child-session-data.ts";
-import type {
-  SessionCapability,
-  SessionListSnapshot,
-  SessionMessageSubscription,
-} from "../../lib/sessions/index.ts";
+import { childSessionListQuery } from "../../lib/sessions/child-session-data.ts";
+import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   normalizeAgentId,
@@ -30,7 +23,6 @@ import { requestChatAbort } from "./chat-abort-request.ts";
 import { requestSharedHistory } from "./chat-history-request.ts";
 import { historySessionId, isHistoryCursor } from "./chat-history-snapshot.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
-import { isSubagentsPanelSession } from "./chat-spawned-subagent.ts";
 import { selectActivityHeadline } from "./components/chat-activity-headline-selection.ts";
 import {
   readSubagentActivitySnapshot,
@@ -38,6 +30,10 @@ import {
   subagentToolCallCount,
   type SubagentActivitySnapshot,
 } from "./subagents-panel-activity.ts";
+import {
+  SubagentsPanelChildren,
+  type SubagentsPanelChildrenSnapshot,
+} from "./subagents-panel-children.ts";
 import { buildToolStreamIdentity, toolStreamIdentityRunId } from "./tool-stream-identity.ts";
 
 const HISTORY_CONCURRENCY = 2;
@@ -45,6 +41,7 @@ const MAX_RETAINED_CALLS = 1024;
 
 export type SubagentsPanelRow = {
   session: GatewaySessionRow;
+  depth?: number;
   callCount?: { count: number; exact: boolean };
   activity?: string;
   toolDisplayName?: string;
@@ -57,6 +54,7 @@ export type SubagentsPanelInput = {
   sessionKey: string;
   agentId: string;
   presented: boolean;
+  includeDescendants?: boolean;
 };
 
 type Metrics = SubagentActivitySnapshot & {
@@ -110,8 +108,8 @@ export class SubagentsPanelData {
 
   private input: SubagentsPanelInput | null = null;
   private scope: ReturnType<SessionCapability["captureConnectionScope"]> = null;
-  private observation: ReturnType<SessionCapability["observeList"]> | null = null;
-  private pendingListRead: Promise<void> | null = null;
+  private children: SubagentsPanelChildren | null = null;
+  private readonly depths = new Map<string, number>();
   private generation = 0;
   private nativeRead: Promise<void> | null = null;
   private nativeRefreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -173,7 +171,8 @@ export class SubagentsPanelData {
   sync(input: SubagentsPanelInput): void {
     const changed =
       input.sessionKey !== this.input?.sessionKey ||
-      normalizeAgentId(input.agentId) !== normalizeAgentId(this.input?.agentId);
+      normalizeAgentId(input.agentId) !== normalizeAgentId(this.input?.agentId) ||
+      Boolean(input.includeDescendants) !== Boolean(this.input?.includeDescendants);
     if (!changed && input.presented === this.input?.presented) {
       return;
     }
@@ -198,7 +197,7 @@ export class SubagentsPanelData {
     if (this.scope && !this.context.sessions.isConnectionScopeCurrent(this.scope)) {
       this.retire();
     }
-    if (this.observation) {
+    if (this.children) {
       return;
     }
     this.scope = scope;
@@ -206,15 +205,14 @@ export class SubagentsPanelData {
     this.loading = true;
     this.failure = null;
     this.syncReadCompletion();
-    this.observation = this.context.sessions.observeList(
-      this.childQuery(this.input),
-      (snapshot) => {
-        if (this.current(generation)) {
-          this.applyList(snapshot);
-        }
-      },
-    );
-    void this.refresh();
+    this.children = new SubagentsPanelChildren(this.context.sessions, {
+      query: this.childQuery(this.input),
+      includeDescendants: this.input.includeDescendants === true,
+      isCurrent: () => this.current(generation),
+      changed: (snapshot) => this.applyList(snapshot),
+    });
+    this.children.start();
+    void this.readNative();
   }
 
   private childQuery(input: SubagentsPanelInput) {
@@ -237,13 +235,12 @@ export class SubagentsPanelData {
 
   async refresh(): Promise<void> {
     const generation = this.generation;
-    await this.pendingListRead;
     if (!this.current(generation)) {
       return;
     }
     this.metrics.clear();
     this.failure = null;
-    await Promise.all([this.readList(), this.readNative()]);
+    await Promise.all([this.children?.refresh() ?? Promise.resolve(), this.readNative()]);
   }
 
   private readNative(): Promise<void> {
@@ -294,93 +291,40 @@ export class SubagentsPanelData {
     return pending;
   }
 
-  private async readList(initialResult?: SessionsListResult): Promise<void> {
-    if (this.pendingListRead) {
-      return this.pendingListRead;
-    }
-    const generation = this.generation;
-    if (!this.input || !this.current(generation)) {
-      return;
-    }
-    const query = this.childQuery(this.input);
-    this.loading = true;
-    this.syncReadCompletion();
-    this.publish();
-    const pending = Promise.resolve()
-      .then(async () => {
-        if (this.current(generation)) {
-          await fetchChildSessionRows({
-            sessions: this.context.sessions,
-            parentKey: query.spawnedBy,
-            agentId: query.agentId,
-            isCurrent: () => this.current(generation),
-            initialResult,
-          });
-        }
-      })
-      .catch((error: unknown) => {
-        if (this.current(generation)) {
-          this.failure = { kind: "read", message: formatUiError(error) };
-          this.loading = false;
-          this.syncReadCompletion();
-          this.publish();
-        }
-      })
-      .finally(() => {
-        if (this.pendingListRead === pending) {
-          this.pendingListRead = null;
-        }
-      });
-    this.pendingListRead = pending;
-    await pending;
-  }
-
-  private applyList(snapshot: SessionListSnapshot): void {
-    const result = snapshot.result;
-    const pagination = snapshot.pagination;
-    const incomplete =
-      (pagination?.hasMore ?? result?.hasMore) ||
-      (pagination?.totalCount !== undefined && pagination.count < pagination.totalCount);
-    this.loading = !snapshot.error && (snapshot.loading || incomplete);
+  private applyList(snapshot: SubagentsPanelChildrenSnapshot): void {
+    this.loading = snapshot.loading;
     this.failure = snapshot.error ? { kind: "read", message: snapshot.error } : null;
+    this.hasResult = snapshot.hasResult;
     this.syncReadCompletion();
-    if (snapshot.error) {
-      // Access loss must not leave previously readable child contents onscreen.
-      this.sessions = [];
-      this.metrics.clear();
-    } else if (result && !incomplete) {
-      this.hasResult = true;
-      const sampledAt = Date.now();
-      const previous = new Map(this.sessions.map((row) => [row.key, row]));
-      this.sessions = result.sessions.filter(isSubagentsPanelSession).map((row) => {
-        const held = previous.get(row.key);
-        const sameSample =
-          held && runIdentity(held) === runIdentity(row) && held.runtimeMs === row.runtimeMs;
-        return Object.assign({}, row, {
-          agentId: resolveUiSessionRowAgentId(row, this.input?.agentId ?? "main"),
-          runtimeSampledAt:
-            row.runtimeSampledAt ?? (sameSample ? held.runtimeSampledAt : undefined) ?? sampledAt,
-        });
+    const sampledAt = Date.now();
+    const previous = new Map(this.sessions.map((row) => [row.key, row]));
+    this.depths.clear();
+    this.sessions = snapshot.rows.map(({ session: row, depth }) => {
+      this.depths.set(row.key, depth);
+      const held = previous.get(row.key);
+      const sameSample =
+        held && runIdentity(held) === runIdentity(row) && held.runtimeMs === row.runtimeMs;
+      return Object.assign({}, row, {
+        agentId: resolveUiSessionRowAgentId(row, this.input?.agentId ?? "main"),
+        runtimeSampledAt:
+          row.runtimeSampledAt ?? (sameSample ? held.runtimeSampledAt : undefined) ?? sampledAt,
       });
-      const keys = new Set(this.sessions.map((row) => row.key));
-      for (const key of this.metrics.keys()) {
-        if (!keys.has(key)) {
-          this.metrics.delete(key);
-        }
+    });
+    const keys = new Set(this.sessions.map((row) => row.key));
+    for (const key of this.metrics.keys()) {
+      if (!keys.has(key)) {
+        this.metrics.delete(key);
       }
-      for (const row of this.sessions) {
-        const identity = runIdentity(row);
-        if (this.metrics.get(row.key)?.identity !== identity) {
-          this.metrics.set(row.key, createMetrics(identity));
-        }
+    }
+    for (const row of this.sessions) {
+      const identity = runIdentity(row);
+      if (this.metrics.get(row.key)?.identity !== identity) {
+        this.metrics.set(row.key, createMetrics(identity));
       }
     }
     this.syncNarration();
     this.publish();
     this.readMetrics();
-    if (result && incomplete && !snapshot.loading && !snapshot.error) {
-      void this.readList(result);
-    }
   }
 
   private syncNarration(): void {
@@ -608,6 +552,7 @@ export class SubagentsPanelData {
       }).abort;
       return {
         session,
+        depth: this.depths.get(session.key) ?? 0,
         callCount: metrics ? subagentToolCallCount(metrics) : undefined,
         activity:
           tool?.text ||
@@ -710,9 +655,9 @@ export class SubagentsPanelData {
     this.nativeRead = null;
     this.nativeSnapshot = undefined;
     this.nativeError = null;
-    this.observation?.dispose();
-    this.observation = null;
-    this.pendingListRead = null;
+    this.children?.dispose();
+    this.children = null;
+    this.depths.clear();
     this.scope = null;
     this.sessions = [];
     this.metrics.clear();

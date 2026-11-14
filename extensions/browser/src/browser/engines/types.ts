@@ -48,7 +48,7 @@ export type BrowserEngineDescriptor = {
 
 type BrowserEngineCdpNormalizer = {
   send: (message: object) => object;
-  receive: (message: Record<string, unknown>) => Record<string, unknown> | undefined;
+  receive: (message: Record<string, unknown>) => Record<string, unknown>[];
   clear: () => void;
 };
 
