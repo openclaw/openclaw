@@ -551,7 +551,7 @@ export type ToolCardOutcome =
   | "unknown";
 
 export type ChatGoalMutationAction = { goalId: string } & (
-  | { action: ChatGoalAction }
+  | { action: ChatGoalAction; note?: string }
   | { action: "edit"; objective: string }
   | { action: "replace"; objective: string; expectedRunId: string; expectedGoalUpdatedAt: number }
 );

@@ -112,6 +112,15 @@ export function buildUpdatedSessionGoalStatus(
   ) {
     throw new SessionGoalTransitionError(`goal is already ${accounted.status}`);
   }
+  const blockedResumeNote =
+    accounted.status === "blocked" && options.status === "active"
+      ? (options.note?.trim() ?? "")
+      : undefined;
+  if (blockedResumeNote === "") {
+    throw new SessionGoalTransitionError(
+      "A blocked goal needs a resume note describing what changed.",
+    );
+  }
   const resetsBudgetWindow =
     options.status === "active" &&
     (accounted.status === "budget_limited" ||
@@ -123,7 +132,11 @@ export function buildUpdatedSessionGoalStatus(
     ...accounted,
     status: options.status,
     updatedAt: now,
-    ...(options.note ? { lastStatusNote: options.note } : {}),
+    ...(blockedResumeNote
+      ? { lastStatusNote: blockedResumeNote }
+      : options.note
+        ? { lastStatusNote: options.note }
+        : {}),
     ...(options.status === "paused" ? { pausedAt: now } : {}),
     ...(options.status === "blocked" ? { blockedAt: now } : {}),
     ...(options.status === "complete" ? { completedAt: accounted.completedAt ?? now } : {}),
