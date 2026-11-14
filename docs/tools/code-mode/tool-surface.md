@@ -161,8 +161,9 @@ Ordinary cells retain their existing explicit-yield behavior.
 Required cells collect ordinary shell commands to completion. Explicit
 `background: true` remains the opt-out for intentionally detached servers.
 A shell `exec({awaitResults: true, ...})` or `agents_wait({awaitResults: true, ...})`
-inside an ordinary cell also makes that cell required. These declarations do
-not enable `tools.exec.notifyOnExit`.
+inside an ordinary cell also makes that cell required, as does any native
+`ask_user` call, so a pending question is never cancelled at turn end. These
+declarations do not enable `tools.exec.notifyOnExit`.
 
 For required collector results, await `agents.run(...)` in a required cell,
 or call `agents_wait({ids, awaitResults: true})`. Ordinary announcing children

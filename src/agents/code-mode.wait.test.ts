@@ -30,6 +30,7 @@ import {
   createCatalogCodeModeHarness,
   jsonTool,
 } from "./code-mode.test-support.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
@@ -236,6 +237,23 @@ it("preserves an accepted host handoff while wait is parked without resuming the
     release.resolve();
     await waiting;
   }
+});
+
+it("keeps an ordinary cell's native ask_user owned past its budget until answered", async () => {
+  mockClock();
+  const parked = createDeferred();
+  const question = controlledTool(fakeTool("ask_user", "Ask the owner"));
+  cleanups.push(question.release.resolve);
+  observeSettlement(parked.resolve);
+  const result = harness([question.tool], { codeMode: { timeoutMs: 1_000 } }).run(
+    'return await ask_user({ value: "Proceed?" });',
+  );
+  await parked.promise;
+  // An unowned `waiting` result would let turn teardown cancel the pending question.
+  await vi.advanceTimersByTimeAsync(60_000);
+  question.release.resolve();
+  expectCompleted(await result, { name: "ask_user", input: { value: "Proceed?" } });
+  expect((await question.started.promise)?.aborted).toBe(false);
 });
 
 it.each(["failure", "cancel", "replace"] as const)(
