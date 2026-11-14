@@ -1,4 +1,4 @@
-# 12,903 net test LF against main 9f1dce8b minus the single 400-line PR allowance.
+# 12,962 net test LF against main 9f1dce8b minus the single 400-line PR allowance.
 # Real worker identity/alias refusal, async capture retirement, FIFO and settlement,
 # auth commit publication, Talk/trajectory lifecycle, and periodic maintenance FS proof.
 # Repairs retain real queued-custody, completion-context, and immediate-retirement proof.
@@ -13,4 +13,6 @@
 # Startup backfill preserves same-file reopen and worker refusal of physical replacement.
 # CI fixtures retain original assertions with native worker/watch admission and physical roots.
 # Calibrated startup fs counts and real held-commit replacement quarantine regression.
-12503
+# Concurrent cold Talk creation must exercise the real discovery/writer wait cycle.
+# Its 59-line regression persists both entries; no cheaper helper catches the deadlock.
+12562
