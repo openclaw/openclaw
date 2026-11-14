@@ -345,7 +345,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
           ? ["--allowedTools", "mcp__openclaw__message,mcp__openclaw__read"]
           : []),
         "--disallowedTools",
-        `${openClaw.length ? "" : "mcp__*,"}ScheduleWakeup,mcp__other__*`,
+        `ScheduleWakeup,${openClaw.length ? "" : "mcp__*,"}mcp__other__*`,
       ]);
     },
   );
