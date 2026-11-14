@@ -150,6 +150,7 @@ export function captureCliRunToolAuthority(
         const authority = createAgentQuestionAnswerAuthority({
           sessionKey: questionSessionKey,
           requesterProfileId: source?.profileId,
+          sourceQuestionInput: params.sourceQuestionInput,
           fingerprint,
           prepareCaller: async (caller) =>
             prepareReplyToolAuthorityCallerRead(

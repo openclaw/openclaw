@@ -459,7 +459,9 @@ export async function executePreparedReplyRun(
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
+    disableCollectBatching: opts?.sourceQuestionInput !== undefined,
     runObservers: {
+      sourceQuestionInput: opts?.sourceQuestionInput,
       awaitSessionDiffBaseline: opts?.awaitSessionDiffBaseline,
       onAgentRunStart: opts?.onAgentRunStart,
       onPreparedAgentRunStart: opts?.onPreparedAgentRunStart,
@@ -693,6 +695,7 @@ export async function executePreparedReplyRun(
       steeringIntent: resolveReplySteeringIntent({
         directives: params.directives,
         resetTriggered: effectiveResetTriggered,
+        sourceQuestionInput: opts?.sourceQuestionInput,
       }),
       commandBody: prefixedCommandBody,
       transcriptCommandBody,

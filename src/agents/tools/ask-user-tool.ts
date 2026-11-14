@@ -55,6 +55,7 @@ type AskUserQuestionState = {
   questions: QuestionRequestQuestion[];
   expiresAtMs: number;
   phase: AskUserQuestionPhase;
+  sourceOwned?: boolean;
   claim?: ReturnType<typeof registerPendingAgentQuestion>;
   waiters: Set<() => void>;
 };
@@ -179,6 +180,9 @@ export async function waitForAskUserPromptReady(
     return undefined;
   }
   while (askUserQuestions.get(questionId) === state) {
+    if (state.sourceOwned) {
+      return undefined;
+    }
     if (
       state.phase.kind === "prompting" ||
       state.phase.kind === "answerable" ||
@@ -189,6 +193,9 @@ export async function waitForAskUserPromptReady(
     }
     try {
       const status = await readAskUserQuestionStatus(questionId, gatewayCall);
+      if (state.sourceOwned || askUserQuestions.get(questionId) !== state) {
+        return undefined;
+      }
       if (status === "pending") {
         // The executor may live in another JS realm or process. The Gateway record
         // is the cross-runtime readiness boundary when local state cannot signal.
@@ -289,6 +296,9 @@ export async function isAskUserPromptPending(
     return false;
   }
   while (askUserQuestions.get(questionId) === state) {
+    if (state.sourceOwned) {
+      return false;
+    }
     if (state.phase.kind === "resolving" || state.phase.kind === "prompt-failed") {
       return false;
     }
@@ -305,6 +315,7 @@ export async function isAskUserPromptPending(
     const currentState = askUserQuestions.get(questionId);
     if (
       currentState !== state ||
+      state.sourceOwned ||
       currentState.phase.kind === "resolving" ||
       currentState.phase.kind === "prompt-failed"
     ) {
@@ -437,6 +448,7 @@ function createAskUserPromptDelivery(
   timeoutSeconds: number,
   pendingMessage: string,
   deliverPrompt?: (questionId: string) => Promise<void>,
+  sourceOwned = false,
 ) {
   const reserved = askUserQuestions.get(questionId);
   const existing = findAskUserQuestionForSession(sessionKey);
@@ -451,7 +463,7 @@ function createAskUserPromptDelivery(
     phase: { kind: "registering" },
     waiters: new Set(),
   };
-  Object.assign(state, { sessionKey, questions });
+  Object.assign(state, { sessionKey, questions, sourceOwned });
   state.expiresAtMs = Date.now() + timeoutSeconds * 1_000;
   transitionAskUserQuestion(state, { kind: "registering" });
   askUserQuestions.set(questionId, state);
@@ -459,6 +471,10 @@ function createAskUserPromptDelivery(
     questionId,
     hasSubscriber: reserved !== undefined || deliverPrompt !== undefined,
     markReady() {
+      if (state.sourceOwned) {
+        transitionAskUserQuestion(state, { kind: "answerable" });
+        return;
+      }
       if (reserved || deliverPrompt) {
         markAskUserPromptReady(questionId, questions);
       } else {
@@ -534,6 +550,7 @@ export function createAskUserTool(params: {
                 signal: prompt.signal,
               })
           : undefined,
+        questionAuthority?.sourceQuestionInput !== undefined,
       );
       using prompt = createQuestionPromptLifetime(signal);
       let registered = false;
@@ -611,7 +628,7 @@ export function createAskUserTool(params: {
                 timeoutMs,
               },
               signal ? { signal } : undefined,
-            ) as Promise<{ id?: unknown }>,
+            ) as Promise<{ id?: unknown; expiresAtMs?: number }>,
         );
         state.claim.attachRegistration(registration);
         const requestResult = await registration;
@@ -642,6 +659,9 @@ export function createAskUserTool(params: {
           signal ? { signal } : undefined,
         ).finally(prompt.close) as Promise<QuestionWaitAnswerResult>;
         state.claim.setAnswer(answerPromise);
+        if (state.claim.publishSourceQuestion) {
+          await state.claim.publishSourceQuestion(requestResult.expiresAtMs);
+        }
         delivery.markReady();
         if (delivery.hasSubscriber) {
           const promptDeliveryPromise = delivery.waitForDelivery(signal);

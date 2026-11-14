@@ -3,7 +3,9 @@ import {
   releaseSessionControllerClaim,
 } from "../../sessions/session-controller.mailbox.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import type { SourceQuestionInputV1 } from "../source-question.types.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { readReplySourceInput } from "./reply-source-binding.js";
 import { resolveReplyTurnKind } from "./reply-turn-kind.js";
 
@@ -31,6 +33,13 @@ export async function acquireDispatchTurn(state: PrepareDispatchOperationReadySt
  * waits for its own mailbox claim instead, so its turn never queues behind it.
  */
 export async function acquireAcpDispatchTurn(state: PrepareDispatchOperationReadyState) {
+  const sourceInput = state.params.replyOptions?.sourceQuestionInput;
+  if (sourceInput?.mode === "answer-only") {
+    return {
+      status: "source-question-refused" as const,
+      result: await refuseReplyHookQuestionInput(state, sourceInput),
+    };
+  }
   const refusal = await acquireDispatchTurn(state);
   const replyOptions = state.params.replyOptions;
   const input = readReplySourceInput(replyOptions);
@@ -55,4 +64,20 @@ export async function acquireAcpDispatchTurn(state: PrepareDispatchOperationRead
     releaseSessionControllerClaim(input.claim);
   }
   return claimedRefusal;
+}
+
+/** A hook without the native source seam must consume refusal before acquiring an execution. */
+export async function refuseReplyHookQuestionInput(
+  state: PrepareDispatchOperationReadyState,
+  input: Extract<SourceQuestionInputV1, { mode: "answer-only" }>,
+) {
+  const runState = resolveReplyOperationRunState(state.params.replyOptions);
+  if (runState) {
+    runState.questionInputHandled = true;
+    runState.admission = { status: "skipped", reason: "question-response-refused" };
+  }
+  await input.onReceipt({ status: "refused", reason: "unsupported" });
+  state.recordProcessed("error", { reason: "source_question_takeover_unsupported" });
+  state.markIdle("message_error");
+  return { handled: true as const, queuedFinal: false, counts: state.dispatcher.getQueuedCounts() };
 }

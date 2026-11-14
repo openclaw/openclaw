@@ -503,6 +503,10 @@ export async function prepareQuestionCallerAuthority(
 
 export type PreparedQuestionAnswerAuthority = Readonly<{
   sessionKey: string;
+  sourceQuestionInput?: Extract<
+    import("../../auto-reply/source-question.types.js").SourceQuestionInputV1,
+    { mode: "new-task" }
+  >;
   /** Host-admitted viewer identity, never a transport sender label. */
   requesterProfileId?: string;
   assertActive: () => void;
@@ -524,6 +528,7 @@ const questionAnswerCapabilities = new WeakMap<
 /** Retain the creator's prepared policy; a matching hash alone never grants authority. */
 export function createAgentQuestionAnswerAuthority(params: {
   sessionKey: string;
+  sourceQuestionInput?: PreparedQuestionAnswerAuthority["sourceQuestionInput"];
   requesterProfileId?: string;
   fingerprint: string | undefined;
   project: (caller: ReplyToolAuthorityOverlay) => string | undefined;
@@ -533,6 +538,10 @@ export function createAgentQuestionAnswerAuthority(params: {
 }): PreparedQuestionAnswerAuthority {
   return Object.freeze({
     sessionKey: params.sessionKey.trim(),
+    get sourceQuestionInput() {
+      params.assertActive();
+      return params.sourceQuestionInput;
+    },
     requesterProfileId: params.requesterProfileId,
     assertActive: params.assertActive,
     admitTranscriptAnswer: params.admitTranscriptAnswer,

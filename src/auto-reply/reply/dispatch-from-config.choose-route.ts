@@ -656,13 +656,16 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   }
 
   const acpRefusal = state.dispatchKind === "acp" ? await acquireAcpDispatchTurn(state) : undefined;
-  if (acpRefusal) {
+  if (acpRefusal?.status === "complete") {
     return acpRefusal;
   }
-  const replyDispatchTakeover = await runReplyDispatchHook(state, {
-    shouldSendToolSummaries,
-    shouldSendToolSummariesAsync,
-  });
+  const replyDispatchTakeover =
+    acpRefusal?.status === "source-question-refused"
+      ? acpRefusal.result
+      : await runReplyDispatchHook(state, {
+          shouldSendToolSummaries,
+          shouldSendToolSummariesAsync,
+        });
   if (replyDispatchTakeover?.handled) {
     commitInboundDedupeIfClaimed();
     completeDispatchReplyOperation();

@@ -633,8 +633,8 @@ export type ChannelMessagingAdapter = {
 };
 
 export type ChannelAgentPromptAdapter = {
-  /** Native controls that can present and resolve structured user questions. */
-  questionInputMode?: "buttons";
+  /** Stable channel support for user controls or source-owned business questions. */
+  questionInputMode?: "buttons" | "source";
   /** The channel supplies its own inline-button guidance through messageToolHints. */
   customInlineButtonHint?: boolean;
   messageToolHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];

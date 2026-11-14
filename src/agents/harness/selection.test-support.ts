@@ -86,6 +86,10 @@ export async function withOwnedHarnessGeneration<Registered, Result>(
 }
 
 export const privateHarnessParamCases = [
+  {
+    field: "sourceQuestionInput",
+    value: { version: 1, mode: "new-task", onQuestion: async () => {} },
+  },
   { field: "thinkingExplicit", value: false },
   {
     field: "runtimePluginToolGrant",

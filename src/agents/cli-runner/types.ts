@@ -51,6 +51,7 @@ type CliSessionRetryParams = {
 export type RunCliAgentParams = Pick<
   RunEmbeddedAgentParams,
   | "conversationToolPolicy"
+  | "sourceQuestionInput"
   | "trustedInternalHandoff"
   | "trigger"
   | "finalizePromptForResolvedTools"

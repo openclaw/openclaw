@@ -45,6 +45,7 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { tryDispatchAcpReplyCore } from "./dispatch-acp.js";
+import * as replyDispatchEvents from "./dispatch-from-config.events.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -660,3 +661,150 @@ it.each(["acp", "ordinary"] as const)("resets the explicit %s target", async (ta
     },
   );
 });
+
+it.each(["new-task", "answer-pending", "answer-empty"] as const)(
+  "keeps source intent at the real ACP takeover (%s)",
+  async (mode) => {
+    await withOpenClawTestState(
+      { label: `acp-source-${mode}`, env: { OPENCLAW_TEST_FAST: "0" } },
+      async (state) => {
+        const sessionKey = "agent:main:acp:source-question";
+        const backendId = "source-question-acp";
+        const cfg = withFullRuntimeReplyConfig({
+          agents: {
+            entries: { main: { workspace: state.workspaceDir } },
+            defaults: { workspace: state.workspaceDir, skipBootstrap: true },
+          },
+          acp: { enabled: true, dispatch: { enabled: true }, backend: backendId },
+          plugins: { enabled: true, allow: ["acpx"], entries: { acpx: { enabled: true } } },
+        });
+        await state.writeConfig(cfg);
+        const registry = createPluginRegistry({
+          logger: { info() {}, warn() {}, error() {}, debug() {} },
+          runtime: createPluginRuntimeMock(),
+          activateGlobalSideEffects: false,
+        });
+        const record = createPluginRecord({
+          id: "acpx",
+          origin: "bundled",
+          source: state.path("plugin/acpx/index.ts"),
+          status: "loaded",
+        });
+        registry.registry.plugins.push(record);
+        const dispatchEvent = vi.spyOn(replyDispatchEvents, "createReplyDispatchEvent");
+        registry
+          .createApi(record, { config: cfg })
+          .on("reply_dispatch", tryDispatchAcpReplyHook, { eligibleDispatchKinds: ["acp"] });
+        setActivePluginRegistry(registry.registry);
+        initializeGlobalHookRunner(registry.registry);
+        const runTurn = vi.fn(async function* () {
+          yield { type: "text_delta" as const, text: "new task reply" };
+          yield { type: "done" as const };
+        });
+        const cancel = vi.fn(async () => {});
+        registerAcpRuntimeBackend({
+          id: backendId,
+          runtime: {
+            ownerAwareSessions: 1,
+            async ensureSession(input) {
+              return { ...input, backend: backendId, runtimeSessionName: input.sessionKey };
+            },
+            runTurn,
+            cancel,
+            async close() {},
+          },
+        });
+        testing.resetAcpSessionManagerForTests();
+        const manager = getAcpSessionManager();
+        const receipt = vi.fn();
+        const resolveQuestion = vi.fn(async () => ({}));
+        const claim =
+          mode !== "answer-empty"
+            ? registerPendingAgentQuestion({
+                sessionKey,
+                questionId: "ask_88888888888888888888888888888888",
+                questions: [
+                  { id: "seats", header: "Seats", question: "Seats?", options: [], isOther: true },
+                ],
+                answer: new Promise(() => {}),
+                gatewayCall: resolveQuestion,
+              })
+            : undefined;
+        claim?.attachRegistration(Promise.resolve());
+        const dispatcher = createReplyDispatcher({ deliver: async () => {} });
+        try {
+          await manager.initializeSession({
+            cfg,
+            sessionKey,
+            agentId: "main",
+            agent: "fixture",
+            mode: "persistent",
+          });
+          await withPluginRuntimeRegistryScope(registry.registry, () =>
+            dispatchInboundMessage({
+              cfg,
+              dispatcher,
+              ctx: buildTestCtx({
+                SessionKey: sessionKey,
+                AgentId: "main",
+                Provider: "webchat",
+                Surface: "webchat",
+                From: "source-peer",
+                SenderId: "source-peer",
+                Body: "hello",
+                BodyForAgent: "hello",
+                RawBody: "hello",
+                CommandBody: "hello",
+                MessageSid: `source-${mode}`,
+              }),
+              replyOptions: {
+                sourceQuestionInput:
+                  mode === "new-task"
+                    ? { version: 1, mode: "new-task" }
+                    : {
+                        version: 1,
+                        mode: "answer-only",
+                        question: {
+                          version: 1,
+                          questions: [],
+                          expiresAtMs: Date.now() + 60_000,
+                          signal: new AbortController().signal,
+                        },
+                        onReceipt: receipt,
+                      },
+              },
+            }),
+          );
+          expect(resolveQuestion).not.toHaveBeenCalled();
+          expect(cancel).not.toHaveBeenCalled();
+          if (mode === "new-task") {
+            expect(runTurn).toHaveBeenCalledOnce();
+            expect(dispatchEvent).toHaveBeenCalledOnce();
+            expect(dispatchEvent.mock.calls[0]?.[0]).toMatchObject({
+              sourceQuestionIntent: "new-task",
+            });
+            expect(dispatchEvent.mock.calls[0]?.[0]).not.toHaveProperty("sourceQuestionInput");
+            await expectPendingQuestionAnswerClaimable(sessionKey, true);
+          } else {
+            expect(runTurn).not.toHaveBeenCalled();
+            expect(dispatchEvent).not.toHaveBeenCalled();
+            expect(receipt).toHaveBeenCalledExactlyOnceWith({
+              status: "refused",
+              reason: "unsupported",
+            });
+          }
+        } finally {
+          claim?.dispose();
+          dispatcher.markComplete();
+          await dispatcher.waitForIdle();
+          await disposeAcpSessionManagerInstance(manager, "test-complete");
+          testing.resetAcpSessionManagerForTests();
+          dispatchEvent.mockRestore();
+          unregisterAcpRuntimeBackend(backendId);
+          resetPluginRuntimeStateForTest();
+          await disposePluginRegistryInstances(registry.registry);
+        }
+      },
+    );
+  },
+);

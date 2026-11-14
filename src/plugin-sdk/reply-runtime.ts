@@ -55,6 +55,10 @@ export type {
   PreparedAgentRunStart,
   BlockReplyContext,
   SourceReplyDeliveryMode,
+  SourceBusinessQuestionV1,
+  SourceQuestionV1,
+  SourceQuestionAnswerReceiptV1,
+  SourceQuestionInputV1,
 } from "../auto-reply/get-reply-options.types.js";
 export type { ReplyPayload } from "./reply-payload.js";
 export type {

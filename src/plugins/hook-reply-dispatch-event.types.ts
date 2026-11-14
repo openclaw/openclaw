@@ -15,6 +15,8 @@ export type PluginHookReplyDispatchEvent = {
   suppressUserDelivery?: boolean;
   suppressReplyLifecycle?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Independent task intent only; source callbacks and question authority remain host-private. */
+  sourceQuestionIntent?: "new-task";
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;

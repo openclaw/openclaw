@@ -404,8 +404,9 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     softResetTail.length > 0 ||
     hasInboundHistoryBody(sessionCtx) ||
     hasCurrentReplyTargetContext;
+  const isSourceAnswer = opts?.sourceQuestionInput?.mode === "answer-only";
   const hasMediaAttachment = hasInboundMedia(sessionCtx) || (opts?.images?.length ?? 0) > 0;
-  if (!hasUserBody && !hasMediaAttachment) {
+  if (!hasUserBody && !hasMediaAttachment && !isSourceAnswer) {
     // Skip onReplyStart when typing is suppressed (e.g. sendPolicy deny) —
     // otherwise channels that wire onReplyStart to typing indicators leak
     // visible signals even though outbound delivery is suppressed.
@@ -587,7 +588,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     // marker and directive stay current-turn context only.
     const roomEventBody = isRoomEvent ? resolveRoomEventTranscriptBody() : undefined;
     const effectiveBaseBody =
-      roomEventBody ?? (hasUserBody ? resetModelBody : MEDIA_ONLY_USER_TEXT);
+      roomEventBody ?? (hasUserBody || isSourceAnswer ? resetModelBody : MEDIA_ONLY_USER_TEXT);
     const transcriptBody = isBareSessionReset
       ? softResetTail || `[OpenClaw session ${startupAction}]`
       : effectiveBaseBody;

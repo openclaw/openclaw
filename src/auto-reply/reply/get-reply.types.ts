@@ -158,6 +158,20 @@ export function prepareInternalGetReplyOptions(
   opts: GetReplyOptions | undefined,
   context?: MsgContext,
 ): InternalGetReplyOptions | undefined {
+  const input = opts?.sourceQuestionInput;
+  if (
+    input !== undefined &&
+    (!input ||
+      input.version !== 1 ||
+      (input.mode !== "new-task" && input.mode !== "answer-only") ||
+      (input.mode === "new-task" &&
+        input.onQuestion !== undefined &&
+        typeof input.onQuestion !== "function") ||
+      (input.mode === "answer-only" &&
+        (typeof input.onReceipt !== "function" || input.question?.version !== 1)))
+  ) {
+    throw new Error("Unsupported source question input contract");
+  }
   const channelAuthority =
     context &&
     (getRequesterProfile(context)?.operatorAuthority ??

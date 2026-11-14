@@ -19,9 +19,16 @@ import type { ReplyPayload } from "./reply-payload.js";
 import type { ReplyMessageInjectionOutcome } from "./reply/message-injection-authority.js";
 import type { FollowupQueueDisposition } from "./reply/queue-policy.js";
 import type { TypingController } from "./reply/typing.js";
+import type { SourceQuestionInputV1 } from "./source-question.types.js";
 import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
 export type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
+export type {
+  SourceBusinessQuestionV1,
+  SourceQuestionV1,
+  SourceQuestionAnswerReceiptV1,
+  SourceQuestionInputV1,
+} from "./source-question.types.js";
 export type { FollowupQueueDisposition } from "./reply/queue-policy.js";
 
 /** An accepted visible work session and its canonical Control UI link. */
@@ -238,6 +245,8 @@ export type GetReplyOptions = {
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
   /** Retains source-owned delivery when this turn is queued behind an active run. */
   onQueuedFollowupReplyBatch?: QueuedFollowupReplyDelivery;
+  /** Source-owned question publication or an explicit answer to that exact live question. */
+  sourceQuestionInput?: SourceQuestionInputV1;
   /** Reports terminal queue-cap rejection or eviction when no agent run will report an outcome. */
   onFollowupQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /**

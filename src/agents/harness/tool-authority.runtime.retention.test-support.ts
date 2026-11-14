@@ -7,6 +7,7 @@ import {
   prepareAgentRunAdmission,
 } from "../admitted-run-context.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
+import { captureAgentQuestionAnswerAuthority } from "./host-private-capabilities.js";
 import { withPreparedEmbeddedRunToolAuthority } from "./tool-authority.runtime.js";
 
 const sessionId = "authority-retention";
@@ -16,6 +17,7 @@ const runId = "authority-retention";
 async function completeAttempt(source: "receipt" | "watchdog") {
   const continuation = { messages: [{ role: "user", content: "completed synthetic turn" }] };
   const internalContinuation = { prompt: "internal completed synthetic turn" };
+  const sourceQuestionInput = { version: 1, mode: "new-task", onQuestion: async () => {} } as const;
   const admission = prepareAgentRunAdmission({
     cfg: {},
     operationalRunInstance: createOperationalRunInstanceRef(runId),
@@ -29,8 +31,13 @@ async function completeAttempt(source: "receipt" | "watchdog") {
     const admittedRunContext = await admission.admit("embedded", "retention");
     const replyOperation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
     try {
-      const internal = { admittedRunContext, replyOperation, continuation: internalContinuation };
-      const retainedAssertion = await withPreparedEmbeddedRunToolAuthority(
+      const internal = {
+        admittedRunContext,
+        replyOperation,
+        continuation: internalContinuation,
+        sourceQuestionInput,
+      };
+      const retained = await withPreparedEmbeddedRunToolAuthority(
         internal,
         {
           sessionId,
@@ -52,16 +59,25 @@ async function completeAttempt(source: "receipt" | "watchdog") {
         async () => {
           const caller = getGatewayToolCallerIdentity();
           const watchdog = caller?.watchdogAttempt;
-          return source === "receipt"
-            ? caller?.receiptAuthority
-            : watchdog?.isCurrent.bind(watchdog);
+          const questionAuthority = captureAgentQuestionAnswerAuthority(sessionKey);
+          assert.ok(questionAuthority);
+          assert.equal(questionAuthority.sourceQuestionInput, sourceQuestionInput);
+          await Promise.resolve();
+          assert.equal(questionAuthority.sourceQuestionInput, sourceQuestionInput);
+          return {
+            assertion:
+              source === "receipt" ? caller?.receiptAuthority : watchdog?.isCurrent.bind(watchdog),
+            questionAuthority,
+          };
         },
       );
-      assert.ok(retainedAssertion);
+      assert.ok(retained.assertion);
       return {
         continuation: new WeakRef(continuation),
         internalContinuation: new WeakRef(internalContinuation),
-        retainedAssertion,
+        sourceQuestionInput: new WeakRef(sourceQuestionInput),
+        retainedAssertion: retained.assertion,
+        questionAuthority: retained.questionAuthority,
       };
     } finally {
       replyOperation.complete();
@@ -72,7 +88,7 @@ async function completeAttempt(source: "receipt" | "watchdog") {
 }
 
 for (const source of ["receipt", "watchdog"] as const) {
-  const completed = [];
+  const completed: Awaited<ReturnType<typeof completeAttempt>>[] = [];
   for (let count = 0; count < 10; count++) {
     completed.push(await completeAttempt(source));
   }
@@ -84,12 +100,23 @@ for (const source of ["receipt", "watchdog"] as const) {
     `${source} retained the attempt`,
   );
   assert.equal(
+    completed.filter(({ sourceQuestionInput }) => sourceQuestionInput.deref()).length,
+    0,
+    `${source} retained the source question observer`,
+  );
+  assert.equal(
     completed.filter(({ internalContinuation }) => internalContinuation.deref()).length,
     0,
     `${source} retained internal run input`,
   );
   assert.equal(completed[0]!.retainedAssertion(), false, "Retained authority must remain closed");
+  assert.throws(() => completed[0]!.questionAuthority.sourceQuestionInput);
 }
 process.stdout.write(
-  JSON.stringify({ attemptsReleased: true, internalInputsReleased: true, closed: true }),
+  JSON.stringify({
+    attemptsReleased: true,
+    internalInputsReleased: true,
+    sourceInputsReleased: true,
+    closed: true,
+  }),
 );

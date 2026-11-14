@@ -224,6 +224,7 @@ export async function tryDispatchAcpReplyCore(
     : undefined;
   try {
     if (
+      params.sourceQuestionIntent !== "new-task" &&
       pendingAnswerText &&
       !params.images?.length &&
       !params.extractedFileImages?.length &&

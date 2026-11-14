@@ -1,6 +1,10 @@
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
 
+/** Proposed, versioned OpenClaw extension; not an A2A standard field. */
+export const A2A_BUSINESS_INPUT_EXTENSION =
+  "https://docs.openclaw.ai/a2a/extensions/business-input/v1";
+
 const A2A_CONTEXT_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const A2A_MESSAGE_MAX_BYTES = 64 * 1024;
 const A2A_TRUNCATION_MARKER = `\n[message truncated at ${A2A_MESSAGE_MAX_BYTES} bytes]`;
@@ -17,6 +21,7 @@ export type A2aMessageRecord = {
   role: "ROLE_USER" | "ROLE_AGENT";
   parts: A2aMessagePart[];
   metadata?: Record<string, unknown>;
+  extensions?: string[];
 };
 
 export type A2aTaskRecord = {
@@ -24,6 +29,7 @@ export type A2aTaskRecord = {
   contextId: string;
   status:
     | { state: "TASK_STATE_SUBMITTED" | "TASK_STATE_WORKING"; timestamp: string }
+    | { state: "TASK_STATE_INPUT_REQUIRED"; timestamp: string; message: A2aMessageRecord }
     | {
         state:
           | "TASK_STATE_COMPLETED"
@@ -62,6 +68,7 @@ export const A2aSendMessageParamsSchema = z.object({
     role: z.enum(["ROLE_USER", "ROLE_AGENT", "user", "agent"]),
     parts: z.array(z.unknown()),
     metadata: A2aMetadataSchema.optional(),
+    extensions: z.array(z.string()).optional(),
   }),
   configuration: z
     .object({
@@ -124,7 +131,10 @@ export function resolveA2aRpcMethod(
   return A2A_UNSUPPORTED_METHODS.has(method) ? "unsupported" : undefined;
 }
 
-export function extractA2aMessageText(parts: unknown[]): string | undefined {
+export function extractA2aMessageText(
+  parts: unknown[],
+  options?: { allowEmpty?: boolean },
+): string | undefined {
   const textParts: string[] = [];
   for (const candidate of parts) {
     const parsed = A2aInboundPartSchema.safeParse(candidate);
@@ -139,7 +149,7 @@ export function extractA2aMessageText(parts: unknown[]): string | undefined {
   }
 
   const text = textParts.join("\n");
-  if (!text.trim()) {
+  if (!text.trim() && (!options?.allowEmpty || textParts.length === 0)) {
     return undefined;
   }
   if (Buffer.byteLength(text) <= A2A_MESSAGE_MAX_BYTES) {

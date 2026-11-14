@@ -517,12 +517,13 @@ async function resumeRestartStore(
             }
             const parked = resolveSessionYieldWait(sessionKey, selected, agentId);
             const skip = restartResumeSkipReason(sessionKey, selected);
+            const taskOwned = skip === "task-owner";
             const orphanedRun =
-              (!parked || parked === "resume") &&
+              (taskOwned || !parked || parked === "resume") &&
               selected.lifecycleRunId &&
               selected.lifecycleRunId === snapshotEntry.lifecycleRunId &&
               selected.status === undefined &&
-              !skip &&
+              (!skip || taskOwned) &&
               !hasAgentRunContextExecutionOwner(selected.lifecycleRunId) &&
               (!selected.activeWriterRunId ||
                 !hasAgentRunContextExecutionOwner(selected.activeWriterRunId));
@@ -588,8 +589,14 @@ async function resumeRestartStore(
           continue;
         }
         const { entry, marker, parked, skip } = resumed;
+        const resumeTarget = { ...target, agentId, sessionKey, sessionId: entry.sessionId };
         let admissionStage = "principal";
         if (skip && !(parked && skip === "subagent")) {
+          if (skip === "task-owner") {
+            // The marker is cleared and the original run settled above. Retire queued
+            // inputs captured by an older host, preserving their text and replay fences.
+            await interruptOrphanedSessionPendingInputs(resumeTarget, assertRecoveryCurrent);
+          }
           summary.record(agentId, sessionKey, skip);
           log.warn(
             `Skipped restart resume for ${sessionKey}: session is archived or has another execution owner`,
@@ -609,10 +616,7 @@ async function resumeRestartStore(
           try {
             authority = await prepareSessionSystemTurnAuthority({
               context,
-              ...target,
-              agentId,
-              sessionKey,
-              sessionId: entry.sessionId,
+              ...resumeTarget,
               preserveRecordedSource: true,
               assertCurrent: () => signal.throwIfAborted(),
             });
@@ -705,15 +709,11 @@ async function resumeRestartStore(
           );
         }
         // Each accepted sender retains its own admission even when the owner cannot resume.
-        await continueSessionQueuedInputs(
-          context,
-          { ...target, agentId, sessionKey, sessionId: entry.sessionId },
-          {
-            ...marker,
-            signal,
-            assertCurrent: () => signal.throwIfAborted(),
-          },
-        );
+        await continueSessionQueuedInputs(context, resumeTarget, {
+          ...marker,
+          signal,
+          assertCurrent: () => signal.throwIfAborted(),
+        });
       } catch (error) {
         signal.throwIfAborted();
         completed = false;

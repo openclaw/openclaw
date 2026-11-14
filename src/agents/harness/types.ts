@@ -104,6 +104,7 @@ type AgentHarnessLegacyAttemptResult = Omit<AgentHarnessCanonicalAttemptResult, 
 type AgentHarnessAttemptParamsBase = Omit<
   InternalEmbeddedRunAttemptParams,
   | "thinkingExplicit"
+  | "sourceQuestionInput"
   | "admittedRunContext"
   | "disableToolSearch"
   | "sessionReadScopeKey"

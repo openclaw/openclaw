@@ -28,6 +28,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/slack/src/fork.test.ts",
   "extensions/a2a/src/inbound.test.ts",
   "extensions/a2a/src/task-store.persistence.test.ts",
+  "extensions/a2a/src/task-store.input.test.ts",
   "extensions/buzz/src/inbound.test.ts",
   "extensions/clickclack/src/inbound.mention-gating.test.ts",
   "extensions/clickclack/src/inbound.test.ts",

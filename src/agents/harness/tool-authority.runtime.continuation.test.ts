@@ -66,7 +66,7 @@ it("retained authority assertions release settled V8 attempt continuations", asy
   expect(result.error, result.stderr).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
   expect(result.stdout).toContain(
-    '"attemptsReleased":true,"internalInputsReleased":true,"closed":true',
+    '"attemptsReleased":true,"internalInputsReleased":true,"sourceInputsReleased":true,"closed":true',
   );
 });
 

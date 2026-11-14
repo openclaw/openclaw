@@ -91,9 +91,12 @@ describe("executeFollowupTurn", () => {
   it("notifies the queued observer when execution starts", async () => {
     const turn = createTurn();
     const onAgentRunStart = vi.fn();
-    turn.queued.runObservers = { onAgentRunStart };
+    const onQuestion = vi.fn(async () => {});
+    const sourceQuestionInput = { version: 1 as const, mode: "new-task" as const, onQuestion };
+    turn.queued.runObservers = { onAgentRunStart, sourceQuestionInput };
     mockExecution((params) => {
       params.opts?.onAgentRunStart?.("run-1");
+      expect(params.opts?.sourceQuestionInput).toBe(sourceQuestionInput);
     });
 
     await executeTestTurn({ turn });

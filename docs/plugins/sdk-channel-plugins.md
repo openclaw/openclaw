@@ -486,6 +486,27 @@ when initialization must finish before the child runs.
       observer. Human-facing channels should continue to
       deliver useful host notices.
 
+      Channels that carry native business questions declare the stable capability
+      `agentPrompt.questionInputMode: "source"`. This keeps `ask_user` in the session's
+      tool catalog independently of a request's opt-in or callback. Each original source
+      passes `replyOptions.sourceQuestionInput: { version: 1, mode: "new-task", onQuestion }`.
+      A missing receiver refuses question execution; it never falls back to operator UI.
+      These task sources drain individually rather than sharing a collected question.
+
+      `onQuestion` receives a `SourceQuestionV1` from `openclaw/plugin-sdk/reply-runtime`:
+      ordinary question fields, expiry, an abort signal, and exact in-process identity.
+      Retain that same object only for the pending source. An admitted incoming answer
+      uses `{ version: 1, mode: "answer-only", question, onReceipt }`; no public resolver
+      bypasses incoming caller policy. `onReceipt` reports confirmed (with native resolution
+      ID), refused, or unconfirmed and may await durable recording. Answer-only inputs
+      never enter ordinary steering or new execution. ACP and other reply-hook takeovers
+      that lack this source seam refuse answer-only input before acquiring a new execution;
+      they receive only the scalar new-task intent, never the question or its callbacks.
+      Only the original source's terminal
+      callback can complete its task. Do not serialize the question as authority or rebuild
+      it from string IDs after restart. Callback lifetime follows existing source custody;
+      the private source observer is not forwarded to plugin harness parameters.
+
       `replyOptions.onFollowupQueueDisposition` reports terminal queue-cap rejection
       (`queue-cap` or `queue-cap-new`) and eviction (`queue-cap-old`) for the original
       source. These messages will not run, so channels should finalize their status

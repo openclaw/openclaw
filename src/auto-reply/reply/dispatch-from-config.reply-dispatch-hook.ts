@@ -1,5 +1,6 @@
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
+import { refuseReplyHookQuestionInput } from "./dispatch-from-config.dispatch-admission.js";
 import {
   admittedSessionSettingsRestrictRuntime,
   createReplyDispatchEvent,
@@ -23,6 +24,10 @@ export function runReplyDispatchHook(
   ) {
     return undefined;
   }
+  const sourceInput = params.replyOptions?.sourceQuestionInput;
+  if (sourceInput?.mode === "answer-only") {
+    return refuseReplyHookQuestionInput(state, sourceInput);
+  }
   const run = () =>
     state.runWithDispatchLifecycleAdmission(async () => {
       return await runWithDispatchAbortSignal(
@@ -44,6 +49,7 @@ export function runReplyDispatchHook(
               suppressUserDelivery: state.suppressHookUserDelivery,
               suppressReplyLifecycle: state.suppressHookReplyLifecycle,
               sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
+              sourceQuestionIntent: sourceInput?.mode,
               shouldRouteToOriginating: state.shouldRouteToOriginating,
               originatingChannel: state.routeReplyChannel,
               originatingTo: state.routeReplyTo,

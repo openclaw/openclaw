@@ -73,6 +73,7 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
     | "trigger"
     | "bindWatchdogAttempt"
     | "joinObservation"
+    | "sourceQuestionInput"
   > & { queueInputAdapter?: ReplyQueueInputAdapter },
   attempt: Attempt,
   narrow: ReplyToolAuthorityNarrow | undefined,
@@ -257,6 +258,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   }
   const { hostCapabilities, userTurnTranscriptRecorder } = attempt;
   // Retained authority assertions share this scope, but do not own the run payload.
+  let sourceQuestionInput = internal.sourceQuestionInput;
   let executeAttempt: (() => Promise<T>) | undefined = run.bind(undefined, {
     ...attempt,
     abortSignal,
@@ -287,6 +289,9 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
                   : direct?.project(caller, route),
               assertActive: assertReplyActive,
               admitTranscriptAnswer,
+              get sourceQuestionInput() {
+                return sourceQuestionInput;
+              },
             })
           : undefined;
         if (hostCapabilities && questionAuthority) {
@@ -483,6 +488,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
     // Retained ALS callbacks do not extend the attempt's authority.
     live = false;
     executeAttempt = undefined;
+    sourceQuestionInput = undefined;
     if (!registered) {
       watchdogAttempt?.close();
     }
