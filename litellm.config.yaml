@@ -385,10 +385,20 @@ litellm_settings:
   # Claude Code шлёт лишние параметры (thinking, metadata) — не роняем из-за них.
   drop_params: true
   telemetry: false
+  # Трейсинг всех моделей шлюза в локальный Langfuse (3030).
+  # Колбэк шлёт OTLP на {LANGFUSE_OTEL_HOST}/api/public/otel — оттуда видно
+  # вход/выход/стоимость/модель по каждому запросу через шлюз (Claude Code,
+  # OpenClaw, Codex, MiniMax и всё, что ходит через :4000).
+  # Ключи и хост приходят из .env (compose env_file), в файле их нет.
+  # ВАЖНО: прокси читает `callbacks` именно из litellm_settings.
+  callbacks: ["langfuse_otel"]
   # Fallback chains. LiteLLM triggers these on retryable provider failures:
   # 429 (rate limit), 500/502/503 (provider unavailable), timeouts, and
   # auth/quota errors (401/402/403, insufficient_quota) surfaced as API errors.
   fallbacks:
+    - claude-opus-4-5: ["nvidia-nemotron-fast", "minimax-primary", "deepinfra-minimax", "ollama-local-qwen"]
+    - claude-haiku-4-5-20251001: ["nvidia-nemotron-fast", "minimax-primary", "deepinfra-minimax", "ollama-local-qwen"]
+    - claude-sonnet-4-5-20250929: ["nvidia-nemotron-fast", "minimax-primary", "deepinfra-minimax", "ollama-local-qwen"]
     - openclaw-auto: ["minimax-primary", "nvidia-minimax", "deepinfra-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]
     - "MiniMax-M3.1-Flash": ["minimax-primary", "nvidia-minimax", "deepinfra-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]
     - "MiniMax-M3.1-Flash[1m]": ["minimax-primary", "nvidia-minimax", "deepinfra-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]
@@ -428,6 +438,9 @@ router_settings:
   num_retries: 2
   timeout: 120
   fallbacks:
+    - claude-opus-4-5: ["nvidia-nemotron-fast", "minimax-primary", "deepinfra-minimax", "ollama-local-qwen"]
+    - claude-haiku-4-5-20251001: ["nvidia-nemotron-fast", "minimax-primary", "deepinfra-minimax", "ollama-local-qwen"]
+    - claude-sonnet-4-5-20250929: ["nvidia-nemotron-fast", "minimax-primary", "deepinfra-minimax", "ollama-local-qwen"]
     - openclaw-auto: ["minimax-primary", "nvidia-minimax", "deepinfra-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]
     - "MiniMax-M3.1-Flash": ["minimax-primary", "nvidia-minimax", "deepinfra-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]
     - "MiniMax-M3.1-Flash[1m]": ["minimax-primary", "nvidia-minimax", "deepinfra-minimax", "claude-primary", "ollama-local-qwen", "ollama-local-coder"]

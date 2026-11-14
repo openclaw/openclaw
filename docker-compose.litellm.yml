@@ -6,10 +6,13 @@ services:
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
     container_name: openclaw-litellm
-    # Bind to loopback only — this gateway holds the OpenRouter key and is meant
-    # for the local OpenClaw process at http://127.0.0.1:4000, not the network.
+    # Loopback for the local OpenClaw process, plus the Tailscale address so the
+    # Gru zPotok VPS (private tailnet) can reach the gateway — it holds the provider
+    # keys and serves the NVIDIA Nemotron aliases. Never 0.0.0.0: the host has a
+    # public address and this gateway is the only place the provider keys live.
     ports:
       - "127.0.0.1:4000:4000"
+      - "100.68.93.75:4000:4000"
     env_file:
       - .env
     environment:
@@ -21,6 +24,10 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: ["--config", "/app/config.yaml", "--port", "4000"]
+    networks:
+      - default
+      # Доступ к локальному Langfuse (трекинг всех моделей шлюза).
+      - langfuse-internal
     restart: unless-stopped
     healthcheck:
       # /health/liveliness needs no auth; proves the proxy process is up.
@@ -29,3 +36,10 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+
+networks:
+  default: {}
+  # Внешняя сеть стека Langfuse — по ней шлюз шлёт трейсы.
+  langfuse-internal:
+    external: true
+    name: langfuse-stack_langfuse-internal
