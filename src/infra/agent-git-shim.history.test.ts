@@ -366,12 +366,15 @@ it.skipIf(process.platform === "win32")(
   () =>
     withTempDir("agent-git-renames-", async (root) => {
       const { origin, file, git, reader } = await historyFixture(root, 12, true, { rename: true });
-      for (const mode of ["default", "flag", "environment", "relative"]) {
+      for (const mode of ["default", "flag", "environment", "relative", "follow"]) {
         const { linked, invoke, newPacks, requests } = await reader();
         const relative = mode === "relative";
         const prefix = mode === "flag" ? ["--literal-pathspecs"] : [];
         if (relative) {
           prefix.push("-c", "diff.relative=true");
+        }
+        if (mode === "follow") {
+          prefix.push("-c", "log.follow=true");
         }
         const args = [...prefix, "blame", "HEAD", "--", relative ? path.basename(file) : file];
         const result = await invoke(

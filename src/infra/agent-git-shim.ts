@@ -246,7 +246,7 @@ EOF
         grep) set -- "$@" rev-list --objects --no-walk --missing=print ;;
         diff) set -- "$@" diff ;;
         log) set -- "$@" log ;;
-        blame) set -- "$@" log -m --root ;;
+        blame) set -- "$@" -c log.follow=false log -m --root ;;
         *) set -- "$@" log -m ;;
       esac
       while IFS= read -r arg; do [ -z "$arg" ] || set -- "$@" "$arg"; done <<EOF
