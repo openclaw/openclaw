@@ -1,0 +1,2 @@
+# #191629: speech activity table (eight rows) at the real voice transcript writer
+124

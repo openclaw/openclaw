@@ -12,14 +12,17 @@ import {
   observeSqliteReadSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
+import * as entryFreshness from "../config/sessions/entry-freshness.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { readSessionTranscriptMessageEvents } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import {
   captureExternalSessionCommitGuard,
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import type { SessionResetConfig } from "../config/types.base.js";
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -62,6 +65,16 @@ import { VoiceTranscriptOperationRegistry } from "./voice-transcript.js";
 const { useClientVoiceSessionHarness } = await vi.hoisted(
   () => import("./client-voice-session.harness.test-support.js"),
 );
+
+type SpeechActivityCase = {
+  name: string;
+  reset: SessionResetConfig;
+  byChannel?: Record<string, SessionResetConfig>;
+  quiet: number;
+  stamped: boolean;
+  headerOnly?: true;
+  checkFails?: true;
+};
 
 describe("client voice session worker contract", () => {
   const { releaseHeldWrites, sessionTurnMocks } = useClientVoiceSessionHarness();
@@ -697,6 +710,117 @@ describe("client voice session worker contract", () => {
       closedAt: 42,
       transcriptFailureKeys: [],
     });
+  });
+
+  // #191629: speech counts as activity, but once the chat's idle limit has passed it must leave
+  // the activity time for the next reset-capable turn. Daily boundaries never read that time.
+  it.each<SpeechActivityCase>([
+    {
+      name: "idle limit passed",
+      reset: { mode: "idle", idleMinutes: 30 },
+      quiet: 60,
+      stamped: false,
+    },
+    {
+      name: "an unknown expiry (the check fails)",
+      reset: { mode: "idle", idleMinutes: 30 },
+      quiet: 60,
+      stamped: false,
+      checkFails: true,
+    },
+    {
+      name: "start known only from the transcript header",
+      reset: { mode: "idle", idleMinutes: 30 },
+      quiet: 60,
+      stamped: false,
+      headerOnly: true,
+    },
+    {
+      name: "idle limit not reached",
+      reset: { mode: "idle", idleMinutes: 30 },
+      quiet: 20,
+      stamped: true,
+    },
+    {
+      name: "daily boundary only",
+      reset: { mode: "daily", atHour: 4 },
+      quiet: 2_880,
+      stamped: true,
+    },
+    { name: "resets disabled", reset: { mode: "none" }, quiet: 2_880, stamped: true },
+    {
+      name: "a Telegram override that a WebChat turn does not use",
+      reset: { mode: "idle", idleMinutes: 120 },
+      byChannel: { telegram: { mode: "idle", idleMinutes: 30 } },
+      quiet: 60,
+      stamped: true,
+    },
+    {
+      name: "the WebChat override on a Telegram-routed chat",
+      reset: { mode: "idle", idleMinutes: 30 },
+      byChannel: { webchat: { mode: "none" } },
+      quiet: 60,
+      stamped: true,
+    },
+  ])("keeps speech activity for $name", async ({ reset, quiet, stamped, ...rest }) => {
+    await seedSession(target.sessionKey, { channel: "telegram", to: "telegram:42" });
+    const previous = Date.now() - quiet * 60_000;
+    const seeded = loadSessionEntry(target);
+    if (!seeded) {
+      throw new Error("seeded session missing");
+    }
+    if ("headerOnly" in rest) {
+      // No stored lifecycle times: the reset owner recovers the start from the transcript header.
+      await replaceTranscriptEvents({ ...target, sessionId: seeded.sessionId }, [
+        {
+          type: "session",
+          id: seeded.sessionId,
+          version: 3,
+          timestamp: new Date(previous).toISOString(),
+        },
+      ]);
+    } else {
+      replaceSessionEntrySync(target, {
+        ...seeded,
+        sessionStartedAt: previous,
+        lastInteractionAt: previous,
+      });
+    }
+    const voiceSessionId = await createVoice();
+    const spies =
+      "checkFails" in rest
+        ? [
+            vi.spyOn(console, "warn").mockImplementation(() => {}),
+            vi
+              .spyOn(entryFreshness, "resolveSessionEntryResetFreshnessAsync")
+              .mockRejectedValue(new Error("synthetic read failure")),
+          ]
+        : [];
+    await appendClientVoiceTranscript({
+      ...target,
+      sessionTarget: { sessionKey: target.sessionKey },
+      voiceSessionId,
+      entryId: "after-quiet",
+      role: "user",
+      text: "Back after a quiet period",
+      config: {
+        session: { reset, ...("byChannel" in rest ? { resetByChannel: rest.byChannel } : {}) },
+      },
+    });
+    for (const spy of spies) {
+      spy.mockRestore();
+    }
+    const { lastInteractionAt } = loadSessionEntry(target) ?? {};
+    if (stamped) {
+      expect(lastInteractionAt).toBeGreaterThan(previous);
+    } else {
+      expect(lastInteractionAt).toBe("headerOnly" in rest ? undefined : previous);
+    }
+    // Holding the activity time back never drops the speech itself.
+    const saved = readSessionTranscriptMessageEvents({ ...target, sessionId: seeded.sessionId });
+    expect(
+      saved.filter((record) => JSON.stringify(record).includes("Back after a quiet period")),
+    ).toHaveLength(1);
   });
 
   it("publishes transcripts only after their voice bookkeeping commits", async () => {
