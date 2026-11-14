@@ -469,7 +469,7 @@ test.for([
   // The later exits wait for the running completion turn instead of queueing their own.
   expect(receipts).toHaveLength(1);
   gate.resolve();
-  const turnCount = testCase.sizes?.length ?? testCase.turns.length;
+  const turnCount = (testCase.sizes ?? testCase.turns ?? []).length;
   await vi.waitFor(() => expect(receipts).toHaveLength(turnCount), { timeout: 30_000 });
   await completion(signal);
   // Each turn names the run that launched its commands; later exits may finish in any order.
