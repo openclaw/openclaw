@@ -383,6 +383,41 @@ describe("Gateway Template Add plan", () => {
     },
   );
 
+  it.each([
+    [
+      "pager-duty",
+      'Plugin "pager-duty" is not in plugins.allow. Add "pager-duty" to plugins.allow, then add this Template again.',
+    ],
+    [
+      undefined,
+      "This plugin is disabled. Enable it in Plugins; reinstall it there first if needed.",
+    ],
+  ])(
+    "reviews a plugin blocked by plugins.allow with its runtime id (%s)",
+    async (allowlistPluginId, message) => {
+      const source = await readGatewayPackageFixture("incident-response");
+      const config = { agents: { entries: {} }, plugins: { allow: ["other-plugin"] } };
+      const plan = await buildGatewayTemplateAddPlan(source, {
+        config,
+        sourceMcpServers: {},
+        packagePreflight: async () => ({
+          ok: false,
+          code: "plugin_disabled",
+          message: "Local preview detail /tmp/source/plugins/pager-duty",
+          ...(allowlistPluginId ? { allowlistPluginId } : {}),
+        }),
+      });
+      const projected = projectGatewayTemplateAddPlan(plan, source, trust, config);
+
+      expect(projected.blockers).toContainEqual({
+        code: "plugin_disabled",
+        path: "$.plugins[0]",
+        message,
+      });
+      expect(JSON.stringify(projected.blockers)).not.toContain("/tmp/source");
+    },
+  );
+
   it("reviews configured access and recurring work without exposing source secrets", async () => {
     const source = await readGatewayPackageFixture("incident-response");
     const config = { agents: { entries: {} } };

@@ -55,6 +55,8 @@ export type TemplateDiagnostic = {
   phase: "parse" | "schema" | "policy" | "plan" | "mutation";
   path: string;
   message: string;
+  /** Runtime plugin id to add to plugins.allow when only the allowlist blocks the plugin. */
+  allowlistPluginId?: string;
 };
 
 export type TemplateOpenClawAgentSettings = {
