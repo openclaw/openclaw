@@ -26,7 +26,7 @@ import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trac
 import { defaultRuntime } from "../runtime.js";
 import { displayPath, shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
-import { formatCliJsonFailure } from "./failure-output.js";
+import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import type {
@@ -198,7 +198,7 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
             });
             exitCliAfterOutput(defaultRuntime, 1);
           }
-          throw new Error(message);
+          throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
         }
         if (opts.json) {
           defaultRuntime.writeJson({
