@@ -88,7 +88,7 @@ export const slackHuddlePageScripts = MeetingPlatformAdapter.createPageScripts({
     extraResultSource: `inCall: inCall && authorityHolds(),
     meetingTitle: inCall && authorityHolds() ? text(firstRaw(selectors.title)) || undefined : undefined,
     participantCount: inCall && authorityHolds()
-      ? new Set(selectors.participants.flatMap((selector) => [...document.querySelectorAll(selector)])).size
+      ? new Set(controlQueryAll(selectors.participants)).size
       : undefined,`,
   },
   audioOwnershipSource: ({ expectedIdentity, pageIdentitySource }) => `
