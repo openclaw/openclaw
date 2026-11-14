@@ -1,8 +1,11 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createSignal, lazy, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
-import { ImageLightboxItemView } from "../../components/image-lightbox.tsx";
-import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
+import { ImageLightboxItemView } from "../../components/image-lightbox-lazy.tsx";
+import type {
+  ImageLightboxItem,
+  ImageLightboxProps,
+} from "../../components/image-lightbox.types.ts";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { useScrollState } from "../../components/solid/scroll-state.ts";
@@ -182,8 +185,9 @@ export type PaneLayoutData = {
   background: Parameters<typeof SessionBackgroundView>[0];
   overlays: {
     presentation: PresentationValue;
-    image: ImageLightboxItem | null;
-    onCloseImage: () => void;
+    item: ImageLightboxItem | null;
+    onClose: () => void;
+    onUseImage?: ImageLightboxProps["onUseImage"];
     reset: ChatBoardResetConfirmationProps | null;
   };
 };
@@ -231,10 +235,7 @@ function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions
         background={background}
       />
       <Show when={presented()}>
-        <ImageLightboxItemView
-          item={props.data.overlays.image}
-          onClose={() => props.data.overlays.onCloseImage()}
-        />
+        <ImageLightboxItemView {...props.data.overlays} />
         <Show when={props.data.overlays.reset}>
           {(reset) => (
             <ChatLazyBoundary onClose={() => reset().onResolve(false)}>

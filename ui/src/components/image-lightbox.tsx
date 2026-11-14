@@ -1,17 +1,20 @@
-import { Portal } from "@solidjs/web";
 import { Errored, lazy, Loading, Show } from "solid-js";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { ImageLightboxHost } from "./image-lightbox-context.ts";
+import { ImageLightboxError } from "./image-lightbox-error.tsx";
 import type {
   ImageLightboxElement,
   ImageLightboxItem,
   ImageLightboxProps,
 } from "./image-lightbox.types.ts";
-import { LazyViewError } from "./solid/lazy-view-error.tsx";
 
 const Content = lazy(() => import("./image-lightbox-content.tsx"), {
   export: "ImageLightboxContent",
 });
+
+const nonAttributeProperty = { default: undefined, attribute: false } as const;
+const textProperty = { default: "" };
+const nonAttributeTextProperty = { default: "", attribute: false } as const;
 
 const ImageLightbox = defineSolidBridge<ImageLightboxProps>(
   "openclaw-image-lightbox",
@@ -19,29 +22,16 @@ const ImageLightbox = defineSolidBridge<ImageLightboxProps>(
     <ImageLightboxHost value={host}>
       <Errored
         fallback={(error, reset) => (
-          <Portal>
-            <div
-              style={{
-                position: "fixed",
-                right: "1rem",
-                bottom: "1rem",
-                width: "min(420px, calc(100vw - 2rem))",
-                "z-index": "var(--z-toast)",
-              }}
-            >
-              <LazyViewError
-                error={error()}
-                subtitle={props.imageTitle}
-                onRetry={() => reset()}
-                onClose={() =>
-                  host.dispatchEvent(
-                    new CustomEvent("image-lightbox-close", { bubbles: true, composed: true }),
-                  )
-                }
-                inline
-              />
-            </div>
-          </Portal>
+          <ImageLightboxError
+            error={error()}
+            title={props.imageTitle}
+            onRetry={() => reset()}
+            onClose={() =>
+              host.dispatchEvent(
+                new CustomEvent("image-lightbox-close", { bubbles: true, composed: true }),
+              )
+            }
+          />
         )}
       >
         <Loading>
@@ -52,17 +42,18 @@ const ImageLightbox = defineSolidBridge<ImageLightboxProps>(
   ),
   {
     properties: {
-      connectVideo: { default: undefined, attribute: false },
-      gallery: { default: undefined, attribute: false },
-      loadDisplayImage: { default: undefined, attribute: false },
-      readOriginalBlob: { default: undefined, attribute: false },
+      onUseImage: nonAttributeProperty,
+      connectVideo: nonAttributeProperty,
+      gallery: nonAttributeProperty,
+      loadDisplayImage: nonAttributeProperty,
+      readOriginalBlob: nonAttributeProperty,
       mediaKind: { default: "image" },
-      src: { default: "" },
-      originalSrc: { default: "" },
-      imageTitle: { default: "", attribute: false },
-      imageDescription: { default: "", attribute: false },
-      imageWidth: { default: undefined, attribute: false },
-      imageHeight: { default: undefined, attribute: false },
+      src: textProperty,
+      originalSrc: textProperty,
+      imageTitle: nonAttributeTextProperty,
+      imageDescription: nonAttributeTextProperty,
+      imageWidth: nonAttributeProperty,
+      imageHeight: nonAttributeProperty,
     },
   },
 );
@@ -70,19 +61,23 @@ const ImageLightbox = defineSolidBridge<ImageLightboxProps>(
 export function ImageLightboxItemView(props: {
   item: ImageLightboxItem | null | undefined;
   onClose: () => void;
+  description?: string;
+  onUseImage?: ImageLightboxProps["onUseImage"];
 }) {
   return (
     <Show when={props.item}>
       {(item) => (
         <ImageLightbox
-          mediaKind={item().kind ?? "image"}
+          onUseImage={props.onUseImage}
+          mediaKind={item().kind}
           gallery={item().gallery}
           connectVideo={item().connectVideo}
           loadDisplayImage={item().loadDisplayImage}
           readOriginalBlob={item().readOriginalBlob}
           src={item().src}
-          originalSrc={item().originalSrc ?? ""}
+          originalSrc={item().originalSrc}
           imageTitle={item().title}
+          imageDescription={props.description}
           imageWidth={item().width}
           imageHeight={item().height}
           onImage-lightbox-close={props.onClose}

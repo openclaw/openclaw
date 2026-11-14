@@ -3,11 +3,11 @@ import { merge } from "solid-js";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
-import "./components/chat-details.tsx";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { resolveChatPaneDesktopTarget } from "../../components/desktop/desktop-source.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
+import "./components/chat-details.tsx";
 import { focusComposerInput } from "../../lib/composer-input.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
@@ -16,6 +16,7 @@ import { PaneOutboxRecovery } from "./chat-outbox-recovery.tsx";
 import { PaneAttachmentCatalog } from "./chat-pane-attachment-catalog.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { ChatPaneHeaderLayout, type PaneDetailsActions } from "./chat-pane-header-layout.ts";
+import { createLightboxComposerAction } from "./chat-pane-image-attachment.ts";
 import type { PaneLayoutData } from "./chat-pane-layout-view.tsx";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
@@ -201,6 +202,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
     const latestBrowserTabs = latestBrowserTabCards(chatProps.messages, chatProps.toolMessages);
     const panePresentation = { owner: this.element, isPresented: () => this.presented };
     const connectionGeneration = this.connectionGeneration;
+    const canUseImage = !catalog && chatProps.canCompose && !chatProps.suggestionComposer;
     const headerPresentation = {
       owner: this.element,
       isPresented: () => this.visuallyPresented,
@@ -712,8 +714,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       },
       overlays: {
         presentation: panePresentation,
-        image: state.imageLightbox,
-        onCloseImage: state.handleCloseImage,
+        item: state.imageLightbox,
+        onClose: state.handleCloseImage,
+        onUseImage: canUseImage ? createLightboxComposerAction(this, state) : undefined,
         reset: this.renderResetConfirmation(),
       },
     };

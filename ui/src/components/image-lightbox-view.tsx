@@ -6,16 +6,21 @@ import {
   action,
   createMemo,
   createOptimistic,
+  createSignal,
   createUniqueId,
   omit,
 } from "solid-js";
+import { registerChatComposerEnglish } from "../i18n/locales/en-chat-composer.ts";
 import { registerChatMediaEnglish } from "../i18n/locales/en-chat-media.ts";
+import { registerChatMessageMetadataEnglish } from "../i18n/locales/en-chat-message-metadata.ts";
 import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { showToast } from "../lib/toast.ts";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
 import { Icon } from "./solid/icon.tsx";
 
 registerEnglishCatalog(registerChatMediaEnglish);
+registerEnglishCatalog(registerChatComposerEnglish);
+registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
 type FocusableRef = () => (element: HTMLElement) => void;
 
@@ -49,12 +54,16 @@ export function LightboxChrome(props: {
   hasGallery: boolean;
   isVideo: boolean;
   onDownloadImage: () => Promise<void>;
+  onUseImage?: () => Promise<void>;
+  useImageDisabled?: boolean;
   onClose: (event?: Event) => void;
   children: JSX.Element;
 }) {
   const originalUrl = createMemo(() => props.originalUrl);
   return (
-    <section class="lightbox">
+    <section
+      class={["lightbox", { "lightbox--compose": Boolean(props.onUseImage) && !props.isVideo }]}
+    >
       <header class="header">
         <strong class="title">{props.title}</strong>
         <div class="actions">
@@ -78,7 +87,9 @@ export function LightboxChrome(props: {
       <Show
         when={props.isVideo}
         fallback={
-          <openclaw-modal-actions class="lightbox-footer">
+          <openclaw-modal-actions
+            class={["lightbox-footer", { "lightbox-footer--compose": Boolean(props.onUseImage) }]}
+          >
             <LightboxImageDownload
               focusableRef={props.focusableRef}
               onDownload={props.onDownloadImage}
@@ -94,6 +105,13 @@ export function LightboxChrome(props: {
               >
                 <Icon name="externalLink" />
               </a>
+            </Show>
+            <Show when={props.onUseImage}>
+              <LightboxImageUse
+                focusableRef={props.focusableRef}
+                disabled={props.useImageDisabled}
+                onUse={() => props.onUseImage?.() ?? Promise.resolve()}
+              />
             </Show>
           </openclaw-modal-actions>
         }
@@ -168,6 +186,47 @@ export function lightboxImageStyle(image: ImageLightboxItem | undefined) {
     height > 0
     ? { width: `min(${width}px, 100cqw, calc(100cqh * ${width / height}))` }
     : { width: undefined };
+}
+
+function LightboxImageUse(props: {
+  focusableRef: FocusableRef;
+  disabled?: boolean;
+  onUse: () => Promise<void>;
+}) {
+  // Closing this foreign-root modal must not wait on a presentation action's transition.
+  const [busy, setBusy] = createSignal(false);
+  let pending = false;
+  const use = async (button: HTMLButtonElement) => {
+    if (pending || props.disabled) {
+      return;
+    }
+    pending = true;
+    setBusy(true);
+    try {
+      await props.onUse();
+    } catch {
+      if (button.isConnected) {
+        showToast({ severity: "error", message: t("chat.attachments.readFailed") });
+      }
+    } finally {
+      pending = false;
+      if (button.isConnected) {
+        setBusy(false);
+      }
+    }
+  };
+  return (
+    <button
+      ref={props.focusableRef()}
+      class="action use-image"
+      type="button"
+      disabled={busy() || props.disabled}
+      aria-busy={busy() ? "true" : undefined}
+      onClick={(event) => void use(event.currentTarget)}
+    >
+      {busy() ? t("common.loading") : t("chat.messages.addToChat")}
+    </button>
+  );
 }
 
 function LightboxImageDownload(props: {

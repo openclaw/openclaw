@@ -18,7 +18,7 @@ import {
   reloadAfterRenderErrorOnce,
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
-import { ImageLightboxItemView } from "../../components/image-lightbox.tsx";
+import { ImageLightboxItemView } from "../../components/image-lightbox-lazy.tsx";
 import {
   resolveLobsterPetMode,
   resolveLobsterRunOutcome,

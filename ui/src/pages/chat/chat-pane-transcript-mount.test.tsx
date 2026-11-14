@@ -88,8 +88,8 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
               background: { surface: "session" },
               overlays: {
                 presentation: state().presented,
-                image: null,
-                onCloseImage: () => {},
+                item: null,
+                onClose: () => {},
                 reset: null,
               },
             }}

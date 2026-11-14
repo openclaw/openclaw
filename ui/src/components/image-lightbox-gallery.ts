@@ -1,5 +1,9 @@
 import { createSignal, onCleanup } from "solid-js";
-import type { ImageLightboxGallery, ImageLightboxItem } from "./image-lightbox.types.ts";
+import type {
+  ImageLightboxGallery,
+  ImageLightboxItem,
+  ImageLightboxProps,
+} from "./image-lightbox.types.ts";
 
 // Cached items hold their decoded image; browsers may drop an unreferenced one and refetch it.
 const decodedImages = new WeakMap<ImageLightboxItem, HTMLImageElement>();
@@ -96,6 +100,19 @@ export function createImageLightboxGallery() {
     }
     images = new Map();
     gallery = undefined;
+  }
+
+  function useCurrentImage(use: ImageLightboxProps["onUseImage"], current: () => boolean) {
+    const { current: item, index, busy } = selection;
+    const activeImages = images;
+    if (!use || !item || item.kind === "video" || busy) {
+      return Promise.resolve();
+    }
+    // Resolution upgrades retain selection intent; navigation and source replacement do not.
+    return use(
+      item,
+      () => current() && activeImages === images && selection.index === index && !selection.busy,
+    );
   }
 
   function canMove(delta: number) {
@@ -210,6 +227,7 @@ export function createImageLightboxGallery() {
     peek: () => selection,
     reset,
     canMove,
+    useCurrentImage,
     move,
     connectPlayer,
     updateVideoStatus,

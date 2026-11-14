@@ -453,7 +453,7 @@ it.each([
   await waitForSolid(() =>
     expect(modal.querySelector(".download-image")?.hasAttribute("disabled")).toBe(false),
   );
-  expect(fetchImage).toHaveBeenCalledExactlyOnceWith(src);
+  expect(fetchImage).toHaveBeenCalledExactlyOnceWith(src, { referrerPolicy: "no-referrer" });
   expect(createObjectUrl).toHaveBeenCalledTimes(downloadType ? 1 : 0);
   expect(click).toHaveBeenCalledTimes(downloadType ? 1 : 0);
   if (downloadType) {
@@ -511,7 +511,9 @@ it.each(["url", "blob", "gallery"] as const)(
       expect(download.disabled).toBe(false);
     } else {
       expect(readOriginalBlob).not.toHaveBeenCalled();
-      expect(fetchImage).toHaveBeenCalledExactlyOnceWith(gallery ? next : first);
+      expect(fetchImage).toHaveBeenCalledExactlyOnceWith(gallery ? next : first, {
+        referrerPolicy: "no-referrer",
+      });
     }
   },
 );
@@ -685,3 +687,30 @@ it.each(["document", "shadow"] as const)(
     expect(close).toHaveBeenCalledOnce();
   },
 );
+
+it("keeps failed Use in message attempts retryable and includes the action in Tab focus", async () => {
+  const toast = container.appendChild(document.createElement("openclaw-toast-host"));
+  const pending = createDeferred();
+  const onUseImage = vi
+    .fn<NonNullable<ImageLightboxProps["onUseImage"]>>()
+    .mockImplementationOnce(() => pending.promise)
+    .mockResolvedValue(undefined);
+  const { modal } = await renderLightbox({ onUseImage });
+  const use = button(modal, ".use-image");
+  button(modal, ".close").focus();
+  pressKey(document.activeElement!, "Tab", { shiftKey: true, composed: true });
+  expect(document.activeElement).toBe(use);
+  use.click();
+  use.click();
+  expect(onUseImage).toHaveBeenCalledOnce();
+  await waitForSolid(() => expect(use.disabled).toBe(true));
+  pending.reject(new Error("Original unavailable"));
+  await waitForSolid(() => expect(use.disabled).toBe(false));
+  expect(toast.toasts.map((entry) => entry.options)).toContainEqual(
+    expect.objectContaining({ message: "Could not attach file. Try again." }),
+  );
+  expect(modal.isConnected).toBe(true);
+  use.click();
+  await waitForSolid(() => expect(onUseImage).toHaveBeenCalledTimes(2));
+  await waitForSolid(() => expect(use.disabled).toBe(false));
+});

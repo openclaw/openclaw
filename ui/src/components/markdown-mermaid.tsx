@@ -22,8 +22,8 @@ import { observeDocumentRootAttributes } from "../lib/reactive/document-root-att
 import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { resolveThemeColor } from "../lib/theme-color.ts";
+import { ImageLightboxItemView } from "./image-lightbox-lazy.tsx";
 import { Icon } from "./solid/icon.tsx";
-import "./image-lightbox.tsx";
 import { Menu } from "./solid/menu.tsx";
 import mermaidStyles from "./markdown-mermaid.css?inline";
 
@@ -243,11 +243,10 @@ function MermaidContent(props: MermaidProps, host: MermaidElement) {
           </pre>
         </Show>
         <Show when={expanded() && imageUrl()}>
-          <openclaw-image-lightbox
-            prop:src={imageUrl()}
-            prop:imageTitle={imageTitle()}
-            prop:imageDescription={imageDescription()}
-            onImage-lightbox-close={() => setExpanded(false)}
+          <ImageLightboxItemView
+            item={{ src: imageUrl(), title: imageTitle() }}
+            description={imageDescription()}
+            onClose={() => setExpanded(false)}
           />
         </Show>
       </>

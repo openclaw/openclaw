@@ -24,6 +24,7 @@ export type ImageLightboxGallery = {
   items: readonly ((retryFailed?: boolean) => Promise<ImageLightboxItem | null>)[];
 };
 export type ImageLightboxProps = {
+  onUseImage?: (item: ImageLightboxItem, isCurrent: () => boolean) => Promise<void>;
   connectVideo?: ImageLightboxItem["connectVideo"];
   gallery?: ImageLightboxGallery;
   loadDisplayImage?: ImageLightboxItem["loadDisplayImage"];

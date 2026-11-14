@@ -95,17 +95,29 @@ it("preloads CSS-gated route entries without promoting optional chunks", async (
   const sessionsEntry = path.join(repoRoot, "ui/src/pages/sessions/sessions-page.tsx");
   const cronEntry = path.join(repoRoot, "ui/src/pages/cron/cron-page.tsx");
   const plainEntry = path.join(repoRoot, "ui/src/pages/usage/usage-page.tsx");
+  const lightboxEntry = path.join(repoRoot, "ui/src/components/image-lightbox-content.tsx");
+  const imageUseEntry = path.join(
+    repoRoot,
+    "ui/src/pages/chat/chat-pane-image-attachment.runtime.ts",
+  );
   const sources = new Map([
     [
       "/preload-entry.js",
-      `globalThis.loadStyled = () => import(${JSON.stringify(styledEntry)}); globalThis.loadSessions = () => import(${JSON.stringify(sessionsEntry)}); globalThis.loadCron = () => import(${JSON.stringify(cronEntry)}); globalThis.loadPlain = () => import(${JSON.stringify(plainEntry)}); globalThis.loadOptional = () => import("/optional.js");`,
+      `globalThis.loadStyled = () => import(${JSON.stringify(styledEntry)}); globalThis.loadSessions = () => import(${JSON.stringify(sessionsEntry)}); globalThis.loadCron = () => import(${JSON.stringify(cronEntry)}); globalThis.loadPlain = () => import(${JSON.stringify(plainEntry)}); globalThis.loadOptional = () => import("/optional.js"); globalThis.openImage = () => import(${JSON.stringify(lightboxEntry)}); globalThis.useImage = () => import(${JSON.stringify(imageUseEntry)}); export const context = globalThis.context;`,
     ],
     [styledEntry, 'import "/nested.js"; export const ready = true;'],
     [sessionsEntry, 'import "/nested.js"; export const sessionsReady = true;'],
     [cronEntry, 'import "/nested.js"; export const cronReady = true;'],
     ["/nested.js", 'import "/style.css"; globalThis.styled = true;'],
     [plainEntry, "export const ready = true;"],
-    ["/optional.js", 'import "/style.css"; export const ready = true;'],
+    ["/optional.js", 'import "/style.css"; export { extra } from "/extra.js";'],
+    [lightboxEntry, 'export { original } from "/original.js";'],
+    [
+      imageUseEntry,
+      'import { context } from "/preload-entry.js"; import { original } from "/original.js"; import { extra } from "/extra.js"; export const use = () => [context, original(), extra()];',
+    ],
+    ["/original.js", "export const original = () => globalThis.original;"],
+    ["/extra.js", "export const extra = () => globalThis.extra;"],
     ["/style.css", ".fixture { color: red; }"],
   ]);
   const requests = new Map<string, string[]>();
@@ -145,6 +157,13 @@ it("preloads CSS-gated route entries without promoting optional chunks", async (
   const cron = chunks.find((chunk) => chunk.facadeModuleId === cronEntry)!;
   const plain = chunks.find((chunk) => chunk.facadeModuleId === plainEntry)!;
   const optional = chunks.find((chunk) => chunk.facadeModuleId === "/optional.js")!;
+  const importer = chunks.find((chunk) => chunk.facadeModuleId === "/preload-entry.js")!;
+  const imageUse = chunks.find((chunk) => chunk.facadeModuleId === imageUseEntry)!;
+  const original = chunks.find((chunk) => chunk.moduleIds.includes("/original.js"))!;
+  const extra = chunks.find((chunk) => chunk.moduleIds.includes("/extra.js"))!;
+  expect(requests.get(imageUse.fileName)).not.toContain(importer.fileName);
+  expect(requests.get(imageUse.fileName)).not.toContain(original.fileName);
+  expect(requests.get(imageUse.fileName)).toContain(extra.fileName);
   expect(requests.get(styled.fileName)).toContain(styled.fileName);
   expect(requests.get(sessions.fileName)).toContain(sessions.fileName);
   expect(requests.get(cron.fileName)).toContain(cron.fileName);

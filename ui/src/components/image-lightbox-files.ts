@@ -1,4 +1,5 @@
 import { BROWSER_IMAGE_MIME_TYPES } from "../../../src/shared/browser-image-mime-types.js";
+import { fetchControlUiResource } from "../app/browser-http.ts";
 import { downloadBlobFile } from "../lib/download.ts";
 import { downloadImageBlob } from "../lib/image-download.ts";
 import { resolveSafeExternalUrl } from "../lib/open-external-url.ts";
@@ -48,19 +49,26 @@ export async function resolveLightboxOriginalUrl(
   return { url: blobUrl, blobUrl };
 }
 
-export async function downloadLightboxImage(
+export function readLightboxOriginalBlob(
   source: string,
-  title: string,
   read?: () => Promise<Blob>,
-) {
-  const blob = read
-    ? await read()
-    : await fetch(source).then((response) => {
+): Promise<Blob> {
+  return read
+    ? read()
+    : fetchControlUiResource(source, { referrerPolicy: "no-referrer" }).then((response) => {
         if (!response.ok) {
           throw new Error("Image download failed");
         }
         return response.blob();
       });
+}
+
+export async function downloadLightboxImage(
+  source: string,
+  title: string,
+  read?: () => Promise<Blob>,
+) {
+  const blob = await readLightboxOriginalBlob(source, read);
   const mimeType = mimeTypeEssence(blob.type);
   if (mimeType === "image/svg+xml") {
     // Preserve the original file without creating an active SVG download URL.
