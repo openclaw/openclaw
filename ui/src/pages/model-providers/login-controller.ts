@@ -19,7 +19,13 @@ import type { ModelSetupWizardCompletion } from "../model-setup/wizard-runner.ts
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { buildModelProviderCards, type ModelProviderCard } from "./data.ts";
 import { createLoginSavingPresentation } from "./login-presentation.ts";
-import { buildLoginProviders, resolveLoginSelection } from "./login-providers.ts";
+import {
+  buildLoginProviders,
+  findLoginCompletionModel,
+  resolveLoginSelection,
+  resolveReconnectChoice,
+  type LoginChoice,
+} from "./login-providers.ts";
 import { createModelProviderStartChat } from "./login-start-chat.ts";
 import { hasProviderAccounts } from "./profiles-view.tsx";
 import "../../styles/model-providers.css";
@@ -83,19 +89,12 @@ export function createModelProviderLogin(options: {
   const runner = wizard.runner;
   const completionCatalog = new ModelCatalogReader(notify, {
     onResult: (catalog) => {
-      const available = (model: ModelCatalogEntry) =>
-        canonicalModelAuthProviderId(model.provider) === authProviderId &&
-        model.available === true &&
-        model.manualSelectionAllowed !== false;
       const selected = completionModel;
       completionModel = selected
         ? (catalog.models.find(
             (model) => model.provider === selected.provider && model.id === selected.id,
           ) ?? selected)
-        : (catalog.models.find((model) => available(model) && model.recommended === true) ??
-          catalog.models.find(
-            (model) => available(model) && `${model.provider}/${model.id}` === verifiedModelRef,
-          ));
+        : findLoginCompletionModel(catalog.models, authProviderId, verifiedModelRef);
       notify();
     },
   });
@@ -201,6 +200,20 @@ export function createModelProviderLogin(options: {
     return open(undefined, {
       allowSetup: !models.some((model) => model.available !== false),
     });
+  }
+
+  function start(selected: LoginChoice, allowSetup = false): void {
+    if (!options.canStart() || selected.kind === "setup-secret") {
+      return;
+    }
+    authProviderId = canonicalModelAuthProviderId(selected.authProvider);
+    currentPicker = null;
+    const selectingModel = allowSetup && selected.requiresSetup;
+    loginMode = selectingModel ? "activate" : selected.requiresSetup ? "access" : "auth";
+    refreshWarning = null;
+    runner.prepareSignIn(selected.kind, selected.label, selected.brandId);
+    const activation: { selectModel?: true } = selectingModel ? { selectModel: true } : {};
+    void run(() => runner.start(selected.id, "models.authLogin", activation));
   }
 
   async function open(
@@ -404,9 +417,7 @@ export function createModelProviderLogin(options: {
             ? t("modelProviders.login.nativeDescription")
             : t("modelProviders.login.description"),
       onClose: () => reset(),
-      onQuery: (value: string) => {
-        setQuery(value);
-      },
+      onQuery: setQuery,
       onProvider: (providerId: string) => {
         if (!canSelect()) {
           return;
@@ -438,19 +449,7 @@ export function createModelProviderLogin(options: {
           options.onManualProvider?.(selected.id);
           return;
         }
-        authProviderId = canonicalModelAuthProviderId(selected.authProvider);
-        currentPicker = null;
-        const selectingModel = picker.allowSetup && selected.requiresSetup;
-        loginMode = selectingModel ? "activate" : selected.requiresSetup ? "access" : "auth";
-        refreshWarning = null;
-        runner.prepareSignIn(selected.kind, selected.label, selected.brandId);
-        void run(() =>
-          runner.start(
-            selected.id,
-            "models.authLogin",
-            selectingModel ? { selectModel: true } : {},
-          ),
-        );
+        start(selected, picker.allowSetup);
       },
       onApiKey: () => {
         if (!canSelect() || !provider?.apiKeyProvider) {
@@ -497,14 +496,7 @@ export function createModelProviderLogin(options: {
     const known = catalog.models.find((model) => model.provider === provider && model.id === id);
     verifiedModelRef = modelRef;
     const recommended =
-      !catalog.retired &&
-      catalog.models.find(
-        (model) =>
-          canonicalModelAuthProviderId(model.provider) === authProviderId &&
-          model.available === true &&
-          model.manualSelectionAllowed !== false &&
-          model.recommended === true,
-      );
+      !catalog.retired && findLoginCompletionModel(catalog.models, authProviderId);
     const name = completion.modelActivation?.modelName ?? known?.name;
     completionModel = recommended
       ? { provider: recommended.provider, id: recommended.id, name: recommended.name }
@@ -685,6 +677,14 @@ export function createModelProviderLogin(options: {
         onConnect: (card: ModelProviderCard) => open([card.id, ...card.credentialProviderIds]),
         canConnect: (card: ModelProviderCard) =>
           loginProviders([card.id, ...card.credentialProviderIds]).length > 0,
+        canReconnect: (id: string) => resolveReconnectChoice(loginProviders([id])) !== undefined,
+        reconnectDisabled: !options.canStart() || busy(),
+        onReconnect: (provider: string) => {
+          const choice = resolveReconnectChoice(loginProviders([provider]));
+          if (choice && !busy()) {
+            start(choice);
+          }
+        },
       };
     },
     get pageActions() {

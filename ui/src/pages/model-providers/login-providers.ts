@@ -2,6 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type {
   ModelAuthStatusResult,
+  ModelCatalogEntry,
   ProviderLoginOption,
   SystemAgentSetupDetectResult,
 } from "../../api/types.ts";
@@ -13,7 +14,7 @@ import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 
 registerModelSetupEnglish();
 
-type LoginChoice = Omit<ProviderLoginOption, "kind"> & {
+export type LoginChoice = Omit<ProviderLoginOption, "kind"> & {
   kind: ProviderLoginOption["kind"] | "setup-secret";
   authProvider: string;
 };
@@ -138,4 +139,30 @@ export function resolveLoginSelection(
     modelRef,
     missing: { model, provider: canonicalModelAuthProviderId(modelProvider), authProvider },
   };
+}
+
+export function findLoginCompletionModel(
+  models: ModelCatalogEntry[],
+  authProvider: string | undefined,
+  verifiedModelRef?: string,
+) {
+  const available = (model: ModelCatalogEntry) =>
+    canonicalModelAuthProviderId(model.provider) === authProvider &&
+    model.available === true &&
+    model.manualSelectionAllowed !== false;
+  return (
+    models.find((model) => available(model) && model.recommended === true) ??
+    (verifiedModelRef
+      ? models.find(
+          (model) => available(model) && `${model.provider}/${model.id}` === verifiedModelRef,
+        )
+      : undefined)
+  );
+}
+
+export function resolveReconnectChoice(groups: LoginProvider[]) {
+  const choices = groups
+    .flatMap((group) => group.choices)
+    .filter((choice) => choice.kind === "oauth" || choice.kind === "device-code");
+  return choices.length === 1 ? choices[0] : undefined;
 }
