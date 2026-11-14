@@ -43,7 +43,7 @@
     "@zag-js/menu": "2.0.0-next.3",
     "@zag-js/rect-utils": "2.0.0-next.3",
     "@zag-js/vanilla": "2.0.0-next.3",
-    "dompurify": "3.4.16",
+    "dompurify": "3.4.17",
     "ghostty-web": "0.4.0",
     "highlight.js": "11.12.0",
     "json5": "2.2.3",
