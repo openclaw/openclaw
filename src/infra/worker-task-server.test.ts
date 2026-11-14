@@ -83,8 +83,8 @@ async function admissionFixture() {
     port.close();
     peer.close();
   });
-  const { hasSqliteDatabaseSchemaAdmissionForPath: admit } =
-    await import("./sqlite-database-admission.js");
+  const { exchangeSqliteDatabaseAdmission } =
+    await import("./sqlite-database-admission-context.js");
   const { getSqliteDatabaseAdmissionUpstream: upstream } =
     await import("./sqlite-worker-database-admission-relay.js");
   return {
@@ -104,7 +104,7 @@ async function admissionFixture() {
       Atomics.store(new Int32Array(request.decision), 0, 1);
     }),
     inspect: () => {
-      admit(":memory:");
+      exchangeSqliteDatabaseAdmission(":memory:");
     },
   };
 }
