@@ -73,7 +73,16 @@ it.each(["status", "stop"])("rewrites /loop %s as a scoped work order", async (c
 });
 
 it.each([
-  { isAuthorizedSender: false, senderIsOwner: true, expected: { shouldContinue: false } },
+  {
+    isAuthorizedSender: false,
+    senderIsOwner: true,
+    expected: {
+      shouldContinue: false,
+      reply: {
+        text: "You are not authorized to use this command. Ask your Gateway administrator for command access.",
+      },
+    },
+  },
   {
     isAuthorizedSender: true,
     senderIsOwner: false,
