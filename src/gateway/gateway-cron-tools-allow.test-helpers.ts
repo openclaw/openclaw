@@ -29,10 +29,17 @@ export function summarizeCronToolProbe(params: {
   results: ToolResultMessage[];
   assistantText: string;
   marker: string;
+  /** Host-prepared catalog, not proof of native model visibility or execution. */
+  reportedToolNames?: readonly string[];
 }): string {
-  const { calls, results, assistantText, marker } = params;
+  const { calls, results, assistantText, marker, reportedToolNames } = params;
   // Ordinals preserve call/result correlation without emitting provider IDs, paths, or content.
   return JSON.stringify({
+    hostReportedTools: reportedToolNames
+      ? Object.fromEntries(
+          ["read", "exec", "wait"].map((name) => [name, reportedToolNames.includes(name)]),
+        )
+      : null,
     calls: calls.map((call, index) => ({
       call: index,
       tool: toolLabel(call.name),

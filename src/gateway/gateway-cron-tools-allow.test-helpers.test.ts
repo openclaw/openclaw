@@ -24,12 +24,14 @@ describe("cron tool probe diagnostics", () => {
       results: [result(`ReferenceError: ${privateText} MARKER`), result("no detail", "orphan")],
       assistantText: "NO_TOOLS",
       marker: "MARKER",
+      reportedToolNames: ["read", privateText],
     });
     expect(summary).not.toContain(privateText);
     expect(summary).not.toContain("MARKER");
     expect(summary).not.toContain("unmatched");
     expect(summary).not.toContain("orphan");
     expect(JSON.parse(summary)).toEqual({
+      hostReportedTools: { read: true, exec: false, wait: false },
       calls: [
         { call: 0, tool: "exec", argumentShape: "code-wrapper", matchingResults: [0] },
         { call: 1, tool: "other", argumentShape: "not-exec", matchingResults: [] },
@@ -56,6 +58,21 @@ describe("cron tool probe diagnostics", () => {
       ],
       assistantMarkerPresent: false,
       assistantNoTools: true,
+    });
+  });
+
+  it("distinguishes an empty host catalog from an unavailable report", () => {
+    const summary = summarizeCronToolProbe({
+      calls: [],
+      results: [],
+      assistantText: "",
+      marker: "MARKER",
+      reportedToolNames: [],
+    });
+    expect(JSON.parse(summary).hostReportedTools).toEqual({
+      read: false,
+      exec: false,
+      wait: false,
     });
   });
 
@@ -95,5 +112,6 @@ describe("cron tool probe diagnostics", () => {
     expect(summary.results[0].isError).toBe(false);
     expect(summary.assistantMarkerPresent).toBe(true);
     expect(summary.assistantNoTools).toBe(false);
+    expect(summary.hostReportedTools).toBeNull();
   });
 });
