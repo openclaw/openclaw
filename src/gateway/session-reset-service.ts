@@ -25,6 +25,7 @@ import {
 } from "../auto-reply/reply/session-reset-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
+  RESET_WORK_START,
   resolveSessionWorkStartError,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
   SESSION_TOTAL_TOKENS_VERSION,
@@ -302,12 +303,11 @@ async function performPreparedGatewaySessionReset({
     if (placementError) {
       return errorShape(ErrorCodes.INVALID_REQUEST, placementError.message);
     }
-    // Reset drains pending preparation before replacing the session.
-    const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry, {
-      allowPendingWorkspace: true,
-    });
-    if (archivedSessionError) {
-      return errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError);
+    // Reset drains pending preparation and retires any provider-review pause with the
+    // replaced generation before starting the new one.
+    const workStartError = resolveSessionWorkStartError(canonicalKey, entry, RESET_WORK_START);
+    if (workStartError) {
+      return errorShape(ErrorCodes.INVALID_REQUEST, workStartError);
     }
     if (isModelSelectionLocked(entry)) {
       return errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_RESET_MESSAGE);
