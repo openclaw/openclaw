@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EventLoopReadyResult } from "../../packages/gateway-client/src/event-loop-ready.js";
 import { GATEWAY_SERVER_CAPS as CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -29,6 +29,91 @@ const expectInventory = (client: Client, workerHost: unknown) =>
     }),
   );
 beforeEach(resetRunnerTestState);
+
+describe("MSIX isolated desktop diagnostics", () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    vi.stubEnv("CLAWCTL_GATEWAY_ISOLATION", "enabled");
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", platform);
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it.each(["computer.act", "screen.snapshot"])(
+    "warns on stderr without changing the advertised %s command or successful connection",
+    async (command) => {
+      mocks.nodeHostCommands = [command];
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+      await withReadyNodeHost(
+        async ({ options, running }) => {
+          expect(options.commands).toContain(command);
+          expect(stderr).toHaveBeenCalledWith(
+            expect.stringContaining("isolated agent desktop, not your signed-in Windows desktop"),
+          );
+          expect(stderr).toHaveBeenCalledWith(expect.stringContaining("Windows Hub"));
+          expect(stderr).toHaveBeenCalledWith(
+            expect.stringContaining(
+              "computer.act support is pending: https://github.com/openclaw/openclaw-windows-node/issues/1871",
+            ),
+          );
+          expect(stdout).not.toHaveBeenCalled();
+          receiveHello(options);
+          await expect(running).resolves.toEqual({ connected: true });
+          expect(process.exitCode).toBe(0);
+        },
+        { stopAfterFirstConnect: true },
+      );
+    },
+  );
+
+  it.each([
+    { platform: "win32", isolation: undefined, commands: ["computer.act"] },
+    { platform: "linux", isolation: "enabled", commands: ["computer.act"] },
+    { platform: "win32", isolation: "enabled", commands: ["system.which"] },
+  ] as const)("does not warn for an unaffected node (%j)", async (scenario) => {
+    Object.defineProperty(process, "platform", { ...platform, value: scenario.platform });
+    vi.stubEnv("CLAWCTL_GATEWAY_ISOLATION", scenario.isolation);
+    mocks.nodeHostCommands = [...scenario.commands];
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    await expectStartupTimeout();
+    expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("Windows Hub"));
+    expect(lastCapturedOptions()?.commands).toEqual(expect.arrayContaining(scenario.commands));
+  });
+
+  it("uses the filtered manifest rather than available plugin capabilities", async () => {
+    mocks.nodeHostCaps = ["computer", "screen"];
+    mocks.nodeHostCommands = ["computer.act", "screen.snapshot"];
+    mocks.configureNodeHost.mockResolvedValueOnce({
+      version: 1,
+      nodeId: "restricted-node",
+      commands: ["system.which"],
+    });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    await expectStartupTimeout();
+    expect(lastCapturedOptions()?.commands).toEqual(["system.which"]);
+    expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("Windows Hub"));
+  });
+
+  it("warns once when desktop commands become available after startup", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    await withReadyNodeHost(async ({ client }) => {
+      expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("Windows Hub"));
+      mocks.nodeHostCommands = ["screen.snapshot"];
+      mocks.availabilityChanged?.();
+      expect(client.updateNodeManifest).toHaveBeenLastCalledWith(
+        expect.objectContaining({ commands: expect.arrayContaining(["screen.snapshot"]) }),
+      );
+      mocks.nodeHostCommands = ["computer.act", "screen.snapshot"];
+      mocks.availabilityChanged?.();
+      const warnings = stderr.mock.calls.filter(([line]) => String(line).includes("Windows Hub"));
+      expect(warnings).toHaveLength(1);
+    });
+  });
+});
 
 it("reconciles the manifest after watch attachment and on later changes", async () => {
   mocks.availabilityOnWatch = { caps: ["canvas"], commands: ["canvas.present"] };
