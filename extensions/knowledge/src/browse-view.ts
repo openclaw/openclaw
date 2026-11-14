@@ -331,8 +331,14 @@ export function renderBrowse(
     data.append(pageTable(ui, result.records));
   }
   if (!result.records.length) {
+    const filtered = Boolean(s.browseQuery || s.type || (s.kind === "claim" && s.originFilter));
     data.append(
-      empty("Nothing here yet", "Tell your agent in chat and saved knowledge will appear here."),
+      empty(
+        filtered ? "No matching records" : "Nothing here yet",
+        filtered
+          ? "Try a different search or clear the filters."
+          : "Tell your agent in chat and saved knowledge will appear here.",
+      ),
     );
   }
   const pages = el("div", undefined, "knowledge-pagination");
