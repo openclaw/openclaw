@@ -21,6 +21,7 @@ import {
   type UsageOverviewLoad,
 } from "./session-cost-usage-overview-load.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
+import { acquireUsageCostRefreshPermit } from "./session-cost-usage-refresh-admission.js";
 import {
   prepareUsageCostWorker,
   resolveUsageCostWorkerDayBucket,
@@ -603,6 +604,13 @@ async function runQueuedUsageCostRefresh(
       if (monotonicNow() < retryAt || usageCostRefreshDelay(state, monotonicNow()) > 0) {
         continue;
       }
+      const admission = await acquireUsageCostRefreshPermit(state, signal);
+      if (admission.kind === "aborted") {
+        return;
+      }
+      if (admission.kind === "retry") {
+        continue;
+      }
       let partialBatch = false;
       try {
         // Publications queued before deletion leave discovery before acquiring storage.
@@ -722,6 +730,8 @@ async function runQueuedUsageCostRefresh(
         for (const file of state.readingSessionFiles.keys()) {
           state.pendingSessionFiles.set(file, null);
         }
+      } finally {
+        admission.releasePermit?.();
       }
     } while (state.fullRefreshRequested || state.pendingSessionFiles.size > 0);
   } finally {
