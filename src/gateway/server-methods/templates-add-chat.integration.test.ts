@@ -549,6 +549,17 @@ it.each([false, true])(
       )?.templateSetup?.report;
       // The successful setup receipt is consumed, not a permanent Template manager.
       expect(report).toBeUndefined();
+      const [replayOk, replay] = await gateway.add({ ...chatAdd, resume: true });
+      expect(replayOk).toBe(true);
+      expect(replay).toMatchObject({
+        agentId: "travel-copilot",
+        sessionKey,
+        status: "partial",
+        readiness: { ready: false },
+        error: { code: "template_setup_outcome_unavailable" },
+      });
+      expect(replay).not.toHaveProperty("initializationPending");
+      expect(Object.keys(gateway.config().agents!.entries!)).toEqual(["main", "travel-copilot"]);
       expect(prompt).toContain('"kind":"skill","name":"@steipete/goplaces"');
       expect(prompt).toContain("Skill @steipete/goplaces@1.0.0 was not found on ClawHub.");
       expect(prompt).toContain('"kind":"mcpServer","name":"docs"');
@@ -675,7 +686,12 @@ it("retries only the hidden setup after a failed first turn, preserving files an
     const [retryOk, result] = await retry;
     const [concurrentOk, concurrentResult] = await concurrent;
     expect(concurrentOk, JSON.stringify(concurrentResult)).toBe(true);
-    expect(concurrentResult).toMatchObject({ agentId: "travel-copilot", status: "complete" });
+    expect(concurrentResult).toMatchObject({
+      agentId: "travel-copilot",
+      status: "partial",
+      readiness: { ready: false },
+      error: { code: "template_setup_outcome_unavailable" },
+    });
     expect(retryOk, JSON.stringify(result)).toBe(true);
     expect(result).toMatchObject({ agentId: "travel-copilot", status: "complete", sessionKey });
     expect(Object.keys(gateway.config().agents!.entries!)).toEqual(["main", "travel-copilot"]);
@@ -691,7 +707,13 @@ it("retries only the hidden setup after a failed first turn, preserving files an
     // one-shot setup receipt has been consumed. Reconcile, never create a copy.
     const [replayOk, replay, replayError] = await gateway.add({ ...chatAdd, resume: true });
     expect(replayOk, JSON.stringify(replayError)).toBe(true);
-    expect(replay).toMatchObject({ agentId: "travel-copilot", status: "complete", sessionKey });
+    expect(replay).toMatchObject({
+      agentId: "travel-copilot",
+      status: "partial",
+      sessionKey,
+      readiness: { ready: false },
+      error: { code: "template_setup_outcome_unavailable" },
+    });
     expect(Object.keys(gateway.config().agents!.entries!)).toEqual(["main", "travel-copilot"]);
     expect(resolveSource).toHaveBeenCalledTimes(sourceReads);
     expect(skills.install).toHaveBeenCalledTimes(installs);

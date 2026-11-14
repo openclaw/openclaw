@@ -8,7 +8,7 @@ import { sessionEntryCommitGuardOptions } from "../config/sessions/session-sourc
 import { normalizeAgentId } from "../routing/session-key.js";
 import { withOpenClawStateLeaseAsync } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import type { ChatTemplateAddInput } from "./gateway-add-chat.js";
+import type { ChatTemplateAddInput } from "./gateway-add-input.js";
 import type { GatewayTemplateAddApplyResult } from "./gateway-add-result.js";
 
 /** The ordinary session owns this one-shot continuation, not an installed Template ledger. */
@@ -33,6 +33,7 @@ export async function continueTemplateSetup(
   };
   const entry = await readSessionEntryReadOnlyInWorker(scope, input.assertCurrent);
   const setup = entry?.templateSetup;
+  let report = setup?.report;
   if (!entry) {
     if (input.resume) {
       throw new Error(
@@ -44,13 +45,19 @@ export async function continueTemplateSetup(
   const result = (openingError?: string): GatewayTemplateAddApplyResult => {
     const error = openingError
       ? { code: "template_opening_failed", message: openingError }
-      : setup?.report.failures.length
+      : report?.failures.length
         ? {
             code: "template_setup_incomplete",
             message:
               "Some Template dependencies could not be set up. The agent and conversation were kept. Continue in this chat; do not add another copy.",
           }
-        : undefined;
+        : !report
+          ? {
+              code: "template_setup_outcome_unavailable",
+              message:
+                "Template setup has finished, but Retry cannot verify its dependency outcome. Continue in the existing chat; no setup was repeated.",
+            }
+          : undefined;
     return {
       agentId,
       sessionKey,
@@ -96,7 +103,9 @@ export async function continueTemplateSetup(
           throw new Error("The Template conversation changed before setup; it was left intact.");
         }
         if (!current.templateSetup) {
-          return result(); // Another admitted Retry already completed this continuation.
+          // The consumed receipt cannot prove success, even if our pre-lease report was empty.
+          report = undefined;
+          return result();
         }
         if (!isDeepStrictEqual(current.templateSetup, setup)) {
           throw new Error("The Template setup continuation changed; it was left intact.");

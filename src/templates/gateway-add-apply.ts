@@ -24,16 +24,13 @@ import { TemplateAddMutationError } from "./add.js";
 import { withResolvedClawHubSource, type ClawHubCoordinate } from "./clawhub-source.js";
 import type { TemplateCronGateway, PersistedTemplateCronRef } from "./cron.js";
 import { digestTemplateValue } from "./digest.js";
-import {
-  createTemplateAgentFromChat,
-  selectChatTemplateAgentId,
-  type ChatTemplateAddInput,
-} from "./gateway-add-chat.js";
+import { createTemplateAgentFromChat, selectChatTemplateAgentId } from "./gateway-add-chat.js";
 import {
   templateInitializationCheckpoints,
   type AdmittedTemplateAgent,
   type PreparedAgentChat,
 } from "./gateway-add-continuation.js";
+import type { ChatTemplateAddInput } from "./gateway-add-input.js";
 import {
   buildGatewayTemplateAddPlan,
   projectGatewayTemplateAddPlan,
