@@ -683,7 +683,7 @@ struct RootSidebar: View {
         rowPass: SessionRowPass) -> some View
     {
         HStack(spacing: 0) {
-            self.sessionButton(row.node, rowPass: rowPass)
+            self.sessionButton(row.node, rowPass: rowPass, isChild: row.depth > 0)
             if !row.node.children.isEmpty {
                 Button {
                     if !self.collapsedParents.insert(row.id).inserted {
@@ -705,7 +705,8 @@ struct RootSidebar: View {
 
     private func sessionButton(
         _ node: ChatSessionSidebarModel.Node,
-        rowPass: SessionRowPass) -> some View
+        rowPass: SessionRowPass,
+        isChild: Bool) -> some View
     {
         let session = node.session
         let isSelected = session.key == rowPass.selectedSessionKey
@@ -715,6 +716,7 @@ struct RootSidebar: View {
                 isSelected: isSelected,
                 mainSessionKey: rowPass.mainSessionKey,
                 categories: rowPass.categories,
+                canChangePlacement: !isChild,
                 isConnected: self.appModel.isOperatorGatewayConnected,
                 minute: Int(Date().timeIntervalSince1970 / 60),
                 open: self.selectSession,

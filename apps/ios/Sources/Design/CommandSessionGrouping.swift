@@ -21,6 +21,19 @@ enum CommandSessionGrouping {
         knownGroups: [String] = [],
         preservesGroupOrder: Bool = false) -> [CommandSessionSection]
     {
+        // Resolve the same authoritative child roster as the sidebar before placement.
+        // Legacy child pins/categories remain stored, but only roots own placement.
+        let roots = ChatSessionSidebarModel.tree(from: entries)
+        let families = Dictionary(roots.map { root in
+            (
+                root.session.key,
+                ChatSessionSidebarModel.rows([root], showsChildren: { _ in true })
+                    .map(\.node.session))
+        }, uniquingKeysWith: { first, _ in first })
+        let entries = roots.map(\.session)
+        func expanded(_ entries: [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry] {
+            entries.flatMap { families[$0.key] ?? [$0] }
+        }
         let pinned = entries.filter { $0.pinned == true }.sorted(by: self.activityComesBefore)
         let unpinned = entries.filter { $0.pinned != true }
         // Stored-but-empty groups still render as sections so they remain
@@ -34,7 +47,7 @@ enum CommandSessionGrouping {
             sections.append(CommandSessionSection(
                 id: .pinned,
                 title: "Pinned",
-                entries: pinned,
+                entries: expanded(pinned),
                 showsHeader: true))
         }
 
@@ -43,7 +56,7 @@ enum CommandSessionGrouping {
             sections.append(CommandSessionSection(
                 id: .category(category),
                 title: category,
-                entries: categoryEntries.sorted(by: self.activityComesBefore),
+                entries: expanded(categoryEntries.sorted(by: self.activityComesBefore)),
                 showsHeader: true))
         }
 
@@ -52,7 +65,7 @@ enum CommandSessionGrouping {
             sections.append(CommandSessionSection(
                 id: .ungrouped,
                 title: "Ungrouped",
-                entries: ungrouped,
+                entries: expanded(ungrouped),
                 showsHeader: !categoryNames.isEmpty))
         }
 
