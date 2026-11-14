@@ -107,6 +107,12 @@ for unbundled development setups.
    This command requires npm 12 or npm 11.16+. On npm 11.15 and earlier, omit
    `--allow-scripts=openclaw`.
 
+Existing asdf-managed Node installations can be reused. The app preserves its
+inherited environment, including `HOME`, when checking the Node and CLI versions.
+For pnpm installations, it searches both `~/Library/pnpm` and
+`~/Library/pnpm/bin` for the CLI. After changing a manual installation, choose
+**Check again** to repeat discovery.
+
 ## Launchd (Gateway as LaunchAgent)
 
 The macOS app can manage the Gateway as a background service instead of a
