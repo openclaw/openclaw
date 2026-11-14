@@ -420,3 +420,22 @@ it("runs overdue history retention after sleep and leaves unrelated writes parke
   await clock.advanceTo(360_000);
   expect(mocks.history).toHaveBeenCalledTimes(2);
 });
+
+it.each([false, true])("defers low-memory retention and honors stop=%s", async (stop) => {
+  vi.spyOn(process, "constrainedMemory").mockReturnValue(1_000);
+  const available = vi.spyOn(process, "availableMemory").mockReturnValue(100);
+  const admission = vi.spyOn(gatewayWork, "runWithGatewayIndependentRootWorkAdmission");
+  start();
+  await clock.advanceBy(5_000);
+  expect(admission).not.toHaveBeenCalled();
+  expect(mocks.history).not.toHaveBeenCalled();
+  expect(mocks.registry).not.toHaveBeenCalled();
+  expect(scheduler.nextWakeAtMs).toBe(65_000);
+  if (stop) {
+    await stopCronMaintenance();
+  }
+  available.mockReturnValue(500);
+  await clock.advanceBy(60_000);
+  expect(mocks.history).toHaveBeenCalledTimes(stop ? 0 : 1);
+  expect(mocks.registry).toHaveBeenCalledTimes(stop ? 0 : 1);
+});

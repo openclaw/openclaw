@@ -28,6 +28,7 @@ import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
 } from "./gateway-supervision.js";
+import { isConstrainedProcessLowOnMemory } from "./host-memory.js";
 import { checkTelemetryUpdate } from "./telemetry.js";
 import { UpdateCampaignController } from "./update-campaign.js";
 import {
@@ -668,6 +669,9 @@ export function createGatewayUpdateCheck(params: {
       }
       started = true;
       lifecycle.schedule("update.check", async () => {
+        if (isConstrainedProcessLowOnMemory()) {
+          return 60_000;
+        }
         try {
           await runGatewayUpdateCheck(params, lifecycle);
         } catch (error) {
@@ -681,6 +685,9 @@ export function createGatewayUpdateCheck(params: {
         return resolveCheckIntervalMs(params.getConfig(), getUpdateSchedule()?.install?.kind);
       });
       lifecycle.schedule("update.remote-model-catalog", async () => {
+        if (isConstrainedProcessLowOnMemory()) {
+          return 60_000;
+        }
         let nextCheckInMs = REMOTE_MODEL_CATALOG_TTL_MS;
         try {
           const result = await refreshRemoteModelCatalog({

@@ -15,6 +15,10 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import * as stateContext from "../state/openclaw-state-worker-context.js";
 import { warmGatewayDatabasePageCache } from "./server-database-page-cache.js";
 
+const pacing = vi.hoisted(() => ({ onDelay: () => {} }));
+// mock-isolation: Control pressure arriving during pacing without real timers.
+vi.mock("node:timers/promises", () => ({ setTimeout: async () => pacing.onDelay() }));
+
 // mock-isolation: Test family routing without launching the native page-cache reader.
 vi.mock("../infra/sqlite-readonly-worker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-readonly-worker.js")>()),
@@ -34,6 +38,7 @@ const complete: PageCacheProgress = {
 };
 
 afterEach(() => {
+  pacing.onDelay = () => {};
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -97,3 +102,42 @@ it.each([
     await closeOpenClawStateDatabaseByPathAsync(statePath);
   }
 });
+
+// Exercise the real pacing/scope owner with only native page reads replaced.
+it.each(["entry", "begin", "pacing", "next-target"] as const)(
+  "yields optional page warming under low memory at %s",
+  async (stage) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(process, "constrainedMemory").mockReturnValue(1_000);
+    let available = stage === "entry" ? 100 : 500;
+    vi.spyOn(process, "availableMemory").mockImplementation(() => available);
+    const stateDir = dirs.make("page-cache-memory-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const statePath = resolveOpenClawStateSqlitePath();
+    mkdirSync(path.dirname(statePath), { recursive: true });
+    writeFileSync(statePath, "");
+    const read = vi.mocked(runSqliteReadOnlyOperation);
+    read.mockReset().mockImplementation(async () => {
+      if (stage === "pacing") {
+        pacing.onDelay = () => {
+          available = 100;
+        };
+      } else {
+        available = 100;
+      }
+      return { ...complete, complete: stage === "next-target" || read.mock.calls.length > 1 };
+    });
+    const log = { info: vi.fn(), warn: vi.fn() };
+    try {
+      await warmGatewayDatabasePageCache({
+        databases: [{ database: { path: statePath, agentId: "main" }, assertCurrent() {} }],
+        signal: new AbortController().signal,
+        log,
+      });
+      expect(read).toHaveBeenCalledTimes(stage === "entry" ? 0 : 1);
+      expect(log.warn).not.toHaveBeenCalled();
+    } finally {
+      await closeOpenClawStateDatabaseByPathAsync(statePath);
+    }
+  },
+);

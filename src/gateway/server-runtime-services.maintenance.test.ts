@@ -223,3 +223,35 @@ describe("post-ready maintenance scheduling", () => {
     }
   });
 });
+
+it("defers low-memory optional startup work without delaying cron", async () => {
+  vi.spyOn(process, "constrainedMemory").mockReturnValue(1_000);
+  const available = vi.spyOn(process, "availableMemory").mockReturnValue(100);
+  const clock = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const cron = { start: vi.fn(async () => undefined) };
+  const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+  vi.mocked(runGatewayPostReadyStartupMaintenance).mockClear();
+  scheduleGatewayPostReadyMaintenance(
+    createPostReadyMaintenanceScheduleParams({
+      scheduler,
+      cronState: createTestCronState(cron),
+    }),
+  );
+  try {
+    await clock.advanceBy(1);
+    expect(cron.start).toHaveBeenCalledOnce();
+    await clock.advanceBy(1_000);
+    await clock.advanceBy(1_000);
+    expect(runGatewayPostReadyStartupMaintenance).not.toHaveBeenCalled();
+    expect(runtimeServiceMocks.warmGatewayDatabasePageCache).not.toHaveBeenCalled();
+    available.mockReturnValue(500);
+    await clock.advanceBy(1_000);
+    await clock.advanceBy(1_000);
+    expect(runGatewayPostReadyStartupMaintenance).toHaveBeenCalledOnce();
+    expect(cron.start).toHaveBeenCalledOnce();
+  } finally {
+    await scheduler.stop();
+    vi.restoreAllMocks();
+  }
+});

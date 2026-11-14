@@ -60,6 +60,15 @@ inspection failures retain the existing self-restart behavior. The running
 Gateway must contain this fix; a downloaded candidate cannot change an older
 Gateway's installation observer.
 
+Automatic update and remote-model-catalog checks retry after one minute while
+available process memory is at or below 20% of a valid process limit. Explicit
+update checks remain available. The same pressure signal defers optional Gateway
+startup database maintenance and Cron retention; scheduled Cron execution is not
+paused. Page-cache warming releases its current reader instead of continuing
+under pressure. Existing lifecycle cancellation and shutdown ownership remain
+unchanged. This requires the running Gateway to contain the fix; it changes no
+configuration, schema, or stored data.
+
 Candidate Doctor recovers interrupted legacy heartbeat runs through cron's startup
 recovery owner before converting them to automations, while holding offline
 maintenance custody. Live or unproved runtime ownership leaves the conversion and
