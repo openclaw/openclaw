@@ -2,6 +2,7 @@
   { "locale": "zh-CN", "fileName": "zh-CN.ts", "exportName": "zh_CN", "languageKey": "zhCN" },
   { "locale": "zh-TW", "fileName": "zh-TW.ts", "exportName": "zh_TW", "languageKey": "zhTW" },
   { "locale": "pt-BR", "fileName": "pt-BR.ts", "exportName": "pt_BR", "languageKey": "ptBR" },
+  { "locale": "pt-PT", "fileName": "pt-PT.ts", "exportName": "pt_PT", "languageKey": "ptPT" },
   { "locale": "de", "fileName": "de.ts", "exportName": "de", "languageKey": "de" },
   { "locale": "es", "fileName": "es.ts", "exportName": "es", "languageKey": "es" },
   { "locale": "ja-JP", "fileName": "ja-JP.ts", "exportName": "ja_JP", "languageKey": "jaJP" },
