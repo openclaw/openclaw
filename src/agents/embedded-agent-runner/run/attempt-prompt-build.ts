@@ -363,6 +363,7 @@ type PromptContextAttempt = Pick<
   | "contextTokenBudget"
   | "currentInboundContext"
   | "currentInboundEventKind"
+  | "inputProvenance"
   | "internalEvents"
   | "fallbackActive"
   | "runtimeContextFragments"
@@ -470,8 +471,26 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
         : [{ kind: "conversation-data" as const, text: input.prompt.originContext.text }]
       : []),
   ];
+  // Hooks receive the body, but active model text must keep the same provenance
+  // envelope as durable replay. Preserve hook additions and the hidden carrier.
+  const effectiveModelPrompt =
+    input.prompt.originContext &&
+    !input.isRawModelRun &&
+    attempt.operation !== "settled-tool-finalization" &&
+    input.prompt.effectivePrompt.trim() &&
+    input.prompt.effectivePrompt !== input.prompt.originContext.text &&
+    !input.prompt.effectivePrompt.startsWith(`${input.prompt.originContext.text}\n`)
+      ? `${input.prompt.originContext.text}\n${input.prompt.effectivePrompt}`
+      : input.prompt.effectivePrompt;
+  const modelPromptProvenance =
+    input.prompt.originContext &&
+    !input.isRawModelRun &&
+    attempt.operation !== "settled-tool-finalization" &&
+    input.prompt.effectivePrompt.trim()
+      ? attempt.inputProvenance
+      : undefined;
   const promptSubmission = resolveRuntimeContextPromptParts({
-    effectivePrompt: input.prompt.effectivePrompt,
+    effectivePrompt: effectiveModelPrompt,
     transcriptPrompt: input.prompt.effectiveTranscriptPrompt,
     fragments: eventFragments,
     allowRuntimeOnly: !attempt.suppressNextUserMessagePersistence,
@@ -584,6 +603,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     llmBoundaryPromptForPrecheck,
     prePromptMessageCount,
     promptForModel,
+    modelPromptProvenance,
     promptForSession,
     promptSubmission,
     promptToolResultAggregateMaxChars,
