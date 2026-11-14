@@ -225,6 +225,43 @@ describe("parseTemplateManifest", () => {
     expect(result.diagnostics[0]?.path).toMatch(/^\$\.mcpServers\.unsafe/);
   });
 
+  it.each([
+    {
+      server: { url: "https://mcp.linear.app/mcp" },
+      path: "$.mcpServers.remote.transport",
+      reason: 'expected one of "sse"|"streamable-http"',
+    },
+    {
+      server: { url: "https://mcp.linear.app/mcp", transport: "http" },
+      path: "$.mcpServers.remote.transport",
+      reason: 'expected one of "sse"|"streamable-http"',
+    },
+    {
+      server: { command: "node", args: [8080] },
+      path: "$.mcpServers.remote.args[0]",
+      reason: "expected string, received number",
+    },
+    {
+      server: {},
+      path: "$.mcpServers.remote.command",
+      reason: "expected string, received undefined",
+    },
+  ])("names the malformed MCP field for %j", ({ server, path, reason }) => {
+    const result = parseTemplateManifest({
+      ...baseManifest,
+      mcpServers: { remote: server },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ path, message: expect.stringContaining(reason) }),
+    );
+    // A collapsed union diagnostic carries no field or rule, so it is never actionable.
+    expect(result.diagnostics.map((diagnostic) => diagnostic.message)).not.toContain(
+      "Invalid input",
+    );
+  });
+
   it("rejects workspace traversal and duplicate destinations", () => {
     const traversal = parseTemplateManifest({
       ...baseManifest,
