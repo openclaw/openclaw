@@ -90,9 +90,8 @@ export function deviceApprover(
       return approver.by === "root"
         ? "Approved with the recovery key"
         : `Approved by owner device ${ownerDevices.find((owner) => owner.deviceFp === approver.by)?.label ?? approver.by}`;
-    case "member_device":
-      return `Approved by ${memberDevices.find((member) => member.deviceFp === approver.device_fp)?.label ?? approver.device_fp}`;
   }
+  return `Approved by ${memberDevices.find((member) => member.deviceFp === approver.device_fp)?.label ?? approver.device_fp}`;
 }
 
 /** Display-only count; the Gateway owns the actual transitive revocation. */

@@ -505,13 +505,14 @@ describe("Access page", () => {
         label: "Independent",
         approvedBy: { kind: "owner" as const, by: "root" as const },
       },
-    ].map((device) => ({
-      ...device,
-      connections: 0,
-      lastSeenAt: null,
-      lastSeen: Math.floor(Date.now() / 1000) - 300,
-      runs: [],
-    }));
+    ].map((device) =>
+      Object.assign(device, {
+        connections: 0,
+        lastSeenAt: null,
+        lastSeen: Math.floor(Date.now() / 1000) - 300,
+        runs: [],
+      }),
+    );
     const member = {
       accountId: "acct-mira",
       role: "operator",

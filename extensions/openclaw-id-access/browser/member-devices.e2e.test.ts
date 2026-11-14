@@ -56,7 +56,9 @@ suite.define(() => {
             open.addEventListener("upgradeneeded", () =>
               open.result.createObjectStore("owner-devices"),
             );
-            open.addEventListener("error", () => reject(open.error));
+            open.addEventListener("error", () =>
+              reject(new Error("Could not open device test store", { cause: open.error })),
+            );
             open.addEventListener("success", () => {
               const db = open.result;
               const tx = db.transaction("owner-devices", "readwrite");
@@ -67,7 +69,7 @@ suite.define(() => {
               });
               tx.addEventListener("error", () => {
                 db.close();
-                reject(tx.error);
+                reject(new Error("Could not save test owner device", { cause: tx.error }));
               });
             });
           });
@@ -102,13 +104,14 @@ suite.define(() => {
             label: "Firefox on Linux — independent device",
             approvedBy: { kind: "owner", by: "root" },
           },
-        ].map((device) => ({
-          ...device,
-          connections: 0,
-          lastSeenAt: null,
-          lastSeen: now - 300,
-          runs: [],
-        }));
+        ].map((device) =>
+          Object.assign(device, {
+            connections: 0,
+            lastSeenAt: null,
+            lastSeen: now - 300,
+            runs: [],
+          }),
+        );
         const member = {
           accountId: "member-mira",
           displayName: "Mira Example",

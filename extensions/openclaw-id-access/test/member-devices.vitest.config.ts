@@ -4,22 +4,22 @@ import { defineConfig } from "vitest/config";
 import { createUiE2eVitestConfig } from "../../../test/vitest/vitest.ui-e2e.config.ts";
 
 const base = createUiE2eVitestConfig();
+const projects = await Promise.all(base.test?.projects ?? []);
 export default defineConfig({
   ...base,
   test: {
     ...base.test,
-    projects: base.test?.projects?.map((project) => {
+    projects: projects.map((project) => {
       if (typeof project !== "object" || !project.test) {
         throw new Error("Expected an inline UI E2E project");
       }
-      return {
-        ...project,
+      return Object.assign(project, {
         test: {
           ...project.test,
           globalSetup: ["test/vitest/vitest.ui-e2e.global-setup.ts"],
           setupFiles: [],
         },
-      };
+      });
     }),
   },
 });
