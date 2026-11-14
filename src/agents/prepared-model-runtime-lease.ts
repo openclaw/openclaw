@@ -21,6 +21,7 @@ import {
   PreparedModelRuntimePublicationSupersededError,
   ownerKey,
   normalizePreparedModelRuntimeInput,
+  preparedModelRuntimeCatalogConfigsCompatible,
   preparedModelRuntimeConfigsMatch,
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
@@ -420,20 +421,35 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
       );
     }
     // Execution purpose isolates plugins, not the configured agent's published inventory.
+    // A read-only probe (setup inference, isolated completion) keeps its own execution
+    // owner but still captures the configured agent's published catalog: its projection
+    // differs only by read-only execution identity and the gateway subagent-binding
+    // capability a reader cannot know about (absent is a wildcard, #197238).
+    const catalogInput = (entry: PreparedModelRuntimeInput) =>
+      input.readOnly
+        ? {
+            ...entry,
+            readOnly: false,
+            config: entry.config,
+            allowGatewaySubagentBinding: false,
+            loadRuntimePlugins: false,
+            runtimePluginPurpose: undefined,
+            runtimePluginSelections: undefined,
+          }
+        : {
+            ...entry,
+            loadRuntimePlugins: false,
+            runtimePluginPurpose: undefined,
+            runtimePluginSelections: undefined,
+          };
     const catalogOwner =
       configuredOwner &&
-      ownerKey({
-        ...configuredOwner.input,
-        loadRuntimePlugins: false,
-        runtimePluginPurpose: undefined,
-        runtimePluginSelections: undefined,
-      }) ===
-        ownerKey({
-          ...inventoryInput,
-          loadRuntimePlugins: false,
-          runtimePluginPurpose: undefined,
-          runtimePluginSelections: undefined,
-        })
+      ownerKey(catalogInput(configuredOwner.input)) === ownerKey(catalogInput(inventoryInput)) &&
+      preparedModelRuntimeCatalogConfigsCompatible(
+        configuredOwner.input.config,
+        inventoryInput.config,
+        configuredOwner.input.agentId,
+      )
         ? configuredOwner
         : owner;
     snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);
