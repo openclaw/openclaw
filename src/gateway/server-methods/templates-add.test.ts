@@ -196,6 +196,29 @@ it("applies the reviewed coordinate against the persisted roster", async () => {
   expect(request).toEqual([[true, ready]]);
 });
 
+it.each(["plan", "apply"] as const)(
+  "templates.add.%s reads MCP servers as the config file declares them",
+  async (operation) => {
+    const declared = { command: "node", env: { TOKEN: "${FIXTURE_MCP_TOKEN}" } };
+    listMcp.mockResolvedValue({
+      ok: true,
+      mcpServers: { docs: { command: "node", env: { TOKEN: "synthetic-token" } } },
+      authoredConfig: { mcp: { servers: { docs: declared } } },
+    });
+    let servers: unknown;
+    planAdd.mockImplementation(async (input) => {
+      servers = await input.sourceMcpServers();
+      return plan;
+    });
+    applyAdd.mockImplementation(async (input) => {
+      servers = await (await input.getPlanningContext()).sourceMcpServers();
+      return ready;
+    });
+    await callAdd(operation);
+    expect(servers).toEqual({ docs: declared });
+  },
+);
+
 it.each(["applied", "applied-restart-required", "restart-pending"] as const)(
   "reports the reload owner's %s receipt without admitting an unpublished agent",
   async (outcome) => {

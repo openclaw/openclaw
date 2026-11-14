@@ -69,7 +69,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           if (!listedMcp.ok) {
             throw new Error(listedMcp.error);
           }
-          return listedMcp.mcpServers;
+          return listedMcp.authoredConfig?.mcp?.servers ?? {};
         },
       });
       assertTemplatesLabsEnabled(context.getRuntimeConfig());
@@ -194,7 +194,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
               if (!listedMcp.ok) {
                 throw new Error(listedMcp.error);
               }
-              return listedMcp.mcpServers;
+              return listedMcp.authoredConfig?.mcp?.servers ?? {};
             },
           };
         },
