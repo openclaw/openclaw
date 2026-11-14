@@ -236,11 +236,14 @@ describe("cron management authority grants", () => {
     },
   );
 
-  it("rejects missing grants and callers without an admitted admin capability", async () => {
-    const fixture = createManagementFixture(false);
-    expect(fixture.mint).toThrow(denied);
-    await fixture.deny({ runId: fixture.scope.runId, token: "missing-grant" });
-  });
+  it.each(["cron.get", "cron.runs"])(
+    "rejects %s without an admitted admin capability",
+    async (method) => {
+      const fixture = createManagementFixture(false);
+      expect(() => fixture.mint(method)).toThrow(denied);
+      await fixture.deny({ runId: fixture.scope.runId, token: "missing-grant" }, method);
+    },
+  );
 
   it("expires at sixty seconds before redemption", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
