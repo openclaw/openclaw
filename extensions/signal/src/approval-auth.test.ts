@@ -1,8 +1,32 @@
 // Signal tests cover approval auth plugin behavior.
 import { describe, expect, it } from "vitest";
 import { getSignalApprovalApprovers, signalApprovalAuth } from "./approval-auth.js";
+import { signalConfigAdapter } from "./shared.js";
 
 describe("signalApprovalAuth", () => {
+  it.each([
+    ["uuid:ABCDEF12-3456-7890-ABCD-EF1234567890", true],
+    ["signal:uuid:ABCDEF12-3456-7890-ABCD-EF1234567890", true],
+    ["abcdef12-3456-7890-abcd-ef1234567890", true],
+    ["+1 (555) 123-0000", true],
+    ["uuid:BBCDEF12-3456-7890-ABCD-EF1234567890", false],
+  ])("retains approval identity through command formatting: %s", (sender, authorized) => {
+    const cfg = {
+      channels: {
+        signal: { allowFrom: ["uuid:abcdef12-3456-7890-abcd-ef1234567890", "+15551230000"] },
+      },
+    };
+    const [senderId] = signalConfigAdapter.formatAllowFrom!({ cfg, allowFrom: [sender] });
+    expect(
+      signalApprovalAuth.authorizeActorAction({
+        cfg,
+        senderId,
+        action: "approve",
+        approvalKind: "exec",
+      }).authorized,
+    ).toBe(authorized);
+  });
+
   it("authorizes phone and uuid approvers with stable sender ids", () => {
     const cfg = {
       channels: {

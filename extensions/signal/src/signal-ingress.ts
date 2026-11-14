@@ -1,9 +1,9 @@
+import { resolveApprovalReactionDecision } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
-  type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -12,7 +12,11 @@ import {
   normalizeNullableString as normalizeRawString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalSseEvent } from "./client-adapter.js";
-import type { SignalReceivePayload } from "./monitor/event-handler.types.js";
+import { isSignalActiveRunControlText } from "./monitor/event-handler.control-lane.js";
+import type {
+  SignalIngressLifecycle,
+  SignalReceivePayload,
+} from "./monitor/event-handler.types.js";
 import { getOptionalSignalRuntime } from "./runtime.js";
 
 const SIGNAL_INGRESS_DRAIN_INTERVAL_MS = 1_000;
@@ -30,6 +34,7 @@ type SignalIngressEnvelope = {
 type SignalIngressEventFacts = {
   eventId: string;
   laneKey: string;
+  conversationLaneKey: string;
 };
 
 type SignalPreparedIngressEvent = [
@@ -44,8 +49,6 @@ type SignalIngressPayload = {
 };
 
 type SignalIngressBody = Omit<SignalIngressPayload, "version">;
-
-export type SignalIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
 type SignalIngressDispatch = (
   event: SignalSseEvent,
@@ -102,7 +105,11 @@ function inspectSignalIngressEvent(
     return null;
   }
   const dataMessage = resolveDataMessage(envelope);
-  const reactionMessage = isRecord(envelope.reactionMessage) ? envelope.reactionMessage : null;
+  const reactionMessage = isRecord(envelope.reactionMessage)
+    ? envelope.reactionMessage
+    : isRecord(dataMessage?.reaction)
+      ? dataMessage.reaction
+      : null;
   if (!dataMessage && !reactionMessage) {
     // Receipts, typing notifications, and other transport-only envelopes never dispatch.
     return null;
@@ -132,9 +139,32 @@ function inspectSignalIngressEvent(
   const reactionGroup = isRecord(reactionMessage?.groupInfo) ? reactionMessage.groupInfo : null;
   const groupId =
     normalizeRawString(dataGroup?.groupId) ?? normalizeRawString(reactionGroup?.groupId);
+  const conversationLaneKey = groupId ? `group:${groupId}` : `direct:${senderKey}`;
+  const message = normalizeRawString(dataMessage?.message) ?? "";
+  const hasBody =
+    message.length > 0 ||
+    (isRecord(dataMessage?.quote) && Boolean(normalizeRawString(dataMessage.quote.text))) ||
+    (Array.isArray(dataMessage?.attachments) && dataMessage.attachments.length > 0);
+  const approvalReaction =
+    !hasBody &&
+    reactionMessage?.isRemove !== true &&
+    typeof reactionMessage?.emoji === "string" &&
+    asPositiveSafeInteger(reactionMessage.targetSentTimestamp) !== undefined &&
+    Boolean(
+      normalizeRawString(reactionMessage.targetAuthor) ||
+      normalizeRawString(reactionMessage.targetAuthorUuid),
+    ) &&
+    resolveApprovalReactionDecision({
+      reactionKey: reactionMessage.emoji,
+      allowedDecisions: ["allow-once", "allow-always", "deny"],
+    });
+  // Scheduling does not authorize a command or reaction. The existing handler still checks
+  // sender access, command authorization, and the exact live approval target.
+  const control = isSignalActiveRunControlText(message) || approvalReaction;
   return {
     eventId: JSON.stringify([senderKey, timestamp]),
-    laneKey: groupId ? `group:${groupId}` : `direct:${senderKey}`,
+    laneKey: control ? `${conversationLaneKey}:control` : conversationLaneKey,
+    conversationLaneKey,
   };
 }
 
@@ -199,6 +229,22 @@ export async function startSignalIngressMonitor(params: {
     },
     appendRetryDelaysMs: [0],
     drain: {
+      deriveLaneKey: (record) => {
+        try {
+          return inspectSignalIngressEvent([record.payload.event, undefined])?.laneKey;
+        } catch {
+          // Delivery owns dead-lettering malformed persisted events.
+          return record.laneKey;
+        }
+      },
+      reconcileStoredLaneKey: (record, storedLaneKey, derivedLaneKey) => {
+        const facts = inspectSignalIngressEvent([record.payload.event, undefined]);
+        // Retain accepted pre-upgrade controls, but never move them to another conversation.
+        return (
+          facts?.conversationLaneKey === storedLaneKey &&
+          derivedLaneKey === `${storedLaneKey}:control`
+        );
+      },
       resolveNonRetryableFailure: resolveSignalIngressNonRetryableFailure,
       onLog: (message) => params.runtime.log?.(`signal ${message}`),
     },
