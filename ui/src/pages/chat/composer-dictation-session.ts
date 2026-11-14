@@ -11,6 +11,7 @@ import {
   RealtimeTalkPcmInputPump,
 } from "./talk/audio.ts";
 import { describeRealtimeTalkInputError, RealtimeTalkInputOwner } from "./talk/input.ts";
+import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
 const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
 const DICTATION_ENCODING = "g711_ulaw";
@@ -59,6 +60,8 @@ export class ComposerDictationSession {
   private context: AudioContext | null = null;
   private readonly inputPump = new RealtimeTalkPcmInputPump();
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
+  // Live microphone level for the listening meter; lives with the lazily loaded capture.
+  readonly inputLevel = new RealtimeTalkLevelSignal();
   private unsubscribe: (() => void) | null = null;
   private sessionId: string | null = null;
   private transcriptionSessionId: string | null = null;
@@ -99,10 +102,21 @@ export class ComposerDictationSession {
       this.options && "inputDeviceId" in this.options
         ? this.options.inputDeviceId
         : loadSettings().realtimeTalkInputDeviceId?.trim() || undefined;
+    // Start the audio graph while the browser opens the microphone instead of
+    // after it. Microphone errors still win; stopCapture() closes the context.
+    try {
+      this.context = new AudioContext({ sampleRate: DICTATION_SAMPLE_RATE_HZ });
+    } catch {
+      this.context = null;
+    }
     const media = await this.input.open(inputDeviceId);
     if (this.stopped) {
       return;
     }
+    if (this.context?.sampleRate !== DICTATION_SAMPLE_RATE_HZ) {
+      throw new Error(t("chat.composer.dictationBrowserAudioUnsupported"));
+    }
+    const context = this.context;
     this.unsubscribe = this.client.addEventListener((frame) => {
       const payload = eventPayload(frame);
       if (
@@ -139,19 +153,12 @@ export class ComposerDictationSession {
         this.reportFailure(t("chat.composer.dictationDisconnected"));
       }
     });
-    try {
-      this.context = new AudioContext({ sampleRate: DICTATION_SAMPLE_RATE_HZ });
-    } catch {
-      throw new Error(t("chat.composer.dictationBrowserAudioUnsupported"));
-    }
-    if (this.context.sampleRate !== DICTATION_SAMPLE_RATE_HZ) {
-      throw new Error(t("chat.composer.dictationBrowserAudioUnsupported"));
-    }
-    if (this.callbacks.onLevel) {
-      this.inputMeter = new RealtimeTalkMediaStreamMeter(this.callbacks.onLevel);
-      this.inputMeter.start(media, this.context);
-    }
-    this.inputPump.start(media, this.context, (samples) => {
+    this.inputMeter = new RealtimeTalkMediaStreamMeter((level) => {
+      this.inputLevel.set(level);
+      this.callbacks.onLevel?.(level);
+    });
+    this.inputMeter.start(media, context);
+    this.inputPump.start(media, context, (samples) => {
       if (this.stopped) {
         return;
       }

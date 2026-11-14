@@ -1,0 +1,6 @@
+# Model picker interaction regressions: native drag propagation in Chat and New Session,
+# live Favorites membership with stable rows, touch/context hit targets, clipped-edge
+# scrolling, keyboard ownership, and geometry require distinct browser boundaries.
+# Computed context-control typography is checked against adjacent metadata at both widths.
+# Net test growth is 519 lines; this record covers the 119 lines above the 400-line allowance.
+119

@@ -6,14 +6,13 @@ import { WebSocket, WebSocketServer } from "../../../packages/gateway-client/src
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOneTimeTicketStore } from "../../shared/one-time-ticket-store.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
-import {
-  getRemoteControlUiIngressContext,
-  hasCurrentRemoteControlUiIngress,
-} from "../ingress-attribution.js";
-import type { RemoteControlUiIngressContext } from "../server/client-identity-types.js";
+import { getRemoteControlUiIngressContext } from "../ingress-attribution.js";
 import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 import type { DesktopAudioSource } from "./managed-linux-audio.js";
-import type { DesktopObserveRequester } from "./observe-requester.js";
+import {
+  hasCurrentDesktopObserveRequester,
+  type DesktopObserveRequester,
+} from "./observe-requester.js";
 
 const DESKTOP_AUDIO_PATH = "/desktop/audio";
 // A quarter second of stereo PCM. Slow viewers disconnect instead of hearing stale audio.
@@ -21,9 +20,9 @@ const MAX_BUFFERED_BYTES = (48_000 * 2 * 2) / 4;
 const audioWss = new WebSocketServer({ noServer: true, maxPayload: 128 });
 
 type AudioObservation = {
-  attach(ws: WebSocket, ingress?: RemoteControlUiIngressContext): void;
+  attach(ws: WebSocket, req: IncomingMessage): void;
   close(): void;
-  isCurrent(ingress?: RemoteControlUiIngressContext): boolean;
+  isCurrent(req?: IncomingMessage): boolean;
 };
 const tickets = createOneTimeTicketStore<AudioObservation>({
   ttlMs: 60_000,
@@ -38,12 +37,8 @@ export function mintDesktopAudioObserver(params: {
   const lifetime = new AbortController();
   const ready = createDeferredCore<boolean>();
   let closeSocket: (() => void) | undefined;
-  const isCurrent = (ingress?: RemoteControlUiIngressContext) =>
-    !lifetime.signal.aborted &&
-    (!ingress ||
-      params.requester?.remoteIngressPrincipal?.assertCurrent ===
-        ingress.resolvePrincipal().assertCurrent) &&
-    params.requester?.isCurrent() !== false;
+  const isCurrent = (req?: IncomingMessage) =>
+    !lifetime.signal.aborted && hasCurrentDesktopObserveRequester(params.requester, req);
   const close = () => {
     if (lifetime.signal.aborted) {
       return;
@@ -57,8 +52,9 @@ export function mintDesktopAudioObserver(params: {
   const minted = tickets.mint({
     close,
     isCurrent,
-    attach(ws, ingress) {
-      const isAttachCurrent = () => isCurrent(ingress) && hasCurrentRemoteControlUiIngress(ingress);
+    attach(ws, req) {
+      const ingress = getRemoteControlUiIngressContext(req);
+      const isAttachCurrent = () => isCurrent(req);
       let captureAbort: AbortController | undefined;
       let transition: Promise<void> | undefined;
       let pending: (() => Promise<void>) | undefined;
@@ -251,13 +247,12 @@ export function handleDesktopAudioUpgrade(
   if (resource.pathname !== DESKTOP_AUDIO_PATH) {
     return false;
   }
-  const ingress = getRemoteControlUiIngressContext(req);
   const entry = tickets.consume(resource.searchParams.get("token") ?? "");
-  if (!entry || !entry.isCurrent(ingress) || !hasCurrentRemoteControlUiIngress(ingress)) {
+  if (!entry || !entry.isCurrent(req)) {
     entry?.close();
     rejectWebSocketUpgrade(socket, { status: 401 });
     return true;
   }
-  audioWss.handleUpgrade(req, socket, head, (ws) => entry.attach(ws, ingress));
+  audioWss.handleUpgrade(req, socket, head, (ws) => entry.attach(ws, req));
   return true;
 }

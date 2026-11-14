@@ -12,7 +12,6 @@ import { NewSessionModelControl } from "./model-control.ts";
 type ViewProps = Parameters<typeof NewSessionModelControlView>[0];
 const views = new WeakMap<NewSessionModelControl, ReturnType<typeof mountSolid<ViewProps>>>();
 const openedPickers = new WeakSet<HTMLDetailsElement>();
-const openedProviders = new WeakSet<HTMLButtonElement>();
 const subscribe =
   <T>(listeners: Set<T>) =>
   (listener: T) => {
@@ -122,19 +121,6 @@ export function renderControl(
     picker.open = true;
     picker.dispatchEvent(new Event("toggle"));
     flush();
-  }
-  // Owner tests choose models across providers; reveal those rows through the real disclosure.
-  for (const toggle of container.querySelectorAll<HTMLButtonElement>(
-    "[data-chat-model-provider-toggle]",
-  )) {
-    if (openedProviders.has(toggle)) {
-      continue;
-    }
-    openedProviders.add(toggle);
-    if (toggle.getAttribute("aria-expanded") === "false") {
-      toggle.click();
-      flush();
-    }
   }
   return container;
 }

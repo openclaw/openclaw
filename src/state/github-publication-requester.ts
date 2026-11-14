@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { openClawIdRecoveryPrincipalSchema } from "../gateway/openclaw-id/tunnel-principal.js";
 
 const requesterSchema = z
   .strictObject({
@@ -9,6 +10,7 @@ const requesterSchema = z
       z.strictObject({ kind: z.literal("system") }),
     ]),
     scopes: z.array(z.string().min(1)),
+    openclawIdPrincipal: openClawIdRecoveryPrincipalSchema.optional(),
     grant: z
       .strictObject({
         pluginId: z.string().min(1).max(128),
@@ -26,7 +28,12 @@ const requesterSchema = z
       })
       .optional(),
   })
-  .refine((value) => value.actor.kind !== "system" || value.grant === null);
+  .refine((value) => value.actor.kind !== "system" || value.grant === null)
+  .refine(
+    (value) =>
+      !value.openclawIdPrincipal ||
+      (value.actor.kind === "operator" && value.openclawIdPrincipal.kind === "member"),
+  );
 
 type RequesterData = z.infer<typeof requesterSchema>;
 export type GitHubPublicationOrigin = Readonly<NonNullable<RequesterData["origin"]>>;
@@ -77,6 +84,14 @@ function immutableRequester(
     version: 1,
     actor: Object.freeze(value.actor),
     scopes: Object.freeze([...new Set(value.scopes)].toSorted()),
+    ...(value.openclawIdPrincipal
+      ? {
+          openclawIdPrincipal: Object.freeze({
+            ...value.openclawIdPrincipal,
+            authority: Object.freeze({ ...value.openclawIdPrincipal.authority }),
+          }),
+        }
+      : {}),
     grant: value.grant
       ? Object.freeze({
           ...value.grant,
@@ -117,10 +132,14 @@ export function matchesGitHubPublicationRequester(
     encodeGitHubPublicationRequester(original) ===
     encodeGitHubPublicationRequester({
       ...current,
+      // An accepted principal-free request keeps its original profile/grant basis on retry.
+      openclawIdPrincipal: original.openclawIdPrincipal ? current.openclawIdPrincipal : undefined,
       grant:
-        current.grant && original.grant
-          ? { ...current.grant, aliasBindingIds: original.grant.aliasBindingIds }
-          : current.grant,
+        !original.openclawIdPrincipal && current.openclawIdPrincipal && current.grant === null
+          ? original.grant
+          : current.grant && original.grant
+            ? { ...current.grant, aliasBindingIds: original.grant.aliasBindingIds }
+            : current.grant,
       ...(current.origin && original.origin
         ? { origin: { ...current.origin, runId: original.origin.runId } }
         : {}),

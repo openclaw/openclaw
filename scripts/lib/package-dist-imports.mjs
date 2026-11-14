@@ -73,22 +73,27 @@ function sourceTypeFor(importerPath, packageJsons) {
   }
 }
 
-function resolvesCommonJs(importedPath, fileSet, packageJsons) {
+/** Resolve CommonJS imports using only the files admitted to the package. */
+export function resolvePackageDistCommonJs(importedPath, fileSet, packageJsons) {
   const extensions = ["", ".js", ".json", ".node"];
-  const loadFile = (target) => extensions.some((extension) => fileSet.has(target + extension));
+  const loadFile = (target) =>
+    extensions.map((extension) => target + extension).find((file) => fileSet.has(file));
   const loadIndex = (directory) =>
     extensions
       .slice(1)
-      .some((extension) => fileSet.has(path.posix.join(directory, "index" + extension)));
-  if (!importedPath.endsWith("/") && loadFile(importedPath)) {
-    return true;
+      .map((extension) => path.posix.join(directory, "index" + extension))
+      .find((file) => fileSet.has(file));
+  const file = !importedPath.endsWith("/") && loadFile(importedPath);
+  if (file) {
+    return file;
   }
   const manifest = packageJsons.get(path.posix.join(importedPath, "package.json"));
   const main = manifest === undefined ? undefined : JSON.parse(manifest).main;
   if (typeof main === "string" && main) {
     const target = path.posix.join(importedPath, main);
-    if (loadFile(target) || loadIndex(target)) {
-      return true;
+    const entry = loadFile(target) ?? loadIndex(target);
+    if (entry) {
+      return entry;
     }
   }
   return loadIndex(importedPath);
@@ -268,7 +273,7 @@ export function collectPackageDistImportErrors(params) {
   for (const { importerPath, importedPath, kind } of imports) {
     const found =
       kind === "require"
-        ? resolvesCommonJs(importedPath, fileSet, packageJsons)
+        ? resolvePackageDistCommonJs(importedPath, fileSet, packageJsons) !== undefined
         : fileSet.has(importedPath);
     if (!found) {
       errors.push(`${importerPath} imports missing ${importedPath}`);

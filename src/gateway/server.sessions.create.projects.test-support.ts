@@ -5,7 +5,9 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { expect } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { withTimeout } from "../infra/fs-safe.js";
+import type { registerProjectRegistry } from "../projects/project-registry.js";
 import {
   captureSessionControllerSettlement,
   SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
@@ -65,6 +67,32 @@ export async function successfulSessionRequest<T = unknown>(
   const result = await directSessionReq<T>(...args);
   expect(result.ok, JSON.stringify(result.error)).toBe(true);
   return result.payload!;
+}
+
+export function expectPreparedProject(
+  entry: SessionEntry | null | undefined,
+  sessionId: string,
+  project: Awaited<ReturnType<typeof registerProjectRegistry>>,
+  projectRoot: string,
+) {
+  expect(entry).toMatchObject({
+    sessionId,
+    projectId: project.id,
+    worktree: { canonicalWorkspaceDir: projectRoot },
+  });
+  expect(entry?.spawnedCwd).not.toBe(projectRoot);
+}
+
+export function retryRemoteProjectSession(
+  sessionKey: string,
+  runId: string,
+  context: Record<string, unknown>,
+) {
+  return successfulSessionRequest<{ runId: string; status: string }>(
+    "chat.send",
+    { sessionKey, agentId: "main", message: "Retry the remote project", idempotencyKey: runId },
+    { ...controlUiClient, context },
+  );
 }
 
 export async function removeOwnedSessionWorktree(key?: string) {

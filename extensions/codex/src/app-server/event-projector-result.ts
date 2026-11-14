@@ -191,7 +191,9 @@ export abstract class CodexTurnProjection {
         ? AbortSignal.any([options.runAbortSignal, this.projectionController.signal])
         : this.projectionController.signal,
     });
-    this.toolProgressProjection = new CodexToolProgressProjection(params);
+    this.toolProgressProjection = new CodexToolProgressProjection(params, (event) =>
+      this.emitAgentEvent(event),
+    );
     this.toolTranscriptProjection = new CodexToolTranscriptProjection(
       params,
       threadId,

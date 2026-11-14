@@ -80,6 +80,7 @@ const mockRegistryUnitTests = uiIsolatedTestFiles.map((testFile) => testFile.sli
 const mockRegistryBrowserTests = [
   "src/lib/toast-host.loading.browser.test.ts",
   "src/pages/chat/chat-pane-frame-updates.browser.test.tsx",
+  "src/pages/chat/components/chat-tool-cards.browser.test.tsx",
   "src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx",
 ].map((file) => resolveUiTypeScriptPath(file, here));
 function resolveChromiumLaunchOptions(): { executablePath: string } | undefined {
@@ -123,6 +124,7 @@ const webkitTestFiles = [
   "src/components/session-people-search.browser.test.ts",
   "src/components/control-theme.browser.test.tsx",
   "src/components/menu-surface.browser.test.tsx",
+  "src/components/solid/overlay-style.browser.test.tsx",
   "src/components/session-progress-hovercard.browser.test.ts",
   "src/components/modal-dialog.test.ts",
   "src/components/tooltip.test.ts",
@@ -142,6 +144,7 @@ const webkitTestFiles = [
   "src/pages/chat/components/chat-details.browser.test.ts",
   "src/pages/chat/components/chat-message-reactions.browser.test.tsx",
   "src/pages/chat/components/chat-model-picker.browser.test.tsx",
+  "src/pages/chat/components/chat-model-picker-layout.browser.test.tsx",
   "src/pages/chat/components/chat-pane-header.browser.test.tsx",
   "src/components/overlay-anchor.browser.test.ts",
   "src/components/overlay-lifecycle.browser.test.ts",

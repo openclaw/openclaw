@@ -37,7 +37,6 @@ import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/m
 import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { prepareLocalCapabilityAccountSecrets } from "../../cli/capability-cli/local-account-secrets.js";
-import { formatCliCommand } from "../../cli/command-format.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveMergedModelProviderEntry } from "../../config/model-provider-config.js";
 import {
@@ -51,8 +50,6 @@ import {
   normalizeSecretInputString,
   resolveSecretInputRef,
 } from "../../config/types.secrets.js";
-import type { EmbeddedStateLockHandle } from "../../infra/embedded-state-lock.js";
-import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { appendConfigPathSegment } from "../../shared/dot-path.js";
 import { monotonicNow } from "../../shared/monotonic-time.js";
@@ -576,10 +573,6 @@ export async function buildProbeTargets(params: {
   return { targets, results };
 }
 
-function formatActiveGatewayModelsProbeRefusal(identity: GatewayLockIdentity): string {
-  return `A Gateway is running for this state directory (pid ${identity.pid}, port ${identity.port}). Stop the Gateway first (${formatCliCommand("openclaw gateway stop")}), then rerun models status --probe.`;
-}
-
 type AuthProbeStateOwnership = {
   mode: "exclusive";
 };
@@ -592,32 +585,24 @@ export async function withAuthProbeStateOwnership<T>(
   if (!ownership) {
     return await run();
   }
-  const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
-    await import("../../infra/embedded-state-lock.js");
-  const signalBridge = createEmbeddedStateSignalBridge();
-  let stateLock: EmbeddedStateLockHandle | null | undefined;
-  let work: Awaited<ReturnType<typeof createAuthProbeWork>> | undefined;
-  try {
-    work = await createAuthProbeWork(signalBridge.signal);
-    stateLock = await acquireEmbeddedStateLock({
-      signal: signalBridge.signal,
-      formatActiveGatewayRefusal: formatActiveGatewayModelsProbeRefusal,
-    });
-    return await work.run(() => run(signalBridge.signal));
-  } finally {
-    const release = async () => {
+  const { runWithLocalStateOwner } = await import("../../cli/local-state-owner.js");
+  return await runWithLocalStateOwner({
+    method: "models status --probe",
+    params: {},
+    target: "model credentials",
+    onForeignOwner: "refuse",
+    onlineAlternative: "Omit --probe to read status without live checks.",
+    runLocal: async ({ signal }) => {
+      const work = await createAuthProbeWork(signal);
       try {
-        await stateLock?.release();
+        return await work.run(() => run(signal));
       } finally {
-        signalBridge.dispose();
+        // Ownership outlives a failed batch until its in-flight probes settle.
+        await work.settle(async () => {});
+        await work.settled;
       }
-    };
-    if (work) {
-      await work.settle(release);
-    } else {
-      await release();
-    }
-  }
+    },
+  });
 }
 
 export async function runAuthProbes(

@@ -77,7 +77,7 @@ export async function stageQueuePayloadMedia(
     mediaAccess?: OutboundMediaAccess;
     maxBytes: number;
     stateDir?: string;
-    artifactFormat?: "session-generation-v1" | "command-owner-v1";
+    artifactFormat?: "session-generation-v1" | "command-owner-v1" | "media-candidate-v1";
   },
   context?: DeliveryQueueStateContext,
 ): Promise<StageQueueMediaResult> {
@@ -94,11 +94,13 @@ export async function stageQueuePayloadMedia(
   // Older queue readers skip these artifacts instead of collecting media whose
   // authority-bound queue namespace they cannot inventory.
   const artifactPrefix =
-    params.artifactFormat === "command-owner-v1"
-      ? "c1-"
-      : params.artifactFormat === "session-generation-v1"
-        ? "g1-"
-        : "";
+    params.artifactFormat === "media-candidate-v1"
+      ? "r1-"
+      : params.artifactFormat === "command-owner-v1"
+        ? "c1-"
+        : params.artifactFormat === "session-generation-v1"
+          ? "g1-"
+          : "";
   const artifactsBySource = new Map<string, string>();
   for (const source of params.payloads.flatMap(payloadMediaSources)) {
     if (isSpoolableSource(source) && !artifactsBySource.has(source)) {
@@ -139,6 +141,8 @@ export async function stageQueuePayloadMedia(
       buildOutboundMediaLoadOptions({
         maxBytes: params.maxBytes,
         mediaAccess: params.mediaAccess,
+        // Candidate custody preserves paid originals, not a send-time downscale.
+        ...(params.artifactFormat === "media-candidate-v1" ? { optimizeImages: false } : {}),
         mediaLocalRoots: params.mediaAccess?.localRoots,
         mediaReadFile: params.mediaAccess?.readFile,
       }),

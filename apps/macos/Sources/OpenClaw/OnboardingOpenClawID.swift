@@ -21,8 +21,14 @@ extension OnboardingOpenClawIDService {
 enum OnboardingOpenClawIDIntent { case makeReachable, connect, joinNode }
 
 enum OnboardingOpenClawIDAction {
-    case signIn, selectClaw(String), saveRecoveryKit, confirmRecoveryKit, requestNode, checkApproval, requestChat
+    case signIn, switchAccount, selectClaw(String), saveRecoveryKit, confirmRecoveryKit, requestNode, checkApproval,
+         requestChat
     case pasteNodeInvitation(discoveryOrigin: String)
+    case approveFromDevice, useRecoveryKit, chooseKitFile, retry, back
+    /// The person's own comparison of the six digits on this Mac.
+    case confirmCode(matches: Bool)
+    /// The typed recovery code. It is passed straight to the enrollment and not kept in view state.
+    case submitRecoveryKit(String)
 }
 
 struct OnboardingClaw: Identifiable, Equatable {
@@ -44,6 +50,35 @@ enum OnboardingOpenClawIDStep: Equatable {
     case chatAccess(claw: String, approvalURL: URL?)
     case connected(claw: String)
     case reachable(hostname: String)
+    /// The OpenClaw ID sign-in window is open.
+    case signingIn
+    /// The owner picks how this Mac becomes their device.
+    case chooseApproval(claw: String, device: String)
+    /// The six digits are shown; the service waits for the approving device on its own, and opens
+    /// its handoff only after the person confirmed the match here too.
+    case ownerCompareCode(claw: String, device: String, code: String, approvalURL: URL?, confirmed: Bool)
+    case recoveryKitEntry(claw: String)
+    case ownerConnected(claw: String, device: String, approvedWith: String)
+    case problem(OnboardingOpenClawIDProblem)
+}
+
+enum OnboardingOpenClawIDProblem: Equatable {
+    case clawOffline(claw: String)
+    case denied(claw: String)
+    case expired(claw: String)
+    case kitInvalid(claw: String)
+    case notInvited(account: String)
+    /// A claw this account joined as a member: a new Mac needs its own invite.
+    case memberNeedsInvite(claw: String)
+    case signInFailed
+}
+
+extension OnboardingOpenClawIDStep {
+    /// The code is shown and the service is waiting for the owner's decision.
+    var isAwaitingApproval: Bool {
+        if case .ownerCompareCode = self { return true }
+        return false
+    }
 }
 
 struct UnavailableOnboardingOpenClawIDService: OnboardingOpenClawIDService {
@@ -72,14 +107,18 @@ final class OnboardingOpenClawIDModel {
     let accountUnavailableReason: String?
     @ObservationIgnored private let service: any OnboardingOpenClawIDService
     @ObservationIgnored private let onNodeConnected: (String) -> Void
+    @ObservationIgnored private let onJoined: (String) throws -> Void
     @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var wait: Task<Void, Never>?
 
     init(
         service: any OnboardingOpenClawIDService,
-        onNodeConnected: @escaping (String) -> Void = { _ in })
+        onNodeConnected: @escaping (String) -> Void = { _ in },
+        onJoined: @escaping (String) throws -> Void = { try MacOpenClawIDJoinCompletion.finish(claw: $0) })
     {
         self.service = service
         self.onNodeConnected = onNodeConnected
+        self.onJoined = onJoined
         self.unavailableReason = service.unavailableReason
         self.accountUnavailableReason = service.accountUnavailableReason
     }
@@ -95,12 +134,23 @@ final class OnboardingOpenClawIDModel {
     @discardableResult
     func perform(_ action: OnboardingOpenClawIDAction) -> Task<Void, Never>? {
         guard !self.busy, self.unavailableReason == nil else { return nil }
+        self.wait?.cancel()
+        self.wait = nil
+        switch action {
+        case .signIn, .switchAccount: self.step = .signingIn
+        default: break
+        }
+        if case .retry = action, case .ownerConnected = self.step {
+            return self.run { self.step }
+        }
         return self.run { try await self.service.perform(action) }
     }
 
     func cancel() {
         self.task?.cancel()
         self.task = nil
+        self.wait?.cancel()
+        self.wait = nil
         self.service.cancel()
         self.busy = false
         self.error = nil
@@ -116,8 +166,7 @@ final class OnboardingOpenClawIDModel {
             do {
                 let step = try await operation()
                 guard !Task.isCancelled else { return }
-                self.step = step
-                if case let .nodeConnection(claw, true) = step { self.onNodeConnected(claw) }
+                try self.show(step)
             } catch {
                 guard !Task.isCancelled else { return }
                 // Service errors can carry sensitive response bodies; do not render them verbatim.
@@ -127,5 +176,32 @@ final class OnboardingOpenClawIDModel {
         }
         self.task = task
         return task
+    }
+
+    private func show(_ step: OnboardingOpenClawIDStep) throws {
+        self.step = step
+        switch step {
+        case let .nodeConnection(claw, true): self.onNodeConnected(claw)
+        case let .ownerConnected(claw, _, _): try self.onJoined(claw)
+        case .ownerCompareCode: self.awaitApproval()
+        default: break
+        }
+    }
+
+    /// Waits for the approving device without blocking the sheet, so the person can still switch
+    /// to the recovery kit. Any other action cancels the wait.
+    private func awaitApproval() {
+        self.wait = Task { @MainActor in
+            do {
+                let step = try await self.service.perform(.checkApproval)
+                guard !Task.isCancelled else { return }
+                self.wait = nil
+                try self.show(step)
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.wait = nil
+                self.error = "Setup did not finish. Try again or continue without OpenClaw ID."
+            }
+        }
     }
 }

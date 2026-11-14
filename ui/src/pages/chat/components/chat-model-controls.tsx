@@ -55,7 +55,6 @@ const MODEL_SELECTION_SCOPE_LABELS = new Map([
 function resolveCatalogTriggerStatus(
   state: ChatModelCatalogState,
   optionCount: number,
-  selectionKnown: boolean,
 ): string | undefined {
   if (state.status === "offline") {
     return undefined;
@@ -64,7 +63,7 @@ function resolveCatalogTriggerStatus(
     return optionCount === 0 ? t("chat.modelControls.modelsUnavailable") : undefined;
   }
   if (!state.hasSnapshot && ["idle", "loading"].includes(state.status)) {
-    return selectionKnown ? undefined : t("chat.modelControls.loadingModels");
+    return undefined;
   }
   if (state.hasSnapshot && optionCount === 0) {
     return t("chat.modelControls.noModelsAvailable");
@@ -160,7 +159,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     const headingKey = (id: string) => {
       const provider = normalizeChatModelProviderId(id);
       // Usage aliases are not billing identities: Claude CLI's native account
-      // and the direct Anthropic API connection own separate picker headings.
+      // and the direct Anthropic API connection own separate authentication identities.
       return provider === "claude-cli"
         ? provider
         : normalizeChatModelProviderGroupId(canonicalModelAuthProviderId(provider));
@@ -265,6 +264,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         recommended: catalogEntry?.recommended,
         disabled: option.disabled,
         unavailableReason: option.disabled ? option.unavailableReason : undefined,
+        unavailableUntil: catalogEntry?.unavailableUntil,
         provider: catalog.provider(
           option.value,
           isDefault
@@ -281,8 +281,8 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         pickerOption.agentRuntimeId = agentRuntimeId;
       }
       if (isDefault && sessionRuntimePinned && resolveModelRuntimeRoute(pickerOption.provider)) {
-        // Default clears the runtime pin; session-scoped metadata describes the route being left.
-        pickerOption.agentRuntimeId = undefined;
+        // Default clears the runtime pin; label the configured default route, not the one being left.
+        pickerOption.agentRuntimeId = defaultsRuntimeId?.trim() || undefined;
       }
       const options = [pickerOption];
       for (const choice of runtimeSelectionLocked ? [] : (catalogEntry?.runtimeChoices ?? [])) {
@@ -303,6 +303,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
           supportsTools: choice.supportsTools,
           disabled: choice.available === false,
           unavailableReason: choice.unavailableReason,
+          unavailableUntil: choice.unavailableUntil,
           recommended: pickerOption.recommended,
         });
       }
@@ -502,7 +503,6 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       providerAuth,
       currentOverride,
       defaultModel,
-      modelOverrideSource,
       modelOptions,
       activeModelOption,
       pickerValue,
@@ -529,22 +529,15 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     const fastMode = props.modelSwitching
       ? { ...presentedFastMode, disabled: true }
       : presentedFastMode;
-    const catalogLoadingWithoutSnapshot =
-      !catalogState.hasSnapshot && ["idle", "loading"].includes(catalogState.status);
-    // The session owns the selected model; its account-scoped catalog only owns
-    // picker availability. Refreshing that catalog must not hide a known selection.
-    const selectionKnown = Boolean(
-      currentOverride || (modelOverrideSource === null && defaultModel),
-    );
     const catalogTriggerStatus = retired
-      ? resolveCatalogTriggerStatus(catalogState, 0, false)
+      ? resolveCatalogTriggerStatus(catalogState, 0)
       : policy?.restricted && !currentOverride && !defaultModel
         ? t(
             modelOptions.length
               ? "chat.modelControls.selectionRequired"
               : "chat.modelControls.noPermittedModels",
           )
-        : resolveCatalogTriggerStatus(catalogState, modelOptions.length, selectionKnown);
+        : resolveCatalogTriggerStatus(catalogState, modelOptions.length);
     const hasResolvableModel =
       catalogState.hasSnapshot &&
       (catalogState.status === "ready" ||
@@ -644,8 +637,6 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
         triggerModelValue: triggerModelValue || undefined,
         triggerStatusLabel: props.modelSelectionLocked ? undefined : catalogTriggerStatus,
-        triggerLoading:
-          !props.modelSelectionLocked && catalogLoadingWithoutSnapshot && !selectionKnown,
         onModelSetup:
           policy?.restricted || retired || uninitialized ? undefined : props.onModelSetup,
         onProviderSettings:
@@ -689,12 +680,12 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
   });
 }
 
-export function ChatModelControls(props: ChatModelControlsProps) {
+export function ChatModelControls(props: ChatModelControlsProps & { showEffort?: boolean }) {
   const controls = createChatModelControls(props);
   return (
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       <ChatModelPicker {...controls().model} />
-      <ChatEffortPicker {...controls().effort} />
+      {props.showEffort !== false ? <ChatEffortPicker {...controls().effort} /> : undefined}
     </div>
   );
 }

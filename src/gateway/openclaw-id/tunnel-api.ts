@@ -1,11 +1,11 @@
-// Membership API for owner devices that reach the claw over the tunnel (the
+// Membership API for admitted devices that reach the claw over the tunnel (the
 // browser loader's Service Worker, which is not a Gateway WebSocket client).
-// Only requests relayed by the tunnel child reach it, so the caller is an
-// admitted device whose key W the QUIC handshake authenticated. Every write is
-// a signed statement the authority verifies itself (spec sections 6 and 7);
-// this layer only decodes JSON and maps refusals to HTTP.
+// Only requests relayed by the tunnel child reach it. The QUIC handshake
+// authenticates the device key W; this layer checks admission before dispatch,
+// decodes JSON and maps refusals to HTTP. Membership writes carry signed
+// statements the authority verifies itself (spec sections 6 and 7).
 //
-//   GET  /_openclaw-id/v1/membership  owner devices: seq, binding, active owner certs, members, invites
+//   GET  /_openclaw-id/v1/membership  account-scoped member view, or full owner view
 //   POST /_openclaw-id/v1/statements  { statement }            MembershipChange, Revocation
 //   POST /_openclaw-id/v1/invites     { cap, proof_key }       InviteCap plus base64url proof key
 //   POST /_openclaw-id/v1/node-invites { cap, proof_key }      NodeInviteCap plus proof key
@@ -21,7 +21,9 @@ const MAX_BODY_BYTES = 64 * 1024;
 
 /** What the tunnel API needs from the Gateway's OpenClaw ID owner. */
 export type TunnelApiOwner = {
-  /** The membership view for an owner device's peer key; undefined for anyone else. */
+  /** Resolves current membership and applies the Gateway's role admission policy. */
+  isAdmitted: (peerKey: string) => Promise<boolean>;
+  /** The full owner view or account-scoped member view; undefined for nodes. */
   membership: (peerKey: string) => Promise<unknown>;
   /** Loads owner authority once; the returned check is synchronous and live. */
   prepareOwnerCheck: (peerKey: string) => Promise<() => boolean>;
@@ -132,7 +134,7 @@ export function isTunnelApiRequest(req: IncomingMessage): boolean {
 }
 
 /**
- * Serves one tunnel API request from the admitted device `peerKey`. The caller
+ * Serves one tunnel API request from the authenticated device `peerKey`. The caller
  * has already checked the request came through the tunnel child.
  */
 export async function handleTunnelApiRequest(
@@ -141,6 +143,10 @@ export async function handleTunnelApiRequest(
   peerKey: string,
   owner: TunnelApiOwner,
 ): Promise<void> {
+  if (!(await owner.isAdmitted(peerKey))) {
+    sendError(res, 403, "not_admitted", "this device is not admitted");
+    return;
+  }
   const route = routeOf(req.url);
   if (!route) {
     sendError(res, 404, "not_found", "no such OpenClaw ID endpoint");
@@ -155,7 +161,7 @@ export async function handleTunnelApiRequest(
   if (route === "membership") {
     const view = await owner.membership(peerKey);
     if (!view) {
-      sendError(res, 403, "not_owner_device", "only owner devices read membership");
+      sendError(res, 403, "not_member_device", "only owner or member devices read membership");
       return;
     }
     sendJson(res, 200, view);
@@ -187,12 +193,12 @@ export async function handleTunnelApiRequest(
     sendError(res, 400, "malformed", "cap and a 32-byte base64url proof_key are required");
     return;
   }
+  const isOwner = await owner.prepareOwnerCheck(peerKey);
+  if (!isOwner()) {
+    sendError(res, 403, "not_owner_device", "only owner devices register invites");
+    return;
+  }
   if (route === "node-invites") {
-    const isOwner = await owner.prepareOwnerCheck(peerKey);
-    if (!isOwner()) {
-      sendError(res, 403, "not_owner_device", "only owner devices register node invites");
-      return;
-    }
     await answerWrite(
       res,
       owner,

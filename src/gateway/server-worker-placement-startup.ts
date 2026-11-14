@@ -59,6 +59,8 @@ import type {
 } from "./worker-environments/placement-record.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { createRepositoryPublicationPreparation } from "./worker-environments/repository-publication-preparation.js";
+import { refreshRepositoryRefs } from "./worker-environments/repository-ref-refresh.js";
 import { createRepositoryWorkspaceMutationService } from "./worker-environments/repository-workspace-mutation.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 import { createWorkerPlacementRedispatch } from "./worker-environments/worker-placement-redispatch.js";
@@ -94,6 +96,7 @@ export type GatewayWorkerPlacementRuntimeParams = {
 export function createGatewayGitHubPublicationRuntime(params: {
   placements: WorkerSessionPlacementStore;
   environments?: Pick<WorkerEnvironmentService, "get" | "startTunnel" | "ensureRetainedRunning">;
+  prepareRepositoryIntegration?: import("./repository-publication-integration.js").PrepareRepositoryPublicationIntegration;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   warn: (message: string) => void;
 }) {
@@ -235,7 +238,20 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
             return activate(assertCurrent);
           },
         }),
-      onActivated: ({ sessionId }, placement) => {
+      onActivated: (request, placement) => {
+        const { sessionId } = request;
+        runInDetachedAsyncContext(() => {
+          void refreshRepositoryRefs({
+            identity: request,
+            placements: params.placements,
+            environments: params.environments,
+            resolveWorkspace,
+          }).catch(() => {
+            params.warn(
+              "Background repository main refresh was unavailable; session startup continues and publication will refresh its base.",
+            );
+          });
+        });
         const environment = params.environments.get(placement.environmentId);
         if (
           environment?.state === "attached" &&
@@ -668,6 +684,15 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
     },
     placements: params.placements,
     githubPublication,
+    prepareRepositoryPublication: createRepositoryPublicationPreparation({
+      placements: params.placements,
+      environments: params.environments,
+      getConfig: getRuntimeConfig,
+      ensurePlacement: (request) => dispatchService.ensurePlacement(request),
+      resolveDevicePlacementRequirement,
+      waitForNode: runtimeRefresh.wait,
+      reconcileActive: (id) => dispatchService.reconcileActive(id),
+    }),
     repositoryWorkspaceMutationService: createRepositoryWorkspaceMutationService({
       placements: params.placements,
       environments: params.environments,

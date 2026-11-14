@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import { createSignal } from "solid-js";
+import { Loading, createMemo, createSignal } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { CronCompactJob, CronJobsListResult } from "../../../api/types.ts";
@@ -789,6 +789,47 @@ it("expands 25 retained jobs in tens independently of RPC pagination and resets 
   );
   expect(rows()).toHaveLength(0);
   expect(current.request).toHaveBeenCalledTimes(3);
+});
+
+it("admits cron events and reveals rows while an async frame holds a derived session prop", async () => {
+  const jobs = Array.from({ length: 25 }, (_, index) =>
+    job({ id: `job-${index}`, name: `Automation ${index + 1}` }),
+  );
+  const current = source(sequence(page(jobs), page(jobs)));
+  const initial = { sessionKey: "agent:ops:task" };
+  const [details, setDetails] = createSignal(initial);
+  const held = createDeferred<string>();
+  const { container } = mountSolid(() => {
+    // A pending read keeps the replacement details object staged until it settles.
+    const frame = createMemo(() => (details() === initial ? "ready" : held.promise));
+    return (
+      <>
+        <Loading>{frame()}</Loading>
+        <ChatSummaryAutomations
+          gateway={current.gateway}
+          // Like Details, the compiler builds a fresh memo for this conditional on every read.
+          sessionKey={details().sessionKey ? details().sessionKey : ""}
+          desktop={{ expanded: true, onExpandedChange: vi.fn() }}
+          presented
+        />
+      </>
+    );
+  });
+  const rows = () => container.querySelectorAll(".chat-summary__automation");
+  await waitForSolid(() => expect(rows()).toHaveLength(10));
+  setDetails({ sessionKey: "agent:ops:task" });
+  flush();
+
+  current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
+  await waitForSolid(() => expect(current.request).toHaveBeenCalledTimes(2));
+  expect(current.request).toHaveBeenLastCalledWith(
+    "cron.list",
+    expect.objectContaining({ sessionKey: "agent:ops:task" }),
+  );
+  container.querySelector<HTMLButtonElement>(".chat-summary__automation-more")!.click();
+  held.resolve("ready");
+  await waitForSolid(() => expect(rows()).toHaveLength(20));
+  expect(current.request).toHaveBeenCalledTimes(2);
 });
 
 it("retains reconnect facts and distinguishes auto-disabled from paused and stale running", async () => {
