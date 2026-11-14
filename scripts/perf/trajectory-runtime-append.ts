@@ -209,11 +209,11 @@ try {
       const run = statement.run.bind(statement);
       statement.get = (...bindings) => {
         statements += Number(measured && sql.includes("trajectory_runtime_events"));
-        return get(...bindings);
+        return Reflect.apply(get, statement, bindings);
       };
       statement.run = (...bindings) => {
         statements += Number(measured && sql.includes("trajectory_runtime_events"));
-        return run(...bindings);
+        return Reflect.apply(run, statement, bindings);
       };
       return statement;
     };
