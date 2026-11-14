@@ -26,7 +26,11 @@ it.each([false, true])(
     const sessionRow = Object.freeze({ ...row, model: "synthetic", hasActiveSubagentRun: false });
     const result = buildGatewaySessionSnapshot({ sessionRow, lifecycle });
     expect(Object.keys(result)[0]).toBe("session");
-    expect(Object.keys(result).slice(-2)).toEqual(["subagentRunState", "hasActiveSubagentRun"]);
+    expect(Object.keys(result).slice(-3)).toEqual([
+      "subagentRunState",
+      "hasActiveSubagentRun",
+      "hasActiveSubagentDescendantRun",
+    ]);
     expect(result.session).not.toBe(sessionRow);
     expect(result.session).not.toHaveProperty("session");
     expect(wire(result)).toMatchObject({
@@ -109,6 +113,25 @@ it("scopes the global goal to its resolved agent", () => {
   expect(unscoped).not.toHaveProperty("session.goal");
   expectBoth(buildGatewaySessionSnapshot({ sessionRow, agentId: "main" }), {
     goal: sessionRow.goal,
+  });
+});
+
+it("carries descendant-only subagent liveness in session snapshots", () => {
+  const sessionRow = {
+    key: "agent:main:parent",
+    kind: "direct" as const,
+    updatedAt: 7,
+    hasActiveSubagentRun: true,
+    hasActiveSubagentDescendantRun: true,
+  };
+
+  expect(buildGatewaySessionSnapshot({ sessionRow, lifecycle: true })).toMatchObject({
+    hasActiveSubagentRun: true,
+    hasActiveSubagentDescendantRun: true,
+    session: {
+      hasActiveSubagentRun: true,
+      hasActiveSubagentDescendantRun: true,
+    },
   });
 });
 
