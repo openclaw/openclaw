@@ -46,6 +46,13 @@ the Gateway checks its pairing identity and generation against the persisted
 approval and limits access to the capabilities and commands that connection
 declared.
 
+Node-originated agent requests and voice transcripts retain the pairing identity
+and generation that admitted them. If a turn waits in the session queue, the
+Gateway rechecks that authority when the turn is selected, before preflight or
+model execution. Removing and re-pairing the node does not restore an older
+queued turn. Reconnecting with the same pairing remains valid, and work that
+already started may finish.
+
 An initial unapproved surface has no effective commands. While a later expansion
 waits, previously approved commands remain effective only if the node still
 declares them and Gateway command policy allows them.
@@ -106,8 +113,11 @@ and explicitly approve the signed redemption, which includes the node's
 self-reported name, platform, commands, and capabilities.
 
 On the first connection for each newly approved node listing, the Gateway
-automatically pairs the node device once. Only commands and capabilities within the description
-the owner approved qualify for automatic surface approval. Additional access uses
+automatically pairs the node device once. Only commands and capabilities within
+the description the owner approved qualify for automatic surface approval. The
+OS permission states the node reports on that first connection are recorded with
+the approved surface, so reconnects that declare the same or less access need no
+approval. Additional commands, capabilities, or newly granted OS permissions use
 the normal `node.pair` approval flow. Gateway command policy, node-local execution
 approvals, and OS permissions still apply.
 

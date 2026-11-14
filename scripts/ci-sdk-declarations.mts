@@ -50,11 +50,16 @@ function assertRegularPath(
   return target;
 }
 
-function currentSdk(root: string) {
+function currentSdk(root: string, onMismatch?: (reason: string) => void) {
   const unit = sdkBoundaryUnit();
   const inputReceipt = `${unit.outDir}/.inputs.json`;
   const record = readArtifactRecord(path.join(root, recordName));
-  if (!record || !fs.existsSync(path.join(root, inputReceipt))) {
+  if (!record) {
+    onMismatch?.("SDK artifact record is missing or invalid");
+    return undefined;
+  }
+  if (!fs.existsSync(path.join(root, inputReceipt))) {
+    onMismatch?.("SDK compiler receipt is missing");
     return undefined;
   }
   const snapshot = new BoundaryInputSnapshot(root);
@@ -65,8 +70,9 @@ function currentSdk(root: string) {
     [...unit.required, inputReceipt],
     inputReceipt,
     path.join(root, unit.outDir),
+    onMismatch,
   )
-    ? record
+    ? { record, snapshot }
     : undefined;
 }
 
@@ -116,12 +122,12 @@ function cacheIdentity(root: string) {
 }
 
 function pack(root: string) {
-  const record = currentSdk(root);
-  if (!record) {
+  const current = currentSdk(root);
+  if (!current) {
     throw new Error("Only a current full SDK receipt can be published");
   }
   const boundary = createDeclarationInputBoundary(root);
-  const names = [...Object.keys(record.outputs), recordName].toSorted();
+  const names = [...Object.keys(current.record.outputs), recordName].toSorted();
   const files = names.map((file) => {
     if (!declarationPath(file)) {
       throw new Error("SDK receipt contains a non-declaration transport path");
@@ -130,7 +136,8 @@ function pack(root: string) {
     if (!fs.statSync(target).isFile()) {
       throw new Error("SDK transport requires regular declaration files");
     }
-    return [file, fs.readFileSync(target, "utf8")];
+    // Transport the same output bytes whose digests passed receipt validation.
+    return [file, current.snapshot.readText(target)];
   });
   const key = cacheIdentity(root).key;
   const bytes = Buffer.from(JSON.stringify({ version: 1, key, files }));
@@ -200,8 +207,15 @@ function restore(root: string, required: boolean) {
       fs.mkdirSync(path.dirname(file.path), { recursive: true });
       fs.writeFileSync(file.path, file.content);
     }
-    if (!currentSdk(root)) {
-      throw new Error("Prepared SDK receipt does not match current inputs and toolchain");
+    let mismatch: string | undefined;
+    if (
+      !currentSdk(root, (reason) => {
+        mismatch = reason;
+      })
+    ) {
+      throw new Error(
+        `Prepared SDK receipt does not match current inputs and toolchain: ${mismatch}`,
+      );
     }
     console.log(`Prepared SDK restored and validated: ${files.length} files`);
   } catch (error) {
@@ -251,8 +265,15 @@ async function main() {
         );
       }
     } else if (operation === "validate") {
-      if (!currentSdk(root)) {
-        throw new Error("Prepared SDK receipt does not match current inputs and toolchain");
+      let mismatch: string | undefined;
+      if (
+        !currentSdk(root, (reason) => {
+          mismatch = reason;
+        })
+      ) {
+        throw new Error(
+          `Prepared SDK receipt does not match current inputs and toolchain: ${mismatch}`,
+        );
       }
       console.log("Prepared SDK receipt is current");
     } else {

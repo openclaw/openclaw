@@ -436,11 +436,9 @@ function readActiveContext(
                 .limit(1)
                 .as("boundary"),
             )
-            .innerJoin("transcript_events as event", (join) =>
-              join
-                .on("event.session_id", "=", projection.resolved.sessionId)
-                .onRef("event.seq", "=", "boundary.seq"),
-            )
+            .crossJoin("transcript_events as event")
+            .where("event.session_id", "=", projection.resolved.sessionId)
+            .whereRef("event.seq", "=", "boundary.seq")
             .select([
               "boundary.active_position",
               "boundary.seq",

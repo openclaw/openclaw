@@ -85,7 +85,7 @@ historical failed-attempt records, even after a later verified success.
 
 Native transaction roots under `<runtime-home>/.openclaw-update/` stay on disk
 until the controller next prunes releases with no activation journal present:
-before a deployment, after an accepted one, and in `--cleanup`. Without a
+after an accepted deployment and in `--cleanup`. Without a
 journal, an earlier transaction's pre-migration snapshot can only undo state
 that was since accepted. Roots whose receipt is absent (Doctor never ran),
 `migrated`, `restored`, or `finished` are then retired: the runtime account
@@ -117,6 +117,12 @@ attempt; an invalid or foreign listener still fails verification. Deadline expir
 still emits `VERIFICATION_FAILED`. Readiness waits and RPC retries never renew that
 deadline. The 60-second marker RPC timeout bounds a transport exchange; it is
 not the whole startup acceptance window.
+
+Convergence samples HTTP health, readiness, then startup after the status/channel
+RPCs. This prevents an earlier `startup-sidecars` response from contradicting a
+later ready response when startup settles during an RPC. The probes remain
+snapshots; persistent startup or channel recovery still fails at the original
+deadline, and malformed or terminal evidence still fails verification.
 
 Before the marker, the owner waits for native `/startupz` to report that critical
 initial startup has settled, `/readyz` to report readiness without a refusal for
@@ -247,6 +253,13 @@ It binds that gate and completion as immutable history, plus the new retained
 V1 incident and independently reviewed actual four-file incumbent and replacement
 closures. It reuses the existing adoption publication and replay owner; neither
 an old completion nor a new operation UUID authorizes today's files or incident.
+
+After a journal has been retired, use
+[`steady-successor`](RETAINED-REPAIR.md#adopt-a-controller-after-journal-retirement)
+to supersede the completed gate without requiring another incident. It binds the
+currently installed closure and serving Gateway, preserves the old closure and
+gate, and publishes the new four-file closure under the same lock. Controller
+adoption does not restart the Gateway or authorize a deployment.
 
 ## Installed closure
 
@@ -454,7 +467,13 @@ candidate files independent of writable store inodes. pnpm owns store format,
 invalidation, and pruning. Operators can reclaim unused packages with
 `pnpm store prune --store-dir <build-home>/cache/store` as the build account when
 the deployment owner is idle. Candidate cleanup removes only the work and
-staging trees. Staging uses reflinks where supported and ordinary copies
+staging trees. Release pruning runs only after full acceptance or through explicit
+`--cleanup`, never to reclaim headroom before a build. Insufficient capacity
+refuses preparation so the operator can schedule cleanup separately. Retention
+still protects current, previous, the three most recently verified releases,
+pins, and journal references. Post-acceptance pruning can still cause a host-wide
+filesystem commit stall and delay other I/O; it no longer overlaps deployment
+drain or verification. Staging uses reflinks where supported and ordinary copies
 otherwise; sealing, filesystem ownership, manifest validation, and directory
 publication remain unchanged. The build account also retains the build owner's
 artifact cache at `cache/build-artifacts`. Input content hashes select reusable

@@ -16,6 +16,7 @@ const enAssistantContext = {
     includeContext: "Include work context",
     selection: "Selected text",
     attachSelection: "Attach selected text",
+    attachSelectionTooltip: "Attach selection",
     removeSelection: "Remove selected text",
   },
 } satisfies TranslationMap;

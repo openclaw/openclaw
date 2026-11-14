@@ -201,6 +201,9 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     sessionTranscriptProjectionPublication: runtimeProcessEntrypoint(
       "config/sessions/session-transcript-projection-publication.worker",
     ),
+    sessionTranscriptActiveFactsBackfill: runtimeProcessEntrypoint(
+      "config/sessions/session-transcript-active-facts-backfill.worker",
+    ),
     sessionTranscriptReports: runtimeProcessEntrypoint(
       "config/sessions/session-accessor.sqlite-transcript-reports.worker",
     ),

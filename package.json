@@ -4,6 +4,7 @@
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "updatePreflightProtocol": 1,
+    "updateRehearsalProtocol": 1,
     "databaseEngines": [
       "sqlite",
       "postgres"
@@ -1968,6 +1969,7 @@
     "gen:host-env-policy:swift": "node --import ./scripts/tsx.mjs scripts/generate-host-env-security-policy-swift.mts --write",
     "ghsa:patch": "node --import ./scripts/tsx.mjs scripts/ghsa-patch.mts",
     "ios:app-review-notes:pdf": "xcrun swift scripts/ios-app-review-notes-pdf.swift apps/ios/APP-REVIEW-NOTES-APPLE.md apps/ios/build/app-review/APP-REVIEW-NOTES.pdf",
+    "ios:behavior": "node --import ./scripts/tsx.mjs scripts/ios-behavior.mts",
     "ios:build": "/bin/bash -c 'export PATH=\"$PATH:/opt/homebrew/bin:/usr/local/bin\"; ./scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && node scripts/ios-write-swift-filelist.mjs && cd apps/ios && xcodegen generate && xcodebuild -project OpenClaw.xcodeproj -scheme OpenClaw -destination \"${IOS_DEST:-generic/platform=iOS Simulator}\" -configuration Debug build'",
     "ios:filelist:gen": "node scripts/ios-write-swift-filelist.mjs",
     "ios:gen": "/bin/bash -c 'export PATH=\"$PATH:/opt/homebrew/bin:/usr/local/bin\"; ./scripts/ios-configure-signing.sh && ./scripts/ios-write-version-xcconfig.sh && node scripts/ios-write-swift-filelist.mjs && cd apps/ios && xcodegen generate'",

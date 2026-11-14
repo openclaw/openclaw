@@ -1,4 +1,4 @@
-import { createMemo, onSettled, Repeat, Show } from "solid-js";
+import { createMemo, lazy, onSettled, Repeat, Show } from "solid-js";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -8,6 +8,7 @@ import { isRealtimeTalkMicrophoneIssueMessage } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import { createMicrophoneMeter, type MicrophoneMeterStatus } from "../talk/microphone-meter.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
@@ -177,40 +178,19 @@ export function ChatVoiceStatus(props: {
   );
 }
 
+// The dictation phase view loads with the first dictation, outside the boot bundle.
+const ActiveDictationStatus = lazy(() => import("./composer-dictation-status.tsx"), {
+  export: "ActiveDictationStatus",
+});
+
 export function ComposerDictationStatus(props: {
   readDictation: () => ComposerDictationOwner | undefined;
 }) {
-  const content = createMemo(() => {
-    const dictation = props.readDictation();
-    if (!dictation?.active) {
-      return null;
-    }
-    if (dictation.connecting) {
-      return (
-        <ChatVoiceStatus status="connecting" detail={t("chat.composer.microphoneAccessPending")} />
-      );
-    }
-    return (
-      <div class="agent-chat__composer-status-stack">
-        <div
-          class={[
-            "agent-chat__dictation-status",
-            { "agent-chat__dictation-status--finalizing": dictation.finalizing },
-          ]}
-        >
-          <span
-            class={[
-              "agent-chat__dictation-phase",
-              { "agent-chat__dictation-phase--listening text-shimmer": !dictation.finalizing },
-            ]}
-          >
-            {dictation.finalizing
-              ? t("chat.composer.dictationFinalizing")
-              : t("chat.composer.dictationListening")}
-          </span>
-        </div>
-      </div>
-    );
-  });
-  return <>{content()}</>;
+  return (
+    <Show when={props.readDictation()?.active}>
+      <ChatLazyBoundary>
+        <ActiveDictationStatus readDictation={props.readDictation} />
+      </ChatLazyBoundary>
+    </Show>
+  );
 }

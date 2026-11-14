@@ -56,6 +56,11 @@ configuration separately. Binding controls keep their own loading and error
 state until configuration is available; a slow configuration read does not
 hold the inventory page open.
 
+Device and command-approval panels build their contents when first opened, then
+keep them mounted when closed so drafts survive reopening. Summary rows continue
+to update while closed. Browser find-in-page searches panel contents only after
+you have opened that panel.
+
 Connections without general read access also skip CLI session catalogs, plugin
 tool artwork, detailed usage reads, and the separate command catalog. Slash-command
 menus retain permitted chat metadata or built-in commands without requesting a
@@ -107,7 +112,10 @@ Send or clear any existing composer draft first; recovery never replaces it.
 Editing requires permission to rewind the conversation and is unavailable while
 a run is active. **Try again** still continues the existing conversation without
 replaying the original message, because earlier actions may already have run.
-Rewinding does not undo external actions.
+Rewinding does not undo external actions. Large local histories are copied incrementally.
+If an individual event or the history navigation metadata exceeds the safe memory
+budget, the request fails without changing the conversation; other sessions remain
+available. Export the transcript to inspect it.
 
 ## Command palette file attachments
 
@@ -126,8 +134,10 @@ new background session without changing your current conversation or composer.
 
 Each newly added attachment switches the palette to **Compose**, including after
 you return to Search with an attachment still in the draft.
-Add optional instructions, choose the agent, folder, and worktree, then send
-or press **Cmd/Ctrl+Enter**. Dropping a file does not start the session by itself.
+Add optional instructions, then send or press **Cmd/Ctrl+Enter**. The settings
+button at the left of the composer opens **New session settings** for the agent,
+folder, worktree, and **Remember settings**; the model picker sits beside Send.
+Dropping a file does not start the session by itself.
 Files remain visible while preparing. If a file is rejected, an error toast
 explains the failure and only that file is removed. You can manually start a
 session with the remaining text and files; a rejected file cancels a pending

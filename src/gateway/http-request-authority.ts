@@ -29,6 +29,7 @@ import {
   GatewayOperatorAccessDeniedError,
   hasCurrentGatewayOperatorAccess,
 } from "./operator-access-policy.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { readOperatorRolePolicyRevision } from "./operator-role-policy.js";
 import { sourceRolePolicies } from "./operator-role-source-policy.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -181,7 +182,9 @@ export function captureHttpRequestAuthority(
   );
   const roles = cfg.gateway?.roles;
   const rolePolicy = sourceRolePolicies(roles);
-  const roleRevision = roles ? readOperatorRolePolicyRevision() : undefined;
+  const roleRevision = isNamedOperatorRoleEnforcementEnabled(cfg)
+    ? readOperatorRolePolicyRevision()
+    : undefined;
   const aliasRevision = readUserProfileAliasRevision();
   const ingress = getRemoteControlUiIngressContext(params.req);
   return () => {

@@ -324,6 +324,7 @@ type EnglishCatalog = TranslationMap & {
       | "incognito"
       | "incognitoLabel"
       | "incognitoDescription"
+      | "incognitoDescriptionTooltip"
       | "incognitoLimits"
       | "cloudWorkerPlacement"
       | "placementWorkspaceConflict"
@@ -681,7 +682,7 @@ const startupEnglish = {
   agentScope: agentEn.agentScope,
   newSession: {
     title: "New session",
-    hint: "Pick where this session works, then say what to do.",
+    hint: "Pick where this session works.",
     placementReloadBlocked: "Recovery needs a reload. Unsaved starts will be lost.",
     discardUnsavedAndReload: "Discard unsaved starts and reload",
   },
@@ -760,6 +761,8 @@ const startupEnglish = {
     incognitoLabel: "Incognito",
     incognitoDescription:
       "Incognito session. History expires 24 hours after creation or when the Gateway restarts, whichever comes first.",
+    incognitoDescriptionTooltip:
+      "History expires after 24 hours or a Gateway restart, whichever comes first.",
     incognitoLimits:
       "Your model provider still processes messages. Tools, plugins, and uploads may save data.",
     cloudWorkerPlacement: "Placement: {state}",
@@ -990,6 +993,7 @@ const startupEnglish = {
   desktop: {
     title: "Desktop",
     openWindow: "Open desktop in new window",
+    openWindowTooltip: "Open in new window",
     unavailable: "Desktop viewing is unavailable for this connection.",
     toggle: "Toggle desktop panel",
     reconnect: "Reconnect",
@@ -1407,7 +1411,7 @@ const startupEnglish = {
     // Footer key hint: "Tab compose" switches to the other mode.
     modeSwitch: { search: "search", compose: "compose" },
     searchPlaceholder: "Search…",
-    composePlaceholder: "Write a message…",
+    composePlaceholder: "Ask me anything, or hand me something to do",
     attachmentPrompt: "What would you like to do with these files?",
     categories: { navigation: "Navigation" },
   },
@@ -1532,7 +1536,8 @@ const startupEnglish = {
     clawhub: {},
     modelAccounts: {
       section: "Account",
-      automatic: "Automatic (new-chat default)",
+      automatic: "Automatic",
+      automaticTrigger: "Account: Auto",
       manage: "Manage saved accounts…",
     },
     mentions: {},
@@ -1796,7 +1801,6 @@ const startupEnglish = {
       queue: "Queue",
       queueMessage: "Queue message",
       stop: "Stop",
-      stopWithShortcut: "Stop (Esc)",
       stopGenerating: "Stop generating",
       send: "Send",
       sendMessage: "Send message",
@@ -1869,6 +1873,7 @@ const startupEnglish = {
       hideChat: "Hide this conversation",
       conversationEmpty: "The conversation for this task.",
       minimize: "Minimize side panel",
+      minimizeTooltip: "Minimize",
       resize: "Resize side panel",
       review: "Review",
       reviewEmpty: "Open a change, file, image, or tool result to review it here.",

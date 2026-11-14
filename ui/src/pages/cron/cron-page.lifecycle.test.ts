@@ -48,6 +48,7 @@ const gate = () => deferred<void>(undefined);
 
 async function openDraft(page: CronTestPage, name: string, prompt: string) {
   click(page, testId("cron-new-task"));
+  await import("./view-detail.tsx");
   await waitForElement(page, "fieldset.cron-editor");
   fillInput(page, "#cron-name", name);
   fillInput(page, "#cron-payload-text", prompt);

@@ -82,7 +82,7 @@ additive change. v1-draft accepts only `ed25519`.
 | MembershipChange   | claw_id, seq, target (by op), issued_at                                                                        | current owner device (or R)              | `manage_members`; `approve_device` for `add_owner_device`      |
 | Revocation         | target_fp, target_kind (`owner_device` \| `peer_key`), reason, root_epoch, issued_at                           | R or any current owner device            | none                                                           |
 | MembershipSnapshot | claw_id, seq, binding_seq, owner_devices[{device_pub, caps}], owner_peer_keys, members[], protocols, issued_at | K_gw of the verified binding             | n/a (a mirror of current state, never an authority)            |
-| InviteRedemption   | claw_id, invite_id, account_id, device_pub, peer_key, proof, requested_at                                      | the invitee's own D_I (self-signed)      | n/a                                                            |
+| InviteRedemption   | claw_id, invite_id, account_id, device_pub, peer_key, label, proof, requested_at                               | the invitee's own D_I (self-signed)      | n/a                                                            |
 | RootReset          | claw_id, new_root_pub, binding_seq, issued_at                                                                  | K_gw of the binding being replaced       | n/a (owner reset on the machine, enrollment.md)                |
 
 `root_epoch` is the constant 1 (`ROOT_EPOCH`); any other value is `malformed`. There is no
@@ -105,21 +105,22 @@ even if a Gateway considers it less privileged.
 
 MembershipChange targets:
 
-| op                 | target fields                                                                     |
-| ------------------ | --------------------------------------------------------------------------------- |
-| `add`              | account_id, role, peer_keys (>= 1), invite_id (null, or the invite this approves) |
-| `remove`           | account_id                                                                        |
-| `set_role`         | account_id, role                                                                  |
-| `revoke_device`    | peer_key (one member browser)                                                     |
-| `add_owner_device` | cert: the new device's OwnerDeviceCert (signed by the change's own signer)        |
-| `deny_invite`      | invite_id (declines a pending redemption; the invite is consumed)                 |
+| op                  | target fields                                                                     |
+| ------------------- | --------------------------------------------------------------------------------- |
+| `add`               | account_id, role, peer_keys (>= 1), invite_id (null, or the invite this approves) |
+| `add_member_device` | account_id, peer_key, device_pub, label (inherits role)                           |
+| `remove`            | account_id                                                                        |
+| `set_role`          | account_id, role                                                                  |
+| `revoke_device`     | peer_key (one member browser)                                                     |
+| `add_owner_device`  | cert: the new device's OwnerDeviceCert (signed by the change's own signer)        |
+| `deny_invite`       | invite_id (declines a pending redemption; the invite is consumed)                 |
 
 `seq` must equal the Gateway's current membership seq + 1 (compare-and-set). This stops a
 captured change from being replayed later; a concurrent writer gets a conflict and retries.
 
 ## Verification
 
-`verifyOwnerStatement(statement, anchor, { now, owners })`, where anchor = {R public key}
+`verifyOwnerStatement(statement, anchor, { now, owners, members })`, where anchor = {R public key}
 and `owners(devicePub)` returns the capabilities of a device the claw currently lists as an
 active owner device (undefined otherwise):
 
@@ -129,6 +130,13 @@ active owner device (undefined otherwise):
 4. `owners(signer)` is undefined (no lookup, a stranger, or a removed device) -> `not_an_owner`.
 5. The signer holds the capability the type needs -> else `missing_capability`; an
    OwnerDeviceCert grants no caps the signer lacks -> else `caps_escalation`.
+
+When the signer is not an owner, `members(devicePub)` may resolve a currently listed member
+peer to `{ account_id, peer_key }`. Only `MembershipChange` operations `add_member_device`
+and `revoke_device` then verify, producing authority
+`member_device { account_id, device_pub, peer_key }`. The authority checks the target belongs
+to that same account and refuses self-revocation. Every other statement and operation is
+still owner/R-only; member changes never pass the mailbox gate. See enrollment.md, Member devices.
 
 Only the Gateway can run steps 4 and 5. Clients and Discovery verify R's signatures only.
 
@@ -166,7 +174,7 @@ nothing else. There are no certificate chains and no list of revoked keys.
   `owner_device`) deletes it **and every device it approved**, directly or through devices it
   approved, computed from `approved_by` at removal time. A `peer_key` Revocation removes that
   member browser, or the owner device holding it (with its approvals). `revoke_device` removes
-  one member browser; `remove` removes a member. The Gateway disconnects the removed keys and
+  one member device and its transitive member-device approvals; `remove` removes a member. The Gateway disconnects the removed keys and
   invalidates their device tokens. Nothing is remembered: a later Revocation of a key the
   claw no longer lists changes nothing.
 - **A revocation covers what its signer saw.** A Revocation names its `claw_id` and the
@@ -367,7 +375,10 @@ for request authentication.
 
 `MembershipTarget` adds `add_node { peer_key, label, invite_id }` and
 `remove_node { peer_key }`; both require R or a current owner with `manage_members`.
-`deny_invite` and peer-key revocations cover nodes too. `MembershipSnapshotBody` requires
+`deny_invite` and peer-key revocations cover nodes too. `add_owner_device` takes an optional
+`node { peer_key, label, description }`: an app approved as an owner device brings its node in
+the same decision (see [enrollment.md](enrollment.md#owner-device-node)). The member is optional
+(absent, not null), so changes without it are byte-for-byte unchanged. `MembershipSnapshotBody` requires
 `node_peer_keys: IrohEndpointKey[]` (empty when none), separate from `owner_peer_keys` and
 `members`. Existing snapshots must be re-signed by K_gw when consumers update this draft;
 never insert a field into an already signed envelope.

@@ -259,15 +259,13 @@ function ProviderAccess(props: ModelProvidersViewProps) {
   });
   const connected = () => groups().connected;
   const unconnected = () => groups().unconnected;
-  const refreshLabel = () =>
-    props.refreshing ? t("modelProviders.refreshing") : t("common.refresh");
   // The last refresh time lives in the refresh tooltip instead of the header row.
   const refreshTooltip = () =>
     props.updatedAt && !props.refreshing
-      ? `${refreshLabel()} · ${t("modelProviders.updated", {
+      ? t("modelProviders.updated", {
           time: formatTimeMs(props.updatedAt, { hour: "numeric", minute: "2-digit" }),
-        })}`
-      : refreshLabel();
+        })
+      : undefined;
   // Setup with nothing connected has no list to filter.
   const nothingToSearch = () =>
     needsModelSetup(props) && props.cards.length === 0 && !props.error && !search();
@@ -362,9 +360,9 @@ function ProviderAccess(props: ModelProvidersViewProps) {
           {needsModelSetup(props) ? undefined : props.providerScope}
           <RefreshButton
             class="model-providers__refresh-button"
-            label={refreshLabel()}
+            label={t("common.refresh")}
             tooltip={refreshTooltip()}
-            busy={props.refreshing}
+            disabled={props.refreshing}
             onClick={() => props.onRefresh()}
           />
         </>
