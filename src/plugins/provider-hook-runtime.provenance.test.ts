@@ -627,44 +627,47 @@ describe("provider runtime physical ownership", () => {
     },
   );
 
-  it("keeps an admitted dreaming sidecar in the scoped loader source identity", () => {
-    const memoryPlugin = (id: string, label: string) => {
-      const plugin = writePlugin({
-        id,
-        filename: "index.cjs",
-        body: `module.exports = { id: ${JSON.stringify(id)}, kind: "memory", register(api) {
+  it.each(["selected-memory", "Selected-Memory"])(
+    "keeps an admitted dreaming sidecar in the scoped loader source identity for %s",
+    (selectedId) => {
+      const memoryPlugin = (id: string, label: string) => {
+        const plugin = writePlugin({
+          id,
+          filename: "index.cjs",
+          body: `module.exports = { id: ${JSON.stringify(id)}, kind: "memory", register(api) {
           api.registerProvider({ id: ${JSON.stringify(id)}, label: ${JSON.stringify(label)}, auth: [] });
         }};`,
-      });
-      return {
-        id,
-        kind: "memory" as const,
-        origin: "global" as const,
-        rootDir: plugin.dir,
-        source: plugin.file,
-        configSchema: { type: "object", additionalProperties: true },
+        });
+        return {
+          id,
+          kind: "memory" as const,
+          origin: "global" as const,
+          rootDir: plugin.dir,
+          source: plugin.file,
+          configSchema: { type: "object", additionalProperties: true },
+        };
       };
-    };
-    const selected = memoryPlugin("selected-memory", "selected");
-    const old = memoryPlugin("memory-core", "old");
-    const next = memoryPlugin("memory-core", "new");
-    const load = (sidecar: ReturnType<typeof memoryPlugin>) =>
-      loadPlugins({
-        config: {
-          plugins: {
-            allow: ["selected-memory", "memory-core"],
-            slots: { memory: "selected-memory" },
-            entries: {
-              "selected-memory": { enabled: true, config: { dreaming: { enabled: true } } },
-              "memory-core": { enabled: true },
+      const selected = memoryPlugin(selectedId, "selected");
+      const old = memoryPlugin("memory-core", "old");
+      const next = memoryPlugin("memory-core", "new");
+      const load = (sidecar: ReturnType<typeof memoryPlugin>) =>
+        loadPlugins({
+          config: {
+            plugins: {
+              allow: [selectedId, "memory-core"],
+              slots: { memory: selectedId },
+              entries: {
+                [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
+                "memory-core": { enabled: true },
+              },
             },
           },
-        },
-        onlyPluginIds: ["selected-memory"],
-        manifestRegistry: createSnapshot({ plugins: [selected, sidecar] }).manifestRegistry,
-      }).providers.find((entry) => entry.pluginId === "memory-core")?.provider.label;
-    expect([load(old), load(next), load(old)]).toEqual(["old", "new", "old"]);
-  });
+          onlyPluginIds: [selectedId],
+          manifestRegistry: createSnapshot({ plugins: [selected, sidecar] }).manifestRegistry,
+        }).providers.find((entry) => entry.pluginId === "memory-core")?.provider.label;
+      expect([load(old), load(next), load(old)]).toEqual(["old", "new", "old"]);
+    },
+  );
 
   it.each([undefined, "/synthetic/retained"])(
     "carries retained workspace %s into handles without explicit metadata",
