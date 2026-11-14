@@ -363,12 +363,17 @@ fun OnboardingFlow(
   ClawDesignTheme(dark = onboardingDark, family = appearanceThemeFamily, accentArgb = appearanceAccentArgb ?: gatewayAccentArgb) {
     val context = LocalContext.current
     val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
-    val statusText = gatewayConnectionDisplay.statusText
-    val gatewayConnectionProblem = gatewayConnectionDisplay.problem
-    val isConnected = gatewayConnectionDisplay.isConnected
-    val isNodeConnected by viewModel.isNodeConnected.collectAsState()
-    val nodeCapabilityApproval by viewModel.nodeCapabilityApproval.collectAsState()
-    val nodeApprovalAction by viewModel.nodeApprovalAction.collectAsState()
+    val savedActiveTarget by viewModel.activeGatewayStableId.collectAsState()
+    var onboardingTarget by rememberSaveable { mutableStateOf(savedActiveTarget) }
+    val targetMatches = onboardingTarget != null && gatewayConnectionDisplay.targetStableId == onboardingTarget
+    val statusText = if (targetMatches) gatewayConnectionDisplay.statusText else "Waiting for this Gateway connection"
+    val gatewayConnectionProblem = gatewayConnectionDisplay.problem.takeIf { targetMatches }
+    val isConnected = targetMatches && gatewayConnectionDisplay.isConnected
+    val isNodeConnected = targetMatches && gatewayConnectionDisplay.nodeConnected
+    val currentNodeCapabilityApproval by viewModel.nodeCapabilityApproval.collectAsState()
+    val currentNodeApprovalAction by viewModel.nodeApprovalAction.collectAsState()
+    val nodeCapabilityApproval = if (targetMatches) currentNodeCapabilityApproval else GatewayNodeCapabilityApproval.Loading
+    val nodeApprovalAction = if (targetMatches) currentNodeApprovalAction else ai.openclaw.app.GatewayNodeApprovalActionState()
     val nodesDevicesRefreshing by viewModel.nodesDevicesRefreshing.collectAsState()
     val serverName by viewModel.serverName.collectAsState()
     val gateways by viewModel.gateways.collectAsState()
@@ -378,6 +383,9 @@ fun OnboardingFlow(
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
     val startAtGatewaySetup by viewModel.startOnboardingAtGatewaySetup.collectAsState()
     var step by rememberSaveable { mutableStateOf(OnboardingStep.Welcome) }
+    LaunchedEffect(savedActiveTarget, step) {
+      if (onboardingTarget == null && step == OnboardingStep.Welcome) onboardingTarget = savedActiveTarget
+    }
     var setupCode by rememberSaveable { mutableStateOf("") }
     var manualHost by rememberSaveable { mutableStateOf("") }
     var manualPort by rememberSaveable { mutableStateOf("18789") }
@@ -395,16 +403,12 @@ fun OnboardingFlow(
     var nodeApprovalCheckRefreshStarted by rememberSaveable { mutableStateOf(false) }
     var nodeApprovalAutoContinueEnabled by rememberSaveable { mutableStateOf(false) }
     var nativeNodeApprovalRequested by rememberSaveable { mutableStateOf(false) }
-    val ready =
-      canFinishOnboarding(
-        isConnected = isConnected,
-        isNodeConnected = isNodeConnected,
-        nodeCapabilityApproval = nodeCapabilityApproval,
-      ) &&
+    val ready = canFinishOnboarding(gatewayConnectionDisplay, onboardingTarget)
+    val nodeApprovalReady =
+      canFinishNodeCapabilityApproval(isConnected, isNodeConnected, nodeCapabilityApproval) &&
         (
           accessStage != OnboardingAccessStage.PermissionReapproval ||
-            nodeCapabilityApproval == GatewayNodeCapabilityApproval.Unsupported ||
-            nodeApprovalAction.verified
+            nodeCapabilityApproval == GatewayNodeCapabilityApproval.Unsupported || nodeApprovalAction.verified
         )
 
     OpenClawSystemBarAppearance(lightAppearance = !onboardingDark)
@@ -483,8 +487,8 @@ fun OnboardingFlow(
       }
     }
 
-    LaunchedEffect(step, ready, nodeApprovalAction.verified, nativeNodeApprovalRequested) {
-      if (step == OnboardingStep.NodeApproval && nativeNodeApprovalRequested && nodeApprovalAction.verified && ready) {
+    LaunchedEffect(step, nodeApprovalReady, nodeApprovalAction.verified, nativeNodeApprovalRequested) {
+      if (step == OnboardingStep.NodeApproval && nativeNodeApprovalRequested && nodeApprovalAction.verified && nodeApprovalReady) {
         advanceAfterNodeApproval()
       }
     }
@@ -526,18 +530,18 @@ fun OnboardingFlow(
           checkRequested = nodeApprovalCheckRequested,
           refreshStarted = nodeApprovalCheckRefreshStarted,
           nodesDevicesRefreshing = nodesDevicesRefreshing,
-          ready = ready,
+          ready = nodeApprovalReady,
         )
       ) {
         advanceAfterNodeApproval()
       }
     }
 
-    LaunchedEffect(step, ready, nodeCapabilityApproval, nodeApprovalAutoContinueEnabled, nativeNodeApprovalRequested) {
+    LaunchedEffect(step, nodeApprovalReady, nodeCapabilityApproval, nodeApprovalAutoContinueEnabled, nativeNodeApprovalRequested) {
       if (
         nodeApprovalShouldAutoContinue(
           step = step,
-          ready = ready,
+          ready = nodeApprovalReady,
           nodeCapabilityApproval = nodeCapabilityApproval,
           autoContinueEnabled = nodeApprovalAutoContinueEnabled && !nativeNodeApprovalRequested,
         )
@@ -569,7 +573,8 @@ fun OnboardingFlow(
       setupScanErrorCode = OnboardingErrorCode.None
       attemptedGatewayName = attemptedName
       lastGatewayInputSource = inputSource
-      viewModel.saveGatewayConfigAndConnect(plan)
+      onboardingTarget = null
+      viewModel.saveGatewayConfigAndConnect(plan, onTargetAdmitted = { onboardingTarget = it })
       step = OnboardingStep.Recovery
     }
 
@@ -793,9 +798,9 @@ fun OnboardingFlow(
             if (nearbyGateway == null) {
               attemptedGatewayName = null
             } else {
-              manualHost = nearbyGateway.host
               manualPort = nearbyGatewayManualPort(nearbyGateway)
               manualTls = nearbyGatewayManualTls(nearbyGateway)
+              manualHost = gatewayManualAddressForEditing(nearbyGateway.host, manualPort, manualTls)
               attemptedGatewayName = nearbyGateway.name
             }
             step = OnboardingStep.Manual
@@ -868,10 +873,6 @@ fun OnboardingFlow(
             manualHost = it
             setupErrorCode = OnboardingErrorCode.None
           },
-          onManualPortChange = {
-            manualPort = it
-            setupErrorCode = OnboardingErrorCode.None
-          },
           onManualTlsChange = { manualTls = it },
           onTokenChange = {
             token = it
@@ -918,8 +919,10 @@ fun OnboardingFlow(
               nodesDevicesRefreshing = nodesDevicesRefreshing,
             ),
           checkRequested = nodeApprovalCheckRequested,
-          ready = ready,
+          ready = nodeApprovalReady,
+          canContinueToChat = ready,
           onBack = ::goBack,
+          onContinueToChat = { if (canFinishOnboarding(viewModel.gatewayConnectionDisplay.value, onboardingTarget)) viewModel.setOnboardingCompleted(true) },
           onCopyCommand = { command -> context.copyTextWithConfirmation("OpenClaw pairing approval command", command, nativeText("Approval command copied").resolveNativeText()) },
           onCheckApproval = ::checkNodeApproval,
           onApprove = { requestId ->
@@ -1653,7 +1656,6 @@ private fun ManualGatewaySetupScreen(
   mascotMood: MascotMood,
   onBack: () -> Unit,
   onManualHostChange: (String) -> Unit,
-  onManualPortChange: (String) -> Unit,
   onManualTlsChange: (Boolean) -> Unit,
   onTokenChange: (String) -> Unit,
   onPasswordChange: (String) -> Unit,
@@ -1680,25 +1682,19 @@ private fun ManualGatewaySetupScreen(
         }
         item {
           LabeledField(label = nativeString("Gateway URL")) {
-            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-              if (onboardingFormUsesStackedLayout(maxWidth.value, fontScale)) {
-                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                  ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = nativeString("Host"), modifier = Modifier.fillMaxWidth())
-                  ClawTextField(value = manualPort, onValueChange = onManualPortChange, placeholder = nativeString("Port"), modifier = Modifier.fillMaxWidth())
-                }
-              } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                  ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = nativeString("Host"), modifier = Modifier.weight(1f))
-                  ClawTextField(value = manualPort, onValueChange = onManualPortChange, placeholder = nativeString("Port"), modifier = Modifier.width(104.dp))
-                }
-              }
-            }
+            ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = nativeString("https://gateway.example.test"), modifier = Modifier.fillMaxWidth())
             Text(
               text = nativeString("Use the Gateway computer's LAN address or secure remote hostname."),
               style = ClawTheme.type.caption,
               color = ClawTheme.colors.textMuted,
             )
           }
+        }
+        item {
+          BrowserSignInButton(
+            targetUrl = browserSignInUrl(manualHost, manualPort, transport.effectiveTls),
+            onConnect = onPair,
+          )
         }
         item {
           LabeledField(label = nativeString("Token")) {
@@ -1715,26 +1711,28 @@ private fun ManualGatewaySetupScreen(
             ClawTextField(value = password, onValueChange = onPasswordChange, placeholder = nativeString("Password optional"), secret = true)
           }
         }
-        item {
-          LabeledField(label = nativeString("Connection security")) {
-            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-              val stacked = onboardingFormUsesStackedLayout(maxWidth.value, fontScale)
-              if (stacked) {
-                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                  GatewayTransportChoices(transport, onManualTlsChange, Modifier.fillMaxWidth())
-                }
-              } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                  GatewayTransportChoices(transport, onManualTlsChange)
+        if (!manualHost.contains("://")) {
+          item {
+            LabeledField(label = nativeString("Connection security")) {
+              BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val stacked = onboardingFormUsesStackedLayout(maxWidth.value, fontScale)
+                if (stacked) {
+                  Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    GatewayTransportChoices(transport, onManualTlsChange, Modifier.fillMaxWidth())
+                  }
+                } else {
+                  Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                    GatewayTransportChoices(transport, onManualTlsChange)
+                  }
                 }
               }
-            }
-            transport.helperText?.let { helperText ->
-              Text(
-                text = helperText,
-                style = ClawTheme.type.caption,
-                color = ClawTheme.colors.textMuted,
-              )
+              transport.helperText?.let { helperText ->
+                Text(
+                  text = helperText,
+                  style = ClawTheme.type.caption,
+                  color = ClawTheme.colors.textMuted,
+                )
+              }
             }
           }
         }
@@ -2028,7 +2026,9 @@ private fun NodeApprovalScreen(
   checkingApproval: Boolean,
   checkRequested: Boolean,
   ready: Boolean,
+  canContinueToChat: Boolean,
   onBack: () -> Unit,
+  onContinueToChat: () -> Unit,
   onCopyCommand: (String) -> Unit,
   onCheckApproval: () -> Unit,
   onApprove: (String) -> Unit,
@@ -2075,6 +2075,13 @@ private fun NodeApprovalScreen(
             if (pending != null) onApprove(pending.requestId) else onCheckApproval()
           },
         )
+        if (canContinueToChat) {
+          ClawSecondaryButton(
+            text = nativeString("Continue to chat"),
+            onClick = onContinueToChat,
+            modifier = Modifier.onboardingActionButton(),
+          )
+        }
       }
     },
   ) {
@@ -2111,7 +2118,9 @@ private fun NodeApprovalScreen(
           modifier = Modifier.fillMaxWidth(),
         )
         ApprovalCommandBlock(command = "openclaw nodes pending", onCopy = { onCopyCommand("openclaw nodes pending") })
-        ApprovalCommandBlock(command = approveCommand, onCopy = { onCopyCommand(approveCommand) })
+        if (approvalRequestId(approval) != null) {
+          ApprovalCommandBlock(command = approveCommand, onCopy = { onCopyCommand(approveCommand) })
+        }
         Text(
           text = nativeString("Use the requestId from the pending command in the approve command."),
           style = ClawTheme.type.caption,
@@ -2790,7 +2799,7 @@ private fun recoveryGatewayApprovalCommand(gatewayConnectionProblem: GatewayConn
 
 internal fun recoveryNodeApprovalCommand(pendingRequestId: String?): String {
   val requestId = pendingRequestId?.trim()?.takeIf { it.isNotEmpty() }
-  return if (requestId != null) "openclaw nodes approve $requestId" else "openclaw nodes approve REQUEST_ID"
+  return if (requestId != null) "openclaw nodes approve $requestId" else "openclaw nodes pending"
 }
 
 internal fun approvalRequestId(approval: GatewayNodeCapabilityApproval): String? =
@@ -2810,8 +2819,8 @@ internal fun gatewayPairingContinueDestination(
   nodeCapabilityApproval: GatewayNodeCapabilityApproval,
 ): OnboardingStep? =
   when {
-    ready -> OnboardingStep.Permissions
     nodeCapabilityApprovalNeedsUserAction(nodeCapabilityApproval) -> OnboardingStep.NodeApproval
+    ready -> OnboardingStep.Permissions
     else -> null
   }
 
@@ -2920,23 +2929,17 @@ private class PermissionState(
 
 /** Onboarding finishes only after the gateway resolves node capability approval. */
 internal fun canFinishOnboarding(
-  isConnected: Boolean,
-  isNodeConnected: Boolean,
-  nodeCapabilityApproval: GatewayNodeCapabilityApproval,
-): Boolean =
-  isConnected &&
-    isNodeConnected &&
-    when (nodeCapabilityApproval) {
-      is GatewayNodeCapabilityApproval.PendingApproval,
-      is GatewayNodeCapabilityApproval.PendingReapproval,
-      GatewayNodeCapabilityApproval.Unapproved,
-      GatewayNodeCapabilityApproval.Loading,
-      -> false
+  connection: ai.openclaw.app.GatewayConnectionDisplay,
+  targetStableId: String?,
+): Boolean = targetStableId != null && connection.targetStableId == targetStableId && connection.isConnected
 
-      GatewayNodeCapabilityApproval.Approved,
-      GatewayNodeCapabilityApproval.Unsupported,
-      -> true
-    }
+internal fun canFinishNodeCapabilityApproval(
+  isOperatorConnected: Boolean,
+  isNodeConnected: Boolean,
+  approval: GatewayNodeCapabilityApproval,
+): Boolean =
+  isOperatorConnected && isNodeConnected &&
+    (approval == GatewayNodeCapabilityApproval.Approved || approval == GatewayNodeCapabilityApproval.Unsupported)
 
 private val requiredContactPermissions = listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS)
 private val requiredCalendarPermissions = listOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)

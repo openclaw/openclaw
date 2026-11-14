@@ -288,58 +288,16 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun blocksFinishWhenGatewayHasNotReportedNodeConnected() {
-    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = false, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved))
+  fun operatorReadinessDoesNotWaitForOptionalNodeTransportOrCapabilityConsent() {
+    val connection = ai.openclaw.app.GatewayConnectionDisplay(true, "Connected (node offline)", null, targetStableId = "synthetic-a")
+    assertTrue(canFinishOnboarding(connection, "synthetic-a"))
+    assertFalse(canFinishOnboarding(connection, "synthetic-b"))
+    assertFalse(canFinishOnboarding(connection, null))
   }
 
   @Test
-  fun blocksFinishWhenDisconnected() {
-    assertFalse(canFinishOnboarding(isConnected = false, isNodeConnected = false, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved))
-  }
-
-  @Test
-  fun blocksFinishWhenOnlyNodeIsConnected() {
-    assertFalse(canFinishOnboarding(isConnected = false, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved))
-  }
-
-  @Test
-  fun blocksFinishWhenNodeCapabilityApprovalIsPending() {
-    listOf(
-      GatewayNodeCapabilityApproval.PendingApproval(null),
-      GatewayNodeCapabilityApproval.PendingReapproval(null),
-      GatewayNodeCapabilityApproval.Unapproved,
-    ).forEach { approval ->
-      assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = approval))
-    }
-  }
-
-  @Test
-  fun allowsFinishWhenOperatorNodeAndCapabilityApprovalAreReady() {
-    assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved))
-  }
-
-  @Test
-  fun blocksFinishWhileDelayedNodeListResolvesPendingApproval() =
-    runTest {
-      val delayedNodeList = CompletableDeferred<GatewayNodeCapabilityApproval>()
-      var approvalState: GatewayNodeCapabilityApproval = GatewayNodeCapabilityApproval.Loading
-      val refresh = launch { approvalState = delayedNodeList.await() }
-
-      assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = approvalState))
-
-      delayedNodeList.complete(GatewayNodeCapabilityApproval.PendingApproval(null))
-      refresh.join()
-      assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = approvalState))
-    }
-
-  @Test
-  fun allowsFinishWhenSuccessfulLegacyNodeListOmitsApprovalState() {
-    assertTrue(canFinishOnboarding(isConnected = true, isNodeConnected = true, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Unsupported))
-  }
-
-  @Test
-  fun blocksFinishForLegacyNodeListUntilNodeConnects() {
-    assertFalse(canFinishOnboarding(isConnected = true, isNodeConnected = false, nodeCapabilityApproval = GatewayNodeCapabilityApproval.Unsupported))
+  fun nodeReadinessCannotReplaceAnAdmittedOperator() {
+    assertFalse(canFinishOnboarding(ai.openclaw.app.GatewayConnectionDisplay(false, "Node connected", null, targetStableId = "synthetic-a", nodeConnected = true), "synthetic-a"))
   }
 
   @Test
@@ -427,8 +385,8 @@ class OnboardingFlowLogicTest {
   fun recoveryNodeApprovalCommandUsesRequestIdWhenAvailable() {
     assertEqualsCases(
       "openclaw nodes approve request-1" to recoveryNodeApprovalCommand(" request-1 "),
-      "openclaw nodes approve REQUEST_ID" to recoveryNodeApprovalCommand(null),
-      "openclaw nodes approve REQUEST_ID" to recoveryNodeApprovalCommand(" "),
+      "openclaw nodes pending" to recoveryNodeApprovalCommand(null),
+      "openclaw nodes pending" to recoveryNodeApprovalCommand(" "),
     )
   }
 
@@ -447,7 +405,8 @@ class OnboardingFlowLogicTest {
   @Test
   fun gatewayPairingContinueOnlyRoutesToNodeApprovalWhenApprovalNeedsUserAction() {
     listOf(
-      GatewayContinueCase(OnboardingStep.Permissions, ready = true, approval = GatewayNodeCapabilityApproval.PendingApproval(null)),
+      GatewayContinueCase(OnboardingStep.NodeApproval, ready = true, approval = GatewayNodeCapabilityApproval.PendingApproval(null)),
+      GatewayContinueCase(OnboardingStep.Permissions, ready = true, approval = GatewayNodeCapabilityApproval.Loading),
       GatewayContinueCase(OnboardingStep.NodeApproval, ready = false, approval = GatewayNodeCapabilityApproval.PendingApproval(null)),
       GatewayContinueCase(OnboardingStep.NodeApproval, ready = false, approval = GatewayNodeCapabilityApproval.PendingReapproval(null)),
       GatewayContinueCase(OnboardingStep.NodeApproval, ready = false, approval = GatewayNodeCapabilityApproval.Unapproved),
@@ -969,4 +928,12 @@ class OnboardingFlowLogicTest {
       clientMaxProtocol = clientMax,
       expectedProtocol = expected,
     )
+
+  @Test fun explicitNodeCapabilityConsentStillWaitsForItsOwnApproval() {
+    assertFalse(canFinishNodeCapabilityApproval(true, false, GatewayNodeCapabilityApproval.Approved))
+    assertFalse(canFinishNodeCapabilityApproval(false, true, GatewayNodeCapabilityApproval.Approved))
+    assertFalse(canFinishNodeCapabilityApproval(true, true, GatewayNodeCapabilityApproval.Loading))
+    assertFalse(canFinishNodeCapabilityApproval(true, true, GatewayNodeCapabilityApproval.Unapproved))
+    assertTrue(canFinishNodeCapabilityApproval(true, true, GatewayNodeCapabilityApproval.Approved))
+  }
 }

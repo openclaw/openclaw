@@ -135,6 +135,14 @@ class DeviceAuthStore(
     prefs.remove(metadataKey(gatewayId, deviceId, role))
   }
 
+  /** Forget/signout retire every credential epoch for this Gateway, including legacy slots. */
+  fun clearGateway(gatewayId: String) {
+    synchronized(lock) {
+      val prefixes = listOf("gateway.deviceToken.$gatewayId.", "gateway.deviceTokenMeta.$gatewayId.")
+      prefs.secureKeys().filter { key -> prefixes.any(key::startsWith) }.forEach(prefs::remove)
+    }
+  }
+
   private fun tokenKey(
     gatewayId: String,
     deviceId: String,

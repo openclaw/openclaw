@@ -474,6 +474,37 @@ class SecurePrefs(
     password: String? = null,
   ) = saveGatewayCredentials(stableId, GatewayCredentials(token, bootstrapToken, password))
 
+  // Only non-secret origin/profile references live here. Cookies remain in the app-private
+  // WebView profile, never in preferences or Gateway credentials.
+  internal fun loadBrowserSessionProfiles(): Map<String, String> =
+    plainPrefs.all.entries
+      .mapNotNull { (key, value) ->
+        if (key.startsWith("gateway.browserProfile.") && value is String) {
+          key.removePrefix("gateway.browserProfile.") to value
+        } else {
+          null
+        }
+      }.toMap()
+
+  // KTX edit(commit = true) discards the Boolean needed to reject an unpersisted browser grant.
+  @Suppress("UseKtx")
+  internal fun saveBrowserSessionProfile(
+    origin: String,
+    profileName: String?,
+    credentialEpoch: String? = null,
+  ): Boolean {
+    val editor = plainPrefs.edit()
+    val key = "gateway.browserProfile.$origin"
+    val previous = plainPrefs.getString(key, null)
+    if (!previous.isNullOrEmpty() && previous != profileName) editor.remove("gateway.browserCredentialEpoch.$previous")
+    if (profileName == null) editor.remove(key) else editor.putString(key, profileName)
+    if (!profileName.isNullOrEmpty()) editor.putString("gateway.browserCredentialEpoch.$profileName", credentialEpoch ?: profileName)
+    return editor.commit()
+  }
+
+  // Existing accepted profiles used their profile name as the credential epoch.
+  internal fun loadBrowserCredentialEpoch(profileName: String): String = plainPrefs.getString("gateway.browserCredentialEpoch.$profileName", null) ?: profileName
+
   fun clearGatewayCredentials(stableId: String) {
     synchronized(gatewayCredentialLock) {
       val key = gatewayCredentialsKey(stableId)

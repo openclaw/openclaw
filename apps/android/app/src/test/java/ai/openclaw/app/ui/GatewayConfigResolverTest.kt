@@ -1,7 +1,9 @@
 package ai.openclaw.app.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -1153,4 +1155,51 @@ class GatewayConfigResolverTest {
   }
 
   private fun encodeSetupCode(payloadJson: String): String = Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))
+
+  @Test
+  fun fullManualUrlsOwnTheirStandardAndExplicitPorts() {
+    assertEquals(443, resolveDefaultManualGatewayPort("https://gateway.example.test/", false))
+    assertEquals(8443, resolveDefaultManualGatewayPort("https://gateway.example.test:8443/base/", false))
+    assertEquals(80, resolveDefaultManualGatewayPort("http://127.0.0.1/", false))
+    assertEquals(18789, resolveDefaultManualGatewayPort("127.0.0.1", false))
+  }
+
+  @Test
+  fun fullUrlConnectionIgnoresStalePortAndTlsControls() {
+    val config =
+      checkNotNull(
+        resolveGatewayConnectConfig(
+          useSetupCode = false,
+          setupCode = "",
+          manualHostInput = "https://gateway.example.test:8443/base/",
+          manualPortInput = "18789",
+          manualTlsInput = false,
+          bootstrapTokenInput = "",
+          tokenInput = "",
+          passwordInput = "",
+        ),
+      )
+    assertEquals("gateway.example.test", config.host)
+    assertEquals(8443, config.port)
+    assertTrue(config.tls)
+    assertEquals("/base/", config.contextPath)
+  }
+
+  @Test
+  fun standardHttpPortIsOnlyAcceptedForExistingLocalCleartextPolicy() {
+    val local = checkNotNull(parseGatewayEndpointResult("http://127.0.0.1/").config)
+    assertEquals(80, local.port)
+    assertFalse(local.tls)
+    assertEquals(GatewayEndpointValidationError.INSECURE_REMOTE_URL, parseGatewayEndpointResult("http://gateway.example.test/").error)
+  }
+
+  @Test
+  fun persistedManualAddressesRoundTripWithoutLosingCustomPortsOrIpv6() {
+    assertEquals("https://gateway.example.test", gatewayManualAddressForEditing("gateway.example.test", "443", true))
+    assertEquals("http://127.0.0.1:18789", gatewayManualAddressForEditing("127.0.0.1", "18789", false))
+    assertEquals("https://[fd00::1]:8443", gatewayManualAddressForEditing("fd00::1", "8443", true))
+    assertEquals("https://gateway.example.test:8443/base", gatewayManualAddressForEditing("https://gateway.example.test:8443/base", "18789", false))
+    assertEquals("http://127.0.0.1:18789", composeGatewayManualUrl("127.0.0.1", "", false))
+    assertEquals("http://127.0.0.1:8443", composeGatewayManualUrl("127.0.0.1:8443", "18789", false))
+  }
 }

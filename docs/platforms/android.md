@@ -31,6 +31,59 @@ New replies stay in view while you are at the end of the settings conversation. 
 
 System control (launchd/systemd) lives on the Gateway host — see [Gateway](/gateway).
 
+## Browser sign-in behind a reverse proxy
+
+For an HTTPS Gateway protected by Authelia or another browser-session reverse proxy,
+choose **Sign in with browser** in manual setup, or next to a saved HTTPS Gateway
+in Settings. The app starts the original native connection once. After the proxy
+login, verified native operator admission returns you to that connection automatically.
+A native pairing requirement can return you to device approval before node access is
+approved. **Continue in OpenClaw** remains a retry fallback, not a cookie/URL-based
+login confirmation.
+A Gateway token or password may still be required if the Gateway itself uses
+shared-secret authentication; browser sign-in only authenticates the proxy layer.
+It is not an LDAP client or an OIDC configuration.
+
+Sign-in uses a dedicated Android WebView profile, not the system browser, Control
+UI, or Canvas cookie store. It requires an Android System WebView version with
+multi-profile support. TLS certificate errors are not bypassed. Login credentials
+are entered only into the provider's HTTPS page; there is no JavaScript-to-native
+bridge. The sign-in screen is excluded from screenshots and screen recording.
+
+The browser owns cookie persistence and domain/path/expiry matching. Native
+WebSocket and media requests resolve cookies for their actual HTTPS URL, only on
+the selected Gateway origin (including its port). Redirects are not followed by
+native authenticated transports. Cookie headers are not exported as media headers.
+Reconnecting or fetching media after an expired proxy session can require another
+browser sign-in. The proxy still owns server-side session validity, including any
+already-upgraded WebSocket.
+
+Opening a new sign-in creates a fresh credential profile and retires the previous
+browser session for that origin, so another account cannot inherit its authority or
+locally cached conversations. Other saved Gateways are unaffected. Canceling leaves that origin requiring sign-in; it does not restore the previous
+account. A rotation/reconnect within an accepted profile retains its credential epoch
+and persistent device identity. Native role grants are scoped to the Gateway and
+browser credential epoch; selecting a new account never reuses the previous epoch's
+tokens. Existing device, operator, node-role and phone-capability approvals remain
+distinct and are not automatically approved.
+
+An admitted operator can continue onboarding while optional node access is still
+loading or offline. If phone capability approval is pending, **Continue to chat**
+leaves that approval unchanged. Enabling phone capabilities still requires the
+separate consent and Gateway approval; a node connection alone is not an operator
+login. Progress and approval actions remain associated with the requested Gateway.
+
+To remove a saved browser session, open **Settings → Gateway** and choose
+**Sign out of saved browser session** on that Gateway's saved card. It remains
+available after automatic return from sign-in. This disconnects affected native
+connections, clears that Gateway's local cached conversations and role grants, and
+deletes the app's saved browser profile. Browser sign-in is required again
+for that origin, including after restarting the app; signout does not silently fall
+back to a saved Gateway token or device credential. It does not assume or invoke a
+provider logout endpoint, revoke an LDAP account, or sign out other browsers.
+Android app backup is disabled; cookie values stay in the app-private WebView
+store, with only the non-secret profile reference in the existing preferences.
+
 ## Simultaneous Gateway sessions
 
 Pair each Gateway once, then open **Settings → Gateway**. The checkmark marks
@@ -657,6 +710,30 @@ Notification forwarding requires the Android Notification Listener permission. T
 </Note>
 
 WhatsApp, WhatsApp Business, Telegram, Telegram X, Discord, and Signal notifications are always excluded. Their messages are already owned by native OpenClaw channel sessions; forwarding the Android notification as a separate node event could route a reply through the wrong conversation.
+
+## Browser sign-in URL and recording proofs
+
+Enter a full Gateway URL as you would in a browser. HTTPS without an explicit port uses
+443; an explicit port such as `https://gateway.example.test:8443/` is authoritative.
+Bare local Gateway hosts retain their existing port default of 18789. For an advanced
+port override, include it in the address; there is no separate stale port field to
+replace the port in a complete URL. HTTP URLs use port 80 only where the existing
+local-cleartext policy permits them. Provider redirect ports are not Gateway ports.
+
+The browser's compact header shows the current HTTPS security origin, including a
+nondefault port, rather than redirect paths, query strings, or state. Short landscape
+and keyboard-sized windows use compact actions. Saved-session signout stays on the
+persistent **Settings → Gateway** card, not in the transient login browser.
+
+Browser sign-in remains capture-protected in ordinary debug and release builds.
+For a deliberately recording-enabled developer proof APK, use
+`./gradlew -PopenclawBrowserSignInRecording=true :app:assembleThirdPartyDebug`.
+The opt-in defaults to false, applies only to debuggable builds, and is ignored by
+release variants. Such an APK has the -debug-recording version suffix. Use synthetic
+accounts, pause recording during password entry, and redact secrets before sharing
+proof. Installing an ordinary debug APK with the same package and signer restores
+protection without clearing app data. There is no intent, deep link, JavaScript API,
+or saved preference that enables recording in a normal build.
 
 ## Related
 
