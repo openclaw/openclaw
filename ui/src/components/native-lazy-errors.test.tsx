@@ -1,7 +1,11 @@
 /* @vitest-environment jsdom */
 
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { ImageLightboxItemView } from "./image-lightbox-lazy.tsx";
+import type { ImageLightboxItem } from "./image-lightbox.types.ts";
 import { arrive, createPet } from "./lobster-pet.test-support.ts";
 import "./solid/agent-avatar.tsx";
 import "./image-lightbox.tsx";
@@ -32,6 +36,40 @@ afterEach(async () => {
 });
 
 describe("native lazy renderer failures", () => {
+  it("keeps a cold Solid lightbox failure retryable and dismissible without a phantom native host", async () => {
+    const close = vi.fn();
+    const view = mountSolid(() => {
+      const [item, setItem] = createSignal<ImageLightboxItem | null>({
+        src: "synthetic.png",
+        title: "Cold synthetic image",
+      });
+      return (
+        <ImageLightboxItemView
+          item={item()}
+          onClose={() => {
+            close();
+            setItem(null);
+          }}
+        />
+      );
+    });
+    await waitForSolid(() =>
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+        "Cold synthetic image",
+      ),
+    );
+    const alert = document.querySelector('[role="alert"]')!;
+    expect(alert.querySelector(".lazy-view-error__action")).not.toBeNull();
+    expect(view.container.querySelector("openclaw-image-lightbox")).toBeNull();
+    const dismiss = [...alert.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent === "Close",
+    )!;
+    dismiss.click();
+    await waitForSolid(() => expect(document.querySelector('[role="alert"]')).toBeNull());
+    expect(close).toHaveBeenCalledOnce();
+    view.unmount();
+  });
+
   it("keeps the native avatar host and renders a decorative fallback", async () => {
     const avatar = document.createElement("openclaw-agent-avatar");
     avatar.option = { value: "synthetic-agent", label: "Synthetic agent" };

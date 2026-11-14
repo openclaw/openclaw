@@ -16,7 +16,7 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts"
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
-import { ImageLightboxItemView } from "../../components/image-lightbox.tsx";
+import { ImageLightboxItemView } from "../../components/image-lightbox-lazy.tsx";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";

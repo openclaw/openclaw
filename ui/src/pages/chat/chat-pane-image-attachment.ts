@@ -13,8 +13,8 @@ export function createLightboxComposerAction(
     state.imageLightboxRequestVersion,
     pane.connectionGeneration,
   ] as const;
-  return (...selection) =>
-    import("./chat-pane-image-attachment.runtime.ts").then((runtime) =>
-      runtime.default(...target, ...selection),
-    );
+  return async (...selection) => {
+    const { default: useLightboxImage } = await import("./chat-pane-image-attachment.runtime.ts");
+    return useLightboxImage(...target, ...selection);
+  };
 }

@@ -1,9 +1,12 @@
 /* @vitest-environment jsdom */
+import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { flush } from "../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
+import { ImageLightboxItemView as LazyImageLightbox } from "./image-lightbox-lazy.tsx";
 import { ImageLightboxItemView } from "./image-lightbox.tsx";
+import type { ImageLightboxItem } from "./image-lightbox.types.ts";
 
 const loading = vi.hoisted(() => {
   const { promise, resolve: release } = Promise.withResolvers<void>();
@@ -24,6 +27,21 @@ it("loads only when opened, reads current media, and leaves a retired host empty
   const retired = mountSolid(() => (
     <ImageLightboxItemView item={{ src: "retired.png", title: "" }} onClose={() => {}} />
   ));
+  let replaceItem!: (item: ImageLightboxItem) => void;
+  const cold = mountSolid(() => {
+    const [item, setItem] = createSignal<ImageLightboxItem>({
+      src: "cold-before.png",
+      title: "Cold before",
+    });
+    replaceItem = setItem;
+    return <LazyImageLightbox item={item()} onClose={() => {}} />;
+  });
+  const coldRetired = mountSolid(() => (
+    <LazyImageLightbox item={{ src: "never-open.png", title: "Retired" }} onClose={() => {}} />
+  ));
+  expect(cold.container.querySelector("openclaw-image-lightbox")).toBeNull();
+  replaceItem({ src: "cold-after.png", title: "Cold after" });
+  coldRetired.unmount();
   const host = current.container.querySelector("openclaw-image-lightbox")!;
   const removed = retired.container.querySelector("openclaw-image-lightbox")!;
   expect(host.querySelector("openclaw-modal-dialog")).toBeNull();
@@ -36,4 +54,9 @@ it("loads only when opened, reads current media, and leaves a retired host empty
   expect(host.querySelector("img")?.getAttribute("src")).toBe("after.png");
   expect(host.querySelector("img")?.getAttribute("alt")).toBe("After");
   expect(removed.querySelector("openclaw-modal-dialog")).toBeNull();
+  await waitForSolid(() =>
+    expect(cold.container.querySelector("img")?.getAttribute("src")).toBe("cold-after.png"),
+  );
+  expect(cold.container.querySelector("img")?.getAttribute("alt")).toBe("Cold after");
+  expect(coldRetired.container.querySelector("openclaw-image-lightbox")).toBeNull();
 });

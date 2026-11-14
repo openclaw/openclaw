@@ -1,7 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createSignal, lazy, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
-import { ImageLightboxItemView } from "../../components/image-lightbox.tsx";
+import { ImageLightboxItemView } from "../../components/image-lightbox-lazy.tsx";
 import type {
   ImageLightboxItem,
   ImageLightboxProps,

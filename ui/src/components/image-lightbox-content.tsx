@@ -344,11 +344,10 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
   const resetZoom = () => panzoom?.reset({ animate: false });
 
   function revokeOriginalBlobUrl() {
-    if (!originalBlobUrl) {
-      return;
+    if (originalBlobUrl) {
+      URL.revokeObjectURL(originalBlobUrl);
+      originalBlobUrl = "";
     }
-    URL.revokeObjectURL(originalBlobUrl);
-    originalBlobUrl = "";
   }
 
   async function resolveOriginalUrl(fallbackSrc: string, fallbackOriginalSrc: string) {
@@ -726,3 +725,5 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
     </>
   );
 }
+
+export { ImageLightboxItemView } from "./image-lightbox.tsx";

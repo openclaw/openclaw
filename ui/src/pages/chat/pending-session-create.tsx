@@ -3,7 +3,7 @@ import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-
 import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
 import type { GatewayStatusProps } from "../../components/gateway-status.ts";
-import { ImageLightboxItemView } from "../../components/image-lightbox.tsx";
+import { ImageLightboxItemView } from "../../components/image-lightbox-lazy.tsx";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
