@@ -23,6 +23,7 @@ struct ChatProTab: View {
     }
 
     @Environment(NodeAppModel.self) private var appModel
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(GatewayConnectionController.self) private var gatewayController
@@ -37,6 +38,11 @@ struct ChatProTab: View {
         self.appModel.chatPresentation.viewModel
     }
 
+    @State private var desktopHandoff: OpenClawQuestionDesktopHandoff?
+    @State private var desktopOwnerID: UUID?
+    @State private var lastAutomaticallyPresentedDesktop: OpenClawQuestionDesktopHandoff?
+    @State private var showsQuestionDesktop = false
+    @State private var isChatVisible = false
     @State private var transcriptShareItem: TranscriptShareItem?
     @State private var showsTranscriptExportError = false
     @State private var showsNewSessionOptions = false
@@ -49,6 +55,32 @@ struct ChatProTab: View {
 
     var body: some View {
         self.content
+            .environment(\.openClawOpenQuestionDesktop, self.openQuestionDesktop)
+            .environment(\.openClawChatIsObscured, self.isQuestionDesktopVisible)
+            .accessibilityHidden(self.isQuestionDesktopVisible)
+            .overlay { self.questionDesktop }
+            .toolbar(self.isQuestionDesktopVisible ? .hidden : .visible, for: .navigationBar)
+            .onAppear {
+                self.isChatVisible = true
+                self.presentPendingDesktopIfNeeded()
+            }
+            .onDisappear { self.isChatVisible = false }
+            .onChange(of: self.viewModel?.activeDesktopHandoffs ?? [], initial: true) { _, handoffs in
+                if let desktopHandoff, !handoffs.contains(desktopHandoff) {
+                    self.desktopHandoff = nil
+                    self.showsQuestionDesktop = false
+                }
+                self.presentPendingDesktopIfNeeded()
+            }
+            .onChange(of: self.appModel.chatPresentation.presentationID) { _, _ in
+                self.desktopHandoff = nil
+                self.showsQuestionDesktop = false
+                self.lastAutomaticallyPresentedDesktop = nil
+                self.presentPendingDesktopIfNeeded()
+            }
+            .onChange(of: self.canPresentQuestionDesktop) { _, canPresent in
+                if canPresent { self.presentPendingDesktopIfNeeded() }
+            }
             .task {
                 if self.speech == nil {
                     let gateway = self.appModel.operatorSession
@@ -57,6 +89,84 @@ struct ChatProTab: View {
                     }
                 }
             }
+    }
+
+    private var hasCurrentQuestionDesktop: Bool {
+        guard let desktopHandoff else { return false }
+        // Do not rebind a retained viewer to replacement Gateway credentials before reconciliation renders.
+        return self.desktopOwnerID == self.appModel.chatPresentation.presentationID &&
+            self.appModel.chatPresentation.isCurrent(appModel: self.appModel) &&
+            self.viewModel?.activeDesktopHandoffs.contains(desktopHandoff) == true
+    }
+
+    private var isQuestionDesktopVisible: Bool {
+        self.showsQuestionDesktop && self.hasCurrentQuestionDesktop
+    }
+
+    private var pendingDesktopHandoffs: [OpenClawQuestionDesktopHandoff] {
+        self.viewModel?.pendingDesktopHandoffs ?? []
+    }
+
+    private var canPresentQuestionDesktop: Bool {
+        self.isChatVisible && self.scenePhase == .active && self.gatewayConnected &&
+            !self.isGatewayTransitionPending && self.transcriptShareItem == nil && !self.showsNewSessionOptions
+    }
+
+    private func presentPendingDesktopIfNeeded() {
+        guard self.canPresentQuestionDesktop, !self.showsQuestionDesktop,
+              let handoff = self.pendingDesktopHandoffs.first,
+              handoff != self.lastAutomaticallyPresentedDesktop
+        else { return }
+        self.openQuestionDesktop(handoff)
+        if self.showsQuestionDesktop { self.lastAutomaticallyPresentedDesktop = handoff }
+    }
+
+    private func openQuestionDesktop(_ handoff: OpenClawQuestionDesktopHandoff) {
+        guard self.canPresentQuestionDesktop,
+              self.appModel.chatPresentation.isCurrent(appModel: self.appModel),
+              self.pendingDesktopHandoffs.contains(handoff)
+        else { return }
+        self.desktopHandoff = handoff
+        self.desktopOwnerID = self.appModel.chatPresentation.presentationID
+        self.showsQuestionDesktop = true
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
+    @ViewBuilder
+    private var questionDesktop: some View {
+        if let desktopHandoff, self.hasCurrentQuestionDesktop {
+            // Hide, rather than remove, this request's viewer when returning to chat.
+            // This preserves page authentication and does not answer the question.
+            NavigationStack {
+                ControlUIHubScreen(
+                    page: .desktop(source: desktopHandoff.environmentID, session: desktopHandoff.sessionKey),
+                    usesNativeNavigationChrome: true)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button {
+                                self.showsQuestionDesktop = false
+                                UIApplication.shared.sendAction(
+                                    #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                            } label: {
+                                Label {
+                                    Text("Chat")
+                                        .font(OpenClawType.subheadSemiBold)
+                                } icon: {
+                                    Image(systemName: "chevron.left")
+                                }
+                            }
+                            .accessibilityLabel("Return to Chat")
+                            .accessibilityIdentifier("QuestionDesktop.ReturnToChat")
+                        }
+                    }
+            }
+            // A new request for the same environment must still start a new, view-only viewer.
+            .id(desktopHandoff.id)
+            .ignoresSafeArea(.container)
+            .opacity(self.isQuestionDesktopVisible ? 1 : 0)
+            .allowsHitTesting(self.isQuestionDesktopVisible)
+            .accessibilityHidden(!self.isQuestionDesktopVisible)
+        }
     }
 
     private var isGatewayTransitionPending: Bool {

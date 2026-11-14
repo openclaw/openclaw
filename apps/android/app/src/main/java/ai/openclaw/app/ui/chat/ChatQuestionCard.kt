@@ -3,6 +3,7 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatQuestionStatus
+import ai.openclaw.app.chat.desktopHandoffQuestion
 import ai.openclaw.app.gateway.Question
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawPrimaryButton
@@ -49,12 +50,14 @@ internal fun ChatQuestionCard(
   onSubmit: (ChatQuestionPrompt, Map<String, List<String>>) -> Unit,
   onSkip: (ChatQuestionPrompt) -> Unit,
   modifier: Modifier = Modifier,
+  onOpenDesktop: ((ChatQuestionPrompt) -> Unit)? = null,
+  enabled: Boolean = true,
 ) {
   val draft = prompt.draft
   var nowMs by remember(prompt.record.id) { mutableLongStateOf(System.currentTimeMillis()) }
   val status = prompt.status(nowMs)
-  val pending = status == ChatQuestionStatus.Pending
-  if (!pending && status != ChatQuestionStatus.Submitting) {
+  val pending = enabled && status == ChatQuestionStatus.Pending
+  if (status != ChatQuestionStatus.Pending && status != ChatQuestionStatus.Submitting) {
     ChatQuestionSummary(prompt = prompt, status = status, modifier = modifier)
     return
   }
@@ -75,6 +78,11 @@ internal fun ChatQuestionCard(
       modifier = Modifier.padding(16.dp),
       verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+      if (onOpenDesktop != null && prompt.desktopHandoffQuestion() != null) {
+        TextButton(onClick = { onOpenDesktop(prompt) }, enabled = pending) {
+          Text(nativeString("Open desktop"))
+        }
+      }
       prompt.record.questions.forEach { question ->
         SecretStoreConsent(
           prompt = prompt,
@@ -93,6 +101,7 @@ internal fun ChatQuestionCard(
         prompt = prompt,
         status = status,
         nowMs = nowMs,
+        enabled = enabled,
         onSubmit = onSubmit,
         onSkip = onSkip,
       )
@@ -255,6 +264,7 @@ private fun QuestionFooter(
   prompt: ChatQuestionPrompt,
   status: ChatQuestionStatus,
   nowMs: Long,
+  enabled: Boolean,
   onSubmit: (ChatQuestionPrompt, Map<String, List<String>>) -> Unit,
   onSkip: (ChatQuestionPrompt) -> Unit,
 ) {
@@ -268,7 +278,7 @@ private fun QuestionFooter(
     Spacer(Modifier.weight(1f))
     TextButton(
       onClick = { onSkip(prompt) },
-      enabled = status == ChatQuestionStatus.Pending,
+      enabled = enabled && status == ChatQuestionStatus.Pending,
     ) {
       Text(nativeString("Skip"))
     }
@@ -280,7 +290,7 @@ private fun QuestionFooter(
           nativeString("Submit")
         },
       onClick = { answers?.let { onSubmit(prompt, it) } },
-      enabled = answers != null && status == ChatQuestionStatus.Pending,
+      enabled = enabled && answers != null && status == ChatQuestionStatus.Pending,
     )
   }
   prompt.errorText?.let { error ->

@@ -13,6 +13,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { registerActiveEmbeddedRunHumanInputWait } from "../../agents/embedded-agent-runner/run-state.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import {
   handleQuestionChannelRequested,
@@ -140,6 +141,7 @@ export function createQuestionHandlers(
       }
       let request = params;
       const storeBound = request.questions.some((question) => question.secretStore);
+      const desktop = request.questions.find((question) => question.desktop)?.desktop;
       const authority = readGatewayRequestMutationAuthority(options);
       authority.assertCurrent();
       const narrow = usesOwnRunQuestionAccess(client);
@@ -160,7 +162,7 @@ export function createQuestionHandlers(
       }
       const identity = client?.internal?.agentRuntimeIdentity;
       const validateAuthority = context.validateAgentRuntimeApprovalAuthority;
-      if ((storeBound || narrow) && (!identity || !validateAuthority)) {
+      if ((storeBound || desktop || narrow) && (!identity || !validateAuthority)) {
         respondError(
           respond,
           ErrorCodes.INVALID_REQUEST,
@@ -244,6 +246,57 @@ export function createQuestionHandlers(
                 sessionKey: request.sessionKey,
               })
             : undefined;
+        if (desktop) {
+          // Admit the presentation target before entering the synchronous question
+          // snapshot. Existing attachment/placement owners retain desktop authority.
+          if (!requester || isRequesterActive?.() !== true) {
+            throw new QuestionRequestValidationError("Desktop handoffs require a live agent task.");
+          }
+          const service = context.workerEnvironmentService;
+          const environmentId = desktop.source.environmentId;
+          const attachment = service?.findSessionAttachment(requester);
+          let ownerEpoch: number | undefined;
+          if (attachment?.environmentId === environmentId) {
+            service?.assertSessionAttachment(attachment);
+            ownerEpoch = attachment.ownerEpoch;
+          } else if (
+            requester.delegatedAuthority.kind === "worker" &&
+            requester.delegatedAuthority.turnClaim.owner.environmentId === environmentId
+          ) {
+            ownerEpoch = requester.delegatedAuthority.turnClaim.owner.ownerEpoch;
+          } else {
+            const run = getAgentRunContext(requester.operationalRunInstance.runId);
+            if (
+              run?.agentId === requester.agentId &&
+              run.sessionKey === requester.sessionKey &&
+              run.sessionId
+            ) {
+              const placements = await context.workerSessionPlacementService?.getManyAsync?.([
+                run.sessionId,
+              ]);
+              const placement = placements?.get(run.sessionId);
+              if (
+                placement?.state === "active" &&
+                placement.agentId === requester.agentId &&
+                placement.sessionKey === sessionKey &&
+                placement.environmentId === environmentId
+              ) {
+                ownerEpoch = placement.activeOwnerEpoch;
+              }
+            }
+          }
+          authority.assertCurrent();
+          const environment = service?.get(environmentId);
+          if (
+            ownerEpoch === undefined ||
+            environment?.ownerEpoch !== ownerEpoch ||
+            !environment.desktopAvailable
+          ) {
+            throw new QuestionRequestValidationError(
+              "The required desktop must be attached to or running this task.",
+            );
+          }
+        }
         const create = (prepared?: PreparedQuestionSession) => {
           if (sessionKey && requiresSharing()) {
             const authorizationError = prepared?.authorizeMutation(client);

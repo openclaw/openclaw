@@ -1,5 +1,6 @@
 import { deflateSync } from "node:zlib";
 import type { Locator, Page } from "playwright";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.ts";
 import type { DesktopClient } from "../components/desktop/desktop-client.ts";
 
 export function createRfbClipboardProvide(format: 1 | 2): number[] {
@@ -28,6 +29,23 @@ export function createRfbRawFrame(): number[] {
     message.set([24, 180, 160, 0], offset);
   }
   return [...message];
+}
+
+export function createRfbPngFrame(): number[] {
+  const png = createSolidPngBuffer(96, 64, { r: 24, g: 180, b: 160 });
+  const header = Buffer.alloc(16);
+  header.writeUInt16BE(1, 2);
+  header.writeUInt16BE(96, 8);
+  header.writeUInt16BE(64, 10);
+  header.writeInt32BE(-260, 12); // TightPNG, decoded through noVNC's asynchronous render queue.
+  const length: number[] = [];
+  let remaining = png.length;
+  do {
+    const byte = remaining & 127;
+    remaining >>>= 7;
+    length.push(byte | (remaining ? 128 : 0));
+  } while (remaining);
+  return [...header, 0xa0, ...length, ...png];
 }
 
 /** Count Desktop transport lifecycle calls without opening a real RFB socket. */
@@ -64,9 +82,13 @@ export async function installDesktopClientFake(panel: Locator): Promise<void> {
 /** Install the scripted RFB 3.8 endpoint used by Desktop's canonical noVNC E2E. */
 export async function installScriptedRfbServer(
   page: Page,
-  options: { disconnectAfterLastPeer?: boolean } = {},
+  options: {
+    disconnectAfterLastPeer?: boolean;
+    stallFirstHandshake?: boolean;
+    autoFirstImage?: boolean;
+  } = {},
 ) {
-  await page.evaluate(({ disconnectAfterLastPeer }) => {
+  await page.evaluate(({ disconnectAfterLastPeer, stallFirstHandshake, autoFirstImage = true }) => {
     const GatewaySocket = window.WebSocket;
     const sockets = new Set<FakeRfbSocket>();
     const events: string[] = [];
@@ -150,6 +172,10 @@ export async function installScriptedRfbServer(
         } else if (this.handshake === 2) {
           this.deliver(new Uint8Array([0, 0, 0, 0]));
         } else if (this.handshake === 3) {
+          if (stallFirstHandshake && this.id === 1) {
+            events.push(`handshake-stalled:${this.id}`);
+            return;
+          }
           if (desktopTeardown) {
             this.close(1000, "desktop stream closed");
             return;
@@ -169,6 +195,13 @@ export async function installScriptedRfbServer(
           view.setUint32(20, name.length);
           init.set(name, 24);
           this.deliver(init);
+          if (autoFirstImage) {
+            // A real peer supplies image data after ServerInit. Keep its marker
+            // distinct from explicit test frames so it cannot satisfy their pixel waits.
+            this.deliver(
+              new Uint8Array([0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 3, 5, 7, 0]),
+            );
+          }
         }
       }
       close(code = 1000, reason = ""): void {

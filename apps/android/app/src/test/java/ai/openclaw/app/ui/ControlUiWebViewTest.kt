@@ -12,9 +12,14 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotSame
@@ -66,6 +71,52 @@ class ControlUiWebViewTest {
       interactive = false
       idleMainLooper()
       assertSame(preview, findWebView(controller.get().window.decorView))
+    } finally {
+      controller.pause().stop().destroy()
+      idleMainLooper()
+    }
+  }
+
+  @Test
+  @Config(sdk = [31])
+  fun desktopResizeRetainsTheViewerButTargetAndAuthenticationReplacementDoNot() {
+    val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+    var page by mutableStateOf(NodeRuntime.GatewayControlPage("https://gateway.example.test", null, connectAuth = { _, _ -> JsonObject(emptyMap()) }))
+    var source by mutableStateOf("desktop-proof")
+    var height by mutableStateOf(600.dp)
+    var interactive by mutableStateOf(true)
+    controller.get().setContent {
+      OpenClawTheme(themeMode = AppearanceThemeMode.System) {
+        Box(Modifier.height(height)) {
+          DesktopViewer(page = page, isConnected = true, source = source, interactive = interactive)
+        }
+      }
+    }
+    try {
+      idleMainLooper()
+      val original = requireNotNull(findWebView(controller.get().window.decorView))
+      assertTrue(original.url.orEmpty().startsWith("https://gateway.example.test/focus/desktop/source/desktop-proof"))
+      height = 280.dp
+      interactive = false
+      idleMainLooper()
+      assertSame(original, findWebView(controller.get().window.decorView))
+      height = 600.dp
+      interactive = true
+      idleMainLooper()
+      assertSame(original, findWebView(controller.get().window.decorView))
+
+      source = "replacement-proof"
+      idleMainLooper()
+      val retargeted = requireNotNull(findWebView(controller.get().window.decorView))
+      assertNotSame(original, retargeted)
+      assertTrue(retargeted.url.orEmpty().startsWith("https://gateway.example.test/focus/desktop/source/replacement-proof"))
+      page = NodeRuntime.GatewayControlPage("https://gateway.example.test", null, connectAuth = { _, _ -> JsonObject(emptyMap()) })
+      idleMainLooper()
+      assertNotSame(retargeted, findWebView(controller.get().window.decorView))
+
+      page = page.copy(tlsFingerprintSha256 = "task-proof-pin")
+      idleMainLooper()
+      assertNull(findWebView(controller.get().window.decorView))
     } finally {
       controller.pause().stop().destroy()
       idleMainLooper()

@@ -848,17 +848,28 @@ it.each([
     const result = await tool.execute(`manual-${outcome}`, {
       requiredAction: {
         reason: "A manual step is required.",
-        instructions: "Complete it in the existing browser panel.",
+        instructions:
+          "Take control of the selected cloud desktop and complete the visible manual step.",
+        desktop: { source: { kind: "environment", environmentId: "worker:manual-step" } },
       },
     });
     expect(
       gateway.mock.mock.calls.find(([method]) => method === "question.request")?.[2],
     ).toMatchObject({
-      questions: [{ questionId: "required_action", isOther: false }],
+      questions: [
+        {
+          questionId: "required_action",
+          isOther: false,
+          desktop: { source: { kind: "environment", environmentId: "worker:manual-step" } },
+        },
+      ],
     });
     expect(result.details).toMatchObject(
       outcome === "ready"
-        ? { status: "ready_to_verify" }
+        ? {
+            status: "ready_to_verify",
+            desktop: { source: { kind: "environment", environmentId: "worker:manual-step" } },
+          }
         : { status: "action_unresolved", reason: outcome === "pending" ? "expired" : outcome },
     );
     expect(JSON.stringify(result)).not.toContain("proceed with best judgment");

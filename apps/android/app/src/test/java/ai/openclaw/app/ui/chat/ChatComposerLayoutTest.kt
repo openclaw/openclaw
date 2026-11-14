@@ -28,6 +28,8 @@ import ai.openclaw.app.chat.ChatMessageCost
 import ai.openclaw.app.chat.ChatOutboxAttachment
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
+import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatQuestionStatus
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.questionsForSession
 import ai.openclaw.app.closeNodeRuntimeTestFixture
@@ -35,6 +37,7 @@ import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.QuestionRecord
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.verbatimText
@@ -6382,6 +6385,55 @@ class ChatComposerLayoutTest {
     )
   }
 
+  @Test
+  @Config(sdk = [31])
+  fun pendingDesktopHandoffReopensWithFreshAuthenticationWithoutResolving() {
+    showChat(viewportHeight = { 760.dp })
+    val prompt =
+      ChatQuestionPrompt(
+        Json.decodeFromString<QuestionRecord>(
+          """{
+            "id":"desktop-auth-recovery",
+            "sessionKey":"${controller.sessionKey.value}",
+            "agentId":"main",
+            "runId":"original-desktop-run",
+            "createdAtMs":1,
+            "expiresAtMs":9223372036854775807,
+            "status":"pending",
+            "questions":[{
+              "questionId":"required_action",
+              "header":"Manual step",
+              "question":"Complete the visible manual step, then return for a fresh check.",
+              "desktop":{"source":{"kind":"environment","environmentId":"desktop-proof"}},
+              "options":[{"label":"Ready to recheck"},{"label":"Stop this task"}],
+              "isOther":false
+            }]
+          }""",
+        ),
+      )
+    // Seed Gateway-owned state at the native presentation boundary. Parser and settlement
+    // behavior are covered through ChatController in ChatDesktopHandoffTest.
+    composeRule.runOnIdle { controllerFlow<List<ChatQuestionPrompt>>("_questions").value = listOf(prompt) }
+    composeRule.onNode(isDialog()).assertExists()
+    composeRule.runOnIdle {
+      @Suppress("UNCHECKED_CAST")
+      val pages =
+        NodeRuntime::class.java
+          .getDeclaredField("_gatewayControlPage")
+          .apply { isAccessible = true }
+          .get(runtime) as MutableStateFlow<NodeRuntime.GatewayControlPage?>
+      pages.value = checkNotNull(pages.value).copy(connectAuth = { _, _ -> JsonObject(emptyMap()) })
+    }
+    composeRule.onNode(isDialog()).assertExists()
+    composeRule.onNode(hasContentDescription(nativeString("Back")) and hasAnyAncestor(isDialog())).performClick()
+    composeRule.onNode(isDialog()).assertDoesNotExist()
+    composeRule.runOnIdle {
+      val retained = controller.questions.value.single()
+      assertEquals(ChatQuestionStatus.Pending, retained.status())
+      assertTrue(retained.promptOwner === prompt.promptOwner)
+    }
+  }
+
   private fun showChat(
     viewportWidth: Dp = 360.dp,
     viewportHeight: () -> Dp = { 400.dp },
@@ -6458,6 +6510,7 @@ class ChatComposerLayoutTest {
                       onOpenDashboard = {},
                       onOpenGatewaySettings = {},
                       onOpenProvidersModels = onOpenProvidersModels,
+                      allowDesktopHandoffPresentation = true,
                       tabletopPanes = panes,
                       features = features,
                     )

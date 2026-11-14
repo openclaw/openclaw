@@ -20,7 +20,12 @@ import type { GatewayBroadcastFn } from "../server-broadcast-types.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createQuestionHandlers } from "./question.js";
 import { createSecretStoreWriteService } from "./secrets.js";
-import type { GatewayClient, GatewayRequestOptions, RespondFn } from "./types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestOptions,
+  RespondFn,
+} from "./types.js";
 
 export let manager: QuestionManager;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
@@ -87,6 +92,7 @@ export async function callQuestionRpc(
   params: Record<string, unknown>,
   options?: {
     client?: GatewayClient;
+    context?: Partial<GatewayRequestContext>;
     clients?: readonly GatewayClient[];
     cfg?: OpenClawConfig;
     registered?: true;
@@ -113,6 +119,7 @@ export async function callQuestionRpc(
         ),
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
       getRuntimeConfig: () => cfg,
+      ...options?.context,
     }),
   };
   if (options?.registered) {

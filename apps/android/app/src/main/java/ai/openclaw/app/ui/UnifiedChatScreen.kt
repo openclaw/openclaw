@@ -22,6 +22,7 @@ internal fun UnifiedChatShellScreen(
   onOpenDashboard: (String) -> Unit,
   onOpenGatewaySettings: () -> Unit,
   onOpenProvidersModels: () -> Unit,
+  allowDesktopHandoffPresentation: Boolean,
   tabletopPanes: TabletopPaneBounds? = null,
   features: List<DisplayFeature> = emptyList(),
 ) {
@@ -48,6 +49,7 @@ internal fun UnifiedChatShellScreen(
       onOpenDashboard = onOpenDashboard,
       onOpenGatewaySettings = onOpenGatewaySettings,
       onOpenProvidersModels = onOpenProvidersModels,
+      allowDesktopHandoffPresentation = allowDesktopHandoffPresentation,
       tabletopPanes = tabletopPanes,
       features = features,
     )

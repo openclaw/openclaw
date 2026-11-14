@@ -298,6 +298,9 @@ fun ShellScreen(
                 onOpenDashboard = nav::openSessionDashboard,
                 onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
                 onOpenProvidersModels = { nav.openDetailTab(Tab.ProvidersModels) },
+                allowDesktopHandoffPresentation =
+                  !commandOpen && pendingTrust == null && gatewayAddition == null &&
+                    (permanentSidebar || (sidebarDrawerState.currentValue == DrawerValue.Closed && sidebarDrawerState.targetValue == DrawerValue.Closed)),
               )
             }
 

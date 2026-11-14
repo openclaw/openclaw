@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.i18n.nativeString
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
@@ -27,22 +28,41 @@ internal fun DesktopScreen(
     // Keep the viewer's touch toolbar above the soft keyboard.
     modifier = Modifier.imePadding(),
   ) {
-    val page = controlPage
-    if (isConnected && page != null) {
+    DesktopViewer(page = controlPage, isConnected = isConnected, source = source, session = session)
+  }
+}
+
+/** Shared viewer; native presentation never takes control or settles a pending question. */
+@Composable
+internal fun DesktopViewer(
+  page: NodeRuntime.GatewayControlPage?,
+  isConnected: Boolean,
+  source: String? = null,
+  session: String? = null,
+  interactive: Boolean = true,
+) {
+  if (isConnected && page != null) {
+    if (page.tlsFingerprintSha256 != null) {
+      ControlUiUnavailable(
+        title = nativeString("Desktop unavailable"),
+        detail = nativeString("Embedded pages are unavailable on certificate-pinned gateways. Use the native screens instead."),
+      )
+    } else {
       // GatewayControlPage equality includes its native operator owner and the accepted TLS pin.
       key(page, source, session) {
         ControlUiWebView(
           page = page,
           url = desktopUrl(baseUrl = page.baseUrl, source = source, session = session),
           modifier = Modifier.fillMaxSize(),
+          interactive = interactive,
         )
       }
-    } else {
-      ControlUiUnavailable(
-        title = nativeString("Desktop needs a connected gateway"),
-        detail = nativeString("Connect to your gateway to view a machine screen."),
-      )
     }
+  } else {
+    ControlUiUnavailable(
+      title = nativeString("Desktop needs a connected gateway"),
+      detail = nativeString("Connect to your gateway to view a machine screen."),
+    )
   }
 }
 

@@ -333,6 +333,7 @@ public final class OpenClawQuestionCardModel: Identifiable {
 }
 
 struct OpenClawQuestionCard: View {
+    @Environment(\.openClawOpenQuestionDesktop) private var openDesktop
     @Bindable private var model: OpenClawQuestionCardModel
     private let onSubmit: @MainActor @Sendable (OpenClawQuestionCardModel) async -> Void
     private let onSkip: @MainActor @Sendable (OpenClawQuestionCardModel) async -> Void
@@ -400,6 +401,26 @@ struct OpenClawQuestionCard: View {
                 .foregroundStyle(OpenClawChatTheme.accent)
             Text(question.question)
                 .font(OpenClawChatTypography.body)
+            if let openDesktop,
+               let handoff = self.model.desktopHandoffs.first(where: { $0.questionID == question.questionid })
+            {
+                Button {
+                    openDesktop(handoff)
+                } label: {
+                    Label {
+                        Text("Open Desktop")
+                            .font(OpenClawChatTypography.body)
+                    } icon: {
+                        Image(systemName: "display")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(self.model.status(at: now) != .pending)
+                .accessibilityIdentifier("chat-question-open-desktop")
+                Text("Take control in Desktop, then return here to choose Ready to recheck or Stop.")
+                    .font(OpenClawChatTypography.caption)
+                    .foregroundStyle(.secondary)
+            }
             if let store = question.secretstore {
                 self.secretStoreConsent(question: question, store: store, now: now)
             }

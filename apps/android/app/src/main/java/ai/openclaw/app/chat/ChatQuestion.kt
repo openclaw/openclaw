@@ -36,6 +36,13 @@ data class ChatQuestionPrompt(
     }
 }
 
+/** Only a live, task-bound request can present a desktop, never transcript tool activity. */
+internal fun ChatQuestionPrompt.desktopHandoffQuestion(): Question? {
+  if (record.sessionKey.isNullOrBlank() || record.runId.isNullOrBlank()) return null
+  if (status() !in setOf(ChatQuestionStatus.Pending, ChatQuestionStatus.Submitting)) return null
+  return record.questions.singleOrNull()?.takeIf { it.desktop != null }
+}
+
 data class ChatQuestionDraft(
   val selectedOptions: Map<String, Set<String>> = emptyMap(),
   val otherText: Map<String, String> = emptyMap(),

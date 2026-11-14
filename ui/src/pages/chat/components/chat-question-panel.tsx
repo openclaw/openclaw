@@ -8,6 +8,10 @@ import {
   untrack,
 } from "solid-js";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
+import {
+  DESKTOP_PANEL_TOGGLE_EVENT,
+  type DesktopPanelToggleDetail,
+} from "../../../components/panel-toggle-contract.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { nextRadio } from "../../../components/solid/radio-navigation.ts";
 import { SessionLink } from "../../../components/solid/session-link.tsx";
@@ -404,6 +408,36 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
               {!model().nonBlocking && (
                 <div class="chat-question-panel__heading">
                   <span class="chat-question-panel__prompt">{item().question}</span>
+                </div>
+              )}
+              {item().desktop && (
+                <div class="chat-question-panel__external">
+                  <button
+                    class="btn btn--sm"
+                    type="button"
+                    disabled={disabled()}
+                    onClick={() => {
+                      const source = question()?.desktop?.source;
+                      if (!source || disabled()) {
+                        return;
+                      }
+                      const detail: DesktopPanelToggleDetail = {
+                        open: true,
+                        requestId: model().requestKey,
+                        sessionKey: model().sessionKey,
+                        environmentId: source.environmentId,
+                      };
+                      window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail }));
+                      // Keep the child-targeted intent in the existing buffer
+                      // until its requesting conversation mounts.
+                      if (model().requestedBySession) {
+                        props.panel.onOpenSession?.();
+                      }
+                    }}
+                  >
+                    <Icon name="monitor" /> {t("chat.questions.openDesktop")}
+                  </button>
+                  <span class="muted">{t("chat.questions.desktopStepHint")}</span>
                 </div>
               )}
               {item().url && (

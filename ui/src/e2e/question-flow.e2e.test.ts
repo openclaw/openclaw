@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Question, QuestionResolveResult } from "@openclaw/gateway-protocol";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
@@ -5,6 +7,7 @@ import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/con
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -13,6 +16,14 @@ import {
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  desktopGateway,
+  observationCases,
+  sessionsList,
+  workerDesktopEnvironment,
+} from "./desktop-panel.test-support.ts";
+import { createRfbRawFrame, installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
+import { canvasPixel } from "./panel-fixtures.test-support.ts";
 import { defineQuestionFooterTests } from "./question-footer.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -245,6 +256,143 @@ function scrollRegressionQuestion(id: string, prompt: string) {
 }
 
 suite.define(() => {
+  it.each([false, true])(
+    "keeps a required desktop step pending across viewing, manual control, and reconnect (child=%s)",
+    async (child) => {
+      const page = await newPage();
+      const gateway = await desktopGateway(page, [workerDesktopEnvironment], observationCases(), {
+        featureMethods: [
+          "desktop.observe",
+          "desktop.release",
+          "environments.list",
+          "environments.status",
+          "question.get",
+          "question.list",
+          "question.resolve",
+        ],
+        methodResponses: {
+          "sessions.list": {
+            ...sessionsList("active"),
+            count: child ? 2 : 1,
+            sessions: [
+              ...sessionsList("active").sessions,
+              ...(child
+                ? [
+                    {
+                      key: questionSessionKey,
+                      kind: "direct",
+                      label: "Manual setup",
+                      parentSessionKey: mainSessionKey,
+                      spawnDepth: 1,
+                      status: "running",
+                      hasActiveRun: true,
+                      updatedAt: Date.now(),
+                    },
+                  ]
+                : []),
+            ],
+          },
+          "environments.status": workerDesktopEnvironment,
+          "question.list": { questions: [] },
+          "desktop.release": { released: true },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainSessionKey));
+      await gateway.waitForRequest("question.list");
+      const rfb = await installScriptedRfbServer(page);
+      const request = {
+        ...questionRecord("required-desktop-request", {
+          questionId: "required_action",
+          header: "Manual step",
+          question: "Complete the manual setup on the selected desktop.",
+          desktop: { source: { kind: "environment", environmentId: workerDesktopEnvironment.id } },
+          options: [{ label: "Ready to recheck" }, { label: "Stop this task" }],
+          isOther: false,
+        }),
+        sessionKey: child ? questionSessionKey : mainSessionKey,
+        runId: "original-desktop-task",
+      };
+      await gateway.setMethodResponse("question.list", { questions: [request] });
+      let question = await showQuestion(page, gateway, request);
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          question.locator(".chat-question-panel"),
+          [question.getByText(request.questions[0]!.question, { exact: true })],
+          { animations: "disabled" },
+        );
+        await writeFile(
+          path.join(
+            suite.artifactDir,
+            `required-desktop${child ? "-child" : ""}-${process.env.OPENCLAW_DESKTOP_PROOF_STAGE ?? "after"}.png`,
+          ),
+          frame.png,
+        );
+      }
+      await button(question, "Open desktop").click();
+      if (child) {
+        await page.waitForFunction(
+          (key) =>
+            window.openclawControlUi?.snapshot().sessionKey === key &&
+            window.openclawControlUi.snapshot().routeReady,
+          questionSessionKey,
+        );
+        question = page
+          .getByRole("region", { name: "Chat", exact: true })
+          .locator("openclaw-chat-question-panel")
+          .filter({ hasText: request.questions[0]!.question });
+      }
+      const desktop = page.locator("openclaw-desktop-panel").filter({ visible: true });
+      await expect.poll(rfb.events).toEqual(["authenticated:1"]);
+      expect((await gateway.getRequests("desktop.observe"))[0]?.params).toEqual({
+        source: { kind: "environment", environmentId: workerDesktopEnvironment.id },
+        control: false,
+      });
+      await desktop.locator(".desktop-stage__take-control").click();
+      await expect.poll(rfb.events).toEqual(["authenticated:1", "authenticated:2", "closed:1"]);
+      await rfb.disconnect("temporary desktop transport loss");
+      await button(desktop, "Reconnect").click();
+      await expect.poll(rfb.events).toContain("authenticated:3");
+      await rfb.send([createRfbRawFrame()]);
+      await expect
+        .poll(() => canvasPixel(desktop.locator(".desktop-surface canvas")))
+        .toEqual([24, 180, 160, 255]);
+      expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          desktop.locator("section[aria-label='Desktop']"),
+          [question.locator(".chat-question-panel"), desktop.locator(".desktop-surface canvas")],
+          { animations: "disabled" },
+        );
+        await writeFile(
+          path.join(suite.artifactDir, `required-desktop${child ? "-child" : ""}-viewer-after.png`),
+          frame.png,
+        );
+      }
+      expect((await gateway.getRequests("desktop.observe")).map(({ params }) => params)).toEqual([
+        {
+          source: { kind: "environment", environmentId: workerDesktopEnvironment.id },
+          control: false,
+        },
+        {
+          source: { kind: "environment", environmentId: workerDesktopEnvironment.id },
+          control: true,
+        },
+        {
+          source: { kind: "environment", environmentId: workerDesktopEnvironment.id },
+          control: true,
+        },
+      ]);
+      await question.getByRole("radio", { name: /Ready to recheck/ }).click();
+      await button(question, "Submit").click();
+      await expectResolution(gateway, {
+        id: request.id,
+        answers: { answers: { required_action: ["Ready to recheck"] } },
+      });
+    },
+  );
+
   afterEach(async () => {
     await context?.close().catch(() => {});
     context = undefined;

@@ -792,6 +792,33 @@ describe("embedded desktop panel presentation", () => {
     }
   });
 
+  it("opens each new required desktop request view-only without resetting the same pending request", async () => {
+    const v = viewer(workerInventory);
+    const panel = await mount(v.gateway.client, v.connect);
+    const open = (requestId: string) =>
+      panel.handleToggleRequest(
+        new CustomEvent("openclaw:desktop-toggle", {
+          detail: { open: true, environmentId: desktopEnvironment.id, requestId },
+        }),
+      );
+    open("required-step-one");
+    await waitForSolid(() => expect(rpcCalls(v.request, "desktop.observe")).toHaveLength(1));
+    expectObserve(v.request, desktopEnvironment.id, false);
+    await waitForSolid(() =>
+      expect(panel.querySelector(".desktop-stage__take-control")).not.toBeNull(),
+    );
+    clickPanelButton(panel, ".desktop-stage__take-control");
+    await waitForSolid(() => expect(rpcCalls(v.request, "desktop.observe")).toHaveLength(2));
+    expectObserve(v.request, desktopEnvironment.id, true);
+    open("required-step-one");
+    await panel.updateComplete;
+    expect(rpcCalls(v.request, "desktop.observe")).toHaveLength(2);
+    open("required-step-two");
+    await waitForSolid(() => expect(rpcCalls(v.request, "desktop.observe")).toHaveLength(3));
+    expectObserve(v.request, desktopEnvironment.id, false);
+    expect(rpcCalls(v.request, "question.resolve")).toHaveLength(0);
+  });
+
   it("keeps a hidden embedded mount dormant even when the standalone dock was open", async () => {
     localStorage.setItem(
       "openclaw.desktopPanel",

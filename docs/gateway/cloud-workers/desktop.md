@@ -109,6 +109,8 @@ connection paths.
 
 If you close or replace a Desktop panel during setup, it releases the unused observation when setup returns. This frees that attempt's node stream and viewer slot without waiting for ticket expiry or interrupting another viewer. A connected viewer retains the existing brief-hide behavior.
 
+The viewer stays connecting and keeps input disabled until authentication and the first nonempty primary screen update have actually painted. Desktop dimensions, names, cursor images, and empty updates do not make a blank viewer ready. If authentication or the first image stalls for 30 seconds, the viewer closes that attempt and offers **Reconnect**. Reconnecting keeps the selected desktop and control mode; it does not switch machines, automatically retry, or complete a pending human action.
+
 The Gateway sends WebSocket keepalives on desktop observer and node desktop or portal streams while idle, so an unchanged screen or quiet preview does not go silent behind a proxy. Backpressure may delay pong replies without revoking the stream; the owning session and control connection still govern teardown.
 
 When another operator takes control, your viewer reconnects in view-only mode. The notice identifies the new controller by their authenticated profile name, or their authenticated user ID when no profile name is set. Connections without an authenticated user identity show a generic takeover notice.

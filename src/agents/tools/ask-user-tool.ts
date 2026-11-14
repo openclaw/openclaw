@@ -347,7 +347,8 @@ function answeredResult(
     if (answers.answers.required_action?.[0] !== REQUIRED_ACTION_READY) {
       return unresolvedActionResult("declined");
     }
-    const payload = { status: "ready_to_verify" as const };
+    const desktop = questions[0]?.desktop;
+    const payload = { status: "ready_to_verify" as const, ...(desktop ? { desktop } : {}) };
     // Human work can make previously unavailable tools discoverable (for example, OAuth).
     const refresh = refreshTools();
     return {

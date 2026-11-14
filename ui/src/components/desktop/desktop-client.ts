@@ -2,6 +2,7 @@ import { resolveGatewayWebSocketUrl } from "../../lib/gateway-websocket-url.ts";
 import { isApplePlatform } from "../../lib/keyboard-shortcut-contract.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { DesktopSizingMode } from "./desktop-panel-state.ts";
+import { observeNoVncFirstImage, type NoVncFirstImageHost } from "./novnc-first-image.ts";
 
 export type DesktopDisconnectDetail = {
   clean: boolean;
@@ -111,14 +112,15 @@ export type DesktopConnectionHandle = {
   setSizingMode(mode: DesktopSizingMode): void;
 };
 
-type RfbClient = EventTarget & {
-  background: string;
-  disconnect(): void;
-  sendKey(keysym: number, code: string | null, down?: boolean): void;
-  scaleViewport: boolean;
-  resizeSession: boolean;
-  viewOnly: boolean;
-};
+type RfbClient = EventTarget &
+  NoVncFirstImageHost & {
+    background: string;
+    disconnect(): void;
+    sendKey(keysym: number, code: string | null, down?: boolean): void;
+    scaleViewport: boolean;
+    resizeSession: boolean;
+    viewOnly: boolean;
+  };
 
 type RfbConstructor = new (
   target: HTMLElement,
@@ -174,12 +176,23 @@ export class DesktopClient {
       throw error;
     }
     rfb.background = options.background ?? getComputedStyle(options.target).backgroundColor;
-    rfb.viewOnly = options.viewOnly;
+    // Authentication is not proof of a usable image; noVNC must not grab input yet.
+    rfb.viewOnly = true;
     rfb.resizeSession = false;
     let retired = false;
     let inputDisabled = false;
     let presented = true;
     let connected = false;
+    let authenticated = false;
+    let firstImage = false;
+    let stopFirstImage = () => {};
+    const canInput = () =>
+      connected &&
+      !retired &&
+      !inputDisabled &&
+      presented &&
+      !options.viewOnly &&
+      options.isCurrent();
     let sizingMode = options.sizingMode ?? "fit";
     const dispatchKeyboardEvent = (event: KeyboardEvent) => {
       // noVNC owns translation for both canvas input and the mobile keyboard bridge.
@@ -261,6 +274,39 @@ export class DesktopClient {
         sizingMode === "match";
     };
     applySizing();
+    const markConnected = () => {
+      if (
+        connected ||
+        !authenticated ||
+        !firstImage ||
+        retired ||
+        inputDisabled ||
+        !options.isCurrent()
+      ) {
+        return;
+      }
+      connected = true;
+      clearTimeout(connectionTimer);
+      rfb.viewOnly = !presented || options.viewOnly;
+      options.onConnect?.();
+      applySizing();
+    };
+    const retire = () => {
+      retired = true;
+      stopFirstImage();
+      clearTimeout(connectionTimer);
+      disableInput();
+      stopInputTracking();
+      stopSocketClose();
+      stopRfb.forEach((stop) => stop());
+      viewport.dispose();
+    };
+    const disconnect = () => {
+      if (!retired) {
+        retire();
+        rfb.disconnect();
+      }
+    };
     // noVNC's EventTargetMixin ignores listener options, including AbortSignal.
     const stopRfb = [
       listen(rfb, "connect", () => {
@@ -268,38 +314,42 @@ export class DesktopClient {
           disableInput();
           return;
         }
-        connected = true;
-        options.onConnect?.();
-        applySizing();
+        authenticated = true;
+        markConnected();
       }),
       listen(rfb, "disconnect", (event) => {
         // noVNC's terminal state is permanent; callbacks may synchronously retire this handle.
-        retired = true;
-        disableInput();
-        stopInputTracking();
-        stopSocketClose();
-        stopRfb.forEach((stop) => stop());
-        viewport.dispose();
+        retire();
         // SAFETY: noVNC's public disconnect event carries clean, even before the socket closes.
         const { clean } = (event as CustomEvent<{ clean: boolean }>).detail;
         options.onDisconnect?.({ ...closeDetail, clean });
       }),
       listen(rfb, "securityfailure", (event) => {
+        clearTimeout(connectionTimer);
         disableInput();
         const detail = (event as CustomEvent<DesktopSecurityFailureDetail>).detail ?? {};
         options.onSecurityFailure?.(detail);
       }),
     ];
+    // Bound both authentication and the first primary image; metadata alone
+    // must neither enable control nor leave an unbounded blank viewer.
+    const connectionTimer = setTimeout(() => {
+      disconnect();
+      if (options.isCurrent()) {
+        options.onDisconnect?.({ clean: false });
+      }
+    }, 30_000);
+    try {
+      stopFirstImage = observeNoVncFirstImage(rfb, options.isCurrent, () => {
+        firstImage = true;
+        markConnected();
+      });
+    } catch (error) {
+      disconnect();
+      throw error;
+    }
     return {
-      disconnect: () => {
-        if (!retired) {
-          retired = true;
-          disableInput();
-          stopInputTracking();
-          rfb.disconnect();
-          viewport.dispose();
-        }
-      },
+      disconnect,
       disableInput,
       setPresented: (value) => {
         presented = value;
@@ -315,7 +365,7 @@ export class DesktopClient {
           releaseHeldKeys();
         }
         rfb.resizeSession = false;
-        rfb.viewOnly = !presented || options.viewOnly;
+        rfb.viewOnly = !presented || options.viewOnly || !connected;
         applySizing();
         return true;
       },
@@ -323,8 +373,15 @@ export class DesktopClient {
         sizingMode = mode;
         applySizing();
       },
-      sendKeyboardEvent: (event) => dispatchKeyboardEvent(cloneKeyboardEvent(event)),
+      sendKeyboardEvent: (event) => {
+        if (canInput()) {
+          dispatchKeyboardEvent(cloneKeyboardEvent(event));
+        }
+      },
       sendText: (text) => {
+        if (!canInput()) {
+          return;
+        }
         // Mobile IMEs can omit keydown/keyup. "Unidentified" asks noVNC's
         // keyboard owner to translate each inserted character and emit a
         // balanced press/release. Line breaks need Enter rather than Unicode LF.
@@ -346,7 +403,11 @@ export class DesktopClient {
           );
         }
       },
-      sendBackspace: () => rfb.sendKey(0xff08, "Backspace"),
+      sendBackspace: () => {
+        if (canInput()) {
+          rfb.sendKey(0xff08, "Backspace");
+        }
+      },
     };
   }
 }

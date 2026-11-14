@@ -43,6 +43,7 @@ import ai.openclaw.app.chat.SessionBranch
 import ai.openclaw.app.chat.SessionEditorAttachment
 import ai.openclaw.app.chat.VoiceNoteRecorderState
 import ai.openclaw.app.chat.chatOutboxQueueFailureText
+import ai.openclaw.app.chat.desktopHandoffQuestion
 import ai.openclaw.app.chat.isTranscriptOnlyOpenClawAssistant
 import ai.openclaw.app.chat.questionsForSession
 import ai.openclaw.app.chat.resolveChatComposerOwner
@@ -365,6 +366,7 @@ internal fun ChatScreen(
   onOpenDashboard: (String) -> Unit,
   onOpenGatewaySettings: () -> Unit,
   onOpenProvidersModels: () -> Unit = onOpenGatewaySettings,
+  allowDesktopHandoffPresentation: Boolean = true,
   tabletopPanes: TabletopPaneBounds? = null,
   features: List<DisplayFeature> = emptyList(),
 ) {
@@ -531,6 +533,44 @@ internal fun ChatScreen(
   val gatewayHandoff by viewModel.gatewayConnectionHandoff.collectAsState()
   // Keep stale rendered owners disabled until all presentation flows catch up to the runtime.
   val composerOwnerReady = !gatewayHandoff.pending && viewModel.isCurrentChatComposerOwner(composerOwner)
+  val sessionQuestions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId)
+  val desktopQuestions = sessionQuestions.filter { it.desktopHandoffQuestion() != null }
+  var desktopPromptOwner by remember(composerOwner, controlPage) { mutableStateOf<Any?>(null) }
+  var dismissedDesktopOwners by remember(composerOwner, controlPage) { mutableStateOf<Set<Any>>(emptySet()) }
+  val foreground = lifecycleState.isAtLeast(Lifecycle.State.RESUMED)
+  LaunchedEffect(composerOwner, controlPage, desktopQuestions, foreground, composerOwnerReady, allowDesktopHandoffPresentation) {
+    val owners = desktopQuestions.map { it.promptOwner }.toSet()
+    dismissedDesktopOwners = dismissedDesktopOwners.intersect(owners)
+    if (desktopPromptOwner !in owners) desktopPromptOwner = null
+    if (foreground && composerOwnerReady && allowDesktopHandoffPresentation && desktopPromptOwner == null) {
+      desktopPromptOwner = desktopQuestions.firstOrNull { it.promptOwner !in dismissedDesktopOwners }?.promptOwner
+    }
+  }
+  desktopQuestions.firstOrNull { it.promptOwner === desktopPromptOwner }?.takeIf { composerOwnerReady }?.let { prompt ->
+    key(prompt.promptOwner) {
+      ChatDesktopHandoff(
+        prompt = prompt,
+        page = controlPage,
+        connected = gatewayConnectionDisplay.isConnected,
+        foreground = foreground,
+        onDismiss = {
+          dismissedDesktopOwners = dismissedDesktopOwners + prompt.promptOwner
+          desktopPromptOwner = null
+        },
+        onDraftChanged = viewModel::updateChatQuestionDraft,
+        onSubmit = { expected, answers ->
+          if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && viewModel.isCurrentChatComposerOwner(composerOwner)) {
+            viewModel.resolveChatQuestion(expected, answers)
+          }
+        },
+        onSkip = { expected ->
+          if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && viewModel.isCurrentChatComposerOwner(composerOwner)) {
+            viewModel.skipChatQuestion(expected)
+          }
+        },
+      )
+    }
+  }
   val composerState = remember(viewModel) { viewModel.chatComposerState }
   val inputDrafts = composerState.textDrafts
   val imagePickerOwnerCheckpoint =
@@ -1014,7 +1054,7 @@ internal fun ChatScreen(
     activeRunClockKey = selectedActiveRun.clockKey,
     activeRunOutputTokens = selectedActiveRun.outputTokens,
     pendingToolCalls = pendingToolCalls,
-    questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
+    questions = sessionQuestions,
     streamingAssistantText = streamingAssistantText,
     healthOk = healthOk,
     gatewayOffline = gatewayOffline,
@@ -1028,6 +1068,7 @@ internal fun ChatScreen(
     onResolveQuestion = viewModel::resolveChatQuestion,
     onQuestionDraftChanged = viewModel::updateChatQuestionDraft,
     onSkipQuestion = viewModel::skipChatQuestion,
+    onOpenDesktop = { prompt -> if (composerOwnerReady && foreground && allowDesktopHandoffPresentation) desktopPromptOwner = prompt.promptOwner },
     onStarterPrompt = { prompt -> if (viewModel.isCurrentChatComposerOwner(composerOwner)) inputDrafts[composerOwner] = prompt },
     onReplyMessage = { value -> viewModel.setChatReplyDraft(value, composerOwner) },
     sessionActionsEnabled =
@@ -1765,6 +1806,7 @@ private fun ChatMessageList(
   onResolveQuestion: (ChatQuestionPrompt, Map<String, List<String>>) -> Unit,
   onQuestionDraftChanged: (ChatQuestionPrompt, (ChatQuestionDraft) -> ChatQuestionDraft) -> Unit,
   onSkipQuestion: (ChatQuestionPrompt) -> Unit,
+  onOpenDesktop: (ChatQuestionPrompt) -> Unit,
   onStarterPrompt: (String) -> Unit,
   onReplyMessage: (String) -> Unit,
   sessionActionsEnabled: Boolean,
@@ -1960,7 +2002,7 @@ private fun ChatMessageList(
                     }
 
                     is ChatTimelineItem.QuestionPrompt -> {
-                      ChatQuestionCard(prompt = item.prompt, onDraftChanged = onQuestionDraftChanged, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
+                      ChatQuestionCard(prompt = item.prompt, onDraftChanged = onQuestionDraftChanged, onSubmit = onResolveQuestion, onSkip = onSkipQuestion, onOpenDesktop = onOpenDesktop)
                     }
 
                     is ChatTimelineItem.WorkedSummary -> {

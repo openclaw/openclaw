@@ -87,6 +87,7 @@ enum ControlUIHubPage {
 struct ControlUIHubScreen: View {
     @Environment(NodeAppModel.self) private var appModel
     @State private var failedAccessBoundaryIdentity: Int?
+    @State private var documentState = AuthenticatedControlUIDocumentState()
     let page: ControlUIHubPage
     var headerSidebarAction: OpenClawSidebarHeaderAction?
     var usesNativeNavigationChrome = false
@@ -131,6 +132,7 @@ struct ControlUIHubScreen: View {
                     basicProxyCredentialProvider: {
                         AuthenticatedControlUI.basicProxyCredential(config: config)
                     },
+                    documentState: self.documentState,
                     accessCookie: accessCookieAdmission.cookie,
                     accessAdmissionIsCurrent: authorization?.isCurrent,
                     accessResponseCheck: authorization?.checkResponse,
@@ -138,6 +140,7 @@ struct ControlUIHubScreen: View {
                     // Unrelated SwiftUI updates must not reload a live desktop or shell.
                         .id(webContentIdentity)
                         .ignoresSafeArea(.container, edges: .bottom)
+                self.documentRecovery
             } else {
                 self.unavailableCard
             }
@@ -160,6 +163,42 @@ struct ControlUIHubScreen: View {
             if let headerSidebarAction {
                 OpenClawSidebarToolbarItem(action: headerSidebarAction, placement: .topBarLeading)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var documentRecovery: some View {
+        switch self.documentState.phase {
+        case .ready:
+            EmptyView()
+        case .loading:
+            ProgressView {
+                Text("Loading…")
+                    .font(OpenClawType.subheadSemiBold)
+            }
+            .padding(24)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        case .failed:
+            VStack(spacing: 12) {
+                ProIconBadge(systemName: self.page.symbol, color: OpenClawBrand.accent)
+                Text("Could not load this page")
+                    .font(OpenClawType.subheadSemiBold)
+                Text("Check your connection, then reload to reconnect.")
+                    .font(OpenClawType.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button {
+                    self.documentState.reload()
+                } label: {
+                    Text("Reload")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+                .openClawProminentButton()
+                .accessibilityIdentifier("ControlUIHub.Reload")
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background { OpenClawProBackground() }
         }
     }
 

@@ -1,0 +1,2 @@
+# Exact regression growth for task-bound desktop admission, same-request control retention, noVNC stalled-handshake recovery, and own/child question-to-viewer flows. The pinned stack base enforces the aggregate ratchet; shared baseline unchanged.
+410

@@ -108,10 +108,24 @@ permissions without Goal Resume. Do not wait in `ask_user` for Goal Resume or
 any native session control that requires an idle session. If such a control is
 genuinely needed, explain it and finish the current turn so the user can use it.
 
-Opening the link does not answer the question. **Ready to recheck** returns
+For a step on the already selected cloud desktop, the agent includes
+`requiredAction.desktop: { source: { kind: "environment", environmentId } }`.
+The Gateway admits only an environment attached to or running that task. The
+question retains its existing request ID, session, and run identity. **Open
+desktop** shows that exact source view-only; use **Take control** for the manual
+step. A new required step starts view-only even when an earlier step used the
+same desktop. Host and paired-node targets are not supported by this handoff.
+
+Opening the desktop, reconnecting it, or opening the link does not answer the question. **Ready to recheck** returns
 `status: "ready_to_verify"`: the agent must re-observe the original target through
 its owning tool. The OpenClaw agent runtime refreshes its tool catalog before
-continuing so a completed sign-in can make its tools available. The answer is not proof of authentication, permission, or
+continuing so a completed sign-in can make its tools available. For a desktop
+step, it uses `computer` with `action: "take_control"` on the same desktop:
+pass `environmentId` for a conversation attachment, or omit selectors when the
+computer is already bound to the worker/remote-exec session. This returns the
+human viewer to view-only and obtains a fresh observation before proceeding.
+Never switch to another desktop when that bound target is unavailable.
+The answer is not proof of authentication, permission, or
 successful completion, and it grants no additional authority. The agent
 continues from the conversation's recorded progress only when the prerequisite
 is actually satisfied, without repeating completed or uncertain side effects.

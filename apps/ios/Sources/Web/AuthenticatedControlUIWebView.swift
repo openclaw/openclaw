@@ -436,6 +436,8 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
     let deviceSettingsBridge: IOSDeviceSettingsBridge?
     let nativeAuth: ControlUINativeGatewayAuthHandler
     private let embedCompatibility: DashboardEmbedCompatibility?
+    private let documentState: AuthenticatedControlUIDocumentState?
+    private var reloadID: Int
     private var compatibilityDocumentID: UUID?
     private let url: URL
     private var authScript: String?
@@ -466,6 +468,7 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         deviceSettingsBridge: IOSDeviceSettingsBridge? = nil,
         usesNativeEmbed: Bool = false,
         embedCompatibility: DashboardEmbedCompatibility? = nil,
+        documentState: AuthenticatedControlUIDocumentState? = nil,
         accessCookie: HTTPCookie? = nil,
         accessAdmissionIsCurrent: AuthenticatedControlUIAccessCookieInstaller.Admission? = nil,
         accessResponseCheck: (@Sendable (HTTPURLResponse) async throws -> Void)? = nil,
@@ -482,6 +485,8 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         self.deviceSettingsBridge = deviceSettingsBridge
         self.usesNativeEmbed = usesNativeEmbed
         self.embedCompatibility = embedCompatibility
+        self.documentState = documentState
+        self.reloadID = documentState?.reloadID ?? 0
         self.expectedOrigin = GatewayTLSAuthority(url: url)
         self.allowedMainFramePathPrefix = allowedMainFramePathPrefix.map(Self.normalizedPath)
         self.onMainFrameNavigationOutsideScope = onMainFrameNavigationOutsideScope
@@ -558,6 +563,17 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         self.nativeAuth.webView = webView
     }
 
+    func reloadIfRequested(in webView: WKWebView) {
+        guard let documentState, self.reloadID != documentState.reloadID else { return }
+        self.reloadID = documentState.reloadID
+        Task { @MainActor [weak self, weak webView] in
+            guard let self, let webView, await self.prepareInitialLoad(),
+                  self.nativeAuth.webView === webView
+            else { return }
+            _ = webView.load(URLRequest(url: self.url, cachePolicy: .reloadIgnoringLocalCacheData))
+        }
+    }
+
     static func embedScript(url: URL, isPad: Bool = UIDevice.current.userInterfaceIdiom == .pad) -> String? {
         let formFactor = isPad ? "pad" : "phone"
         return IOSDeviceSettingsBridge.originGatedScript(
@@ -566,6 +582,7 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         self.activeNavigation = navigation
+        self.documentState?.phase = .loading
         self.deviceSettingsBridge?.willNavigate(in: webView)
         self.nativeAuth.document.startNavigation()
         self.installUserScripts(in: webView.configuration.userContentController)
@@ -580,12 +597,16 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        guard self.activeNavigation === navigation, let compatibilityDocumentID else { return }
+        guard self.activeNavigation === navigation else { return }
+        self.documentState?.phase = .ready
+        guard let compatibilityDocumentID else { return }
         self.embedCompatibility?.didFinishLoading(documentID: compatibilityDocumentID, in: webView)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError _: any Error) {
         guard self.activeNavigation === navigation else { return }
+        self.activeNavigation = nil
+        self.documentState?.phase = .failed
         self.retireEmbedCompatibility()
         self.deviceSettingsBridge?.retireDocument(in: webView)
         self.nativeAuth.document.retire()
@@ -593,12 +614,15 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError _: any Error) {
         guard self.activeNavigation === navigation else { return }
+        self.documentState?.phase = .failed
+        self.activeNavigation = nil
         self.deviceSettingsBridge?.didFailProvisionalNavigation(in: webView)
         self.nativeAuth.document.failProvisionalNavigation()
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         self.activeNavigation = nil
+        self.documentState?.phase = .failed
         self.retireEmbedCompatibility()
         self.deviceSettingsBridge?.retireDocument(in: webView)
         self.nativeAuth.document.retire()
@@ -683,6 +707,11 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         httpErrorStatus: Int?,
         decisionHandler: @MainActor @Sendable (WKNavigationResponsePolicy) -> Void)
     {
+        if let documentState, httpErrorStatus != nil {
+            documentState.phase = .failed
+            decisionHandler(.cancel)
+            return
+        }
         guard let embedCompatibility, let httpErrorStatus else {
             decisionHandler(.allow)
             return
@@ -837,6 +866,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
     let deviceSettingsBridge: IOSDeviceSettingsBridge?
     let usesNativeEmbed: Bool
     let embedCompatibility: DashboardEmbedCompatibility?
+    let documentState: AuthenticatedControlUIDocumentState?
     let accessCookie: HTTPCookie?
     let accessAdmissionIsCurrent: AuthenticatedControlUIAccessCookieInstaller.Admission?
     let accessResponseCheck: (@Sendable (HTTPURLResponse) async throws -> Void)?
@@ -854,6 +884,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         deviceSettingsBridge: IOSDeviceSettingsBridge? = nil,
         usesNativeEmbed: Bool = false,
         embedCompatibility: DashboardEmbedCompatibility? = nil,
+        documentState: AuthenticatedControlUIDocumentState? = nil,
         accessCookie: HTTPCookie? = nil,
         accessAdmissionIsCurrent: AuthenticatedControlUIAccessCookieInstaller.Admission? = nil,
         accessResponseCheck: (@Sendable (HTTPURLResponse) async throws -> Void)? = nil,
@@ -870,6 +901,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         self.deviceSettingsBridge = deviceSettingsBridge
         self.usesNativeEmbed = usesNativeEmbed
         self.embedCompatibility = embedCompatibility
+        self.documentState = documentState
         self.accessCookie = accessCookie
         self.accessAdmissionIsCurrent = accessAdmissionIsCurrent
         self.accessResponseCheck = accessResponseCheck
@@ -889,6 +921,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
             deviceSettingsBridge: self.deviceSettingsBridge,
             usesNativeEmbed: self.usesNativeEmbed,
             embedCompatibility: self.embedCompatibility,
+            documentState: self.documentState,
             accessCookie: self.accessCookie,
             accessAdmissionIsCurrent: self.accessAdmissionIsCurrent,
             accessResponseCheck: self.accessResponseCheck,
@@ -989,6 +1022,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
             return
         }
         self.applyAppearance(to: webView)
+        context.coordinator.reloadIfRequested(in: webView)
         // Connection changes recreate the view via `.id`; unrelated SwiftUI passes must not reload it.
     }
 

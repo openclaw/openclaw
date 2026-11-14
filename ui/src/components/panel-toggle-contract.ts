@@ -59,6 +59,9 @@ export type BrowserPanelToggleDetail = {
 };
 
 export type DesktopPanelToggleDetail = {
+  /** Exact pending question request; opening is not its completion. */
+  requestId?: string;
+  sessionKey?: string;
   dock?: "bottom" | "right";
   expanded?: boolean;
   open?: boolean;

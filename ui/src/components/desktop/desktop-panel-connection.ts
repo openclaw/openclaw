@@ -1,5 +1,6 @@
 import type { DesktopObserveResult } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { DesktopPanelToggleDetail } from "../panel-toggle-contract.ts";
 import type { DesktopConnectionHandle } from "./desktop-client.ts";
 import type { DesktopSizingMode } from "./desktop-panel-state.ts";
 
@@ -29,11 +30,23 @@ export class DesktopConnectionHandoff {
   private current: DesktopConnectionHandle | null = null;
   private retained: DesktopConnectionHandle | null = null;
   private connected = false;
+  private requiredActionRequestId: string | undefined;
   private abandonObservation: (() => void) | undefined;
   private hiddenTimer: ReturnType<typeof setTimeout> | null = null;
 
   get handle(): DesktopConnectionHandle | null {
     return this.connected ? this.current : null;
+  }
+
+  beginRequiredAction(request: DesktopPanelToggleDetail | null, reset: () => void): void {
+    if (
+      request?.requestId &&
+      request.environmentId &&
+      request.requestId !== this.requiredActionRequestId
+    ) {
+      reset();
+      this.requiredActionRequestId = request.requestId;
+    }
   }
 
   begin(retainViewer: boolean): void {
@@ -96,7 +109,7 @@ export class DesktopConnectionHandoff {
   }
 
   markConnected(): void {
-    // A returned handle or observe result is not the RFB authentication boundary.
+    // A handle, observation, or RFB authentication is not a painted primary image.
     this.abandonObservation = undefined;
     this.connected = true;
     const retained = this.retained;

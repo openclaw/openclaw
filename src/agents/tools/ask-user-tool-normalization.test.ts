@@ -74,6 +74,7 @@ it("represents a required manual step through the existing attributed question c
       reason: "The desktop is waiting for a manual device step.",
       instructions: "Complete the visible step, then return for a fresh check.",
       url: "https://example.test/manual-step",
+      desktop: { source: { kind: "environment", environmentId: "worker:manual-step" } },
     },
   });
   expect(result).toMatchObject({
@@ -83,6 +84,7 @@ it("represents a required manual step through the existing attributed question c
         questionId: "required_action",
         header: "Manual step",
         url: "https://example.test/manual-step",
+        desktop: { source: { kind: "environment", environmentId: "worker:manual-step" } },
         isOther: false,
         options: [{ label: "Ready to recheck" }, { label: "Stop this task" }],
       },
@@ -92,6 +94,17 @@ it("represents a required manual step through the existing attributed question c
 });
 
 it.each([
+  ...[
+    { kind: "host" },
+    { kind: "node", nodeId: "node:other" },
+    { kind: "environment", environmentId: "" },
+  ].map((source) => ({
+    requiredAction: {
+      reason: "Blocked",
+      instructions: "Complete the manual step",
+      desktop: { source },
+    },
+  })),
   {
     requiredAction: {
       reason: "Blocked",

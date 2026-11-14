@@ -1,0 +1,2 @@
+# Exact first-image regression growth: metadata-before-pixels, queued PNG decoding, input gating, stale generation, and observer cleanup. Shared baseline unchanged.
+334

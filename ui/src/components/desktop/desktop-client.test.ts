@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
+/* eslint-disable no-underscore-dangle -- This external RFB mock reproduces the pinned noVNC 1.7.0 private instance contract. */
 
 import { createRoot, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { DesktopClient } from "./desktop-client.ts";
 import { createDesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
+import type { NoVncFirstImageHost } from "./novnc-first-image.ts";
 
 class FakeSocket extends EventTarget {
   readonly url: string;
@@ -24,6 +26,49 @@ function createFakeRfb() {
     resizeSession = false;
     readonly disconnect = vi.fn();
     readonly sendKey = vi.fn();
+    autoFirstImage = true;
+    _display: NoVncFirstImageHost["_display"] = {
+      width: 2,
+      height: 2,
+      _viewportLoc: { x: 0, y: 0, w: 2, h: 2 },
+      _damageBounds: { left: 65535, top: 65535, right: 0, bottom: 0 },
+      _damage(x, y, width, height) {
+        this._damageBounds.left = Math.min(this._damageBounds.left, x);
+        this._damageBounds.top = Math.min(this._damageBounds.top, y);
+        this._damageBounds.right = Math.max(this._damageBounds.right, x + width);
+        this._damageBounds.bottom = Math.max(this._damageBounds.bottom, y + height);
+      },
+      _scanRenderQ() {},
+      pending: () => false,
+      resize(width, height) {
+        this.width = this._viewportLoc.w = width;
+        this.height = this._viewportLoc.h = height;
+        this._damage(0, 0, width, height);
+        this.flip();
+      },
+      flip() {
+        this._damageBounds = { left: 65535, top: 65535, right: 0, bottom: 0 };
+      },
+    };
+    _handleDataRect() {
+      this._display._damage(0, 0, 2, 2);
+      return true;
+    }
+    readonly originals = {
+      data: Object.getOwnPropertyDescriptor(FakeRfb.prototype, "_handleDataRect"),
+      damage: Object.getOwnPropertyDescriptor(this._display, "_damage"),
+      scan: Object.getOwnPropertyDescriptor(this._display, "_scanRenderQ"),
+      resize: Object.getOwnPropertyDescriptor(this._display, "resize"),
+      flip: Object.getOwnPropertyDescriptor(this._display, "flip"),
+    };
+    override dispatchEvent(event: Event): boolean {
+      const result = super.dispatchEvent(event);
+      if (event.type === "connect" && this.autoFirstImage) {
+        this._handleDataRect();
+        this._display.flip();
+      }
+      return result;
+    }
 
     // Match noVNC's EventTargetMixin, which accepts no listener options.
     override addEventListener(type: string, callback: EventListenerOrEventListenerObject | null) {
@@ -97,6 +142,88 @@ describe("DesktopClient", () => {
     expect(onSecurityFailure).not.toHaveBeenCalled();
   });
 
+  it.each(["handshake", "first image"])(
+    "expires stalled %s once and leaves a ready replacement connected",
+    async (stage) => {
+      vi.useFakeTimers();
+      const { instances, connect } = setupClient();
+      const onConnect = vi.fn();
+      const onDisconnect = vi.fn();
+      try {
+        const stalled = await connect({ onConnect, onDisconnect });
+        instances[0]!.autoFirstImage = false;
+        if (stage === "first image") {
+          instances[0]!.dispatchEvent(new Event("connect"));
+        }
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(onDisconnect).toHaveBeenCalledExactlyOnceWith({ clean: false });
+        expect(instances[0]!.disconnect).toHaveBeenCalledOnce();
+        instances[0]!.dispatchEvent(new Event("connect"));
+        instances[0]!.dispatchEvent(new CustomEvent("disconnect", { detail: { clean: true } }));
+        expect(onConnect).not.toHaveBeenCalled();
+        expect(onDisconnect).toHaveBeenCalledTimes(1);
+        stalled.disconnect();
+
+        const replacement = await connect({ onConnect, onDisconnect });
+        instances[1]!.dispatchEvent(new Event("connect"));
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(onConnect).toHaveBeenCalledOnce();
+        expect(onDisconnect).toHaveBeenCalledTimes(1);
+        expect(instances[1]!.disconnect).not.toHaveBeenCalled();
+        replacement.disconnect();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(onDisconnect).toHaveBeenCalledTimes(1);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["paint", "disconnect", "stale"])(
+    "gates input until primary pixels and restores first-image hooks after %s",
+    async (ending) => {
+      const { instances, canvas, connect } = setupClient();
+      const onConnect = vi.fn();
+      const keys = vi.fn();
+      canvas.addEventListener("keydown", keys);
+      let current = true;
+      const handle = await connect({ onConnect, isCurrent: () => current });
+      const rfb = instances[0]!;
+      rfb.autoFirstImage = false;
+      rfb.dispatchEvent(new Event("connect"));
+      rfb._display.resize(3, 3);
+      handle.sendText("hidden");
+      handle.sendBackspace();
+      expect([
+        rfb.viewOnly,
+        onConnect.mock.calls.length,
+        keys.mock.calls.length,
+        rfb.sendKey.mock.calls.length,
+      ]).toEqual([true, 0, 0, 0]);
+      if (ending === "disconnect") {
+        handle.disconnect();
+      }
+      if (ending === "stale") {
+        current = false;
+      }
+      rfb._handleDataRect();
+      rfb._display.flip();
+      expect(onConnect).toHaveBeenCalledTimes(ending === "paint" ? 1 : 0);
+      expect(
+        Object.getOwnPropertyDescriptor(Object.getPrototypeOf(rfb), "_handleDataRect"),
+      ).toEqual(rfb.originals.data);
+      expect(Object.hasOwn(rfb, "_handleDataRect")).toBe(false);
+      for (const key of ["damage", "scan", "resize", "flip"] as const) {
+        const method = key === "damage" ? "_damage" : key === "scan" ? "_scanRenderQ" : key;
+        expect(Object.getOwnPropertyDescriptor(rfb._display, method)).toEqual(rfb.originals[key]);
+      }
+      handle.sendText("visible");
+      expect(keys).toHaveBeenCalledTimes(ending === "paint" ? 7 : 0);
+      handle.disconnect();
+    },
+  );
+
   it.each([
     { trusted: true, held: false },
     { trusted: true, held: true },
@@ -104,8 +231,9 @@ describe("DesktopClient", () => {
   ])(
     "reconciles keyboard focus snapshots only when trusted=$trusted, held=$held",
     async ({ trusted, held }) => {
-      const { canvas, connect } = setupClient();
+      const { instances, canvas, connect } = setupClient();
       const handle = await connect();
+      instances[0]!.dispatchEvent(new Event("connect"));
       const input = document.createElement("textarea");
       const [keyboard, dispose] = createRoot(
         (disposeRoot) => [createDesktopMobileKeyboard(() => handle), disposeRoot] as const,
@@ -157,8 +285,9 @@ describe("DesktopClient", () => {
   it.each(["blur", "reset", "replacement", "view-only"])(
     "does not restore old keyboard modifiers after %s",
     async (transition) => {
-      const { canvas, connect } = setupClient();
+      const { instances, canvas, connect } = setupClient();
       const original = await connect();
+      instances[0]!.dispatchEvent(new Event("connect"));
       let handle = original;
       let controlling = true;
       const input = document.createElement("textarea");
@@ -188,6 +317,7 @@ describe("DesktopClient", () => {
         } else if (transition === "replacement") {
           original.disconnect();
           handle = await connect();
+          instances[1]!.dispatchEvent(new Event("connect"));
         } else {
           controlling = false;
         }
@@ -280,13 +410,15 @@ describe("DesktopClient", () => {
 
     expect(instances[0]).toMatchObject({
       background: "rgb(8, 8, 8)",
-      viewOnly: false,
+      viewOnly: true,
       scaleViewport: false,
     });
     expect(instances[0]?.options).toEqual({
       credentials: { username: "operator", password: "secret" },
     });
 
+    instances[0]!.dispatchEvent(new Event("connect"));
+    expect(instances[0]?.viewOnly).toBe(false);
     handle.setSizingMode("fit");
     expect(instances[0]?.scaleViewport).toBe(true);
     handle.sendKeyboardEvent(new KeyboardEvent("keydown", { key: "k", code: "KeyK" }));
@@ -420,12 +552,13 @@ describe("DesktopClient", () => {
     ["CR", "é\rΩ", ["é", "Enter", "Ω"]],
     ["blank lines", "\n\r\n\r", ["Enter", "Enter", "Enter"]],
   ] as const)("sends %s text line breaks as single Enter presses", async (_name, text, keys) => {
-    const { canvas, connect } = setupClient();
+    const { instances, canvas, connect } = setupClient();
     const events: KeyboardEvent[] = [];
     const onKey = (event: KeyboardEvent) => events.push(event);
     canvas.addEventListener("keydown", onKey);
     canvas.addEventListener("keyup", onKey);
     const handle = await connect();
+    instances[0]!.dispatchEvent(new Event("connect"));
 
     handle.sendText(text);
 

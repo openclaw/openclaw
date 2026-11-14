@@ -241,6 +241,10 @@ export function createDesktopPanel(
     if (!host.embedded) {
       dockLayout.setOpen(true);
     }
+    // A new human step opens its exact source view-only, even if a previous
+    // request left this same desktop under manual control. Reopening the same
+    // pending step preserves its viewer; reconnect never answers the question.
+    handoff.beginRequiredAction(detail, () => returnToPicker("explicit"));
     const environmentId = detail?.environmentId ?? (detail?.open === true ? currentId : null);
     if (environmentId) {
       void connectRequestedEnvironment(environmentId, Boolean(detail?.environmentId));

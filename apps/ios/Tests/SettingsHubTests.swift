@@ -407,16 +407,27 @@ final class DashboardResponseFixture: NSObject, WKNavigationDelegate {
     private let url: URL
     private let webView: WKWebView
     private let coordinator: AuthenticatedControlUIWebViewCoordinator
+    private let documentState: AuthenticatedControlUIDocumentState?
     private var loaded: CheckedContinuation<Void, Never>?
 
-    init(url: URL) {
+    init(
+        url: URL,
+        documentState: AuthenticatedControlUIDocumentState? = nil,
+        usesEmbedCompatibility: Bool = true)
+    {
         self.url = url
+        self.documentState = documentState
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         self.webView = WKWebView(frame: .zero, configuration: configuration)
         self.coordinator = AuthenticatedControlUIWebViewCoordinator(
-            url: url, tls: nil, usesNativeEmbed: true, embedCompatibility: self.compatibility)
+            url: url,
+            tls: nil,
+            usesNativeEmbed: usesEmbedCompatibility,
+            embedCompatibility: usesEmbedCompatibility ? self.compatibility : nil,
+            documentState: documentState)
         super.init()
+        self.coordinator.attachNativeAuthDocument(to: self.webView)
         self.webView.navigationDelegate = self
     }
 
@@ -428,6 +439,30 @@ final class DashboardResponseFixture: NSObject, WKNavigationDelegate {
         }
         let text = try await self.webView.evaluateJavaScript("document.documentElement?.innerText ?? ''")
         return text as? String ?? ""
+    }
+
+    func terminateDocument() {
+        self.coordinator.webViewWebContentProcessDidTerminate(self.webView)
+    }
+
+    func reload() async {
+        await withCheckedContinuation { continuation in
+            self.loaded = continuation
+            self.documentState?.reload()
+            self.coordinator.reloadIfRequested(in: self.webView)
+        }
+    }
+
+    func stop() {
+        AuthenticatedControlUIWebView.dismantleUIView(self.webView, coordinator: self.coordinator)
+    }
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        self.coordinator.webView(webView, didStartProvisionalNavigation: navigation)
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        self.coordinator.webView(webView, didCommit: navigation)
     }
 
     func webView(
@@ -442,15 +477,18 @@ final class DashboardResponseFixture: NSObject, WKNavigationDelegate {
         }
     }
 
-    func webView(_: WKWebView, didFinish _: WKNavigation!) {
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        self.coordinator.webView(webView, didFinish: navigation)
         self.finishLoad()
     }
 
-    func webView(_: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError _: any Error) {
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+        self.coordinator.webView(webView, didFailProvisionalNavigation: navigation, withError: error)
         self.finishLoad()
     }
 
-    func webView(_: WKWebView, didFail _: WKNavigation!, withError _: any Error) {
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+        self.coordinator.webView(webView, didFail: navigation, withError: error)
         self.finishLoad()
     }
 

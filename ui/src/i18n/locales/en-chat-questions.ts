@@ -14,6 +14,9 @@ const enChatQuestions = {
       answer: "Answer",
       answerPlaceholder: "{label}",
       openLink: "Open link",
+      openDesktop: "Open desktop",
+      desktopStepHint:
+        "Take control to complete the step, then choose Ready to recheck. Opening or reconnecting is not completion.",
       externalStepHint: "Complete the step in the new tab, then return here to submit your answer.",
       submit: "Submit",
       next: "Next",

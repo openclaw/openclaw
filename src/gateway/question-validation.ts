@@ -16,6 +16,18 @@ export function questionShapeError(
       return `duplicate question id '${question.questionId}'`;
     }
     ids.add(question.questionId);
+    if (
+      question.desktop &&
+      (questions.length !== 1 ||
+        question.questionId !== "required_action" ||
+        question.isOther !== false ||
+        question.isSecret ||
+        question.secretStore ||
+        question.resource ||
+        question.multiSelect)
+    ) {
+      return "desktop handoffs require one required-action question without custom, secret, or resource input";
+    }
     if (options.validateUrls && question.url !== undefined) {
       const url = URL.parse(question.url);
       if (!url || !hasHttpUrlPrefix(question.url) || url.username || url.password) {

@@ -41,6 +41,7 @@ export function normalizeAskUserParams(value: unknown) {
         ...(action.url ? [action.url] : []),
       ].join("\n\n"),
       ...(action.url ? { url: action.url } : {}),
+      ...(action.desktop ? { desktop: action.desktop } : {}),
       options: [{ label: REQUIRED_ACTION_READY }, { label: REQUIRED_ACTION_STOP }],
       isOther: false,
     });
@@ -153,6 +154,11 @@ export const AskUserToolSchema = Type.Object(
             maxLength: 2000,
             description:
               "External human-only step that can finish while this run waits. Never Goal Resume, an idle-session control, or approval of already authorized work.",
+          }),
+          desktop: Type.Optional({
+            ...QuestionRequestQuestionSchema.properties.desktop,
+            description:
+              "The exact already selected cloud desktop for this required step. Opens view-only; the human explicitly takes control. Use its observed environmentId, never a guessed target.",
           }),
           url: Type.Optional({
             ...QuestionRequestQuestionSchema.properties.url,
