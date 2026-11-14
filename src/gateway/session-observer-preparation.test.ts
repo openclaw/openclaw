@@ -1,14 +1,26 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePluginGenerationRetiredError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "../agents/prepared-model-runtime-admission-errors.js";
 import "../agents/utility-completion.js";
+import {
+  PluginInstanceUnavailableError,
+  PluginInventoryRetiredError,
+} from "../plugins/plugin-instance-error.js";
+import { AsyncWorkScopeClosedError } from "../shared/async-work-scope.js";
 import { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
 import {
   advanceAndFlush as advance,
+  expectBroadcast,
   useObserverSuite,
 } from "./session-observer-suite.test-support.js";
 import {
   event,
   flushObserver,
+  modelMessage,
   preparedModel,
   startAndAddToolNotes,
 } from "./session-observer.test-utils.js";
@@ -139,6 +151,43 @@ it("retries after a rejected preparation", async () => {
   expect(prepareModel).toHaveBeenCalledTimes(2);
   expect(harness.completeModel).toHaveBeenCalledOnce();
   expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
+});
+
+it.each(
+  [
+    new PreparedModelRuntimeOwnerNotPublishedError("runtime is being replaced", {
+      admissionBlocked: true,
+    }),
+    new PluginInstanceUnavailableError("codex"),
+    new PreparedModelRuntimePluginGenerationRetiredError("runtime generation retired"),
+    new PreparedModelRuntimePublicationSupersededError("runtime publication superseded"),
+    new PluginInventoryRetiredError(),
+    new AsyncWorkScopeClosedError(),
+  ].flatMap((refused) => [
+    { stage: "preparation", refused },
+    { stage: "completion", refused },
+  ]),
+)("recovers the same run after $refused.message blocks $stage", async ({ stage, refused }) => {
+  let available = false;
+  const prepareModel = vi.fn(async () => {
+    if (stage === "preparation" && !available) {
+      throw refused;
+    }
+    return { ...preparedModel(), authProfileId: available ? "current" : "retired" };
+  });
+  const completeModel = vi.fn<typeof defaultCompleteModel>(async ({ authProfileId }) => {
+    if (authProfileId === "retired") {
+      throw refused;
+    }
+    return modelMessage({ headline: "Recovered after replacement", health: "on-track" });
+  });
+  const harness = createHarness({ prepareModel, completeModel });
+  await startAndAddToolNotes(harness.observer);
+  await advance(24_000);
+  expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
+  available = true;
+  await advance(12_000);
+  expectBroadcast(harness, { runId: "run-1", headline: "Recovered after replacement" });
 });
 
 it.each([
