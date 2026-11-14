@@ -191,6 +191,11 @@ Preparation, host exchanges, cancellation observers, and settlement callbacks
 run in that task's scope. Worker creation, idle timers, and retirement use the
 pool scope so a warm worker does not retain its first caller.
 
+Resource-close receipt ports also use the pool scope. Receipt observation and
+error decoding restore the cleanup caller, including during synchronous
+servicing. Settlement replaces that caller context with the pool context so
+delayed native port closure does not retain a completed cleanup request.
+
 `captureWorkerTaskContext()` must keep the `AsyncResource` in an independent
 closure. Other task callbacks must not capture that resource through a shared
 closure: an owned task handle can remain readable after release. Release replaces
