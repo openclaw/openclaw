@@ -61,6 +61,8 @@ let interrupted = false;
 async function interrupt(exitCode: number) {
   interrupted = true;
   process.exitCode = exitCode;
+  // Preserve partial evidence before teardown can drain the process event loop.
+  await writeFile(path.join(out, "observations.json"), JSON.stringify(observations, null, 2));
   await Promise.allSettled([...cleanups].map((close) => close()));
 }
 process.once("SIGINT", () => void interrupt(130));
