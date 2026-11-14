@@ -3,6 +3,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { expect, it, vi } from "vitest";
 import type { MigrationArtifact } from "../infra/session-sqlite-migration-artifact.js";
+import * as migrationIssues from "../infra/session-sqlite-migration-issues.js";
 import {
   createSessionSqliteMigrationRun,
   recordCompletedMigrationMoves,
@@ -384,3 +385,36 @@ it.each(["recorded", "adopted"] as const)(
     ]);
   },
 );
+
+it("classifies shared target findings once per inventory and refreshes changed manifests", async () => {
+  await withOpenClawTestState({ label: "doctor-shared-target-findings" }, async (state) => {
+    const { moves, recordRun, inventory } = createRetainedDuplicateArchives(state);
+    const run = recordRun(moves);
+    const target = run.manifest.targets[0]!;
+    target.issues = Array.from({ length: 64 }, () => ({
+      code: "historical_transcript_deferred",
+      message: "Synthetic retained historical transcript",
+    }));
+    writeSessionSqliteMigrationManifest(run);
+    const classify = vi.spyOn(migrationIssues, "isSessionSqliteMigrationWarning");
+    try {
+      const before = inventory();
+      expect(before.report.artifacts.map(({ reason }) => reason)).toEqual([
+        "unreferenced-history",
+        "unreferenced-history",
+      ]);
+      const warningChecks = classify.mock.calls.length;
+      target.issues.push({ code: "integrity_check_failed", message: "Synthetic blocking issue" });
+      writeSessionSqliteMigrationManifest(run);
+      classify.mockClear();
+      const after = inventory();
+      expect(after.report.artifacts.map(({ reason }) => reason)).toEqual([
+        "incomplete-recovery-operation",
+        "incomplete-recovery-operation",
+      ]);
+      expect([warningChecks, classify.mock.calls.length]).toEqual([64, 65]);
+    } finally {
+      classify.mockRestore();
+    }
+  });
+});
