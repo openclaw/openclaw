@@ -113,12 +113,13 @@ export function createGatewayConnectionState(params: {
         const policyConfig = projection?.getPolicyConfig() ?? cfg;
         const prepared = projection
           ? {
-              sharing: prepareProjectedSessionSharing({
-                cfg: policyConfig,
-                client,
-                isMember: (target, identity) =>
-                  projection.hasMembership(target.storePath, target.storeKey, identity),
-              }),
+              sharing: () =>
+                prepareProjectedSessionSharing({
+                  cfg: policyConfig,
+                  client,
+                  isMember: (target, identity) =>
+                    projection.hasMembership(target.storePath, target.storeKey, identity),
+                }),
               target: (key: string, owner?: string) => {
                 const scope = resolveSessionEventAgentScope(cfg, key, owner);
                 return scope?.[1] ? projection.sharingTarget({ key, agentId: scope[1] }) : null;

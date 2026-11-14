@@ -1,0 +1,3 @@
+# Extend the real broadcast/Stop regression with preparation counts: two admin
+# recipients need presentation sharing only; no target-sharing authorization work.
+5
