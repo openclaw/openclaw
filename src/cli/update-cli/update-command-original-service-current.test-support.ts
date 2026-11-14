@@ -150,6 +150,7 @@ export function registerCurrentF3Controls(fixture: () => OriginalServiceFixture)
     "own-rebind-without-stop",
     "own-compensated-rebind-without-stop",
     "own-pin-rebind",
+    "own-environment-rebind",
     "foreign-pin",
     "unrelated-replacement",
     "revoked",
@@ -161,8 +162,25 @@ export function registerCurrentF3Controls(fixture: () => OriginalServiceFixture)
       ...managedDefinition,
       workingDirectory: state.home,
       managedDefinition,
-      managedOverrides: {},
+      managedOverrides:
+        scenario === "own-environment-rebind"
+          ? { environment: { keys: ["OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS"] } }
+          : {},
+      environment: {
+        ...managedDefinition.environment,
+        ...(scenario === "own-environment-rebind"
+          ? { OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS: "120000" }
+          : {}),
+      },
     };
+    if (scenario === "own-environment-rebind") {
+      const dropIn = state.path("operator.conf");
+      await fs.writeFile(
+        dropIn,
+        "[Service]\nEnvironment=OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS=120000\n",
+      );
+      serviceState.command.definitionPaths = [dropIn];
+    }
     before.serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
       state: serviceState,
       root: rootA,
@@ -249,6 +267,7 @@ export function registerCurrentF3Controls(fixture: () => OriginalServiceFixture)
           workingDirectory: managedDefinition.workingDirectory,
           preserveAutoStart: true,
         });
+        expect(args.environment).toEqual(managedDefinition.environment);
         serviceState.command = structuredClone(originalCommand);
         commitDaemonRuntimePin(pinScope, args.runtimePinUpdate, serviceState.command);
       });
@@ -342,6 +361,12 @@ export function registerCurrentF3Controls(fixture: () => OriginalServiceFixture)
         );
       }
       expect(await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!)).toEqual(bytes);
+      if (scenario === "own-environment-rebind") {
+        expect(serviceState.command).toEqual(originalCommand);
+        expect(await fs.readFile(state.path("operator.conf"), "utf8")).toBe(
+          "[Service]\nEnvironment=OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS=120000\n",
+        );
+      }
     });
   });
 

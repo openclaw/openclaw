@@ -1,2 +1,0 @@
-# Extends the existing real-worker contention regression to cover unrelated-session progress.
-18

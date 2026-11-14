@@ -290,6 +290,9 @@ openclaw codex archive <thread-id> --confirm-no-other-runner [--agent <id>] [--h
 - `--cursor <cursor>` continues one host page and therefore requires `--host`.
 - `--json` prints the structured Gateway response.
 
+With `--json`, Ctrl-C or SIGTERM stops a pending `sessions` catalog read without
+printing a late result; the CLI exits with status 130 or 143.
+
 All three commands accept `--agent <id>` and inherit `--url`, `--token`, and `--timeout <ms>` from the
 Gateway client. Session listing defaults to 75,000 ms so cold paired-node
 catalogs can complete. Continue and archive default to 30,000 ms. They also expose the shared

@@ -1192,7 +1192,6 @@ src/agents/plugin-text-transforms.ts	4
 src/agents/prepared-model-catalog.ts	1
 src/agents/prepared-model-catalog.worker.ts	1
 src/agents/prepared-model-runtime.configured.ts	1
-src/agents/prepared-model-runtime.facts.ts	1
 src/agents/prepared-model-runtime.ts	1
 src/agents/provider-attribution.ts	5
 src/agents/provider-auth-aliases.ts	1
@@ -1700,7 +1699,6 @@ src/gateway/plugin-activation-runtime-config.ts	2
 src/gateway/probe.ts	1
 src/gateway/restart-trace.ts	2
 src/gateway/secret-input-paths.ts	1
-src/gateway/server-broadcast.ts	1
 src/gateway/server-chat-state.ts	1
 src/gateway/server-chat.ts	3
 src/gateway/server-core-runtime.ts	1
@@ -2070,7 +2068,6 @@ src/plugins/host-hook-runtime.ts	1
 src/plugins/host-hook-scheduled-turns.ts	4
 src/plugins/host-hook-state.ts	6
 src/plugins/install-managed-npm-state.ts	2
-src/plugins/install-npm-metadata.ts	1
 src/plugins/install-persistence.ts	1
 src/plugins/install-record-commit.ts	2
 src/plugins/install-transaction.ts	3

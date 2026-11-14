@@ -42,7 +42,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { VERSION } from "../../version.js";
-import { CLI_NAME } from "../cli-name.js";
+import { formatGatewayServiceRootRedirect } from "../daemon-cli/shared.js";
 import {
   DEFAULT_PACKAGE_NAME,
   assertGlobalUpdateOwner,
@@ -331,6 +331,9 @@ export async function resolveUpdateCommandTarget(
         managedServiceRoot = managedServicePlan.serviceRoot;
         managedServiceNodeRunner = managedServicePlan.nodeRunner;
         root = managedServiceRootRedirect?.root ?? discoveredRoot;
+        if (managedServiceRootRedirect) {
+          warn(formatGatewayServiceRootRedirect(managedServiceRootRedirect));
+        }
         if (!opts.json) {
           const { rootRedirect, nodeRunner } = managedServicePlan;
           if (rootRedirect) {
@@ -340,11 +343,6 @@ export async function resolveUpdateCommandTarget(
             defaultRuntime.log(
               theme.warn(
                 `Shell OpenClaw root differs from the managed gateway service root: ${rootRedirect.previousRoot}`,
-              ),
-            );
-            defaultRuntime.log(
-              theme.muted(
-                `After the update, make sure \`${CLI_NAME}\` on PATH resolves to the managed service root or reinstall the gateway service from the shell install you want to use.`,
               ),
             );
             if (nodeRunner) {
@@ -447,10 +445,19 @@ export async function resolveUpdateCommandTarget(
             packageInstallEnv = withNodeRuntimePath(packageInstallEnv, packageUpdateNodeRunner);
           }
           if (packageInstallTarget.manager === "npm") {
-            const destination = await inspectNpmGlobalDestination(root, packageInstallTarget);
+            const destination = await inspectNpmGlobalDestination(
+              root,
+              packageInstallTarget,
+              opts.dryRun,
+            );
             if (destination.kind !== "owned" && destination.kind !== "empty") {
               await refuseUpdate(destination.reason, destination.message, destination.failureFacts);
               return undefined;
+            }
+            if (destination.kind === "owned" && destination.interruptedLink) {
+              warn(
+                `${opts.dryRun ? "Would restore" : "Restored"} the npm package link an interrupted update left at ${destination.interruptedLink}.`,
+              );
             }
           }
           const diskWarning = createLowDiskSpaceWarning({

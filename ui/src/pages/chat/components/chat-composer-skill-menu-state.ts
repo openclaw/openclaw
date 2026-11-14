@@ -7,6 +7,7 @@ import {
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
+import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 
 // Display titles may use any script (including NFD combining marks);
@@ -209,8 +210,8 @@ export function createSkillMenu() {
       if (!currentTextarea) {
         return;
       }
-      currentTextarea.focus({ preventScroll: true });
-      currentTextarea.setSelectionRange(nextCaret, nextCaret);
+      focusComposerInput(currentTextarea, { preventScroll: true });
+      selectComposerInput(currentTextarea, nextCaret, nextCaret);
     });
   }
 

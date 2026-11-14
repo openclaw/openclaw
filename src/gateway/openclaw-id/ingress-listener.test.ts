@@ -2,9 +2,13 @@ import fs from "node:fs";
 import http, { type IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
 import { syntheticPeerAddress } from "../../../packages/openclaw-id-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   authorizeHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
@@ -16,6 +20,7 @@ import {
   startOpenClawIdIngressListener,
   type OpenClawIdIngressListener,
 } from "./ingress-listener.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.js";
 import { upstreamHeaders } from "./tunnel-child/headers.js";
 import { setOpenClawIdTunnelPrincipalResolver } from "./tunnel-principal.js";
 
@@ -31,7 +36,13 @@ let dir: string | undefined;
 let started: OpenClawIdIngressListener | undefined;
 let gateway: http.Server | undefined;
 
+beforeEach(() =>
+  setRuntimeConfigSnapshot({
+    gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
+  }),
+);
 afterEach(async () => {
+  clearRuntimeConfigSnapshot();
   setOpenClawIdTunnelPrincipalResolver(undefined);
   await started?.close();
   gateway?.close();

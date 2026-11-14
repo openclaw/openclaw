@@ -9,10 +9,15 @@
 // --plain-result exercises object consumers instead of retained serialized selection.
 // --list-shape runtime-search exercises cold runtime-label rejection; --acp-rows gives one
 // third of rows persisted ACP ownership. --source-ref pins runtime owners to a Git revision.
+// Use --source-ref working-tree for identical loader instrumentation on an uncommitted candidate.
 // --archived-sessions fixes the archive population; --row-updates-per-list publishes metadata
 // writes per logical second, with --row-update-population and --row-update-field selecting them.
 // --search-discovery measures the real sessions_search inventory sweep, excluding transcript FTS.
+// --active-runs 30 holds synthetic runs active; discovery also reports warm page preparation
+// at offsets 0/3600/7200/12800 after the measured sweep (outside CPU/allocation samples).
 // Use --list-shape all --sessions 3500 --archived-sessions 3000 --updates-per-list 0.
+// --list-shape people --row-updates-per-list 1 --row-update-field inputTokens measures
+// selection invalidation under display-only churn. --count-visits also counts owner projections.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -30,6 +35,7 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js
 import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
+import type { SessionListDiagnostics } from "../../src/gateway/session-list-diagnostics.types.js";
 import type {
   GatewaySessionRow,
   SessionsListResult,
@@ -69,6 +75,7 @@ const { values } = parseArgs({
     "identified-viewer": { type: "boolean", default: false },
     "plain-result": { type: "boolean", default: false },
     "search-discovery": { type: "boolean", default: false },
+    "active-runs": { type: "string", default: "0" },
   },
 });
 assert(values["state-dir"], "--state-dir must name a new synthetic directory");
@@ -80,6 +87,10 @@ assert(
   "Work-count instrumentation is not a timing/allocation run",
 );
 // Pin only the runtime projection owners; fixture, transport, and measurement stay identical.
+const readSource = (file: string) =>
+  values["source-ref"] && values["source-ref"] !== "working-tree"
+    ? execFileSync("git", ["show", `${values["source-ref"]}:${file}`], { encoding: "utf8" })
+    : readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
 if (values["source-ref"]) {
   const sources = new Map(
     [
@@ -95,11 +106,12 @@ if (values["source-ref"]) {
       "src/gateway/session-list-view-cache.ts",
       "src/gateway/session-sharing-read.ts",
       "src/gateway/session-row-presentation.ts",
+      "src/gateway/session-row-projection-revisions.ts",
+      "src/gateway/session-row-projection.ts",
+      "src/gateway/session-row-projection-publication.ts",
+      "src/gateway/session-row-publication.ts",
       "src/agents/tools/sessions-search-tool.ts",
-    ].map((file) => [
-      new URL(`../../${file}`, import.meta.url).href,
-      execFileSync("git", ["show", `${values["source-ref"]}:${file}`], { encoding: "utf8" }),
-    ]),
+    ].map((file) => [new URL(`../../${file}`, import.meta.url).href, readSource(file)]),
   );
   registerHooks({
     load(url, context, nextLoad) {
@@ -117,6 +129,7 @@ const integer = (
     | "iterations"
     | "warmup"
     | "updates-per-list"
+    | "active-runs"
     | "archived-sessions"
     | "row-updates-per-list",
   min = 1,
@@ -126,6 +139,7 @@ const agents = integer("agents", 4);
 const iterations = integer("iterations");
 const warmup = integer("warmup");
 const updatesPerList = integer("updates-per-list", 0);
+const activeRuns = integer("active-runs", 0);
 const archivedSessions =
   values["archived-sessions"] === undefined ? undefined : integer("archived-sessions", 0);
 const rowUpdatesPerList = integer("row-updates-per-list", 0);
@@ -134,30 +148,14 @@ assert(["active", "archived", "mixed"].includes(values["row-update-population"])
 assert(["updatedAt", "inputTokens", "mixed"].includes(values["row-update-field"]));
 const root = path.resolve(values["state-dir"]);
 const presentationSourceHash = createHash("sha256")
-  .update(
-    values["source-ref"]
-      ? execFileSync("git", [
-          "show",
-          `${values["source-ref"]}:src/gateway/session-row-presentation.ts`,
-        ])
-      : readFileSync(new URL("../../src/gateway/session-row-presentation.ts", import.meta.url)),
-  )
+  .update(readSource("src/gateway/session-row-presentation.ts"))
   .digest("hex");
 const filterSourceHash = createHash("sha256")
   .update(readFileSync(new URL("../../src/gateway/session-list-filters.ts", import.meta.url)))
   .digest("hex");
 const discoverySourceHash = values["search-discovery"]
   ? createHash("sha256")
-      .update(
-        values["source-ref"]
-          ? execFileSync("git", [
-              "show",
-              `${values["source-ref"]}:src/agents/tools/sessions-search-tool.ts`,
-            ])
-          : readFileSync(
-              new URL("../../src/agents/tools/sessions-search-tool.ts", import.meta.url),
-            ),
-      )
+      .update(readSource("src/agents/tools/sessions-search-tool.ts"))
       .digest("hex")
   : undefined;
 const anchor = Date.UTC(2026, 9, 25);
@@ -449,6 +447,7 @@ if (values["list-shape"] && values["list-shape"] !== "mixed") {
     all: { archived: "all" },
     sidebar: { source: "sidebar", rowMode: "sidebar", limit: 100, archived: false },
     full: { source: "sessions-page", limit: 100, archived: "all" },
+    people: { source: "sessions-page", includePeople: true, limit: 100, archived: "all" },
     search: { source: "sessions-page", search: "dashboard", limit: 100, archived: "all" },
     "runtime-search": { source: "sessions-page", search: "openclaw", limit: 100, archived: "all" },
     agent: { source: "sessions-page", agentId: "reviewer", limit: 100, archived: false },
@@ -625,7 +624,9 @@ try {
       JSON.stringify(rows.filter((row) => row.entry).map((row) => [row.key, row.entry])),
     );
   }
-  const children = rows.filter((row) => row.key.startsWith("agent:main:subagent:")).slice(0, 8);
+  const children = rows
+    .filter((row) => row.key.startsWith("agent:main:subagent:"))
+    .slice(0, Math.max(8, activeRuns));
   const collectorParent = fixture.summary.stressTargets?.[0]?.sessionKey;
   const parent = rows.find(
     (row) =>
@@ -725,6 +726,10 @@ try {
     publications.publishSubagentRunChanges([next.childSessionKey], [next.runId]);
     updates++;
   };
+  assert(activeRuns <= active.length, "Fixture must contain enough children for --active-runs");
+  for (let index = 0; index < activeRuns; index++) {
+    update();
+  }
   let discovery: { pages: number; rows: number; keys: number; digest: string } | undefined;
   const readList = (opts: SessionsListParams) =>
     lists.listProjectedSessions({
@@ -969,7 +974,16 @@ try {
   };
   await run(warmup, false);
   let partitionEntriesVisited = 0;
+  let ownerProjections = 0;
   if (values["count-visits"]) {
+    const identities = projection.state.rowContext.identityProjection;
+    if (identities) {
+      const owner = identities.owner.bind(identities);
+      identities.owner = (...args) => {
+        ownerProjections++;
+        return owner(...args);
+      };
+    }
     const prepared = lists.prepareSessionRowSelection(
       projection,
       { archived: "all" },
@@ -1014,6 +1028,7 @@ try {
   const beforeSelections = workMetrics.getSessionRowSelectionMetrics();
   const before = process.threadCpuUsage();
   await run(iterations, true);
+  const measuredOwnerProjections = ownerProjections;
   const used = process.threadCpuUsage(before);
   const elapsedMs = performance.now() - started;
   await nextTurn();
@@ -1052,6 +1067,45 @@ try {
   }
   if (cpu) {
     writeFileSync(path.join(root, "cpu.cpuprofile"), JSON.stringify(cpu));
+  }
+  const discoveryPages = [];
+  if (values["search-discovery"]) {
+    for (const offset of [0, 3600, 7200, 12800]) {
+      const diagnostics: SessionListDiagnostics = {
+        startSyncCpu: () => undefined,
+        finishSyncCpu: () => {},
+        mark: () => {},
+        projection: {
+          prepareSyncMs: 0,
+          rowSyncMs: 0,
+          yieldWaitMs: 0,
+          yieldCount: 0,
+          selectedRowCount: 0,
+          dirtyRowCount: 0,
+          materializedRowCount: 0,
+          reusedRowCount: 0,
+        },
+      };
+      const pageStarted = performance.now();
+      await lists.listProjectedSessions({
+        projection,
+        opts: {
+          source: "sessions-search",
+          rowMode: "dashboard",
+          limit: 200,
+          offset,
+          archived: "all",
+          includeGlobal: true,
+          includeUnknown: false,
+        },
+        diagnostics,
+      });
+      discoveryPages.push({
+        offset,
+        wallMs: performance.now() - pageStarted,
+        ...diagnostics.projection,
+      });
+    }
   }
   const golden = {
     initial: initialGolden,
@@ -1124,6 +1178,7 @@ try {
       }),
     ),
     partitionEntriesVisited: values["count-visits"] ? partitionEntriesVisited : undefined,
+    ownerProjections: values["count-visits"] ? measuredOwnerProjections : undefined,
     partitions: {
       hits: lastPartitions.hits - firstPartitions.hits,
       misses: lastPartitions.misses - firstPartitions.misses,
@@ -1151,6 +1206,8 @@ try {
     runningCandidateSelectionsPerList: runningCandidateSelections / iterations,
     returnedRows,
     discovery,
+    discoveryPages,
+    activeRuns,
     elapsedMs,
     threadCpuMs: (used.user + used.system) / 1000,
     listCpuMsPerCall: listCpuMicros / 1000 / iterations,

@@ -105,7 +105,7 @@ it.each([
       "fetch",
       vi.fn(async (input: RequestInfo | URL) =>
         input === endpoint
-          ? Response.json({ data: [{ id: "proxy-model" }] })
+          ? Response.json({ data: [{ id: "proxy-model", object: "model", mode: "chat" }] })
           : new Response("Not Found", { status: 404 }),
       ),
     );
@@ -121,10 +121,9 @@ it.each([
       resolveProviderApiKey: () => ({ apiKey: "LITELLM_API_KEY", discoveryApiKey: "sk-test" }),
       resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
     });
-    expect(result).toMatchObject({
-      provider: { models: [expect.objectContaining({ id: "proxy-model" })] },
-      outcomes: [{ provider: "litellm", status: "ready" }],
-    });
+    expect(result).toMatchObject({ outcomes: [{ provider: "litellm", status: "ready" }] });
+    const rows = result && "provider" in result ? result.provider.models : [];
+    expect(rows.map((m) => [m.id, m.inference?.chat])).toEqual([["proxy-model", undefined]]);
   },
 );
 

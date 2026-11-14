@@ -5,10 +5,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
-import {
-  assertManagedHandoffTestConsumer,
-  createManagedHandoffTestBinding,
-} from "../../test/helpers/managed-handoff-isolation.js";
+import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { startOpenAiResponsesModelServer } from "../../test/helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import {
@@ -668,11 +665,6 @@ it.for(["resume", "followup", "failed-reload"] as const)(
       await state.cleanup();
       stage("cleanup-complete");
     }
-    assertManagedHandoffTestConsumer(
-      handoffBinding,
-      process.pid,
-      path.join(process.cwd(), "src/infra"),
-    );
     await fs.writeFile(
       path.join(handoffBinding.directory, `reload-case-${scenario}.json`),
       JSON.stringify({

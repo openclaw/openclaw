@@ -33,7 +33,7 @@ Public contract between plugins/core; changes can affect bundled + third-party p
 ## Versioned Required Capabilities
 
 - Always: shipped Plugin SDK parameter contract gains required host authority → versioned type requiring it. Legacy type source-compatible for documented deprecation window; migrate every bundled/internal caller in same change.
-- Always: generic closure-bound host capabilities. Bind every exposed tool, preparer, callback, approval operation, native-action surface. Retained copies must fail after owner/capability closure, including closure during awaited policy work.
+- Always: generic closure-bound host capabilities. Bind every exposed tool, preparer, callback, approval operation, native-action surface. Retained copies must fail on the next call after owner/capability closure. A call that started before closure may finish.
 - Never: legacy optionality as capability-free runtime path, reconstructed host authority inside plugin, provider-specific authority in generic contract.
 - Ask first: SDK + security owner acceptance before shortening compatibility window, making shipped type source-incompatible, or widening capability's trust, authority, persistence boundary.
 

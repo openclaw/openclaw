@@ -517,6 +517,11 @@ catalog refresh; correct authored `models.json` pricing directly. Other schema
 errors and invalid model API or token limits still reject the affected catalog,
 even on a model with malformed pricing.
 
+Usage reports capture local pricing before rendering and keep those prices for
+the operation. Gateway catalog publication updates the retained local source,
+including an absent file. After editing `models.json` externally, restart the
+Gateway to publish the new prices.
+
 ### Hosted catalog updates
 
 OpenClaw can refresh the model metadata shipped by installed provider plugins

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import {
   closeSync,
@@ -2486,55 +2486,126 @@ function databaseRead(pathname, callback) {
   }
 }
 
-function verifyStateCompatibility(databasePath, existing, candidate, inspectAgent, captured = [], beforeAgentRead, inspectRetiredAgents) {
-  const stateRoot = dirname(dirname(databasePath));
+function agentDatabaseInventory(database, stateRoot) {
   const agents = new Map();
-  let retiredAgents;
-  const recordAgent = (pathname, agentId) => {
-    // Discovery sources must agree; canonical layout cannot erase a conflicting registration.
-    if (agents.has(pathname) && agents.get(pathname) !== agentId)
-      reject("agent database ownership sources disagree");
-    agents.set(pathname, agentId);
-  };
-  const live = databaseRead(databasePath, (database) => {
-    const observed = database.prepare("PRAGMA user_version").get().user_version;
-    const registry = database
-      .prepare("SELECT type FROM sqlite_master WHERE name = ?")
-      .get("agent_databases");
-    if (registry && registry.type !== "table") reject("agent database registry is malformed");
-    if (registry) {
-      const columns = new Set(
-        database
-          .prepare("PRAGMA table_info(agent_databases)")
-          .all()
-          .map((row) => row.name),
-      );
-      for (const column of ["agent_id", "path"]) {
-        if (!columns.has(column)) reject(`agent database registry is missing ${column}`);
+  const registry = database
+    .prepare("SELECT type FROM sqlite_master WHERE name = ?")
+    .get("agent_databases");
+  if (registry && registry.type !== "table") reject("agent database registry is malformed");
+  if (registry) {
+    const columns = new Set(
+      database
+        .prepare("PRAGMA table_info(agent_databases)")
+        .all()
+        .map((row) => row.name),
+    );
+    for (const column of ["agent_id", "path"]) {
+      if (!columns.has(column)) reject(`agent database registry is missing ${column}`);
+    }
+    const rows = database
+      .prepare("SELECT agent_id, path FROM agent_databases LIMIT 257")
+      .all();
+    if (rows.length > 256)
+      reject("agent database registry exceeds the bounded compatibility budget");
+    for (const row of rows) {
+      if (
+        typeof row.agent_id !== "string" ||
+        !row.agent_id ||
+        typeof row.path !== "string" ||
+        !row.path
+      ) {
+        reject("registered agent database identity is invalid");
       }
-      const rows = database
-        .prepare("SELECT agent_id, path FROM agent_databases LIMIT 257")
-        .all();
-      if (rows.length > 256)
-        reject("agent database registry exceeds the bounded compatibility budget");
-      for (const row of rows) {
-        if (
-          typeof row.agent_id !== "string" ||
-          !row.agent_id ||
-          typeof row.path !== "string" ||
-          !row.path
-        ) {
-          reject("registered agent database identity is invalid");
-        }
-        const pathname = isAbsolute(row.path) ? resolve(row.path) : resolve(stateRoot, row.path);
-        if (!isAbsolute(row.path))
+      const pathname = isAbsolute(row.path) ? resolve(row.path) : resolve(stateRoot, row.path);
+      if (!isAbsolute(row.path)) {
+        safeRelative(stateRoot, pathname);
+        if (existsSync(dirname(pathname)))
           safeRelative(realpathSync(stateRoot), realpathSync(dirname(pathname)));
-        recordAgent(pathname, row.agent_id);
+      }
+      if (agents.has(pathname) && agents.get(pathname) !== row.agent_id)
+        reject("agent database ownership sources disagree");
+      agents.set(pathname, row.agent_id);
+    }
+  }
+  const deleted = new Map(), held = new Set();
+  if (database.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='agent_deletion_journal'").get()) {
+    const rows = database.prepare(`SELECT agent_id, agent_dir, database_paths_json FROM agent_deletion_journal
+      WHERE cleanup_completed=0 OR (cleanup_completed=1 AND delete_files=0) LIMIT 257`).all();
+    if (rows.length > 256) reject("held agent databases exceed the bounded compatibility budget");
+    for (const row of rows) {
+      const paths = JSON.parse(row.database_paths_json);
+      if (typeof row.agent_id !== "string" || typeof row.agent_dir !== "string" ||
+          !Array.isArray(paths) || paths.some(path => typeof path !== "string"))
+        reject("retained agent database identity is malformed");
+      deleted.set(row.agent_id, new Set([join(row.agent_dir, "openclaw-agent.sqlite"), ...paths]
+        .map(path => resolve(stateRoot, path))));
+    }
+  }
+  if (database.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='migration_sources'").get()) {
+    const receipt = database.prepare("SELECT report_json FROM migration_sources WHERE source_key=?")
+      .get("agent-deletion-journal-reconstruction");
+    if (receipt) {
+      const report = JSON.parse(receipt.report_json);
+      if (!Array.isArray(report.held) || report.held.length > 256)
+        reject("agent database reconstruction holds are malformed");
+      for (const value of report.held) {
+        if (typeof value?.agentId !== "string" || typeof value.path !== "string" || !value.path.trim())
+          reject("agent database reconstruction hold is malformed");
+        held.add(resolve(stateRoot, value.path));
       }
     }
+  }
+  // Same native facts as deletion discovery: surviving registered owners keep
+  // shared stores live; a directory name cannot confer that ownership.
+  const isHeld = (pathname, agentId) => held.has(pathname) || deleted.has(agentId) ||
+    ([...deleted.values()].some(paths => paths.has(pathname)) &&
+      (!agents.has(pathname) || deleted.has(agents.get(pathname))));
+  // Discovery adds directory and historical paths without changing registered ownership.
+  return { agents: new Map(agents), isHeld };
+}
+
+function archivedHeldAgentDatabase(stateRoot, agentId, pathname, captured) {
+  if (pathname !== join(stateRoot, "agents", agentId, "agent", "openclaw-agent.sqlite")) return;
+  const archive = join(stateRoot, "held-agent-archive"), owner = lstatSync(stateRoot);
+  const parent = lstatSync(archive, { throwIfNoEntry: false });
+  if (!parent) return;
+  // Operators may create the archive parent as root before moving runtime-owned stores.
+  if (!parent.isDirectory() || parent.isSymbolicLink() || ![0, owner.uid].includes(parent.uid) ||
+      (parent.mode & 0o022) !== 0) reject("held agent archive is not an owner-safe directory");
+  const directories = readdirSync(archive, { withFileTypes: true });
+  if (directories.length > 256) reject("held agent archive exceeds the bounded compatibility budget");
+  let found;
+  for (const directory of directories) {
+    if (!directory.name.startsWith(`${agentId}-held-`)) continue;
+    const root = join(archive, directory.name), agent = join(root, "agent");
+    exactDirectory(root, owner.uid, "archived held agent", { group: owner.gid });
+    exactDirectory(agent, owner.uid, "archived held agent store", { group: owner.gid });
+    const path = join(agent, "openclaw-agent.sqlite"), entry = lstatSync(path);
+    if (!entry.isFile() || entry.isSymbolicLink() || entry.uid !== owner.uid || entry.gid !== owner.gid ||
+        (entry.mode & 0o022) !== 0 || realpathSync(path) !== path)
+      reject("archived held agent database identity is unsafe");
+    if (captured && (entry.dev !== captured[2] || entry.ino !== captured[3])) continue;
+    if (found) reject("archived held agent database identity is ambiguous");
+    found = { path, entry };
+  }
+  return found;
+}
+
+function verifyStateCompatibility(databasePath, existing, candidate, inspectAgent, captured = [], beforeAgentRead, inspectRetiredAgents, inspectHeldAgent) {
+  const stateRoot = dirname(dirname(databasePath));
+  let agents, isHeld, retiredAgents;
+  const live = databaseRead(databasePath, (database) => {
+    ({ agents, isHeld } = agentDatabaseInventory(database, stateRoot));
     retiredAgents = inspectRetiredAgents?.(database);
-    return observed;
+    return database.prepare("PRAGMA user_version").get().user_version;
   });
+  const recordAgent = (pathname, agentId) => {
+    if (agents.has(pathname) && agents.get(pathname) !== agentId) {
+      if (isHeld(pathname, agentId) && !isHeld(pathname, agents.get(pathname))) return;
+      if (!isHeld(pathname, agents.get(pathname))) reject("agent database ownership sources disagree");
+    }
+    agents.set(pathname, agentId);
+  };
   // Package versions are reader ceilings; a failed boot need not have advanced live state.
   if (!Number.isSafeInteger(live) || live > candidate.state || live > existing.state) {
     reject("live state schema is incompatible with candidate or rollback predecessor");
@@ -2564,6 +2635,8 @@ function verifyStateCompatibility(databasePath, existing, candidate, inspectAgen
   }
   for (const pathname of retiredAgents ?? []) agents.delete(pathname);
   const stateOwner = lstatSync(stateRoot);
+  const saved = new Map(captured.map(tuple => [tuple[1], tuple]));
+  let heldCount = 0;
   function historicalIdentity(pathname) {
     const [, , device, inode] = historical.get(pathname);
     if (!isAbsolute(pathname) || resolve(pathname) !== pathname)
@@ -2576,6 +2649,18 @@ function verifyStateCompatibility(databasePath, existing, candidate, inspectAgen
     return entry;
   }
   for (const [pathname, agentId] of agents) {
+    const present = lstatSync(pathname, { throwIfNoEntry: false });
+    const archived = !present && archivedHeldAgentDatabase(stateRoot, agentId, pathname, saved.get(pathname));
+    if (isHeld(pathname, agentId) || archived) {
+      const entry = archived?.entry ?? present, tuple = saved.get(pathname);
+      if (!entry?.isFile() || entry.isSymbolicLink() || entry.uid !== stateOwner.uid || entry.gid !== stateOwner.gid ||
+          (entry.mode & 0o022) !== 0 || (tuple && (entry.dev !== tuple[2] || entry.ino !== tuple[3])))
+        reject("a held agent database identity is missing or changed");
+      if (!archived && realpathSync(pathname) !== pathname) reject("held agent database path is not canonical");
+      heldCount += 1;
+      inspectHeldAgent?.(agentId, pathname, entry);
+      continue;
+    }
     beforeAgentRead?.(pathname);
     const capturedEntry = historical.has(pathname) ? historicalIdentity(pathname) : undefined;
     const entry = capturedEntry ?? lstatSync(pathname);
@@ -2620,7 +2705,7 @@ function verifyStateCompatibility(databasePath, existing, candidate, inspectAgen
       }
     } finally { if (fd !== undefined) closeSync(fd); }
   }
-  return { live, current: existing, target: candidate, agentDatabases: agents.size };
+  return { live, current: existing, target: candidate, agentDatabases: agents.size - heldCount, heldAgentDatabases: heldCount };
 }
 
 function sessionWitnessTuples(saved) {
@@ -2628,7 +2713,8 @@ function sessionWitnessTuples(saved) {
   return saved.map(value => {
     if (typeof value !== "string") reject("session preservation witness is malformed");
     const tuple = JSON.parse(value);
-    if (!Array.isArray(tuple) || tuple.length !== 8 ||
+    if (!Array.isArray(tuple) || (tuple.length !== 8 && !(tuple.length === 9 && tuple[8] === "held" &&
+        tuple[4] === "" && tuple[5] === "" && tuple[6] === null && tuple[7] === null)) ||
         [0, 1, 4, 5].some(index => typeof tuple[index] !== "string") ||
         [2, 3].some(index => !Number.isSafeInteger(tuple[index]) || tuple[index] < 0) ||
         [6, 7].some(index => tuple[index] !== null && typeof tuple[index] !== "string"))
@@ -2637,7 +2723,7 @@ function sessionWitnessTuples(saved) {
   });
 }
 
-function nativeUpdateReceipt(record, required = false) {
+function nativeUpdateReceipt(record, required = false, serving) {
   if (!record.nativeUpdate) {
     if (required) reject("activation journal has no native update owner");
     return null;
@@ -2663,24 +2749,92 @@ function nativeUpdateReceipt(record, required = false) {
     reject("native update receipt has no completed migration or restoration");
   }
   const identities = new Map();
+  let inventory;
   for (const path of receipt.databases) {
     const value = receipt.databaseIdentities?.[path];
     if (!value) continue; // Originally absent stores may still be absent after restoration.
     if (!isAbsolute(path) || resolve(path) !== path || !Number.isSafeInteger(value.dev) || !Number.isSafeInteger(value.ino))
       reject("native database receipt identity is invalid");
     const recorded = { path, device: value.dev, inode: value.ino };
-    if (required && !isDeepStrictEqual(identity(path), recorded))
-      reject("native database identity changed after the owner completed");
+    if (required) {
+      let entry = lstatSync(path, { throwIfNoEntry: false });
+      if (!entry) {
+        const agentId = basename(dirname(dirname(path)));
+        inventory ??= databaseRead(record.protectedPaths[1].path, database => agentDatabaseInventory(database, receipt.stateDir));
+        if (inventory.isHeld(path, agentId) || !inventory.agents.has(path))
+          entry = archivedHeldAgentDatabase(receipt.stateDir, agentId, path, [agentId, path, value.dev, value.ino])?.entry;
+      }
+      if (!entry?.isFile() || entry.isSymbolicLink() || entry.dev !== value.dev || entry.ino !== value.ino)
+        reject("native database identity changed after the owner completed");
+    }
     identities.set(path, recorded);
   }
   const config = receipt.configIdentity;
   if (config?.path !== receipt.configPath || !Number.isSafeInteger(config.dev) || !Number.isSafeInteger(config.ino))
     reject("native config receipt identity is invalid");
   const recorded = { path: config.path, device: config.dev, inode: config.ino };
-  if (required && !isDeepStrictEqual(identity(config.path), recorded))
-    reject("native config identity changed after the owner completed");
-  identities.set(config.path, recorded);
-  return { status: receipt.status, identities };
+  let configDrift;
+  if (required && !isDeepStrictEqual(identity(config.path), recorded)) {
+    if (!serving || receipt.status !== "migrated" || record.phase !== "ROLLBACK_FAILED")
+      reject("native config identity changed after the owner completed");
+    configDrift = { previous: recorded, ...nativeForwardConfig(record, serving) };
+  }
+  const current = configDrift?.current ?? recorded;
+  identities.set(config.path, { path: current.path, device: current.device, inode: current.inode });
+  return { status: receipt.status, identities, ...(configDrift ? { configDrift } : {}) };
+}
+
+function nativeForwardConfig(record, serving) {
+  const path = record.protectedPaths[0].path, stateDir = dirname(dirname(record.protectedPaths[1].path));
+  const owner = lstatSync(stateDir);
+  if (owner.uid !== serving.uid || realpathSync(path) !== path) reject("native serving config path or owner changed");
+  const current = migrationFile(path, serving.uid, { mode: 0o600, group: owner.gid });
+  const runtimeHome = process.env.OPENCLAW_TEAM_RUNTIME_HOME ?? dirname(stateDir);
+  const response = spawnSync(process.env.OPENCLAW_TEAM_RUNUSER ?? "/usr/sbin/runuser", ["-u", "openclaw", "--", "env",
+    `HOME=${runtimeHome}`, `OPENCLAW_HOME=${runtimeHome}`, `OPENCLAW_CONFIG_PATH=${path}`, `OPENCLAW_STATE_DIR=${stateDir}`,
+    serving.runtime, "--input-type=module", "-e", `
+import { pathToFileURL } from "node:url";
+const [release, port] = process.argv.slice(1);
+const { callGatewayFromCli } = await import(pathToFileURL(release + "/dist/plugin-sdk/gateway-runtime.js").href);
+const value = await callGatewayFromCli("config.get", { port, expectUrl: "ws://127.0.0.1:" + port, json: true, timeout: "15000" }, {},
+  { scopes: ["operator.admin"], sharedStateMode: "read-only", progress: false });
+const { path, exists, valid, hash, configRevisionHash, appliedConfigHash, includedPaths, writeError } = value;
+process.stdout.write(JSON.stringify({ path, exists, valid, hash, configRevisionHash, appliedConfigHash, includedPaths, writeError: Boolean(writeError) }));
+`, serving.release, String(serving.port)], { encoding: "utf8", timeout: 20000, maxBuffer: migrationJsonLimit });
+  if (response.error || response.status !== 0) reject("native serving config observation failed");
+  const loaded = migrationJson(Buffer.from(response.stdout));
+  // Native config.get tokens cover include graphs. This retained single-file
+  // incident must bind its actual bytes, not merely a potentially cached response.
+  if (loaded.path !== path || loaded.exists !== true || loaded.valid !== true || loaded.writeError ||
+      (loaded.includedPaths !== undefined && (!Array.isArray(loaded.includedPaths) || loaded.includedPaths.length)) ||
+      !/^hmac-sha256:v1:[A-Za-z0-9_-]{43}$/.test(loaded.configRevisionHash ?? "") ||
+      loaded.configRevisionHash !== loaded.appliedConfigHash)
+    reject("native serving config is invalid, included, or not applied by the candidate");
+  const projected = databaseRead(record.protectedPaths[1].path, database => {
+    const key = database.prepare("SELECT hmac_key FROM config_revision_keys WHERE id=1").get()?.hmac_key;
+    if (!(key instanceof Uint8Array) || key.length !== 32) reject("native config revision key is unavailable");
+    // Read the existing native projection key; never initialize or persist it.
+    return "hmac-sha256:v1:" + createHmac("sha256", key)
+      .update(JSON.stringify(["openclaw.gateway.config-revision.raw.v1", current.descriptor.sha256])).digest("base64url");
+  });
+  if (loaded.hash !== projected || !isDeepStrictEqual(
+      migrationFile(path, serving.uid, { mode: 0o600, group: owner.gid }).descriptor, current.descriptor))
+    reject("native serving config revision does not match the current file");
+  return { current: current.descriptor, appliedRevision: loaded.appliedConfigHash };
+}
+
+function nativeForwardState(root, record, serving) {
+  repairNativeBinding(root, serving);
+  selectedConfigProcess(root, record, serving);
+  const receipt = nativeUpdateReceipt(record, true, serving);
+  if (receipt.status !== "migrated") reject("native forward recovery requires the completed migration receipt");
+  const protectedPaths = record.protectedPaths.map(previous => {
+    const current = receipt.identities.get(previous.path);
+    if (!current) reject("native update omitted a protected path");
+    return current;
+  });
+  selectedConfigProcess(root, record, serving);
+  return { protectedPaths, ...(receipt.configDrift ? { configDrift: receipt.configDrift } : {}) };
 }
 
 function journalNativePermit(pathname, expected, action) {
@@ -2742,10 +2896,20 @@ function originalWitness(pathname, record, expected, archivedSource) {
   if (!isDeepStrictEqual(after.descriptor, journal.descriptor)) reject("original session witness journal changed while reading");
   const nativeReceipt = nativeUpdateReceipt(record);
   if (!nativeReceipt) return file.bytes;
+  const databasePath = record.protectedPaths[1].path, stateRoot = dirname(dirname(databasePath));
+  let inventory;
   // Native restore can atomically replace the file; the original session IDs remain the witness.
   return Buffer.from(JSON.stringify(sessionWitnessTuples(migrationJson(file.bytes)).map(tuple => {
     const current = nativeReceipt.identities.get(tuple[1]);
-    if (!current) reject("native update omitted an original session store");
+    if (!current) {
+      inventory ??= databaseRead(databasePath, database => agentDatabaseInventory(database, stateRoot));
+      // Doctor deliberately leaves held stores outside its migration receipt.
+      // Keep their original physical witness; preservation still verifies it.
+      if (tuple[8] === "held" || inventory.isHeld(tuple[1], tuple[0]) ||
+          (!existsSync(tuple[1]) && archivedHeldAgentDatabase(stateRoot, tuple[0], tuple[1], tuple)))
+        return JSON.stringify(tuple);
+      reject("native update omitted an original session store");
+    }
     return JSON.stringify([tuple[0], tuple[1], current.device, current.inode, ...tuple.slice(4)]);
   })));
 }
@@ -3047,6 +3211,7 @@ function retainedRepairWitness(record, saved, rewriteEvidence, scope = "captured
       const id = [agentId, realpathSync(pathname), entry.dev, entry.ino],
         key = JSON.stringify(id);
       for (const tuple of pending.get(key) ?? []) {
+        if (tuple[8] === "held") continue;
         const failure = retainedRepairTranscriptPreservationFailure(database, ...tuple.slice(4));
         if (!failure) continue;
         // Physical identity is already bound by pending's key. Only a selected
@@ -3130,6 +3295,11 @@ function retainedRepairWitness(record, saved, rewriteEvidence, scope = "captured
         pending.delete(key);
       }
       return retired;
+    },
+    (agentId, pathname, entry) => {
+      const id = [agentId, pathname, entry.dev, entry.ino];
+      pending.delete(JSON.stringify(id));
+      captured.push(JSON.stringify([...id, "", "", null, null, "held"]));
     },
   );
   if (pending.size) reject(`RETAINED_CONTINUITY_DATABASE scope=${scope}: retained preparation lost a witnessed physical database`);
@@ -4820,7 +4990,8 @@ async function startupProfileCommand(command, input) {
     );
     assert.equal(environment.get("SYSTEMD_EXEC_PID"), String(pid));
     assert.equal(statSync(`/proc/${pid}`).uid, intent.uid);
-    assert.equal(readFileSync(`/proc/${pid}/cgroup`, "utf8"), `0::${intent.cgroup}\n`);
+    assert.equal(intent.cgroup, repairNativeGroup);
+    repairNativeProcessCgroup(`/proc/${pid}/cgroup`);
     assert.equal(realpathSync(`/proc/${pid}/exe`), realpathSync(process.execPath));
     // process.title overwrites Linux cmdline; systemd owns the launched argv.
     // The preload also validates its intact process.argv at capture admission.
@@ -5763,6 +5934,7 @@ async function startupProfileCommand(command, input) {
 
 const repairNativeUnit = "openclaw-gateway.service";
 const repairNativeGroup = "/system.slice/openclaw-gateway.service";
+const repairNativeProcessGroups = [repairNativeGroup, repairNativeGroup + "/gateway"];
 const repairNativeLibrary = "/usr/local/lib/openclaw-team/release-lib.mjs";
 const repairNativeNode = "/usr/bin/node";
 const repairGuardPrefix = "zzzz-openclaw-retained-repair-";
@@ -5869,14 +6041,17 @@ function repairNativeManagerStopped(uid, boundary) {
   assertUnpopulatedCgroup(current, "repair user manager");
   return manager;
 }
-function repairNativeStoppedGroup(boundary) {
+function repairNativeStoppedGroup(boundary, uid) {
   const root = join(boundary, "sys/fs/cgroup");
   migrationAncestors(root, migrationOwner(), boundary);
   let current = root;
   for (const part of repairNativeGroup.slice(1).split("/")) {
     current = join(current, part);
-    if (!lstatSync(current, { throwIfNoEntry: false })) return;
-    exactDirectory(current, migrationOwner(), "repair system cgroup");
+    const entry = lstatSync(current, { throwIfNoEntry: false });
+    if (!entry) return;
+    const delegated = part === repairNativeUnit && entry.uid === uid;
+    exactDirectory(current, delegated ? uid : migrationOwner(), "repair system cgroup",
+      { group: delegated ? entry.gid : rootGroup() });
   }
   assertUnpopulatedCgroup(current, "repair system Gateway");
 }
@@ -5909,16 +6084,23 @@ function repairNativeBinding(root, binding) {
       realpathSync(binding.release) !== binding.release) reject("repair process release is not canonical");
   return binding;
 }
+function repairNativeProcessCgroup(pathname) {
+  const contents = readFileSync(pathname, "utf8");
+  // DelegateSubgroup=gateway places the main process here, never in a nested subgroup.
+  const group = repairNativeProcessGroups.find(group => contents === "0::" + group + "\n");
+  if (!group) reject("repair process cgroup is not the system Gateway root or gateway leaf");
+  return group;
+}
 function repairNativeProcess(root, binding) {
   repairNativeBinding(root, binding);
   const { proc } = repairNativeRoots(), directory = join(proc, String(binding.pid));
   const stat = readFileSync(join(directory, "stat"), "utf8"), separator = stat.lastIndexOf(") ");
   const fields = stat.slice(separator + 2).trim().split(/\s+/);
+  const cgroup = repairNativeProcessCgroup(join(directory, "cgroup"));
   if (!stat.startsWith(binding.pid + " (") || separator < 0 || fields[19] !== binding.generation ||
       ["Z", "X", "x", "T", "t"].includes(fields[0]) || statSync(directory).uid !== binding.uid ||
       realpathSync(join(directory, "cwd")) !== binding.release ||
-      realpathSync(join(directory, "exe")) !== realpathSync(binding.runtime) ||
-      readFileSync(join(directory, "cgroup"), "utf8") !== "0::" + repairNativeGroup + "\n")
+      realpathSync(join(directory, "exe")) !== realpathSync(binding.runtime))
     reject("repair process generation, owner, runtime, release, or cgroup changed");
   // process.title rewrites Linux cmdline; systemd retains the launched command.
   const command = repairNativeBusProperty("ExecStart"), row = command?.data?.[0], argv = row?.[1];
@@ -5929,7 +6111,7 @@ function repairNativeProcess(root, binding) {
       argv[2] !== "gateway" || argv[3] !== "--port" || argv[4] !== String(binding.port)) reject("repair native launch command changed");
   const bootId = readFileSync(join(proc, "sys/kernel/random/boot_id"), "utf8").trim();
   if (!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(bootId)) reject("repair boot identity is unavailable");
-  return { ...binding, bootId, cgroup: repairNativeGroup };
+  return { ...binding, bootId, cgroup };
 }
 function retainedRepairObserveLive(root, binding) {
   migrationNamespace(root);
@@ -5954,7 +6136,7 @@ function retainedRepairObserveLive(root, binding) {
 function retainedRepairObserveStopped(root, owner, targets) {
   const { bootId: expectedBootId, cgroup: expectedCgroup, ...binding } = owner.process;
   repairNativeBinding(root, binding);
-  if (expectedCgroup !== repairNativeGroup) reject("repair stopped cgroup binding changed");
+  if (!repairNativeProcessGroups.includes(expectedCgroup)) reject("repair stopped cgroup binding changed");
   if (!/^[a-f0-9]{32}$/.test(owner.invocationId) || !/^[1-9]\d*$/.test(owner.startedAtMonotonic))
     reject("repair stopped custody lacks the exact previous native owner");
   if (!Array.isArray(targets) || !targets.length || new Set(targets).size !== targets.length)
@@ -5973,7 +6155,7 @@ function retainedRepairObserveStopped(root, owner, targets) {
         unit.ExecMainStartTimestampMonotonic !== owner.startedAtMonotonic || !["", repairNativeGroup].includes(unit.ControlGroup))
       reject("repair system owner, control, history, or job has not settled");
     repairNativeNoJobs(owner.process.uid);
-    repairNativeStoppedGroup(boundary);
+    repairNativeStoppedGroup(boundary, owner.process.uid);
     repairNativeListeners(owner.process.port);
     assertDatabaseWritersStopped(new Set(targets), proc);
     return { unit, userManager: manager, bootId, oldPid: owner.process.pid, uid: owner.process.uid, port: owner.process.port, targets: [...targets] };
@@ -6150,7 +6332,7 @@ function retainedRepairStartClaim(root, operation) {
   if (unit.ActiveState !== "activating" || unit.SubState !== "condition" || unit.MainPID !== "0" ||
       unit.ControlPID !== String(process.pid) || unit.ControlGroup !== repairNativeGroup ||
       !/^[a-f0-9]{32}$/.test(unit.InvocationID) || process.env.INVOCATION_ID !== unit.InvocationID ||
-      readFileSync("/proc/self/cgroup", "utf8") !== "0::" + repairNativeGroup + "\n")
+      !["0::" + repairNativeGroup + "\n", "0::" + repairNativeGroup + "/.control\n"].includes(readFileSync("/proc/self/cgroup", "utf8")))
     reject("repair claim is not this service's native condition process");
   return repairNativeClaimCore(root, operation);
 }
@@ -6534,20 +6716,47 @@ function retainedAdoptionReadClosure(paths) {
     privateOnly: false, mode: index === 0 ? 0o755 : 0o644, limit: migrationJournalLimit,
   }));
 }
-function retainedAdoptionLegacy(paths, expected) {
+function retainedAdoptionLegacy(paths, expected, nativeRecovery) {
   validMigrationDescriptor(expected, "path", "controller adoption original journal");
   if (expected.path !== paths.pathname) reject("controller adoption source journal is not canonical");
   const file = migrationFile(paths.pathname, paths.owner, { mode: 0o600, limit: migrationJournalLimit });
   if (!isDeepStrictEqual(file.descriptor, expected)) reject("controller adoption source journal changed");
   const record = validJournal(migrationJson(file.bytes));
-  const allowed = ["version", "phase", "topology", "predecessor", "candidate", "process", "pointerTopology", "services", "suspension", "protectedPaths", "originalWitness", "gatewayRuntime", "createdAt"];
+  const allowed = ["version", "phase", "topology", "predecessor", "candidate", "process", "pointerTopology", "services", "suspension", "protectedPaths", "originalWitness", "gatewayRuntime", "createdAt", ...(nativeRecovery ? ["nativeUpdate"] : [])];
   if (record.version !== 1 || record.phase !== "ROLLBACK_FAILED" || record.topology !== "system" ||
       !record.originalWitness || record.predecessor.sha === record.candidate.sha ||
       [record.predecessor, record.candidate].some(info => ["state", "agent"].some(key =>
         !Number.isSafeInteger(info.schemaVersions?.[key]) || info.schemaVersions[key] < 0)) ||
-      !isDeepStrictEqual(record.predecessor.schemaVersions, record.candidate.schemaVersions) ||
+      (!nativeRecovery && !isDeepStrictEqual(record.predecessor.schemaVersions, record.candidate.schemaVersions)) ||
       Object.keys(record).some(key => !allowed.includes(key)))
     reject("controller adoption requires the exact retained legacy failed system incident");
+  if (nativeRecovery) {
+    suspensionObject(nativeRecovery, ["process", "receipt", "backup"], "native recovery adoption");
+    suspensionObject(nativeRecovery.backup, ["path", "device", "inode"], "native recovery backup identity");
+    validMigrationDescriptor(nativeRecovery.receipt, "path", "native recovery receipt");
+    if (!record.nativeUpdate || !["state", "agent"].some(key => record.candidate.schemaVersions[key] > record.predecessor.schemaVersions[key]) ||
+        ["state", "agent"].some(key => record.candidate.schemaVersions[key] < record.predecessor.schemaVersions[key]))
+      reject("native recovery adoption requires a migrated schema-crossing candidate");
+    const root = dirname(paths.directory), backupPath = record.nativeUpdate.backupRoot + ".databases";
+    if (nativeRecovery.process.release !== join(root, "releases", record.candidate.sha) ||
+        (nativeRecovery.process.pid === record.process.pid && nativeRecovery.process.generation === record.process.generation))
+      reject("native recovery adoption process is not the selected candidate");
+    retainedRepairObserveLive(root, nativeRecovery.process);
+    const forward = nativeForwardState(root, record, nativeRecovery.process);
+    if (forward.configDrift) file.nativeConfig = forward.configDrift;
+    const owner = lstatSync(record.protectedPaths[0].path);
+    const receipt = migrationFile(record.nativeUpdate.backupRoot + ".receipt.json", owner.uid, { mode: 0o600, group: owner.gid });
+    if (!isDeepStrictEqual(receipt.descriptor, nativeRecovery.receipt) ||
+        migrationJson(receipt.bytes).backup?.directory !== backupPath)
+      reject("native recovery adoption backup receipt changed");
+    const backup = lstatSync(backupPath);
+    if (!backup.isDirectory() || backup.uid !== owner.uid || backup.gid !== owner.gid || (backup.mode & 0o077) !== 0 ||
+        realpathSync(backupPath) !== backupPath ||
+        !isDeepStrictEqual(nativeRecovery.backup, { path: backupPath, device: backup.dev, inode: backup.ino }))
+      reject("native recovery adoption backup identity changed");
+    // Read the bound witness through its owner; never rewrite it or copy native snapshots.
+    originalWitness(paths.pathname, record);
+  }
   return file;
 }
 function retainedAdoptionProtocolCheck(files) {
@@ -6562,8 +6771,29 @@ function retainedAdoptionProtocolCheck(files) {
 // A completed incident may be archived before a controller successor is needed.
 // This is evidence for the same retired source, not permission to retire another
 // journal or to interrupt the incumbent. Every publication rechecks live custody.
-function retainedAdoptionSource(paths, request) {
-  if (!request.retirement) return retainedAdoptionLegacy(paths, request.source);
+function retainedAdoptionSource(paths, request, expected) {
+  if (request.steady) {
+    if (lstatSync(paths.pathname, { throwIfNoEntry: false }))
+      reject("steady controller adoption requires no activation journal");
+    const root = dirname(paths.directory);
+    retainedRepairObserveLive(root, request.steady.process);
+    for (const name of ["current", "previous"]) {
+      const pointer = name === "previous" && !lstatSync(join(root, name), { throwIfNoEntry: false })
+        ? null : retainedRepairPointer(root, name);
+      if (!isDeepStrictEqual(pointer, request.steady.pointers[name]) ||
+          (name === "current" && join(root, "releases", pointer.sha) !== request.steady.process.release))
+        reject("steady controller adoption release pointers changed");
+    }
+    // The completed predecessor owns this immutable archive. Its retired incident
+    // is provenance, never a requirement on today's Gateway, config or databases.
+    return retainedAdoptionChecked(request.source.path, request.source);
+  }
+  if (!request.retirement) {
+    const source = retainedAdoptionLegacy(paths, request.source, request.nativeRecovery);
+    if (expected && !isDeepStrictEqual(source.nativeConfig, expected.nativeConfig))
+      reject("controller adoption serving config changed after binding");
+    return source;
+  }
   validMigrationDescriptor(request.retirement, "path", "accepted retirement completion");
   const completionFile = retainedAdoptionChecked(request.retirement.path, request.retirement);
   const completion = migrationJson(completionFile.bytes);
@@ -6649,16 +6879,21 @@ function retainedAdoptionSource(paths, request) {
   return original;
 }
 
-function retainedAdoptionRequest(root, input, historical = false) {
-  suspensionObject(input, ["version", "operation", "source", "oldClosure", "replacement", ...(historical ? ["historical"] : Object.hasOwn(input, "retirement") ? ["retirement"] : [])], "controller adoption request");
+function retainedAdoptionRequest(root, input, historical = false, steady = false) {
+  suspensionObject(input, ["version", "operation", "source", "oldClosure", "replacement", ...(steady ? ["historical", "steady"] : historical ? ["historical"] : Object.hasOwn(input, "retirement") ? ["retirement"] : []), ...(!steady && Object.hasOwn(input, "nativeRecovery") && !input.retirement ? ["nativeRecovery"] : [])], "controller adoption request");
   if (input.version !== 1 || !Array.isArray(input.oldClosure) || input.oldClosure.length !== 4 ||
       !Array.isArray(input.replacement) || input.replacement.length !== 4)
     reject("controller adoption request must bind all four old and approved new files");
   const paths = retainedAdoptionLocations(root, input.operation);
-  if (historical) {
+  if (historical || steady) {
     suspensionObject(input.historical, ["gate", "complete"], "controller adoption historical approval");
     for (const descriptor of Object.values(input.historical)) validMigrationDescriptor(descriptor, "path", "historical adoption artifact");
     if (input.historical.gate.path !== paths.gate) reject("controller adoption historical gate is not canonical");
+  }
+  if (steady) {
+    validMigrationDescriptor(input.source, "path", "completed controller source archive");
+    suspensionObject(input.steady, ["process", "pointers"], "steady controller adoption");
+    suspensionObject(input.steady.pointers, ["current", "previous"], "steady controller pointers");
   }
   for (let index = 0; index < 4; index++) {
     validMigrationDescriptor(input.oldClosure[index], "path", "old controller file");
@@ -6699,10 +6934,10 @@ function retainedAdoptionLoad(root, input) {
   const file = retainedAdoptionChecked(paths.prefix + ".intent.json");
   if (file.descriptor.sha256 !== input.intentSha256) reject("controller adoption intent hash changed");
   const intent = migrationJson(file.bytes);
-  suspensionObject(intent, ["version", "kind", "protocol", "request", "lock", "metadata", "original", "backups", "replacements", ...(Object.hasOwn(intent, "bootstrap") ? ["bootstrap"] : []), ...(Object.hasOwn(intent, "predecessor") ? ["predecessor"] : [])], "controller adoption intent");
+  suspensionObject(intent, ["version", "kind", "protocol", "request", "lock", "metadata", "original", "backups", "replacements", ...(Object.hasOwn(intent, "nativeConfig") ? ["nativeConfig"] : []), ...(Object.hasOwn(intent, "bootstrap") ? ["bootstrap"] : []), ...(Object.hasOwn(intent, "predecessor") ? ["predecessor"] : [])], "controller adoption intent");
   if (intent.version !== 1 || intent.kind !== "retained-controller-adoption" || intent.protocol !== retainedAdoptionProtocol || intent.request.operation !== input.operation)
     reject("controller adoption intent has the wrong owner");
-  retainedAdoptionRequest(root, intent.request, Object.hasOwn(intent.request, "historical"));
+  retainedAdoptionRequest(root, intent.request, Object.hasOwn(intent.request, "historical"), Object.hasOwn(intent.request, "steady"));
   if (!isDeepStrictEqual(intent.lock, retainedRepairLock())) reject("controller adoption lock inode changed");
   if (!isDeepStrictEqual(intent.metadata, paths.destinations.map((path, index) => ({
     path, mode: index === 0 ? 0o755 : 0o644, uid: paths.owner, gid: rootGroup(),
@@ -6924,16 +7159,18 @@ function retainedAdoptionPredecessor(root, paths, predecessor, request) {
   // never grants current admission or claims that its retired files remain installed.
   const completed = retainedAdoptionCompletion(root, { operation: gate.value.operation, intentSha256: gate.value.intent.sha256 }, false);
   if (!isDeepStrictEqual(completed.complete.descriptor, predecessor.complete) ||
-      (request.historical ? !isDeepStrictEqual(request.historical, { gate: predecessor.gate, complete: predecessor.complete }) ||
+      (request.steady ? !isDeepStrictEqual(request.historical, { gate: predecessor.gate, complete: predecessor.complete }) ||
+        !isDeepStrictEqual(request.source, completed.intent.original) || !isDeepStrictEqual(completed.value.closure, request.oldClosure) :
+        request.historical ? !isDeepStrictEqual(request.historical, { gate: predecessor.gate, complete: predecessor.complete }) ||
         isDeepStrictEqual(completed.intent.request.source, request.source) :
         !retainedAdoptionSourceMatches(paths, completed.intent.request.source, request) ||
         !isDeepStrictEqual(completed.value.closure, request.oldClosure)))
     reject("controller adoption completed predecessor differs from the approved incumbent");
   return completed;
 }
-function retainedAdoptionPrepare(root, input, historical = false) {
+function retainedAdoptionPrepare(root, input, historical = false, steady = false) {
   const lock = retainedRepairLock();
-  const paths = retainedAdoptionRequest(root, input, historical);
+  const paths = retainedAdoptionRequest(root, input, historical, steady);
   const gate = lstatSync(paths.gate, { throwIfNoEntry: false }) ? retainedAdoptionGate(paths) : undefined;
   if (gate?.value.operation === input.operation) {
     const binding = { operation: input.operation, intentSha256: gate.value.intent.sha256 };
@@ -6941,7 +7178,7 @@ function retainedAdoptionPrepare(root, input, historical = false) {
     if (!isDeepStrictEqual(context.intent.request, input)) reject("controller adoption replay changed its request");
     retainedAdoptionRunner(input, retainedAdoptionReadClosure(paths).map(file => file.descriptor),
       [context.intent.replacements[1], context.bootstrap?.intent.replacements[1]]);
-    retainedAdoptionSource(paths, input);
+    retainedAdoptionSource(paths, input, context.intent);
     return binding;
   }
   // Historical completion proves immutable history only. Current source and
@@ -6950,6 +7187,9 @@ function retainedAdoptionPrepare(root, input, historical = false) {
   if (historical && (!previous || !isDeepStrictEqual(input.historical, { gate: gate.file.descriptor, complete: previous.complete.descriptor }) ||
       isDeepStrictEqual(previous.intent.request.source, input.source)))
     reject("historical adoption requires the exact completed gate of a different incident");
+  if (steady && (!previous || !isDeepStrictEqual(input.historical, { gate: gate.file.descriptor, complete: previous.complete.descriptor }) ||
+      !isDeepStrictEqual(input.source, previous.intent.original)))
+    reject("steady controller adoption requires the exact completed predecessor and archived source");
   if (input.retirement && !previous) reject("retired incident adoption requires a completed predecessor");
   const bootstrapGate = retainedBootstrapPaths(paths).gate;
   let bootstrap;
@@ -6957,7 +7197,7 @@ function retainedAdoptionPrepare(root, input, historical = false) {
     bootstrap = retainedBootstrapClosed(retainedBootstrapLoad(root, input.operation, input), true);
   retainedAdoptionRunner(input, undefined, bootstrap?.intent.replacements[1]);
   const source = retainedAdoptionSource(paths, input);
-  if (previous && !historical && !retainedAdoptionSourceMatches(paths, previous.intent.request.source, input))
+  if (previous && !historical && !steady && !retainedAdoptionSourceMatches(paths, previous.intent.request.source, input))
     reject("controller adoption predecessor source changed");
   const old = bootstrap ? bootstrap.backups : retainedAdoptionReadClosure(paths);
   if (!bootstrap && !isDeepStrictEqual(old.map(file => file.descriptor), input.oldClosure)) reject("controller adoption old closure changed");
@@ -6976,9 +7216,9 @@ function retainedAdoptionPrepare(root, input, historical = false) {
   const predecessor = previous ? { gate: gate.file.descriptor,
     archive: retainedRepairFile(paths.prefix + ".predecessor-gate.json", gate.file.bytes), complete: previous.complete.descriptor } : undefined;
   const metadata = paths.destinations.map((path, index) => ({ path, mode: index === 0 ? 0o755 : 0o644, uid: paths.owner, gid: rootGroup() }));
-  const intent = { version: 1, kind: "retained-controller-adoption", protocol: retainedAdoptionProtocol, request: input, lock, metadata, original, backups, replacements: savedReplacements, ...(bootstrap ? { bootstrap: bootstrap.closed.descriptor } : {}), ...(predecessor ? { predecessor } : {}) };
+  const intent = { version: 1, kind: "retained-controller-adoption", protocol: retainedAdoptionProtocol, request: input, lock, metadata, original, backups, replacements: savedReplacements, ...(source.nativeConfig ? { nativeConfig: source.nativeConfig } : {}), ...(bootstrap ? { bootstrap: bootstrap.closed.descriptor } : {}), ...(predecessor ? { predecessor } : {}) };
   const descriptor = retainedAdoptionJSON(paths.prefix + ".intent.json", intent);
-  retainedAdoptionSource(paths, input);
+  retainedAdoptionSource(paths, input, intent);
   if (bootstrap) retainedBootstrapClosed(bootstrap, true);
   else if (!isDeepStrictEqual(retainedAdoptionReadClosure(paths).map(file => file.descriptor), input.oldClosure))
     reject("controller adoption old closure changed before gate publication");
@@ -7039,7 +7279,7 @@ function retainedAdoptionStep(context, index) {
   if (isDeepStrictEqual(current.descriptor, step.from)) {
     const stage = migrationFile(stagePath, paths.owner, { privateOnly: false, mode, limit: migrationJournalLimit });
     if (!isDeepStrictEqual(stage.descriptor, step.stage)) reject("controller adoption exact staged inode changed");
-    retainedAdoptionSource(paths, intent.request);
+    retainedAdoptionSource(paths, intent.request, intent);
     renameSync(stagePath, path);
     syncPath(dirname(path));
     current = migrationFile(path, paths.owner, { privateOnly: false, mode, limit: migrationJournalLimit });
@@ -7053,12 +7293,12 @@ function retainedAdoptionApply(root, binding) {
   retainedRepairLock();
   const context = retainedAdoptionLoad(root, binding);
   retainedAdoptionGate(context.paths, context.file.descriptor);
-  retainedAdoptionSource(context.paths, context.intent.request);
+  retainedAdoptionSource(context.paths, context.intent.request, context.intent);
   const observed = retainedAdoptionReadClosure(context.paths).map(file => file.descriptor);
   retainedAdoptionRunner(context.intent.request, observed, [context.intent.replacements[1], context.bootstrap?.intent.replacements[1]]);
   if (context.bootstrap) retainedBootstrapReaders(context.paths);
   const closure = context.paths.destinations.map((_, index) => retainedAdoptionStep(context, index));
-  retainedAdoptionSource(context.paths, context.intent.request);
+  retainedAdoptionSource(context.paths, context.intent.request, context.intent);
   retainedAdoptionProtocolCheck(retainedAdoptionReadClosure(context.paths));
   const complete = { version: 1, kind: "retained-controller-adoption-complete", operation: binding.operation,
     intent: context.file.descriptor, source: context.intent.request.source, closure };
@@ -7091,7 +7331,7 @@ function retainedAdoptionCompletion(root, binding, current = true) {
 function retainedAdoptionContext(root, binding) {
   retainedRepairLock();
   const context = retainedAdoptionCompletion(root, binding);
-  retainedAdoptionSource(context.paths, context.intent.request);
+  retainedAdoptionSource(context.paths, context.intent.request, context.intent);
   return { version: 1, kind: "retained-controller-adoption-context", operation: binding.operation,
     source: context.intent.request.source, adoption: { intent: context.file.descriptor, complete: context.complete.descriptor },
     closure: context.value.closure };
@@ -7133,9 +7373,10 @@ function retainedControllerAdoption(action, root, input) {
     case "bootstrap": return retainedBootstrap(root, input);
     case "prepare": return retainedAdoptionPrepare(root, input);
     case "historical-successor": return retainedAdoptionPrepare(root, input, true);
+    case "steady-successor": return retainedAdoptionPrepare(root, input, false, true);
     case "apply": return retainedAdoptionApply(root, input);
     case "context": return retainedAdoptionContext(root, input);
-    default: reject("controller adoption only implements bootstrap, prepare, historical-successor, apply and context");
+    default: reject("controller adoption only implements bootstrap, prepare, historical-successor, steady-successor, apply and context");
   }
 }
 
@@ -7449,7 +7690,7 @@ try {
   let result;
   switch (command) {
     case "retained-controller-adoption":
-      if (args.length !== 3) reject("usage: retained-controller-adoption prepare|historical-successor|apply|context ROOT INPUT");
+      if (args.length !== 3) reject("usage: retained-controller-adoption prepare|historical-successor|steady-successor|apply|context ROOT INPUT");
       result = JSON.stringify(retainedControllerAdoption(args[0], args[1], jsonArgument(args[2])));
       break;
     case "controller-adoption-gate":
@@ -7713,6 +7954,7 @@ try {
         const expected = pending.get(key);
         if (!expected) return;
         for (const { tuple, ordinal } of expected) {
+          if (tuple[8] === "held") continue;
           const [sessionKey, sessionId, windowKey, generation] = tuple.slice(4);
           const failure = transcriptPreservationFailure(database, sessionKey, sessionId, windowKey, generation);
           if (failure) warnings.record(tuple, ordinal, failure);
@@ -7725,6 +7967,14 @@ try {
         candidate,
         command === "compatibility" ? undefined : inspectAgent,
         [...pending.values()].map(sessions => sessions[0].tuple),
+        undefined,
+        undefined,
+        (agentId, pathname, entry) => {
+          const identity = [agentId, pathname, entry.dev, entry.ino];
+          pending.delete(JSON.stringify(identity));
+          if (command === "session-preservation-witness")
+            witness.push(JSON.stringify([...identity, "", "", null, null, "held"]));
+        },
       );
       if (command === "compatibility") result = JSON.stringify(state);
       else if (command === "session-preservation-witness") result = JSON.stringify(witness.sort());
@@ -8192,6 +8442,17 @@ try {
       if (args.length !== 4) reject("usage: journal-native-state JOURNAL EXPECTED CONFIG DATABASE");
       result = JSON.stringify(journalNativeState(args[0], jsonArgument(args[1]), args[2], args[3]));
       break;
+    case "journal-native-forward": {
+      if (args.length !== 8) reject("usage: journal-native-forward JOURNAL EXPECTED ROOT PID GENERATION RUNTIME UID PORT");
+      const record = ownedJournal(args[0]);
+      if (args[0] !== migrationNamespace(args[2]).pathname || !isDeepStrictEqual(record, jsonArgument(args[1])))
+        reject("native forward recovery journal changed");
+      const snapshot = nativeForwardState(args[2], record, { pid: integer(args[3], "candidate PID"), generation: args[4],
+        release: join(args[2], "releases", record.candidate.sha), runtime: args[5], uid: integer(args[6], "runtime UID"), port: integer(args[7], "Gateway port") });
+      if (snapshot.configDrift) process.stderr.write(`NATIVE_CONFIG_DRIFT ${JSON.stringify(snapshot.configDrift)}\n`);
+      result = JSON.stringify(snapshot);
+      break;
+    }
     case "journal-original-witness": {
       const record = ownedJournal(args[0]);
       const bytes = originalWitness(args[0], record, validJournal(jsonArgument(args[1])));

@@ -4,8 +4,20 @@ import {
   wrapCurrentPluginInstance,
 } from "../../plugins/plugin-instance-scope.js";
 import type { PluginInstanceConsumer } from "../../plugins/plugin-instance.types.js";
-import type { CreateChannelIngressMonitorOptions } from "./ingress-monitor-types.js";
+import type {
+  ChannelIngressMonitorRetention,
+  CreateChannelIngressMonitorOptions,
+} from "./ingress-monitor-types.js";
 import type { ChannelIngressQueue } from "./ingress-queue.js";
+
+/** Replay-guard retention defaults; changing a value requires a per-channel keyspace audit. */
+export const CHANNEL_INGRESS_RETENTION_DEFAULTS = Object.freeze({
+  pruneIntervalMs: 60 * 60 * 1_000,
+  completedTtlMs: 30 * 24 * 60 * 60 * 1_000,
+  completedMaxEntries: 20_000,
+  failedTtlMs: 30 * 24 * 60 * 60 * 1_000,
+  failedMaxEntries: 20_000,
+} satisfies ChannelIngressMonitorRetention);
 
 export function createIngressMonitorOwner<TRaw, TBody, TStoredPayload, TMetadata>(
   params: CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata>,
@@ -63,8 +75,32 @@ export function createIngressMonitorOwner<TRaw, TBody, TStoredPayload, TMetadata
     );
     return custodyQueue;
   };
+  const retention =
+    options.retention === "standard"
+      ? CHANNEL_INGRESS_RETENTION_DEFAULTS
+      : { ...CHANNEL_INGRESS_RETENTION_DEFAULTS, ...options.retention };
+  const { pruneIntervalMs, ...pruneOptions } = retention;
+  let lastPrunedAt = 0;
+
+  const pruneIfDue = async (owner: "admission" | "pump"): Promise<void> => {
+    // Zero preserves admission-owned compatibility: prune once per admission, never from a pump.
+    if ((owner === "admission") !== pruneIntervalMs <= 0) {
+      return;
+    }
+    const currentTime = maintenance.now();
+    if (owner === "pump" && currentTime - lastPrunedAt < pruneIntervalMs) {
+      return;
+    }
+    await (owner === "pump" ? getCustodyQueue() : getQueue()).prune({
+      ...pruneOptions,
+      now: currentTime,
+    });
+    lastPrunedAt = currentTime;
+  };
+
   return {
     options,
+    pruneIfDue,
     get maintenance() {
       return maintenance;
     },

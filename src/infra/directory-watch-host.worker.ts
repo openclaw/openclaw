@@ -14,7 +14,7 @@ new Worker(parentMonitor, {
   .unref();
 
 type Request = { id: number; path?: string; recursive?: boolean };
-const live = new Set<number>();
+const live = new Map<number, fs.FSWatcher>();
 const send = (message: { id: number; event?: string; filename?: string | null }) =>
   process.stdout.write(`${JSON.stringify(message)}\n`);
 let buffered = "";
@@ -25,16 +25,28 @@ process.stdin.setEncoding("utf8").on("data", (chunk: string) => {
     const request: Request = JSON.parse(line);
     const { id, path, recursive } = request;
     if (path === undefined) {
+      if (process.platform !== "darwin") {
+        live.get(id)?.close();
+      }
       live.delete(id);
       continue;
     }
     try {
-      fs.watch(path, { persistent: false, recursive }, (event, filename) => {
-        if (live.has(id)) {
-          send({ id, event, filename });
-        }
-      }).on("error", () => live.delete(id) && send({ id }));
-      live.add(id);
+      // Node's Linux recursive fallback accepts missing roots without reporting failure.
+      if (recursive) {
+        fs.accessSync(path, fs.constants.R_OK);
+      }
+      // Windows short-name watch events can abort libuv when their long form arrives.
+      const watchPath =
+        process.platform === "win32" && path.includes("~") ? fs.realpathSync.native(path) : path;
+      const watcher = fs
+        .watch(watchPath, { persistent: false, recursive }, (event, filename) => {
+          if (live.has(id)) {
+            send({ id, event, filename });
+          }
+        })
+        .on("error", () => live.delete(id) && send({ id }));
+      live.set(id, watcher);
       // Invalidate once registration is live to cover its asynchronous startup.
       send({ id, event: "change" });
     } catch {
