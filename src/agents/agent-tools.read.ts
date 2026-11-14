@@ -129,6 +129,7 @@ type ReadTruncationDetails = {
   truncated: boolean;
   outputLines: number;
   totalLines?: number;
+  truncatedBy?: ReadToolTruncationDetails["truncatedBy"];
   continuation?: ReadToolContinuation;
 };
 
@@ -289,7 +290,12 @@ async function executeReadWithAdaptivePaging(params: {
     const candidateBytes = aggregatedBytes + delimiter.length + Buffer.byteLength(pageText, "utf8");
     const candidateContent = `${aggregatedContent}${delimiter}${pageContent}`;
     const continuationNotice = pageContinuation
-      ? formatReadContinuationNotice(pageContinuation, params.maxBytes)
+      ? formatReadContinuationNotice(
+          pageContinuation,
+          params.maxBytes,
+          undefined,
+          truncation?.truncatedBy === "budget",
+        )
       : "";
 
     if (

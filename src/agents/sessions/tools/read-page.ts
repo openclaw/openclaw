@@ -17,19 +17,27 @@ export function formatReadContinuationNotice(
   continuation: ReadToolContinuation,
   maxBytes: number,
   range?: { startLine: number; totalLines: number },
+  budgetBound = false,
 ): string {
   const cursor = continuation.kind === "cursor" ? `, cursor=${continuation.cursor}` : "";
   const limit = continuation.limit === undefined ? "" : `, limit=${continuation.limit}`;
   if (!range) {
-    const budget = formatSize(maxBytes).replace(/\.0(?=KB)/, "");
-    return `\n\n[Read output capped at ${budget} for this call. Use offset=${continuation.offset}${cursor}${limit} to continue.]`;
+    // Name the constraint that actually bounded the page. Reporting the byte cap the page
+    // never reached understates what was dropped and invites the model to stop paginating.
+    // Keep the budget wording no longer than the byte wording: a read page already sits at
+    // the caller's limit, so a longer notice is clipped by the downstream result guard.
+    const capped = budgetBound
+      ? "by the model budget"
+      : `at ${formatSize(maxBytes).replace(/\.0(?=KB)/, "")} for this call`;
+    return `\n\n[Read output capped ${capped}. Use offset=${continuation.offset}${cursor}${limit} to continue.]`;
   }
   const label =
     continuation.kind === "cursor"
       ? `part of line ${range.startLine}`
       : `lines ${range.startLine}-${continuation.offset - 1} of ${range.totalLines}`;
   const action = continuation.kind === "cursor" ? "Use read with" : "Use";
-  return `\n\n[Showing ${label} (${formatSize(maxBytes)} limit). ${action} offset=${continuation.offset}${cursor}${limit} to continue.]`;
+  const bounded = budgetBound ? "model budget" : `${formatSize(maxBytes)} limit`;
+  return `\n\n[Showing ${label} (${bounded}). ${action} offset=${continuation.offset}${cursor}${limit} to continue.]`;
 }
 
 /** Bound a selected text page once; legacy injected readers reuse this owner decision. */
@@ -135,6 +143,7 @@ export function createBoundedReadTextPage(params: {
     Buffer.byteLength(formatReadContinuationNotice(lineEstimate, params.maxBytes, range), "utf8"),
   );
   let prefix = truncateUtf8Prefix(params.content, Math.max(0, maxBytes - reservedBytes));
+  const byteCappedPrefix = prefix;
   if (params.modelBudget) {
     prefix = sliceToolResultTextToBudget(
       prefix,
@@ -148,6 +157,9 @@ export function createBoundedReadTextPage(params: {
       { minimumRawWeight: 2 },
     );
   }
+  // The weighted budget removed content the byte cap would have kept, so the byte allowance
+  // below is derived from a limit the page never reached and cannot name the real cause.
+  const budgetBound = prefix !== byteCappedPrefix;
   // Convert the fitted prefix back to a byte allowance for the existing line/cursor owner.
   // The cursor advances only over text that survives both model limits and its real footer.
   const contentBudgetBytes = Buffer.byteLength(prefix, "utf8");
@@ -165,7 +177,11 @@ export function createBoundedReadTextPage(params: {
     truncation.truncatedBy = "lines";
     truncation.outputLines = DEFAULT_MAX_LINES;
   }
-  const truncatedBy = truncation.truncatedBy;
+  // A line-bounded page keeps reporting lines: the budget cut never decided the outcome there.
+  const truncatedBy =
+    budgetBound && truncation.truncatedBy === "bytes"
+      ? ("budget" as const)
+      : truncation.truncatedBy;
   if (!truncation.truncated || truncatedBy === null) {
     return completeSelectedPage(truncation.content);
   }
@@ -205,7 +221,12 @@ export function createBoundedReadTextPage(params: {
     ...truncationDetails
   } = truncation;
   return {
-    text: `${content}${formatReadContinuationNotice(continuation, params.maxBytes, range)}`,
+    text: `${content}${formatReadContinuationNotice(
+      continuation,
+      params.maxBytes,
+      range,
+      truncatedBy === "budget",
+    )}`,
     details: {
       kind: "truncated",
       content,
