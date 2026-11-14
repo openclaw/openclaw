@@ -4,6 +4,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -12,7 +13,7 @@ import {
 } from "./cli-backends.test-support.js";
 import { configFor } from "./model-auth.fixtures.test-support.js";
 import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
-import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
+import { apiKey, authStore, harnessRegistry } from "./model-catalog-fixtures.test-support.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { prepareModelChoice, preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
@@ -340,6 +341,92 @@ it.each([
     });
   },
 );
+
+it.each(
+  ["openclaw", "google-gemini-cli"].flatMap((runtime) =>
+    ["default-wrong-account", "default-valid-account", "other-provider-recovery"].map(
+      (scenario) => ({
+        runtime,
+        scenario,
+      }),
+    ),
+  ),
+)("preserves account scope for $scenario on $runtime", async ({ runtime, scenario }) => {
+  const cliRuntime = "google-gemini-cli";
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: cliRuntime,
+        modelProvider: "google",
+        pluginId: "google",
+        config: { command: "gemini" },
+      },
+    ],
+  });
+  const model: ModelCatalogEntry = {
+    provider: "google",
+    id: "gemini-2.5-pro",
+    name: "Gemini",
+    api: "google-generative-ai",
+  };
+  const cfg: OpenClawConfig = {
+    plugins: { entries: { google: { enabled: true } } },
+    agents: {
+      defaults: {
+        model: { primary: `google/${model.id}` },
+        models: { [`google/${model.id}`]: { agentRuntime: { id: runtime } } },
+      },
+    },
+  };
+  const owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, {
+    modelCatalog: { entries: [model], routeVariants: [model] },
+    authModes: { [cliRuntime]: { source: "native", mode: "oauth" } },
+    metadataSnapshot: createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "google", providers: ["google"], cliBackends: [cliRuntime] }],
+    }),
+  });
+  bindPreparedModelRuntimeAuth(owner, {
+    store: authStore({
+      selected: apiKey(scenario === "default-valid-account" ? "google" : "other"),
+      google: apiKey("google"),
+    }),
+  });
+  published.owner = owner;
+  const recovery = scenario === "other-provider-recovery";
+  const entry: SessionEntry = { sessionId: "default-account-selection", updatedAt: 0 };
+  applyModelOverrideToSessionEntry({
+    entry,
+    selection: {
+      provider: recovery ? "other" : model.provider,
+      model: recovery ? "other-model" : model.id,
+      isDefault: !recovery,
+    },
+    profileOverride: "selected",
+    explicitDefaultSelection: true,
+  });
+  expect(entry.authProfileOverrideSource).toBe("user");
+  if (!recovery) {
+    expect(entry.providerOverride).toBeUndefined();
+    expect(entry.modelProvider).toBeUndefined();
+  }
+  const choice = await preparePublishedModelRuntimeChoice({
+    cfg,
+    agentId: "main",
+    provider: model.provider,
+    model: model.id,
+    runtimeId: runtime,
+    sessionEntry: entry,
+  });
+  if (scenario === "default-wrong-account") {
+    expect(choice).toMatchObject({
+      kind: "unavailable",
+      message: expect.stringContaining('selected account "selected" is unavailable'),
+    });
+  } else {
+    expect(choice).toMatchObject({ kind: "ready", runtimeId: runtime });
+    expect(choice.kind === "ready" && choice.validate()).toBeUndefined();
+  }
+});
 
 it("retains the missing personal account privately but hides its locator in runtime rejection", async () => {
   const profileId =

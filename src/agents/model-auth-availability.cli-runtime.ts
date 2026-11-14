@@ -13,7 +13,10 @@ import {
   resolveCliRuntimeCanonicalProvider,
   resolveCliRuntimeModelBackendBinding,
 } from "./cli-backends.js";
-import { selectCliExecutionAuthProfile } from "./cli-execution-auth.js";
+import {
+  evaluateCliExecutionAuthProfileAdmission,
+  selectCliExecutionAuthProfile,
+} from "./cli-execution-auth.js";
 import { resolveBundledCliBackendAuthPolicy } from "./cli-runner/cli-backend-auth-policy.js";
 import type {
   ModelAuthAvailabilityEvaluation,
@@ -109,6 +112,41 @@ export function createCliRuntimeModelAuthEvaluator(
     }
     const authPolicy = resolveBundledCliBackendAuthPolicy(runtimeProvider);
     if (
+      ref.pinnedProfileId?.trim() &&
+      selectedProfileId &&
+      authPolicy &&
+      !authPolicy.nativeAuthProfileIds?.includes(selectedProfileId)
+    ) {
+      const admission = evaluateCliExecutionAuthProfileAdmission({
+        cliExecutionProvider: runtimeProvider,
+        canonicalProvider: resolveCliRuntimeCanonicalProvider({
+          runtime: runtimeProvider,
+          config: params.cfg,
+          includeSetupRegistry: true,
+          metadataSnapshot: params.metadataSnapshot,
+        }),
+        credential: params.authStore.profiles[selectedProfileId],
+        explicitSelection: true,
+      });
+      if (admission.kind !== "accepted") {
+        // Native login cannot rescue an account execution refuses to forward.
+        return {
+          availability: false,
+          routeResolution: null,
+          selectedProfileId,
+          unavailableReason: admission.kind === "missing" ? "missing-auth" : "auth-failed",
+        };
+      }
+      if (!authPolicy.strictSelectedProfile && admission.credential.type === "api_key") {
+        // Forwarded static credentials still need materialization; a native OAuth login
+        // cannot satisfy their SecretRefs. CLI-owned OAuth refresh stays with the runtime.
+        return evaluateProviderAuth(admission.credential.provider, {
+          modelId: ref.modelId,
+          requiredProfileId: selectedProfileId,
+        });
+      }
+    }
+    if (
       selectedProfileId &&
       authPolicy?.strictSelectedProfile &&
       !authPolicy.nativeAuthProfileIds?.includes(selectedProfileId)
@@ -139,9 +177,6 @@ export function createCliRuntimeModelAuthEvaluator(
       }
     }
     const runtimeAuth = { id: runtimeProvider, source: "native" as const };
-    if (normalizedRuntimeProvider === normalizedProvider) {
-      return runtimeOwners?.length ? { ...evaluation, runtimeAuth } : undefined;
-    }
     const runtimeAuthMode =
       params.preparedRuntimeAuthModes?.[normalizeProviderIdForAuth(runtimeProvider)];
     if (runtimeAuthMode !== undefined) {
@@ -154,6 +189,9 @@ export function createCliRuntimeModelAuthEvaluator(
         evidence: "runtime",
         runtimeAuth,
       };
+    }
+    if (normalizedRuntimeProvider === normalizedProvider) {
+      return runtimeOwners?.length ? { ...evaluation, runtimeAuth } : undefined;
     }
     // Preparation probes the native login of every configured runtime; only routes found by
     // later discovery wait for the full catalog's probe (#134463).
