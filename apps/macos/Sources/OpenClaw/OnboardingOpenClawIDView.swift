@@ -33,21 +33,35 @@ struct OnboardingReachabilityContent: View {
 
 struct OnboardingOpenClawIDView: View {
     @Bindable var model: OnboardingOpenClawIDModel
+    var onClose: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 20) {
-            OnboardingOpenClawIDContent(
-                step: self.model.step,
-                unavailableReason: self.model.step == .signIn
-                    ? self.model.accountUnavailableReason : self.model.unavailableReason,
-                action: { self.model.perform($0) })
-                .disabled(self.model.busy || self.model.unavailableReason != nil)
+            if self.model.error != nil, case .ownerConnected = self.model.step {
+                Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(.orange)
+            } else {
+                OnboardingOpenClawIDContent(
+                    step: self.model.step,
+                    unavailableReason: self.model.step == .signIn
+                        ? self.model.accountUnavailableReason : self.model.unavailableReason,
+                    action: { self.model.perform($0) })
+                    .disabled(self.model.busy || self.model.unavailableReason != nil)
+            }
             if self.model.busy { ProgressView("Working…") }
             if let error = self.model.error {
                 Text(error).foregroundStyle(.orange).font(.callout)
+                if case .ownerConnected = self.model.step {
+                    Button("Try again") { self.model.perform(.retry) }.disabled(self.model.busy)
+                }
             }
-            Button("Close") { self.dismiss() }.keyboardShortcut(.cancelAction)
+            Button("Close") {
+                if let onClose = self.onClose {
+                    onClose()
+                } else {
+                    self.dismiss()
+                }
+            }.keyboardShortcut(.cancelAction)
         }
         .padding(28)
         .frame(width: 574)
@@ -61,6 +75,7 @@ struct OnboardingOpenClawIDContent: View {
     let unavailableReason: String?
     let action: (OnboardingOpenClawIDAction) -> Void
     @State private var discoveryOrigin = ""
+    @State private var recoveryCode = ""
 
     var body: some View {
         VStack(spacing: 18) {
@@ -103,7 +118,7 @@ struct OnboardingOpenClawIDContent: View {
                 .foregroundStyle(.secondary)
             Button("Check connection") { self.action(.checkApproval) }
         case .signIn:
-            self.heading("Sign in with OpenClaw ID", subtitle: "Choose an account to find your OpenClaw.")
+            self.heading("Sign in with OpenClaw ID", subtitle: "Find the claws you own or were invited to.")
             Image(systemName: "person.crop.circle").font(.system(size: 56)).foregroundStyle(.tint)
             Button("Sign in") { self.action(.signIn) }
                 .buttonStyle(.borderedProminent).disabled(self.unavailableReason != nil)
@@ -120,11 +135,13 @@ struct OnboardingOpenClawIDContent: View {
                 Button { self.action(.selectClaw(claw.id)) } label: {
                     self.row(
                         claw.name,
-                        detail: "\(claw.relationship) · \(claw.online ? "Online" : "Offline")",
+                        detail: "\(claw.relationship) · \(claw.online ? "Online" : "Offline — turn it on to continue")",
                         icon: "desktopcomputer")
                 }
                 .buttonStyle(.plain).disabled(!claw.online)
             }
+            Button("Use a different account") { self.action(.switchAccount) }
+                .buttonStyle(.link)
         case let .recoveryKit(hostname, saved):
             self.heading("Save your recovery kit", subtitle: "Keep the recovery kit for \(hostname) somewhere safe.")
             self.row(
@@ -189,7 +206,201 @@ struct OnboardingOpenClawIDContent: View {
         case let .reachable(hostname):
             self.heading("You’re all set!", subtitle: "Reachable at \(hostname).")
             self.row("Recovery kit saved", detail: "Keep it safe. New devices still need your approval.", icon: "key")
+        case .signingIn:
+            self.heading("Finish signing in", subtitle: "Continue in the OpenClaw ID window.")
+            ProgressView().controlSize(.large)
+            Text("This only confirms who you are. Access to a claw still needs your approval.")
+                .font(.callout).foregroundStyle(.secondary)
+        case let .chooseApproval(claw, device):
+            self.heading(
+                "Make this Mac your device",
+                subtitle: "You own \(claw). Approve \(device) once to use it with full access.")
+            self.choice(
+                "Approve from another device",
+                detail: "Use a browser or device that already has access to \(claw). You’ll compare a six-digit code.",
+                icon: "laptopcomputer.and.iphone",
+                action: .approveFromDevice)
+            self.choice(
+                "Use your recovery kit",
+                detail: "For when no other device is at hand. The kit is used once on this Mac, then erased.",
+                icon: "key",
+                action: .useRecoveryKit)
+            self.row(
+                "\(device) will also run tools for \(claw)",
+                detail: """
+                Commands, screen, camera and notifications, subject to the permissions you grant. \
+                You can stop this in Settings.
+                """,
+                icon: "wrench.and.screwdriver")
+        case let .ownerCompareCode(claw, device, code, approvalURL, confirmed):
+            self.heading(
+                "Compare the code",
+                subtitle: "On a device that already has access to \(claw), open the request from \(device).")
+            Text(code).font(.system(size: 42, weight: .semibold, design: .monospaced)).textSelection(.enabled)
+            if confirmed {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text("Waiting for approval…").foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Does the other device show the same six digits?").foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    Button("They don’t match") { self.action(.confirmCode(matches: false)) }
+                    Button("The codes match") { self.action(.confirmCode(matches: true)) }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+            self.note("""
+            Look for the notification in \(claw)’s Control UI, or open Account → Your devices → \
+            Approve a new device.
+            """)
+            if let approvalURL, approvalURL.scheme == "https" {
+                Link(destination: approvalURL) { self.plain("Open \(claw) in your browser") }
+            }
+            Button("Use your recovery kit instead") { self.action(.useRecoveryKit) }.buttonStyle(.link)
+        case let .recoveryKitEntry(claw):
+            self.heading(
+                "Use your recovery kit",
+                subtitle: "Enter the recovery code from the kit you saved for \(claw).")
+            SecureField("Recovery code", text: self.$recoveryCode)
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.leading)
+            HStack {
+                Button("Choose kit file…") { self.action(.chooseKitFile) }
+                Spacer()
+            }
+            self.row(
+                "Stays on this Mac",
+                detail: """
+                The code approves this Mac and then is erased from memory. It is never saved, \
+                sent to \(claw) or logged.
+                """,
+                icon: "lock.shield")
+            self.note("Your password manager saved it as “OpenClaw recovery kit · \(claw)”.", font: .caption)
+            Button("Approve this Mac") {
+                let code = self.recoveryCode
+                self.recoveryCode = ""
+                self.action(.submitRecoveryKit(code))
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(self.recoveryCode.isEmpty)
+        case let .ownerConnected(claw, device, approvedWith):
+            self.heading("You’re all set!", subtitle: "\(device) is your device on \(claw).")
+            self.row(
+                "Full access",
+                detail: "Chat, dashboard and settings, like your browser. \(approvedWith).",
+                icon: "checkmark.seal")
+            self.row(
+                "Runs tools for \(claw)",
+                detail: "Your assistant can use this Mac within the permissions you grant. Stop anytime in Settings.",
+                icon: "wrench.and.screwdriver")
+            self.row(
+                "Opening the dashboard…",
+                detail: "Signed in through OpenClaw ID. No VPN or Gateway token.",
+                icon: "rectangle.and.hand.point.up.left")
+        case let .problem(problem):
+            self.problemContent(problem)
         }
+    }
+
+    @ViewBuilder
+    private func problemContent(_ problem: OnboardingOpenClawIDProblem) -> some View {
+        switch problem {
+        case let .clawOffline(claw):
+            self.problemHeading(
+                "\(claw) is offline",
+                detail: """
+                The computer running \(claw) isn’t reachable. Make sure it’s on and connected, \
+                then try again.
+                """,
+                icon: "wifi.slash")
+            Button("Try again") { self.action(.retry) }.buttonStyle(.borderedProminent)
+            Button("Choose another claw") { self.action(.back) }.buttonStyle(.link)
+        case let .denied(claw):
+            self.problemHeading(
+                "Not approved",
+                detail: "The request to add this Mac to \(claw) was declined. Nothing was added.",
+                icon: "xmark.octagon")
+            Button("Start over") { self.action(.back) }.buttonStyle(.borderedProminent)
+        case let .expired(claw):
+            self.problemHeading(
+                "The request expired",
+                detail: "No one approved this Mac on \(claw) in time. Start again to get a new code.",
+                icon: "clock.badge.exclamationmark")
+            Button("Get a new code") { self.action(.retry) }.buttonStyle(.borderedProminent)
+        case let .kitInvalid(claw):
+            self.problemHeading(
+                "That recovery code didn’t work",
+                detail: "It isn’t a recovery code, or it’s the kit for another claw. Use the kit made for \(claw).",
+                icon: "key.slash")
+            Button("Try again") { self.action(.useRecoveryKit) }.buttonStyle(.borderedProminent)
+            Button("Approve from another device instead") { self.action(.approveFromDevice) }
+                .buttonStyle(.link)
+        case let .notInvited(account):
+            self.problemHeading(
+                "No claws for \(account)",
+                detail: """
+                You don’t own a claw and haven’t joined one yet. Ask an owner for an invite, \
+                or set up OpenClaw on this Mac.
+                """,
+                icon: "person.crop.circle.badge.questionmark")
+            Button("Use a different account") { self.action(.switchAccount) }
+                .buttonStyle(.link)
+        case let .memberNeedsInvite(claw):
+            self.problemHeading(
+                "Ask for an invite to \(claw)",
+                detail: "You joined \(claw) as a member. Each of your devices joins with its own invite from an owner.",
+                icon: "envelope.badge")
+            Button("Choose another claw") { self.action(.back) }.buttonStyle(.link)
+        case .signInFailed:
+            self.problemHeading(
+                "Sign-in didn’t finish",
+                detail: "OpenClaw ID didn’t confirm your account. Try again.",
+                icon: "person.crop.circle.badge.exclamationmark")
+            Button("Sign in again") { self.action(.signIn) }.buttonStyle(.borderedProminent)
+        }
+    }
+
+    /// Runtime text built from claw and device names (rendered as given, like `heading` and `row`).
+    private func plain(_ text: String) -> Text {
+        Text(text)
+    }
+
+    private func note(_ text: String, font: Font = .callout) -> some View {
+        self.plain(text).font(font).foregroundStyle(.secondary)
+    }
+
+    private func problemHeading(_ title: String, detail: String, icon: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: icon).font(.system(size: 44)).foregroundStyle(.orange)
+            Text(title).font(.largeTitle.weight(.semibold))
+            Text(detail).foregroundStyle(.secondary)
+        }
+    }
+
+    private func choice(
+        _ title: String,
+        detail: String,
+        icon: String,
+        action: OnboardingOpenClawIDAction) -> some View
+    {
+        Button { self.action(action) } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: icon).font(.title2).foregroundStyle(.tint).frame(width: 28)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(title).font(.headline)
+                    Text(detail).font(.callout).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+            }
+            .multilineTextAlignment(.leading)
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func heading(_ title: String, subtitle: String) -> some View {

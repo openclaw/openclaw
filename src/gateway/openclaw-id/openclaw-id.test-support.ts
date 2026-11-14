@@ -258,12 +258,14 @@ export async function redemptionMail(params: {
     "InviteRedemption",
     {
       ...parts,
+      label: "Bob browser",
       proof: await computeRedemptionProof(params.proofKey, parts),
       requested_at: nowSeconds(),
     },
     signer,
   );
   return {
+    signer,
     peerKey,
     message: {
       message_id: `m-${params.inviteId.slice(0, 6)}`,

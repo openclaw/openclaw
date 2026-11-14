@@ -21,11 +21,10 @@ extension OpenClawChatViewModel {
         guard self.messages != reconciled.messages || reconciled.changed else { return }
         self.messages = reconciled.messages
         self.seedInputHistory(from: reconciled.messages)
+        // A durable reply can land while pacing still holds back its last words. Show everything
+        // received, so the live bubble it supersedes leaves in this same update (`liveText`).
+        self.flushPendingStreamingAssistantDisplay()
         markTimelineChanged()
-    }
-
-    var liveAssistantDisplayText: String? {
-        self.liveText(self.displayedStreamingAssistantText)
     }
 
     /// A structural read must not subscribe the whole transcript to every new word.

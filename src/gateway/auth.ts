@@ -35,6 +35,7 @@ import {
   resolveOpenClawIdTunnelPrincipal,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { checkBrowserOrigin, type BrowserOriginPolicy } from "./origin-check.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
 import {
@@ -211,7 +212,7 @@ export function gatewayIngressPrincipalAuthError(
   if (principal.kind === "person") {
     return gatewayPersonPrincipalAuthError(auth, cfg);
   }
-  if (cfg.gateway?.roles) {
+  if (isNamedOperatorRoleEnforcementEnabled(cfg)) {
     return "Owner ingress does not support gateway.roles. Use a person-bound grant approved in the Gateway Control UI.";
   }
   if (auth.mode !== "token" && auth.mode !== "password") {
@@ -232,7 +233,7 @@ export function gatewayPersonPrincipalAuthError(
   const proxy = auth.trustedProxy;
   if (
     auth.mode !== "trusted-proxy" ||
-    !cfg.gateway?.roles ||
+    !isNamedOperatorRoleEnforcementEnabled(cfg) ||
     proxy?.userHeader.trim().toLowerCase() !== "cf-access-authenticated-user-email" ||
     !proxy.requiredHeaders?.some(
       (header) => header.trim().toLowerCase() === "cf-access-jwt-assertion",

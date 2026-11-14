@@ -27,6 +27,7 @@ import type {
 import {
   hasToolUsageRanking,
   selectUsageRankedToolRows,
+  visitUsageRankedToolRows,
   type ToolUsageRankingSnapshot,
 } from "./tool-usage-ranking.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -322,7 +323,16 @@ function formatToolSearchCatalogDirectory(
   return [heading, ...lines, "", notice, footerForCount(lines.length)].join("\n");
 }
 
-type McpDirectoryServer = { name: string; rows: ToolDirectoryRow[]; unlisted: number };
+type McpDirectoryRow = ToolDirectoryRow & { id: string };
+type McpDirectoryServer = { name: string; rows: McpDirectoryRow[]; unlisted: number };
+type McpDirectoryLayout = {
+  /** A collapsed server renders as one count line. */
+  expanded: (server: McpDirectoryServer) => boolean;
+  /** Rows of an expanded server that keep their names; the rest join its count line. */
+  listed?: (row: McpDirectoryRow) => boolean;
+  described: (row: McpDirectoryRow) => boolean;
+  hiddenServers?: number;
+};
 
 /**
  * One-line, bounded projection of untrusted server-provided text. Rows cannot
@@ -356,10 +366,9 @@ function mcpDirectoryServerName(entry: ToolSearchCatalogEntry): string {
 
 function renderMcpToolDirectory(
   servers: readonly McpDirectoryServer[],
-  expanded: (server: McpDirectoryServer) => boolean,
-  withDescriptions: boolean,
-  hiddenServers = 0,
+  layout: McpDirectoryLayout,
 ): string {
+  const hiddenServers = layout.hiddenServers ?? 0;
   const lines = [MCP_TOOL_DIRECTORY_HEADING];
   let omitted = false;
   let hiddenTools = 0;
@@ -368,21 +377,26 @@ function renderMcpToolDirectory(
       hiddenTools += server.rows.length + server.unlisted;
       return;
     }
-    if (!expanded(server)) {
+    if (!layout.expanded(server)) {
       omitted = true;
       lines.push(
         `- ${server.name} server: ${server.rows.length + server.unlisted} tools, names omitted`,
       );
       return;
     }
+    let more = server.unlisted;
     for (const row of server.rows) {
+      if (layout.listed && !layout.listed(row)) {
+        more += 1;
+        continue;
+      }
       lines.push(
-        withDescriptions ? `${row.label}: ${row.description || "No description."}` : row.label,
+        layout.described(row) ? `${row.label}: ${row.description || "No description."}` : row.label,
       );
     }
-    if (server.unlisted > 0) {
+    if (more > 0) {
       omitted = true;
-      lines.push(`- ${server.name} server: ${server.unlisted} more tools, names omitted`);
+      lines.push(`- ${server.name} server: ${more} more tools, names omitted`);
     }
   });
   if (hiddenServers > 0) {
@@ -399,7 +413,13 @@ function fitsMcpToolDirectory(text: string): boolean {
   return Buffer.byteLength(text, "utf8") <= MAX_MCP_TOOL_DIRECTORY_BYTES;
 }
 
-function formatMcpToolDirectory(entries: readonly ToolSearchCatalogEntry[]): string {
+const all = () => true;
+const none = () => false;
+
+function formatMcpToolDirectory(
+  entries: readonly ToolSearchCatalogEntry[],
+  usageRanking?: ToolUsageRankingSnapshot,
+): string {
   const byServer = new Map<string, McpDirectoryServer>();
   for (const entry of entries) {
     if (entry.source !== "mcp" || entry.directVisible) {
@@ -419,6 +439,7 @@ function formatMcpToolDirectory(entries: readonly ToolSearchCatalogEntry[]): str
       continue;
     }
     server.rows.push({
+      id: entry.id,
       label: `- ${label}`,
       description: sanitizeMcpToolDirectoryDescription(entry.description),
     });
@@ -433,28 +454,43 @@ function formatMcpToolDirectory(entries: readonly ToolSearchCatalogEntry[]): str
   })).toSorted((a, b) => compare(a.name, b.name));
   // Degrade in fixed steps: descriptions, then names, then whole servers become
   // counts. Every server stays visible as at least a count.
-  const full = renderMcpToolDirectory(servers, () => true, true);
+  const full = renderMcpToolDirectory(servers, { expanded: all, described: all });
   if (fitsMcpToolDirectory(full)) {
     return full;
   }
-  const names = renderMcpToolDirectory(servers, () => true, false);
+  const names = renderMcpToolDirectory(servers, { expanded: all, described: none });
+  const ranked = usageRanking
+    ? formatUsageRankedMcpToolDirectory(servers, usageRanking, fitsMcpToolDirectory(names))
+    : undefined;
+  if (ranked !== undefined) {
+    return ranked;
+  }
   if (fitsMcpToolDirectory(names)) {
     return names;
   }
   // Expand the smallest servers first so the most servers keep callable names.
   const expanded = new Set<McpDirectoryServer>();
+  const isExpanded = (server: McpDirectoryServer) => expanded.has(server);
   const bySize = servers.toSorted(
     (a, b) => a.rows.length - b.rows.length || compare(a.name, b.name),
   );
   for (const server of bySize) {
     expanded.add(server);
-    if (!fitsMcpToolDirectory(renderMcpToolDirectory(servers, (s) => expanded.has(s), false))) {
+    if (
+      !fitsMcpToolDirectory(
+        renderMcpToolDirectory(servers, { expanded: isExpanded, described: none }),
+      )
+    ) {
       expanded.delete(server);
       break;
     }
   }
   for (let hidden = 0; hidden <= servers.length; hidden += 1) {
-    const text = renderMcpToolDirectory(servers, (s) => expanded.has(s), false, hidden);
+    const text = renderMcpToolDirectory(servers, {
+      expanded: isExpanded,
+      described: none,
+      hiddenServers: hidden,
+    });
     if (fitsMcpToolDirectory(text) || hidden === servers.length) {
       return text;
     }
@@ -463,22 +499,81 @@ function formatMcpToolDirectory(entries: readonly ToolSearchCatalogEntry[]): str
 }
 
 /**
+ * Frozen usage decides which rows keep descriptions, then which keep names, under
+ * the same byte budget. Rows still render in canonical server/name order, and a
+ * server whose names do not fit keeps a count line. Undefined defers to the fixed
+ * steps when even count lines for every server do not fit.
+ */
+function formatUsageRankedMcpToolDirectory(
+  servers: readonly McpDirectoryServer[],
+  usageRanking: ToolUsageRankingSnapshot,
+  namesFit: boolean,
+): string | undefined {
+  const rows = servers.flatMap((server) => server.rows);
+  const selected = new Set<string>();
+  const isSelected = (row: McpDirectoryRow) => selected.has(row.id);
+  const layout: McpDirectoryLayout = namesFit
+    ? { expanded: all, described: isSelected }
+    : {
+        expanded: (server) => server.rows.some(isSelected),
+        listed: isSelected,
+        described: none,
+      };
+  if (!namesFit && !fitsMcpToolDirectory(renderMcpToolDirectory(servers, layout))) {
+    return undefined;
+  }
+  const serverSize = new Map(
+    servers.flatMap((server) => server.rows.map((row) => [row.id, server.rows.length] as const)),
+  );
+  visitUsageRankedToolRows(
+    rows.map((row) => ({
+      id: row.id,
+      pinned: false,
+      line: namesFit ? `${row.label}: ${row.description || "No description."}` : row.label,
+    })),
+    usageRanking,
+    MAX_MCP_TOOL_DIRECTORY_BYTES,
+    (row) => {
+      selected.add(row.id);
+      if (fitsMcpToolDirectory(renderMcpToolDirectory(servers, layout))) {
+        return true;
+      }
+      selected.delete(row.id);
+      return false;
+    },
+    // Like the fixed steps, unscored names favor smaller servers so more servers
+    // keep callable names.
+    (left, right) =>
+      (serverSize.get(left.id) ?? 0) - (serverSize.get(right.id) ?? 0) ||
+      (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
+  );
+  return renderMcpToolDirectory(servers, layout);
+}
+
+/**
  * Bounded directory of deferred MCP tools for the tool_search description. It is
  * rendered from the immutable catalog snapshot only, so unchanged inventory keeps
  * identical bytes and the provider's prompt prefix stays reusable.
  */
-export function buildMcpToolSearchDirectory(catalog: ToolSearchCatalogSession): string {
+export function buildMcpToolSearchDirectory(
+  catalog: ToolSearchCatalogSession,
+  usageRanking?: ToolUsageRankingSnapshot,
+): string {
+  const ranking = hasToolUsageRanking(usageRanking) ? usageRanking : undefined;
+  const cacheKey = ranking
+    ? `${MCP_TOOL_DIRECTORY_CACHE_KEY}:${JSON.stringify(ranking)}`
+    : MCP_TOOL_DIRECTORY_CACHE_KEY;
   let cachedPrompts = toolSchemaDirectoryPromptCache.get(catalog.entries);
-  const cached = cachedPrompts?.get(MCP_TOOL_DIRECTORY_CACHE_KEY);
+  const cached = cachedPrompts?.get(cacheKey);
   if (cached !== undefined) {
     return cached;
   }
-  const directory = formatMcpToolDirectory(catalog.entries);
+  const directory = formatMcpToolDirectory(catalog.entries, ranking);
   if (!cachedPrompts) {
     cachedPrompts = new Map<string, string>();
     toolSchemaDirectoryPromptCache.set(catalog.entries, cachedPrompts);
   }
-  cachedPrompts.set(MCP_TOOL_DIRECTORY_CACHE_KEY, directory);
+  cachedPrompts.set(cacheKey, directory);
   pruneMapToMaxSize(cachedPrompts, 12);
   return directory;
 }

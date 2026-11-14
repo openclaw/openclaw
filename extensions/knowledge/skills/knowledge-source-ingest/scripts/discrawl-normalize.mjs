@@ -62,7 +62,9 @@ async function run(argv) {
   }
   const database = new DatabaseSync(databasePath, { readOnly: true });
   const output = options.get("output") ?? "-";
-  const destination = output === "-" ? process.stdout : createWriteStream(output);
+  // Set only after every input has been validated; opening the destination
+  // truncates an existing file, so creation stays out of the rejection paths.
+  let destination;
   try {
     let channel;
     if (/^\d+$/.test(requestedChannel)) {
@@ -109,6 +111,7 @@ async function run(argv) {
       scope +
       ") AND m.created_at>=?2 AND m.created_at<?3 ORDER BY m.created_at,m.id";
     const statement = database.prepare(sql);
+    destination = output === "-" ? process.stdout : createWriteStream(output);
     let count = 0;
     let watermark = null;
     for (const row of statement.iterate(channel.id, since, before)) {
@@ -169,7 +172,16 @@ async function run(argv) {
     );
   } finally {
     database.close();
+    // A rejected export must not leave the open destination holding the event loop.
+    if (destination && destination !== process.stdout) {
+      destination.destroy();
+    }
   }
 }
 
-await run(process.argv.slice(2));
+try {
+  await run(process.argv.slice(2));
+} catch (error) {
+  console.error(error.message);
+  process.exitCode = 1;
+}

@@ -6,7 +6,9 @@ import {
   type SessionTranscriptTargetBinding,
 } from "../../config/sessions/transcript-target-binding.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
+import type { AgentRunRequest } from "../../gateway/server-methods/agent-request-types.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
+import { readLocalFileSafely } from "../../infra/fs-safe.js";
 import type { SessionDeliveryRequesterBinding } from "../../infra/session-delivery-queue.records.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -18,6 +20,7 @@ import {
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
 import { findMediaGenerationOperation } from "../media-generation-activity.js";
 import { deliverSubagentAnnouncement } from "../subagents/announce/subagent-announce-delivery.js";
+import { MAX_IMAGE_INPUT_BYTES } from "../tool-images.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-completion");
 
@@ -163,6 +166,38 @@ export async function wakeMediaGenerationTaskCompletion(params: {
     lifecycleRevision: target.lifecycleRevision,
   };
   const announceId = `${params.toolName}:${handle.taskId}:${params.status}`;
+  const inputAttachments: NonNullable<AgentRunRequest["attachments"]> = [];
+  let imageInspectionUnavailable = false;
+  // Admit only this producer's successful outputs, bound to the requester above.
+  // They are ordinary input attachments, not a new prompt-path read permission.
+  if (params.status === "ok" && params.toolName === "image_generate") {
+    for (const attachment of params.attachments ?? []) {
+      if (attachment.type !== "image" || !attachment.path) {
+        continue;
+      }
+      try {
+        const { buffer } = await readLocalFileSafely({
+          filePath: attachment.path,
+          maxBytes: MAX_IMAGE_INPUT_BYTES,
+        });
+        inputAttachments.push({
+          type: "image",
+          mimeType: attachment.mimeType,
+          fileName: attachment.name,
+          content: buffer.toString("base64"),
+        });
+      } catch (error) {
+        imageInspectionUnavailable = true;
+        log.warn("Generated image could not be attached for inspection", {
+          runId: handle.runId,
+          error,
+        });
+      }
+    }
+    if (!isSourceCurrent()) {
+      return { status: "permanent_failure" };
+    }
+  }
   const mediaUrls = Array.from(
     new Set([
       ...(params.mediaUrls ?? []),
@@ -183,6 +218,11 @@ export async function wakeMediaGenerationTaskCompletion(params: {
       ...(params.attachments?.length ? { attachments: params.attachments } : {}),
       ...(mediaUrls.length ? { mediaUrls } : {}),
       replyInstruction: [
+        ...(imageInspectionUnavailable
+          ? [
+              "Some generated images could not be attached for inspection. Do not claim to have inspected unavailable image content; use an available image tool or report the limitation.",
+            ]
+          : []),
         ...(params.status === "ok"
           ? [
               `The ${params.completionLabel} is ready. The host sends its files to the original chat before this turn, so do not send them again.`,
@@ -211,6 +251,7 @@ export async function wakeMediaGenerationTaskCompletion(params: {
     completionRequesterLifecycleRevision: target.lifecycleRevision ?? undefined,
     triggerMessage,
     internalEvents,
+    ...(inputAttachments.length ? { inputAttachments } : {}),
     requesterSessionOrigin: handle.requesterOrigin,
     completionDirectOrigin: handle.requesterOrigin,
     directOrigin: handle.requesterOrigin,

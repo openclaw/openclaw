@@ -621,7 +621,6 @@ struct OpenClawChatComposer: View {
         } label: {
             Image(systemName: "paperclip")
         }
-        .help("Add attachment")
         .accessibilityLabel("Attachments")
         .buttonStyle(.bordered)
         .controlSize(.small)
@@ -1321,7 +1320,6 @@ extension OpenClawChatComposer {
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
-        .help("Refresh")
     }
 
     private var composerPadding: CGFloat {
@@ -1648,6 +1646,7 @@ extension OpenClawChatComposer {
 
     private func sendDraftIfEnabled(queueMode: OpenClawChatQueueMode? = nil) {
         guard self.canSendMessage else { return }
+        ChatBehaviorProbe.mark("send")
         self.inputModel?.send(queueMode: queueMode)
     }
 }

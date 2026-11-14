@@ -18,6 +18,7 @@ import {
   sessionManagerReadTranscriptBranch,
 } from "../../sessions/session-manager-view-types.js";
 import { resolveToolSearchConfig } from "../../tool-search-config.js";
+import { applyUsageRankedMcpToolSearchDirectory } from "../../tool-search.js";
 import {
   readToolUsageRankingSnapshot,
   type ToolUsageRankingSnapshot,
@@ -203,10 +204,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       entries: sessionManager[sessionManagerReadTranscriptBranch](),
       historyBoundaryCount: sessionManager.getBoundaryCount(),
       enabled: rankingEnabled,
-      catalogIds:
-        toolSearchCatalogRef?.current?.entries
-          .filter((entry) => entry.source !== "mcp")
-          .map((entry) => entry.id) ?? [],
+      catalogIds: toolSearchCatalogRef?.current?.entries.map((entry) => entry.id) ?? [],
       inherited: inheritedRanking,
       now,
       readRankedIds: async () => {
@@ -283,6 +281,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const effectiveToolCount = effectiveTools.length;
   let freshSystemPrompt = systemPromptText;
   let projectedSystemPrompt: string | undefined;
+  // Assigned once the session exists; earlier prompt preparations keep their ranking.
+  const sessionTools: { refresh?: () => void } = {};
   const prepareSystemPromptUpdate: SystemPromptUpdatePreparation | undefined =
     usesSystemPromptSeries
       ? async (nextPrompt: string, freshlyRendered = false) => {
@@ -290,6 +290,11 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           let wasFreshlyRendered = freshlyRendered;
           const previousRanking = usageRanking;
           await prepareUsageRanking();
+          if (usageRanking !== previousRanking) {
+            // A refreshed snapshot starts a new series: re-pin the tool definitions, including
+            // the ranked MCP directory, before the first request that uses it.
+            sessionTools.refresh?.();
+          }
           if (usageRanking !== previousRanking && systemPrompt.prepareToolPrompt) {
             const refresh = await systemPrompt.prepareToolPrompt(
               resources.session?.agent.state.tools ?? effectiveTools,
@@ -342,7 +347,12 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           toolPolicy: toolPolicyDigest,
           entries: sessionManager[sessionManagerReadTranscriptBranch](),
           historyBoundaryCount: sessionManager.getBoundaryCount(),
-          tools,
+          // The pin freezes this description with the series, like the ranking itself.
+          tools: applyUsageRankedMcpToolSearchDirectory(
+            tools,
+            toolSearchCatalogRef?.current,
+            usageRanking,
+          ),
         });
         if (sessionPromptState.pendingToolSurface !== pending) {
           declarePromptToolPin(attempt);
@@ -402,6 +412,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       ),
   );
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
+  sessionTools.refresh = preparedAgentSession.refreshTools;
   const recordCurrentTurnImageFailure = (count: number) => {
     state.currentTurnImageFailureCount = Math.max(state.currentTurnImageFailureCount, count);
   };

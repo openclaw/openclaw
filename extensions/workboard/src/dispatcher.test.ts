@@ -373,6 +373,24 @@ describe("dispatchAndStartWorkboardCards", () => {
     });
     await expectStatus(second.id, "ready");
   });
+  it("starts up to the board's per-owner limit for unassigned cards", async () => {
+    await store.upsertBoard({ id: "team", orchestration: { maxActivePerOwner: 2 } });
+    const createTeamCard = () => createCard({ boardId: "team", workspaceAccess: fullHostAccess });
+    const first = await createTeamCard();
+    const second = await createTeamCard();
+    const third = await createTeamCard();
+    run = vi.fn().mockImplementation(async ({ idempotencyKey }) => ({ runId: idempotencyKey }));
+
+    const initial = await dispatch({ boardId: "team", maxStarts: 3 });
+    const repeated = await dispatch({ boardId: "team", maxStarts: 3 });
+
+    expect(initial.started.map((started) => started.cardId)).toEqual([first.id, second.id]);
+    expect(initial.startFailures).toEqual([]);
+    expect(repeated.started).toEqual([]);
+    await expectStatus(first.id, "running");
+    await expectStatus(second.id, "running");
+    await expectStatus(third.id, "ready");
+  });
   const createAuthorizedCard = (
     input: Omit<Parameters<WorkboardStore["create"]>[0], "title"> & { title?: string } = {},
   ) => createCard({ workspaceAccess: fullHostAccess, ...input });

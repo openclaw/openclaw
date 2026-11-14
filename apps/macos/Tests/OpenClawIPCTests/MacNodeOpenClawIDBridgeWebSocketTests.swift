@@ -74,6 +74,19 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
         }
     }
 
+    @Test func `dashboard proxy upgrades only the Gateway root path`() throws {
+        // Regression: the dashboard's Control UI socket targets "/", which the worker-only
+        // upgrade refused, so the dashboard never reached the Gateway.
+        let text = try #require(String(bytes: self.upgrade, encoding: .utf8))
+        let root = try MacNodeOpenClawIDBridgeRequest.parse(Data(
+            text.replacingOccurrences(of: "/__openclaw__/worker", with: "/").utf8))
+        let response = try #require(String(bytes: Codec.upgrade(root, path: "/"), encoding: .utf8))
+        #expect(response.hasPrefix("HTTP/1.1 101 "))
+        #expect(throws: (any Error).self) { try Codec.upgrade(root) }
+        let worker = try MacNodeOpenClawIDBridgeRequest.parse(self.upgrade)
+        #expect(throws: (any Error).self) { try Codec.upgrade(worker, path: "/") }
+    }
+
     @Test func `rejects invalid headers before payload allocation`() throws {
         let invalidHeaders: [[UInt8]] = [
             [0x81, 0x00], // Missing client mask.
