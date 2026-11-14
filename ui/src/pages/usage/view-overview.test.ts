@@ -14,6 +14,7 @@ import {
   buildAggregatesFromSessions,
   createUsageOverview,
   usageFixture,
+  usageTotals,
 } from "./view.test-support.ts";
 
 const aggregates = buildAggregatesFromSessions([]);
@@ -38,6 +39,26 @@ function mountInsights(currentTotals: () => UsageTotals, currentAggregates: () =
 }
 
 describe("UsageInsights", () => {
+  it("keeps an unmeasured cache rate neutral and rates measured results", () => {
+    const [current, setCurrent] = createSignal(usageTotals(0, 0));
+    const { container } = mountInsights(current, () => aggregates);
+    for (const [input, cacheRead, label, tone] of [
+      [0, 0, "—", undefined],
+      [100, 0, "0.0%", "bad"],
+      [50, 50, "50.0%", "warn"],
+      [25, 75, "75.0%", "good"],
+    ] as const) {
+      setCurrent(usageTotals(input, 0, { cacheRead, totalTokens: input + cacheRead }));
+      flush();
+      const card = container
+        .querySelector("#usage-summary-hint-cache-hit-rate")!
+        .closest(".usage-summary-card")!;
+      expect(text(card, ".usage-summary-value")).toBe(label);
+      for (const value of ["bad", "warn", "good"]) {
+        expect(card.classList.contains("usage-summary-card--" + value)).toBe(value === tone);
+      }
+    }
+  });
   it("renders overview hints as focusable tooltip anchors and identifies agents in the breakdown", async () => {
     const [currentTotals, setCurrentTotals] = createSignal(totals);
     const [currentAggregates, setCurrentAggregates] = createSignal({
