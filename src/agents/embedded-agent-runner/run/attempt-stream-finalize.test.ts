@@ -298,6 +298,39 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
     );
   });
 
+  it("rewinds a rejected settled-turn finalizer answer to before its prompt", async () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage(makeUserMessage("Original request", 1));
+    const settledId = sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Settled tool work" }],
+      stopReason: "stop",
+      timestamp: 2,
+    } as never);
+    sessionManager.appendMessage(makeUserMessage("Finalizer prompt", 3));
+    const rejectedId = sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "Rejected finalizer answer" }],
+      stopReason: "stop",
+      timestamp: 4,
+    } as never);
+    const fixture = createFixture({
+      sessionManager: sessionManager as never,
+      repairedRejectedProviderReplay: false,
+      getBeforeAgentFinalizeRevisionEntryId: () => rejectedId,
+    });
+    Object.assign(fixture.input.attempt, { operation: "settled-tool-finalization" });
+    mocks.runPrompt.mockResolvedValue({ promptStartedAt: 100, transcriptLeafId: settledId });
+
+    await runEmbeddedAttemptSettledPhase(fixture.input);
+
+    expect(sessionManager.getLeafId()).toBe(settledId);
+    const retryTranscript = JSON.stringify(sessionManager.buildSessionContext().messages);
+    expect(retryTranscript).toContain("Settled tool work");
+    expect(retryTranscript).not.toContain("Finalizer prompt");
+    expect(retryTranscript).not.toContain("Rejected finalizer answer");
+  });
+
   it("settles the stream before publishing state and running after-turn work", async () => {
     const pendingError = new Error("pending event failed");
     const reason = vi

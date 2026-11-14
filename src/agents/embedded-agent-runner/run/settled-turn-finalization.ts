@@ -225,6 +225,19 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     Boolean(initial.attempt.lastToolError) ||
     isEmbeddedRunTerminalTimeout(initial.terminalState.outcome) ||
     classifyAgentRunTerminalOutcome(initial.terminalState.outcome) === "failure";
+  // The finalizer writes the turn's final answer, so it keeps the run's before_agent_finalize
+  // budget: a revision excludes its answer from the transcript like any rejected draft, and
+  // terminal resolution runs one more ordinary pass. Not for a summary of work an output limit
+  // cut off, nor once the source reply was delivered.
+  const finalizerAttempt =
+    initial.terminalState.outcome.stopReason !== "length" &&
+    prepared.sourceReplyDeliveryState === "missing"
+      ? finalizationParams
+      : {
+          ...finalizationParams,
+          maxBeforeAgentFinalizeRevisions: undefined,
+          beforeAgentFinalizeRevisionAttempts: undefined,
+        };
   log.warn(
     `settled post-tool turn lacked a final answer: ${describeRun()} — running isolated finalization`,
   );
@@ -238,7 +251,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       assertFinalizationActive();
       const runFinalization = () =>
         runPreparedSettledTurnFinalization({
-          attempt: finalizationParams,
+          attempt: finalizerAttempt,
           settledAttempt: initial.attempt,
           harness: input.finalization.harness,
           prompt,
@@ -514,6 +527,10 @@ async function runPreparedSettledTurnFinalization(input: {
         lastAssistant: result.assistant,
         currentAttemptAssistant: result.assistant,
         currentAttemptCompletedAssistant: result.assistant,
+        // The finalizer excluded its answer before handing over a hook's revision of it.
+        ...(result.beforeAgentFinalizeRevisionReason
+          ? { beforeAgentFinalizeRevisionReason: result.beforeAgentFinalizeRevisionReason }
+          : {}),
         toolMetas: settledAttempt.toolMetas,
         lastToolError: settledAttempt.lastToolError,
         successfulNestedToolNames: settledAttempt.successfulNestedToolNames,

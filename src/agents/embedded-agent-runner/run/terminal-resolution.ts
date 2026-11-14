@@ -405,7 +405,8 @@ export async function resolveEmbeddedRunTerminal(input: {
   const beforeFinalizeRevisionReason = attempt.beforeAgentFinalizeRevisionReason;
   if (
     beforeFinalizeRevisionReason &&
-    !settledTurnFinalizationAttempted &&
+    // An answered isolated finalization carries the hooks' revision of its own answer.
+    (!settledTurnFinalizationAttempted || input.settledTurnFinalizationOutcome === "answered") &&
     !terminalInterrupted &&
     !promptError &&
     !attempt.clientToolCalls &&

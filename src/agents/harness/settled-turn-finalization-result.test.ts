@@ -55,6 +55,7 @@ it.each<[string, AgentHarnessSettledTurnFinalizationResult]>([
     safeResult({ content: [{ type: "text", text: "partial" }], stopReason: "length" }),
   ],
   ["invalid assistant message index", { ...safeResult(), assistantMessageIndex: -1 }],
+  ["empty revision reason", { ...safeResult(), beforeAgentFinalizeRevisionReason: " " }],
   [
     "unsupported result field: futureCapabilityEvidence",
     {
@@ -72,6 +73,19 @@ it("projects a successful full attempt into the narrow result", () => {
   expect(projectSettledTurnFinalizationAttemptResult(attempt)).toMatchObject({
     assistant: attempt.currentAttemptCompletedAssistant,
     assistantMessageIndex: 2,
+  });
+});
+
+it("projects a hook's revision of the answer, reading its reply from the assistant", () => {
+  const attempt = successfulAttempt({
+    beforeAgentFinalizeRevisionReason: "Build first",
+    preparedTerminalReply: undefined,
+  });
+
+  expect(projectSettledTurnFinalizationAttemptResult(attempt)).toMatchObject({
+    assistant: attempt.currentAttemptCompletedAssistant,
+    beforeAgentFinalizeRevisionReason: "Build first",
+    preparedTerminalReply: { text: "done" },
   });
 });
 
