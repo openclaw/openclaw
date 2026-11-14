@@ -445,15 +445,17 @@ owner signing key.
 Queued GitHub publication retains the initiating member device's attested membership
 source and checks it again before later writes, including after recovery. Removal,
 role changes, or a definition that no longer permits the request stop later writes;
-a new access-policy requirement cannot replace the original grant. Nonadministrator
-members retain their existing publication restrictions.
+a new access-policy requirement cannot replace the original grant. Every member uses
+the membership role before the profile or default role, including nonadministrator members.
 
-After upgrading, historical publication requests without a recorded authentication
-source are refused if the requester's profile has an OpenClaw ID identity. This
-includes linked owners and people who queued the request through another sign-in:
-the original sign-in cannot be inferred from the profile. This one-time refusal
-affects requests in flight across the upgrade; request publication again. New
-requests record their source and are not subject to this historical-source refusal.
+After upgrading, historical publication requests with neither a recorded membership
+principal nor an authentication source are refused if the requester's profile has
+an OpenClaw ID identity. This includes linked owners and people who queued the
+request through another sign-in: the original sign-in cannot be inferred from the
+profile. This one-time refusal affects requests in flight across the upgrade;
+request publication again. A recorded membership principal attests the request even
+without an authentication source. Retries retain the accepted principal and source
+rather than adopting the later invocation's authority.
 
 A member's sandbox requirement comes from the membership definition, even when
 `gateway.roles.default` is absent or their profile has a different named role

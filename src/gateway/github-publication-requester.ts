@@ -191,10 +191,13 @@ function prepareRequesterPolicy(
     }
   };
   const assertRole = (profile: UserProfileAccessFacts | undefined, config: OpenClawConfig) => {
-    // Historical records cannot distinguish members, linked owners, or other sign-ins.
-    // Fail closed for any OpenClaw ID-bound profile; request publication again after
-    // upgrading. New records carry their source and do not need this historical fence.
-    if (!snapshot.authenticationSource && profile?.hasOpenClawIdIdentity) {
+    // Records with neither a principal nor a source cannot distinguish member and
+    // other sign-ins. Linked profiles must request those publications again.
+    if (
+      !snapshot.authenticationSource &&
+      !snapshot.openclawIdPrincipal &&
+      profile?.hasOpenClawIdIdentity
+    ) {
       throw new GitHubPublicationRequesterUnavailableError();
     }
     const principal = snapshot.openclawIdPrincipal;
