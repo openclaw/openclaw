@@ -43,7 +43,9 @@ import {
 import { loadPendingFinalDeliveryPayload } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { suspendReplacedStoreNotifications } from "./subagent-registry-lifecycle-cleanup.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import {
   createSubagentStoreRunFixture,
@@ -55,6 +57,7 @@ import { observeRootWork } from "./subagent-registry.browser-cleanup.test-suppor
 import {
   initSubagentRegistry,
   resetSubagentRegistryForTests,
+  testing,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -80,6 +83,7 @@ const retiredDelivery = {
 
 it.each([
   "direct",
+  "restored-captured",
   "batch",
   "batch-retry",
   "yielded-batch",
@@ -93,6 +97,7 @@ it.each([
 ] as const)(
   "records a required failed completion in its original requester transcript (%s)",
   async (route) => {
+    using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
     const expiry = route.startsWith("expiry-");
     const { subagent } = records();
     const target = {
@@ -114,13 +119,20 @@ it.each([
       requesterStorePath: target.storePath,
       requesterSettleWake: { status: "pending", attemptCount: 0 },
     });
-    if (!expiry || route === "expiry-error-failed") {
+    if ((!expiry && route !== "restored-captured") || route === "expiry-error-failed") {
       subagent.execution.outcome = {
         status: "error",
         error: "Descendant completion can no longer continue this yielded requester.",
       };
     }
-    subagent.completion = { required: true, resultText: null, capturedAt: Date.now() };
+    subagent.completion = {
+      required: true,
+      resultText: route === "restored-captured" ? "captured child answer" : null,
+      capturedAt: Date.now(),
+    };
+    if (route === "restored-captured") {
+      subagent.delivery = { status: "pending", generation: 1 };
+    }
     const batch = [subagent];
     if (route.endsWith("yielded-batch")) {
       subagent.requesterSettleWake = {
@@ -147,10 +159,19 @@ it.each([
       publishCommittedRecords(sibling);
     }
     publishCommittedRecords(subagent);
-    if (!expiry) {
+    if (!expiry && route !== "restored-captured") {
       subagentRuns.retireCompletionAuthority(subagent);
     }
-    if (route === "direct-legacy-yielded-batch") {
+    if (route === "restored-captured") {
+      await resetSubagentRegistryForTests({ persist: false });
+      await closeOpenClawStateDatabaseAsync();
+      publishSystemEventStoreResolver(() => target.storePath);
+      await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+      await testing.sweepOnceForTests();
+      expect(loadSubagentRegistryFromSqlite().get(subagent.runId)?.completion?.resultText).toBe(
+        "captured child answer",
+      );
+    } else if (route === "direct-legacy-yielded-batch") {
       await suspendReplacedStoreNotifications({ runs: subagentRuns, resumedRuns: new Set() });
     } else if (route !== "batch" && route !== "batch-retry" && !route.endsWith("yielded-batch")) {
       expect(
@@ -191,6 +212,13 @@ it.each([
       ...target,
       sessionId: route === "replaced-session" ? "replacement-requester" : target.sessionId,
     });
+    if (!expiry) {
+      expect(warning).toHaveBeenCalledWith("Subagent completion delivery failed", {
+        runId: subagent.runId,
+        requesterSessionKey: subagent.requesterSessionKey,
+        reason: "store replaced",
+      });
+    }
     const notices = events.filter((event) => isRecord(event) && event.type === "custom_message");
     expect(notices).toEqual(
       route.startsWith("replaced-") || expiry
@@ -230,6 +258,7 @@ it.each([
 it.each([false, true])(
   "settles an unreachable yielded task only after custody retires (%s)",
   async (retired) => {
+    using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
     const { subagent } = records();
     await upsertSessionEntryCore(
       {
@@ -260,6 +289,12 @@ it.each([false, true])(
       }),
     ).toBe(retired);
     if (retired) {
+      expect(warning).toHaveBeenCalledWith("Settling unreachable yielded subagent", {
+        runId: subagent.runId,
+        requesterSessionKey: subagent.requesterSessionKey,
+        reason: "Descendant completion can no longer continue this yielded requester.",
+        yieldedAt: subagent.execution.endedAt,
+      });
       expect(complete).toHaveBeenCalledWith(
         expect.objectContaining({
           endedAt: subagent.execution.endedAt,
@@ -272,6 +307,7 @@ it.each([false, true])(
         "sweeper-unreachable-yield",
       );
     } else {
+      expect(warning).not.toHaveBeenCalled();
       expect(complete).not.toHaveBeenCalled();
     }
   },
