@@ -65,7 +65,7 @@ function recoveryFixture(id: string, body: string) {
   };
 }
 
-it("joins worker-backed recovery cleanup without blocking foreground work", async () => {
+it("keeps foreground work progressing through worker-backed recovery capture and cleanup", async () => {
   const posts = vi.spyOn(NativeWorker.prototype, "postMessage");
   await using fixture = recoveryFixture(
     "recovery-cleanup",
@@ -77,8 +77,6 @@ it("joins worker-backed recovery cleanup without blocking foreground work", asyn
     const captureParent = path.dirname(capturedRoot());
     const capturesBefore = fs.readdirSync(captureParent);
     const recovery = createPluginReloadRecovery(previous, prepareGatewayPluginLoad);
-    recovery.capture(new Set([plugin.id]));
-    expect(fs.readdirSync(captureParent)).toHaveLength(capturesBefore.length + 1);
     const capture = posts.mock.calls.findIndex(
       ([value]) => isRecord(value) && isRecord(value.input) && value.input.operation === "capture",
     );
@@ -97,10 +95,20 @@ it("joins worker-backed recovery cleanup without blocking foreground work", asyn
       foregroundRan = true;
     });
     try {
-      await recovery.dispose();
+      await recovery.capture(new Set([plugin.id]));
       await foreground;
-      expect(foregroundAtReplies).not.toHaveLength(0);
-      expect(foregroundAtReplies.every(Boolean)).toBe(true);
+      expect(foregroundAtReplies.length).toBeGreaterThan(0);
+      expect(foregroundAtReplies).not.toContain(false);
+      expect(fs.readdirSync(captureParent)).toHaveLength(capturesBefore.length + 1);
+      foregroundAtReplies.length = 0;
+      foregroundRan = false;
+      const cleanupForeground = Promise.resolve().then(() => {
+        foregroundRan = true;
+      });
+      await recovery.dispose();
+      await cleanupForeground;
+      expect(foregroundAtReplies.length).toBeGreaterThan(0);
+      expect(foregroundAtReplies).not.toContain(false);
       expect(fs.readdirSync(captureParent)).toEqual(capturesBefore);
       expect(
         previous.providers[0]!.provider.normalizeModelId!({
@@ -130,7 +138,7 @@ it("replaces a worker-backed plugin when its previous captured source is missing
     fs.rmSync(root, { recursive: true });
     const recovery = createPluginReloadRecovery(previous, prepareGatewayPluginLoad);
     try {
-      expect(recovery.capture(new Set([plugin.id]))).toEqual([
+      expect(await recovery.capture(new Set([plugin.id]))).toEqual([
         `Plugin ${plugin.id} captured source is missing. Continuing replacement; rollback cannot restore this plugin's previous code.`,
       ]);
       expect([...recovery.unavailablePluginIds]).toEqual([plugin.id]);

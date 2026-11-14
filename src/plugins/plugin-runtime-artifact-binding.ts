@@ -127,16 +127,16 @@ export function hasCanonicalPluginDistribution(record: ArtifactBoundRecord): boo
 }
 
 /** Acquire recovery custody before shutdown revokes the previous runtime's module loader. */
-export function capturePluginRuntimeRecovery(
+export async function capturePluginRuntimeRecovery(
   record: ArtifactBoundRecord,
-): PluginRuntimeRecovery | undefined {
+): Promise<PluginRuntimeRecovery | undefined> {
   const instance = getPluginInstance(record);
   const selection = record[RUNTIME_ARTIFACT_SELECTION];
   if (!instance || !selection) {
     return undefined;
   }
   return {
-    module: instance.captureModuleLoaderRecovery(),
+    module: await instance.captureModuleLoaderRecovery(),
     runtimeEntry: { ...selection.runtimeEntry },
     ...(selection.setupEntry ? { setupEntry: { ...selection.setupEntry } } : {}),
   };

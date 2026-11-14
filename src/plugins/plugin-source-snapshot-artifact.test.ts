@@ -15,6 +15,7 @@ import {
   capturePluginSnapshotGeneration,
   capturePluginSourceSnapshot,
 } from "./plugin-generation-capture.js";
+import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import {
   hasPluginNativeCaptureCleanupCandidates,
@@ -379,42 +380,63 @@ it("captures complete lazy files for install-time package import aliases", () =>
   );
 });
 
-it("retains frozen logical aliases and closure restrictions through recovery forks", async () => {
-  const { stateDir, source, descriptor } = await fixture(false);
-  const reader = await acquirePluginSourceSnapshot({ stateDir, descriptor, assertCurrent });
-  releases.push(reader.release);
-  const capture = () =>
-    withPluginSourceCaptureStorage({ stateDir, placement: "state" }, () =>
-      capturePluginSnapshotGeneration(reader, undefined, (run) => run()),
+it.each(["inline", "worker"] as const)(
+  "retains %s frozen aliases and closure restrictions through recovery forks",
+  async (transport) => {
+    const { stateDir, source, descriptor } = await fixture(false);
+    const reader = await acquirePluginSourceSnapshot({ stateDir, descriptor, assertCurrent });
+    releases.push(reader.release);
+    const capture = () =>
+      withPluginSourceCaptureStorage({ stateDir, placement: "state" }, () =>
+        capturePluginSnapshotGeneration(reader, undefined, (run) => run()),
+      );
+    const runtime =
+      transport === "worker"
+        ? (
+            await preparePluginGenerationArtifact({
+              rootDir: source,
+              source: path.join(source, "index.cjs"),
+              sourceSnapshot: { stateDir, descriptor },
+            })
+          ).artifact
+        : capture();
+    releases.push(runtime.disposeAsync);
+    // Frozen custody remains a synchronous contract, including over worker RPC.
+    const custody = runtime.retainSourceCustody();
+    releases.push(custody.source.disposeAsync);
+    expect(
+      fs.readFileSync(custody.source.resolve(path.join(source, "index.cjs")), "utf8"),
+    ).toContain("require('dep')");
+    const recovery =
+      transport === "worker"
+        ? await runtime.captureRecoverySourceAsync!()
+        : runtime.captureRecoverySource();
+    releases.push(recovery.disposeAsync);
+    const fork = recovery.fork();
+    releases.push(fork.disposeAsync);
+    fs.rmSync(source, { recursive: true });
+    reader.release();
+    runtime.dispose();
+    const restored = withPluginSourceCaptureStorage({ stateDir, placement: "state" }, () =>
+      capturePluginSnapshotGeneration(
+        fork.frozenSource!,
+        undefined,
+        (run) => run(),
+        undefined,
+        fork.native,
+      ),
     );
-  const runtime = capture();
-  releases.push(runtime.disposeAsync);
-  const recovery = runtime.captureRecoverySource();
-  releases.push(recovery.disposeAsync);
-  const fork = recovery.fork();
-  releases.push(fork.disposeAsync);
-  fs.rmSync(source, { recursive: true });
-  reader.release();
-  runtime.dispose();
-  const restored = withPluginSourceCaptureStorage({ stateDir, placement: "state" }, () =>
-    capturePluginSnapshotGeneration(
-      fork.frozenSource!,
-      undefined,
-      (run) => run(),
-      undefined,
-      fork.native,
-    ),
-  );
-  releases.push(restored.disposeAsync);
-  expect(restored.frozenSource).toBe(true);
-  expect(restored.sourceDigest).toBe(descriptor.contentDigest);
-  expect(fs.readFileSync(restored.resolve(path.join(source, "index.cjs")), "utf8")).toContain(
-    "require('dep')",
-  );
-  expect(() => restored.assertFrozenModule!(path.join(stateDir, "outside.cjs"))).toThrow(
-    "Declare the dependency",
-  );
-});
+    releases.push(restored.disposeAsync);
+    expect(restored.frozenSource).toBe(true);
+    expect(restored.sourceDigest).toBe(descriptor.contentDigest);
+    expect(fs.readFileSync(restored.resolve(path.join(source, "index.cjs")), "utf8")).toContain(
+      "require('dep')",
+    );
+    expect(() => restored.assertFrozenModule!(path.join(stateDir, "outside.cjs"))).toThrow(
+      "Declare the dependency",
+    );
+  },
+);
 
 it("refuses publication when the capture no longer matches its installation binding", async () => {
   const { stateDir, capture, binding } = await fixture();

@@ -474,7 +474,7 @@ it("publishes native admission to pinned install roots while capture storage is 
   });
 });
 
-it.each(["capture", "custody", "fork"] as const)(
+it.each(["capture", "captureAsync", "custody", "fork"] as const)(
   "keeps %s recovery alive beyond the short RPC deadline and owner disposal",
   async (operation) => {
     const { root, source, entry } = sourceFixture("1.0.0");
@@ -499,10 +499,12 @@ it.each(["capture", "custody", "fork"] as const)(
           })();
         }
         // Recovery copies the captured package synchronously in the worker. Advance
-        // its host deadline clock without making this lifecycle proof sleep for 30s.
+        // its host deadline clock past the sync or async RPC budget without sleeping.
         const parentRecovery = operation === "fork" ? artifact.captureRecoverySource() : undefined;
         const now = performance.now();
-        const clock = vi.spyOn(performance, "now").mockReturnValue(now + 30_001);
+        const clock = vi
+          .spyOn(performance, "now")
+          .mockReturnValue(now + (operation === "captureAsync" ? 120_001 : 30_001));
         clock.mockReturnValueOnce(now);
         let recovery: ReturnType<typeof artifact.captureRecoverySource>;
         try {
@@ -510,7 +512,9 @@ it.each(["capture", "custody", "fork"] as const)(
             ? parentRecovery.fork()
             : operation === "custody"
               ? artifact.retainSourceCustody().source
-              : artifact.captureRecoverySource();
+              : operation === "captureAsync"
+                ? await artifact.captureRecoverySourceAsync!()
+                : artifact.captureRecoverySource();
         } finally {
           clock.mockRestore();
           await parentRecovery?.disposeAsync();
