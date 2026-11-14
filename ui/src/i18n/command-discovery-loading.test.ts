@@ -13,7 +13,7 @@ describe("command discovery English loading", () => {
       ["name", "Rename session"],
       ["verbose", "Verbose"],
       ["reasoning", "Reasoning"],
-    ]) {
+    ] as const) {
       expect(getSlashCommandTitle({ key, name: key, description: "" })).toBe(title);
     }
     expect(manager.t("sessionsView.personalGroupScopeMine")).toBe(
