@@ -45,8 +45,8 @@
 }
 
 /* At the row's end, the glyph lines up with the other rows' chevrons, also when the control
-   wraps under the title on phones. The tooltip host is display: contents. */
-.settings-row__control > openclaw-tooltip:last-child > .settings-details-toggle {
+   wraps under the title on phones. */
+.settings-row__control > .settings-details-toggle:last-child {
   margin-inline: auto -6px;
 }
 

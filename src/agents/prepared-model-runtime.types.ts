@@ -95,6 +95,11 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     allowGatewaySubagentBinding: boolean;
     /** Reads accepted inventory without scheduling discovery or expiry renewal. */
     readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
+    /** Admission facts travel with run projections; never reread live inventory for a started turn. */
+    capturedModelCatalog?: Readonly<{
+      admitted: ModelCatalogSnapshot;
+      published: ModelCatalogSnapshot;
+    }>;
     /** Inventory demand may renew expired providers without waiting or replacing saved rows. */
     refreshExpiredModelCatalog?: () => void;
     /** Rechecks native CLI login availability without refreshing provider inventory. */

@@ -184,7 +184,9 @@ const profileBinding = {
 const avatarParams = { profileId: profile.id, mime: "image/png", avatarBase64: "AQ==" };
 const nameParams = { profileId: profile.id, displayName: "Ada" };
 const roleConfig = {
-  getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }),
+  getRuntimeConfig: () => ({
+    gateway: { roles: { default: "guest", definitions: { guest: {} } } },
+  }),
 };
 const effects = [
   prepareUserProfileGitHubAttribution,
@@ -683,4 +685,45 @@ it.each(
     expectFailure(respond);
     expectUntouched(refresh);
   }
+});
+
+it("requires gateway.roles.default to assign a named role from definitions alone", async () => {
+  setUserProfileRole.mockReturnValue({ ...profile, role: "guest" });
+  const respond = await runUsersHandler(
+    "users.setRole",
+    { profileId: profile.id, role: "guest" },
+    adminClient,
+    {
+      getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }),
+    },
+  );
+  expectError(respond, {
+    code: "INVALID_REQUEST",
+    message: expect.stringContaining("gateway.roles.default"),
+  });
+  expect(setUserProfileRole).not.toHaveBeenCalled();
+});
+
+it("refuses assigning a member profile's role outside Access but permits clearing", async () => {
+  const prepareMemberProfileCheck = vi.fn(async () => () => true);
+  const context = { ...roleConfig, openclawIdService: { prepareMemberProfileCheck } };
+  const refused = await runUsersHandler(
+    "users.setRole",
+    { profileId: profile.id, role: "guest" },
+    adminClient,
+    context,
+  );
+  expectError(refused, {
+    code: "INVALID_REQUEST",
+    message: expect.stringContaining("Access page"),
+  });
+  expect(setUserProfileRole).not.toHaveBeenCalled();
+  setUserProfileRole.mockReturnValue({ ...profile, role: null });
+  const cleared = await runUsersHandler(
+    "users.setRole",
+    { profileId: profile.id, role: null },
+    adminClient,
+    context,
+  );
+  expect(cleared).toHaveBeenCalledWith(true, { profile: { ...profile, role: null } });
 });

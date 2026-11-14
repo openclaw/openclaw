@@ -591,7 +591,7 @@ function runRunnerProfileFixture(options: {
   configuredProfile?: string;
   author?: string;
   starter?: string;
-  eventName: "pull_request" | "push" | "workflow_dispatch";
+  eventName: "pull_request" | "push" | "schedule" | "workflow_dispatch";
   headRepository?: string;
   repository?: string;
   runAttempt?: number;
@@ -6103,6 +6103,7 @@ describe("ci workflow guards", () => {
   it.each([
     ...[
       { author: "vincentkoc", starter: "vincentkoc", admitted: true },
+      { author: "jalehman", starter: "davemorin", admitted: true },
       { author: "other-maintainer", starter: "vincentkoc", admitted: false },
       { author: "vincentkoc", starter: "other-maintainer", admitted: false },
       { author: "vincentkoc", starter: "vincentkoc", runAttempt: 2, admitted: false },
@@ -6115,7 +6116,16 @@ describe("ci workflow guards", () => {
         qualificationDispatch: true,
       }),
     ),
+    ...["davemorin", "jalehman", "joshavant", "steipete"].flatMap((owner) => [
+      { author: owner, starter: "vincentkoc", admitted: true },
+      { author: "vincentkoc", starter: owner, admitted: true },
+    ]),
     { author: "vincentkoc", starter: "vincentkoc", admitted: true },
+    { author: "steipete", starter: "joshavant", admitted: true },
+    { author: "github-actions[bot]", starter: "vincentkoc", admitted: false },
+    { author: "vincentkoc", starter: "github-actions[bot]", admitted: false },
+    { author: "vincent", starter: "vincentkoc", admitted: false },
+    { author: "", starter: "steipete", eventName: "schedule" as const, admitted: false },
     { author: "contributor", starter: "vincentkoc", admitted: false },
     { author: "vincentkoc", starter: "contributor", admitted: false },
     { author: "vincentkoc", starter: "vincentkoc", runAttempt: 2, admitted: false },
@@ -7230,7 +7240,12 @@ describe("ci workflow guards", () => {
         'printf "%s\\n" "$*" >> "$SDK_NODE_CALLS"',
         'printf "cache-key=fixture-sdk\\n" >> "$GITHUB_OUTPUT"',
       ]);
-      const steps = { identity: { outputs: {} }, pack: { outputs: {} }, restore: { outputs: {} } };
+      const steps = {
+        identity: { outputs: {} },
+        pack: { outputs: {} },
+        "main-pack": { outputs: {} },
+        restore: { outputs: {} },
+      };
       const run = (id: keyof typeof steps) => {
         const step = action.runs.steps.find((candidate: WorkflowStep) => candidate.id === id);
         const output = path.join(root, `${id}.outputs`);
@@ -7249,14 +7264,20 @@ describe("ci workflow guards", () => {
       };
       run("identity");
       expect(steps.identity.outputs).toMatchObject({ enabled: "true" });
-      if (mode === "publish-run" || mode === "restore-run") {
+      if (mode !== "restore-main") {
         expect(existsSync(calls)).toBe(false);
-        run(mode === "publish-run" ? "pack" : "restore");
+        run(mode === "publish-run" ? "pack" : mode === "save-main" ? "main-pack" : "restore");
       }
       expect(readFileSync(calls, "utf8").trim()).toBe(
-        `scripts/ci-sdk-declarations.mts ${mode === "publish-run" ? "pack" : mode === "restore-run" ? "restore --required" : "key"}`,
+        `scripts/ci-sdk-declarations.mts ${mode === "restore-main" ? "key" : mode === "restore-run" ? "restore --required" : "pack"}`,
       );
       expect(evaluateWorkflow(action.outputs["cache-key"].value, { steps })).toBe("fixture-sdk");
+      if (mode === "save-main") {
+        const save = action.runs.steps.find((step: WorkflowStep) =>
+          step.uses?.startsWith("actions/cache/save@"),
+        );
+        expect(evaluateWorkflow(save.with.key, { steps })).toBe("fixture-sdk");
+      }
     },
   );
 
@@ -13203,6 +13224,52 @@ describe("ci workflow guards", () => {
       resolveShardPlans({ OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(groups[index]) }),
     );
   });
+
+  it.each([
+    { eventName: "schedule", runId: "", selected: ["first-cli"] },
+    { eventName: "schedule", runId: "1", selected: ["second-cli"] },
+    { eventName: "schedule", runId: "2", selected: ["first-cli"] },
+    { eventName: "schedule", runId: "9007199254740993", selected: ["second-cli"] },
+    { eventName: "schedule", runId: "invalid", selected: ["first-cli"] },
+    { eventName: "pull_request", runId: "1", selected: [] },
+  ] as const)(
+    "assigns one separate CLI audit row by run identity ($eventName, $runId)",
+    ({ eventName, runId, selected }) => {
+      const cli = "test/vitest/vitest.cli-process.config.ts";
+      const unit = "test/vitest/vitest.unit-fast.config.ts";
+      const rows = [
+        { name: "first-cli", configs: [cli] },
+        { name: "unit", configs: [unit] },
+        { name: "mixed", configs: [unit, cli] },
+        { name: "second-cli", configs: [cli] },
+      ];
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName,
+        scopeEnv: { GITHUB_RUN_ID: runId },
+        changedPaths: [],
+        nodeTestShards: rows.map(({ name, configs }) => ({
+          checkName: name,
+          shardName: name,
+          configs,
+          requiresDist: false,
+          runner: "ubuntu-24.04",
+        })),
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      const result: {
+        check_name: string;
+        audit_cli_observations?: boolean;
+        adaptive_observations?: boolean;
+      }[] = readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include;
+      expect(
+        result.filter((row) => row.audit_cli_observations).map((row) => row.check_name),
+      ).toEqual(selected);
+      expect(
+        result.filter((row) => row.adaptive_observations).map((row) => row.check_name),
+      ).toEqual(["unit", "mixed"]);
+    },
+  );
 
   it.each([
     ...(["github", "hybrid", "blacksmith"] as const).map((runnerProfile) => ({

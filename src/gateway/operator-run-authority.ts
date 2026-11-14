@@ -14,7 +14,10 @@ import { runtimeConfigPublication } from "../config/runtime-config-publication.j
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createOperatorAuthorityInactiveError } from "../infra/operator-authority-error.js";
+import {
+  createOperatorAuthorityInactiveError,
+  isOperatorAuthorityUnavailable,
+} from "../infra/operator-authority-error.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -255,7 +258,7 @@ export function captureChannelOperatorRunAuthority(input: {
     readCurrentRoleFacts: () => ({
       assignedRole: params.assignedRole,
       githubLogin: params.githubLogin ?? null,
-      ...(membershipPolicy ? { policy: membershipPolicy } : {}),
+      ...(membershipPolicy ? { policy: resolveRole(params.getRuntimeConfig()) } : {}),
     }),
     get modelPolicy() {
       return modelPolicy.readCurrent();
@@ -471,7 +474,9 @@ export async function captureGatewayOperatorRunAuthority(input: {
       try {
         check();
       } catch (error) {
-        revoke(error);
+        if (!isOperatorAuthorityUnavailable(error)) {
+          revoke(error);
+        }
       }
     }
   };
@@ -523,7 +528,9 @@ export async function captureGatewayOperatorRunAuthority(input: {
       assertSource();
       assertRoleCurrent();
     } catch (error) {
-      revoked = true;
+      if (!isOperatorAuthorityUnavailable(error)) {
+        revoked = true;
+      }
       throw error;
     }
   });
@@ -678,7 +685,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
       rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
       readCurrentRoleFacts: () => ({
         ...assertProfileCurrent(),
-        ...(membershipPolicy ? { policy: membershipPolicy } : {}),
+        ...(membershipPolicy ? { policy: resolveCurrentRole() } : {}),
       }),
       source: source.token,
       invocation: params.invocationAuthority,

@@ -23,6 +23,7 @@ import { resolveCyberAccessProgramForProvider } from "../../agents/model-catalog
 import { findModelByNativeAlias, findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
@@ -237,6 +238,11 @@ export async function runCliFallbackCandidate(
             activeSessionEntry: sessionEntry,
           });
         const scheduledInference = params.scheduledInference;
+        // Only a session pin follows the conversation into another provider's CLI, where the
+        // CLI owner rejects it. A configured model account stays with that model's provider.
+        const sessionPinned =
+          params.candidateRun.authProfileId?.trim() === sessionEntry?.authProfileOverride?.trim() &&
+          resolveCollapsedSessionAuthPinSource(sessionEntry) === "user";
         const resolveLiveProfile = async () =>
           allowCliAuthProfileForwarding
             ? await resolveCliExecutionAuthProfileId({
@@ -244,7 +250,11 @@ export async function runCliFallbackCandidate(
                 authProfileProvider: params.provider,
                 config: params.runtimeConfig,
                 agentDir: params.candidateRun.agentDir,
-                selected: params.candidateRun,
+                selected: sessionPinned
+                  ? params.candidateRun
+                  : resolveRunAuthProfile(params.candidateRun, params.provider, {
+                      config: params.runtimeConfig,
+                    }),
                 sessionBinding: cliSessionBinding,
               })
             : resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {

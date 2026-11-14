@@ -498,6 +498,14 @@ final class MacNodeModeCoordinator: NSObject {
                 continue
             }
 
+            if self.openClawIDToolsOff {
+                // This Mac is an owner device of its OpenClaw ID claw without a node: it must not
+                // fall back to pairing a node over the owner's own connection.
+                self.channelStatus.record(.idle)
+                guard await refreshIterator.next() != nil else { return }
+                continue
+            }
+
             let codexThreadCatalogEnabled = MacNodeCodexThreadCatalog.shouldAdvertise()
 
             do {
@@ -1359,6 +1367,13 @@ extension MacNodeModeCoordinator {
         self.openClawIDSelectionStore?.save(target)
         self.openClawIDSelection = .success(target)
         self.enqueueRouteInvalidation(mode: .reconnectRefresh)
+    }
+
+    /// The primary connection is this Mac's OpenClaw ID claw and no node key is selected for it.
+    var openClawIDToolsOff: Bool {
+        guard case .success(nil) = self.openClawIDSelection else { return false }
+        let state = AppStateStore.shared
+        return MacOpenClawIDJoinCompletion.primaryIsJoinedClaw(mode: state.connectionMode, remoteUrl: state.remoteUrl)
     }
 
     func isOpenClawIDTargetConnected(_ target: MacNodeOpenClawIDTarget) -> Bool {

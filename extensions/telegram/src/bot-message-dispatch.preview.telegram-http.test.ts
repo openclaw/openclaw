@@ -440,6 +440,37 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     },
   );
   it.each([false, true])(
+    "never makes disabled reply controls clickable (rich=%s)",
+    async (richMessages) => {
+      await runTurn(async () => undefined, {
+        mode: "off",
+        telegramCfg: { richMessages },
+        finalReply: {
+          text: "Choose an environment.",
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  { label: "Deploy", value: "env|prod" },
+                  { label: "✓ Staging", value: "env|staging", disabled: true },
+                ],
+              },
+            ],
+          },
+        },
+      });
+      const answer = [...visibleMessages].find(([id]) => visibleMarkup.has(id));
+      const deploy = { text: "Deploy", callback_data: "env|prod" };
+      // Native disabled buttons follow the rich-message opt-in; plain accounts keep the label as text.
+      expect(answer && visibleMarkup.get(answer[0])).toEqual({
+        inline_keyboard: [richMessages ? [deploy, { text: "✓ Staging", disabled: {} }] : [deploy]],
+      });
+      expect(answer?.[1].includes("Staging")).toBe(!richMessages);
+      expect(JSON.stringify(calls)).not.toContain("env|staging");
+    },
+  );
+  it.each([false, true])(
     "retires lazy partials only on new tool starts (update=%s)",
     async (update) => {
       const answer = "The first result is ready, and the remaining work is still running.";
