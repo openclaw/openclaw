@@ -568,15 +568,22 @@ export async function prepareQaGatewayChild(
       lifetime.assertOpen();
 
       if (params.initializeCurrentRuntimeState) {
+        const canonicalConfig = gatewayCommand?.processBoundary
+          ? await fs.readFile(configPath)
+          : undefined;
         const bootstrapEnv = createQaPackagedBootstrapEnv(env);
         await runQaPackagedBootstrap("QA state initialization failed", () =>
           initializeQaGatewayChildState({
-            repoRoot: params.repoRoot,
-            tempRoot,
+            executablePath: nodeExecPath,
+            argsPrefix: cliArgsPrefix,
+            cwd: gatewayCwd,
             env: bootstrapEnv,
             lifetime,
           }),
         );
+        if (canonicalConfig && !canonicalConfig.equals(await fs.readFile(configPath))) {
+          throw new Error("installed package initialization mutated canonical config");
+        }
       } else if (usesPackagedCandidate && gatewayCommand) {
         const command = {
           lifetime,

@@ -170,7 +170,14 @@ const registrations = {
   dns: { register: async (program) => (await import("../dns-cli.js")).registerDnsCli(program) },
   docs: { register: async (program) => (await import("../docs-cli.js")).registerDocsCli(program) },
   qa: {
-    register: async (program) => {
+    register: async (program, argv) => {
+      const { resolveCliArgvInvocation } = await import("../argv-invocation.js");
+      const { commandPath } = resolveCliArgvInvocation(argv);
+      if (commandPath[0] === "qa" && commandPath[1] === "initialize") {
+        const { registerQaInitializeCli } = await import("../qa-initialize-cli.js");
+        registerQaInitializeCli(program);
+        return;
+      }
       // This registrar comes from a source-checkout artifact, not a statically known module.
       const { registerQaLabCli } = await loadPrivateQaCliModule();
       if (typeof registerQaLabCli !== "function") {

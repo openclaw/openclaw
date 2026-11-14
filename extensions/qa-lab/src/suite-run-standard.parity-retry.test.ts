@@ -14,6 +14,7 @@ import { runQaFlowSuiteStandard } from "./suite-run-standard.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import type {
   QaSuiteResolvedRunContext,
+  QaSuiteRunParams,
   QaSuiteScenarioResult,
   QaSuiteScenarioRunner,
 } from "./suite-types.js";
@@ -187,6 +188,66 @@ afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
   await tempDirs.cleanup();
+});
+
+describe("QA suite fresh Telegram state routing", () => {
+  it.each([
+    { label: "current source", candidate: "source", channelId: "telegram", initialize: true },
+    {
+      label: "current packaged candidate",
+      candidate: "package",
+      channelId: "telegram",
+      initialize: true,
+    },
+    { label: "explicit release", candidate: "release", channelId: "telegram", initialize: false },
+    {
+      label: "alternate bounded runtime",
+      candidate: "alternate",
+      channelId: "telegram",
+      initialize: false,
+    },
+    { label: "another live channel", candidate: "source", channelId: "discord", initialize: false },
+  ])(
+    "selects fresh initialization only for $label",
+    async ({ candidate, channelId, initialize }) => {
+      const context = makeRetryTestContext();
+      let command: QaSuiteRunParams["sutOpenClawCommand"];
+      if (candidate === "release") {
+        command = { executablePath: "/qa/release/openclaw", usePackagedPlugins: true };
+      } else if (candidate === "package" || candidate === "alternate") {
+        command = {
+          executablePath: "/qa/bounded-openclaw",
+          usePackagedPlugins: true,
+          processBoundary: {
+            kind: "linux-proc-v1",
+            evidenceDir: "/qa/evidence",
+            expectedUid: 1234,
+            expectedGid: 1234,
+            forwardedEnvKeys: [],
+            runtimeExecutablePath: process.execPath,
+            runtimeArgsPrefix: [
+              "--import",
+              "/qa/preload.mjs",
+              path.join(
+                candidate === "package" ? context.repoRoot : "/qa/release",
+                "dist",
+                "index.js",
+              ),
+            ],
+            terminationRetryTimeoutMs: 1000,
+          },
+        };
+      }
+      await runQaFlowSuiteStandard(
+        { lab: makeRetryTestLab(), channelDriver: "live", channelId, sutOpenClawCommand: command },
+        context,
+        vi.fn<QaSuiteScenarioRunner>().mockResolvedValue(makeRetryTestResult("pass")),
+      );
+      expect(mocks.startQaGatewayChild).toHaveBeenCalledWith(
+        expect.objectContaining({ command, initializeCurrentRuntimeState: initialize }),
+      );
+    },
+  );
 });
 
 describe("QA suite Control UI ownership", () => {

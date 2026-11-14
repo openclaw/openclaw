@@ -19,6 +19,10 @@ export async function initializeQaRuntimeState(): Promise<void> {
     { createDoctorPrompter },
     { defaultRuntime },
     { migrateLegacyMainSessionKeys },
+    { runPostCorePluginConvergence },
+    { resolvePluginCapabilityConsentCliOptions },
+    { materializeSkillWorkshopPlugin },
+    { runSessionStartupMigration },
   ] = await Promise.all([
     import("../config/io.js"),
     import("../config/mutate.js"),
@@ -37,6 +41,10 @@ export async function initializeQaRuntimeState(): Promise<void> {
     import("../commands/doctor-prompter.js"),
     import("../runtime.js"),
     import("../config/sessions/legacy-main-session-migration.js"),
+    import("../commands/doctor/shared/post-core-plugin-convergence.js"),
+    import("../cli/plugin-capability-consent.js"),
+    import("../config/skill-workshop-plugin-migration.js"),
+    import("../config/sessions/startup-migration-runtime.js"),
   ]);
   const io = createConfigIO({ env, observe: false });
   const snapshot = await io.readConfigFileSnapshot();
@@ -64,17 +72,37 @@ export async function initializeQaRuntimeState(): Promise<void> {
     throw new Error(machineState.warnings.join("\n"));
   }
   initializeFreshDaemonRuntimePinMigration(env);
-  const migration = applyPluginDoctorCompatibilityMigrations(snapshot.sourceConfig, {
+  const workshop = materializeSkillWorkshopPlugin(snapshot.sourceConfig);
+  const migration = applyPluginDoctorCompatibilityMigrations(workshop.config, {
     env,
     historicalWebhookListeners: "preserve-configured",
   });
   if (migration.warnings?.length) {
     throw new Error(migration.warnings.join("\n"));
   }
-  const config = applyPluginAutoEnable({
+  let config = applyPluginAutoEnable({
     config: migration.config,
     env,
   }).config;
+  // Fresh QA fixtures explicitly accept their declared plugin capabilities, just
+  // like the packaged repair path. The install owner records the actual binding.
+  const plugins = await runPostCorePluginConvergence({
+    cfg: config,
+    env,
+    configPersistence: "caller",
+    ...resolvePluginCapabilityConsentCliOptions({
+      acceptCapabilities: true,
+      action: "update",
+      allowPrompt: false,
+    }),
+  });
+  if (plugins.errored || plugins.warnings.length) {
+    throw new Error(
+      plugins.warnings.map((warning) => warning.message).join("\n") ||
+        "QA plugin convergence failed",
+    );
+  }
+  config = plugins.config;
   const credentials = await maybeMigrateModelCatalogCredentials({
     cfg: config,
     env,
@@ -109,5 +137,15 @@ export async function initializeQaRuntimeState(): Promise<void> {
   if (legacySessions.armed && (!legacySessions.complete || !legacySessions.ledgerComplete)) {
     throw new Error("QA initializer requires completed legacy session migration");
   }
+  await runSessionStartupMigration({
+    cfg: config,
+    env,
+    log: {
+      info: () => undefined,
+      warn: (warning) => {
+        throw new Error(warning);
+      },
+    },
+  });
   await refreshPluginRegistry({ config, env, reason: "manual" });
 }
