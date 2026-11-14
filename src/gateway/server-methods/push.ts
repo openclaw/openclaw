@@ -9,6 +9,7 @@ import {
   validateWebPushUnsubscribeParams,
   validateWebPushVapidPublicKeyParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import {
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
@@ -45,6 +46,11 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
+import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import { resolveNodePushTransport } from "./node-push-transport.js";
 import { respondError, respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -212,7 +218,7 @@ export const pushHandlers = {
   "push.test": defineValidatedGatewayHandler(
     "push.test",
     validatePushTestParams,
-    async ({ params, respond, context }) => {
+    async ({ params, respond, context, client, sessionMutationAuthorization }) => {
       const nodeId = normalizeOptionalString(params.nodeId) ?? "";
       if (!nodeId) {
         respondError(respond, ErrorCodes.INVALID_REQUEST, "nodeId required");
@@ -244,7 +250,31 @@ export const pushHandlers = {
           respondError(respond, ErrorCodes.INVALID_REQUEST, transport.error);
           return;
         }
-        const result = await sendApnsAlert({ ...transport.transport, nodeId, title, body });
+        const alert = { ...transport.transport, nodeId, title, body };
+        const result =
+          params.sessionKey === undefined
+            ? await sendApnsAlert(alert)
+            : await (async () => {
+                const identity = await loadOrCreateProcessDeviceIdentityAsync();
+                const projection = requireSessionRowProjection(context);
+                const selection = {
+                  projection,
+                  client,
+                  p: { key: params.sessionKey },
+                  isCurrent: () => getSessionRowProjection(context) === projection,
+                };
+                const preparedAlert = await withPreparedSessionResolve(selection, (resolved) => {
+                  sessionMutationAuthorization?.assertCurrent();
+                  if (!resolved.ok || !("key" in resolved)) {
+                    throw new Error("Push chat destination is unavailable");
+                  }
+                  return {
+                    ...alert,
+                    destination: { gatewayDeviceId: identity.deviceId, sessionKey: resolved.key },
+                  };
+                });
+                return await sendApnsAlert(preparedAlert);
+              })();
         if (
           shouldClearStoredApnsRegistration({
             registration,

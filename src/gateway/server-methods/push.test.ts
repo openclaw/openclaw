@@ -2,16 +2,36 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import type { SessionsResolveResult } from "../sessions-resolve.js";
 import { pushHandlers } from "./push.js";
 import { pushSubscription } from "./push.test-support.js";
 
 const mocks = vi.hoisted(() => ({
+  destination: vi.fn<() => SessionsResolveResult>(),
+  projection: {},
   getRuntimeConfig: vi.fn(() => ({})),
   resolveProfileId: vi.fn<(profileId: string) => string | undefined>((profileId) => profileId),
   findBoundWebPushSubscriptionByEndpoint:
     vi.fn<(params: { endpoint: string }) => Promise<BoundWebPushSubscription | null>>(),
 }));
 const findBoundWebPushSubscriptionByEndpoint = mocks.findBoundWebPushSubscriptionByEndpoint;
+
+// mock-isolation: Bind a synthetic Gateway without opening the host identity store.
+vi.mock("../../infra/device-identity-async.js", () => ({
+  loadOrCreateProcessDeviceIdentityAsync: vi.fn(async () => ({ deviceId: "gateway-fixture" })),
+}));
+vi.mock("../session-row-projection-access.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-row-projection-access.js")>()),
+  requireSessionRowProjection: () => mocks.projection,
+  getSessionRowProjection: () => mocks.projection,
+}));
+// mock-isolation: Supply visibility outcomes; the real prepared-reader regression runs separately.
+vi.mock("../sessions-resolve.js", () => ({
+  withPreparedSessionResolve: async (
+    _params: unknown,
+    consume: (result: SessionsResolveResult) => unknown,
+  ) => consume(mocks.destination()),
+}));
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
@@ -230,6 +250,43 @@ describe("push.test handler", () => {
     });
     vi.mocked(normalizeApnsEnvironment).mockReturnValue(null);
     vi.mocked(shouldClearStoredApnsRegistration).mockReturnValue(false);
+  });
+
+  it("admits a push destination once and lets the started send finish", async () => {
+    mocks.destination.mockClear();
+    mocks.destination.mockReturnValue({ ok: true, key: "agent:main:incident", agentId: "main" });
+    vi.mocked(sendApnsAlert).mockImplementationOnce(async (alert) => {
+      mocks.destination.mockReturnValue({ ok: true, missing: true });
+      if (alert.isCurrent && !(await alert.isCurrent())) {
+        throw new Error("APNs send invalidated");
+      }
+      return apnsResult({});
+    });
+    const respond = await apnsRequest({ nodeId: "ios-node-1", sessionKey: "agent:main:incident" });
+    expectSuccess(respond, apnsResult({}));
+    expect(sendApnsAlert).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        destination: { gatewayDeviceId: "gateway-fixture", sessionKey: "agent:main:incident" },
+      }),
+    );
+    expect(mocks.destination).toHaveBeenCalledTimes(1);
+  });
+
+  it.each<SessionsResolveResult>([
+    { ok: true, missing: true },
+    { ok: false, error: { code: ErrorCodes.FORBIDDEN, message: "Not visible" } },
+  ])("does not send missing or inaccessible destinations: %j", async (resolution) => {
+    mocks.destination.mockReturnValue(resolution);
+    const respond = await apnsRequest({ nodeId: "ios-node-1", sessionKey: "agent:main:incident" });
+    expect(sendApnsAlert).not.toHaveBeenCalled();
+    expect(firstRespondCall(respond)).toMatchObject([
+      false,
+      undefined,
+      {
+        code: ErrorCodes.UNAVAILABLE,
+        message: expect.stringContaining("Push chat destination is unavailable"),
+      },
+    ]);
   });
 
   it("rejects invalid params", async () => {

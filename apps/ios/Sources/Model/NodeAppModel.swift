@@ -505,6 +505,8 @@ final class NodeAppModel {
     var gatewayDefaultAgentId: String?
     var gatewayAgents: [AgentSummary] = []
     var openChatRequestID: Int = 0
+    private(set) var pendingChatNotification: ChatNotificationRequest?
+    private var lastHandledChatNotificationID: String?
     @ObservationIgnored private var consumedOpenChatRequestID: Int = 0
     private(set) var pendingLiveVoiceStart = false
     var liveVoiceStartError: String?
@@ -3316,6 +3318,62 @@ extension NodeAppModel {
         self.openChatRequestID &+= 1
     }
 
+    func handleChatNotification(_ request: ChatNotificationRequest) async {
+        guard request.notificationID != self.lastHandledChatNotificationID,
+              request.notificationID != self.pendingChatNotification?.notificationID
+        else { return }
+        self.pendingChatNotification = request
+        await self.deliverPendingChatNotification()
+    }
+
+    private func deliverPendingChatNotification() async {
+        guard let request = self.pendingChatNotification, self.operatorConnected else { return }
+        let generation = self.operatorAuthorityGeneration
+        let stillCurrent = {
+            self.operatorConnected && self.operatorAuthorityGeneration == generation &&
+                self.pendingChatNotification == request
+        }
+        if let restore = self.chatSessionRoutingRestoreTask {
+            await restore.value
+        }
+        guard stillCurrent(), let route = await self.operatorGateway.currentRoute() else { return }
+        do {
+            let key = try await request.resolve(
+                gatewayIdentity: {
+                    try await self.fetchPushRelayGatewayIdentity(ifCurrentRoute: route).deviceId
+                },
+                session: { sessionKey in
+                    let params = try JSONEncoder().encode(["key": sessionKey])
+                    let response = try await self.operatorGateway.request(
+                        method: "sessions.resolve",
+                        paramsJSON: String(data: params, encoding: .utf8),
+                        timeoutSeconds: 8,
+                        ifCurrentRoute: route)
+                    struct Resolution: Decodable {
+                        let ok: Bool
+                        let key: String?
+                    }
+                    let resolved = try JSONDecoder().decode(Resolution.self, from: response)
+                    return resolved.ok ? resolved.key : nil
+                },
+                isCurrent: stillCurrent)
+            guard await self.operatorGateway.currentRoute() == route, stillCurrent() else { return }
+            self.pendingChatNotification = nil
+            self.lastHandledChatNotificationID = request.notificationID
+            guard let key else { return }
+            // Resolve through the current authenticated connection before focus writes
+            // preferences or retargets Talk. A push never creates or sends to a session.
+            self.openChat(sessionKey: key)
+        } catch {
+            // RPC failures can resume before the model's disconnect callback. Only
+            // an error from the still-current socket consumes the selected tap.
+            if await self.operatorGateway.currentRoute() == route, stillCurrent() {
+                self.pendingChatNotification = nil
+                self.lastHandledChatNotificationID = request.notificationID
+            }
+        }
+    }
+
     func consumeOpenChatRequest(_ requestID: Int) -> Bool {
         guard requestID != 0,
               requestID == self.openChatRequestID,
@@ -4291,6 +4349,22 @@ extension NodeAppModel {
                 self.operatorTalkHydrationGeneration = nil
             }
         }
+        let shouldContinue: @MainActor @Sendable () -> Bool = { [weak self] in
+            guard let self else { return false }
+            return self.operatorTalkConnectionGeneration == talkConnectionGeneration &&
+                self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
+        }
+        let previousRoutingRestore = self.chatSessionRoutingRestoreTask
+        let routingRestore = Task { [weak self] in
+            await previousRoutingRestore?.value
+            guard let self, !Task.isCancelled, shouldContinue() else { return }
+            // Roster reconciliation can retire a saved agent and clear chat focus.
+            // Notification navigation waits on this same routing owner before opening.
+            await self.refreshBrandingFromGateway(shouldApply: shouldContinue)
+            guard shouldContinue() else { return }
+            await self.refreshAgentsFromGateway(shouldApply: shouldContinue)
+        }
+        self.chatSessionRoutingRestoreTask = routingRestore
         self.apply(
             .connected(GatewaySessionInfo(hasAdminScope: scopes?.contains("operator.admin") == true)),
             to: .operator,
@@ -4302,21 +4376,12 @@ extension NodeAppModel {
         GatewayDiagnostics.log(
             "operator gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
 
-        let shouldContinue: @MainActor @Sendable () -> Bool = { [weak self] in
-            guard let self else { return false }
-            return self.operatorTalkConnectionGeneration == talkConnectionGeneration &&
-                self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
-        }
         // Watch approval resolutions flush from the reconcile-gated watch path
         // (reconcileWatchExecApprovalCache), not eagerly on operator connect.
-        if let chatSessionRoutingRestoreTask {
-            await chatSessionRoutingRestoreTask.value
-        }
+        await routingRestore.value
         guard shouldContinue() else { return }
         self.chatSessionRoutingRestoreTask = nil
-        await self.refreshBrandingFromGateway(shouldApply: shouldContinue)
-        guard shouldContinue() else { return }
-        await self.refreshAgentsFromGateway(shouldApply: shouldContinue)
+        await self.deliverPendingChatNotification()
         guard shouldContinue() else { return }
         await self.talkMode.reloadConfig(shouldApply: shouldContinue)
         guard shouldContinue() else { return }
