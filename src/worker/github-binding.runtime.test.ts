@@ -29,7 +29,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 describe("prepareWorkerGitHubEnvironment", () => {
   const remoteUrl = "https://github.com/openclaw/worker-fixture.git";
   const binding = {
-    token: "worker-checkout-synthetic-token",
+    token: "worker-checkout-fixture-value",
     login: "worker-fixture",
     branch: "openclaw/session-fixture",
     remoteUrl,
@@ -179,6 +179,47 @@ describe("prepareWorkerGitHubEnvironment", () => {
     expect(warn.mock.lastCall?.[0]).toContain(remoteHead.slice(0, 7));
   });
 
+  it("keeps non-GitHub credential helpers while using the managed GitHub identity", async () => {
+    const forgejoHelper = "printf 'forgejo-helper-invoked\\n' >&2";
+    await git(
+      root,
+      "config",
+      "--global",
+      "credential.https://forgejo.example.helper",
+      `!${forgejoHelper}`,
+    );
+
+    const prepared = await prepare();
+    if (!prepared) {
+      throw new Error("Expected a turn-owned GitHub profile");
+    }
+    // This helper records invocation only; it never supplies or stores credentials.
+    const env = {
+      ...process.env,
+      ...prepared.localIdentityEnv,
+      ...prepared.credentialScrubEnv,
+      GIT_TERMINAL_PROMPT: "0",
+    };
+    await expect(
+      exec.runExec("git", ["credential", "fill"], {
+        timeoutMs: 10_000,
+        logOutput: false,
+        input: "protocol=https\nhost=forgejo.example\n\n",
+        env,
+      }),
+    ).rejects.toMatchObject({ stderr: expect.stringContaining("forgejo-helper-invoked") });
+
+    const githubHelpers = await exec.runExec(
+      "git",
+      ["config", "--get-all", "credential.https://github.com.helper"],
+      { timeoutMs: 10_000, logOutput: false, env },
+    );
+    expect(githubHelpers.stdout.split(/\r?\n/).filter(Boolean)).toEqual([
+      "!gh auth git-credential",
+    ]);
+    await disposeWorkerGitHubEnvironment(path.join(root, "state"), "turn");
+  });
+
   it("never starts the credentialed fetch for a fenced turn", async () => {
     const remoteHead = await publishEarlierTurn();
     const controller = new AbortController();
@@ -287,9 +328,9 @@ describe("prepareWorkerGitHubEnvironment", () => {
     expect(prepared?.localIdentityEnv).toMatchObject({
       GH_CONFIG_DIR: expect.stringContaining(path.join(root, "state", "github-profiles")),
       GIT_CONFIG_COUNT: "4",
-      GIT_CONFIG_KEY_0: "credential.helper",
+      GIT_CONFIG_KEY_0: "credential.https://github.com.helper",
       GIT_CONFIG_VALUE_0: "",
-      GIT_CONFIG_KEY_1: "credential.helper",
+      GIT_CONFIG_KEY_1: "credential.https://github.com.helper",
       GIT_CONFIG_VALUE_1: "!gh auth git-credential",
       GIT_AUTHOR_NAME: binding.gitAuthor.name,
       GIT_AUTHOR_EMAIL: binding.gitAuthor.email,
