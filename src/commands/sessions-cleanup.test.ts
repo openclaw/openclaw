@@ -60,6 +60,7 @@ function gatewayCleanupResult(
       beforeCount: 3,
       afterCount: 1,
       pruned: 2,
+      unreferencedArtifacts: artifactStats(),
       ...overrides,
     }).summary,
     applied: true,
@@ -241,23 +242,7 @@ describe("sessionsCleanupCommand", () => {
       allAgents: true,
       mode: "enforce",
       dryRun: false,
-      stores: [
-        {
-          ...gatewayCleanupResult("/gateway/main/openclaw-agent.sqlite", {
-            beforeCount: 1,
-            afterCount: 0,
-            missing: 1,
-            pruned: 0,
-            unreferencedArtifacts: {
-              scannedFiles: 0,
-              removedFiles: 0,
-              freedBytes: 0,
-              olderThanMs: 0,
-            },
-          }),
-          appliedCount: 0,
-        },
-      ],
+      stores: [{ ...gatewayCleanupResult("/gateway/main/openclaw-agent.sqlite"), appliedCount: 0 }],
       partialError: {
         failingAgentId: "work",
         failingStorePath: "/gateway/work/openclaw-agent.sqlite",
