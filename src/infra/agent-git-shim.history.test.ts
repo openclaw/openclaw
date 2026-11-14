@@ -19,6 +19,11 @@ async function historyFixture(root: string, versions = 12, append = true) {
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_ALLOW_PROTOCOL: "file",
     GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_COUNT: "2",
+    GIT_CONFIG_KEY_0: "gc.auto",
+    GIT_CONFIG_VALUE_0: "0",
+    GIT_CONFIG_KEY_1: "maintenance.auto",
+    GIT_CONFIG_VALUE_1: "false",
   };
   const git = (cwd: string, args: string[], input?: string) => {
     const result = spawnSync("git", ["-C", cwd, ...args], { env, input, encoding: "utf8" });
@@ -174,6 +179,26 @@ it.skipIf(process.platform === "win32")(
         const wanted = await requests();
         expect(new Set(wanted).size).toBe(wanted.length);
       }
+      // A failed explicit batch must not fall through to per-object lazy fetches.
+      const bin = path.join(root, "failed-batch");
+      await fs.mkdir(bin);
+      await fs.writeFile(
+        path.join(bin, "git"),
+        `#!/bin/sh
+for arg do [ "$arg" != --stdin ] || exit 1; done
+exec "$OPENCLAW_FIXTURE_GIT" "$@"
+`,
+        { mode: 0o755 },
+      );
+      const failed = await reader();
+      const failure = await failed.invoke(["log", "-p", "--", file], undefined, {
+        PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+        OPENCLAW_FIXTURE_GIT: path.join(git(root, ["--exec-path"]).trim(), "git"),
+      });
+      expect(await failed.newPacks()).toHaveLength(0);
+      expect(await failed.requests()).toHaveLength(0);
+      expect(failure.code).toBe(2);
+      expect(failure.stderr).toContain("pathspec");
       const { invoke, newPacks, requests } = await reader();
       const result = await invoke(["log", "-p", "--", file], undefined, { GIT_NO_LAZY_FETCH: "1" });
       expect(result.code).not.toBe(0);
@@ -184,6 +209,8 @@ it.skipIf(process.platform === "win32")(
       const metadata = ["log", "--format=%H", "--", file];
       expect((await invoke(metadata)).stdout).toBe(git(origin, metadata));
       expect(await requests()).toHaveLength(0);
+      const noMatch = await reader();
+      expect((await noMatch.invoke(["grep", "absent-pattern", "HEAD~1"])).code).toBe(1);
       const unsupported = ["show", "--format=short", `HEAD~1:${file}`];
       const shown = await invoke(unsupported);
       expect(shown.code, shown.stderr).toBe(0);
@@ -193,25 +220,70 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
-  "bounds show and blame discovery but batches large pickaxe searches",
+  "bounds content discovery without falling back to lazy-fetch packs",
   () =>
     withTempDir("agent-git-blob-bound-", async (root) => {
       const { origin, file, git, reader } = await historyFixture(root, 2050, false);
       const { invoke, requests } = await reader();
-      const args = ["show", `HEAD~1:${file}`];
-      const result = await invoke(args);
-      expect(result.code, result.stderr).toBe(0);
-      expect(result.stdout).toBe(git(origin, args));
+      const showArgs = ["show", `HEAD~1:${file}`];
+      const showResult = await invoke(showArgs);
+      expect(showResult.code, showResult.stderr).toBe(0);
+      expect(showResult.stdout).toBe(git(origin, showArgs));
       expect(await requests()).toHaveLength(1);
-      const blame = ["blame", "-L", "1,1", "HEAD", "--", file];
-      expect((await invoke(blame)).stdout).toBe(git(origin, blame));
-      expect(await requests()).toHaveLength(1);
-      const search = await reader();
-      const pickaxe = ["log", "--oneline", "-Shistory line 1", "--", file];
-      const searched = await search.invoke(pickaxe);
-      expect(searched.code, searched.stderr).toBe(0);
-      expect(searched.stdout).toBe(git(origin, pickaxe));
-      expect(await search.newPacks()).toHaveLength(2);
-      expect(await search.requests()).toHaveLength(2049);
+      for (const args of [
+        ["log", "--oneline", "-S", "selectThemeSettings"],
+        ["log", "-G", "history"],
+        ["log", "-p"],
+        ["blame", "HEAD", "--", file],
+      ]) {
+        const search = await reader();
+        const searched = await search.invoke(args);
+        expect.soft(await search.newPacks(), args.join(" ")).toHaveLength(0);
+        expect.soft(await search.requests(), args.join(" ")).toHaveLength(0);
+        expect.soft(searched.code, args.join(" ")).toBe(2);
+        expect.soft(searched.stderr).toContain("pathspec");
+        expect.soft(searched.stderr).toContain("git grep");
+        expect.soft(searched.stderr).toContain("--since");
+      }
+      const narrowed = await reader();
+      for (const args of [
+        ["log", "-S", "history", "--since=2023-11-14T22:45:00Z", "--", file],
+        ["grep", "history", "HEAD~1", "--", file],
+      ]) {
+        const result = await narrowed.invoke(args);
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toBe(git(origin, args));
+      }
+      // A closure beyond the discovery budget is still usable when already local.
+      const hydrated = await reader();
+      const objects = git(hydrated.base, [
+        "rev-list",
+        "--objects",
+        "--missing=print",
+        "HEAD",
+        "--",
+        file,
+      ])
+        .split("\n")
+        .filter((line) => line.startsWith("?"))
+        .map((line) => line.slice(1))
+        .join("\n");
+      git(
+        hydrated.base,
+        [
+          "-c",
+          "fetch.negotiationAlgorithm=noop",
+          "fetch",
+          "--filter=blob:none",
+          "--no-auto-maintenance",
+          "origin",
+          "--stdin",
+        ],
+        objects + "\n",
+      );
+      const before = await hydrated.newPacks();
+      const hydratedArgs = ["log", "--oneline", "-S", "history", "--", file];
+      expect((await hydrated.invoke(hydratedArgs)).stdout).toBe(git(origin, hydratedArgs));
+      expect(await hydrated.newPacks()).toEqual(before);
     }),
 );

@@ -244,13 +244,12 @@ EOF
       while IFS= read -r arg; do [ -z "$arg" ] || set -- "$@" "$arg"; done <<EOF
 $blob_paths
 EOF
-      { GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" 2>/dev/null && echo complete; } | LC_ALL=C awk -v verb="$blob_verb" '
-        BEGIN { speculative = verb == "show" || verb == "blame" }
+      { GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" 2>/dev/null && echo complete; } | LC_ALL=C awk '
         function add(oid, mode) {
           if (mode == "160000" || oid ~ /^0+$/ || seen[oid]++) return
-          if (speculative && (++count > 2048 || (bytes += length(oid) + 1) > 131072)) exit
+          if (++count > 2048 || (bytes += length(oid) + 1) > 131072) exit
         }
-        { if (speculative && (scanned += length($0) + 1) > 8388608) exit }
+        { if ((scanned += length($0) + 1) > 8388608) exit }
         /^\\?/ { add(substr($1, 2), "100644") }
         /^:[0-7]+ [0-7]+ [0-9a-f]+ [0-9a-f]+ / {
           add($3, substr($1, 2)); add($4, $2)
@@ -355,7 +354,7 @@ $1
   [ "$blob_verb" != grep ] || [ -n "$blob_args" ] || return 1
   return 0
 }
-prepare_blobs() (
+prepare_blobs() {
   [ "$no_lazy_fetch" != 1 ] || return 0
   case \${GIT_NO_LAZY_FETCH:-} in 1|true|yes|on) return 0 ;; esac
   # This portable shell helper uses line-delimited arguments and object IDs.
@@ -370,67 +369,49 @@ EOF
     case $object in *' missing') ;; *) return 0 ;; esac
   fi
   query_repository blobless "$@" || return 0
-  candidates=$(query_repository history_blobs "$@")
-  case $candidates in ''|skip) return 0 ;; esac
-  missing=$(query_repository objects "$@" <<EOF | awk '$2 == "missing" { print $1 }'
+  query_repository shared "$@" || return 0
+  # Show prepares history speculatively; other content searches must stay offline
+  # after this bounded prefetch, even when discovery or the fetch cannot finish.
+  [ "$blob_verb" = show ] || prepared_blobs=1
+  (
+    candidates=$(query_repository history_blobs "$@")
+    case $candidates in ''|skip) return 0 ;; esac
+    missing=$(query_repository objects "$@" <<EOF | awk '$2 == "missing" { print $1 }'
 $candidates
 EOF
-  )
-  [ -n "$missing" ] || return 0
-  query_repository shared "$@" || return 0
-  # Serialize across linked worktrees, then inspect the objects under the lock:
-  # overlapping callers fetch only the part not already supplied by the leader.
-  lock=$common/openclaw-history-blobs.lock
-  attempts=0
-  until mkdir "$lock" 2>/dev/null; do
-    attempts=$((attempts + 1))
-    [ "$attempts" -lt 300 ] || return 0
-    # A large live batch may exceed thirty seconds; do not start lazy fetches
-    # beside it. Only an ownerless lock retains the bounded fallback.
-    if read -r owner 2>/dev/null < "$lock/pid"; then
-      if kill -0 "$owner" 2>/dev/null; then
-        attempts=0
-      else
-        rm -f "$lock/pid"
-        rmdir "$lock" 2>/dev/null && continue
+    )
+    [ -n "$missing" ] || return 0
+    # Serialize across linked worktrees, then inspect the objects under the lock:
+    # overlapping callers fetch only the part not already supplied by the leader.
+    lock=$common/openclaw-history-blobs.lock
+    attempts=0
+    until mkdir "$lock" 2>/dev/null; do
+      attempts=$((attempts + 1))
+      [ "$attempts" -lt 300 ] || return 0
+      # A large live batch may exceed thirty seconds; do not start lazy fetches
+      # beside it. An ownerless lock stops waiting after thirty seconds.
+      if read -r owner 2>/dev/null < "$lock/pid"; then
+        if kill -0 "$owner" 2>/dev/null; then
+          attempts=0
+        else
+          rm -f "$lock/pid"
+          rmdir "$lock" 2>/dev/null && continue
+        fi
       fi
-    fi
-    sleep 0.1
-  done
-  trap 'rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null' 0
-  trap 'exit 1' HUP INT TERM
-  echo $$ > "$lock/pid"
-  missing=$(query_repository objects "$@" <<EOF | awk '$2 == "missing" { print $1 }'
+      sleep 0.1
+    done
+    trap 'rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null' 0
+    trap 'exit 1' HUP INT TERM
+    echo $$ > "$lock/pid"
+    missing=$(query_repository objects "$@" <<EOF | awk '$2 == "missing" { print $1 }'
 $missing
 EOF
-  )
-  [ -n "$missing" ] || return 0
-  count=$(printf '%s\n' "$missing" | wc -l)
-  if [ "$count" -ge 2048 ]; then
-    echo "OpenClaw: fetching $count missing Git objects for this content search." >&2
-  fi
-  # Keep large searches under the shared lock, with bounded pack construction.
-  if [ "$count" -gt 2048 ]; then
-    printf '%s\\n' "$missing" | (
-      IFS= read -r missing || exit 0
-      count=1
-      while IFS= read -r oid; do
-        if [ "$count" = 2048 ]; then
-          query_repository fetch_blobs "$@" 2>/dev/null || exit 0
-          missing=$oid
-          count=1
-        else
-          missing="$missing
-$oid"
-          count=$((count + 1))
-        fi
-      done
-      query_repository fetch_blobs "$@" 2>/dev/null || :
     )
-    return
-  fi
-  query_repository fetch_blobs "$@" 2>/dev/null || :
-)
+    [ -n "$missing" ] || return 0
+    query_repository fetch_blobs "$@" 2>/dev/null || :
+  )
+}
+
 append_revision_roots() {
   arg=$1
   traverse=
@@ -578,6 +559,14 @@ if ! is_probe "$@"; then
   if [ "$prepare_history" = 1 ]; then
     prepare_commits "$@" || exit 2
     case $verb in log|blame|show|diff|grep) prepare_blobs "$@" ;; esac
+    if [ "$prepared_blobs" = 1 ]; then
+      GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@"
+      result=$?
+      [ "$result" = 0 ] && exit 0
+      [ "$blob_verb" = grep ] && [ "$result" = 1 ] && exit 1
+      echo 'OpenClaw: content search could not finish within the shared partial-clone blob budget; command stopped without lazy fetching. Add a narrower pathspec, use git grep on specific revisions, or set a --since bound (a revision range for blame), then retry.' >&2
+      exit 2
+    fi
   fi
   if [ "$projection_fetch" = 1 ]; then fetch_defaults "$@" || exit 2; fi
   if [ "$shallow_change" = 1 ] || [ -n "$fetch_depth" ]; then
