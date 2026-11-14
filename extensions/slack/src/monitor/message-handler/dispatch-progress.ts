@@ -461,12 +461,19 @@ export function createSlackProgressRuntime(runtimeParams: {
   });
   const commentaryProgressEnabled = progressDraft.commentaryProgressEnabled;
 
+  // Core fires onReasoningEnd and onAssistantMessageStart without awaiting
+  // them, so a draft boundary can land while the final reply is delivered; it
+  // waits for this, or it would stop the stream under the answer.
+  let nativeFinalDelivery: Promise<unknown> | undefined;
   const deliverNativeFinal = async (
     payload: ReplyPayload,
     kind: ReplyDispatchKind,
   ): Promise<LivePreviewDeliveryResult> => {
-    await cancelNativeUpdates();
-    return await withNativeStreamOrder(() => deliverNativeFinalNow(payload, kind));
+    const run = cancelNativeUpdates().then(() =>
+      withNativeStreamOrder(() => deliverNativeFinalNow(payload, kind)),
+    );
+    nativeFinalDelivery = run.catch(() => undefined);
+    return await run;
   };
 
   const deliverNativeFinalNow = async (payload: ReplyPayload, kind: ReplyDispatchKind) => {
@@ -630,6 +637,9 @@ export function createSlackProgressRuntime(runtimeParams: {
     if (useNativeProgressStreaming) {
       if (!nativeUpdatesStopped && options?.force !== true) {
         return false;
+      }
+      if (options?.force !== true) {
+        await nativeFinalDelivery;
       }
       await cancelNativeUpdates();
     }
