@@ -3687,7 +3687,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         "src/gateway/server-worker-placement-session-evidence.test.ts",
         "src/gateway/server-worker-placement-session-evidence.worker.test.ts",
         "src/gateway/session-lifecycle-run-failure.test.ts",
-        "src/gateway/session-lifecycle-state.persistence.test.ts",
         "src/gateway/talk/client-permission-parity.test.ts",
         "src/gateway/tool-resolution.swarm-collector.test.ts",
         "src/gateway/tool-resolution.terminal.test.ts",

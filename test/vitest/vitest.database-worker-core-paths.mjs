@@ -252,7 +252,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/config/sessions/session-actor-transcript-reuse.test.ts",
   "src/gateway/server-methods/chat-send-reply-dispatch.test.ts",
   "src/gateway/server-methods/chat-send-reply-session.test.ts",
-  "src/gateway/server-methods/chat-send-commentary-media.test.ts",
   "src/agents/model-auth.profiles.test.ts",
   // Native credential fixtures need the host's exclusive offline writer custody.
   "test/decision-baseten-admission.integration.test.ts",
@@ -480,7 +479,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/boot.test.ts",
   "src/gateway/mcp-http.runtime.portal-readiness.test.ts",
   "src/gateway/server-methods/chat-history-worker.test.ts",
-  "src/gateway/session-history.subagent-visibility.test.ts",
   "src/gateway/session-row-projection.runtime-ownership.test.ts",
   "src/gateway/session-row-projection.worker-read.test.ts",
   "src/gateway/session-runtime-selection-projection.test.ts",
