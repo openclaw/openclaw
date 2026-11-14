@@ -463,13 +463,44 @@ it("preserves per-item trust in a pending batch", async () => {
     },
     {},
   );
+  const errors: string[] = [];
   const { assistantContent: content } = await buildContent({
     agentId: "main",
     payloads: [payload],
     managedMediaLocalRoots: [workspaceDir],
+    onManagedMediaPrepareError: (message) => errors.push(message),
   });
   expect(content).toEqual([
     expect.objectContaining({ type: "audio", mimeType: "audio/mpeg" }),
     attachmentError("delivery-failed", "untrusted.mp3", "audio", "audio/mpeg"),
+  ]);
+  // The log line keeps the refusal reason that the displayed failure omits.
+  expect(errors).toEqual([
+    'Managed audio attachment "untrusted.mp3" could not be prepared: Local audio/video media requires an explicitly trusted reply payload',
+  ]);
+});
+
+it("logs the HTTP failure behind a long remote media URL", async () => {
+  createMediaTestContext();
+  const source = `https://example.test/${"nested/".repeat(40)}chart.png`;
+  // Import after graph evaluation; the fetch/store modules participate in a mock cycle.
+  const mediaFetch = await import("../../media/fetch.js");
+  using saveRemoteMedia = vi.spyOn(mediaFetch, "saveRemoteMedia");
+  saveRemoteMedia.mockRejectedValue(
+    new mediaFetch.MediaFetchError(
+      "http_error",
+      `Failed to fetch media from ${source}: HTTP 404 Not Found`,
+      { status: 404 },
+    ),
+  );
+  const errors: string[] = [];
+  const { assistantContent: content } = await buildContent({
+    agentId: "main",
+    payloads: [{ mediaUrls: [source] }],
+    onManagedMediaPrepareError: (message) => errors.push(message),
+  });
+  expect(JSON.stringify(content)).not.toContain(source);
+  expect(errors).toEqual([
+    `Managed image attachment "chart.png" could not be prepared: Failed to fetch media from ${source}: HTTP 404 Not Found | http_error`,
   ]);
 });
