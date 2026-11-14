@@ -138,6 +138,8 @@ async function runModelsListCommand(
               },
               agentId,
               params,
+              // The local CLI reader is the operator; the gateway path gates this by client cap.
+              includeManualSelection: true,
             });
           },
         );
@@ -195,16 +197,24 @@ async function runModelsListCommand(
   }
   const rows = result.models
     .filter((model) => !opts.local || model.local === true)
-    .map((model): ModelRow => ({
-      key: modelKey(model.provider, model.id),
-      name: model.name,
-      input: model.input?.join("+") || "-",
-      contextWindow: model.contextWindow ?? null,
-      contextTokens: model.contextTokens,
-      local: model.local ?? null,
-      available: model.available ?? null,
-      tags: [...new Set([...(model.tags ?? []), ...(model.alias ? [`alias:${model.alias}`] : [])])],
-    }));
+    .map((model): ModelRow => {
+      const row: ModelRow = {
+        key: modelKey(model.provider, model.id),
+        name: model.name,
+        input: model.input?.join("+") || "-",
+        contextWindow: model.contextWindow ?? null,
+        contextTokens: model.contextTokens,
+        local: model.local ?? null,
+        available: model.available ?? null,
+        tags: [
+          ...new Set([...(model.tags ?? []), ...(model.alias ? [`alias:${model.alias}`] : [])]),
+        ],
+      };
+      if (model.manualSelectionAllowed !== undefined) {
+        row.manualSelectionAllowed = model.manualSelectionAllowed;
+      }
+      return row;
+    });
   if (rows.length === 0 && !opts.json && !opts.plain) {
     runtime.log("No models found.");
   } else if (opts.json) {
