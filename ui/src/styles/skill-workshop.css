@@ -52,6 +52,10 @@
   overflow: hidden;
 }
 
+.sw-layout > .sw-list:only-child {
+  grid-column: 1 / -1;
+}
+
 .sw-layout > .sw-detail {
   display: flex;
   flex-direction: column;
