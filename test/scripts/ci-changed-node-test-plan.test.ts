@@ -618,7 +618,6 @@ describe("CI changed Node test plan", () => {
     (runnerBackend) => {
       const targets = [
         "src/agents/agent-bundle-mcp-retention.test.ts",
-        "src/agents/mcp-stdio-client.cleanup.real.test.ts",
         "src/cli/gateway-cli/pre-bootstrap.process.test.ts",
         "src/commands/doctor-config-preflight.refusal.process.test.ts",
         "src/flows/doctor-health.test.ts",
@@ -823,7 +822,6 @@ describe("CI changed Node test plan", () => {
   it.each([
     "src/agents/model-fallback.reply-entry.e2e.test.ts",
     "src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts",
-    "src/agents/bash-tools.process.e2e.test.ts",
   ])("prepares the runtime for the executed E2E route of %s", (target) => {
     const shards = expectDefined(
       createChangedNodeTestShardsWithSmoke([target], { selectedTestTargets: [target] }),
@@ -1829,7 +1827,7 @@ describe("CI changed Node test plan", () => {
     );
   });
 
-  it.each(["src/agents/simple-completion-runtime.plugin-scope.test.ts"])(
+  it.each(["src/agents/prepared-model-catalog-worker.integration.test.ts"])(
     "prepares runtime artifacts for changed fixture %s",
     (target) => {
       const shards = createChangedNodeTestShards([target]);

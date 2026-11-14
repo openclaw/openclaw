@@ -20,8 +20,6 @@ it("retains a real MCP manager created under a file-owned metadata mock", async 
   expect(globalThis[key]).toBe(manager);
 });
 `,
-    "09-mcp-b-installed-bundle.test.ts": `import ${source("agents/agent-bundle-mcp-runtime.agent-bundle.test.ts")};
-`,
     "09-mcp-c-replaced-owner.test.ts": `${imports}
 it("cancels the agent before publishing a successor during MCP disposal", async () => {
   const manager = await fixtureManager();

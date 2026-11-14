@@ -14,7 +14,6 @@ describe("detectChangedScope Windows routing", () => {
     "src/agents/sessions/tools/read.ts",
     "src/agents/sessions/tools/render-utils.test.ts",
     "src/infra/home-dir.test.ts",
-    "src/agents/provider-local-service.shutdown.test.ts",
     "src/infra/openclaw-cli-invocation.test-support.ts",
     "test/helpers/openclaw-test-instance.cli.test-support.mjs",
     "src/plugin-sdk/node-host.ts",

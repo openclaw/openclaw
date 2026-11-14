@@ -30,7 +30,6 @@ const runtimeOnlyUnitFiles = new Set([
   "src/agents/agent-tools.delegated-authority.test.ts",
   "src/agents/provider-auth-websocket.test.ts",
   "src/agents/session-placement-computer.test.ts",
-  "src/agents/session-tool-result-guard.tool-result-persist-hook.test.ts",
   "src/agents/sessions/agent-session-steering-context.test.ts",
   "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
   "src/agents/subagents/registry/subagent-control.accounting.test.ts",

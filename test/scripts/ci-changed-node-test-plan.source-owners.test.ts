@@ -203,7 +203,6 @@ describe("CI changed Node test plan", () => {
       targets: [
         "src/channels/message-access/operator-authority.test.ts",
         "src/agents/command/delivery.restart-final.integration.test.ts",
-        "src/agents/command/delivery.settle-reset.integration.test.ts",
         "src/auto-reply/reply/commands-acp.owner.test.ts",
         "src/auto-reply/reply/commands-allowlist.owner.test.ts",
         "src/auto-reply/reply/commands-plugin.channel-native.test.ts",
