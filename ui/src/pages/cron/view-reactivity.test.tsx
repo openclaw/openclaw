@@ -128,33 +128,37 @@ it("keeps pagination current while a query is pending without mounting editor su
   expect(view.container.querySelector("datalist")).toBeNull();
 });
 
-it("retains live suggestions only while the editor is presented", async () => {
+it("retains live timezone choices only while the editor is presented", async () => {
   const [props, setProps] = createSignal(
-    createCronViewProps({ createOpen: true, timezoneSuggestions: ["UTC", "Europe/Vienna"] }),
+    createCronViewProps({
+      createOpen: true,
+      form: { ...createCronViewProps().form, scheduleKind: "cron" },
+      timezoneSuggestions: ["UTC", "Europe/Vienna"],
+    }),
   );
   const view = mountSolid(() => <CronView {...props()} />);
   await vi.dynamicImportSettled();
   await waitForSolid(() =>
-    expect(view.container.querySelector("#cron-tz-suggestions")).not.toBeNull(),
+    expect(view.container.querySelector("button#cron-cron-tz")).not.toBeNull(),
   );
-  const timezones = getElement(view.container, "#cron-tz-suggestions", HTMLDataListElement);
-  const options = [...timezones.querySelectorAll("option")];
-  expect(options.map((option) => option.value)).toEqual(["UTC", "Europe/Vienna"]);
+  const trigger = getElement(view.container, "button#cron-cron-tz", HTMLButtonElement);
+  trigger.click();
+  await waitForSolid(() =>
+    expect(document.querySelector('[role="option"][data-value="Europe/Vienna"]')).not.toBeNull(),
+  );
+  const vienna = document.querySelector('[role="option"][data-value="Europe/Vienna"]');
   setProps((previous) => ({ ...previous, timezoneSuggestions: [...previous.timezoneSuggestions] }));
   flush();
-  expect(view.container.querySelector("#cron-tz-suggestions")).toBe(timezones);
-  expect(timezones.querySelectorAll("option")[0]).toBe(options[0]);
-  expect(timezones.querySelectorAll("option")[1]).toBe(options[1]);
+  expect(view.container.querySelector("button#cron-cron-tz")).toBe(trigger);
+  expect(document.querySelector('[role="option"][data-value="Europe/Vienna"]')).toBe(vienna);
   setProps((previous) => ({ ...previous, timezoneSuggestions: ["Europe/Vienna", "Asia/Tokyo"] }));
   flush();
-  expect(view.container.querySelector("#cron-tz-suggestions")).toBe(timezones);
-  expect([...timezones.querySelectorAll("option")].map((option) => option.value)).toEqual([
-    "Europe/Vienna",
-    "Asia/Tokyo",
-  ]);
+  expect(view.container.querySelector("button#cron-cron-tz")).toBe(trigger);
+  expect(document.querySelector('[role="option"][data-value="UTC"]')).toBeNull();
+  expect(document.querySelector('[role="option"][data-value="Asia/Tokyo"]')).not.toBeNull();
   setProps((previous) => ({ ...previous, createOpen: false }));
   flush();
-  expect(view.container.querySelector("datalist")).toBeNull();
+  expect(document.querySelector('[role="option"][data-value="Asia/Tokyo"]')).toBeNull();
 });
 
 it("retains history controls and forwards the current transcript target after refresh", () => {

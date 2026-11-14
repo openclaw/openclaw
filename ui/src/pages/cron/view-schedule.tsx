@@ -19,6 +19,7 @@ import {
   CronSelect,
 } from "./view-fields.tsx";
 import { describeJobNextRun } from "./view-job-status.tsx";
+import { CronTimezonePicker } from "./view-timezone.tsx";
 import type { CronProps } from "./view-types.ts";
 const EVERY_SUMMARY_KEYS = {
   seconds: ["cron.form.summaryEverySecondOne", "cron.form.summaryEverySeconds"],
@@ -212,15 +213,7 @@ export function ScheduleSection(props: CronProps) {
             mono
             placeholder={t("cron.form.expressionPlaceholder")}
           />
-          <CronInput
-            {...props}
-            field="cronTz"
-            errorKey="cronTz"
-            label={t("cron.form.timezoneOptional")}
-            help={t("cron.form.timezoneHelp")}
-            list="cron-tz-suggestions"
-            placeholder={t("cron.form.timezonePlaceholder")}
-          />
+          <CronTimezonePicker {...props} field="cronTz" />
         </>
       ) : undefined}
       {form().scheduleKind === "event" ? <EventSourceFields {...props} /> : undefined}
