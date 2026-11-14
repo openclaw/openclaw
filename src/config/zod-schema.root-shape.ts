@@ -443,6 +443,8 @@ export const OpenClawSchemaShape = {
       defaultTools: z.array(z.string().trim().min(1)).optional(),
       /** Skip missed recurring slots at startup; one-shot catch-up is unchanged. Default: false. */
       skipMissedJobs: z.boolean().optional(),
+      /** Share the agent concurrency limit with conversations instead of eight runs. Default: false. */
+      dynamicConcurrency: z.boolean().optional(),
       triggers: z
         .strictObject({
           enabled: z.boolean().optional(),

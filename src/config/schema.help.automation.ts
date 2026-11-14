@@ -110,6 +110,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     'Tools added when the automations tool creates or explicitly revises a nonempty toolsAllow list, before creator-policy checks and approval. Unset adds nothing. Use toolsAllowMode: "exact" on that request to opt out; [] remains tool-less. Existing jobs and unrelated edits are unchanged.',
   "cron.skipMissedJobs":
     "Skips missed recurring cron/every slots at Gateway startup and schedules their next future occurrence instead of catching up. Default: false. Enable to avoid stale reminders after downtime; one-shot at jobs still catch up.",
+  "cron.dynamicConcurrency":
+    "Lets automation run more than eight jobs at once: it shares agents.defaults.maxConcurrent with conversations, using what conversation turns in progress leave free and never fewer than eight. Default: false, a fixed eight. Condition checks do not count toward either limit.",
   "cron.webhookToken":
     "Bearer token attached to automation webhook POST deliveries when webhook mode is used. Prefer secret/env substitution and rotate this token regularly if shared webhook endpoints are internet-reachable.",
   "cron.webhookSsrfPolicy":

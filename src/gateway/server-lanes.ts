@@ -1,6 +1,6 @@
 import { enableSessionSuspensionWritesForGatewayStart } from "../agents/session-suspension.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
-import { MIN_CRON_RUN_SLOTS } from "../config/cron-limits.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getCommandLaneSnapshot,
@@ -17,9 +17,6 @@ type GatewayLaneConcurrency = {
   subagent: number;
 };
 
-/** Hook dispatch keeps its own width; the host-sized automation budget does not widen it. */
-const HOOK_DISPATCH_LANE_WIDTH = 8;
-
 /** Capacity held inside the cron budget so hook dispatch cannot be starved. */
 const HOOK_DISPATCH_LANE_RESERVATION = 1;
 
@@ -29,13 +26,16 @@ const CRON_HOOK_LANE_GROUP = "cron-hooks";
 export function resolveGatewayLaneConcurrency(cfg: OpenClawConfig): GatewayLaneConcurrency {
   const main = resolveAgentMaxConcurrent(cfg);
   return {
-    // The run queue admits automation runs against the agent limit; these lanes are as wide as
-    // the most it can admit.
-    cron: Math.max(MIN_CRON_RUN_SLOTS, main),
+    // With dynamic concurrency the run queue admits automation runs against the agent limit;
+    // these lanes are as wide as the most it can admit.
+    cron:
+      cfg.cron?.dynamicConcurrency === true
+        ? Math.max(DEFAULT_CRON_MAX_CONCURRENT_RUNS, main)
+        : DEFAULT_CRON_MAX_CONCURRENT_RUNS,
     // The reservation guarantees one slot, but hooks may use every free slot
-    // inside the shared budget, up to their own width. A one-wide lane would
-    // serialize unrelated hooks.
-    hookDispatch: cfg.hooks?.enabled === true ? HOOK_DISPATCH_LANE_WIDTH : 0,
+    // inside the shared budget, up to their own width, which the agent limit
+    // does not widen. A one-wide lane would serialize unrelated hooks.
+    hookDispatch: cfg.hooks?.enabled === true ? DEFAULT_CRON_MAX_CONCURRENT_RUNS : 0,
     main,
     subagent: resolveSubagentMaxConcurrent(cfg),
   };

@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import { MIN_CRON_RUN_SLOTS } from "../config/cron-limits.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createGatewaySchedulerClock,
@@ -56,7 +56,7 @@ function createQueueBlocker() {
   const release = createDeferred();
   let active = 0;
   const runCommandJob: NonNullable<CronServiceDeps["runCommandJob"]> = async () => {
-    if (++active === MIN_CRON_RUN_SLOTS) {
+    if (++active === DEFAULT_CRON_MAX_CONCURRENT_RUNS) {
       started.resolve();
     }
     await release.promise;
@@ -66,7 +66,7 @@ function createQueueBlocker() {
     runCommandJob,
     async occupy(cron: CronService, signal: AbortSignal) {
       const jobs = await Promise.all(
-        Array.from({ length: MIN_CRON_RUN_SLOTS }, (_, index) =>
+        Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, (_, index) =>
           addOneShot(cron, `capacity blocker ${index}`, clock.clock.now() + 86_400_000, {
             enabled: false,
             payload: { kind: "command", argv: ["synthetic-capacity-blocker"] },
