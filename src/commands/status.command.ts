@@ -6,6 +6,7 @@ import {
   readPairingConnectErrorDetails,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
 import { withProgress } from "../cli/progress.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
@@ -127,7 +128,18 @@ export async function statusCommand(
 
   // Structured probe failures belong to nonthrowing JSON; text status keeps failures loud.
   if (health && "error" in health) {
-    throw new Error(health.error);
+    // Keep the machine output stable (the probe error alone) while the human output
+    // names a concrete recovery step, matching the actionable-error contract.
+    // Recovery guidance is a diagnostic next step (`gateway status --deep`), not a
+    // lifecycle command: start/install can be refused by the service owner (for
+    // example under an external supervisor), so the hint must not assume either is
+    // permitted. It applies to local and remote targets alike.
+    const recoveryHint = "Run `openclaw gateway status --deep` for gateway diagnostics.";
+    throw new ExpectedCliError({
+      message: health.error,
+      humanOutput: `${health.error}\n${recoveryHint}`,
+      machineOutput: health.error,
+    });
   }
 
   const {
