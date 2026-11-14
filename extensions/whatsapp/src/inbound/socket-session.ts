@@ -359,6 +359,16 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     };
     let lastError: unknown = new Error(RECONNECT_IN_PROGRESS_ERROR);
     for (let attempt = 1; ; attempt += 1) {
+      // The handoff precedes every provider request, including this attempt's timelock query.
+      try {
+        assertDirectAdapterHandoff?.();
+      } catch (error) {
+        // A revoked send must not leave its readiness proof for the next send.
+        if (verifiedSendReady?.jid === jid) {
+          verifiedSendReady = undefined;
+        }
+        throw error;
+      }
       const currentSock = getCurrentSock();
       if (currentSock) {
         try {
@@ -383,12 +393,8 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
             options.socketRef.current = null;
           }
         }
-      } else {
-        // A caller revoked while the socket is away must not wait out the reconnect backoff.
-        assertDirectAdapterHandoff?.();
-        if (!shouldRetryDisconnect()) {
-          throw lastError;
-        }
+      } else if (!shouldRetryDisconnect()) {
+        throw lastError;
       }
 
       if (attempt >= sendRetryMaxAttempts) {

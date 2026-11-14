@@ -375,6 +375,37 @@ describe("web monitor inbox socket lifecycle", () => {
       await listener.close();
     });
 
+    it("sends no readiness query or edit on the successor socket once revoked during backoff", async () => {
+      const { socketRef, started } = startRetryingMonitor();
+      const { listener, sock } = await started;
+      const revocation = new Error("originating run ended");
+      let revoked = false;
+      const successorSock = {
+        sendMessage: vi.fn(async () => ({ key: { id: "edit-after-revocation" } })),
+        fetchAccountReachoutTimelock: vi.fn().mockResolvedValue({ isActive: false }),
+      };
+      sock.sendMessage.mockRejectedValueOnce(new Error("connection closed"));
+      sleepWithAbortMock.mockImplementationOnce(async () => {
+        revoked = true;
+        socketRef.current = successorSock as never;
+      });
+
+      const result = listener
+        .editMessage(key.remoteJid, key.id, "updated", () => {
+          if (revoked) {
+            throw revocation;
+          }
+        })
+        .catch((error: unknown) => error);
+
+      expect(await result).toBe(revocation);
+      expect(sock.sendMessage).toHaveBeenCalledOnce();
+      expect(successorSock.fetchAccountReachoutTimelock).not.toHaveBeenCalled();
+      expect(successorSock.sendMessage).not.toHaveBeenCalled();
+
+      await listener.close();
+    });
+
     it("rejects without a write during a reachout timelock", async () => {
       const { started } = startRetryingMonitor();
       const { listener, sock } = await started;
