@@ -34,6 +34,8 @@ export type ChatModelSearchView = {
   isHighlighted(key: string): boolean;
   highlight(value: string | undefined): void;
   providerOpen(provider: string): boolean;
+  /** Return to the opening provider so a closed picker never reopens elsewhere. */
+  resetProvider(): void;
   moreOpen(provider: string): boolean;
   filtering(): boolean;
   empty(): boolean;
@@ -164,6 +166,7 @@ export function resetModelSearch(details: HTMLDetailsElement): void {
   }
   // Clear explicit navigation even when the query is already empty.
   state?.view?.highlight(undefined);
+  state?.view?.resetProvider();
   state?.setQuery("");
 }
 

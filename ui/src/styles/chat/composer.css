@@ -4760,8 +4760,16 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   white-space: nowrap;
 }
 
-.chat-controls__account-trigger:is(:hover, [aria-expanded="true"]) {
+.chat-controls__account-trigger:is(:hover, [aria-expanded="true"]):not(:disabled) {
   background: var(--menu-selected);
+}
+
+/* A locked account is a label, not a control. */
+.chat-controls__account-trigger:disabled {
+  min-width: 0;
+  padding-inline: 0;
+  background: transparent;
+  color: var(--muted);
 }
 
 .chat-controls__account-popover {

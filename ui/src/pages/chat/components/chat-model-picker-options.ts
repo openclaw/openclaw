@@ -147,6 +147,8 @@ export function prepareChatModelPickerPanel(
   favorites?: {
     keys: readonly string[];
     opening: { keys: readonly string[]; selected: string };
+    /** The user last chose Favorites; it opens only while it holds the selected model. */
+    preferFavorites?: boolean;
   },
 ) {
   const defaultModelOption = params.modelOptions.find((option) => option.isDefault);
@@ -208,10 +210,18 @@ export function prepareChatModelPickerPanel(
   }
   const orderedProviderGroups = [...providerGroups];
   const leadingProvider = leadingModelOption && groupProvider(leadingModelOption);
-  const activeProvider = activeModelOption && groupProvider(activeModelOption);
+  let activeProvider = activeModelOption && groupProvider(activeModelOption);
 
   if (favoriteOptions.length && orderedProviderGroups.length > 1) {
     orderedProviderGroups.unshift([FAVORITES_GROUP, { lead: favoriteOptions, more: [] }]);
+    // Opening keys keep the tab steady while stars change; an emptied group falls back.
+    if (
+      favorites?.preferFavorites &&
+      activeModelOption &&
+      openingFavorites.includes(activeModelOption)
+    ) {
+      activeProvider = FAVORITES_GROUP;
+    }
   }
   const orderedOptions = orderedProviderGroups.flatMap(([, { lead, more }]) => [...lead, ...more]);
   const optionIndex = new Map(

@@ -14,6 +14,7 @@ import {
 
 const key = "ui.modelFavorites:research";
 const model = "openai/small";
+const favoritesTabKey = "openclaw.control.modelPickerFavoritesTab.v1";
 
 // Cold loading is covered by browser proof; these cases exercise the loaded picker.
 beforeAll(async () => {
@@ -21,7 +22,10 @@ beforeAll(async () => {
 });
 
 beforeEach(installModelPickerLayout);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  localStorage.removeItem(favoritesTabKey);
+});
 
 async function mount(
   entries: Record<string, unknown> = {},
@@ -186,6 +190,36 @@ it("uses the same favorite across runtimes while retaining distinct row identiti
   expect(view.container.querySelector('[data-chat-model-provider-toggle="$favorites"]')).toBeNull();
   view.star().click();
   await waitForSolid(() => expect(Object.hasOwn(view.entries, key)).toBe(false));
+});
+
+it("reopens on Favorites only when it was chosen last and holds the selected model", async () => {
+  const view = await mount({ [key]: [model] }, undefined, { selectedModelValue: model });
+  const activeTab = () =>
+    view.container
+      .querySelector('[data-chat-model-provider-toggle][aria-selected="true"]')
+      ?.getAttribute("data-chat-model-provider-toggle");
+  const reopenWith = async (selectedModelValue: string) => {
+    view.params.selectedModelValue = selectedModelValue;
+    await reopen(view);
+  };
+  await waitForSolid(() => expect(activeTab()).toBe("openai"));
+  await selectProvider(view.container, "$favorites");
+  expect(localStorage.getItem(favoritesTabKey)).toBe("true");
+  await reopenWith(model);
+  await waitForSolid(() => expect(activeTab()).toBe("$favorites"));
+  // An unstarred selection opens its own provider; the Favorites preference remains.
+  await reopenWith("openai/large");
+  await waitForSolid(() => expect(activeTab()).toBe("openai"));
+  await reopenWith(model);
+  await waitForSolid(() => expect(activeTab()).toBe("$favorites"));
+  await selectProvider(view.container, "openai");
+  expect(localStorage.getItem(favoritesTabKey)).toBe("false");
+  await reopenWith(model);
+  await waitForSolid(() => expect(activeTab()).toBe("openai"));
+  // Another provider never reopens when it lacks the selected model.
+  await selectProvider(view.container, "anthropic");
+  await reopenWith(model);
+  await waitForSolid(() => expect(activeTab()).toBe("openai"));
 });
 
 it("lets the selected default model be favorited", async () => {

@@ -51,6 +51,10 @@ import {
   modelRuntimeId,
   providerRuntimeOptions,
 } from "./chat-model-settings.tsx";
+import {
+  loadModelPickerFavoritesTab,
+  saveModelPickerFavoritesTab,
+} from "./model-provider-order.ts";
 
 registerSettingsEnglish();
 
@@ -104,6 +108,11 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
     () => search?.open() ?? true,
     selectedModelValue,
   );
+  // Read the remembered tab once per opening so later tab clicks never move this view.
+  const preferFavorites = createMemo<{ open: boolean; value: boolean }>((previous) => {
+    const open = search?.open() ?? true;
+    return open && previous?.open ? previous : { open, value: loadModelPickerFavoritesTab() };
+  });
   const state = createMemo(() =>
     prepareChatModelPickerPanel(
       {
@@ -112,7 +121,11 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
         selectedModelValue: selectedModelValue(),
         selectedAgentRuntime: selectedAgentRuntime(),
       },
-      { keys: favorites.keys(), opening: opening() },
+      {
+        keys: favorites.keys(),
+        opening: opening(),
+        preferFavorites: preferFavorites().value,
+      },
     ),
   );
   const showBrowser = createMemo(
@@ -564,6 +577,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
                     )}
                     disabled={disabled()}
                     onSelect={(provider) => {
+                      saveModelPickerFavoritesTab(provider === FAVORITES_GROUP);
                       if (!searchView?.providerOpen(provider)) {
                         setProviderTransition((previous) => !previous);
                       }
