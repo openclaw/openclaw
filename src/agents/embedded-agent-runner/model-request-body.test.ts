@@ -143,7 +143,11 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
       // Completion diagnostics belong to the consumed transport stream.
       void event;
     }
-    expect((await stream.result()).stopReason).toBe("stop");
+    const result = await stream.result();
+    expect(
+      result.stopReason,
+      `${result.errorMessage}; fetch calls=${fetchMock.mock.calls.length}`,
+    ).toBe("stop");
     expect(wire).toBe(expectedWire);
     expect(mainThreadPayloadSerializations).toBe(0);
     expect(state.lastAttempt).toEqual({

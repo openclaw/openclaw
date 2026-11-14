@@ -1,13 +1,17 @@
+import fs from "node:fs";
+import path from "node:path";
 // Verifies package transports consume the route generation prepared on the model.
 import {
   configureAiTransportHost,
   getAiTransportHost,
   getDefaultAiTransportHost,
 } from "@openclaw/ai";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createPluginModuleLoader } from "../plugins/loader-module-runtime.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
-import "./ai-transport-runtime-host.js";
 import { attachModelProviderLocalServiceReconciler } from "./provider-local-service-reconcile.js";
+import "./ai-transport-runtime-host.js";
 import {
   attachModelProviderLocalService,
   ensureModelProviderLocalService,
@@ -18,7 +22,10 @@ import {
   getModelProviderRequestRouteFacts,
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
+import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
+
+const temp = useAutoCleanupTempDirTracker(afterEach);
 
 function buildOwners(): PluginMetadataSnapshotOwnerMaps {
   const empty = new Map<string, readonly string[]>();
@@ -42,24 +49,46 @@ function buildOwners(): PluginMetadataSnapshotOwnerMaps {
 }
 
 describe("AI transport prepared provider routes", () => {
-  it("retains runtime capabilities when another module graph installs the base host", async () => {
+  it("retains guarded defaults and configured observers across native SDK loading", async () => {
     const originalHost = getDefaultAiTransportHost();
+    expect(originalHost.buildModelFetch).toBe(buildGuardedModelFetch);
+    const requests: unknown[] = [];
+    const fetchObserver = vi.fn<typeof fetch>(async (input, init) => {
+      requests.push(await new Request(input, init).json());
+      return new Response(
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "observed" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    const buildModelFetch = () => fetchObserver;
+    configureAiTransportHost({ ...originalHost, buildModelFetch });
     const model = attachModelProviderRequestRouteFacts(
-      makeProviderModelFixture<"openai-responses">({
+      makeProviderModelFixture<"openai-completions">({
         id: "prepared-model",
         provider: "openai",
-        api: "openai-responses",
+        api: "openai-completions",
         baseUrl: "https://prepared.example/v1",
       }),
       buildOwners(),
     );
     try {
-      await import(
-        /* @vite-ignore */ new URL(
-          "../llm/ai-transport-host.ts?duplicate-base-install",
-          import.meta.url,
-        ).href
+      const plugin = path.join(temp.make("native-fetch-observer-"), "index.cjs");
+      fs.writeFileSync(plugin, `module.exports = require("openclaw/plugin-sdk/llm");`);
+      const load = createPluginModuleLoader({ tryNative: true, pluginSdkResolution: "src" });
+      const sdk = load(plugin) as typeof import("../plugin-sdk/llm.js");
+      // Check before invoking the fetch port: a regression must never send a real request.
+      expect(getDefaultAiTransportHost().buildModelFetch).toBe(buildModelFetch);
+      const response = await sdk.complete(
+        model,
+        { messages: [{ role: "user", content: "observer fixture", timestamp: 0 }] },
+        { apiKey: "synthetic-observer-key" },
       );
+      expect(response).toMatchObject({
+        stopReason: "stop",
+        content: [{ type: "text", text: "observed" }],
+      });
+      expect(requests).toMatchObject([{ model: "prepared-model", stream: true }]);
+      expect(fetchObserver).toHaveBeenCalledTimes(1);
       expect(
         getDefaultAiTransportHost().resolveProviderRequestCapabilities({
           model,
