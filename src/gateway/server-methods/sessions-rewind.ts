@@ -17,9 +17,7 @@ import {
 } from "../../config/sessions/session-actor-storage-binding.js";
 import type { SessionMessageCutResult as MessageCutMutationResult } from "../../config/sessions/session-message-cut.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import {
   captureSessionTarget,
   isCompetingSessionControllerWorkActive,
@@ -51,7 +49,6 @@ import { SessionMutationAuthorizationChangedError } from "../session-sharing.js"
 import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import type { GatewaySessionEntryRead } from "../session-utils-store.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
-import { LocalWorkspaceConflictError } from "../worker-environments/local-workspace-conflict-error.js";
 import {
   readSessionWorkerPlacementAsync,
   resolveSessionWorkerPlacementMutationError,
@@ -62,6 +59,7 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { prepareSessionForkFilesystemRoot } from "./session-create-root.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { resolveEditorMediaAttachments } from "./session-rewind-editor-media.js";
+import { rejectSessionMessageCutFailure } from "./session-rewind-failure-log.js";
 import { prepareRewindRepositoryEntries } from "./session-rewind-repository-entries.js";
 import { waitForTerminalSessionRunSettlement } from "./session-run-settlement.js";
 import { listSessionBranchesForGateway } from "./sessions-branches-list.js";
@@ -229,7 +227,7 @@ async function mutatePreparedSessionAtMessage({
     if (error instanceof SessionMutationAuthorizationChangedError) {
       throw error;
     }
-    reject(`Failed to ${action} the local session. Try again.`, ErrorCodes.UNAVAILABLE);
+    rejectSessionMessageCutFailure(action, "upstream presence", error, reject);
     return;
   }
   using preparedUpstream = upstreamPresence;
@@ -579,18 +577,7 @@ async function mutatePreparedSessionAtMessage({
         if (error instanceof SessionMutationAuthorizationChangedError) {
           throw error;
         }
-        if (error instanceof ModelSelectionLockedError) {
-          reject(error.message);
-          return;
-        }
-        if (
-          error instanceof LocalWorkspaceConflictError ||
-          error instanceof SqliteJsonlReadBudgetExceededError
-        ) {
-          reject(error.message, ErrorCodes.UNAVAILABLE);
-          return;
-        }
-        reject(`Failed to ${action} the local session. Try again.`, ErrorCodes.UNAVAILABLE);
+        rejectSessionMessageCutFailure(action, "local mutation", error, reject);
         return;
       } finally {
         if (forkRepository && !repositoryForkCommitted) {

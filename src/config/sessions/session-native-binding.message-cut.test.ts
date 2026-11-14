@@ -160,6 +160,7 @@ it.each([
   ({ mode, entryId, leafId, loseReply }) =>
     withCutFixture(async (fixture) => {
       const client = await fixture.attachClient();
+      const before = fixture.readEntry();
       const arrived = createDeferred();
       const release = createDeferred();
       const published = vi.fn();
@@ -184,7 +185,11 @@ it.each([
       const cut = fixture.cut(mode, entryId);
       try {
         await awaitGateBeforeSettlement(arrived.promise, cut, "C3 did not reach receipt delivery");
-        expect(fixture.readEntry()?.sessionId).not.toBe(fixture.scope.sessionId);
+        // C3's transaction has committed, so the stored row already holds the new
+        // incarnation: the session id is kept and the lifecycle revision rotated.
+        const cutEntry = fixture.readEntry();
+        expect(cutEntry?.sessionId).toBe(fixture.scope.sessionId);
+        expect(cutEntry?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
         expect(fixture.readBinding()).toBeUndefined();
         expect(published).not.toHaveBeenCalled();
         expect(client.release).not.toHaveBeenCalled();
@@ -193,7 +198,8 @@ it.each([
         release.resolve();
         const result = await cut;
         assert(result.status === "created");
-        expect(result.entry.previousSessionId).toBe(fixture.scope.sessionId);
+        expect(result.entry.sessionId).toBe(fixture.scope.sessionId);
+        expect(result.entry.previousSessionId).toBeUndefined();
         expect(
           loadTranscriptEventsSync({ ...fixture.scope, sessionId: result.entry.sessionId }).at(-1),
         ).toMatchObject({ type: "leaf", targetId: leafId });

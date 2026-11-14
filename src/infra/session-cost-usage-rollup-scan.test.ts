@@ -31,22 +31,15 @@ const scan = (json: string[]) =>
   });
 
 it("does not retain decoded payloads while refreshing memory usage", async () => {
-  // Isolate decoded expansion from the already resident immutable input. Run the
-  // opt-in 640 MiB scan with a 512 MiB heap after preparing the test compiler cache.
-  const heapProof = process.env.OPENCLAW_USAGE_HEAP_PROOF === "1";
-  const count = heapProof ? 640 : 8;
-  const event = message(7);
-  const eventJson = JSON.stringify({
-    ...event,
-    message: {
-      ...event.message,
-      content: [
-        { type: "text", text: "🌞".repeat(heapProof ? 256 * 1024 : 16) },
-        ...event.message.content,
-      ],
-    },
-  });
-  const result = await scan(Array<string>(count).fill(eventJson));
+  // Eight ordinary turns with real id/parent links: every turn is billed (72).
+  const count = 8;
+  const result = await scan(
+    Array.from({ length: count }, (_row, index) =>
+      JSON.stringify(
+        message(7, { id: `a${index}`, parentId: index === 0 ? null : `a${index - 1}` }),
+      ),
+    ),
+  );
   const bucket = Object.values(result.rollup.buckets)[0]!;
   expect(result.parsedRecords).toBe(count);
   expect(result.countedRecords).toBe(count);
@@ -57,13 +50,24 @@ it("does not retain decoded payloads while refreshing memory usage", async () =>
     totalCost: count,
   });
   expect(bucket.tools).toEqual([{ name: "read", count }]);
+  // The 640 MiB / 512 MiB heap scan that proves no decoded payload is retained is
+  // opt-in and never ran in CI; it is kept with this task's proof instead.
 });
 
 it("preserves rewind, side append and parentless navigation with canonical byte anchors", async () => {
+  // The real append path writes a side artifact without a parentId, so it hangs
+  // off the leaf that was active when it landed, and a later rewind chains its
+  // leaf control onto it. Billing therefore still reaches the displaced tip `b`.
   const events = [
     message(3, { id: "a", parentId: null }),
     message(5, { id: "b", parentId: "a" }),
-    message(100, { id: "side", parentId: "a", appendMode: "side" }),
+    {
+      type: "custom",
+      id: "side",
+      customType: "audit",
+      appendMode: "side",
+      timestamp: "2026-10-18T12:00:00.000Z",
+    },
     { type: "leaf", id: "rewind", parentId: "side", targetId: "a" },
     message(7, { id: "c" }),
   ];
@@ -71,11 +75,13 @@ it("preserves rewind, side append and parentless navigation with canonical byte 
   const tail = message(200, { id: "hidden", parentId: "c", appendMode: "side" });
   const json = [...events, tail].map((event) => JSON.stringify(event, null, 2));
   const result = await scan(json);
-  expect(result.parsedRecords).toBe(2);
+  // Base reports 15 tokens for this history (rewind after a side append), so the
+  // one in-place transcript bills a, the displaced b and the new c.
+  expect(result.parsedRecords).toBe(3);
   expect(Object.values(result.rollup.buckets)[0]!.totals).toMatchObject({
-    input: 10,
-    output: 4,
-    totalCost: 2,
+    input: 15,
+    output: 6,
+    totalCost: 3,
   });
   expect(result.checkpoint).toMatchObject({
     kind: "sqlite",

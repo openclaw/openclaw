@@ -356,7 +356,10 @@ it("uses committed metadata for selected usage and families with an empty curren
   });
 });
 
-it("keeps a rewound window in its session's usage family", async () => {
+// A rewind keeps its transcript identity, so there is no retired window to
+// re-attach: the single window keeps the usage it already accrued. Multi-id
+// families still cover real rollovers (/new, compaction branch, cron).
+it("keeps a rewound session's usage on its own window", async () => {
   await withUsageState(async (state) => {
     const key = "agent:main:usage-rewind";
     const scope = sessionScope(state, "main", key);
@@ -392,10 +395,11 @@ it("keeps a rewound window in its session's usage family", async () => {
         {
           key,
           currentSessionId: currentId,
-          includedSessionIds: [currentId, firstId],
+          includedSessionIds: [firstId],
           usage: { totalTokens: 23 },
         },
       ]);
+      expect(currentId).toBe(firstId);
       expect(result.totals.totalTokens).toBe(23);
     }
   });

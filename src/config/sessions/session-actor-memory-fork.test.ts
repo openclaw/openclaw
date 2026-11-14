@@ -177,6 +177,8 @@ describe("memory actor fork and cut", () => {
       expectedState,
       mode: "rewind" as const,
     };
+    const drained = await readMemory(storage(parent), "session.history.raw-delta", { limits: {} });
+    assert(drained.kind === "page", "Raw delta page failed");
     const rewind = await commitMemory(storage(parent), "session.messageCut", { intent });
     expect(rewind).toMatchObject({
       status: "created",
@@ -184,16 +186,37 @@ describe("memory actor fork and cut", () => {
       editorAttachments: [{ mimeType: "image/png", data: "c3ludGhldGlj" }],
     });
     assert(rewind.status === "created", "Rewind failed");
-    await expect(async () => readMemory(storage(parent), "session.entry.read", {})).rejects.toThrow(
-      /closed/,
-    );
+    // The cut keeps the transcript identity; the writer claim is what is retired.
+    expect(rewind.entry.sessionId).toBe("parent-session");
+    expect(rewind.entry.lifecycleRevision).not.toBe(expectedState.lifecycleRevision);
+    // The control rotates the generation, as SQLite does: a pre-cut cursor is refused.
+    expect(
+      await readMemory(storage(parent), "session.history.raw-delta", {
+        limits: { cursor: drained.cursor },
+      }),
+    ).toMatchObject({ kind: "reset", reason: "generation_mismatch" });
+    const stale = await mutateMemory(storage(parent), "session.event.append", {
+      scope: {
+        agentId: "main",
+        sessionKey: parentKey,
+        storePath,
+        sessionId: expectedState.sessionId,
+        expectedOwner: { lifecycleRevision: expectedState.lifecycleRevision },
+      },
+      eventJson: JSON.stringify({ type: "custom", id: "stale", customType: "x", parentId: "a2" }),
+    });
+    assert(stale.kind === "rolled-back", "Stale writer was admitted after the cut");
     const active = await acquire();
     const old = await readMemory(storage(active), "session.history.hydrate", {
       sessionId: "parent-session",
     });
     expect(old.kind).toBe("full");
     if (old.kind === "full") {
-      expect(old.snapshot.events).toEqual(transcript);
+      // The original window is retained: every seeded event plus the one control.
+      expect(old.snapshot.events).toMatchObject([
+        ...transcript,
+        { type: "leaf", parentId: "a2", targetId: "a1" },
+      ]);
     }
     const branch = await readMemory(storage(active), "session.parentFork.source", {});
     expect(branch?.branchEntries).toHaveLength(2);

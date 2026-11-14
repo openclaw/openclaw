@@ -104,7 +104,7 @@ function getProjectionKysely(db: EngineConnection) {
   return getNodeSqliteKysely<TranscriptProjectionDatabase>(db);
 }
 
-function projectionFactsColumns(db: EngineConnection) {
+export function projectionFactsColumns(db: EngineConnection) {
   return [
     /* kysely-allow-raw: the projection retains the exact stored byte count and JSONL separator. */ sql<number>`${transcriptEventReadBytesSql()} + 1`.as(
       "serialized_bytes",
@@ -121,7 +121,13 @@ function projectionFactsColumns(db: EngineConnection) {
   ];
 }
 
-function projectionRowFacts(row: SessionTranscriptProjectionRow, contextEligible: 0 | 1) {
+export function projectionRowFacts(
+  row: Pick<
+    SessionTranscriptProjectionRow,
+    "serialized_bytes" | "dependency_navigation_json" | "navigation_type"
+  >,
+  contextEligible: 0 | 1,
+) {
   return row.serialized_bytes === undefined || row.dependency_navigation_json == null
     ? undefined
     : {

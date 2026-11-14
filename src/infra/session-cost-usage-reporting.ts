@@ -36,7 +36,7 @@ import {
   loadCapturedSessionCostSummariesFromCache,
   runUsageReportAfterRefresh,
 } from "./session-cost-usage-cache-runtime.js";
-import { dropInheritedTranscriptEvents } from "./session-cost-usage-inherited.js";
+import { selectBilledTranscriptEvents } from "./session-cost-usage-inherited.js";
 import {
   createUsageCostResolver,
   parseUsageCostTranscriptEntryAsync,
@@ -416,8 +416,9 @@ async function* readTranscriptRecords(
       );
     }
     const records = events.filter(isRecord);
-    const visible = selectVisibleTranscriptEvents(records);
-    yield* options.countedOnly ? dropInheritedTranscriptEvents(records, visible) : visible;
+    yield* options.countedOnly
+      ? selectBilledTranscriptEvents(records)
+      : selectVisibleTranscriptEvents(records);
     return;
   }
   // Diagnostic history and durable scans decode archives without plaintext files.

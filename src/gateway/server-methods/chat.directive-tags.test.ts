@@ -1237,7 +1237,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     }
   });
 
-  it.each(["copied-leaf", null])(
+  // A branch switch keeps the transcript identity, so the session id no longer
+  // fences a stale pane. The fence is the appended `leaf` control: a pane that
+  // still displays the pre-switch leaf, or claims the empty root, is refused even
+  // though it names the session's current id.
+  it.each(["active-sibling", null])(
     "rejects leaf %s from before a branch switch",
     async (expectedLeafEntryId) => {
       const { context, respond, send } = await createSqliteChatRequest(
@@ -1269,7 +1273,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         env: suiteFixtureEnv,
         path: suiteDatabasePath,
       });
-      const staleSessionId = mockState.sessionId;
+      const preSwitchSessionId = mockState.sessionId;
       const switched = await switchSessionBranch({
         agentId: "main",
         env: suiteFixtureEnv,
@@ -1281,7 +1285,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       if (switched.status !== "created") {
         throw new Error("expected branch switch test invariant");
       }
-      expect(switched.entry.sessionId).not.toBe(staleSessionId);
+      // The in-place switch keeps the id the stale pane is still holding.
+      expect(switched.entry.sessionId).toBe(preSwitchSessionId);
       mockState.sessionId = switched.entry.sessionId;
       const before = loadTranscriptEventsSync(transcriptScope());
       expect(resolveSessionTranscriptActiveLeafEntryId(before)).toBe("copied-leaf");
@@ -1290,7 +1295,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         idempotencyKey: "idem-rotated-exact-leaf",
         requestParams: {
           expectedLeafEntryId,
-          sessionId: staleSessionId,
+          sessionId: preSwitchSessionId,
         },
         waitFor: "none",
       });

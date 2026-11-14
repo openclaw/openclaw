@@ -14,11 +14,19 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import * as entryMutations from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { resetSessionEntryLifecycle } from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { markSessionTranscriptIndexDirtyInTransaction } from "../../config/sessions/session-transcript-index.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
@@ -106,6 +114,16 @@ it.each([
                   .mockReturnValue(false)
               : undefined;
           try {
+            // A lagging projection must not turn an invalid selection into a retired
+            // runtime: the preflight reconciles through the projection owner and still
+            // refuses first. The first selection below runs against the dirty one.
+            if (failure === "invalid worker") {
+              runOpenClawAgentWriteTransaction(
+                (current) =>
+                  markSessionTranscriptIndexDirtyInTransaction(current.db, scope.sessionId),
+                toDatabaseOptions(resolveSqliteScope(scope)),
+              );
+            }
             for (const [invalidMethod, entryId, message] of [
               ["sessions.rewind", "missing", "message entry not found"],
               ["sessions.rewind", "assistant-1", "entry is not a user message"],
@@ -205,6 +223,7 @@ it.each([
           "committed session",
         );
         expect(committed.localWorkspaceHandoff?.fromSessionId).toBe(scope.sessionId);
+        expect(committed.lifecycleRevision).not.toBe(original.lifecycleRevision);
         expect(projectPublicSessionEntry(committed)).not.toHaveProperty("localWorkspaceHandoff");
         const settled = expectDefined(
           await readLocalWorkspaceProjection(worktree.id),
@@ -218,12 +237,14 @@ it.each([
           const next = invokeMessageCut("sessions.branches.switch", scope);
           expect(await next.error).toBeUndefined();
           expectCutReply(next.respond, {});
-          const firstSuccessor = committed.sessionId;
+          const firstSuccessor = committed.lifecycleRevision;
           committed = expectDefined(
             await readSessionEntryReadOnlyInWorker(scope),
             "committed session",
           );
-          expect(committed.localWorkspaceHandoff?.fromSessionId).toBe(firstSuccessor);
+          // The second cut's handoff transfers from the first cut's incarnation.
+          expect(committed.localWorkspaceHandoff?.fromSessionId).toBe(scope.sessionId);
+          expect(committed.localWorkspaceHandoff?.lifecycleRevision).toBe(firstSuccessor);
         } else if (failure === "reset before adoption") {
           await resetSessionEntryLifecycle({
             agentId: scope.agentId,
@@ -254,7 +275,10 @@ it.each([
           await resolveLocalWorkspaceOwner({ cfg, ...scope }),
           "managed workspace owner",
         );
-        expect(resumed.sessionId).not.toBe(scope.sessionId);
+        // An in-place cut keeps the transcript id; custody moves to the new
+        // lifecycle revision, which is what retires the pre-cut owner.
+        expect(resumed.sessionId).toBe(scope.sessionId);
+        expect(resumed.lifecycleRevision).not.toBe(original.lifecycleRevision);
         expect(
           (await readSessionEntryReadOnlyInWorker(scope))?.localWorkspaceHandoff,
         ).toBeUndefined();
