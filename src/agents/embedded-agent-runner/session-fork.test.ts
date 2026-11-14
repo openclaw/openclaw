@@ -13,6 +13,11 @@ import * as undiciRuntime from "../../infra/net/undici-runtime.js";
 import type { Context, Message, Model } from "../../llm/types.js";
 import "../ai-transport-runtime-host.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { expectText } from "../../test-utils/text-assertions.js";
 import { providerResponse, type WireApi } from "../embedded-agent-runner.wire.test-support.js";
@@ -21,6 +26,12 @@ import { closeProviderTransportDispatcherPool } from "../provider-transport-disp
 import type { StreamFn } from "../runtime/index.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { wrapStreamFnWithModelRequestGate } from "./model-request-hook.js";
+import {
+  getProviderPromptState,
+  readPreparedProviderRequest,
+  wrapStreamFnWithProviderPromptState,
+} from "./provider-prompt-state.js";
 import { runEmbeddedSessionFork } from "./session-fork.js";
 
 const context: Context = {
@@ -142,6 +153,7 @@ function guardedTransport(beforeDns?: () => void, api: WireApi = "openai-respons
   };
 }
 afterEach(async () => {
+  resetGlobalHookRunner();
   cleanupSessionResources();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -412,4 +424,56 @@ it.each([
     : expect(result).rejects.toThrow(outcome));
   expect(payload.tool_choice).toEqual(api === "anthropic-messages" ? { type: "none" } : "auto");
   expect(streamFn).toHaveBeenCalledTimes(api === "bedrock-converse-stream" ? 0 : 1);
+});
+
+/** A deterministic redactor that withholds side questions when `block` is set. */
+function installRedactor(kinds: unknown[], block = false) {
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([
+      {
+        hookName: "before_model_request",
+        handler: async (raw) => {
+          const event = raw as { requestKind: string; payload: unknown };
+          kinds.push(event.requestKind);
+          if (block && event.requestKind === "side_question") {
+            throw new Error("side question withheld");
+          }
+          const text = JSON.stringify(event.payload).replaceAll("fixture-value", "[REDACTED]");
+          return { payload: JSON.parse(text) };
+        },
+      },
+    ]),
+  );
+}
+
+it("gates the fork's own request once and keeps the parent's gated prefix", async () => {
+  const kinds: unknown[] = [];
+  installRedactor(kinds);
+  const { streamFn, request } = guardedTransport();
+  const secret = history({ role: "user", content: "API_TOKEN=fixture-value", timestamp: 2 });
+  // As on a turn: the run records the request before its gate, then the gate sends.
+  const parentStream = wrapStreamFnWithProviderPromptState({
+    streamFn: wrapStreamFnWithModelRequestGate(streamFn, {}, "turn"),
+    state: getProviderPromptState("fork-gate-parent"),
+    effectiveContextTokenBudget: 10000,
+  });
+  await complete(parentStream, model, secret);
+  const parent = await request().json();
+  const prepared = readPreparedProviderRequest("fork-gate-parent")?.body;
+  const gated = wrapStreamFnWithModelRequestGate(streamFn, {}, "side_question");
+  await fork(gated, model, secret, { preparedRequest: prepared });
+  const { input } = await request().json();
+  expect(kinds).toEqual(["turn", "side_question"]);
+  expect(JSON.stringify(parent.input)).toContain("[REDACTED]");
+  expect(input.slice(0, -1)).toEqual(parent.input);
+  expect(JSON.stringify(input)).not.toContain("fixture-value");
+  expect(JSON.stringify(input.at(-1))).toContain("Review only");
+});
+
+it("does not send a fork the request gate withholds", async () => {
+  installRedactor([], true);
+  const { streamFn, physicalFetch } = guardedTransport();
+  const gated = wrapStreamFnWithModelRequestGate(streamFn, {}, "side_question");
+  await expect(fork(gated)).rejects.toThrow("side question withheld");
+  expect(physicalFetch).not.toHaveBeenCalled();
 });

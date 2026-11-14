@@ -489,12 +489,19 @@ Embedded compaction runs the same gate. Summary requests and server-side compact
 requests over older history pass through it with `requestKind: "compaction"`, after the
 same provider and config `onPayload` transforms as a turn.
 
+Side questions run it too. A `/btw` side question and a plugin session fork
+(`api.runtime.subagent.forkSession`) resend the conversation, so each of their provider
+requests passes through it with `requestKind: "side_question"`, on embedded and CLI
+runtimes. A fork replays the parent's last request before the gate, so a handler that
+rewrites the same input the same way keeps the parent's cached prefix. A thrown error
+fails the side question.
+
 The event is `{ runtime, requestKind, payload, provider, model, messages }`:
 
 - `runtime` is `"embedded"` or `"cli"`.
-- `requestKind` is `"turn"` for an agent turn (including steered CLI input) or
-  `"compaction"` for an embedded compaction request. More kinds may be added; treat an
-  unknown kind like `"turn"`.
+- `requestKind` is `"turn"` for an agent turn (including steered CLI input),
+  `"compaction"` for an embedded compaction request, or `"side_question"` for a side
+  question or session fork. More kinds may be added; treat an unknown kind like `"turn"`.
 - On embedded runs, `payload` is the provider-specific request body. Return
   `{ payload }` to replace it, or return nothing to send it unchanged. Handlers
   run in priority order and each one sees the previous replacement.
@@ -561,12 +568,12 @@ reaches every later request that is not gated. To keep a value out of history, r
 when it is written with `tool_result_persist` or `before_message_write`, and use this hook
 as the last gate on what leaves.
 
-Scope: embedded agent attempts, embedded compaction, and CLI-backed agent turns.
-External harnesses such as Codex, compaction a CLI runtime runs itself, CLI side
-questions, isolated completions, other control operations, tool results a CLI
-reads inside its own loop, custom provider
-transports that bypass both `onPayload` and host encoding, and provider-hosted
-tool results that never return to the client are not intercepted.
+Scope: embedded agent attempts, embedded compaction, side questions and session forks,
+and CLI-backed agent turns. External harnesses such as Codex (including their side
+questions), turns that run on cloud workers, compaction a CLI runtime runs itself,
+isolated completions, other control operations, tool results a CLI reads inside its own
+loop, custom provider transports that bypass both `onPayload` and host encoding, and
+provider-hosted tool results that never return to the client are not intercepted.
 
 ### Session extensions and next-turn injections
 

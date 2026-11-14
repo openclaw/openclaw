@@ -253,7 +253,7 @@ export type PreparedCliRunContext = {
   /** Set after bootstrap; sent as current-turn context so the system prompt stays cacheable. */
   contextEngineSystemPromptAddition?: string;
   promptContext?: CliBackendPromptContext;
-  /** This run's before_model_request gate; absent on side, isolated, and control runs. */
+  /** This run's before_model_request gate; absent on isolated and control runs. */
   beforeModelRequest?: import("./model-request-hook.js").CliModelRequestGate;
   /** Logical model input retained for policy/observation hooks when transport context is separate. */
   promptForHooks?: string;

@@ -1,4 +1,5 @@
 import type { CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
+import type { PluginHookModelRequestKind } from "../../plugins/hook-model.types.js";
 import type { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
@@ -83,6 +84,7 @@ export function createCliModelRequestGate(params: {
   hookContext: PluginHookAgentContext;
   provider: string;
   model: string;
+  requestKind?: PluginHookModelRequestKind;
   /** Model-facing history for this turn, current user turn last. */
   messages: () => Promise<readonly unknown[]>;
 }): CliModelRequestGate {
@@ -95,7 +97,7 @@ export function createCliModelRequestGate(params: {
     const result = await params.hookRunner.runBeforeModelRequest(
       {
         runtime: "cli",
-        requestKind: "turn",
+        requestKind: params.requestKind ?? "turn",
         payload: requestPayload,
         provider: params.provider,
         model: params.model,

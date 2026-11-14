@@ -10,15 +10,16 @@ import type { AsyncPluginHook } from "./hook-handler.types.js";
  * `provenance`; edits to it do not change the request.
  *
  * `requestKind` names the call: `turn` for an agent turn (including steered CLI input),
- * `compaction` for a summary or server-side compaction request over older history. More
- * kinds may be added; treat unknown kinds like `turn`.
+ * `compaction` for a summary or server-side compaction request over older history,
+ * `side_question` for a `/btw` side question or a plugin session fork over the
+ * conversation. More kinds may be added; treat unknown kinds like `turn`.
  *
  * This gate changes only the outgoing request. It never rewrites stored history: a value
  * redacted here is still in the transcript and reaches later requests unless they are gated
  * too. To keep a value out of history, redact it when it is written (`tool_result_persist`,
  * `before_message_write`).
  */
-export type PluginHookModelRequestKind = "turn" | "compaction";
+export type PluginHookModelRequestKind = "turn" | "compaction" | "side_question";
 
 export type PluginHookBeforeModelRequestEvent = {
   runtime: "embedded" | "cli";

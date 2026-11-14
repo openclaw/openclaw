@@ -1,14 +1,35 @@
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, expect, it } from "vitest";
+import type { PluginHookModelRequestKind } from "../../plugins/hook-model.types.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
+import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
-import { createModelRequestTransformer } from "./model-request-hook.js";
+import { wrapStreamFnWithModelRequestGate } from "./model-request-hook.js";
 
 afterEach(resetGlobalHookRunner);
 const model = { id: "fixture", provider: "fixture" } as Model;
+/** Sends one payload through the gate as a transport does and returns what it would send. */
+function sendThroughGate(
+  hookContext: PluginHookAgentContext,
+  requestKind: PluginHookModelRequestKind = "turn",
+) {
+  return async (payload: unknown, requestModel: Model, context: Context) => {
+    let sent: unknown;
+    const streamFn = wrapStreamFnWithModelRequestGate(
+      async (activeModel, _context, options) => {
+        sent = (await options?.onPayload?.(payload, activeModel)) ?? payload;
+        return undefined as never;
+      },
+      hookContext,
+      requestKind,
+    );
+    await streamFn(requestModel, context, {});
+    return sent;
+  };
+}
 it("dispatches final payload with detached provenance and the correct session", async () => {
   const source = {
     role: "user" as const,
@@ -31,11 +52,11 @@ it("dispatches final payload with detached provenance and the correct session", 
       },
     ]),
   );
-  const transform = createModelRequestTransformer({ sessionKey: "fixture-session" });
+  const transform = sendThroughGate({ sessionKey: "fixture-session" });
   expect(await transform({ input: "outside" }, model, context)).toEqual({ input: "withheld" });
   expect(source.content).toBe("outside");
 });
-it("names the request kind, defaulting to a turn", async () => {
+it("names the request kind", async () => {
   const kinds: unknown[] = [];
   initializeGlobalHookRunner(
     createMockPluginRegistry([
@@ -47,13 +68,14 @@ it("names the request kind, defaulting to a turn", async () => {
       },
     ]),
   );
-  await createModelRequestTransformer({})({ input: "a" }, model, { messages: [] });
-  await createModelRequestTransformer({}, "compaction")({ input: "b" }, model, { messages: [] });
-  expect(kinds).toEqual(["turn", "compaction"]);
+  await sendThroughGate({})({ input: "a" }, model, { messages: [] });
+  await sendThroughGate({}, "compaction")({ input: "b" }, model, { messages: [] });
+  await sendThroughGate({}, "side_question")({ input: "c" }, model, { messages: [] });
+  expect(kinds).toEqual(["turn", "compaction", "side_question"]);
 });
 it("leaves the request intact when the plugin is absent", async () => {
   const payload = { input: "owner" };
-  expect(await createModelRequestTransformer({})(payload, model, { messages: [] })).toBe(payload);
+  expect(await sendThroughGate({})(payload, model, { messages: [] })).toBe(payload);
 });
 it("rejects replacements that change the provider tool surface", async () => {
   const tools = [{ type: "function", name: "exec", strict: undefined }];
@@ -63,7 +85,7 @@ it("rejects replacements that change the provider tool surface", async () => {
         { hookName: "before_model_request", handler: async () => ({ payload }) },
       ]),
     );
-    return createModelRequestTransformer({})({ input: "outside", tools }, model, { messages: [] });
+    return sendThroughGate({})({ input: "outside", tools }, model, { messages: [] });
   };
   // A JSON-cloned replacement drops undefined members; the wire bytes are unchanged.
   const cloned = { input: "withheld", tools: [{ type: "function", name: "exec" }] };
@@ -80,7 +102,7 @@ it("rejects in-place mutation of protected fields, including with no replacement
       ]),
     );
     const payload = { input: "outside", model: "fixture", tools: [{ type: "function" }] };
-    return createModelRequestTransformer({})(payload, model, { messages: [] });
+    return sendThroughGate({})(payload, model, { messages: [] });
   };
   const addHosted = ({ payload }: { payload: unknown }) => {
     (payload as { tools: unknown[] }).tools.push({ type: "web_search" });
@@ -101,7 +123,7 @@ it("rejects replacements that change the admitted model or access programs", asy
         { hookName: "before_model_request", handler: async () => ({ payload }) },
       ]),
     );
-    return createModelRequestTransformer({})(original, model, { messages: [] });
+    return sendThroughGate({})(original, model, { messages: [] });
   };
   const rewritten = { ...original, input: "withheld" };
   expect(await replace(rewritten)).toEqual(rewritten);

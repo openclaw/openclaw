@@ -12,9 +12,8 @@ import type { ModelCallUrgency } from "../run-trigger.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
-import { createModelRequestTransformer } from "./model-request-hook.js";
+import { wrapStreamFnWithModelRequestGate } from "./model-request-hook.js";
 import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js";
-import { wrapStreamFnWithProviderPromptState } from "./provider-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
@@ -60,25 +59,21 @@ export async function prepareCompactionSessionAgent(params: {
   }).streamFn;
   // Summaries resend older history, so they pass the same final request gate as turns,
   // at the same depth: provider/config payload wrappers applied below run first.
-  params.session.agent.streamFn = wrapStreamFnWithProviderPromptState({
-    streamFn: params.session.agent.streamFn,
-    state: {},
-    effectiveContextTokenBudget: params.contextTokenBudget,
-    transformPayload: createModelRequestTransformer(
-      {
-        agentId: params.sessionAgentId,
-        ...(params.params.sessionKey ? { sessionKey: params.params.sessionKey } : {}),
-        sessionId: params.sessionId,
-        workspaceDir: params.effectiveWorkspace,
-        modelProviderId: params.provider,
-        modelId: params.modelId,
-        messageProvider: params.resolvedMessageProvider,
-        trigger: params.trigger,
-        contextTokenBudget: params.contextTokenBudget,
-      },
-      "compaction",
-    ),
-  });
+  params.session.agent.streamFn = wrapStreamFnWithModelRequestGate(
+    params.session.agent.streamFn,
+    {
+      agentId: params.sessionAgentId,
+      ...(params.params.sessionKey ? { sessionKey: params.params.sessionKey } : {}),
+      sessionId: params.sessionId,
+      workspaceDir: params.effectiveWorkspace,
+      modelProviderId: params.provider,
+      modelId: params.modelId,
+      messageProvider: params.resolvedMessageProvider,
+      trigger: params.trigger,
+      contextTokenBudget: params.contextTokenBudget,
+    },
+    "compaction",
+  );
   const providerTextTransforms = resolveProviderTextTransforms({
     provider: params.provider,
     config: params.config,
