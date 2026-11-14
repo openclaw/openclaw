@@ -225,7 +225,7 @@ it("keeps the picker open when clicking its provider title and blank space", asy
   expect(picker.open).toBe(true);
   expect(document.activeElement).not.toBe(composer);
   const menu = picker.querySelector<HTMLElement>(".chat-controls__model-menu")!;
-  await userEvent.click(menu, { position: { x: 4, y: 4 } });
+  await userEvent.click(menu, { position: { x: menu.clientWidth / 2, y: 4 } });
   expect(picker.open).toBe(true);
   expect(document.activeElement).not.toBe(composer);
   expect(composer.value).toBe("Keep this draft");
