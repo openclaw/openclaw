@@ -10,8 +10,8 @@ import type {
 } from "../../lib/chat/chat-types.ts";
 import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
-import type { ChatHistoryCursorHost, ChatMessageCache } from "./session-message-cache.ts";
 
 export type ChatReasoning = {
   runId: string;
@@ -86,8 +86,12 @@ export type WaitingApprovalStatus = {
   runId: string;
 };
 
-export type ToolStreamHost = ChatHistoryCursorHost & {
-  chatMessagesBySession?: ChatMessageCache;
+export type ToolStreamHost = {
+  sessionKey: string;
+  assistantAgentId?: string | null;
+  agentsList?: UiSessionDefaultsHost["agentsList"];
+  hello?: UiSessionDefaultsHost["hello"];
+  currentSessionId?: string | null;
   chatDisplayedLeafEntryId?: string | null;
   chatRunId: string | null;
   chatQueue?: readonly ChatQueueItem[];
