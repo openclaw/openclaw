@@ -225,6 +225,8 @@ Table semantics:
 
 - `caption` is a required short heading. `headers` must contain at least one
   unique, non-empty column label.
+  The `message` send action rejects a table without a non-empty `caption`
+  before sending any part of the message.
 - `rows` must contain at least one row. Every row must have exactly one cell per
   header, and every cell must be a non-empty string or a finite number.
 - `rowHeaderColumnIndex` is an optional zero-based index identifying the column
