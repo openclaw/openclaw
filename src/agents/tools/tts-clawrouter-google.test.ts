@@ -22,6 +22,7 @@ type Call = { path: string; auth?: string; body: unknown; vendorHeader: boolean 
 type State = {
   model: string;
   eligible: boolean;
+  catalogProvider?: string;
   onCatalog?: (res: ServerResponse) => void;
   respond?: (res: ServerResponse) => void;
 };
@@ -56,6 +57,9 @@ async function withFixture(
                 ? "/v1beta/interactions"
                 : "/v1beta/models/${model}:generateContent";
               const id = "google/" + state.model;
+              // Worker catalogProjection preserves the manifest provider ID;
+              // the public google/model namespace is intentionally different.
+              const providerId = state.catalogProvider ?? "google-gemini";
               if (req.url === "/v1/catalog") {
                 catalogKeys.push(req.headers.authorization ?? "");
                 res.setHeader("content-type", "application/json");
@@ -70,10 +74,10 @@ async function withFixture(
                     scope: { authType: "proxy_key", credentialId: "synthetic-google-speech" },
                     providers: [
                       {
-                        id: "google",
+                        id: providerId,
                         allowed: true,
                         executable: true,
-                        nativeBaseUrl: "/v1/native/google",
+                        nativeBaseUrl: "/v1/native/" + providerId,
                         routes: [
                           {
                             endpoint,
@@ -90,8 +94,8 @@ async function withFixture(
                             modelId: id,
                             routeKind: interactions ? "manifest" : "native",
                             route: interactions
-                              ? "/v1/proxy/google/speech_interactions"
-                              : "/v1/native/google" + path,
+                              ? `/v1/proxy/${providerId}/speech_interactions`
+                              : "/v1/native/" + providerId + path,
                             transport: "http",
                             eligible: state.eligible,
                             affordability: "request-dependent",
@@ -459,6 +463,17 @@ describe("registered ClawRouter Google speech", () => {
       });
     },
   );
+  it.each([models[0], models[3]])(
+    "rejects fabricated google catalog identity for %s",
+    async (model) => {
+      await withFixture(async (f) => {
+        f.state.catalogProvider = "google";
+        await expect(f.direct()).rejects.toThrow("one eligible supported offer");
+        expect(f.catalogKeys).toEqual(["Bearer synthetic-router-key"]);
+        expect(f.calls).toHaveLength(0);
+      }, model);
+    },
+  );
   it.each(models)("the actual TTS tool delivers WAV for %s", async (model) => {
     await withFixture(async (f) => {
       const result = await f.tool.execute("google-speech", { text: "Synthetic speech" });
@@ -482,8 +497,8 @@ describe("registered ClawRouter Google speech", () => {
       const interactions = model.startsWith("gemini-3.8-");
       expect(f.calls[0]?.path).toBe(
         interactions
-          ? "/v1/proxy/google/speech_interactions"
-          : `/v1/native/google/v1beta/models/${model}:generateContent`,
+          ? "/v1/proxy/google-gemini/speech_interactions"
+          : `/v1/native/google-gemini/v1beta/models/${model}:generateContent`,
       );
       expect(f.calls[0]?.body).toEqual(
         interactions

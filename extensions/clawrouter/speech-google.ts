@@ -331,7 +331,7 @@ export async function synthesizeGoogleSpeech(params: {
   const format = "google." + endpoint;
   const eligible = offers.filter(
     (candidate) =>
-      candidate.providerId === "google" &&
+      candidate.providerId === "google-gemini" &&
       candidate.endpoint === endpoint &&
       candidate.path === path &&
       candidate.methods.includes("POST") &&

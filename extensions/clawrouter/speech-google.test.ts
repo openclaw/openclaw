@@ -41,12 +41,12 @@ function fixture(model = preview) {
   const interactions = model.startsWith("gemini-3.8-");
   const endpoint = interactions ? "speech_interactions" : "speech_generate_content";
   const offer: catalog.ClawRouterCapabilityOffer = {
-    providerId: "google",
+    providerId: "google-gemini",
     endpoint,
     path: interactions ? "/v1beta/interactions" : "/v1beta/models/${model}:generateContent",
     url: interactions
-      ? "https://router.example/v1/proxy/google/speech_interactions"
-      : `https://router.example/v1/native/google/v1beta/models/${model}:generateContent`,
+      ? "https://router.example/v1/proxy/google-gemini/speech_interactions"
+      : `https://router.example/v1/native/google-gemini/v1beta/models/${model}:generateContent`,
     routeKind: interactions ? "manifest" : "native",
     methods: ["POST"],
     requestFormat: "google." + endpoint,
@@ -221,12 +221,15 @@ describe("ClawRouter Google speech codec and admission", () => {
     );
   });
 
-  it.each(["foreign", "endpoint", "format", "route", "model", "duplicate"])(
+  it.each(["foreign", "vendor-alias", "endpoint", "format", "route", "model", "duplicate"])(
     "refuses %s offers without a paid POST",
     async (invalid) => {
       const f = fixture();
       if (invalid === "foreign") {
         f.offer.providerId = "openai";
+      }
+      if (invalid === "vendor-alias") {
+        f.offer.providerId = "google";
       }
       if (invalid === "endpoint") {
         f.offer.endpoint = "generate";
