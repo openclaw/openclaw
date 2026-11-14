@@ -1,0 +1,4 @@
+# ACP liveness regression: pre-prompt setup stays under the host stall watchdog and the attempt timer
+# reaps a session that never opens.
+# Exact net growth for this branch.
+81

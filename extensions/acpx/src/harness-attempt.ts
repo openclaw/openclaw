@@ -86,6 +86,9 @@ export async function runAcpHarnessAttempt(params: {
     },
     isStreaming: () => started && !settled,
     isAborted: () => signal.aborted,
+    // Only a started ACP turn owns liveness: this attempt's own timer bounds it. Setup before the
+    // prompt (session, status, model) stays under the host's stall watchdog.
+    ownsLiveness: () => started && !settled && !timedOut && !signal.aborted,
     isCompacting: () => false,
     cancel: () => controller.abort(),
     abort: () => controller.abort(),
