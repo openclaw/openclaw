@@ -1,6 +1,7 @@
 import activeMemoryPresentation from "../../../../extensions/active-memory/control-ui.presentation.json" with { type: "json" };
 import memoryWikiPresentation from "../../../../extensions/memory-wiki/control-ui.presentation.json" with { type: "json" };
 import type { TranslationMap } from "../lib/types.ts";
+import { registerModelProviderAuthEnglish } from "./en-model-provider-auth.ts";
 import { registerPreferencesEnglish } from "./en-preferences.ts";
 import { registerSettingsSidebarEnglish } from "./en-settings-sidebar.ts";
 import { en } from "./en.ts";
@@ -1117,7 +1118,7 @@ const enSettings = {
       expiring: "Expiring",
       expired: "Expired",
       missing: "Not signed in",
-      apiKey: "API key",
+      apiKey: registerModelProviderAuthEnglish.catalog.modelProviders.status.apiKey,
       denied: "Credentials rejected",
       signInAgain: "Sign in again",
       signInUnavailable: "Sign-in unavailable",

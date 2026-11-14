@@ -4,7 +4,7 @@ import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtim
 import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
-import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
+import { registerModelProviderAuthEnglish } from "../../../i18n/locales/en-model-provider-auth.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import {
   ChatModelAccountOptions,
@@ -52,7 +52,7 @@ import {
   providerRuntimeOptions,
 } from "./chat-model-settings.tsx";
 
-registerSettingsEnglish();
+registerModelProviderAuthEnglish();
 
 type ChatModelPickerPanelProps = {
   params: ChatModelPickerParams;
