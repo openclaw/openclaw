@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { resolveUserPath } from "../utils.js";
@@ -46,18 +47,28 @@ export async function settleWorkspaceBootstrapDeferral(
  * Give a kept agent whose initializer stopped early the ordinary default files.
  * BOOTSTRAP.md and setup state stay with the initializer, so a later seed still applies.
  */
-export async function seedDeferredWorkspaceDefaults(dir: string): Promise<void> {
+export async function seedDeferredWorkspaceDefaults(
+  dir: string,
+  defaults?: {
+    skipBootstrap?: boolean;
+    skipOptionalBootstrapFiles?: readonly OptionalBootstrapFileName[];
+  },
+): Promise<void> {
   const workspace = resolveUserPath(dir);
-  if (!(await readCanonicalWorkspaceStateSnapshot(workspace)).setup.bootstrapDeferred) {
+  if (
+    defaults?.skipBootstrap ||
+    !(await readCanonicalWorkspaceStateSnapshot(workspace)).setup.bootstrapDeferred
+  ) {
     return;
   }
+  const skipped = new Set<string>(defaults?.skipOptionalBootstrapFiles);
   await runWorkspacePreparation(workspace, async (assertFilesystem) => {
     for (const name of [
       DEFAULT_AGENTS_FILENAME,
       DEFAULT_SOUL_FILENAME,
       DEFAULT_IDENTITY_FILENAME,
       DEFAULT_USER_FILENAME,
-    ]) {
+    ].filter((file) => !skipped.has(file))) {
       await publishBootstrapFile(
         path.join(workspace, name),
         () => loadWorkspaceTemplate(name),

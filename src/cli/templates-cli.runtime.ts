@@ -485,7 +485,10 @@ async function runTemplatesAddFromSource(
         );
         if (applied.agentRetained && applied.status !== "complete") {
           // Offline Add has no resume, so the package BOOTSTRAP.md stays held.
-          await seedDeferredWorkspaceDefaults(plan.agent.workspace);
+          await seedDeferredWorkspaceDefaults(
+            plan.agent.workspace,
+            getRuntimeConfig().agents?.defaults,
+          );
         }
         return applied;
       },
