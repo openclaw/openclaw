@@ -17,6 +17,7 @@ import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { apiThrottler } from "./bot.runtime.js";
 import { telegramPlugin } from "./channel.js";
 import { telegramOutbound } from "./outbound-adapter.js";
+import type { InputRichBlock } from "./rich-block-model.js";
 import { sendLogger } from "./send-context.js";
 import {
   createForumTopicTelegram,
@@ -35,6 +36,13 @@ import {
 } from "./send.js";
 import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
 
+const mediaMarkdown = (count: number) =>
+  Array.from(
+    { length: count },
+    (_, index) =>
+      `<figure><img src="https://example.com/${index + 1}.jpg"/><figcaption>photo-${index + 1}</figcaption></figure>`,
+  ).join("\n\n");
+
 describe("Telegram physical send acceptance over HTTP", () => {
   const fixture = useTelegramHttpFixture();
   const { cfg, requests, events, rejections, buttons, sendThrough, pinThroughAdapter } = fixture;
@@ -51,6 +59,56 @@ describe("Telegram physical send acceptance over HTTP", () => {
     ({ bot, mediaDir, photoPath } = fixture);
   });
   afterEach(() => vi.restoreAllMocks());
+
+  it.each([20, 21])("delivers every item and tail of a %i-media rich send", async (count) => {
+    const urls = Array.from(
+      { length: count },
+      (_, index) => `https://example.com/${index + 1}.jpg`,
+    );
+    const text = `${urls.map((url) => `<img src="${url}"/>`).join("\n\n")}\n\nTAIL`;
+    const result = await sendMessageTelegram("123", text, {
+      cfg: { channels: { telegram: { ...cfg.channels.telegram, richMessages: true } } },
+      api: bot.api,
+    });
+    expect(requests.map(({ method }) => method)).toEqual(
+      count === 20 ? ["sendRichMessage"] : ["sendRichMessage", "sendRichMessage"],
+    );
+    const pages = requests.map(({ fields }) => JSON.stringify(fields.rich_message));
+    const delivered = pages.map((page) => page.match(/https:\/\/example\.com\/\d+\.jpg/g) ?? []);
+    expect(delivered.map((media) => media.length)).toEqual(count === 20 ? [20] : [20, 1]);
+    expect(delivered.flat()).toEqual(urls);
+    expect(pages.at(-1)).toContain("TAIL");
+    expect(result.receipt?.platformMessageIds ?? [result.messageId]).toEqual(
+      count === 20 ? ["1"] : ["1", "2"],
+    );
+  });
+
+  it.each(["details", "tg-collage"])(
+    "keeps all media and tail when %s wrapper text exceeds the local text target",
+    async (wrapper) => {
+      const urls = Array.from({ length: 21 }, (_, index) => `https://example.com/${index + 1}.jpg`);
+      const label = "s".repeat(101);
+      const tag = wrapper === "details" ? "summary" : "figcaption";
+      const text = `<${wrapper}><${tag}>${label}</${tag}>${urls
+        .map((url) => `<img src="${url}"/>`)
+        .join("")}</${wrapper}>\n\nTAIL`;
+      await sendMessageTelegram("123", text, {
+        cfg: { channels: { telegram: { ...cfg.channels.telegram, richMessages: true } } },
+        api: bot.api,
+        textLimit: 100,
+      });
+      expect(requests.every(({ method }) => method === "sendRichMessage")).toBe(true);
+      const pages = requests.map(({ fields }) => JSON.stringify(fields.rich_message));
+      const delivered = pages.map((page) => page.match(/https:\/\/example\.com\/\d+\.jpg/g) ?? []);
+      expect(delivered.map((media) => media.length).filter(Boolean)).toEqual([20, 1]);
+      expect(delivered.flat()).toEqual(urls);
+      expect(pages.at(-1)).toContain("TAIL");
+      // Details retain their summary on each continuation; gallery captions belong only once.
+      expect(pages.filter((page) => page.includes(label))).toHaveLength(
+        wrapper === "details" ? 2 : 1,
+      );
+    },
+  );
 
   it("preserves literal code spacing in captions sent over HTTP", async () => {
     await sendMessageTelegram("123", "````\n```\n• literal bullet\n3. literal number\n````", {
@@ -837,6 +895,126 @@ describe("Telegram physical send acceptance over HTTP", () => {
 
   describe("edit recovery", () => {
     afterEach(resetGlobalHookRunner);
+    it.each([
+      { count: 20, native: false },
+      { count: 21, native: false },
+      { count: 20, native: true },
+      { count: 21, native: true },
+    ])(
+      "edits all $count media without truncation (native blocks: $native)",
+      async ({ count, native }) => {
+        const text = `${mediaMarkdown(count)}\n\nTAIL`;
+        const blocks: InputRichBlock[] = [
+          ...Array.from({ length: count }, (_, index): InputRichBlock => ({
+            type: "photo",
+            photo: { type: "photo", media: `https://example.com/${index + 1}.jpg` },
+            caption: { text: `photo-${index + 1}` },
+          })),
+          { type: "paragraph", text: "TAIL" },
+        ];
+        await editMessageTelegram("123", 321, native ? "not the native projection" : text, {
+          cfg: { channels: { telegram: { ...cfg.channels.telegram, richMessages: true } } },
+          api: bot.api,
+          ...(native ? { richMessage: { blocks } } : {}),
+        });
+        expect(requests.map(({ method }) => method)).toEqual(["editMessageText"]);
+        const fields = requests[0]!.fields;
+        expect(fields.message_id).toBe(321);
+        if (count === 20) {
+          expect(fields.rich_message).toBeDefined();
+          expect(fields.text).toBeUndefined();
+        } else {
+          expect(fields.rich_message).toBeUndefined();
+          expect(fields.text).toBe(
+            Array.from(
+              { length: count },
+              (_, index) => `photo-${index + 1} https://example.com/${index + 1}.jpg`,
+            ).join("\n") + "\nTAIL",
+          );
+        }
+        expect(JSON.stringify(fields).match(/https:\/\/example\.com\/\d+\.jpg/g)).toEqual(
+          Array.from({ length: count }, (_, index) => `https://example.com/${index + 1}.jpg`),
+        );
+        expect(JSON.stringify(fields)).toContain("TAIL");
+      },
+    );
+
+    it.each([
+      { length: 4001, character: "x" },
+      { length: 4096, character: "x" },
+      { length: 4097, character: "x" },
+      { length: 4096, character: "😀" },
+      { length: 4097, character: "😀" },
+    ])(
+      "bounds the complete $length-character 21-media replacement with $character before HTTP",
+      async ({ length, character }) => {
+        const prefix =
+          Array.from(
+            { length: 21 },
+            (_, index) => `photo-${index + 1} https://example.com/${index + 1}.jpg`,
+          ).join("\n") + "\n";
+        const tail = `${character.repeat(length - prefix.length - 4)}TAIL`;
+        const result = editMessageTelegram("123", 321, `${mediaMarkdown(21)}\n\n${tail}`, {
+          cfg: { channels: { telegram: { ...cfg.channels.telegram, richMessages: true } } },
+          api: bot.api,
+          buttons,
+          linkPreview: false,
+        });
+        if (length > 4096) {
+          await expect(result).rejects.toThrow(
+            "complete plain fallback is 4097 characters, exceeding the 4096-character edit limit",
+          );
+          expect(requests).toEqual([]);
+        } else {
+          await expect(result).resolves.toMatchObject({
+            ok: true,
+            messageId: "321",
+            chatId: "123",
+          });
+          expect(requests).toEqual([
+            {
+              method: "editMessageText",
+              fields: {
+                chat_id: "123",
+                message_id: 321,
+                text: prefix + tail,
+                link_preview_options: { is_disabled: true },
+                reply_markup: { inline_keyboard: buttons },
+              },
+            },
+          ]);
+        }
+      },
+    );
+
+    it.each([4001, 4096])("recovers a complete %i-character rich edit", async (length) => {
+      const text = `START${"x".repeat(length - 8)}END`;
+      rejections.push("Bad Request: RICH_MESSAGE_URL_INVALID");
+      await editMessageTelegram("123", 321, text, {
+        cfg: { channels: { telegram: { ...cfg.channels.telegram, richMessages: true } } },
+        api: bot.api,
+      });
+      expect(requests.map(({ method }) => method)).toEqual(["editMessageText", "editMessageText"]);
+      expect(requests[0]!.fields.rich_message).toBeDefined();
+      expect(requests[1]!.fields).toEqual({ chat_id: "123", message_id: 321, text });
+    });
+
+    it("keeps literal fallback entities in UTF-16 units when guarding edit length", async () => {
+      rejections.push("Bad Request: can't parse entities");
+      await editMessageTelegram("123", 321, "<pre>😀 README.md</pre>", {
+        cfg,
+        api: bot.api,
+        textMode: "html",
+      });
+      expect(requests.map(({ method }) => method)).toEqual(["editMessageText", "editMessageText"]);
+      expect(requests[1]?.fields).toMatchObject({
+        message_id: 321,
+        text: "😀 README.md",
+        entities: [{ type: "pre", offset: 0, length: 12 }],
+      });
+      expect(requests[1]?.fields.parse_mode).toBeUndefined();
+    });
+
     it.each(["caption", "auto"] as const)(
       "preserves rich list caption rendering during a %s edit",
       async (editMode) => {
@@ -959,16 +1137,15 @@ describe("Telegram physical send acceptance over HTTP", () => {
         '"url":"https://example.com"',
       );
       expect(requests[1]!.fields.text).toBe("More\nDownload");
-      rejections.push("Bad Request: RICH_MESSAGE_URL_INVALID", "Bad Request: message is too long");
+      rejections.push("Bad Request: RICH_MESSAGE_URL_INVALID");
       const text = `START${"x".repeat(4100)}END`;
       await expect(
         editMessageTelegram("123", 321, text, { cfg: richCfg, api: bot.api }),
-      ).rejects.toThrow("message is too long");
-      expect(requests.slice(2).map(({ method }) => method)).toEqual([
-        "editMessageText",
-        "editMessageText",
-      ]);
-      expect(requests.at(-1)!.fields.text).toBe(text);
+      ).rejects.toThrow(
+        "complete plain fallback is 4108 characters, exceeding the 4096-character edit limit",
+      );
+      expect(requests.slice(2).map(({ method }) => method)).toEqual(["editMessageText"]);
+      expect(requests.at(-1)!.fields.rich_message).toBeDefined();
     });
   });
 
