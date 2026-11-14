@@ -174,6 +174,13 @@ const TUI_COMMAND_ROWS = [
   ["stop", undefined, "/stop", undefined, { shared: true }],
   ["new", "Spawn a new isolated session", "/new or /reset"],
   ["reset", "Reset the current session"],
+  [
+    "delete",
+    "Delete the current session and its transcript",
+    "/delete",
+    undefined,
+    { aliases: [{ name: "rm", description: "Alias for /delete" }] },
+  ],
   ["abort", "Abort active run", "/abort"],
   ["settings", "Open settings", "/settings"],
   [

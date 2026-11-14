@@ -476,6 +476,18 @@ export class GatewayChatClient implements TuiBackend {
     });
   }
 
+  async deleteSession(
+    key: string,
+    opts?: { agentId?: string; expectedSessionId?: string; deleteTranscript?: boolean },
+  ): Promise<{ deleted: boolean; key: string }> {
+    return await this.client.request("sessions.delete", {
+      key,
+      ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+      ...(opts?.expectedSessionId ? { expectedSessionId: opts.expectedSessionId } : {}),
+      deleteTranscript: opts?.deleteTranscript !== false,
+    });
+  }
+
   async getGatewayStatus() {
     return await this.client.request("status");
   }

@@ -26,17 +26,19 @@ import {
   resolveTuiCommandDescriptor,
   type TuiCommandHandlerName,
 } from "./commands.js";
+import { TuiChoicePrompt, createTuiChoiceSelector } from "./components/choice-prompt.js";
 import { FilterableSelectList } from "./components/filterable-select-list.js";
 import {
   createSearchableSelectList,
   createTuiSettingsList,
   modelSelectItems,
 } from "./components/selectors.js";
-import { filterableSelectListTheme } from "./theme/theme.js";
+import { filterableSelectListTheme, tuiTheme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { runTuiBrowserSetup } from "./tui-browser-setup.js";
 import type { CommandHandlerContext } from "./tui-command-context.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
+import { clearTuiLastSessionPointers } from "./tui-last-session.js";
 import { captureTuiSessionIncarnation } from "./tui-session-events.js";
 import { buildSessionChoices, loadRecentSessions } from "./tui-session-picker.js";
 import {
@@ -86,10 +88,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
     requestExit,
+    resolveSessionSelection,
   } = context;
   let sessionTransition = {
-    active: null as "new" | "reset" | null,
-    boundary: null as "new" | "reset" | null,
+    active: null as "new" | "reset" | "delete" | null,
+    boundary: null as "new" | "reset" | "delete" | null,
     epoch: 0,
   };
   type PickerRequest = { overlay?: OverlayHandle; refreshModels?: TuiBackend["onModelsChanged"] };
@@ -98,7 +101,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
   // Hold one owner through the full identity transition so later input cannot
   // target the session being retired while create/reset awaits the backend.
-  const beginSessionTransition = (command: "new" | "reset") => {
+  const beginSessionTransition = (command: "new" | "reset" | "delete") => {
     const epoch = sessionTransition.epoch + 1;
     sessionTransition = { active: command, boundary: command, epoch };
     return () => {
@@ -178,7 +181,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
   const hasTrackedAbortTarget = () => Boolean(state.activeChatRunId || hasPendingSubmit(state));
 
-  const rejectUnsafeSessionRollover = (command: "new" | "reset") => {
+  const rejectUnsafeSessionRollover = (command: "new" | "reset" | "delete") => {
     if (!hasTrackedAbortTarget() && state.activityStatus !== "finishing context") {
       return false;
     }
@@ -397,7 +400,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       );
     };
 
-  const changeSession = async (command: "new" | "reset") => {
+  const changeSession = async (command: "new" | "reset" | "delete") => {
     if (!admitSessionAction() || rejectUnsafeSessionRollover(command)) {
       return;
     }
@@ -459,6 +462,118 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     } finally {
       finishSessionTransition();
     }
+  };
+
+  /** Deletes the current session and its transcript, then falls back to a fresh session. */
+  const deleteCurrentSession = async () => {
+    if (!admitSessionAction() || rejectUnsafeSessionRollover("delete")) {
+      return;
+    }
+    const incarnation = captureTuiSessionIncarnation(state);
+    const { selection, sessionId } = incarnation;
+    if (typeof client.deleteSession !== "function") {
+      chatLog.addSystem("session delete is unavailable in this mode");
+      tui.requestRender();
+      return;
+    }
+    const finishSessionTransition = beginSessionTransition("delete");
+    try {
+      const result = await client.deleteSession(selection.sessionKey, {
+        ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
+        ...(sessionId ? { expectedSessionId: sessionId } : {}),
+      });
+      if (!incarnation.isCurrent()) {
+        return;
+      }
+      const deletedKey = selection.sessionKey;
+      const wasGone = !result.deleted;
+      await clearRememberedSessionPointer(deletedKey);
+      await createFallbackSession(selection);
+      const after = captureTuiSessionIncarnation(state);
+      if (!after.isCurrent()) {
+        return;
+      }
+      chatLog.addSystem(
+        wasGone ? `session ${deletedKey} was already gone` : `session ${deletedKey} deleted`,
+      );
+      chatLog.addSystem(`now in session ${state.currentSessionKey}`);
+      tui.requestRender();
+    } catch (err) {
+      if (incarnation.isCurrent()) {
+        chatLog.addSystem(`delete failed: ${formatTuiErrorMessage(err)}`);
+      }
+    } finally {
+      finishSessionTransition();
+      tui.requestRender();
+    }
+  };
+
+  /** Creates a replacement session after the previous one was deleted. */
+  const createFallbackSession = async (selection: { sessionKey: string; agentId: string }) => {
+    const homeKey = resolveSessionSelection?.(void 0, selection.agentId).key;
+    if (homeKey && homeKey !== selection.sessionKey) {
+      await setSession(homeKey);
+      return;
+    }
+    const result = await client.createSession({
+      key: `tui-${randomUUID()}`,
+      agentId: selection.agentId,
+    });
+    if (!result?.key) {
+      throw new Error("sessions.create returned no session key");
+    }
+    await setSession(result.key);
+  };
+
+  /** Removes a deleted session from the remembered restore pointer. */
+  const clearRememberedSessionPointer = async (sessionKey: string) => {
+    try {
+      await clearTuiLastSessionPointers({ sessionKeys: new Set([sessionKey]) });
+    } catch (err) {
+      chatLog.addSystem(`session memory cleanup failed: ${formatTuiErrorMessage(err)}`);
+    }
+  };
+
+  /** Asks for confirmation before running a destructive session delete. */
+  const confirmDeleteSession = () => {
+    const { selection } = captureTuiSessionIncarnation(state);
+    const items = [
+      {
+        value: "cancel",
+        label: "Cancel",
+        description: "Keep the current session",
+      },
+      {
+        value: "delete",
+        label: "Delete session",
+        description: `Delete ${selection.sessionKey} and its transcript`,
+      },
+    ];
+    const selector = createTuiChoiceSelector(items);
+    const prompt = new TuiChoicePrompt(
+      tuiTheme.header("Delete the current session?"),
+      [
+        tuiTheme.dim(`Session: ${selection.sessionKey}`),
+        {
+          text: tuiTheme.system("This permanently removes the session and its transcript."),
+          optional: true,
+        },
+      ],
+      selector,
+    );
+    const overlayHandle = openOverlay(prompt);
+    const closePrompt = () => {
+      closeOverlay(overlayHandle);
+      tui.requestRender();
+    };
+    selector.onSelect = (item) => {
+      closePrompt();
+      if (item.value === "delete") {
+        void deleteCurrentSession();
+      }
+    };
+    selector.onCancel = () => closePrompt();
+    tui.requestRender();
   };
 
   const selectionCommand =
@@ -757,6 +872,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         await sendMessage(raw);
       }
     },
+    delete: () => confirmDeleteSession(),
     abort: async () => {
       context.localCli?.cancel();
       await abortActive();
@@ -784,7 +900,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return;
     }
     const descriptor = resolveTuiCommandDescriptor(name);
-    if (sessionTransition.active && !["exit", "stop", "abort"].includes(descriptor?.name ?? "")) {
+    if (
+      sessionTransition.active &&
+      !["exit", "stop", "abort", "delete"].includes(descriptor?.name ?? "")
+    ) {
       chatLog.addSystem(
         `session change in progress; wait for /${sessionTransition.active} to finish`,
       );
