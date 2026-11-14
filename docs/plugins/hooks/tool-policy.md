@@ -256,6 +256,8 @@ reserved workflow safety.
 
 Trusted policies may set `matcher` to the same standard tool-id list accepted
 by `before_tool_call`. Omit the matcher to retain match-all behavior.
+Approval requests are owned by the registering plugin; the host supplies its
+plugin id even when a policy omits or overrides `requireApproval.pluginId`.
 
 When trusted-policy approval completes inline, ordinary `before_tool_call`
 hooks receive an isolated copy of the approved parameters. Calls with unchanged
