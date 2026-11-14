@@ -14,6 +14,7 @@ import type { CronDelivery, CronJob } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import {
+  CALLER_AUTOMATION_METHODS,
   CRON_MANAGEMENT_METHODS,
   isCronModelManagementAllowed,
 } from "../../gateway/cron-creator-authority-grant.js";
@@ -169,9 +170,11 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       const action = readToolStringParam(params, "action", { required: true });
       if (
         (opts?.personalReminder || requesterAuthority?.personalReminder) &&
-        !["list", "get", "add", "remove"].includes(action)
+        !CALLER_AUTOMATION_METHODS.some((method) => method === "cron." + action)
       ) {
-        throw new Error("Personal reminders allow only list, get, add, and remove.");
+        throw new Error(
+          "Caller automations allow only list, get, add, update, remove, run, and runs.",
+        );
       }
       if (
         managementAuthority?.managementOnly &&

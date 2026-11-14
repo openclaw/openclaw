@@ -94,6 +94,24 @@ When an admitted owner or administrator turn uses `sessions_yield` to wait for i
 
 Each admin management request records its method, run, operational instance, and success or failure in the Gateway's `cron: admin management` log, alongside the ordinary tool audit record. Management authority does not transfer creator attribution or replace the job's scheduled execution policy.
 
+### Linked Telegram callers
+
+A linked Telegram user with `operator.cron` can create one-time or recurring
+Agent-turn automations in the conversation where they asked. The job captures
+only tools available to that user's admitted turn. An explicit tool cap is
+checked against that surface; scheduling never grants owner or administrator
+authority.
+
+The same person can list, inspect, update, run, and remove their jobs in later
+turns in that conversation. Another participant in a shared topic cannot manage
+them. Delivery stays in the originating chat/topic and bot account, or can be
+disabled. Host-command jobs, script/event triggers, and unrelated destinations
+still require their existing separate authority.
+
+`tools.gatewayPolicy.automations.scope: "caller"` is a restriction, not an
+enable switch. Ordinary tool allow/deny policies and the agent's restrictions
+still apply; adding a person to `commands.ownerAllowFrom` is not needed.
+
 ### CLI management
 
 For older automations missing creator account metadata, run `openclaw doctor --fix`.

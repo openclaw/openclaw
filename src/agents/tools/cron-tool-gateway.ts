@@ -1,6 +1,9 @@
 import { attachPluginCommandCreation } from "../../cron/plugin-command-creation.js";
 import type { CronStreamExecPolicy } from "../../cron/stream-exec-authority.js";
-import { attachCronStreamExecPolicy } from "../../gateway/cron-creator-authority-grant.js";
+import {
+  CALLER_AUTOMATION_METHODS,
+  attachCronStreamExecPolicy,
+} from "../../gateway/cron-creator-authority-grant.js";
 import type {
   bindCronManagementGrant,
   bindCronRequesterGrant,
@@ -43,7 +46,7 @@ export function createCronToolGatewayCaller({
       !identity?.cronCreatorAuthorityGrant &&
       (request[0] === "cron.add" ||
         request[0] === "cron.update" ||
-        (personalReminder && ["cron.list", "cron.get", "cron.remove"].includes(request[0])))
+        (personalReminder && CALLER_AUTOMATION_METHODS.some((method) => method === request[0])))
         ? (requesterAuthority ?? identity?.mintCronRequesterGrant)?.(operationSignal)
         : undefined;
     if (personalReminder && !requesterGrant && !identity?.cronCreatorAuthorityGrant) {

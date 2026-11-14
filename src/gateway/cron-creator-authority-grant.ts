@@ -27,6 +27,25 @@ export function isCronModelManagementAllowed(
   return config?.tools?.gatewayPolicy?.automations?.scope !== "caller";
 }
 
+/** Caller-owned Agent-turn scheduling never grants binding or global controls. */
+export const CALLER_AUTOMATION_METHODS = [
+  "cron.list",
+  "cron.get",
+  "cron.add",
+  "cron.update",
+  "cron.remove",
+  "cron.run",
+  "cron.runs",
+] as const;
+
+export function assertCallerAutomationMethodAllowed(method: string): void {
+  if (!CALLER_AUTOMATION_METHODS.some((allowed) => allowed === method)) {
+    throw new TypeError(
+      "Caller automations allow only list, get, add, update, remove, run, and runs.",
+    );
+  }
+}
+
 export const CRON_MANAGEMENT_METHODS = [
   "cron.list",
   "cron.get",

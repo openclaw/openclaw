@@ -65,6 +65,45 @@ export function assertCronModelJobAllowed(
   }
 }
 
+/** Scheduling rights do not permit retargeting or host-command jobs. */
+export function assertCallerAutomationJobAllowed(
+  job: CronJobCreate,
+  scope: CronCallerScope | undefined,
+): void {
+  if (!scope?.personalReminder) {
+    return;
+  }
+  const origin = scope.personalReminderOrigin;
+  const delivery = job.delivery;
+  if (
+    !scope.creatorProfileId ||
+    !origin?.to ||
+    job.agentId !== origin.agentId ||
+    job.sessionKey !== scope.sessionKey ||
+    !["current", "isolated"].includes(job.sessionTarget) ||
+    !["at", "every", "cron"].includes(job.schedule.kind) ||
+    job.payload.kind !== "agentTurn" ||
+    job.payload.toolsAllowIsDefault === true ||
+    !Array.isArray(job.payload.toolsAllow) ||
+    job.payload.toolsAllow.includes("*") ||
+    job.trigger !== undefined ||
+    (job.failureAlert !== undefined && job.failureAlert !== false) ||
+    (delivery?.mode !== "announce" && delivery?.mode !== "none") ||
+    delivery.channel !== "telegram" ||
+    delivery.to !== origin.to ||
+    normalizeAccountId(delivery.accountId) !== scope.accountId ||
+    String(delivery.threadId ?? "") !== String(origin.threadId ?? "") ||
+    delivery.target ||
+    delivery.completionDestination ||
+    delivery.failureDestination ||
+    job.declarationKey
+  ) {
+    throw new TypeError(
+      "Caller automations require a captured tool cap and the original Telegram conversation.",
+    );
+  }
+}
+
 export function resolveCronCreatorAuthorityCapture(
   callerScope: CronCallerScope | undefined,
 ):
@@ -437,8 +476,7 @@ export function cronJobMatchesCallerScope(params: {
       params.job.owner?.sessionKey !== params.callerScope.sessionKey ||
       !params.job.owner?.accountId ||
       normalizeAccountId(params.job.owner?.accountId) !== params.callerScope.accountId ||
-      params.job.schedule.kind !== "at" ||
-      params.job.delivery?.mode !== "announce" ||
+      (params.job.delivery?.mode !== "announce" && params.job.delivery?.mode !== "none") ||
       params.job.delivery.channel !== "telegram" ||
       params.job.delivery.to !== params.callerScope.personalReminderOrigin?.to ||
       String(params.job.delivery.threadId ?? "") !==

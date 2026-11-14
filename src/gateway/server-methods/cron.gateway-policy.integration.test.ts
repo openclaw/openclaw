@@ -680,11 +680,11 @@ it("limits personal reminder reads and removal to the originating human in one t
           "Automation not found",
         );
         expectDenied(await call("cron.remove", { id: bob.id }, "alice"), "Automation not found");
-        for (const method of ["cron.update", "cron.run", "cron.bind", "cron.runs"]) {
+        for (const method of ["cron.bind"]) {
           const denied = await call(method, { id: alice.id }, "alice");
           expect(denied[0]).toBe(false);
           expect(denied[2]?.message).toMatch(
-            /Personal reminders allow only|missing scope: operator.admin/,
+            /Caller automations allow only|missing scope: operator.admin/,
           );
         }
         const reminder = {
@@ -709,6 +709,27 @@ it("limits personal reminder reads and removal to the originating human in one t
           ownerProfileId: "alice",
           createdActor: { type: "human", source: "profile", id: "alice" },
         });
+        const recurring = await call(
+          "cron.add",
+          {
+            ...reminder,
+            deleteAfterRun: false,
+            schedule: { kind: "every", everyMs: 60000 },
+          },
+          "alice",
+        );
+        expect(recurring[0], recurring[2]?.message).toBe(true);
+        const recurringId = (recurring[1] as { id: string }).id;
+        expect((await call("cron.get", { id: recurringId }, "alice"))[0]).toBe(true);
+        expectDenied(await call("cron.get", { id: recurringId }, "bob"), "cron job not found");
+        const disabled = await call(
+          "cron.update",
+          { id: recurringId, patch: { enabled: false } },
+          "alice",
+        );
+        expect(disabled[0], disabled[2]?.message).toBe(true);
+        expect((await call("cron.runs", { id: recurringId, limit: 1 }, "alice"))[0]).toBe(true);
+        expect((await call("cron.remove", { id: recurringId }, "alice"))[0]).toBe(true);
         expectDenied(await call("cron.get", { id: createdId }, "bob"), "cron job not found");
         expectDenied(await call("cron.remove", { id: createdId }, "bob"), "Automation not found");
         expect((await call("cron.remove", { id: createdId }, "alice"))[0]).toBe(true);
@@ -716,12 +737,15 @@ it("limits personal reminder reads and removal to the originating human in one t
           { ...reminder, delivery: { ...reminder.delivery, to: "another-group" } },
           { ...reminder, delivery: { ...reminder.delivery, threadId: "another-topic" } },
           { ...reminder, sessionKey: "agent:main:other" },
-          { ...reminder, payload: { kind: "agentTurn", message: "x", toolsAllow: ["exec"] } },
-          { ...reminder, schedule: { kind: "every", everyMs: 3600000 } },
+          {
+            ...reminder,
+            payload: { kind: "agentTurn", message: "x", toolsAllowIsDefault: true, toolsAllow: [] },
+          },
+          { ...reminder, payload: { kind: "agentTurn", message: "x", toolsAllow: ["*"] } },
           { ...reminder, trigger: { script: "return true" } },
           { ...reminder, failureAlert: { after: 1, to: "other" } },
         ]) {
-          expectDenied(await call("cron.add", bad, "alice"), "Personal reminders require");
+          expectDenied(await call("cron.add", bad, "alice"), "Caller automations require");
         }
         expect((await call("cron.remove", { id: alice.id }, "alice"))[0]).toBe(true);
         expect((await call("cron.get", { id: bob.id }, "bob"))[0]).toBe(true);

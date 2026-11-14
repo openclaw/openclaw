@@ -25,6 +25,7 @@ import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import {
+  assertCallerAutomationMethodAllowed,
   getCronManagementAuthority,
   resolveCronCreatorAuthorityGrantProvenance,
   withCronManagementGrant,
@@ -35,6 +36,7 @@ import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js"
 import { cronAddHandler } from "./cron-add.js";
 import { cronBindHandler } from "./cron-bind.js";
 import {
+  assertCallerAutomationJobAllowed,
   assertCronModelJobAllowed,
   cronCreateMatchesCallerScope,
   cronJobMatchesCallerScope,
@@ -236,6 +238,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         currentJob: jobToUpdate,
         patch,
       });
+      assertCallerAutomationJobAllowed(nextJob, callerScope);
       targetAccess?.release();
       targetAccess = undefined;
       targetAccess = await prepareHumanCronTargetAccess(
@@ -623,11 +626,8 @@ for (const [method, handler] of Object.entries(cronHandlers)) {
       if (requesterGrant && !provenance) {
         throw new TypeError("Automation requester authority is no longer active.");
       }
-      if (
-        provenance?.personalReminder &&
-        !["cron.list", "cron.get", "cron.add", "cron.remove"].includes(method)
-      ) {
-        throw new TypeError("Personal reminders allow only list, get, add, and remove.");
+      if (provenance?.personalReminder) {
+        assertCallerAutomationMethodAllowed(method);
       }
       await handler({
         ...args,
