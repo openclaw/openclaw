@@ -5,6 +5,7 @@
  * production snapshot owner. Workers exercise Node's actual inheritance boundary.
  * This measures catalog inheritance, not whole-Gateway RSS or provider discovery.
  */
+/* oxlint-disable unicorn/require-post-message-target-origin -- Node worker ports have no browser target origin. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -65,9 +66,9 @@ if (!isMainThread) {
       sample: { type: "boolean" },
     },
   });
-  const count = (key) => {
-    const value = Number(values[key]);
-    assert(Number.isSafeInteger(value) && value >= (key === "readers" ? 0 : 1));
+  const count = (option) => {
+    const value = Number(values[option]);
+    assert(Number.isSafeInteger(value) && value >= (option === "readers" ? 0 : 1));
     return value;
   };
   const workers = count("workers"),
@@ -103,8 +104,11 @@ if (!isMainThread) {
     const rssBefore = process.memoryUsage.rss();
     const cpuBefore = process.threadCpuUsage();
     const publishedAt = performance.now();
-    if (values.mode === "baseline") setEnvironmentData(key, { catalog });
-    else publish(catalog);
+    if (values.mode === "baseline") {
+      setEnvironmentData(key, { catalog });
+    } else {
+      publish(catalog);
+    }
     const publishMs = performance.now() - publishedAt;
     const publishCpu = process.threadCpuUsage(cpuBefore);
     const active = [];
@@ -134,7 +138,9 @@ if (!isMainThread) {
         readyMs += result.readyMs;
         const hostCpu = process.threadCpuUsage(hostCpuBefore);
         result.cpuMs += (hostCpu.user + hostCpu.system) / 1000;
-        if (index < readers) assert.equal(result.checksum, expected);
+        if (index < readers) {
+          assert.equal(result.checksum, expected);
+        }
         const memory = once(worker, "message");
         worker.postMessage("measure");
         const [retained] = await memory;
@@ -204,7 +210,7 @@ if (!isMainThread) {
             const sorted = results
               .filter((row) => row.mode === mode)
               .map((row) => row[metric])
-              .sort((a, b) => a - b);
+              .toSorted((a, b) => a - b);
             return [
               metric,
               {
