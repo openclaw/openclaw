@@ -117,6 +117,8 @@ Managed profiles provide execution and coordination identity; they are not an OS
 
 OpenClaw `worker-turn` cloud workers receive the last background-prepared shared identity through their private launch envelope. Binding the identity does not wait for GitHub discovery on the turn path. This binding does not depend on `allowInSandbox` or a role's `sandbox: "required"` policy, so keep people who must not use the shared account off worker profiles. The worker writes the access token to a private per-turn profile in its throwaway state directory. While the repository-bound turn remains authorized, worker heartbeats renew that profile from the same selected account; later exec launches use the renewed token, while running commands keep their launch token. Renewal stops when the caller, session writer, placement, or selected profile loses authority. The profile is removed after the turn’s admitted commands and in-flight credential writes settle; the same OS-user limit described above applies on the worker host. The sealed worker launcher gives each `exec` child the same launch-time credential binding as local exec. GitHub CLI must be installed on the worker host; the bundle includes the launcher, not `gh`. The checkout uses the session-owned branch and an HTTPS `origin` for GitHub repositories; HTTPS Git authentication uses `gh auth git-credential`, with inherited credential helpers cleared. Commits and pushes happen directly on the worker. Reconciliation returns file contents to the Gateway worktree, not commit history. At every turn start, the worker fast-forwards its checkout to the session branch on `origin` when the local branch is behind, bringing in history pushed by an earlier worker; a diverged local branch is left untouched. Paired devices' own GitHub CLI logins are not used for this binding.
 
+Repository-checkpoint publication uses this same selected execution account for the worker’s private Git fetch and integration, independently of the account selected for the final GitHub API/ref/PR writes. The execution account must read the source/head and target/base repositories (one repository in the non-fork case). Each integration owns a fixed credential snapshot bounded by the native transfer deadline and known credential expiry; rotation, removal, selection changes or caller cancellation stop the attempt. It does not borrow an ended turn’s profile or launch a new model turn. Missing execution credentials or repository access fail closed without forwarding a personal publisher token, minting background App grants or falling back to anonymous access. See [Publish with your account](/concepts/user-model#publish-with-your-account) for the saved-request recovery actions.
+
 OpenClaw sandboxes exclude the Gateway's managed GitHub credentials by default; the [per-agent sandbox opt-in](/gateway/config-tools/github-identity#sandbox-opt-in) enables them for an agent's own Docker or Podman sandbox. Ordinary node-host exec and Codex `remote-exec` placements still do not receive these credentials. The `github_publish` tool remains available for remote-exec sessions: it records a bounded publication request without credentials or repository authority. After the exact workspace result is reconciled and accepted, the Gateway commits remaining changes as the verified effective GitHub user, pushes the authoritative session branch through a one-shot HTTPS credential helper, and creates or reuses a pull request. New PRs are open by default; `draft: true` explicitly creates a draft. Updates preserve the existing PR state.
 
 The default sandbox tool policy also allows `github_publish` in managed Gateway conversations, including their first turn. The tool uses the same Gateway publisher and does not require `allowInSandbox`, a managed GitHub profile mount, or GitHub credentials inside the sandbox. Explicit tool denies and restrictive custom allowlists still apply. Offering the tool permits a publication request, not publication from an unbound workspace or an unavailable GitHub account: the Gateway checks the current workspace, caller, and selected credential when the tool is invoked. Missing or invalid credentials return the existing retry or reconnect guidance without falling back to another account.
@@ -437,6 +439,34 @@ Local session-owned worktrees can use the same **Publish PR** action in the Cont
 Automatic shared-publication recovery waits one minute after the first failed attempt and two minutes after the second. After three failed attempts, or a failed attempt on a receipt at least one hour old, it stops GitHub effect recovery and marks the receipt failed with an unconfirmed outcome. If that settlement fails, later attempts retry settlement without repeating GitHub effects. Each request has its own cooldown; an unsettled request still prevents later requests from overtaking it in the same worktree. The attempt count, cooldown, and latest diagnostic reset when the Gateway restarts, but receipt age still bounds failed recovery. Recorded effects and saved work are retained.
 
 During cooldown, publication status includes the remaining wait and the latest failure. Base-fetch failures identify the failed stage and native reason, including timeouts, with bounded, redacted Git diagnostics in status and the recovery warning. Inspect the original branch and PR, repair the reported access, connectivity, or Git-object problem, and let recovery reconcile the existing request. A failed observation does not establish that a push or PR creation failed; do not request a replacement publication to recover it.
+
+Repository-backed cloud publications target the authenticated repository's default
+branch (the parent repository for a fork). A continuation keeps its recorded PR
+repository and base branch. Source branches, tags, and commits select input, not
+the destination. After activation, a background fetch refreshes `origin/main`
+without delaying turns or changing the editing index; failures are advisory.
+
+Publication merges the accepted checkpoint with one observed target tip in private
+worker Git state. It preserves the saved input and any later editing changes. When
+retained history has exactly the checkpoint's tree, the merge uses its original
+ancestry. Conflicts preserve the checkpoint and appear in the receipt. Recovery
+uses the recorded worker destination or required profile without starting a model
+turn; unknown custody is not replaced. Retained compute and runtime reconnects
+require normal dispatch admission. If current startup authorization is needed,
+retry the same request from the original signed-in account. New requests still
+require the exact authoritative disk to be attached for capture; a stored mirror
+cannot replace an unknown disk owner.
+
+An explicit retry with the same idempotency key and unchanged content can reopen
+an unavailable shared request before any publication commit or external write.
+The original requester, selected publisher, and current session authority are
+checked again. A branch rejection can also reconcile a later managed publication
+of the exact saved input by the same requester and account: the recorded commit,
+remote head, and original open PR must match. Recovery extends that commit without
+force-pushing or changing the existing PR metadata. Other branch changes remain
+rejected, and recorded or uncertain effects retain their reconciliation rules.
+API failures report bounded exit, signal, timeout, and HTTP status facts without
+command output.
 
 During publication, an accepted PR response still completes its owned receipt if the requesting connection closes or publication permission ends. A successful local branch update likewise finishes its matching index transaction while the execution retains workspace ownership. This settlement does not authorize another push or PR creation; unconfirmed outcomes retain their existing recovery or personal-confirmation requirements.
 

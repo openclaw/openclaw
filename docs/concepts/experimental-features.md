@@ -93,16 +93,24 @@ index**, or set the Boolean in config:
 ```
 
 The default is **off**; only explicit `true` enables it. The embedded OpenClaw
-runtime ranks the [Code Mode index](/tools/code-mode) and the
-[Tool Search deferred-schema directory](/tools/tool-search), not MCP directories
-or Codex-native surfaces. It does not enable Code Mode or Tool Search, authorize
-any tool, or change search results. Core coding tools retain their pinned places.
-Each surface reserves part of its existing budget for new tools, and selected
-entries render in canonical order.
+runtime ranks the [Code Mode index](/tools/code-mode), the
+[Tool Search deferred-schema directory](/tools/tool-search), and the
+[MCP tool directory](/tools/tool-search#mcp-tool-directory) in the `tool_search`
+description, including MCP servers installed as plugins. Codex-native surfaces
+are not ranked, and Claude CLI runs keep Claude's native `ToolSearch`. The lab
+does not enable Code Mode or Tool Search, authorize any tool, or change search
+results. Core coding tools retain their pinned places. Each surface reserves part
+of its existing budget for new tools, and selected entries render in canonical
+order.
 
 Successful calls contribute to a score with a 14-day half-life. Failed,
 cancelled, pending, client-delegated, and incognito calls do not count. Nested
 calls count the target tool rather than the Tool Search or Code Mode wrapper.
+MCP calls, including Code Mode `MCP` namespace calls, count under their exact
+catalog ID, such as `mcp:granola:granola__list_meetings`, never under a
+same-named OpenClaw or client tool. Scores follow that ID, so renaming an MCP
+server produces new IDs that start without history; the old IDs expire with
+normal retention.
 Subagents inherit the parent's frozen preference, filtered to their own
 available catalog; calls contribute to the agent that executes them.
 
@@ -134,7 +142,10 @@ openclaw tools usage reset --agent main
 - `import` scans retained transcripts from the last `--since` days (1–90,
   default 90), resolves names against the current authorized agent catalog, and
   imports only history not already covered by live recording or an earlier
-  import. Repeating the same import does not count the same history twice.
+  import. MCP calls are counted when history names their exact catalog ID, or
+  when their recorded result identifies the MCP server that owns the name.
+  Calls whose name also belongs to an OpenClaw tool, or to a server whose safe
+  name needed a collision suffix, are reported as unknown tools. Repeating the same import does not count the same history twice.
   The report includes scanned and counted calls, exclusions, errors,
   cancellations, pending calls, wrappers, and top scores. Missing or archived
   history that cannot be scanned is reported rather than inferred. Nested results
@@ -443,10 +454,16 @@ claw's OpenClaw ID owner account then arrive as you (your name, sessions, person
 instructions and My GitHub) instead of the shared owner. Their owner authority still
 comes from each device's certificate, and linking grants or removes nothing.
 
+If this browser already signed in with OpenClaw ID through the same personal sign-in,
+**Link** uses that sign-in and asks for no second code. The Gateway reuses only an ID
+token it received from the issuer itself for your profile and that has not expired.
+Without one, for example after the sign-in expired or the Gateway restarted, **Link**
+shows one device code as before.
+
 - One profile per account: linking an account already linked to another profile, or to
   a member's profile, is refused. Merging profiles in **Users** carries the link.
 - **Unlink** returns owner devices to the shared owner on their next connection.
-  Sessions they already created are not rewritten. While signed in on the Gateway machine, **Turn on remote access**
+  Sessions they already created are not rewritten. While signed in, **Turn on remote access**
   gets its link code from your account instead of asking you to paste one.
 
 ### How the tunnel reaches the Gateway
@@ -475,17 +492,23 @@ comes from each device's certificate, and linking grants or removes nothing.
   the supervisor's IPC channel. It strips client forwarding and identity headers
   and passes the device key it authenticated in the QUIC handshake.
 - Requests that come through this ingress are always treated as relayed, never
-  as direct loopback, even though they arrive on the local host. Linking a claw
-  and other root ceremonies are allowed only on direct loopback.
+  as direct loopback, even though they arrive on the local host. Root
+  ceremonies never run over the tunnel: linking a claw needs direct loopback or
+  an admin's personal sign-in, and moving to new keys needs direct loopback.
 
 <a id="make-a-claw-reachable" />
 
 ### Turn on remote access
 
 With the lab on, sign in with OpenClaw ID from the account menu, then choose
-**Turn on remote access**. It works only in OpenClaw on the computer that runs
-this claw (direct loopback). If setup asks for a **Link code**, get one from the
-**Add a claw** page at `https://claws.<loaderDomain>/link` and paste it into setup:
+**Turn on remote access**. It works in OpenClaw on the computer that runs this
+claw (direct loopback), or for an **admin** signed in through a personal sign-in
+(Tailscale Serve, Cloudflare Access or another trusted proxy, an enterprise
+principal), so a remote claw needs no SSH tunnel. It is refused for shared token
+or password connections over the network, members, people whose role is not an
+administrator, and anything over the OpenClaw ID tunnel. If setup asks for a
+**Link code**, get one from the **Add a claw** page at
+`https://claws.<loaderDomain>/link` and paste it into setup:
 
 1. The Gateway creates the claw id and its signing key, and reports the tunnel's
    endpoint key.
@@ -501,6 +524,18 @@ this claw (direct loopback). If setup asks for a **Link code**, get one from the
 5. With a link code, the Gateway registers the claw with
    Discovery and publishes its descriptor and membership snapshot. Without one,
    the claw is linked locally and can be published later.
+
+Through a personal sign-in, setup also links the OpenClaw ID you signed in with to
+your profile, as **Link OpenClaw ID to your profile** does, so your owner devices
+arrive as you. If that link is refused (for example, the account is already linked
+to another profile), remote access stays on and you can link from
+**Settings → Profile**. The Gateway log records who ran each step and over which
+identity (`openclaw-id: remote access …` with the route, auth method, profile and
+verified user), and emits a matching `security.event`.
+
+**Move to new keys** (`openclaw id rebind`) stays on the computer that runs the
+claw: it is a recovery path, including after remote access was misused, and it
+works with remote access off.
 
 ### Membership
 

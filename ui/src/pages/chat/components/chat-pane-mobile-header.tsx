@@ -66,7 +66,7 @@ export function ChatPaneMobileHeader(props: {
       <MobileNavToggle class="mobile-header__navigation" open={props.navDrawerOpen} />
       <Show when={props.incognito}>
         <openclaw-tooltip
-          prop:content={t("sessionsView.incognitoDescription")}
+          prop:content={t("sessionsView.incognitoDescriptionTooltip")}
           placement="bottom"
           prop:openOnClick={true}
         >

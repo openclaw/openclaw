@@ -2486,55 +2486,126 @@ function databaseRead(pathname, callback) {
   }
 }
 
-function verifyStateCompatibility(databasePath, existing, candidate, inspectAgent, captured = [], beforeAgentRead, inspectRetiredAgents) {
-  const stateRoot = dirname(dirname(databasePath));
+function agentDatabaseInventory(database, stateRoot) {
   const agents = new Map();
-  let retiredAgents;
-  const recordAgent = (pathname, agentId) => {
-    // Discovery sources must agree; canonical layout cannot erase a conflicting registration.
-    if (agents.has(pathname) && agents.get(pathname) !== agentId)
-      reject("agent database ownership sources disagree");
-    agents.set(pathname, agentId);
-  };
-  const live = databaseRead(databasePath, (database) => {
-    const observed = database.prepare("PRAGMA user_version").get().user_version;
-    const registry = database
-      .prepare("SELECT type FROM sqlite_master WHERE name = ?")
-      .get("agent_databases");
-    if (registry && registry.type !== "table") reject("agent database registry is malformed");
-    if (registry) {
-      const columns = new Set(
-        database
-          .prepare("PRAGMA table_info(agent_databases)")
-          .all()
-          .map((row) => row.name),
-      );
-      for (const column of ["agent_id", "path"]) {
-        if (!columns.has(column)) reject(`agent database registry is missing ${column}`);
+  const registry = database
+    .prepare("SELECT type FROM sqlite_master WHERE name = ?")
+    .get("agent_databases");
+  if (registry && registry.type !== "table") reject("agent database registry is malformed");
+  if (registry) {
+    const columns = new Set(
+      database
+        .prepare("PRAGMA table_info(agent_databases)")
+        .all()
+        .map((row) => row.name),
+    );
+    for (const column of ["agent_id", "path"]) {
+      if (!columns.has(column)) reject(`agent database registry is missing ${column}`);
+    }
+    const rows = database
+      .prepare("SELECT agent_id, path FROM agent_databases LIMIT 257")
+      .all();
+    if (rows.length > 256)
+      reject("agent database registry exceeds the bounded compatibility budget");
+    for (const row of rows) {
+      if (
+        typeof row.agent_id !== "string" ||
+        !row.agent_id ||
+        typeof row.path !== "string" ||
+        !row.path
+      ) {
+        reject("registered agent database identity is invalid");
       }
-      const rows = database
-        .prepare("SELECT agent_id, path FROM agent_databases LIMIT 257")
-        .all();
-      if (rows.length > 256)
-        reject("agent database registry exceeds the bounded compatibility budget");
-      for (const row of rows) {
-        if (
-          typeof row.agent_id !== "string" ||
-          !row.agent_id ||
-          typeof row.path !== "string" ||
-          !row.path
-        ) {
-          reject("registered agent database identity is invalid");
-        }
-        const pathname = isAbsolute(row.path) ? resolve(row.path) : resolve(stateRoot, row.path);
-        if (!isAbsolute(row.path))
+      const pathname = isAbsolute(row.path) ? resolve(row.path) : resolve(stateRoot, row.path);
+      if (!isAbsolute(row.path)) {
+        safeRelative(stateRoot, pathname);
+        if (existsSync(dirname(pathname)))
           safeRelative(realpathSync(stateRoot), realpathSync(dirname(pathname)));
-        recordAgent(pathname, row.agent_id);
+      }
+      if (agents.has(pathname) && agents.get(pathname) !== row.agent_id)
+        reject("agent database ownership sources disagree");
+      agents.set(pathname, row.agent_id);
+    }
+  }
+  const deleted = new Map(), held = new Set();
+  if (database.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='agent_deletion_journal'").get()) {
+    const rows = database.prepare(`SELECT agent_id, agent_dir, database_paths_json FROM agent_deletion_journal
+      WHERE cleanup_completed=0 OR (cleanup_completed=1 AND delete_files=0) LIMIT 257`).all();
+    if (rows.length > 256) reject("held agent databases exceed the bounded compatibility budget");
+    for (const row of rows) {
+      const paths = JSON.parse(row.database_paths_json);
+      if (typeof row.agent_id !== "string" || typeof row.agent_dir !== "string" ||
+          !Array.isArray(paths) || paths.some(path => typeof path !== "string"))
+        reject("retained agent database identity is malformed");
+      deleted.set(row.agent_id, new Set([join(row.agent_dir, "openclaw-agent.sqlite"), ...paths]
+        .map(path => resolve(stateRoot, path))));
+    }
+  }
+  if (database.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='migration_sources'").get()) {
+    const receipt = database.prepare("SELECT report_json FROM migration_sources WHERE source_key=?")
+      .get("agent-deletion-journal-reconstruction");
+    if (receipt) {
+      const report = JSON.parse(receipt.report_json);
+      if (!Array.isArray(report.held) || report.held.length > 256)
+        reject("agent database reconstruction holds are malformed");
+      for (const value of report.held) {
+        if (typeof value?.agentId !== "string" || typeof value.path !== "string" || !value.path.trim())
+          reject("agent database reconstruction hold is malformed");
+        held.add(resolve(stateRoot, value.path));
       }
     }
+  }
+  // Same native facts as deletion discovery: surviving registered owners keep
+  // shared stores live; a directory name cannot confer that ownership.
+  const isHeld = (pathname, agentId) => held.has(pathname) || deleted.has(agentId) ||
+    ([...deleted.values()].some(paths => paths.has(pathname)) &&
+      (!agents.has(pathname) || deleted.has(agents.get(pathname))));
+  // Discovery adds directory and historical paths without changing registered ownership.
+  return { agents: new Map(agents), isHeld };
+}
+
+function archivedHeldAgentDatabase(stateRoot, agentId, pathname, captured) {
+  if (pathname !== join(stateRoot, "agents", agentId, "agent", "openclaw-agent.sqlite")) return;
+  const archive = join(stateRoot, "held-agent-archive"), owner = lstatSync(stateRoot);
+  const parent = lstatSync(archive, { throwIfNoEntry: false });
+  if (!parent) return;
+  // Operators may create the archive parent as root before moving runtime-owned stores.
+  if (!parent.isDirectory() || parent.isSymbolicLink() || ![0, owner.uid].includes(parent.uid) ||
+      (parent.mode & 0o022) !== 0) reject("held agent archive is not an owner-safe directory");
+  const directories = readdirSync(archive, { withFileTypes: true });
+  if (directories.length > 256) reject("held agent archive exceeds the bounded compatibility budget");
+  let found;
+  for (const directory of directories) {
+    if (!directory.name.startsWith(`${agentId}-held-`)) continue;
+    const root = join(archive, directory.name), agent = join(root, "agent");
+    exactDirectory(root, owner.uid, "archived held agent", { group: owner.gid });
+    exactDirectory(agent, owner.uid, "archived held agent store", { group: owner.gid });
+    const path = join(agent, "openclaw-agent.sqlite"), entry = lstatSync(path);
+    if (!entry.isFile() || entry.isSymbolicLink() || entry.uid !== owner.uid || entry.gid !== owner.gid ||
+        (entry.mode & 0o022) !== 0 || realpathSync(path) !== path)
+      reject("archived held agent database identity is unsafe");
+    if (captured && (entry.dev !== captured[2] || entry.ino !== captured[3])) continue;
+    if (found) reject("archived held agent database identity is ambiguous");
+    found = { path, entry };
+  }
+  return found;
+}
+
+function verifyStateCompatibility(databasePath, existing, candidate, inspectAgent, captured = [], beforeAgentRead, inspectRetiredAgents, inspectHeldAgent) {
+  const stateRoot = dirname(dirname(databasePath));
+  let agents, isHeld, retiredAgents;
+  const live = databaseRead(databasePath, (database) => {
+    ({ agents, isHeld } = agentDatabaseInventory(database, stateRoot));
     retiredAgents = inspectRetiredAgents?.(database);
-    return observed;
+    return database.prepare("PRAGMA user_version").get().user_version;
   });
+  const recordAgent = (pathname, agentId) => {
+    if (agents.has(pathname) && agents.get(pathname) !== agentId) {
+      if (isHeld(pathname, agentId) && !isHeld(pathname, agents.get(pathname))) return;
+      if (!isHeld(pathname, agents.get(pathname))) reject("agent database ownership sources disagree");
+    }
+    agents.set(pathname, agentId);
+  };
   // Package versions are reader ceilings; a failed boot need not have advanced live state.
   if (!Number.isSafeInteger(live) || live > candidate.state || live > existing.state) {
     reject("live state schema is incompatible with candidate or rollback predecessor");
@@ -2564,6 +2635,8 @@ function verifyStateCompatibility(databasePath, existing, candidate, inspectAgen
   }
   for (const pathname of retiredAgents ?? []) agents.delete(pathname);
   const stateOwner = lstatSync(stateRoot);
+  const saved = new Map(captured.map(tuple => [tuple[1], tuple]));
+  let heldCount = 0;
   function historicalIdentity(pathname) {
     const [, , device, inode] = historical.get(pathname);
     if (!isAbsolute(pathname) || resolve(pathname) !== pathname)
@@ -2576,6 +2649,18 @@ function verifyStateCompatibility(databasePath, existing, candidate, inspectAgen
     return entry;
   }
   for (const [pathname, agentId] of agents) {
+    const present = lstatSync(pathname, { throwIfNoEntry: false });
+    const archived = !present && archivedHeldAgentDatabase(stateRoot, agentId, pathname, saved.get(pathname));
+    if (isHeld(pathname, agentId) || archived) {
+      const entry = archived?.entry ?? present, tuple = saved.get(pathname);
+      if (!entry?.isFile() || entry.isSymbolicLink() || entry.uid !== stateOwner.uid || entry.gid !== stateOwner.gid ||
+          (entry.mode & 0o022) !== 0 || (tuple && (entry.dev !== tuple[2] || entry.ino !== tuple[3])))
+        reject("a held agent database identity is missing or changed");
+      if (!archived && realpathSync(pathname) !== pathname) reject("held agent database path is not canonical");
+      heldCount += 1;
+      inspectHeldAgent?.(agentId, pathname, entry);
+      continue;
+    }
     beforeAgentRead?.(pathname);
     const capturedEntry = historical.has(pathname) ? historicalIdentity(pathname) : undefined;
     const entry = capturedEntry ?? lstatSync(pathname);
@@ -2620,7 +2705,7 @@ function verifyStateCompatibility(databasePath, existing, candidate, inspectAgen
       }
     } finally { if (fd !== undefined) closeSync(fd); }
   }
-  return { live, current: existing, target: candidate, agentDatabases: agents.size };
+  return { live, current: existing, target: candidate, agentDatabases: agents.size - heldCount, heldAgentDatabases: heldCount };
 }
 
 function sessionWitnessTuples(saved) {
@@ -2628,7 +2713,8 @@ function sessionWitnessTuples(saved) {
   return saved.map(value => {
     if (typeof value !== "string") reject("session preservation witness is malformed");
     const tuple = JSON.parse(value);
-    if (!Array.isArray(tuple) || tuple.length !== 8 ||
+    if (!Array.isArray(tuple) || (tuple.length !== 8 && !(tuple.length === 9 && tuple[8] === "held" &&
+        tuple[4] === "" && tuple[5] === "" && tuple[6] === null && tuple[7] === null)) ||
         [0, 1, 4, 5].some(index => typeof tuple[index] !== "string") ||
         [2, 3].some(index => !Number.isSafeInteger(tuple[index]) || tuple[index] < 0) ||
         [6, 7].some(index => tuple[index] !== null && typeof tuple[index] !== "string"))
@@ -2742,10 +2828,20 @@ function originalWitness(pathname, record, expected, archivedSource) {
   if (!isDeepStrictEqual(after.descriptor, journal.descriptor)) reject("original session witness journal changed while reading");
   const nativeReceipt = nativeUpdateReceipt(record);
   if (!nativeReceipt) return file.bytes;
+  const databasePath = record.protectedPaths[1].path, stateRoot = dirname(dirname(databasePath));
+  let inventory;
   // Native restore can atomically replace the file; the original session IDs remain the witness.
   return Buffer.from(JSON.stringify(sessionWitnessTuples(migrationJson(file.bytes)).map(tuple => {
     const current = nativeReceipt.identities.get(tuple[1]);
-    if (!current) reject("native update omitted an original session store");
+    if (!current) {
+      inventory ??= databaseRead(databasePath, database => agentDatabaseInventory(database, stateRoot));
+      // Doctor deliberately leaves held stores outside its migration receipt.
+      // Keep their original physical witness; preservation still verifies it.
+      if (tuple[8] === "held" || inventory.isHeld(tuple[1], tuple[0]) ||
+          (!existsSync(tuple[1]) && archivedHeldAgentDatabase(stateRoot, tuple[0], tuple[1], tuple)))
+        return JSON.stringify(tuple);
+      reject("native update omitted an original session store");
+    }
     return JSON.stringify([tuple[0], tuple[1], current.device, current.inode, ...tuple.slice(4)]);
   })));
 }
@@ -3047,6 +3143,7 @@ function retainedRepairWitness(record, saved, rewriteEvidence, scope = "captured
       const id = [agentId, realpathSync(pathname), entry.dev, entry.ino],
         key = JSON.stringify(id);
       for (const tuple of pending.get(key) ?? []) {
+        if (tuple[8] === "held") continue;
         const failure = retainedRepairTranscriptPreservationFailure(database, ...tuple.slice(4));
         if (!failure) continue;
         // Physical identity is already bound by pending's key. Only a selected
@@ -3130,6 +3227,11 @@ function retainedRepairWitness(record, saved, rewriteEvidence, scope = "captured
         pending.delete(key);
       }
       return retired;
+    },
+    (agentId, pathname, entry) => {
+      const id = [agentId, pathname, entry.dev, entry.ino];
+      pending.delete(JSON.stringify(id));
+      captured.push(JSON.stringify([...id, "", "", null, null, "held"]));
     },
   );
   if (pending.size) reject(`RETAINED_CONTINUITY_DATABASE scope=${scope}: retained preparation lost a witnessed physical database`);
@@ -4820,7 +4922,8 @@ async function startupProfileCommand(command, input) {
     );
     assert.equal(environment.get("SYSTEMD_EXEC_PID"), String(pid));
     assert.equal(statSync(`/proc/${pid}`).uid, intent.uid);
-    assert.equal(readFileSync(`/proc/${pid}/cgroup`, "utf8"), `0::${intent.cgroup}\n`);
+    assert.equal(intent.cgroup, repairNativeGroup);
+    repairNativeProcessCgroup(`/proc/${pid}/cgroup`);
     assert.equal(realpathSync(`/proc/${pid}/exe`), realpathSync(process.execPath));
     // process.title overwrites Linux cmdline; systemd owns the launched argv.
     // The preload also validates its intact process.argv at capture admission.
@@ -5763,6 +5866,7 @@ async function startupProfileCommand(command, input) {
 
 const repairNativeUnit = "openclaw-gateway.service";
 const repairNativeGroup = "/system.slice/openclaw-gateway.service";
+const repairNativeProcessGroups = [repairNativeGroup, repairNativeGroup + "/gateway"];
 const repairNativeLibrary = "/usr/local/lib/openclaw-team/release-lib.mjs";
 const repairNativeNode = "/usr/bin/node";
 const repairGuardPrefix = "zzzz-openclaw-retained-repair-";
@@ -5869,14 +5973,17 @@ function repairNativeManagerStopped(uid, boundary) {
   assertUnpopulatedCgroup(current, "repair user manager");
   return manager;
 }
-function repairNativeStoppedGroup(boundary) {
+function repairNativeStoppedGroup(boundary, uid) {
   const root = join(boundary, "sys/fs/cgroup");
   migrationAncestors(root, migrationOwner(), boundary);
   let current = root;
   for (const part of repairNativeGroup.slice(1).split("/")) {
     current = join(current, part);
-    if (!lstatSync(current, { throwIfNoEntry: false })) return;
-    exactDirectory(current, migrationOwner(), "repair system cgroup");
+    const entry = lstatSync(current, { throwIfNoEntry: false });
+    if (!entry) return;
+    const delegated = part === repairNativeUnit && entry.uid === uid;
+    exactDirectory(current, delegated ? uid : migrationOwner(), "repair system cgroup",
+      { group: delegated ? entry.gid : rootGroup() });
   }
   assertUnpopulatedCgroup(current, "repair system Gateway");
 }
@@ -5909,16 +6016,23 @@ function repairNativeBinding(root, binding) {
       realpathSync(binding.release) !== binding.release) reject("repair process release is not canonical");
   return binding;
 }
+function repairNativeProcessCgroup(pathname) {
+  const contents = readFileSync(pathname, "utf8");
+  // DelegateSubgroup=gateway places the main process here, never in a nested subgroup.
+  const group = repairNativeProcessGroups.find(group => contents === "0::" + group + "\n");
+  if (!group) reject("repair process cgroup is not the system Gateway root or gateway leaf");
+  return group;
+}
 function repairNativeProcess(root, binding) {
   repairNativeBinding(root, binding);
   const { proc } = repairNativeRoots(), directory = join(proc, String(binding.pid));
   const stat = readFileSync(join(directory, "stat"), "utf8"), separator = stat.lastIndexOf(") ");
   const fields = stat.slice(separator + 2).trim().split(/\s+/);
+  const cgroup = repairNativeProcessCgroup(join(directory, "cgroup"));
   if (!stat.startsWith(binding.pid + " (") || separator < 0 || fields[19] !== binding.generation ||
       ["Z", "X", "x", "T", "t"].includes(fields[0]) || statSync(directory).uid !== binding.uid ||
       realpathSync(join(directory, "cwd")) !== binding.release ||
-      realpathSync(join(directory, "exe")) !== realpathSync(binding.runtime) ||
-      readFileSync(join(directory, "cgroup"), "utf8") !== "0::" + repairNativeGroup + "\n")
+      realpathSync(join(directory, "exe")) !== realpathSync(binding.runtime))
     reject("repair process generation, owner, runtime, release, or cgroup changed");
   // process.title rewrites Linux cmdline; systemd retains the launched command.
   const command = repairNativeBusProperty("ExecStart"), row = command?.data?.[0], argv = row?.[1];
@@ -5929,7 +6043,7 @@ function repairNativeProcess(root, binding) {
       argv[2] !== "gateway" || argv[3] !== "--port" || argv[4] !== String(binding.port)) reject("repair native launch command changed");
   const bootId = readFileSync(join(proc, "sys/kernel/random/boot_id"), "utf8").trim();
   if (!/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(bootId)) reject("repair boot identity is unavailable");
-  return { ...binding, bootId, cgroup: repairNativeGroup };
+  return { ...binding, bootId, cgroup };
 }
 function retainedRepairObserveLive(root, binding) {
   migrationNamespace(root);
@@ -5954,7 +6068,7 @@ function retainedRepairObserveLive(root, binding) {
 function retainedRepairObserveStopped(root, owner, targets) {
   const { bootId: expectedBootId, cgroup: expectedCgroup, ...binding } = owner.process;
   repairNativeBinding(root, binding);
-  if (expectedCgroup !== repairNativeGroup) reject("repair stopped cgroup binding changed");
+  if (!repairNativeProcessGroups.includes(expectedCgroup)) reject("repair stopped cgroup binding changed");
   if (!/^[a-f0-9]{32}$/.test(owner.invocationId) || !/^[1-9]\d*$/.test(owner.startedAtMonotonic))
     reject("repair stopped custody lacks the exact previous native owner");
   if (!Array.isArray(targets) || !targets.length || new Set(targets).size !== targets.length)
@@ -5973,7 +6087,7 @@ function retainedRepairObserveStopped(root, owner, targets) {
         unit.ExecMainStartTimestampMonotonic !== owner.startedAtMonotonic || !["", repairNativeGroup].includes(unit.ControlGroup))
       reject("repair system owner, control, history, or job has not settled");
     repairNativeNoJobs(owner.process.uid);
-    repairNativeStoppedGroup(boundary);
+    repairNativeStoppedGroup(boundary, owner.process.uid);
     repairNativeListeners(owner.process.port);
     assertDatabaseWritersStopped(new Set(targets), proc);
     return { unit, userManager: manager, bootId, oldPid: owner.process.pid, uid: owner.process.uid, port: owner.process.port, targets: [...targets] };
@@ -6150,7 +6264,7 @@ function retainedRepairStartClaim(root, operation) {
   if (unit.ActiveState !== "activating" || unit.SubState !== "condition" || unit.MainPID !== "0" ||
       unit.ControlPID !== String(process.pid) || unit.ControlGroup !== repairNativeGroup ||
       !/^[a-f0-9]{32}$/.test(unit.InvocationID) || process.env.INVOCATION_ID !== unit.InvocationID ||
-      readFileSync("/proc/self/cgroup", "utf8") !== "0::" + repairNativeGroup + "\n")
+      !["0::" + repairNativeGroup + "\n", "0::" + repairNativeGroup + "/.control\n"].includes(readFileSync("/proc/self/cgroup", "utf8")))
     reject("repair claim is not this service's native condition process");
   return repairNativeClaimCore(root, operation);
 }
@@ -6534,20 +6648,48 @@ function retainedAdoptionReadClosure(paths) {
     privateOnly: false, mode: index === 0 ? 0o755 : 0o644, limit: migrationJournalLimit,
   }));
 }
-function retainedAdoptionLegacy(paths, expected) {
+function retainedAdoptionLegacy(paths, expected, nativeRecovery) {
   validMigrationDescriptor(expected, "path", "controller adoption original journal");
   if (expected.path !== paths.pathname) reject("controller adoption source journal is not canonical");
   const file = migrationFile(paths.pathname, paths.owner, { mode: 0o600, limit: migrationJournalLimit });
   if (!isDeepStrictEqual(file.descriptor, expected)) reject("controller adoption source journal changed");
   const record = validJournal(migrationJson(file.bytes));
-  const allowed = ["version", "phase", "topology", "predecessor", "candidate", "process", "pointerTopology", "services", "suspension", "protectedPaths", "originalWitness", "gatewayRuntime", "createdAt"];
+  const allowed = ["version", "phase", "topology", "predecessor", "candidate", "process", "pointerTopology", "services", "suspension", "protectedPaths", "originalWitness", "gatewayRuntime", "createdAt", ...(nativeRecovery ? ["nativeUpdate"] : [])];
   if (record.version !== 1 || record.phase !== "ROLLBACK_FAILED" || record.topology !== "system" ||
       !record.originalWitness || record.predecessor.sha === record.candidate.sha ||
       [record.predecessor, record.candidate].some(info => ["state", "agent"].some(key =>
         !Number.isSafeInteger(info.schemaVersions?.[key]) || info.schemaVersions[key] < 0)) ||
-      !isDeepStrictEqual(record.predecessor.schemaVersions, record.candidate.schemaVersions) ||
+      (!nativeRecovery && !isDeepStrictEqual(record.predecessor.schemaVersions, record.candidate.schemaVersions)) ||
       Object.keys(record).some(key => !allowed.includes(key)))
     reject("controller adoption requires the exact retained legacy failed system incident");
+  if (nativeRecovery) {
+    suspensionObject(nativeRecovery, ["process", "receipt", "backup"], "native recovery adoption");
+    suspensionObject(nativeRecovery.backup, ["path", "device", "inode"], "native recovery backup identity");
+    validMigrationDescriptor(nativeRecovery.receipt, "path", "native recovery receipt");
+    if (!record.nativeUpdate || !["state", "agent"].some(key => record.candidate.schemaVersions[key] > record.predecessor.schemaVersions[key]) ||
+        ["state", "agent"].some(key => record.candidate.schemaVersions[key] < record.predecessor.schemaVersions[key]))
+      reject("native recovery adoption requires a migrated schema-crossing candidate");
+    const root = dirname(paths.directory), backupPath = record.nativeUpdate.backupRoot + ".databases";
+    selectedConfigProcess(root, record, nativeRecovery.process);
+    if (nativeRecovery.process.release !== join(root, "releases", record.candidate.sha) ||
+        (nativeRecovery.process.pid === record.process.pid && nativeRecovery.process.generation === record.process.generation))
+      reject("native recovery adoption process is not the selected candidate");
+    retainedRepairObserveLive(root, nativeRecovery.process);
+    if (nativeUpdateReceipt(record, true).status !== "migrated")
+      reject("native recovery adoption requires the completed migration receipt");
+    const owner = lstatSync(record.protectedPaths[0].path);
+    const receipt = migrationFile(record.nativeUpdate.backupRoot + ".receipt.json", owner.uid, { mode: 0o600, group: owner.gid });
+    if (!isDeepStrictEqual(receipt.descriptor, nativeRecovery.receipt) ||
+        migrationJson(receipt.bytes).backup?.directory !== backupPath)
+      reject("native recovery adoption backup receipt changed");
+    const backup = lstatSync(backupPath);
+    if (!backup.isDirectory() || backup.uid !== owner.uid || backup.gid !== owner.gid || (backup.mode & 0o077) !== 0 ||
+        realpathSync(backupPath) !== backupPath ||
+        !isDeepStrictEqual(nativeRecovery.backup, { path: backupPath, device: backup.dev, inode: backup.ino }))
+      reject("native recovery adoption backup identity changed");
+    // Read the bound witness through its owner; never rewrite it or copy native snapshots.
+    originalWitness(paths.pathname, record);
+  }
   return file;
 }
 function retainedAdoptionProtocolCheck(files) {
@@ -6563,7 +6705,7 @@ function retainedAdoptionProtocolCheck(files) {
 // This is evidence for the same retired source, not permission to retire another
 // journal or to interrupt the incumbent. Every publication rechecks live custody.
 function retainedAdoptionSource(paths, request) {
-  if (!request.retirement) return retainedAdoptionLegacy(paths, request.source);
+  if (!request.retirement) return retainedAdoptionLegacy(paths, request.source, request.nativeRecovery);
   validMigrationDescriptor(request.retirement, "path", "accepted retirement completion");
   const completionFile = retainedAdoptionChecked(request.retirement.path, request.retirement);
   const completion = migrationJson(completionFile.bytes);
@@ -6650,7 +6792,7 @@ function retainedAdoptionSource(paths, request) {
 }
 
 function retainedAdoptionRequest(root, input, historical = false) {
-  suspensionObject(input, ["version", "operation", "source", "oldClosure", "replacement", ...(historical ? ["historical"] : Object.hasOwn(input, "retirement") ? ["retirement"] : [])], "controller adoption request");
+  suspensionObject(input, ["version", "operation", "source", "oldClosure", "replacement", ...(historical ? ["historical"] : Object.hasOwn(input, "retirement") ? ["retirement"] : []), ...(Object.hasOwn(input, "nativeRecovery") && !input.retirement ? ["nativeRecovery"] : [])], "controller adoption request");
   if (input.version !== 1 || !Array.isArray(input.oldClosure) || input.oldClosure.length !== 4 ||
       !Array.isArray(input.replacement) || input.replacement.length !== 4)
     reject("controller adoption request must bind all four old and approved new files");
@@ -7713,6 +7855,7 @@ try {
         const expected = pending.get(key);
         if (!expected) return;
         for (const { tuple, ordinal } of expected) {
+          if (tuple[8] === "held") continue;
           const [sessionKey, sessionId, windowKey, generation] = tuple.slice(4);
           const failure = transcriptPreservationFailure(database, sessionKey, sessionId, windowKey, generation);
           if (failure) warnings.record(tuple, ordinal, failure);
@@ -7725,6 +7868,14 @@ try {
         candidate,
         command === "compatibility" ? undefined : inspectAgent,
         [...pending.values()].map(sessions => sessions[0].tuple),
+        undefined,
+        undefined,
+        (agentId, pathname, entry) => {
+          const identity = [agentId, pathname, entry.dev, entry.ino];
+          pending.delete(JSON.stringify(identity));
+          if (command === "session-preservation-witness")
+            witness.push(JSON.stringify([...identity, "", "", null, null, "held"]));
+        },
       );
       if (command === "compatibility") result = JSON.stringify(state);
       else if (command === "session-preservation-witness") result = JSON.stringify(witness.sort());

@@ -53,6 +53,15 @@ backup.
 
 ## Update implementation contract
 
+Offline Doctor prepares no extra inspection image when its existing maintenance
+owner proves custody and the database has no WAL frames or rollback journal.
+These drained SQLite families use immutable reads. Retained WAL, journals, and
+unowned sources keep private snapshots so inspections preserve recovery receipts.
+Stopped-update backup inventory verification reads registrations from
+the completed backup image while retaining filesystem inventory and source-change
+checks. The candidate must contain these changes; backup publication, integrity
+checks, migrations, and rollback rules are unchanged.
+
 Lazy SQLite schema catalogs load through the retained updater's module loader.
 An updater that first needs a catalog after Git activation therefore reads its
 own generation, not the candidate's replacement JSON. This fix must be present
@@ -421,6 +430,12 @@ initiating process; only serializable options cross the migrated-update handoff.
 
 Native `openclaw update migrate` reports progress while inspecting configuration
 and schemas, capturing its database backup, and verifying the migrated schemas.
+Before reporting migration complete, the candidate checks configured and discovered
+nonheld agent databases against its schema and ownership requirements using the
+post-Doctor configuration. This includes stores startup can reopen after their
+registry entries were lost. A refusal retains the recovery backup and prevents
+the supervisor from switching to the candidate. Held deleted-agent databases stay
+outside this check and remain untouched until explicit restoration.
 Update Doctor omits the standalone pre-shutdown transcript archive warmup because
 the updater already owns the stopped-Gateway window. Required archive migrations
 and their integrity and recovery checks still run under maintenance custody.
@@ -465,10 +480,13 @@ stopped backup and identify the changed file. This repair must
 be present in the runtime performing the snapshot, including the candidate worker
 when the installed updater delegates capture to it.
 
+Under the native updater's stopped-writer handoff, backup checkpoints committed WAL
+frames once before recording source identities and taking the recovery image. The
+same integrity and foreign-key checks run on that image without another copy.
 For checkpointed databases under stopped-update custody, backup identifies the
 database engine from the retained backup image instead of acquiring a second
-whole-store image for classification. WAL and rollback-journal captures retain
-their pre-capture engine inspection. Backup digests, PostgreSQL exports, and
+whole-store image for classification. A reader-pinned WAL or rollback journal retains
+private recovery and pre-capture engine inspection. Backup digests, PostgreSQL exports, and
 source-change refusal still apply. The candidate backup worker must contain this change.
 
 Candidate Doctor also accepts an empty WAL index appearing or disappearing

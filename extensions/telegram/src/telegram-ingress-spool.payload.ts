@@ -7,6 +7,8 @@ export type TelegramSpooledUpdatePayload = {
   receivedAt: number;
   update: unknown;
   preparedPollAnswer?: PreparedTelegramPollAnswer;
+  /** DM topic the receiving account adopted this root message into at admission. */
+  adoptedDmThreadId?: number;
   /** Topic of the tapped widget, resolved at admission so replays keep the same lane. */
   preparedWidgetQuery?: PreparedTelegramWidgetQuery;
 };

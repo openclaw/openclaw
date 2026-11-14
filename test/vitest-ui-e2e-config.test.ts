@@ -39,6 +39,7 @@ const serialGatewayFiles =
     .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
     .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");
 const sharedSerialGatewayFiles = [
+  "ui/src/e2e/home-readonly.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-typing.real-gateway.e2e.test.ts",
   "ui/src/e2e/slack-inline-identity.e2e.test.ts",

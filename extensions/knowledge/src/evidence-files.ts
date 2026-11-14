@@ -367,9 +367,9 @@ export function settledStamp(stamp: string, now = Date.now()): boolean {
 
 /** Identity and change stamp of one path, without following links. Any rewrite
  * changes ctime, so equal stamps mean the bytes read earlier are still current. */
-export function fileStamp(root: string, relative: string): string {
+export function fileStamp(root: string, relative: string, observed?: fs.BigIntStats): string {
   try {
-    const s = fs.lstatSync(`${root}/${relative}`, { bigint: true });
+    const s = observed ?? fs.lstatSync(`${root}/${relative}`, { bigint: true });
     return `${s.mode}:${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;
   } catch (e) {
     // SAFETY: lstatSync throws Node Error objects; code is optional on ErrnoException.
