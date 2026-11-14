@@ -75,6 +75,7 @@ still resolves. Each entry points at the page that now holds the content.
 - <a id="browserless-docker-on-the-same-host" />[Browserless Docker on the same host](/tools/browser/remote#browserless-docker-on-the-same-host)
 - <a id="direct-websocket-cdp-providers" />[Direct WebSocket CDP providers](/tools/browser/remote#direct-websocket-cdp-providers)
 - <a id="browserbase" />[Browserbase](/tools/browser/remote#browserbase)
+- <a id="browser-use" />[Browser Use](/tools/browser/remote#browser-use)
 - <a id="notte" />[Notte](/tools/browser/remote#notte)
 - <a id="security" />[Security](/tools/browser/security)
 - <a id="profiles-(multi-browser)" /><a id="profiles-multi-browser" />[Profiles (multi-browser)](/tools/browser/existing-session#profiles-multi-browser)
