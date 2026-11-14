@@ -18,7 +18,7 @@ import * as sessionReads from "../config/sessions/session-entry-read-runtime.js"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { removeCronRunContinuationSessionIfIdle } from "../cron/run-continuation-cleanup.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
-import { resetSystemEventsForTest } from "../infra/system-events.js";
+import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import type { OpenClawPluginDefinition } from "../plugins/plugin-definition.types.js";
 import type { OpenClawPluginToolFactory } from "../plugins/tool-types.js";
@@ -437,6 +437,10 @@ test("completions pending behind a completion turn share the next turn", async (
   }
   await withinTest(waitForExecScope(sessionKey), signal);
   await withinTest(firstTurn.promise, signal);
+  // Exit notification follows process settlement; wait until both later exits are queued.
+  await vi.waitFor(() => expect(peekSystemEventEntries(sessionKey)).toHaveLength(2), {
+    timeout: 30_000,
+  });
   // The later exits wait for the running completion turn instead of queueing their own.
   expect(receipts).toHaveLength(1);
   gate.resolve();
