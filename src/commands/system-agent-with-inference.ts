@@ -1,5 +1,6 @@
 // OpenClaw command gate: prove inference before starting conversational setup.
 
+import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { requestExitAfterOneShotOutput } from "../cli/one-shot-exit.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
@@ -19,7 +20,7 @@ function failOneShotExecution(
   }
   const message = formatErrorMessage(error);
   if (opts.json) {
-    writeRuntimeJson(runtime, { ok: false, error: message });
+    writeRuntimeJson(runtime, formatCliJsonFailure(error));
   } else {
     runtime.error(message);
   }
@@ -87,9 +88,8 @@ export async function runSystemAgentWithInference(
     const guidance = "Run `openclaw onboard` to connect and live-test AI first.";
     if (opts.json) {
       writeRuntimeJson(runtime, {
-        ok: false,
+        ...formatCliJsonFailure(`OpenClaw requires working inference: ${inference.error}`),
         status: inference.status,
-        error: `OpenClaw requires working inference: ${inference.error}`,
         guidance,
       });
     } else {
