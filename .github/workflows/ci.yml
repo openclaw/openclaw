@@ -4191,7 +4191,8 @@ jobs:
           SKIP_NPM_LOCK: ${{ steps.npm-lock-scope.outputs.skip }}
           FROZEN_TARGET: *frozen_target
           HISTORICAL_TARGET: *historical_target
-          FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
+          # The required docs job owns formatting when selected for current targets.
+          FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check == 'true' && (needs.preflight.outputs.frozen_target == 'true' || needs.preflight.outputs.run_check_docs != 'true') }}
           RUN_PR_MADGE_IMPORT_CYCLES: ${{ needs.preflight.outputs.run_pr_madge_import_cycles }}
           RUN_PR_KYSELY_GUARDRAILS: ${{ needs.preflight.outputs.run_pr_kysely_guardrails }}
           SPLIT_PR_GUARDS: ${{ needs.preflight.outputs.split_pr_guards }}
@@ -6014,11 +6015,22 @@ jobs:
                           *package_args,
                           "-destination", os.environ.get("IOS_DEST") or "generic/platform=iOS Simulator",
                           "-showBuildTimingSummary",
-                          "build-for-testing" if os.environ["IOS_CI_PHASE"] == "smoke" or os.environ.get("IOS_MAIN_TIER") == "true" else "build",
+                          "build-for-testing",
                       ], check=True)
-                      if os.environ["IOS_CI_PHASE"] == "smoke" or os.environ.get("IOS_MAIN_TIER") == "true":
-                          with open(os.environ["GITHUB_ENV"], "a") as environment:
-                              environment.write("IOS_TEST_BUILD_PREPARED=true\n")
+                      if os.environ["IOS_CI_PHASE"] == "tests" and os.environ.get("IOS_MAIN_TIER") != "true":
+                          # The UI scheme owns a separate test runner. Prepare it once,
+                          # retaining the same universal destination and build settings.
+                          subprocess.run([
+                              "python3", ".ci-harness/scripts/ci-xcodebuild.py",
+                              "-project", "apps/ios/OpenClaw.xcodeproj",
+                              "-scheme", "OpenClawUITests",
+                              "-configuration", "Debug",
+                              *package_args,
+                              "-destination", "generic/platform=iOS Simulator",
+                              "-showBuildTimingSummary", "build-for-testing",
+                          ], check=True)
+                      with open(os.environ["GITHUB_ENV"], "a") as environment:
+                          environment.write("IOS_TEST_BUILD_PREPARED=true\n")
                   else:
                       subprocess.run(["pnpm", "ios:build"], check=True)
                   print(f"iOS app build: {time.monotonic() - started:.1f}s", flush=True)
@@ -6118,7 +6130,7 @@ jobs:
           # Xcode 27's verbose simulator diagnostics can stall for 600s after passing tests.
           # Preserve xcresult bundles and command logs without that extra collection.
           test_action=test
-          if [[ "$HISTORICAL_TARGET" != "true" && ( "$IOS_CI_PHASE" == "smoke" || ( "$IOS_MAIN_TIER" == "true" && "$IOS_FROZEN_TARGET" != "true" ) ) ]]; then
+          if [[ "${IOS_TEST_BUILD_PREPARED:-false}" == "true" ]]; then
             test_action=test-without-building
           fi
           run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawVoiceCleanupTests.log xcodebuild \
@@ -6192,7 +6204,7 @@ jobs:
             )
           fi
           test_action=test
-          if [[ "$HISTORICAL_TARGET" != "true" && ( "$IOS_CI_PHASE" == "smoke" || ( "$IOS_MAIN_TIER" == "true" && "$IOS_FROZEN_TARGET" != "true" ) ) ]]; then
+          if [[ "${IOS_TEST_BUILD_PREPARED:-false}" == "true" ]]; then
             test_action=test-without-building
           fi
           source .ci-harness/scripts/ci-collect-checks.sh
@@ -6217,7 +6229,7 @@ jobs:
               -parallel-testing-enabled NO \
               -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings \
               -only-testing:OpenClawUITests/BootstrapSetupFailureUITests \
-              test
+              "$test_action"
           fi
           finish_checks
 

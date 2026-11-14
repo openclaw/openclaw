@@ -360,8 +360,7 @@ export async function prepareCronStreamSandboxAuthority(params: {
           current.identity.profile,
           current.currentConfig,
           operator.gatewayAccessGrant,
-          undefined,
-          principal,
+          { openclawIdPrincipal: principal, retained: access ?? undefined },
         );
       }
       // Plugin callbacks may synchronously publish role, profile, session, or config changes.
@@ -450,8 +449,7 @@ export async function prepareCronStreamSandboxAuthority(params: {
         prepared.identity.profile,
         prepared.currentConfig,
         operator.gatewayAccessGrant,
-        undefined,
-        principal,
+        { openclawIdPrincipal: principal },
       );
       const originalAccess = access;
       const accessAborted = () => revoke(originalAccess?.signal.reason ?? unavailable());
@@ -501,7 +499,7 @@ export async function prepareCronStreamSandboxAuthority(params: {
           readCurrentRoleFacts: () => ({
             assignedRole: operator.assignedRole,
             githubLogin: operator.githubLogin,
-            ...(membershipPolicy ? { policy: membershipPolicy } : {}),
+            ...(membershipPolicy ? { policy: openclawIdTunnelRolePolicy(principal) } : {}),
           }),
           ...(originalRole
             ? {

@@ -1,15 +1,32 @@
+/* Reasoning reads like a tool row (tool-cards.css shares its type and color):
+   one line that opens into the full thought. The collapsed preview overlays
+   the toggle's middle column. */
+.chat-reasoning {
+  display: grid;
+  grid-template-columns: 18px minmax(0, auto) 14px;
+}
+
+.chat-reasoning > button {
+  display: grid;
+  grid-area: 1 / 1 / 2 / -1;
+  grid-template-columns: subgrid;
+  padding: 0;
+}
+
+/* Activity text keeps the row's color and font smoothing, like the tool rows. */
 .chat-thinking {
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  border: 1px dashed color-mix(in srgb, var(--text) 18%, transparent);
-  background: color-mix(in srgb, var(--text) 4%, transparent);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.4;
-  /* Reasoning is reading text like .chat-text: keep macOS stem darkening so the
-     small muted prose does not render thin. App chrome keeps body antialiased. */
-  -webkit-font-smoothing: auto;
-  -moz-osx-font-smoothing: auto;
+  grid-column: 2 / -1;
+}
+
+/* The inert collapsed thought clamps to its first line. The negative margin
+   cancels the first block's default 1em top margin inside the clamp. */
+.chat-thinking--preview {
+  display: -webkit-box;
+  grid-area: 1 / 2;
+  margin-top: -1em;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
 }
 
 .chat-message-disclosure {
@@ -1493,7 +1510,7 @@
   > .chat-assistant-attachments,
   > .chat-assistant-attachment-card,
   > .chat-pairing-qr-notices,
-  > .chat-thinking,
+  > .chat-reasoning,
   > .chat-tool-card__widget-host,
   > .chat-text,
   > .chat-message-disclosure,
@@ -1505,7 +1522,7 @@
     + .chat-assistant-attachments,
     + .chat-assistant-attachment-card,
     + .chat-pairing-qr-notices,
-    + .chat-thinking,
+    + .chat-reasoning,
     + .chat-tool-card__widget-host,
     + .chat-text,
     + .chat-message-disclosure,

@@ -139,9 +139,8 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
     openAccounts();
     await vi.waitFor(() => expect(draw().textContent).toContain(account.label));
     select(`account:${account.authProfileId}`);
-    return {
-      completion: vi.waitFor(() => expect(blocked()).not.toBe("Loading models…")),
-    };
+    expect(control.metadataRead).toBeDefined();
+    return { completion: control.metadataRead };
   };
   return {
     ...fixture,
@@ -168,7 +167,7 @@ it("retires a consumed personal-account model before the next configured draft",
   expect(f.model()).toContain("anthropic/alternate@");
   f.control.retireDraftSelection();
   expect(f.model()).toBe("");
-  expect(f.accountToggle()?.textContent).toContain("Automatic");
+  expect(f.accountToggle()?.textContent).toContain("Account: Auto");
 });
 
 it("keeps a personal account when Default uses the role-permitted provider rather than the agent default", async () => {
@@ -273,7 +272,7 @@ it("does not complete a retained account preview before its replacement is accep
   await vi.waitFor(() => expect(f.draw().textContent).toContain(f.account.label));
   f.select(`account:${f.account.authProfileId}`);
   expect(modelOption(f.draw(), "anthropic/model")).not.toBeNull();
-  expect(f.blocked()).toBe("Loading models…");
+  expect(f.blocked()).toBe("Models unavailable");
   expect(f.ready()).toBe(false);
   expect(f.find("account-selection")?.dataset.chatAccountSelection).toBe("automatic");
   replacement.resolve(f.connected);
@@ -358,7 +357,7 @@ it("enables a cooled-down model on reopen without a catalog event", async () => 
 it("selects a usable retained account after refresh failure without changing saved preferences", async () => {
   const f = retainedAccountDraft();
   const { completion } = await f.chooseAccount();
-  expect(f.blocked()).toBe("Loading models…");
+  expect(f.blocked()).toBe("Models unavailable");
   f.preview.resolve({ ...f.connected, refreshFailed: true });
   await completion;
   expect(f.blocked()).toBeUndefined();
@@ -370,7 +369,7 @@ it("selects a usable retained account after refresh failure without changing sav
   f.select("automatic");
   await vi.waitFor(() => expect(f.blocked()).toContain("No account is available for this model."));
   expect(f.model()).toBe("");
-  expect(f.accountToggle()?.textContent).toContain("Automatic");
+  expect(f.accountToggle()?.textContent).toContain("Account: Auto");
   expect(f.savePreference).not.toHaveBeenCalled();
   expect(
     f.request.mock.calls.some(([method]) => /users\.(selectModelAccount|prefs\.set)/.test(method)),
@@ -403,7 +402,7 @@ it("retires a pending personal-account preview when the user identity changes", 
   await completion;
   await vi.waitFor(() => expect(f.blocked()).toContain("No account is available for this model."));
   expect(f.model()).toBe("");
-  expect(f.accountToggle()?.textContent).toContain("Automatic");
+  expect(f.accountToggle()?.textContent).toContain("Account: Auto");
 });
 
 it("retains its neutral auth gate through pending, rejected and failed refreshes, isolated from a session projection", async () => {
@@ -534,18 +533,11 @@ describe("model selection policy", () => {
         }
         if (attempt === 1) {
           expect(checking.querySelector('[data-chat-model-catalog-state="error"]')).toBeNull();
-          if (clearsChoices) {
-            expect(
-              checking
-                .querySelector('[data-chat-model-catalog-state="loading"]')
-                ?.getAttribute("aria-label"),
-            ).toBe("Loading models…");
-          } else {
-            expect(checking.querySelector(".btn__spinner")).not.toBeNull();
-          }
+          expect(checking.querySelector('[data-chat-model-catalog-state="loading"]')).toBeNull();
+          expect(checking.querySelector(".btn__spinner")).toBeNull();
         }
         if (clearsChoices) {
-          expect(blocked()).toBe("Loading models…");
+          expect(blocked()).toBe("Models unavailable");
         }
         wire.reject(new Error("Catalog unavailable"));
         await expect(control.metadataRead).rejects.toThrow("Catalog unavailable");
@@ -581,7 +573,7 @@ describe("model selection policy", () => {
         control.load(next.context, "main", true, { agent });
         const pending = control.metadataRead;
         expect(model()).toBe("fixture/previous");
-        expect(blocked()).toBe("Loading models…");
+        expect(blocked()).toBe("Models unavailable");
         const waiting = draw();
         expect(waiting.textContent).not.toContain("previous");
         expect(waiting.textContent).not.toContain("Previous model");

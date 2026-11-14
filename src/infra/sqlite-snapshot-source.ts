@@ -594,6 +594,7 @@ export function prepareSqliteReadOnlyLocationSync(
 
 async function prepareSqliteSnapshotSource(
   pathname: string,
+  onPrepare?: (phase: "start" | "done", bytes: number) => void,
 ): Promise<PreparedSqliteReadOnlyLocation | undefined> {
   const canonicalPath = fs.realpathSync.native(pathname);
   const journalPath = `${canonicalPath}-journal`;
@@ -610,24 +611,30 @@ async function prepareSqliteSnapshotSource(
   if (!journal.isFile()) {
     throw new Error(`SQLite rollback journal must be a regular file: ${journalPath}`);
   }
+  onPrepare?.("start", fs.statSync(canonicalPath).size);
   return await prepareSqliteReadOnlyLocation(canonicalPath);
 }
 
 export async function withSqliteSnapshotSource<T>(
   pathname: string,
   operation: (sourcePath: string) => Promise<T>,
+  onPrepare?: (phase: "start" | "done", bytes: number) => void,
 ): Promise<T> {
-  let prepared = await prepareSqliteSnapshotSource(pathname);
+  let prepared = await prepareSqliteSnapshotSource(pathname, onPrepare);
   try {
+    if (prepared) {
+      onPrepare?.("done", fs.statSync(prepared.location).size);
+    }
     return await operation(prepared ? prepared.location : pathname);
   } catch (error) {
     if (prepared) {
       throw error;
     }
-    prepared = await prepareSqliteSnapshotSource(pathname);
+    prepared = await prepareSqliteSnapshotSource(pathname, onPrepare);
     if (!prepared) {
       throw error;
     }
+    onPrepare?.("done", fs.statSync(prepared.location).size);
     return await operation(prepared.location);
   } finally {
     await prepared?.cleanupAsync();

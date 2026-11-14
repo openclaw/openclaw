@@ -36,6 +36,7 @@ it("repeats the structured-choice contract in the model-visible schema", () => {
   expect(schema).toContain("Put all selectable choices in options");
   expect(schema).toContain("Every selectable choice");
   expect(schema).toContain("True only when the user may choose several options at once");
+  expect(schema).toContain("Never Goal Resume, an idle-session control");
 });
 
 it.each([

@@ -14,6 +14,7 @@ import {
   resolveNativeFixtureShortPath,
   writeNativeFixtureFile,
 } from "./native-boundary-fixture.js";
+import { resolveNativeDeclarationFixtureSources } from "./native-declaration-fixture-sources.js";
 
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
@@ -100,19 +101,27 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
   const selected = (env?: NodeJS.ProcessEnv) => run(root, root, ["chosen"], env);
   write("package.json", '{"name":"openclaw","type":"module"}');
   write("pnpm-workspace.yaml", "packages: []\n");
+  const declarationSources = resolveNativeDeclarationFixtureSources();
   json("tsconfig.json", {
     compilerOptions: { ...moduleOptions, lib: ["es5"] },
   });
   json(sdkConfig, {
     extends: "../../tsconfig.json",
     include: ["../../src/**/*.ts"],
-    exclude: ["../../src/shared/deferred.ts"],
+    // Runtime tools must be present without joining the synthetic SDK program.
+    exclude: [
+      "../../src/shared/deferred.ts",
+      ...declarationSources
+        .filter((file) => file.startsWith("src/"))
+        .map((file) => `../../${file}`),
+    ],
   });
   write(sdkCore, 'export { value } from "../nested.js";');
   write("src/nested.ts", "export const value = 1;");
   copyFixtureFiles(root, [
     // Selected-consumer fixtures install their extra src/ tools with a narrowed SDK config.
     ...resolvePreparationSources().filter((file) => !file.startsWith("src/")),
+    ...declarationSources,
     "src/shared/deferred.ts",
     "packages/normalization-core/package.json",
   ]);

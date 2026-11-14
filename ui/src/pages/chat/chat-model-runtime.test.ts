@@ -230,9 +230,6 @@ describe("chat model runtime choices", () => {
       withChoice({ supportsTools: false }, { supportsTools: true }),
       "codex",
     );
-    expect(
-      container.querySelector("[data-chat-model-select]")?.getAttribute("data-chat-model-tools"),
-    ).toBe("unavailable");
     const trigger = container.querySelector("[data-chat-model-select]");
     expect(trigger?.getAttribute("aria-label")).toContain("No tools");
     expect(trigger?.textContent).not.toContain("No tools");

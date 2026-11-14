@@ -101,6 +101,7 @@ export function createOwnerApproval(
   client: GatewayBrowserClient,
   onRequest: () => void,
   onKitUsed: (device: string | undefined) => void = () => {},
+  onMemberDeviceAdded: () => void = () => {},
 ) {
   const abort = new AbortController();
   const attempts = new Map<string, Attempt>();
@@ -249,10 +250,14 @@ export function createOwnerApproval(
   // Reveal must match N's commitment before computing the matching number.
   const receive = async (message: MailboxMessage) => {
     const p = message.payload;
-    if (p.kind === "notice" && p.event === "kit_used" && message.claw_id === mail!.clawId) {
-      // A hint only: name the device the Gateway now lists under that fingerprint, if any.
-      const ctx = await readOwnerApprovalContext(client);
-      onKitUsed(ctx.link.ownerDevices?.find((device) => device.deviceFp === p.ref)?.label);
+    if (p.kind === "notice" && message.claw_id === mail!.clawId) {
+      if (p.event === "kit_used") {
+        // A hint only: name the device the Gateway now lists under that fingerprint, if any.
+        const ctx = await readOwnerApprovalContext(client);
+        onKitUsed(ctx.link.ownerDevices?.find((device) => device.deviceFp === p.ref)?.label);
+      } else if (p.event === "member_device_added") {
+        onMemberDeviceAdded();
+      }
       return;
     }
     if (p.kind !== "enrollment" || message.claw_id !== mail!.clawId) {

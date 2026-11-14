@@ -5,12 +5,14 @@ import {
   ensureCanonicalUserProfileForOpenClawIdIdentity as ensureIdentity,
   linkCanonicalOpenClawIdUserProfile as link,
   readOpenClawIdLinkedProfile,
+  readOpenClawIdInviteProfiles,
   readOpenClawIdLinksOfProfile,
   readOpenClawIdUserProfiles,
   unlinkCanonicalOpenClawIdUserProfile as unlink,
 } from "./user-profile-openclaw-id.js";
 import { listProfiles } from "./user-profile-reads.js";
 import {
+  ensureCanonicalDelegatedUserProfile,
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
   ensureCanonicalUserProfileForTailscaleIdentity,
@@ -91,6 +93,7 @@ it("persists bounded display metadata, preserves user edits, and adopts only emp
 });
 
 it("does not create state on reads and preserves explicit profile merges", async () => {
+  expect(await readOpenClawIdInviteProfiles(options)).toEqual([]);
   expect(await readOpenClawIdUserProfiles(["unknown"], options)).toEqual({});
   expect(await readOpenClawIdUserProfiles([], options)).toEqual({});
   expect(existsSync(options.path)).toBe(false);
@@ -117,6 +120,16 @@ it("links one OCID account to one personal profile, carried by merge and removed
   );
   const other = await ensureCanonicalUserProfileForEmail("other@example.test", options);
   const owner = await ensureCanonicalGatewayOwnerProfile("Owner", options);
+  await ensureCanonicalDelegatedUserProfile(
+    { authority: "oce", subject: `oce:v1:${"a".repeat(64)}` },
+    options,
+  );
+  expect((await readOpenClawIdInviteProfiles(options)).map(({ id }) => id).toSorted()).toEqual(
+    [person.id, other.id].toSorted(),
+  );
+  expect(
+    await link({ profileId: "deleted-profile", accountId: "acct-missing", email: null }, options),
+  ).toEqual({ ok: false, code: "profile_changed" });
   expect(await readOpenClawIdLinkedProfile("acct-josh", options)).toBeNull();
 
   expect(
@@ -144,6 +157,7 @@ it("links one OCID account to one personal profile, carried by merge and removed
   expect(await readOpenClawIdLinksOfProfile(person.id, options)).toEqual([
     { accountId: "acct-josh", email: "josh@id.test" },
   ]);
+  expect((await readOpenClawIdInviteProfiles(options)).map(({ id }) => id)).toEqual([other.id]);
   // Membership-style ensure reuses the linked profile rather than creating another.
   expect((await ensureIdentity({ accountId: "acct-josh" }, options)).id).toBe(person.id);
 
@@ -166,6 +180,9 @@ it("links one OCID account to one personal profile, carried by merge and removed
     await link({ profileId: person.id, accountId: "acct-third", email: null }, options),
   ).toEqual({ ok: false, code: "profile_changed" });
   expect(await unlink({ profileId: other.id }, options)).toEqual({ unlinked: true });
+  expect((await readOpenClawIdInviteProfiles(options)).map(({ id }) => id).toSorted()).toEqual(
+    [other.id].toSorted(),
+  );
   expect(await readOpenClawIdLinkedProfile("acct-josh", options)).toBeNull();
   expect(await unlink({ profileId: other.id }, options)).toEqual({ unlinked: false });
 });

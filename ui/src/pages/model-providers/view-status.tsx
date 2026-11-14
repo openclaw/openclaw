@@ -117,20 +117,6 @@ export function hasVerifiedProvider(card: ModelProviderCard): boolean {
 }
 
 export function renderProviderStatus(card: ModelProviderCard) {
-  if (card.checkingModels) {
-    return (
-      <SettingsStatus
-        kind="muted"
-        dot={false}
-        label={
-          <span class="model-providers__checking" role="status">
-            <span class="btn__spinner" aria-hidden="true" />
-            <span>{t("modelProviders.status.checking")}</span>
-          </span>
-        }
-      />
-    );
-  }
   if (card.catalogStatus === "auth-rejected") {
     // The card-wide outcome does not identify which saved credential was rejected.
     return <SettingsStatus kind="danger" label={t("modelProviders.status.denied")} />;
