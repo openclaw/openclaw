@@ -20,10 +20,19 @@ import { Icon } from "../solid/icon.tsx";
 import { Menu, type MenuItem } from "../solid/menu.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { StrokeIcon } from "../solid/stroke-icon.tsx";
+import type { BrowserSelectionProbe } from "./browser-panel-input-owner.ts";
 import type { BrowserPanel } from "./browser-panel-owner.ts";
 import { bareNameAddress } from "./browser-url.ts";
 
 registerEnglishCatalog(registerBrowserEnglish);
+
+// Probe results that disable Copy selection; unreadable stays enabled so the click can explain.
+const COPY_SELECTION_BLOCKS: Partial<Record<string, string>> = {
+  checking: "browser.copySelectionChecking",
+  empty: "browser.copySelectionEmpty",
+  unavailable: "browser.copyUnavailable",
+  disconnected: "browser.copyDisconnected",
+};
 
 export function BrowserToolbar(
   props: { controller: BrowserPanel } & {
@@ -37,6 +46,11 @@ export function BrowserToolbar(
   // The draft can be neither opened nor searched; cleared once the user edits or leaves it.
   const [invalid, setInvalid] = createSignal(false);
   const [favicon, setFavicon] = createSignal<string | undefined>(undefined);
+  // What the remote page had selected when the actions menu opened; idle while it is closed.
+  const [selectionProbe, setSelectionProbe] = createSignal<
+    Exclude<BrowserSelectionProbe, "stale"> | "checking"
+  >("checking");
+  let probeRun = 0;
   let addressText!: HTMLSpanElement;
   onSettled(() => {
     const controller = props.controller;
@@ -126,6 +140,26 @@ export function BrowserToolbar(
     },
     { targets: () => [addressText], fonts: true },
   );
+  // Why Copy selection is disabled; undefined once the page has text to copy.
+  const copySelectionBlock = createMemo(() => {
+    const state = props.controller.evaluateUnavailable ? "unavailable" : selectionProbe();
+    return nativeTab()
+      ? "browser.copySelectionNative"
+      : !props.controller.view
+        ? "browser.copySelectionNoPage"
+        : COPY_SELECTION_BLOCKS[state];
+  });
+  const probeSelection = (open: boolean) => {
+    const run = ++probeRun;
+    setSelectionProbe("checking");
+    if (open) {
+      void props.controller.input.probeSelection().then((result) => {
+        if (run === probeRun && result !== "stale") {
+          setSelectionProbe(result);
+        }
+      });
+    }
+  };
   const menuItems = createMemo((): MenuItem[] => [
     ...(!props.controller.host.fixedTab
       ? [
@@ -137,6 +171,13 @@ export function BrowserToolbar(
         ]
       : []),
     { id: "copy", label: t("browser.copyUrl"), icon: <Icon name="copy" />, disabled: !activeUrl() },
+    {
+      id: "copySelection",
+      label: t("browser.copySelection"),
+      icon: <Icon name="copy" />,
+      disabled: Boolean(copySelectionBlock()),
+      attributes: copySelectionBlock() ? { title: t(copySelectionBlock()!) } : undefined,
+    },
     {
       id: "open",
       label: t("browser.openExternal"),
@@ -199,6 +240,9 @@ export function BrowserToolbar(
         break;
       case "inspect":
         props.controller.setMode("inspect");
+        break;
+      case "copySelection":
+        props.controller.input.copySelection();
         break;
       case "copy":
         void copyToClipboard(activeUrl(), () => props.controller.host.isConnected).then(
@@ -444,6 +488,7 @@ export function BrowserToolbar(
           placement="bottom-end"
           items={menuItems()}
           onSelect={selectAction}
+          onOpenChange={probeSelection}
         />
       </div>
     </div>
