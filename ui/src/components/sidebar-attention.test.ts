@@ -126,6 +126,25 @@ async function openPanel(element: ParentNode, trigger: HTMLButtonElement) {
 }
 
 describe("model auth attention", () => {
+  it.each([undefined, "expired"] as const)(
+    "does not require sign-in for routine OAuth expiry (%s)",
+    (reasonCode) => {
+      const items = authItems("main", {
+        ts: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "expired",
+            profiles: [
+              { profileId: "openai:account", type: "oauth", status: "expired", reasonCode },
+            ],
+          },
+        ],
+      });
+      expect(items).toEqual([]);
+    },
+  );
   it.each([
     ["oauth", "Sign-in required", "Sign in"],
     ["api_key", "API key needs attention", "Update API key"],
@@ -157,7 +176,12 @@ describe("model auth attention", () => {
         status: "expired",
         profiles: [
           { profileId: "openai:a-key", type: "api_key", status: "missing", reasonCode },
-          { profileId: "openai:z-login", type: "oauth", status: "expired" },
+          {
+            profileId: "openai:z-login",
+            type: "oauth",
+            status: "expired",
+            reasonCode: "refresh_failed",
+          },
         ],
       },
     ];

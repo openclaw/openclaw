@@ -3,25 +3,12 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { providerUsageAttention } from "../../components/solid/provider-usage.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { hasRoutineOAuthExpiry } from "../../lib/model-auth.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import type { ModelProviderAuthKind, ModelProviderCard } from "./data.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
-
-/** The auth owner supplies a reason for unusable grants, not for routine access expiry. */
-export function isAccessTokenExpiry(profile: ModelAuthStatusProfile): boolean {
-  return (
-    profile.type === "oauth" &&
-    (profile.status === "expiring" || profile.status === "expired") &&
-    profile.reasonCode === undefined
-  );
-}
-
-/** For OAuth, the auth owner reports `expired` only while a refresh claim may still settle. */
-export function isOAuthRefreshPending(profile: ModelAuthStatusProfile): boolean {
-  return profile.type === "oauth" && profile.reasonCode === "expired";
-}
 
 /** A failed refresh or a lost grant: only a fresh sign-in recovers the account. */
 export function needsOAuthSignIn(profile: ModelAuthStatusProfile): boolean {
@@ -107,11 +94,7 @@ export function needsAuthAttention(card: ModelProviderCard): boolean {
   }
   // A rollup has no credential type. Unknown or mixed expiry retains its warning.
   // A refresh in progress is routine too; it settles without the operator.
-  const expiring = card.profiles.filter((profile) => profile.status === card.auth?.kind);
-  return (
-    expiring.length === 0 ||
-    !expiring.every((profile) => isAccessTokenExpiry(profile) || isOAuthRefreshPending(profile))
-  );
+  return !hasRoutineOAuthExpiry(card.auth.kind, card.profiles);
 }
 
 /**
