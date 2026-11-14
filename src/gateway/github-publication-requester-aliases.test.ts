@@ -437,8 +437,12 @@ it("publishes under the member role with a null grant despite the visitor defaul
   expect(source.requester.assertCurrent).not.toThrow();
   const json = encodeGitHubPublicationRequester(source.requester.snapshot);
   expect(JSON.parse(json).openclawIdPrincipal).toEqual(f.principal);
-  expect(matchesGitHubPublicationRequester(f.guest.snapshot, source.requester.snapshot)).toBe(true);
-  await expect(restore(encodeGitHubPublicationRequester(f.guest.snapshot), f)).rejects.toThrow(
+  const historical = { ...f.guest.snapshot, authenticationSource: undefined };
+  expect(matchesGitHubPublicationRequester(historical, source.requester.snapshot)).toBe(true);
+  expect(matchesGitHubPublicationRequester(f.guest.snapshot, source.requester.snapshot)).toBe(
+    false,
+  );
+  await expect(restore(encodeGitHubPublicationRequester(historical), f)).rejects.toThrow(
     GitHubPublicationRequesterUnavailableError,
   );
   expect(matchesGitHubPublicationRequester(source.requester.snapshot, f.guest.snapshot)).toBe(
@@ -519,7 +523,9 @@ it("retains historical null-grant authorization and refusal without inferring me
     scopes: guestScopes,
     grant: null,
   });
-  expect(encodeGitHubPublicationRequester(f.guest.snapshot)).toBe(json);
+  expect(
+    encodeGitHubPublicationRequester({ ...f.guest.snapshot, authenticationSource: undefined }),
+  ).toBe(json);
   const restored = await restore(json, f);
   expect(restored.assertCurrent).not.toThrow();
   requireVisitorPublicationPolicy(f);
@@ -540,6 +546,7 @@ it.each([false, true])(
       version: 1,
       actor: { kind: "operator", profileId: f.guestProfile },
       scopes: guestScopes,
+      authenticationSource: "non-member",
       grant: source.requester.snapshot.grant,
     });
     expect(encodeGitHubPublicationRequester(source.requester.snapshot)).toBe(json);

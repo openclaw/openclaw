@@ -7,4 +7,7 @@
 # Linked-owner historical refusal plus recorded-source owner-device and other-sign-in
 # recovery/publish controls add 67 lines, exercising both backends and real owner attribution
 # without changing policy.
-279
+# Principal-only parent-format recovery and same-key retry retain their accepted
+# authority for linked profiles; nonadministrator publication and source-byte
+# assertions cover the restacked membership-first contract (20 extra budget lines).
+299

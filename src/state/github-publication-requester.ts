@@ -142,10 +142,9 @@ export function matchesGitHubPublicationRequester(
       // An accepted principal-free request keeps its original profile/grant basis on retry.
       openclawIdPrincipal: original.openclawIdPrincipal ? current.openclawIdPrincipal : undefined,
       // A historical retry keeps the accepted unknown source and its recovery checks.
-      authenticationSource:
-        !original.authenticationSource && current.authenticationSource === "non-member"
-          ? undefined
-          : current.authenticationSource,
+      authenticationSource: original.authenticationSource
+        ? current.authenticationSource
+        : undefined,
       grant:
         !original.openclawIdPrincipal && current.openclawIdPrincipal && current.grant === null
           ? original.grant

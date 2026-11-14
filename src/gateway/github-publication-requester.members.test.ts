@@ -87,10 +87,18 @@ describe("member publication authority", () => {
     realWorktree: true,
   });
 
-  it.each(["allowed", "removed", "downgraded", "policy required"] as const)(
-    "uses the connection's membership on queued publication (%s)",
-    async (change) => {
+  it.each(
+    (["allowed", "removed", "downgraded", "policy required"] as const).flatMap((change) =>
+      ["recorded-source", "principal-only"].map((format) => ({ change, format })),
+    ),
+  )(
+    "uses the connection's membership on queued publication ($change, $format)",
+    async ({ change, format }) => {
       const f = await createRequesterPublicationFixture(checkpoint, "repository");
+      const linked = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+        accountId: "publication-member",
+      });
+      await mergeCanonicalUserProfiles(linked.id, f.guestProfile);
       setOpenClawIdTunnelPrincipalLookup(() => principal);
       const captured = await createGitHubPublicationRequesterFixture({
         profileId: f.guestProfile,
@@ -110,8 +118,15 @@ describe("member publication authority", () => {
       expect(Object.isFrozen(captured.requester.snapshot.openclawIdPrincipal?.authority)).toBe(
         true,
       );
-      const json = encodeGitHubPublicationRequester(captured.requester.snapshot);
-      expect(decodeGitHubPublicationRequester(json)).toEqual(captured.requester.snapshot);
+      const acceptedSnapshot = {
+        ...captured.requester.snapshot,
+        authenticationSource:
+          format === "principal-only"
+            ? undefined
+            : captured.requester.snapshot.authenticationSource,
+      };
+      const json = encodeGitHubPublicationRequester(acceptedSnapshot);
+      expect(decodeGitHubPublicationRequester(json)).toEqual(acceptedSnapshot);
       const restored = await restoreGitHubPublicationRequester(
         json,
         f.guestSource.session,
@@ -123,7 +138,13 @@ describe("member publication authority", () => {
         f.request("member-publication", captured.requester),
       );
       expect(accepted.status).toBe("requested");
-      expect(f.readRequester(accepted.requestId)).toEqual(captured.requester.snapshot);
+      f.replaceRequesterSnapshot(accepted.requestId, json);
+      expect(
+        await f.coordinator.requestForSessionV2(
+          f.request("member-publication", captured.requester),
+        ),
+      ).toMatchObject({ requestId: accepted.requestId });
+      expect(f.readRequester(accepted.requestId)).toEqual(acceptedSnapshot);
       captured.release();
       expect(restored.assertCurrent).not.toThrow();
       if (change === "removed") {
@@ -292,7 +313,7 @@ describe("member publication authority", () => {
       expect(f.publishedTitles).toEqual(["recorded-source-publication"]);
     },
   );
-  it("does not widen a nonadministrator member's existing publication cap", async () => {
+  it("uses a nonadministrator member's role instead of the restrictive profile default", async () => {
     const f = await createRequesterPublicationFixture(checkpoint, "repository");
     const writer = { ...principal, role: "writer" };
     const next = structuredClone(f.config);
@@ -303,14 +324,21 @@ describe("member publication authority", () => {
     };
     setRuntimeConfigSnapshot(next);
     setOpenClawIdTunnelPrincipalLookup(() => writer);
-    await expect(
-      createGitHubPublicationRequesterFixture({
-        profileId: f.guestProfile,
-        scopes: ["operator.write"],
-        ...f.guestSource.session,
-        openclawIdPrincipal: writer,
-      }),
-    ).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
+    const captured = await createGitHubPublicationRequesterFixture({
+      profileId: f.guestProfile,
+      scopes: ["operator.write"],
+      ...f.guestSource.session,
+      openclawIdPrincipal: writer,
+    });
+    expect(captured.requester.snapshot.grant).toBeNull();
+    expect(captured.requester.assertCurrent).not.toThrow();
+    const restored = await restoreGitHubPublicationRequester(
+      encodeGitHubPublicationRequester(captured.requester.snapshot),
+      f.guestSource.session,
+      f.guestSource.context.getCommittedRuntimeConfig,
+    );
+    onTestFinished(restored.release);
+    expect(restored.assertCurrent).not.toThrow();
   });
   it("waits for membership hydration rather than permanently revoking a valid requester", async () => {
     const f = await createRequesterPublicationFixture(checkpoint, "repository");
