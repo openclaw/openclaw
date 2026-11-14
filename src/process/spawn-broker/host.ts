@@ -35,6 +35,7 @@ import {
 } from "./commands.js";
 import { BrokerFileReads } from "./file-reads.js";
 import { BrokerIpcAdmissionError, createBrokerReceiver, createBrokerSender } from "./ipc.js";
+import { drainUntrackedPipe } from "./pipe.js";
 import {
   childCapacityError,
   type BrokerAdmission,
@@ -609,7 +610,7 @@ export class SpawnBrokerHost {
           handle.destroy();
         }
         if (message.type === "pipe") {
-          void this.transmit({ type: "pipe-received", id: message.id, fd: message.fd }).catch(fail);
+          void drainUntrackedPipe(message, (value) => this.transmit(value)).catch(fail);
         } else if (message.type === "prepared") {
           void this.transmit({ type: "launch", id: message.id, allowed: false }).catch(fail);
         }
