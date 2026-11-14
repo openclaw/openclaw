@@ -42,6 +42,13 @@ import { publishUserPreferencesChanged } from "./user-preference-events.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
 const DEFINITION_PREFIX = "ui.themeDefinition.";
+// Selecting a different theme shows its own design, from Settings or the agent.
+// Mode changes, reselection, and explicit appearance values in the same request keep theirs.
+const THEME_DESIGN_DEFAULTS = {
+  [UI_APPEARANCE_PREFERENCE_KEYS.accent]: "theme",
+  [UI_APPEARANCE_PREFERENCE_KEYS.fontUi]: null,
+  [UI_APPEARANCE_PREFERENCE_KEYS.fontChat]: null,
+};
 type ThemeRequest = Omit<GatewayRequestHandlerOptions, "params">;
 
 function requestOwner(options: ThemeRequest) {
@@ -271,6 +278,8 @@ export const themeHandlers: GatewayRequestHandlers = {
         throw new Error(`Theme ${id} is unavailable. List themes to choose an installed theme.`);
       }
       const resetId = options.context.getRuntimeConfig().ui?.prefs?.theme ?? "claw";
+      const changesTheme =
+        id !== undefined && (id ?? resetId) !== (result.current.requestedId ?? result.current.id);
       const selected =
         target ?? catalog.find((theme) => theme.id === (id === null ? resetId : result.current.id));
       const nextMode = selected
@@ -285,6 +294,7 @@ export const themeHandlers: GatewayRequestHandlers = {
         options,
         owner,
         {
+          ...(changesTheme ? THEME_DESIGN_DEFAULTS : {}),
           ...appearanceEntries,
           ...(id !== undefined ? { "ui.theme": id } : {}),
           ...(nextMode !== undefined ? { "ui.themeMode": nextMode } : {}),
@@ -322,7 +332,8 @@ export const themeHandlers: GatewayRequestHandlers = {
       }
       const snapshot = await readThemes(options, owner);
       const current = snapshot.result.current;
-      const affectsSelection = apply || (current.requestedId ?? current.id) === `user/${id}`;
+      const reselects = (current.requestedId ?? current.id) === `user/${id}`;
+      const affectsSelection = apply || reselects;
       const nextMode = affectsSelection
         ? selectionMode(
             (["light", "dark"] as const).filter((palette) => Boolean(definition[palette])),
@@ -335,6 +346,7 @@ export const themeHandlers: GatewayRequestHandlers = {
         options,
         owner,
         {
+          ...(apply && !reselects ? THEME_DESIGN_DEFAULTS : {}),
           [`${DEFINITION_PREFIX}${id}`]: definition,
           ...(apply ? { "ui.theme": `user/${id}` } : {}),
           ...(nextMode !== undefined ? { "ui.themeMode": nextMode } : {}),

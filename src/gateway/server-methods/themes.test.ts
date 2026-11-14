@@ -125,8 +125,15 @@ function themePreferences(id: string, mode = "dark") {
   return { "ui.theme": id, "ui.themeMode": mode };
 }
 
+// Selecting a different theme stores its own accent and clears font overrides.
+const themeDesign = { "ui.accent": "theme" };
+
 function savedTheme(id: string, definition: ReturnType<typeof themeDefinition>) {
   return { ...themePreferences(`user/${id}`), [`ui.themeDefinition.${id}`]: definition };
+}
+
+function appliedTheme(id: string, definition: ReturnType<typeof themeDefinition>) {
+  return { ...savedTheme(id, definition), ...themeDesign };
 }
 
 function syntheticClient(identity?: AgentRuntimeIdentity, profileId?: string): GatewayClient {
@@ -191,7 +198,17 @@ function expectImportBroadcast(
 ) {
   expect(options.context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
     "users.prefs.changed",
-    { profileId, keys: [`ui.themeDefinition.${id}`, "ui.theme", "ui.themeMode"] },
+    {
+      profileId,
+      keys: [
+        "ui.accent",
+        "ui.fontUi",
+        "ui.fontChat",
+        `ui.themeDefinition.${id}`,
+        "ui.theme",
+        "ui.themeMode",
+      ],
+    },
     new Set(connIds),
   );
 }
@@ -289,7 +306,7 @@ it("lists descriptive choices and inspects a plugin definition without exposing 
 });
 
 it("imports and applies in one durable profile mutation, preserving other preferences and notifying only that profile", async () => {
-  seedPreferences({ "ui.accent": "#aabbcc", "ui.fontFamily": "serif" });
+  seedPreferences({ "ui.accent": "#aabbcc", "ui.fontUi": "geist", "ui.fontFamily": "serif" });
   const options = broadcastOptions([client(requesterId), client(otherId, "other-browser")]);
   const branding = {
     mascot: "none",
@@ -311,11 +328,7 @@ it("imports and applies in one durable profile mutation, preserving other prefer
   });
   expectImportBroadcast(options, "xenovessel");
   await closeOpenClawStateDatabaseAsync();
-  preferences({
-    "ui.accent": "#aabbcc",
-    "ui.fontFamily": "serif",
-    ...savedTheme("xenovessel", definition),
-  });
+  preferences({ "ui.fontFamily": "serif", ...appliedTheme("xenovessel", definition) });
   preferences({}, otherId);
   await expectRpc(invoke("themes.get", { id: "user/xenovessel" }), { theme: branding, definition });
   await expectRpc(invoke("themes.list", {}), {
@@ -353,6 +366,21 @@ it("validates and persists theme selection with accompanying appearance changes 
   });
 });
 
+it("shows a newly selected theme's own accent and fonts while keeping overrides for mode changes and reselection", async () => {
+  const overrides = { "ui.accent": "#aabbcc", "ui.fontUi": "geist", "ui.fontChat": "lora" };
+  seedPreferences({ ...themePreferences("claw"), ...overrides });
+  await expectRpc(setTheme({ mode: "light" }));
+  await expectRpc(setTheme({ id: "claw" }));
+  await expectRpc(importTheme("mine"));
+  const mine = { "ui.themeDefinition.mine": themeDefinition() };
+  preferences({ ...themePreferences("claw", "light"), ...overrides, ...mine });
+  await expectRpc(setTheme({ id: "tide" }));
+  preferences({ ...themePreferences("tide", "light"), ...themeDesign, ...mine });
+  seedPreferences(overrides);
+  await expectRpc(importTheme("mine", { apply: true }));
+  preferences({ ...themePreferences("user/mine"), ...themeDesign, ...mine });
+});
+
 it.each([
   { background: "url(https://example.test/collect)" },
   { "font-sans": "sans-serif; background: red" },
@@ -375,7 +403,7 @@ it("clears theme overrides against Gateway defaults while retaining saved custom
   await expectRpc(setTheme({ mode: null }, defaultMode("dark")), {
     current: { id: "claw", mode: "dark", overrides: {} },
   });
-  preferences({ "ui.themeDefinition.dark": definition });
+  preferences({ "ui.themeDefinition.dark": definition, ...themeDesign });
 });
 
 it("selects a dark-only imported theme in one call and refuses explicit incompatible modes without writes", async () => {
@@ -390,7 +418,7 @@ it("selects a dark-only imported theme in one call and refuses explicit incompat
     current: { id: "user/xenovessel", mode: "dark" },
     application: "saved",
   });
-  const saved = savedTheme("xenovessel", definition);
+  const saved = appliedTheme("xenovessel", definition);
   preferences(saved);
   for (const mode of ["light", null]) {
     await expectError(setTheme({ mode }, defaultMode("light")), incompatible);
@@ -408,6 +436,7 @@ it("does not change another client's new selection when reimporting a previously
   });
   preferences({
     ...themePreferences("claw"),
+    ...themeDesign,
     "ui.themeDefinition.adaptive": original,
   });
 });
@@ -456,8 +485,7 @@ it("preserves independent concurrent imports and atomically settles competing se
     const winnerIndex = expectDefined(winners[0], "winning theme mutation index");
     const winner = expectDefined(contenders[winnerIndex], "winning theme mutation");
     const selectedId = winner.method === "themes.import" ? `user/${applied.id}` : "rose";
-    expected["ui.theme"] = selectedId;
-    expected["ui.themeMode"] = "dark";
+    Object.assign(expected, themePreferences(selectedId), themeDesign);
     if (winner.method === "themes.import") {
       expected[`ui.themeDefinition.${winner.params.id}`] = winner.params.definition;
     }
@@ -502,7 +530,7 @@ it("reads and writes through a merged profile alias and notifies both identities
   }
   expect(result).toMatchObject(success({ current: { id: "user/merged" }, application: "saved" }));
   preferences();
-  preferences(savedTheme("merged", definition), otherId);
+  preferences(appliedTheme("merged", definition), otherId);
   preferences({}, unrelatedId);
   for (const profileId of [requesterId, otherId]) {
     await expectRpc(invoke("themes.get", {}, { client: client(profileId) }), {
@@ -530,8 +558,9 @@ it("does not redirect a prepared import when its profile merges before the write
 
 it("rolls back an import at the profile key limit while allowing replacement at capacity", async () => {
   const expected: Record<string, unknown> = {
-    ...Object.fromEntries(Array.from({ length: 125 }, (_, index) => [`retained-${index}`, index])),
+    ...Object.fromEntries(Array.from({ length: 124 }, (_, index) => [`retained-${index}`, index])),
     ...themePreferences("claw"),
+    ...themeDesign,
   };
   const entries = Object.entries(expected);
   for (let offset = 0; offset < entries.length; offset += 32) {
@@ -654,7 +683,7 @@ it("keeps every personal theme action scoped to the selected accepted turn parti
           await execute({ action, ...(action === "set" ? { id, mode } : {}) }, person.profileId),
         ).toMatchObject({ current: { id, mode } });
       }
-      preferences(themePreferences(id, mode), person.profileId);
+      preferences({ ...themePreferences(id, mode), ...themeDesign }, person.profileId);
     }
     const imported = expectDefined(actions[3], "import action");
     expect(await execute(imported, steerer.profileId)).toMatchObject({
