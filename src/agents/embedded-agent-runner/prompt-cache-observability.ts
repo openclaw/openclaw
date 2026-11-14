@@ -4,6 +4,7 @@ import {
   splitSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
+import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { ContextEnginePromptCacheObservationChange as PromptCacheChange } from "../../context-engine/types.js";
@@ -410,6 +411,22 @@ export function beginPromptCacheObservation(
     : [];
   for (const code of previous?.declaredRewrites ?? []) {
     changes.push({ code, detail: `${code} changed provider history` });
+  }
+  // Server-side compaction returns its checkpoint on a new reply. From the next request on, the
+  // transport sends that checkpoint in place of the history it summarized: a compaction rebuild.
+  if (
+    previous &&
+    params.messages
+      .slice(previous.history.length)
+      .some(
+        (message) =>
+          message.role === "assistant" && isCompactionReplayCheckpoint(message.providerReplay),
+      )
+  ) {
+    changes.push({
+      code: "compaction",
+      detail: "provider compaction checkpoint replaced earlier history",
+    });
   }
   const restarted = immediate.some(
     ({ code }) => code === "model" || code === "transport" || code === "cacheRetention",
