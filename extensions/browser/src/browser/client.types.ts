@@ -139,6 +139,8 @@ export type BrowserTab = {
   wsUrl?: string;
   /** Internal CDP lookup pin paired with wsUrl; omitted from model-facing summaries. */
   wsLookup?: BrowserCdpLookup;
+  /** True after a page-level CDP probe observed this target crash or stop responding. */
+  crashed?: true;
   type?: string;
 };
 

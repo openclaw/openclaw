@@ -2,6 +2,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserTab } from "../client.types.js";
 import { makeBrowserProfile } from "../server-context.test-harness.js";
+import { markBrowserTargetCrashed } from "../target-crash.js";
 import { gate } from "./agent-route.test-support.js";
 import { createRouteFixture } from "./request.test-support.js";
 import type { createBrowserRouteResponse } from "./test-helpers.js";
@@ -194,6 +195,26 @@ describe("browser tab routes", () => {
       expect(response.body).toMatchObject({ running: true, canAutoResizeViewport: expected });
     },
   );
+
+  it("marks only observation-backed crashed tabs", async () => {
+    const cdpUrl = "http://127.0.0.1:19103";
+    const crashed = publicTab({ targetId: "T-CRASHED" });
+    markBrowserTargetCrashed(cdpUrl, "T-CRASHED");
+    const healthy = publicTab({ targetId: "T-HEALTHY" });
+
+    const response = await list({
+      profileCtx: makeProfile({
+        profile: makeBrowserProfile({ cdpUrl }),
+        listTabs: vi.fn(async () => [crashed, healthy]),
+      }),
+    });
+
+    expectResponse(response, 200, {
+      running: true,
+      tabs: [{ ...crashed, crashed: true }, healthy],
+      canAutoResizeViewport: true,
+    });
+  });
 
   it.each([
     [{}, "url is required"],
