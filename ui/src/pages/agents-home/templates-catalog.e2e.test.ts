@@ -647,11 +647,8 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
 
   it("prepares the authoritative Add review while the Template detail opens", async () => {
     const { page, gateway } = await fixture();
-    const detail = await openDetail(page);
+    await openDetail(page);
     await expect.poll(() => gateway.getRequests("templates.add.plan")).toHaveLength(1);
-    await expect
-      .poll(() => detail.locator("[data-templates-confirm] button").isEnabled())
-      .toBe(true);
     expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
   });
 

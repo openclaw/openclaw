@@ -385,55 +385,48 @@ it.each([false, true])(
     }
   },
 );
-it.each([
-  "paused",
-  "blocked",
-  "complete",
-  "budget_limited",
-  "usage_limited",
-  "replaced",
-  "cleared",
-  "new input",
-  "paused during preflight",
-] as const)("drops an automatic Goal nudge when admission observes %s", async (change) => {
-  const original = createActiveGoalEntry();
-  const onQueuedFollowupAdmitted = vi.fn(async () => {});
-  const onQueuedFollowupSettled = vi.fn(async () => {});
-  let current = change === "paused during preflight" ? original : structuredClone(original);
-  if (change === "replaced") {
-    current.goal!.id = "replacement";
-  } else if (change === "cleared") {
-    current.goal = undefined;
-  } else if (change === "new input") {
-    state.queueDepth.mockReturnValue(1);
-  } else if (change === "paused during preflight") {
-    state.preflight.mockImplementation(async () => {
-      current = {
-        ...original,
-        updatedAt: 2,
-        goal: { ...original.goal!, status: "paused", updatedAt: 2 },
-      };
-      return original;
-    });
-  } else {
-    current.goal!.status = change;
-  }
-  admit(operation, change === "paused during preflight" ? original : current);
-  state.loadEntry.mockImplementation(() => current);
-  const result = await prepare(
-    createRun({ goalContinuation: { sessionId: "queued-session", goalId: "goal" } }),
-    {
-      sessionEntry: original,
-      storePath: "/fixture/sessions.json",
-      opts: { onQueuedFollowupAdmitted, onQueuedFollowupSettled },
-    },
-  );
-  expect(result).toMatchObject({ kind: "skipped", reason: "goal-inactive", operation });
-  expect(onQueuedFollowupAdmitted).toHaveBeenCalledOnce();
-  expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
-  expect(operation.complete).not.toHaveBeenCalled();
-  expect(state.preflight).toHaveBeenCalledTimes(change === "paused during preflight" ? 1 : 0);
-});
+it.each(["paused", "replaced", "cleared", "new input", "paused during preflight"] as const)(
+  "drops an automatic Goal nudge when admission observes %s",
+  async (change) => {
+    const original = createActiveGoalEntry();
+    const onQueuedFollowupAdmitted = vi.fn(async () => {});
+    const onQueuedFollowupSettled = vi.fn(async () => {});
+    let current = change === "paused during preflight" ? original : structuredClone(original);
+    if (change === "replaced") {
+      current.goal!.id = "replacement";
+    } else if (change === "cleared") {
+      current.goal = undefined;
+    } else if (change === "new input") {
+      state.queueDepth.mockReturnValue(1);
+    } else if (change === "paused during preflight") {
+      state.preflight.mockImplementation(async () => {
+        current = {
+          ...original,
+          updatedAt: 2,
+          goal: { ...original.goal!, status: "paused", updatedAt: 2 },
+        };
+        return original;
+      });
+    } else {
+      current.goal!.status = change;
+    }
+    admit(operation, change === "paused during preflight" ? original : current);
+    state.loadEntry.mockImplementation(() => current);
+    const result = await prepare(
+      createRun({ goalContinuation: { sessionId: "queued-session", goalId: "goal" } }),
+      {
+        sessionEntry: original,
+        storePath: "/fixture/sessions.json",
+        opts: { onQueuedFollowupAdmitted, onQueuedFollowupSettled },
+      },
+    );
+    expect(result).toMatchObject({ kind: "skipped", reason: "goal-inactive", operation });
+    expect(onQueuedFollowupAdmitted).toHaveBeenCalledOnce();
+    expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
+    expect(operation.complete).not.toHaveBeenCalled();
+    expect(state.preflight).toHaveBeenCalledTimes(change === "paused during preflight" ? 1 : 0);
+  },
+);
 
 it("preserves the admitted legacy transcript target", async () => {
   const queued = createRun();

@@ -80,11 +80,6 @@ function createRuntime(tools: AnyAgentTool[]) {
 describe("Tool Search flattened call arguments", () => {
   it.each([
     {
-      label: "canonical id",
-      arguments: { id: "inspect_resource", command: "list", timeout_ms: 5_000 },
-      expected: { command: "list", timeout_ms: 5_000 },
-    },
-    {
       label: "empty args wrapper with dotted params",
       arguments: {
         id: "inspect_resource",

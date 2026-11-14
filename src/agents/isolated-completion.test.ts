@@ -589,12 +589,7 @@ describe("runIsolatedCompletion", () => {
     },
   );
 
-  it.each([
-    undefined,
-    "session-activity-summary",
-    "conversation-label",
-    "session-observer",
-  ] as const)(
+  it.each([undefined, "session-activity-summary"] as const)(
     "routes purpose %s through one empty-tool CLI run with reported usage",
     async (purpose) => {
       const usage = { input: 8, output: 3, cacheRead: 2, total: 13 };

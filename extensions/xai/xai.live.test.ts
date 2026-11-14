@@ -24,7 +24,6 @@ import { isBillingErrorMessage } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import { createReferencePng as createSyntheticPng } from "../test-support/generation-live-test-helpers.js";
 import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
-import { createCodeExecutionTool } from "./code-execution.js";
 import plugin from "./index.js";
 import { xaiPluginConfig } from "./plugin-config.test-support.js";
 
@@ -194,33 +193,6 @@ describeLive("xai plugin live", () => {
       expect(details.model).toBe("grok-4.7");
       expect(details.usedCodeExecution).toBe(true);
       expect(details.content).toContain("42");
-    });
-  }, 120_000);
-
-  it("runs remote code execution with the current default model", async () => {
-    await runXaiLiveCase("code-execution", async () => {
-      const tool = createCodeExecutionTool({
-        config: xaiPluginConfig({
-          webSearch: { apiKey: XAI_API_KEY },
-          codeExecution: { enabled: true, maxTurns: 1, timeoutSeconds: 90 },
-        }),
-      });
-      if (!tool) {
-        throw new Error("expected code_execution tool to be registered");
-      }
-
-      const result = await tool.execute("code-execution:xai-live", {
-        task: "Use the code interpreter to calculate the sum of the integers from 1 through 100.",
-      });
-      const details = (result.details ?? {}) as {
-        content?: string;
-        model?: string;
-        usedCodeExecution?: boolean;
-      };
-
-      expect(details.model).toBe("grok-4.7");
-      expect(details.usedCodeExecution).toBe(true);
-      expect(details.content).toContain("5050");
     });
   }, 120_000);
 

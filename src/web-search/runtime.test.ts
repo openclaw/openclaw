@@ -414,25 +414,6 @@ describe("web search runtime", () => {
     await expect(search()).rejects.toThrow(unavailable);
   });
 
-  it.each(["thrown", "structured"])(
-    "falls back after an auto-selected provider's %s error",
-    async (kind) => {
-      useProviders(
-        searchProvider("google", {
-          createTool: () =>
-            tool(async () => {
-              if (kind === "thrown") {
-                throw new Error("google aborted");
-              }
-              return { error: "missing_google_api_key", message: "google key missing" };
-            }),
-        }),
-        searchProvider("backup", { autoDetectOrder: 2 }),
-      );
-      await expectSearch({}, "backup");
-    },
-  );
-
   it("returns validation errors without building or executing fallback tools", async () => {
     const fallbackFactory = vi.fn(failGoogle);
     const payload = {

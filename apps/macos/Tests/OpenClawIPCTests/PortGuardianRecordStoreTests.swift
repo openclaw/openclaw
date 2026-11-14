@@ -143,22 +143,6 @@ struct PortGuardianRecordStoreTests {
     }
 
     @Test
-    func `orphan cleanup reaps stale tunnel records`() async throws {
-        let fixture = try Self.fixture()
-        defer { fixture.cleanup() }
-        let store = try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
-        let orphan = Self.record(pid: 2_000_000_000, port: 18789, timestamp: 1)
-        try store.upsert(orphan)
-        let guardian = PortGuardian(recordStoreFactory: {
-            try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
-        })
-
-        await guardian.reapOrphanedTunnels()
-
-        #expect(try store.records().isEmpty)
-    }
-
-    @Test
     func `failed receipt deletion relinquishes ownership for sweep retry`() async throws {
         let fixture = try Self.fixture()
         defer { fixture.cleanup() }

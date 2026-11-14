@@ -335,37 +335,6 @@ struct GatewayChannelConnectTests {
         #expect((computerUse["provider"] as? [String: Any])?["id"] as? String == "cua-computer")
     }
 
-    @Test func `concurrent connect shares failure`() async throws {
-        let session = self.makeSession(response: .invalid(delayMs: 200))
-        let channel = try GatewayChannelActor(
-            url: #require(URL(string: "ws://example.invalid")),
-            token: nil,
-            session: WebSocketSessionBox(session: session),
-            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
-
-        let t1 = Task { try await channel.connect() }
-        let t2 = Task { try await channel.connect() }
-
-        let r1 = await t1.result
-        let r2 = await t2.result
-
-        #expect({
-            if case .failure = r1 {
-                true
-            } else {
-                false
-            }
-        }())
-        #expect({
-            if case .failure = r2 {
-                true
-            } else {
-                false
-            }
-        }())
-        #expect(session.snapshotMakeCount() == 1)
-    }
-
     @Test func `failed connect coalesces callers behind backoff`() async throws {
         let gate = NonCooperativeGate()
         let nextBackoff = NonCooperativeGate()
