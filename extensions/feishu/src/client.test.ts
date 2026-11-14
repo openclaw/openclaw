@@ -95,11 +95,13 @@ beforeAll(() => {
     EventDispatcher: vi.fn(),
     defaultHttpInstance: mockBaseHttpInstance,
   }));
-  vi.doMock("@openclaw/proxyline", () => ({
-    createAmbientNodeProxyAgent: proxyAgentCtorMock,
-    hasAmbientNodeProxyConfigured: vi.fn(() =>
-      Boolean(proxyEnvKeys.map((key) => process.env[key]).find((value) => value !== undefined)),
-    ),
+  vi.doMock("../../../src/infra/net/proxyline-runtime.js", () => ({
+    loadProxyline: () => ({
+      createAmbientNodeProxyAgent: proxyAgentCtorMock,
+      hasAmbientNodeProxyConfigured: vi.fn(() =>
+        Boolean(proxyEnvKeys.map((key) => process.env[key]).find((value) => value !== undefined)),
+      ),
+    }),
   }));
 });
 
@@ -117,7 +119,7 @@ afterEach(() => vi.unstubAllEnvs());
 
 afterAll(() => {
   vi.doUnmock("@larksuiteoapi/node-sdk");
-  vi.doUnmock("@openclaw/proxyline");
+  vi.doUnmock("../../../src/infra/net/proxyline-runtime.js");
   vi.resetModules();
 });
 
