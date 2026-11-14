@@ -218,7 +218,12 @@ export async function persistExtractedSource(params: {
       await fs.rename(stagedPackage, destination);
     } catch (error) {
       const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-      if (code !== "EEXIST" && code !== "ENOTEMPTY") {
+      // Windows reports EPERM when renaming onto an existing directory.
+      const windowsDirectoryCollision =
+        code === "EPERM" &&
+        process.platform === "win32" &&
+        (await fs.lstat(destination).catch(() => undefined))?.isDirectory();
+      if (code !== "EEXIST" && code !== "ENOTEMPTY" && !windowsDirectoryCollision) {
         throw error;
       }
       if (!(await sourceDirectoriesMatch(stagedPackage, destination))) {
