@@ -7,7 +7,11 @@ import {
   buildForkedChildTranscriptEvents,
   resolveParentForkSourceTranscript,
 } from "../config/sessions/session-accessor.sqlite-parent-fork.js";
-import { planSessionMessageCut } from "../config/sessions/session-message-cut-plan.js";
+import {
+  planInPlaceSessionMessageCut,
+  planSessionMessageCut,
+} from "../config/sessions/session-message-cut-plan.js";
+import { createMemorySessionMessageCutReader } from "../config/sessions/session-message-cut-target.js";
 import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
 import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
 import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
@@ -134,13 +138,18 @@ it("selects a branch after reading all short pages and preserves sparse sequence
     makeRow(13, "chosen", "switch", 2),
     makeRow(20, "chosen-tail", "chosen", 3),
   ]);
-  expectUsage(result, 6, 3, "chosen-tail");
+  // Three turns, a rewind back to the first reply, then two more turns: base
+  // reports 206 for that history across its retired copy and its successor, and
+  // the one in-place transcript reports the same.
+  expectUsage(result, 206, 5, "chosen-tail");
   expect(result.checkpoint).toMatchObject({ maxSeq: 20, eventCount: 6 });
 });
 
 it.each<[string, Row[], [number, number, string], string?]>([
   ["append", [...appended, makeRow(16, "d", "c", 16)], [31, 5, "d"]],
-  ["leaf", [...appended, control(20, "leaf", "switch", "c", "root")], [1, 1, "root"]],
+  // A rewind to the first reply keeps the spend of the branch it displaced; base
+  // reports 15 for four turns followed by that rewind.
+  ["leaf", [...appended, control(20, "leaf", "switch", "c", "root")], [15, 4, "root"]],
   [
     "reset",
     [...appended, control(20, "reset", "reset", null), makeRow(25, "after-reset", "root", 16)],
@@ -166,46 +175,6 @@ it.each<[string, Row[], [number, number, string], string?]>([
   }
 });
 
-it("follows leaf controls when a switch copies an inactive branch", async () => {
-  // The source selects root -> chosen -> chosen-tail (6 tokens); hidden and hidden-tail (200) are
-  // an inactive branch the source never counted, so the switch's copy must count them.
-  const source = [
-    createSessionTranscriptHeader({ sessionId: "source" }),
-    ...[
-      makeRow(1, "root", null, 1),
-      makeRow(4, "hidden", "root", 100),
-      makeRow(5, "hidden-tail", "hidden", 100),
-      control(8, "leaf", "switch", "hidden-tail", "root"),
-      makeRow(13, "chosen", "switch", 2),
-      makeRow(20, "chosen-tail", "chosen", 3),
-    ].map(({ event }) => event),
-  ];
-  expectUsage(
-    await scan(source.map((event, index) => ({ seq: index, event }))),
-    6,
-    3,
-    "chosen-tail",
-  );
-  const plan = planSessionMessageCut(
-    { sessionId: "source", lifecycleRevision: "r1", updatedAt: timestamp },
-    source,
-    {
-      mode: "switch",
-      entryId: "hidden-tail",
-      expectedState: { sessionId: "source", lifecycleRevision: "r1" },
-      sourceKey: "agent:main:source",
-      canonicalSourceKey: "agent:main:source",
-      targetKey: "agent:main:copy",
-    },
-  );
-  expect(plan.status).toBe("prepared");
-  const copy = plan.status === "prepared" ? plan.events.filter(isRecord) : [];
-  const result = await scan(copy.map((event, index) => ({ seq: index, event })));
-  expect(
-    Object.values(result.rollup.buckets).reduce((sum, b) => sum + b.totals.totalTokens, 0),
-  ).toBe(200);
-});
-
 it("aggregates duplicate-ID paths in selected ancestry order when sequence numbers go backward", async () => {
   const user = (at: number) => ({
     type: "message",
@@ -229,47 +198,48 @@ it("aggregates duplicate-ID paths in selected ancestry order when sequence numbe
   ).toMatchObject({ count: 1, min: 1000, max: 1000, sum: 1000 });
 });
 
-const newTurnParent: Record<string, string> = {
-  "parent fork": "a2",
-  switch: "a2b",
-  "switch back": "a2",
+const userEvent = (id: string, parentId: string | null) => ({
+  type: "message",
+  id,
+  parentId,
+  timestamp: new Date(timestamp).toISOString(),
+  message: { role: "user", content: `${id} question` },
+});
+const answerEvent = (id: string, parentId: string, tokens: number) => {
+  const { event } = makeRow(0, id, parentId, tokens);
+  const message = { ...(event.message as Record<string, unknown>), stopReason: "stop" };
+  return { ...event, message: { ...message, content: [{ type: "text", text: `${id} answer` }] } };
 };
-// Each copy adds one 5-token turn. Copied turns on the source's active path count in the source;
-// a switch to the inactive branch still counts that branch's reply (40), which the source never did.
+/** u1 -> a1(10), the never-active sibling u2b -> a2b(40), then the active u2 -> a2(20). */
+const branchedSource = (): TranscriptEvent[] => [
+  createSessionTranscriptHeader({ sessionId: "source" }),
+  userEvent("u1", null),
+  answerEvent("a1", "u1", 10),
+  userEvent("u2b", "a1"),
+  answerEvent("a2b", "u2b", 40),
+  userEvent("u2", "a1"),
+  answerEvent("a2", "u2", 20),
+];
+// Stored transcripts keep the session header at seq 0.
+const scanWithNewTurn = async (events: readonly unknown[], newTurnParent: string) =>
+  scan(
+    [...events.filter(isRecord), answerEvent("new", newTurnParent, 5)].map((event, index) => ({
+      seq: index,
+      event,
+    })),
+  );
+const billedTokens = (entry: UsageCostRollupEntry) =>
+  Object.values(entry.rollup.buckets).reduce((sum, b) => sum + b.totals.totalTokens, 0);
+
+// A fork copies the counted active path, so the source already counts every copied turn and the
+// copy only adds its own 5-token turn.
 it.each([
-  ["rewind", 5],
-  ["fork", 5],
-  ["parent fork", 5],
-  ["switch", 45],
-  // Switching back must not recount the reply the first copy already counted.
-  ["switch back", 5],
+  ["fork", "a1", 5],
+  ["parent fork", "a2", 5],
 ] as const)(
   "counts history copied by a %s once, in its source transcript",
-  async (mode, expected) => {
-    const user = (id: string, parentId: string | null) => ({
-      type: "message",
-      id,
-      parentId,
-      timestamp: new Date(timestamp).toISOString(),
-      message: { role: "user", content: `${id} question` },
-    });
-    const answer = (id: string, parentId: string, tokens: number) => {
-      const { event } = makeRow(0, id, parentId, tokens);
-      const message = { ...(event.message as Record<string, unknown>), stopReason: "stop" };
-      return {
-        ...event,
-        message: { ...message, content: [{ type: "text", text: `${id} answer` }] },
-      };
-    };
-    const source = [
-      createSessionTranscriptHeader({ sessionId: "source" }),
-      user("u1", null),
-      answer("a1", "u1", 10),
-      user("u2b", "a1"),
-      answer("a2b", "u2b", 40),
-      user("u2", "a1"),
-      answer("a2", "u2", 20),
-    ];
+  async (mode, newTurnParent, expected) => {
+    const source = branchedSource();
     let copy: unknown[];
     if (mode === "parent fork") {
       const forkSource = resolveParentForkSourceTranscript(source, "last-completed");
@@ -280,42 +250,72 @@ it.each([
         targetSessionId: "copy",
       });
     } else {
-      const cut = (
-        events: readonly TranscriptEvent[],
-        cutMode: "fork" | "rewind" | "switch",
-        entryId: string,
-      ) => {
-        const first = events[0];
-        const sessionId = isRecord(first) && typeof first.id === "string" ? first.id : "";
-        const plan = planSessionMessageCut(
-          { sessionId, lifecycleRevision: "r1", updatedAt: timestamp },
-          events,
-          {
-            mode: cutMode,
-            entryId,
-            expectedState: { sessionId, lifecycleRevision: "r1" },
-            sourceKey: "agent:main:source",
-            canonicalSourceKey: "agent:main:source",
-            targetKey: "agent:main:copy",
-          },
-        );
-        expect(plan.status).toBe("prepared");
-        return plan.status === "prepared" ? plan.events : [];
-      };
-      copy =
-        mode === "switch back"
-          ? cut(cut(source, "switch", "a2b"), "switch", "a2")
-          : cut(source, mode, mode === "switch" ? "a2b" : "u2");
+      const plan = planSessionMessageCut(
+        { sessionId: "source", lifecycleRevision: "r1", updatedAt: timestamp },
+        source,
+        {
+          mode: "fork",
+          entryId: "u2",
+          expectedState: { sessionId: "source", lifecycleRevision: "r1" },
+          sourceKey: "agent:main:source",
+          canonicalSourceKey: "agent:main:source",
+          targetKey: "agent:main:copy",
+        },
+      );
+      expect(plan.status).toBe("prepared");
+      copy = plan.status === "prepared" ? plan.events : [];
     }
-    // A new turn continues from the copy's visible leaf.
-    const rows = [
-      ...copy.filter(isRecord),
-      answer("new", newTurnParent[mode] ?? "a1", 5),
-      // Stored transcripts keep the session header at seq 0.
-    ].map((event, index) => ({ seq: index, event }));
-    const result = await scan(rows);
-    expect(
-      Object.values(result.rollup.buckets).reduce((sum, b) => sum + b.totals.totalTokens, 0),
-    ).toBe(expected);
+    expect(billedTokens(await scanWithNewTurn(copy, newTurnParent))).toBe(expected);
+  },
+);
+
+/** The real in-place install: one appended leaf control on the same transcript. */
+function applyInPlaceCut(
+  events: readonly TranscriptEvent[],
+  mode: "rewind" | "switch",
+  entryId: string,
+): TranscriptEvent[] {
+  const expectedState = { sessionId: "source", lifecycleRevision: "r1" };
+  const plan = planInPlaceSessionMessageCut(
+    { ...expectedState, updatedAt: timestamp },
+    createMemorySessionMessageCutReader(events),
+    {
+      mode,
+      entryId,
+      expectedState,
+      sourceKey: "agent:main:source",
+      canonicalSourceKey: "agent:main:source",
+      targetKey: "agent:main:source",
+    },
+  );
+  expect(plan.status).toBe("prepared");
+  return plan.status === "prepared" ? [...events, plan.leafEvent] : [...events];
+}
+
+// Rewind and branch switch append a leaf control instead of copying, so the one transcript now
+// reports what the retired copy and its successor reported together. Each expected total is what
+// the base commit reports for the same user history (handoff USAGE-PARITY.md).
+it.each([
+  ["rewind", [["rewind", "u2"]], "a1", 35],
+  ["switch", [["switch", "a2b"]], "a2b", 75],
+  [
+    "switch back",
+    [
+      ["switch", "a2b"],
+      ["switch", "a2"],
+    ],
+    "a2",
+    75,
+  ],
+] as ReadonlyArray<
+  readonly [string, ReadonlyArray<readonly ["rewind" | "switch", string]>, string, number]
+>)(
+  "bills every historically active path after an in-place %s",
+  async (_label, cuts, newTurnParent, expected) => {
+    let events = branchedSource();
+    for (const [mode, entryId] of cuts) {
+      events = applyInPlaceCut(events, mode, entryId);
+    }
+    expect(billedTokens(await scanWithNewTurn(events, newTurnParent))).toBe(expected);
   },
 );
