@@ -413,7 +413,7 @@ export function ChatModelPickerOption(props: ChatModelPickerOptionProps) {
   );
 }
 
-export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionProps) {
+function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionProps) {
   const search = useContext(ChatModelSearchContext);
   const key = createMemo(() => `target:${props.groupId}:${props.entry.value}`);
   const rank = createMemo(() => search?.row(key())?.rank);

@@ -1,12 +1,9 @@
 import { describe, expect, it } from "vitest";
-import {
-  RELAY_CHECK_INTERVAL_MS,
-  RELAY_GRACE_MS,
-  runLinkSteps,
-  watchRelay,
-  type LinkStep,
-  type LinkStepState,
-} from "./link-steps.ts";
+import { runLinkSteps, watchRelay, type LinkStep, type LinkStepState } from "./link-steps.ts";
+
+// The relay step reads the relay every 2 s and warns after 30 s.
+const RELAY_CHECK_INTERVAL_MS = 2_000;
+const RELAY_GRACE_MS = 30_000;
 
 const messages = {
   notPublished: (publication: Parameters<Parameters<typeof runLinkSteps>[1]["notPublished"]>[0]) =>
