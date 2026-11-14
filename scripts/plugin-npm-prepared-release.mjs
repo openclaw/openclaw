@@ -263,15 +263,6 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
         : { expectedPublicationSelection: params.publicationSelection }),
       verifierSourceSha: workflowSha,
       verifierSourceContent: readFileSync(new URL("./release-ci-summary.mjs", import.meta.url)),
-      isTrustedMainAncestor:
-        params.isTrustedMainAncestor ??
-        ((sha) => {
-          const comparison = client.compareCommits(sha, "main");
-          return (
-            ["ahead", "identical"].includes(comparison.status) &&
-            comparison.merge_base_commit?.sha === sha
-          );
-        }),
     },
     client,
   );
@@ -282,10 +273,9 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
   if (producerSha !== workflowSha) {
     requireValue(
       producerSha === sourceSha &&
-        current.workflowRefProof ===
-          (current.manifest.receiptRecovery
-            ? "receipt-backed-recovery-v1"
-            : "candidate-owned-admission-v1") &&
+        authenticated.qualification.kind !== "historical" &&
+        authenticated.qualification.candidateSha === sourceSha &&
+        authenticated.qualification.qualificationSha === sourceSha &&
         typeof authenticated.revalidateAuthority === "function",
       "Prepared npm Q != P adoption requires live candidate-owned qualification.",
     );

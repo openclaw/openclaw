@@ -1,45 +1,21 @@
 #!/usr/bin/env node
 // Binds Full Release Validation run metadata to its supported evidence manifest.
-import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { text } from "node:stream/consumers";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import {
   normalizePublicationIntent,
-  publicationAdmissionContract,
   publicationObservationJson,
-  publicationSourceContract,
   publicationSourceJson,
-  validatePublicationAdmissionBinding,
-  validatePublicationSourceBinding,
 } from "./full-release-publication-contract.mjs";
-import {
-  normalizeReleaseCoveragePolicy,
-  isSplitChangelogEvidenceDelta,
-  SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
-  validateReleaseManifestAdvisoryJobs,
-  validateRetiredReleaseRetryFields,
-} from "./full-release-validation-policy.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
-import {
-  RECEIPT_RECOVERY_WORKFLOW,
-  verifyReceiptRecoveryAuthority,
-} from "./lib/release-evidence-identity.mjs";
+import { verifyReceiptRecoveryAuthority } from "./lib/release-evidence-identity.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import { createReleaseEvidenceClient, validateReleaseRunEvidence } from "./release-ci-summary.mjs";
-import { qualificationAdmissionContract } from "./release-qualification-coverage.mjs";
 
-const FULL_RELEASE_WORKFLOW = "Full Release Validation";
-const FULL_RELEASE_WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
-const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const PINNED_BRANCH_PATTERN = /^release-ci\/([a-f0-9]{12})-([1-9][0-9]*)$/u;
-const TRUSTED_RELEASE_PUBLISH_TAG_PATTERN =
-  /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u;
-const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
-const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
-
 /** @param {unknown} value */
 function scalarString(value) {
   if (
@@ -53,30 +29,6 @@ function scalarString(value) {
   return "";
 }
 
-/** @param {unknown} value */
-function displayValue(value) {
-  if (value === null || value === undefined) {
-    return "<missing>";
-  }
-  const scalar = scalarString(value);
-  if (scalar) {
-    return scalar;
-  }
-  try {
-    return JSON.stringify(value) ?? "<unserializable>";
-  } catch {
-    return "<unserializable>";
-  }
-}
-
-/**
- * @typedef {object} StrictReleaseEvidence
- * @property {unknown} [schema]
- * @property {unknown} [valid]
- * @property {{ runId?: unknown, targetSha?: unknown, runAttempt?: unknown, manifest?: unknown, workflowRefProof?: unknown, conclusion?: unknown }} [current]
- * @property {{ runId?: unknown, targetSha?: unknown, manifest?: unknown, conclusion?: unknown }} [root]
- * @property {{ changedPaths?: unknown, evidenceSha?: unknown, policy?: unknown, rootRunId?: unknown, selectedRunId?: unknown } | null} [evidenceReuse]
- */
 /**
  * @typedef {object} FullReleaseValidationManifest
  * @property {unknown} [version]
@@ -117,23 +69,12 @@ function displayValue(value) {
  * @property {string} [expectedReleaseTag]
  * @property {string} [expectedTrustedWorkflowFullRef]
  * @property {string} [expectedTrustedWorkflowSha]
- * @property {string} [expectedWorkflowBranch]
  * @property {import("./full-release-publication-contract.mjs").PublicationSelection | (() => import("./full-release-publication-contract.mjs").PublicationSelection)} [expectedPublicationSelection]
  * @property {import("./full-release-publication-contract.mjs").PublicationSelection | (() => import("./full-release-publication-contract.mjs").PublicationSelection)} [expectedPublicationOperation]
  * @property {{ npmDistTag: string }} [expectedCoreNpmPublication]
- * @property {(sha: string) => string} [getWorkflowSource]
- * @property {(sha: string) => boolean} [isTrustedMainAncestor]
- * @property {(params: { repository: string, runId: string, targetSha: string }) => StrictReleaseEvidence} [validateEvidenceReuseStrictly]
  */
 
-function normalizeWorkflowPathRef(ref) {
-  if (!ref || ref.startsWith("refs/")) {
-    return ref;
-  }
-  return `refs/heads/${ref}`;
-}
-
-export function normalizeFullReleaseValidationRun(run) {
+function normalizeFullReleaseValidationRun(run) {
   const [workflowPath, workflowQualifiedRef] = String(run.path ?? run.workflowPath ?? "").split(
     "@",
     2,
@@ -201,29 +142,21 @@ function validatePublicationOperation(source, operation) {
   }
 }
 
-/** @param {FullReleaseValidationEvidenceOptions} options */
-export function validateFullReleaseValidationEvidence({
-  run: rawRun,
-  manifest,
-  expectedRepository,
-  expectedRunId,
-  expectedRunAttempt,
-  expectedTargetSha,
-  expectedReleaseTag,
-  expectedTrustedWorkflowFullRef,
-  expectedTrustedWorkflowSha,
-  expectedWorkflowBranch,
-  expectedPublicationSelection,
-  expectedPublicationOperation,
-  expectedCoreNpmPublication,
-  getWorkflowSource,
-  isTrustedMainAncestor,
-  validateEvidenceReuseStrictly,
-}) {
+/** Publication eligibility over facts obtained by this module's strict traversal. */
+function validatePublicationEvidence(options, evidence) {
+  const {
+    expectedRepository,
+    expectedRunId,
+    expectedRunAttempt,
+    expectedTargetSha,
+    expectedReleaseTag,
+    expectedPublicationSelection,
+    expectedPublicationOperation,
+    expectedCoreNpmPublication,
+  } = options;
   if (
     expectedReleaseTag?.includes("-alpha.") ||
-    expectedCoreNpmPublication?.npmDistTag === "alpha" ||
-    expectedTrustedWorkflowFullRef?.includes("tideclaw/alpha/")
+    expectedCoreNpmPublication?.npmDistTag === "alpha"
   ) {
     throw new Error("Alpha releases are retired; use a beta prerelease instead.");
   }
@@ -234,122 +167,39 @@ export function validateFullReleaseValidationEvidence({
   ) {
     throw new Error("Publication evidence requires one actual consumption selection.");
   }
-  const run = normalizeFullReleaseValidationRun(rawRun);
-  const receiptRecovery = run.workflowPath === RECEIPT_RECOVERY_WORKFLOW;
-  if (Boolean(manifest.receiptRecovery) !== receiptRecovery) {
-    throw new Error("Receipt recovery requires its separately authenticated workflow");
-  }
-  const trustedWorkflowFullRef = expectedTrustedWorkflowFullRef ?? "refs/heads/main";
-  const protectedTag = TRUSTED_RELEASE_PUBLISH_TAG_PATTERN.exec(trustedWorkflowFullRef);
-  if (protectedTag) {
-    if (!SHA_PATTERN.test(expectedTrustedWorkflowSha ?? "")) {
-      throw new Error("Protected release-publish evidence requires an exact trusted workflow SHA.");
-    }
-    if (expectedTrustedWorkflowSha.slice(0, 12) !== protectedTag[1]) {
-      throw new Error("Protected release-publish tag does not match its trusted workflow SHA.");
-    }
-  } else if (
-    !trustedWorkflowFullRef.startsWith("refs/heads/") ||
-    trustedWorkflowFullRef.startsWith("refs/heads/release-publish/")
-  ) {
-    throw new Error("Trusted release-publish workflow ref must be an exact protected tag.");
-  }
-  const checks = [
-    ["databaseId", String(expectedRunId)],
-    ["workflowName", receiptRecovery ? "Full Release Receipt Recovery" : FULL_RELEASE_WORKFLOW],
-    ["workflowPath", receiptRecovery ? RECEIPT_RECOVERY_WORKFLOW : FULL_RELEASE_WORKFLOW_PATH],
-    ["repository", expectedRepository],
-    ["event", "workflow_dispatch"],
-    ["status", "completed"],
-    ["conclusion", "success"],
-  ];
-  for (const [key, expected] of checks) {
-    if (run[key] !== expected) {
-      throw new Error(
-        `Referenced full release validation run ${expectedRunId} must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`,
-      );
-    }
-  }
-  if (!Number.isInteger(run.runAttempt) || run.runAttempt < 1) {
-    throw new Error(`Referenced full release validation run ${expectedRunId} has invalid attempt.`);
-  }
-  if (expectedRunAttempt !== undefined && run.runAttempt !== Number(expectedRunAttempt)) {
-    throw new Error("Referenced full release validation attempt differs from the consumer.");
-  }
-  if (!SHA_PATTERN.test(run.headSha ?? "")) {
-    throw new Error(
-      `Referenced full release validation run ${expectedRunId} has invalid head SHA.`,
-    );
-  }
-  const expectedQualifiedRef = `refs/heads/${run.headBranch}`;
-  const workflowQualifiedRef = normalizeWorkflowPathRef(run.workflowQualifiedRef);
-  if (workflowQualifiedRef && workflowQualifiedRef !== expectedQualifiedRef) {
-    throw new Error(
-      `Referenced full release validation run ${expectedRunId} has workflow path ref ${run.workflowQualifiedRef}, expected ${expectedQualifiedRef}.`,
-    );
-  }
-
-  if (manifest.version !== 3 && manifest.version !== 4) {
-    throw new Error(
-      `Full release validation manifest must use version 3 or 4, got ${displayValue(manifest.version)}.`,
-    );
-  }
-  validateRetiredReleaseRetryFields(manifest);
-  resolveReleasePublishInputs(manifest);
+  const run = normalizeFullReleaseValidationRun(options.run);
+  const current = evidence.current;
+  const manifest = current.manifest;
+  // Bind the transport observation to the exact run authenticated by the owner.
+  // Qualification, workflow provenance, coverage and waivers are not reinterpreted here.
   if (
-    manifest.validationInputs?.knownFlakyJobsJson !== undefined &&
-    manifest.validationInputs.knownFlakyJobsJson !== "[]"
+    evidence.repository !== expectedRepository ||
+    current.runId !== String(expectedRunId) ||
+    current.targetSha !== expectedTargetSha ||
+    current.runAttempt !== run.runAttempt ||
+    (expectedRunAttempt !== undefined && current.runAttempt !== Number(expectedRunAttempt)) ||
+    run.databaseId !== current.runId ||
+    run.headSha !== current.workflowSha ||
+    run.headBranch !== current.workflowRef ||
+    run.workflowPath !== current.workflowPath ||
+    run.repository !== evidence.repository ||
+    run.status !== current.status ||
+    run.conclusion !== current.conclusion ||
+    run.event !== "workflow_dispatch"
   ) {
-    throw new Error("release validation manifest knownFlakyJobsJson must be empty");
+    throw new Error("Publication consumer differs from the authenticated release run.");
   }
-  const manifestChecks = [
-    ["workflowName", FULL_RELEASE_WORKFLOW],
-    ["runId", String(expectedRunId)],
-    ["runAttempt", String(run.runAttempt)],
-    ["workflowRef", run.headBranch],
-    ["workflowSha", run.headSha],
-    ["workflowFullRef", expectedQualifiedRef],
-    ["workflowRefType", "branch"],
-    ["targetSha", expectedTargetSha],
-  ];
-  for (const [key, expected] of manifestChecks) {
-    if (scalarString(manifest[key]) !== expected) {
-      throw new Error(
-        `Full release validation manifest ${key} mismatch: expected ${expected}, got ${displayValue(manifest[key])}.`,
-      );
-    }
+  if (current.conclusion !== "success") {
+    throw new Error("Required release validation evidence did not pass.");
   }
-  const workflowSource = getWorkflowSource
-    ? getWorkflowSource(run.headSha)
-    : createReleaseEvidenceClient(expectedRepository).getWorkflowSource(
-        run.headSha,
-        receiptRecovery ? RECEIPT_RECOVERY_WORKFLOW : FULL_RELEASE_WORKFLOW_PATH,
-      );
-  const contract = publicationSourceContract(workflowSource);
-  const registryContract = publicationAdmissionContract(workflowSource);
-  if (manifest.sourceAdmissionContract !== contract) {
-    throw new Error(
-      "Publication evidence differs from its immutable source-admission workflow contract.",
-    );
+  // v2 remains readable by diagnostics, but was never a publication contract.
+  if (manifest.version !== 3 && manifest.version !== 4) {
+    throw new Error("Publication requires a version 3 or 4 release manifest.");
   }
-  const sourceAdmission = validatePublicationSourceBinding(manifest, {
-    sourceAdmissionContract: contract,
-    repository: expectedRepository,
-    targetSha: expectedTargetSha,
-    parentRunId: String(expectedRunId),
-  });
-  if (manifest.qualificationCoverage && !sourceAdmission?.qualificationAdmission) {
-    throw new Error("Candidate-owned publication evidence omitted admission");
-  }
-  const coveragePolicy = manifest.qualificationCoverage
-    ? sourceAdmission?.coverage.coverage_policy || undefined
-    : normalizeReleaseCoveragePolicy({
-        ...manifest.validationInputs,
-        candidateVersion: manifest.candidateBinding?.package?.version,
-        releaseProfile: manifest.releaseProfile,
-        rerunGroup: manifest.rerunGroup,
-        runReleaseSoak: manifest.runReleaseSoak,
-      });
+  resolveReleasePublishInputs(manifest);
+  const sourceAdmission = manifest.sourceAdmission;
+  const publicationAdmission = manifest.publicationAdmission;
+  const coveragePolicy = evidence.qualification.coveragePolicy;
   const coveredReleaseTag =
     coveragePolicy === "npm-stable-v1"
       ? resolveReleaseContextIdentity(
@@ -357,7 +207,7 @@ export function validateFullReleaseValidationEvidence({
             scalarString(manifest.targetRef),
           scalarString(manifest.validationInputs?.targetVersion),
         )?.releaseTag
-      : `v${scalarString(manifest.validationInputs?.targetVersion)}`;
+      : "v" + scalarString(manifest.validationInputs?.targetVersion);
   if (
     coveragePolicy &&
     (manifest.version !== 4 || !coveredReleaseTag || expectedReleaseTag !== coveredReleaseTag)
@@ -366,38 +216,6 @@ export function validateFullReleaseValidationEvidence({
       "Release coverage policy requires version 4 evidence for the exact publication tag.",
     );
   }
-
-  if (manifest.publicationAdmissionContract !== registryContract) {
-    throw new Error("Publication evidence differs from its immutable registry-admission contract.");
-  }
-  if (
-    qualificationAdmissionContract(workflowSource) === "1" &&
-    sourceAdmission?.validationPurpose === "publish" &&
-    !sourceAdmission.qualificationAdmission
-  ) {
-    throw new Error(
-      "Frozen publication qualification requires independently authenticated P admission",
-    );
-  }
-  const publicationAdmission = validatePublicationAdmissionBinding(manifest, {
-    publicationAdmissionContract: registryContract,
-    ...(receiptRecovery ? { workflowPath: RECEIPT_RECOVERY_WORKFLOW } : {}),
-  });
-  let strictEvidence;
-  const strict = () => {
-    if (!strictEvidence) {
-      if (typeof validateEvidenceReuseStrictly !== "function") {
-        throw new Error("Publication evidence requires authenticated strict validation.");
-      }
-      strictEvidence = validateEvidenceReuseStrictly({
-        repository: expectedRepository,
-        runId: String(expectedRunId),
-        targetSha: expectedTargetSha,
-      });
-    }
-    return strictEvidence;
-  };
-  validateReleaseManifestAdvisoryJobs(manifest);
   if (sourceAdmission) {
     // Historical recovery must not acquire a new publication-selection contract.
     const selected =
@@ -435,7 +253,8 @@ export function validateFullReleaseValidationEvidence({
       }
     }
   }
-  if (registryContract || expectedPublicationOperation) {
+
+  if (manifest.publicationAdmissionContract || expectedPublicationOperation) {
     const contextIdentity = sourceAdmission?.projection
       ? resolveReleaseContextIdentity(
           sourceAdmission.targetContextRef,
@@ -445,50 +264,16 @@ export function validateFullReleaseValidationEvidence({
     const sourceReleaseTag =
       contextIdentity?.releaseTag ??
       (!manifest.validationInputs?.targetContextRef && sourceAdmission?.projection
-        ? `v${sourceAdmission.projection.version}`
+        ? "v" + sourceAdmission.projection.version
         : undefined);
     if (
-      (registryContract && !publicationAdmission) ||
+      !publicationAdmission ||
       (!expectedPublicationSelection &&
         !expectedPublicationOperation &&
         !expectedCoreNpmPublication) ||
       sourceReleaseTag !== expectedReleaseTag
     ) {
       throw new Error("B publication evidence requires the actual selection and release tag.");
-    }
-    const authenticated = strict();
-    if (
-      authenticated.valid !== true ||
-      authenticated.current?.runId !== String(expectedRunId) ||
-      authenticated.current?.targetSha !== expectedTargetSha ||
-      authenticated.current?.runAttempt !== run.runAttempt ||
-      authenticated.current?.conclusion !== "success" ||
-      publicationObservationJson(authenticated.current?.manifest) !==
-        publicationObservationJson(manifest)
-    ) {
-      throw new Error("B publication evidence differs from its authenticated retained manifest.");
-    }
-  }
-
-  if (receiptRecovery && strict().current?.workflowRefProof !== "receipt-backed-recovery-v1") {
-    throw new Error("Receipt recovery requires authenticated original qualification");
-  }
-  const candidateOwned = sourceAdmission?.qualificationAdmission !== undefined;
-  if (candidateOwned) {
-    const authenticated = strict();
-    if (
-      authenticated.valid !== true ||
-      authenticated.current?.runId !== String(expectedRunId) ||
-      authenticated.current?.runAttempt !== run.runAttempt ||
-      authenticated.current?.targetSha !== expectedTargetSha ||
-      authenticated.current?.workflowRefProof !== "candidate-owned-admission-v1" ||
-      authenticated.current?.conclusion !== "success" ||
-      publicationObservationJson(authenticated.current?.manifest) !==
-        publicationObservationJson(manifest)
-    ) {
-      throw new Error(
-        "Candidate-owned qualification requires authenticated complete frozen evidence",
-      );
     }
   }
   if (expectedPublicationOperation) {
@@ -499,124 +284,26 @@ export function validateFullReleaseValidationEvidence({
         : expectedPublicationOperation,
     );
   }
-  const pinnedMatch = PINNED_BRANCH_PATTERN.exec(run.headBranch ?? "");
-  if (!pinnedMatch) {
-    if (protectedTag && !receiptRecovery) {
-      throw new Error(
-        "Protected-tag release evidence must use a canonical release-ci producer branch.",
-      );
-    }
-    if (run.headBranch?.startsWith("release-ci/")) {
-      throw new Error(
-        `Referenced full release validation run ${expectedRunId} has untrusted head branch ${run.headBranch}.`,
-      );
-    }
-    const directBranches = new Set(["main", expectedWorkflowBranch].filter(Boolean));
-    if (directBranches.has(run.headBranch)) {
-      if (run.headBranch === "main" && !isTrustedMainAncestor?.(run.headSha)) {
-        throw new Error(
-          `Direct main validation workflow ${run.headSha} is not reachable from current main.`,
-        );
-      }
-      return {
-        run,
-        source: receiptRecovery ? "receipt-backed-recovery-v1" : "direct",
-        coveragePolicy,
-      };
-    }
-    throw new Error(
-      `Referenced full release validation run ${expectedRunId} has untrusted head branch ${run.headBranch ?? "<missing>"}.`,
-    );
-  }
-  if (pinnedMatch[1] !== run.headSha.slice(0, 12)) {
-    throw new Error(
-      `SHA-pinned validation branch ${run.headBranch} does not match workflow SHA ${run.headSha}.`,
-    );
-  }
-  if (manifest.targetRef !== expectedTargetSha) {
-    throw new Error(
-      `SHA-pinned validation target ref mismatch: expected ${expectedTargetSha}, got ${displayValue(manifest.targetRef)}.`,
-    );
-  }
-  // The protected tag authenticates the current publisher. An older validation
-  // producer remains trusted only through its independent current-main lineage.
-  const historicalProtectedProducer = protectedTag && run.headSha !== expectedTrustedWorkflowSha;
-  if (
-    !candidateOwned &&
-    (historicalProtectedProducer || !protectedTag) &&
-    !isTrustedMainAncestor?.(run.headSha)
-  ) {
-    const subject = protectedTag
-      ? "Protected-tag release evidence workflow SHA"
-      : "SHA-pinned validation workflow";
-    throw new Error(`${subject} ${run.headSha} is not reachable from current main.`);
-  }
-  const source = candidateOwned
-    ? "candidate-owned-admission-v1"
-    : protectedTag
-      ? historicalProtectedProducer
-        ? "sha-pinned-protected-tag-main-ancestor"
-        : "sha-pinned-protected-tag"
-      : "sha-pinned-main";
-  if (Object.hasOwn(manifest, "evidenceReuse")) {
-    const reuse = manifest.evidenceReuse;
-    const exactTarget =
-      reuse?.policy === EXACT_TARGET_EVIDENCE_REUSE_POLICY &&
-      reuse.evidenceSha === expectedTargetSha &&
-      Array.isArray(reuse.changedPaths) &&
-      reuse.changedPaths.length === 0;
-    const changelogOnly =
-      reuse?.policy === CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY &&
-      reuse.evidenceSha !== expectedTargetSha &&
-      Array.isArray(reuse.changedPaths) &&
-      reuse.changedPaths.length === 1 &&
-      reuse.changedPaths[0] === "CHANGELOG.md";
-    const splitChangelog =
-      reuse?.policy === SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY &&
-      reuse.evidenceSha !== expectedTargetSha &&
-      isSplitChangelogEvidenceDelta(
-        reuse.changedPaths,
-        manifest.candidateBinding?.package?.version ?? manifest.validationInputs?.targetVersion,
-      );
-    if (
-      !reuse ||
-      typeof reuse !== "object" ||
-      Array.isArray(reuse) ||
-      (!exactTarget && !changelogOnly && !splitChangelog) ||
-      !/^[1-9][0-9]*$/u.test(scalarString(reuse.runId)) ||
-      !/^[1-9][0-9]*$/u.test(scalarString(reuse.selectedRunId))
-    ) {
-      throw new Error("SHA-pinned validation evidence reuse is invalid.");
-    }
-    if (typeof validateEvidenceReuseStrictly !== "function") {
-      throw new Error("SHA-pinned validation evidence reuse requires strict chain validation.");
-    }
-    const reusedEvidence = strict();
-    if (
-      reusedEvidence?.schema !== `openclaw.release-validation-evidence/v${manifest.version}` ||
-      reusedEvidence.valid !== true ||
-      scalarString(reusedEvidence.current?.runId) !== String(expectedRunId) ||
-      reusedEvidence.current?.targetSha !== expectedTargetSha ||
-      reusedEvidence.root?.targetSha !== reuse.evidenceSha ||
-      reusedEvidence.evidenceReuse?.evidenceSha !== reuse.evidenceSha ||
-      reusedEvidence.evidenceReuse?.policy !== reuse.policy ||
-      JSON.stringify(reusedEvidence.evidenceReuse?.changedPaths) !==
-        JSON.stringify(reuse.changedPaths) ||
-      scalarString(reusedEvidence.evidenceReuse?.rootRunId) !== scalarString(reuse.runId) ||
-      scalarString(reusedEvidence.evidenceReuse?.selectedRunId) !==
-        scalarString(reuse.selectedRunId) ||
-      reusedEvidence.current?.conclusion !== "success"
-    ) {
-      throw new Error("SHA-pinned validation evidence reuse failed strict chain validation.");
-    }
-  }
+  const proof = current.workflowRefProof;
+  const source =
+    evidence.qualification.kind === "recovery"
+      ? "receipt-backed-recovery-v1"
+      : evidence.qualification.kind === "direct"
+        ? "candidate-owned-admission-v1"
+        : proof === "manifest-v3-protected-tag-tooling-lineage"
+          ? "sha-pinned-protected-tag-main-ancestor"
+          : proof === "manifest-v3-protected-tag-exact-sha"
+            ? "sha-pinned-protected-tag"
+            : isShaPinnedReleaseValidationBranch(current.workflowRef)
+              ? "sha-pinned-main"
+              : "direct";
   return { run, source, coveragePolicy };
 }
 
 /**
  * Authenticate once, then adapt that same current manifest to the real consumer.
  * Historical producers retain their exact-source validation without a registry sweep.
- * @param {Omit<FullReleaseValidationEvidenceOptions, "manifest" | "getWorkflowSource" | "validateEvidenceReuseStrictly"> & {
+ * @param {Omit<FullReleaseValidationEvidenceOptions, "manifest"> & {
  *   manifest?: FullReleaseValidationManifest,
  *   manifestPath?: string,
  *   verifierSourceSha?: string,
@@ -628,14 +315,6 @@ export function validateFullReleaseValidationEvidence({
 export async function authenticateFullReleaseValidationEvidence(options, client) {
   const evidenceClient = client ?? createReleaseEvidenceClient(options.expectedRepository);
   const run = normalizeFullReleaseValidationRun(options.run);
-  const workflowSources = new Map();
-  const getWorkflowSource = (sha, path = run.workflowPath) => {
-    const key = `${sha}:${path}`;
-    if (!workflowSources.has(key)) {
-      workflowSources.set(key, evidenceClient.getWorkflowSource(sha, path));
-    }
-    return workflowSources.get(key);
-  };
   const evidence = await validateReleaseRunEvidence(
     {
       repository: options.expectedRepository,
@@ -648,7 +327,7 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
       verifierSourceSha: options.verifierSourceSha,
       verifierSourceContent: options.verifierSourceContent,
     },
-    { ...evidenceClient, getWorkflowSource },
+    evidenceClient,
   );
   if (evidence.current.conclusion !== "success") {
     throw new Error("Required release validation evidence did not pass.");
@@ -662,12 +341,25 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
   ) {
     throw new Error("Supplied publication evidence differs from the authenticated manifest.");
   }
-  const result = validateFullReleaseValidationEvidence({
-    ...options,
-    manifest,
-    getWorkflowSource,
-    validateEvidenceReuseStrictly: () => evidence,
-  });
+  const forPublication = (consumption) => {
+    if (
+      (consumption.expectedTrustedWorkflowFullRef ?? "refs/heads/main") !==
+        (options.expectedTrustedWorkflowFullRef ?? "refs/heads/main") ||
+      consumption.expectedTrustedWorkflowSha !== options.expectedTrustedWorkflowSha
+    ) {
+      throw new Error("Publication tooling context differs from the authenticated qualification.");
+    }
+    const suppliedManifest = consumption.manifest ?? evidence.current.manifest;
+    if (
+      publicationObservationJson(suppliedManifest) !==
+      publicationObservationJson(evidence.current.manifest)
+    ) {
+      throw new Error("Supplied publication evidence differs from the authenticated manifest.");
+    }
+    revalidateAuthority?.();
+    return validatePublicationEvidence(consumption, evidence);
+  };
+  const result = validatePublicationEvidence(options, evidence);
   const revalidateAuthority = candidateArtifactAuthority(manifest, evidence, evidenceClient);
   if (options.npmPreflightLineage) {
     // Retain this owner's authenticated evidence across the consumer handoff.
@@ -684,7 +376,7 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
       producerRunId: options.npmPreflightLineage.producerRunId,
       producerRunAttempt: options.npmPreflightLineage.producerRunAttempt,
     };
-    if (manifest.sourceAdmission?.qualificationAdmission || manifest.receiptRecovery) {
+    if (evidence.qualification.kind !== "historical") {
       validateCandidateOwnedArtifactBinding(
         manifest,
         lineage.sourceSha,
@@ -702,6 +394,8 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
   return {
     ...result,
     evidence,
+    qualification: evidence.qualification,
+    forPublication,
     publicationAdmission: manifest.publicationAdmission ?? null,
     revalidateAuthority,
     publicationAuthority: candidateArtifactAuthorityRecord(manifest, evidence),
@@ -725,13 +419,13 @@ function candidateArtifactAuthorityRecord(manifest, evidence) {
   if (!descriptor) {
     return undefined;
   }
-  if (!evidence.qualificationAdmission) {
+  if (!evidence.qualification.admission) {
     throw new Error("Authenticated candidate admission authority is missing");
   }
   // Retain authenticated identities, not live permission or ref verdicts.
   return structuredClone({
     descriptor,
-    admission: evidence.qualificationAdmission,
+    admission: evidence.qualification.admission,
     recoveryProducer: manifest.receiptRecovery
       ? {
           runId: String(manifest.runId),
@@ -758,38 +452,24 @@ export function revalidateCandidateArtifactAuthority(authority, evidenceClient) 
   }
 }
 
-function validateCandidateOwnedArtifactSource(manifest, candidateSha, qualificationSha) {
-  const recovery = manifest.receiptRecovery;
-  if (
-    candidateSha !== qualificationSha ||
-    manifest.targetSha !== candidateSha ||
-    (recovery
-      ? recovery.candidateBinding?.request?.toolingSha !== qualificationSha
-      : manifest.workflowSha !== qualificationSha)
-  ) {
-    throw new Error("Candidate-owned artifact source and qualification SHA differ");
-  }
-}
-
 function validateCandidateOwnedArtifactBinding(manifest, candidateSha, qualificationSha, evidence) {
-  const recovery = manifest.receiptRecovery;
-  validateCandidateOwnedArtifactSource(manifest, candidateSha, qualificationSha);
+  const qualification = evidence.qualification;
   if (
-    evidence.current.manifest.sourceAdmission?.validationPurpose !== "publish" ||
-    evidence.current.manifest.publicationAdmissionContract !== "1" ||
-    !evidence.current.manifest.publicationAdmission
-  ) {
-    throw new Error("Publication artifacts require publish-purpose admitted qualification");
-  }
-  if (
-    evidence.current.targetSha !== candidateSha ||
+    qualification.kind === "historical" ||
+    candidateSha !== qualificationSha ||
+    qualification.candidateSha !== candidateSha ||
+    qualification.qualificationSha !== qualificationSha ||
     evidence.current.runAttempt !== Number(manifest.runAttempt) ||
-    evidence.current.workflowRefProof !==
-      (recovery ? "receipt-backed-recovery-v1" : "candidate-owned-admission-v1") ||
     evidence.current.conclusion !== "success" ||
     !isDeepStrictEqual(evidence.current.manifest, sortJsonValueKeys(manifest))
   ) {
     throw new Error("Publication artifact is not bound to authenticated candidate qualification");
+  }
+  if (
+    evidence.current.manifest.sourceAdmission.validationPurpose !== "publish" ||
+    !evidence.current.manifest.publicationAdmission
+  ) {
+    throw new Error("Publication artifacts require publish-purpose admitted qualification");
   }
 }
 
@@ -808,7 +488,6 @@ export async function authenticateCandidateOwnedArtifact({
   if (!manifest?.sourceAdmission?.qualificationAdmission && !recovery) {
     return null;
   }
-  validateCandidateOwnedArtifactSource(manifest, candidateSha, qualificationSha);
   const evidenceClient = client ?? createReleaseEvidenceClient(repository);
   const evidence = await validateReleaseRunEvidence(
     {
@@ -825,23 +504,6 @@ export async function authenticateCandidateOwnedArtifact({
   validateCandidateOwnedArtifactBinding(manifest, candidateSha, qualificationSha, evidence);
   const revalidateAuthority = candidateArtifactAuthority(manifest, evidence, evidenceClient);
   return { ...evidence, revalidateAuthority };
-}
-
-function gitIsAncestor(ancestor, target) {
-  const result = spawnSync(
-    "git",
-    ["merge-base", "--is-ancestor", `${ancestor}^{commit}`, `${target}^{commit}`],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
-  if (result.status === 0) {
-    return true;
-  }
-  if (result.status === 1) {
-    return false;
-  }
-  throw new Error(
-    `Could not validate trusted workflow ancestry: ${result.stderr?.trim() || result.signal || result.status}.`,
-  );
 }
 
 /** @returns {import("./full-release-publication-contract.mjs").PublicationSelection} */
@@ -888,7 +550,6 @@ async function main() {
   }
   const run = JSON.parse(await text(process.stdin));
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  const trustedMainRef = process.env.TRUSTED_MAIN_REF ?? "refs/remotes/origin/main";
   const consumer = process.env.PUBLICATION_CONSUMER ?? "";
   const coreProjection = consumer === "core-npm" || consumer === "docker-only";
   const boundedOperation =
@@ -917,7 +578,6 @@ async function main() {
     expectedReleaseTag: process.env.RELEASE_TAG,
     expectedTrustedWorkflowFullRef: process.env.TRUSTED_WORKFLOW_FULL_REF,
     expectedTrustedWorkflowSha: process.env.TRUSTED_WORKFLOW_SHA,
-    expectedWorkflowBranch: process.env.EXPECTED_WORKFLOW_BRANCH,
     expectedCoreNpmPublication: coreProjection
       ? { npmDistTag: process.env.RELEASE_NPM_DIST_TAG ?? "" }
       : undefined,
@@ -938,7 +598,6 @@ async function main() {
       process.env.STRICT_VALIDATOR_FILE ??
         fileURLToPath(new URL("./release-ci-summary.mjs", import.meta.url)),
     ),
-    isTrustedMainAncestor: (sha) => gitIsAncestor(sha, trustedMainRef),
   });
   console.log(
     `Using full release validation run ${result.run.databaseId} (${result.source}): ${result.run.url}`,

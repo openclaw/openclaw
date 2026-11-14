@@ -1146,13 +1146,6 @@ async function authenticateClawHubParentRequest({
           verifierSourceContent: await readFile(
             new URL("./release-ci-summary.mjs", import.meta.url),
           ),
-          isTrustedMainAncestor: (sha) => {
-            const comparison = client.compareCommits(sha, "main");
-            return (
-              ["ahead", "identical"].includes(comparison.status) &&
-              comparison.merge_base_commit?.sha === sha
-            );
-          },
           expectedPublicationOperation: () => {
             const source = manifest.sourceAdmission;
             const selection = source?.publicationSelection;

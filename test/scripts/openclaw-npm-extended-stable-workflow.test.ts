@@ -375,7 +375,7 @@ it("uses the trusted Full Validation evidence verifier", () => {
 
   const fullValidation = publishingStep("Verify full release validation evidence");
   expect(fullValidation.env).toMatchObject({
-    EXPECTED_WORKFLOW_BRANCH: "${{ inputs.release_candidate_branch || github.ref_name }}",
+    TRUSTED_WORKFLOW_FULL_REF: "${{ github.ref }}",
     FULL_RELEASE_VALIDATION_RUN_ATTEMPT: inputRef("full_release_validation_run_attempt"),
   });
   expectText(fullValidation.run, [

@@ -669,7 +669,6 @@ describe("original publication admission reader", () => {
             expectedRunAttempt: fault === "wrong-attempt" ? 2 : 1,
             expectedTargetSha: fault === "wrong-target" ? "d".repeat(40) : fixture.targetSha,
             expectedReleaseTag: "v2026.8.28-beta.1",
-            isTrustedMainAncestor: () => true,
             verifierSourceContent: strictOptions.verifierSourceContent,
             verifierSourceSha: strictOptions.verifierSourceSha,
             ...(fault === "wrong-route"
