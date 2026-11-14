@@ -416,6 +416,18 @@ One-shot helper runs dispatched through a CLI backend, such as Active Memory rec
 
 Source: `src/agents/cli-output.ts` (`toCliUsage`).
 
+### vLLM and SGLang
+
+Both servers cache repeated prompt prefixes on their own. They report cached
+prompt tokens only when started with `--enable-prompt-tokens-details` (vLLM)
+or `--enable-cache-report` (SGLang); OpenClaw then maps
+`prompt_tokens_details.cached_tokens` to `cacheRead`. Without the flag the
+usage payload has no cache counters, so OpenClaw marks cache telemetry
+unavailable and `cacheRead` stays `0` even when the prefix cache hits. See
+[vLLM](/providers/vllm#report-prompt-cache-hits) and [SGLang](/providers/sglang).
+
+Source: `packages/ai/src/transports/openai-transport-shared.ts` (`parseOpenAICompletionsUsage`).
+
 ### Other providers
 
 If a provider does not support any of the above cache modes, `cacheRetention` has no effect.
