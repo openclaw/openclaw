@@ -1646,7 +1646,6 @@
 ["src/agents/isolated-completion.test-support.ts","./harness/selection-decision.js","e41ca5cec7e6f43319d1ca3a43036a2ef1b6629adbdc51d5e25b0fc88a5e9253",1]
 ["src/agents/isolated-completion.test-support.ts","./model-runtime-aliases.js","ccd927ed2151dc5ef2af2347c8a058438b6bc8b734350e4f6738fcfdacef185a",1]
 ["src/agents/live-model-dynamic-candidates.test.ts","../plugins/provider-runtime.js","0a06e4e2b53eeb2ba7e5553ab79d33bcfadd70070040609e015e9ef9e638bc36",1]
-["src/agents/live-model-dynamic-candidates.test.ts","./model-discovery-normalize.js","b9a18283ff17b5ff14f9b89ab50bc21322500101a867bfc31e0aea63a6a357b8",1]
 ["src/agents/live-model-switch.test.ts","../config/sessions/paths.js","333c1dff5faad6c1adeca748dcb913b3c023692fd362a632199d3ca46760f9d6",1]
 ["src/agents/live-model-switch.test.ts","./model-selection.js","6fb9e4415aeb9d7270da96b2a4f19ac7c27b90f7eeafa2fe1e4df01de2a7efca",1]
 ["src/agents/live-target-matcher.test.ts","./live-provider-owner.js","83f1364a5c13f76b3f725764b0504908f08cf43c9ec16525708abea496e64b67",1]

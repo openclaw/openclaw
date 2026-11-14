@@ -13,7 +13,8 @@ const normalizationMocks = vi.hoisted(() => {
   return { normalize, create: vi.fn(() => normalize) };
 });
 
-vi.mock("./model-discovery-normalize.js", () => ({
+vi.mock("./model-discovery-normalize.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-discovery-normalize.js")>()),
   createDiscoveredAgentModelNormalizer: normalizationMocks.create,
 }));
 
