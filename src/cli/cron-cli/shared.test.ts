@@ -161,6 +161,32 @@ function expectRendering({ job, list, show, privateText, listNot, json }: Render
   }
 }
 
+it("prints multi-line diagnostics on separate lines instead of literal escaped newlines", () => {
+  const job = makeJob({
+    schedule: {
+      kind: "stream",
+      command: ["sh", "-c", "echo boom >&2; exit 3"],
+    } as CronJob["schedule"],
+    state: {
+      streamStatus: "error",
+      streamError: "stream source exited (exited, code 3): boom-line-1\nboom-line-2",
+      lastError: "run failed: outer\nremedy line",
+      lastDiagnosticSummary: "boom-line-1\nboom-line-2",
+    },
+  });
+  const logs = renderShow(job);
+  expectText(
+    logs,
+    "stream error: stream source exited (exited, code 3): boom-line-1",
+    "  boom-line-2",
+    "last error: run failed: outer",
+    "  remedy line",
+    "diagnostic: boom-line-1",
+    "  boom-line-2",
+  );
+  expect(logs.join("\n")).not.toContain("\\n");
+});
+
 const disabled = (reason: "consecutive-failures" | "schedule-errors", count: number) =>
   makeJob({
     enabled: false,

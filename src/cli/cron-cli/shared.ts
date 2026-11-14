@@ -723,6 +723,13 @@ export function printCronShow(
   const state = job.state ?? {};
   const model = job.payload?.kind === "agentTurn" ? job.payload.model : undefined;
   const showValue = (value: unknown) => sanitizeTerminalText(stringifyCell(value));
+  // Diagnostics carry Gateway/child output lines; sanitize each line separately so a
+  // multi-line summary keeps its layout instead of printing literal "\n" sequences.
+  const showDiagnostics = (value: unknown) =>
+    stringifyCell(value)
+      .split("\n")
+      .map((line) => sanitizeTerminalText(line))
+      .join("\n  ");
   runtime.log(`id: ${showValue(job.id)}`);
   runtime.log(`declaration: ${showValue(job.declarationKey)}`);
   runtime.log(`name: ${showValue(job.name)}`);
@@ -735,7 +742,8 @@ export function printCronShow(
   runtime.log(`policies: ${formatCronPolicies(job) || "-"}`);
   if (job.schedule?.kind === "stream") {
     runtime.log(`stream status: ${showValue(state.streamStatus)}`);
-    runtime.log(`stream error: ${showValue(state.streamError)}`);
+    // A stream failure message embeds the source's stderr; keep its lines readable.
+    runtime.log(`stream error: ${showDiagnostics(state.streamError)}`);
   }
   runtime.log(
     `trigger: ${job.trigger ? `once=${job.trigger.once === true ? "yes" : "no"}; evals=${state.triggerEvalCount ?? 0}; last eval=${formatRelative(state.lastTriggerEvalAtMs, Date.now())}; last fire=${formatRelative(state.lastTriggerFireAtMs, Date.now())}` : "-"}`,
@@ -749,9 +757,9 @@ export function printCronShow(
   runtime.log(`status: ${showValue(formatCronStatusForDisplay(job).label)}`);
   // lastError is the run/schedule failure message; the diagnostic line below is
   // the run-diagnostics summary and can be empty when only lastError is set.
-  runtime.log(`last error: ${showValue(state.lastError)}`);
+  runtime.log(`last error: ${showDiagnostics(state.lastError)}`);
   runtime.log(`last delivery: ${showValue(state.lastDeliveryStatus)}`);
   runtime.log(`last delivery suppression: ${showValue(state.deliverySuppressionReason)}`);
-  runtime.log(`last delivery error: ${showValue(state.lastDeliveryError)}`);
-  runtime.log(`diagnostic: ${showValue(state.lastDiagnosticSummary)}`);
+  runtime.log(`last delivery error: ${showDiagnostics(state.lastDeliveryError)}`);
+  runtime.log(`diagnostic: ${showDiagnostics(state.lastDiagnosticSummary)}`);
 }
