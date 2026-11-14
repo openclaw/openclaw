@@ -35,6 +35,7 @@ import {
 import { resolveBrowserNavigationPolicy } from "./navigation-policy.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { getPwAiModule } from "./pw-ai-module.js";
+import { isCrashedTarget } from "./pw-session-crash-state.js";
 import {
   MANAGED_BROWSER_PAGE_TAB_LIMIT,
   OPEN_TAB_DISCOVERY_POLL_MS,
@@ -217,6 +218,9 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
               url: p.url,
               type: p.type,
             };
+            if (p.crashed) {
+              tab.crashed = true;
+            }
             if (webExtensionTabId !== undefined) {
               tab.webExtensionTabId = webExtensionTabId;
             }
@@ -243,6 +247,9 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       };
       if (!tab.targetId || !isSelectableCdpBrowserTarget(tab, options)) {
         continue;
+      }
+      if (t.type === "page" && isCrashedTarget(profile.cdpUrl, tab.targetId)) {
+        tab.crashed = true;
       }
       if (tab.wsUrl) {
         const wsPin = await assertCdpEndpointAllowed(tab.wsUrl, cdpControlPolicy, {

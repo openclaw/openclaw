@@ -73,6 +73,17 @@ export class BrowserActionError extends BrowserError {
 }
 
 /**
+ * The tab's renderer process died (crash, OOM kill); the browser itself is fine.
+ * Explicit recovery guidance instead of the generic transient-browser hint.
+ */
+export class CrashedBrowserTargetError extends BrowserActionError {
+  constructor(options?: ErrorOptions) {
+    super("tab crashed (renderer exited); open the URL in a new tab", 500, options);
+    this.name = "CrashedBrowserTargetError";
+  }
+}
+
+/**
  * Raised when a browser CDP endpoint (the cdpUrl itself) fails the
  * configured SSRF policy. Distinct from a blocked navigation target so
  * callers see "fix your browser endpoint config" rather than "fix your

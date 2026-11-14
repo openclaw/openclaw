@@ -46,6 +46,7 @@ import {
   pageStates,
   type BrowserObservedState,
 } from "./pw-session-contracts.js";
+import { isPageCrashed, markCrashedTarget } from "./pw-session-crash-state.js";
 import {
   assertPageNavigationCompletedSafely,
   gotoPageWithNavigationGuard,
@@ -419,6 +420,9 @@ export async function listPagesViaPlaywright(opts: {
                   if (isBlockedTarget(opts.cdpUrl, targetInfo.targetId)) {
                     return { status: "blocked" as const };
                   }
+                  if (isPageCrashed(page)) {
+                    markCrashedTarget(opts.cdpUrl, targetInfo.targetId);
+                  }
                   return {
                     status: "available" as const,
                     page: {
@@ -426,6 +430,7 @@ export async function listPagesViaPlaywright(opts: {
                       title: targetInfo.title,
                       url: page.url(),
                       type: "page" as const,
+                      ...(isPageCrashed(page) ? { crashed: true } : {}),
                     },
                   };
                 }),
@@ -649,7 +654,7 @@ export async function closePageByTargetIdViaPlaywright(opts: {
   ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
 }): Promise<void> {
-  const page = await getPageForTargetId(opts);
+  const page = await getPageForTargetId({ ...opts, allowCrashed: true });
   await closeResolvedPageViaPlaywright(page, opts);
 }
 
