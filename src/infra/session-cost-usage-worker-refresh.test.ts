@@ -176,70 +176,6 @@ it.each<[string, Row[], [number, number, string], string?]>([
   }
 });
 
-// Billing a rewound turn must not move the latency cursor off the active branch:
-// the next append-only assistant event measures from the newest active user turn,
-// exactly as base does for the same continuation without the rewind.
-// The cursor follows the canonical active branch, not whichever displaced path
-// billing folded: u1@12:00:00, a1@12:00:01, u2@12:00:02 displaced by a rewind to a1,
-// a reply at 12:00:06. With a new turn u3@12:00:04 it measures 2 s; without one 6 s,
-// as the never-rewound control does.
-it.each([
-  ["new turn", true, false, 4, 3, 4_000],
-  ["no new turn", true, true, 0, 2, 7_000],
-  ["never rewound", false, true, 0, 2, 7_000],
-] as const)(
-  "takes the continuation cursor from the active branch (%s)",
-  async (_label, rewound, bare, cursorSecond, latencyCount, latencySum) => {
-    const stamp = <T extends Record<string, unknown>>(event: T, second: number) => ({
-      ...event,
-      timestamp: new Date(timestamp + second * 1_000).toISOString(),
-    });
-    const events = [
-      stamp(userEvent("u1", null), 0),
-      stamp(answerEvent("a1", "u1", 1), 1),
-      ...(rewound
-        ? [
-            stamp(userEvent("u2", "a1"), 2),
-            { type: "leaf", id: "c", parentId: "u2", targetId: "a1" },
-          ]
-        : []),
-      ...(bare ? [] : [stamp(userEvent("u3", "a1"), 4), stamp(answerEvent("a3", "u3", 1), 5)]),
-      stamp(answerEvent("a4", bare ? "a1" : "a3", 1), 6),
-    ];
-    const result = await scan(events.map((event, seq) => ({ seq, event: event as Row["event"] })));
-
-    expect(result.rollup.lastUserTimestamp).toBe(timestamp + cursorSecond * 1_000);
-    const latency = Object.values(result.rollup.buckets).reduce(
-      (total, b) => ({ count: total.count + b.latency.count, sum: total.sum + b.latency.sum }),
-      { count: 0, sum: 0 },
-    );
-    expect(latency).toEqual({ count: latencyCount, sum: latencySum });
-  },
-);
-
-it("aggregates duplicate-ID paths in selected ancestry order when sequence numbers go backward", async () => {
-  const user = (at: number) => ({
-    type: "message",
-    id: "user",
-    parentId: null,
-    timestamp: new Date(at).toISOString(),
-    message: { role: "user", content: "synthetic" },
-  });
-  const answer = makeRow(2, "answer", "user", 3);
-  answer.event.timestamp = new Date(timestamp + 2000).toISOString();
-  const result = await scan([
-    { seq: 1, event: user(timestamp) },
-    answer,
-    { seq: 3, event: user(timestamp + 1000) },
-    control(4, "leaf", "switch", "user", "answer"),
-  ]);
-  expectUsage(result, 3, 1, "answer");
-  expect(result.rollup.lastUserTimestamp).toBe(timestamp + 1000);
-  expect(
-    Object.values(result.rollup.buckets).find((bucket) => bucket.latency.count > 0)?.latency,
-  ).toMatchObject({ count: 1, min: 1000, max: 1000, sum: 1000 });
-});
-
 const userEvent = (id: string, parentId: string | null) => ({
   type: "message",
   id,
@@ -425,3 +361,68 @@ it.each([
     expect(billedTokens(await scanWithNewTurn(events, newTurnParent))).toBe(expected);
   },
 );
+
+// Canonical navigation, not the physical append cursor or billing's emission
+// order, decides what is billed and whose turn each reply answers. Every case
+// extends u1@12:00:00 -> a1@12:00:01, reporting tokens, latency samples and the
+// cursor the next append-only scan continues from.
+const stamp = <T extends Record<string, unknown>>(event: T, second: number) => ({
+  ...event,
+  timestamp: new Date(timestamp + second * 1_000).toISOString(),
+});
+const u = (id: string, parentId: string | null, second: number) =>
+  stamp(userEvent(id, parentId), second);
+const a = (id: string, parentId: string, second: number) =>
+  stamp(answerEvent(id, parentId, 1), second);
+const leafRow = (parentId: string, targetId: string | null) =>
+  ({ type: "leaf", id: "cut", parentId, targetId }) as Record<string, unknown>;
+const latencySamples = (entry: UsageCostRollupEntry) =>
+  Object.values(entry.rollup.buckets)
+    .flatMap((bucket) => bucket.latency.centroids.map((centroid) => centroid.value))
+    .toSorted((left, right) => left - right);
+const flatUserEvent = { type: "message", message: { role: "user", content: "q" } };
+const side = { type: "custom", id: "s", parentId: "u1", appendMode: "side" };
+const timingCases: Array<[string, Record<string, unknown>[], number, number[], number?]> = [
+  // A side row moves the append cursor off the active branch, so a rewind must
+  // still bill a1: the retired copy kept counting the displaced branch.
+  ["side cursor", [side, leafRow("s", null)], 1, [1_000]],
+  // Sibling replies each answer their own user turn, whichever one is active.
+  ["sibling switch", [a("a2", "u1", 3), leafRow("a2", "a1")], 2, [1_000, 3_000], 0],
+  // With no new turn the cursor stays on the active branch's own turn, so the
+  // reply at 12:00:06 measures 6 s, as the never-rewound control does.
+  ["rewind", [u("u2", "a1", 2), leafRow("u2", "a1"), a("a4", "a1", 6)], 2, [1_000, 6_000], 0],
+  [
+    "rewind and continue",
+    [u("u2", "a1", 2), leafRow("u2", "a1"), u("u3", "a1", 4), a("a3", "u3", 5), a("a4", "a3", 6)],
+    3,
+    [1_000, 1_000, 2_000],
+    4,
+  ],
+  ["never rewound", [a("a4", "a1", 6)], 2, [1_000, 6_000], 0],
+];
+it.each(timingCases)(
+  "bills and times every branch from canonical navigation (%s)",
+  async (_label, extra, tokens, samples, cursorSecond) => {
+    const result = await scan(
+      [u("u1", null, 0), a("a1", "u1", 1), ...extra].map((event, seq) => ({
+        seq,
+        event: event as Row["event"],
+      })),
+    );
+    expect(billedTokens(result)).toBe(tokens);
+    expect(latencySamples(result)).toEqual(samples);
+    expect(result.rollup.lastUserTimestamp).toBe(
+      cursorSecond === undefined ? undefined : timestamp + cursorSecond * 1_000,
+    );
+  },
+);
+
+// A transcript without navigation ids is one flat branch, as its legacy appender
+// wrote it: the first scan keeps the user turn its appended reply measures from.
+it("times an appended reply against a flat transcript's cursor", async () => {
+  const flat = [{ seq: 0, event: stamp(flatUserEvent, 0) }];
+  const first = await scan(flat);
+  expect(first.rollup.lastUserTimestamp).toBe(timestamp);
+  const tail = [...flat, { seq: 1, event: stamp(makeRow(1, "a1", null, 1).event, 2) }];
+  expect(latencySamples(await scan(tail, first))).toEqual([2_000]);
+});

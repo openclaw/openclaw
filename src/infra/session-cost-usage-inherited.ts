@@ -6,6 +6,7 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "../config/sessions/transcript-tree.js";
+import type { ParsedTranscriptEntry, UsageRollupTiming } from "./session-cost-usage.types.js";
 
 /** Navigation fields plus the header's inherited-history marker, for usage scans. */
 export function projectUsageScanFields(
@@ -25,46 +26,71 @@ export function projectUsageScanFields(
 }
 
 /**
- * Billed rows for one transcript: the active path plus every path that an
- * earlier leaf control selected, minus paths an upstream transcript already
- * counted.
+ * Canonical billing and timing for one transcript, from the navigation owner.
  *
- * Usage reports money that was really spent, so moving the active branch must
- * not remove a completed turn's tokens. Before in-place history cuts, the same
- * total came from the retired copy, which kept counting the path that was
- * active when it was retired.
+ * `billed` is the active path plus both branches of every leaf control, minus
+ * paths an upstream transcript already counted. Usage reports money that was
+ * really spent, so moving the active branch must not remove a completed turn's
+ * tokens; before in-place cuts the same total came from the retired copy, which
+ * kept counting the path that was active when it was retired.
+ *
+ * `userTurnOf` names each billed row's own nearest user ancestor on its canonical
+ * path, so a reply's latency never depends on billing dedup or emission order.
+ * `activeUserTurn` is the canonical active path's latest user turn: the cursor the
+ * next append-only scan continues from.
+ *
+ * `navigated` is false for a transcript without leaf controls, which
+ * `selectSessionTranscriptLeafControlledPath` leaves entirely active; those rows
+ * keep the flat, file-order timing their legacy appender produced.
  */
-export function selectBilledTranscriptEvents<T extends Record<string, unknown>>(
+export type BilledTranscriptPaths<T> = {
+  billed: T[];
+  userTurnOf: ReadonlyMap<T, T>;
+  activeUserTurn?: T;
+  navigated: boolean;
+};
+
+export function selectBilledTranscriptPaths<T extends Record<string, unknown>>(
   records: readonly T[],
-): T[] {
+  isUserTurn: (record: T) => boolean,
+): BilledTranscriptPaths<T> {
   const tree = scanSessionTranscriptTree(records);
   const selected: T[] = [];
   const seen = new Set<T>();
-  const addPath = (leafId: string | null) => {
+  const userTurnOf = new Map<T, T>();
+  const addPath = (leafId: string | null | undefined) => {
+    if (leafId === undefined) {
+      return;
+    }
+    let userTurn: T | undefined;
     for (const node of selectSessionTranscriptTreePathNodes(tree, leafId)) {
       if (!seen.has(node.entry)) {
         seen.add(node.entry);
         selected.push(node.entry);
       }
+      // Ancestry is unique per row, so one visit settles its user turn.
+      if (userTurn !== undefined && !userTurnOf.has(node.entry)) {
+        userTurnOf.set(node.entry, userTurn);
+      }
+      if (isUserTurn(node.entry)) {
+        userTurn = node.entry;
+      }
     }
+    return userTurn;
   };
-  // Each leaf control names both branches of one repoint: its target became
-  // active, and its raw parent is the tip that was active until then. Both were
-  // billed. A sibling that was never active is not reachable this way and stays
-  // unbilled, matching the retired-copy accounting this replaced.
-  //
-  // Order carries no meaning: consumers that need the branch a row belongs to ask
-  // `selectActivePathTranscriptEvents`, not the emission sequence.
-  addPath(tree.leafId);
+  // Each leaf control names both branches of one repoint: the leaf it selected,
+  // and the canonical leaf it displaced, which the navigation scan resolved in
+  // file order. Both were billed. A sibling that was never active is not
+  // reachable this way and stays unbilled, matching the retired-copy accounting
+  // this replaced. Emission order carries no meaning.
+  const activeUserTurn = addPath(tree.leafId);
   for (const node of tree.nodes) {
-    if (!isSessionTranscriptLeafControl(node.entry)) {
+    if (!isSessionTranscriptLeafControl(node.entry) || node.leafId === undefined) {
+      // An invalid control changed no navigation, so it displaced no branch.
       continue;
     }
-    addPath(node.id);
-    const previousTip = node.entry.parentId;
-    if (typeof previousTip === "string" && previousTip) {
-      addPath(previousTip);
-    }
+    addPath(node.leafId);
+    addPath(node.displacedLeafId);
   }
   // A transcript rewrite re-appends a turn as a copy carrying `supersedesEntryId`
   // and publishes its own leaf control, so both the copy and the original become
@@ -84,24 +110,52 @@ export function selectBilledTranscriptEvents<T extends Record<string, unknown>>(
   // Rows an older appender wrote without an id carry no navigation, so no path
   // reaches them. Without a leaf control the whole transcript is still one
   // branch, and `selectVisibleTranscriptEventEntries` bills it flat; keep that.
-  return dropInheritedTranscriptEvents(
+  const selection = dropInheritedTranscriptEvents(
     records,
     billed.length === 0 && !tree.hasLeafControl ? [...records] : billed,
   );
+  // A transcript the visible-event owner leaves entirely active has no branch to
+  // resolve timing against, so it keeps the flat, file-order timing its legacy
+  // appender produced: the same fallback that owner applies.
+  return tree.hasLeafControl
+    ? { billed: selection, userTurnOf, activeUserTurn, navigated: true }
+    : { billed: selection, userTurnOf: new Map(), navigated: false };
 }
 
-/**
- * Rows on the canonical active path, in order.
- *
- * Billing decides which rows count; this decides whose turn the next continuation
- * follows. The two differ after a cut: a displaced turn still counts, but the
- * branch a later assistant event continues is the active one.
- */
-export function selectActivePathTranscriptEvents<T extends Record<string, unknown>>(
+/** Billed rows alone, for diagnostics that report counted history. */
+export function selectBilledTranscriptEvents<T extends Record<string, unknown>>(
   records: readonly T[],
 ): T[] {
-  const tree = scanSessionTranscriptTree(records);
-  return selectSessionTranscriptTreePathNodes(tree, tree.leafId).map((node) => node.entry);
+  return selectBilledTranscriptPaths(records, () => false).billed;
+}
+
+/** The billed usage rows of one full scan, with the canonical timing they need. */
+export function selectBilledUsageEntries<
+  T extends Record<string, unknown> & { usageEntry: ParsedTranscriptEntry | null },
+>(records: readonly T[]): { entries: ParsedTranscriptEntry[]; timing?: UsageRollupTiming } {
+  const paths = selectBilledTranscriptPaths(
+    records,
+    (record) => record.usageEntry?.role === "user",
+  );
+  const entries = paths.billed.flatMap((record) => (record.usageEntry ? [record.usageEntry] : []));
+  if (!paths.navigated) {
+    return { entries };
+  }
+  const userTimestamps = new Map<ParsedTranscriptEntry, number>();
+  for (const record of paths.billed) {
+    const userTurn = paths.userTurnOf.get(record)?.usageEntry?.timestamp?.getTime();
+    if (record.usageEntry && userTurn !== undefined) {
+      userTimestamps.set(record.usageEntry, userTurn);
+    }
+  }
+  const activeUserTimestamp = paths.activeUserTurn?.usageEntry?.timestamp?.getTime();
+  return {
+    entries,
+    timing: {
+      userTimestamps,
+      ...(activeUserTimestamp !== undefined ? { activeUserTimestamp } : {}),
+    },
+  };
 }
 
 /**

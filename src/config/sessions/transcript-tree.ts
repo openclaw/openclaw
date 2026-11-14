@@ -15,6 +15,14 @@ type SessionTranscriptTreeEntry = {
 export type SessionTranscriptTreeNode<T> = SessionTranscriptTreeEntry & {
   entry: T;
   index: number;
+  /**
+   * For a leaf control: the canonical active leaf this control displaced.
+   *
+   * The scan resolves navigation in file order, so only it knows which branch was
+   * current when a control arrived. A control's raw `parentId` is the physical
+   * append cursor, which side appends and plugin rows move off the active branch.
+   */
+  displacedLeafId?: string | null;
 };
 
 export type SessionTranscriptTree<T> = {
@@ -287,7 +295,12 @@ export function scanSessionTranscriptNavigation<T>(
     if (!treeEntry) {
       continue;
     }
-    const node: SessionTranscriptTreeNode<T> = { ...treeEntry, entry, index };
+    const node: SessionTranscriptTreeNode<T> = {
+      ...treeEntry,
+      entry,
+      index,
+      ...(isLeafControl ? { displacedLeafId: leafId } : {}),
+    };
     storage.addNode(node);
     byId.set(node.id, node);
     if (isRecord(entry) && entry.type === "reset") {

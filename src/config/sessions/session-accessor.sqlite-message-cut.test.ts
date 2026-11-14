@@ -166,8 +166,8 @@ it("returns missing-session for history navigation in an absent store", async ()
   ).rejects.toBe(denied);
 });
 
-// Rewind keeps its transcript identity, so the fence that retires pre-rewind
-// readers and writers is the rotated transcript generation, not a new session id.
+// Rewind keeps its transcript identity, so the fence retiring pre-rewind readers
+// and writers is the rotated transcript generation, not a new session id.
 it("rewinds in place and voids the pre-rewind transcript generation", async () => {
   const { env, scope, params } = await createSession();
   const readGeneration = () =>
@@ -388,8 +388,7 @@ it("rewinds by repointing the active leaf and returns the editor text", async ()
 // control resolves in file order: a side cursor re-parents u2 onto a1 ([u1,a1,u2,a2],
 // not [u1,s,u2,a2]); a parentless u2 continues a1, so a1 is not a tip; after a reset
 // a1 predates the boundary, so a control targeting it is rewritten onto the current
-// leaf. Selecting a1 must refuse, and the projection must keep agreeing with a full
-// canonical rebuild.
+// leaf. Selecting a1 refuses, and the projection keeps agreeing with a full rebuild.
 it.each(["parentless", "side-cursor", "reset-boundary"] as const)(
   "keeps canonical navigation for a %s history",
   async (kind) => {
@@ -417,8 +416,8 @@ it.each(["parentless", "side-cursor", "reset-boundary"] as const)(
 );
 
 // A rewind repoints incrementally, so oversized history must not send readers
-// through a full rebuild (which failed reads with "rebuilding"), and the repoint
-// refuses by retained bytes so a large branch never materializes in the worker.
+// through a full rebuild (which failed reads with "rebuilding"); the repoint also
+// refuses by retained bytes, so a large branch never materializes in the worker.
 it("repoints oversized history without hydrating it in one transaction", async () => {
   const { env, scope, params } = await createSession();
   // An oversized stored user turn: navigation never decodes it; the editor read

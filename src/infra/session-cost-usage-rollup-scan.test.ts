@@ -31,7 +31,7 @@ const scan = (json: string[]) =>
   });
 
 it("does not retain decoded payloads while refreshing memory usage", async () => {
-  // Eight ordinary turns with real id/parent links, so every turn is billed (72).
+  // Eight ordinary turns with real id/parent links: every turn is billed (72).
   const count = 8;
   const result = await scan(
     Array.from({ length: count }, (_row, index) =>

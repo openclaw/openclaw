@@ -4,8 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
 import { sha256Base64Url } from "./crypto-digest.js";
 import {
-  selectActivePathTranscriptEvents,
-  selectBilledTranscriptEvents,
+  selectBilledUsageEntries,
   projectUsageScanFields,
 } from "./session-cost-usage-inherited.js";
 import {
@@ -31,6 +30,7 @@ import type {
   CostUsageTotals,
   ParsedTranscriptEntry,
   UsageCostTranscriptFile,
+  UsageRollupTiming,
 } from "./session-cost-usage.types.js";
 
 type UsageCostRollupScanInput = {
@@ -51,21 +51,18 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
   const rollup = previous?.rollup ?? createSessionUsageRollupData();
   let countedRecords = 0;
   let parsedRecords = 0;
-  // Cursor for billed rows off the active path; the active one is the rollup's own.
-  let displacedUserTimestamp: number | undefined;
   // Catalog prices are inputs only for turns without a recorded cost.
   let priced =
     previous !== undefined && previous.pricingFingerprint !== USAGE_COST_UNPRICED_FINGERPRINT;
   return {
     /**
-     * `activePath` names the billed rows the canonical active path still contains.
-     * Billing decides which rows count; this decides whose turn a reply answers,
-     * so a displaced path measures inside itself and never moves the cursor the
-     * next append-only scan continues from. Omitted: every row is active.
+     * `timing` carries the canonical navigation facts of a full scan: each reply's
+     * own user turn and the active path's continuation cursor. Omitted for a flat
+     * transcript or an appended tail, which measure in file order.
      */
     async addEntries(
       entries: Iterable<ParsedTranscriptEntry>,
-      activePath?: ReadonlySet<ParsedTranscriptEntry>,
+      timing?: UsageRollupTiming,
     ): Promise<void> {
       let batch: ParsedTranscriptEntry[] = [];
       const flush = async () => {
@@ -100,7 +97,6 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
             }
           }
           const timestamp = entry.timestamp?.getTime();
-          const onActivePath = activePath?.has(entry) ?? true;
           appendSessionUsageRollupContribution(rollup, {
             timestamp,
             role: entry.role,
@@ -111,12 +107,9 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
             toolNames: entry.toolNames,
             toolResultCounts: entry.toolResultCounts,
             usageTotals,
-            activePath: onActivePath,
-            displacedUserTimestamp,
+            navigated: timing !== undefined,
+            userTimestamp: timing?.userTimestamps.get(entry),
           });
-          if (entry.role === "user" && !onActivePath && timestamp !== undefined) {
-            displacedUserTimestamp = timestamp;
-          }
           countedRecords += entry.usage && timestamp ? 1 : 0;
           parsedRecords += entry.usage ? 1 : 0;
         }
@@ -130,6 +123,10 @@ export function createUsageRollupScan(params: UsageCostRollupScanInput & { appen
       }
       if (batch.length > 0) {
         await flush();
+      }
+      if (timing) {
+        // The cursor is a navigation fact, not a side effect of emission order.
+        rollup.lastUserTimestamp = timing.activeUserTimestamp;
       }
     },
     finish(checkpoint: UsageCostJsonlCheckpoint | UsageCostSqliteCheckpoint): UsageCostRollupEntry {
@@ -169,12 +166,8 @@ export async function scanMemoryUsageCostRollup(params: {
     return record;
   });
   const scan = createUsageRollupScan({ ...params, appendOnly: false });
-  const usageEntries = (selected: readonly (typeof records)[number][]) =>
-    selected.flatMap((record) => (record.usageEntry ? [record.usageEntry] : []));
-  await scan.addEntries(
-    usageEntries(selectBilledTranscriptEvents(records)),
-    new Set(usageEntries(selectActivePathTranscriptEvents(records))),
-  );
+  const billed = selectBilledUsageEntries(records);
+  await scan.addEntries(billed.entries, billed.timing);
   const visibleLeafId = scanSessionTranscriptTree(records).leafId;
   return scan.finish({
     kind: "sqlite",

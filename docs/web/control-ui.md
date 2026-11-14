@@ -113,11 +113,14 @@ Editing requires permission to rewind the conversation and is unavailable while
 a run is active. **Try again** still continues the existing conversation without
 replaying the original message, because earlier actions may already have run.
 Rewinding does not undo external actions. Rewinding and switching branches keep
-the existing conversation and only move its active branch, so their cost does not
-depend on history size. Forking a conversation copies its history incrementally.
-If an individual event or the history navigation metadata exceeds the safe memory
-budget, the fork fails without changing the conversation; other sessions remain
-available. Export the transcript to inspect it.
+the existing conversation and move only its active branch, so neither copies the
+transcript. Both still read its history navigation, and a selection far from the
+current branch is republished by background reconciliation, so their cost follows
+the shape and size of that navigation rather than the stored message bytes.
+Forking a conversation copies its history incrementally. If the selected message,
+an individual event, or the history navigation metadata exceeds the safe memory
+budget, that rewind or fork fails without changing the conversation; other
+sessions remain available. Export the transcript to inspect it.
 
 ## Command palette file attachments
 
