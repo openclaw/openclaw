@@ -65,6 +65,8 @@ export function prepareMemoryIndexChunks({
   // All chunks share one source snapshot; splitting per chunk makes indexing quadratic.
   const sourceLines = source === "memory" ? content.replace(/\r\n/gu, "\n").split("\n") : [];
   const chunkOptions = { ...chunking, perEntry };
+  // Match chunkMarkdown's character budget so heading repair cannot grow a chunk without bound.
+  const maxMergedChunkChars = Math.max(32, chunking.tokens * 4);
   const baseChunks: MemoryChunk[] = [];
   for (const chunk of source === "sessions"
     ? chunkSessionContentAtResetBoundary({
@@ -97,10 +99,13 @@ export function prepareMemoryIndexChunks({
       const following = chunk.text
         .split("\n")
         .slice(Math.max(0, previous.endLine - chunk.startLine + 1));
-      chunk.text = [previous.text, ...following].join("\n");
-      chunk.startLine = previous.startLine;
-      chunk.hash = hashText(chunk.text);
-      baseChunks.pop();
+      const mergedText = [previous.text, ...following].join("\n");
+      if (mergedText.length <= maxMergedChunkChars) {
+        chunk.text = mergedText;
+        chunk.startLine = previous.startLine;
+        chunk.hash = hashText(chunk.text);
+        baseChunks.pop();
+      }
     }
     chunk.provenance = resolveChunkProvenance(entry, source, chunk, pathClassification.originClass);
     baseChunks.push(chunk);

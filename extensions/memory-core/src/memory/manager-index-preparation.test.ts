@@ -46,16 +46,42 @@ it("keeps a heading fragment's curated-entry annotations", () => {
   ]);
 });
 
-it.each([0, 2])("keeps a whole heading when chunk overlap is %s", (overlap) => {
+it.each([0, 2])("respects the chunk budget for heading and body when overlap is %s", (overlap) => {
   const content = "# Plan\nThe irrigation starts at dawn.";
-  const hash = createHash("sha256").update(content).digest("hex");
   const { chunks } = prepareHeading(content, overlap);
-  expect(chunks).toMatchObject([{ startLine: 1, endLine: 2, text: content, hash }]);
+  expect(chunks.every((chunk) => chunk.text.length <= 32)).toBe(true);
+  expect(chunks.some((chunk) => chunk.text.includes("# Plan"))).toBe(true);
+  expect(chunks.some((chunk) => chunk.text.includes("The irrigation starts at dawn."))).toBe(true);
 });
 
 it("preserves a heading continuation sharing the next chunk's source line", () => {
   const { chunks } = prepareHeading(`# ${"a".repeat(32)}\nBody`);
   expect(chunks.map((chunk) => chunk.text).join("")).toBe(`# ${"a".repeat(32)}\nBody`);
+});
+
+it("keeps heading-only merges within the chunk character budget", () => {
+  const headings = Array.from(
+    { length: 400 },
+    (_, index) => `###### 14.7.2.1.1.${index + 1} 科目名称 ${index + 1}`,
+  );
+  const { chunks } = prepare(headings.join("\n\n"), {
+    entry: { path: "memory/syllabus.md", mtimeMs: 1 },
+    pathClassification: { curatedRoot: false, originClass: "agent" },
+    chunking: { tokens: 400, overlap: 80 },
+    provider: { id: "openai", maxInputTokens: 8192 },
+    hardMaxInputTokens: 8000,
+  });
+
+  expect(chunks.length).toBeGreaterThan(1);
+  expect(chunks.every((chunk) => chunk.text.length <= 1600)).toBe(true);
+  expect(
+    chunks.every((chunk) => createHash("sha256").update(chunk.text).digest("hex") === chunk.hash),
+  ).toBe(true);
+  const preparedHeadings = new Set(
+    chunks.flatMap((chunk) => chunk.text.split("\n")).filter((line) => line.startsWith("######")),
+  );
+  expect(preparedHeadings.size).toBe(headings.length);
+  expect(headings.every((heading) => preparedHeadings.has(heading))).toBe(true);
 });
 
 it.each(["memory", "sessions"] as const)("preserves a final heading for %s", (source) => {
