@@ -960,6 +960,12 @@ function createArtifactHarness(mac: MacScriptFixture) {
       )} >"$app/Contents/MacOS/OpenClaw"`,
       'printf helper >"$app/Contents/MacOS/openclaw-mlx-tts"',
       'chmod 755 "$app/Contents/MacOS/OpenClaw" "$app/Contents/MacOS/openclaw-mlx-tts"',
+      'case "${TEST_CUA_DRIVER_KIND:-none}" in',
+      '  file) mkdir -p "$app/Contents/Resources"; printf driver >"$app/Contents/Resources/cua-driver"; chmod 755 "$app/Contents/Resources/cua-driver" ;;',
+      '  symlink) mkdir -p "$app/Contents/Resources"; ln -s /missing/cua-driver "$app/Contents/Resources/cua-driver" ;;',
+      "  none) ;;",
+      "  *) exit 64 ;;",
+      "esac",
     ),
   );
   writeCommandFixture(

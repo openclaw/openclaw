@@ -15,8 +15,11 @@ import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { setActiveDegradedSecretOwners } from "../../../secrets/runtime-degraded-state.js";
 import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
+import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { resolveRealtimeVoiceAgentConsultToolsAllow } from "../../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../talk/describe-view-tool.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { resolveChatSendCallerContext } from "../../server-methods/gateway-client-identity.js";
 import { fixedStoreOwnershipConfig } from "../../server-methods/sessions-fixed-store.test-support.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "../../server-methods/types.js";

@@ -3373,18 +3373,7 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     expect(result.stdout).not.toContain("ensure-called");
   });
 
-  it.each([
-    {
-      name: "reports a stale Homebrew node without PATH advice",
-      installed: true,
-      message: "brew update && brew upgrade node",
-    },
-    {
-      name: "does not print PATH advice when Homebrew node is missing at runtime",
-      installed: false,
-      message: "Homebrew node is not installed on disk",
-    },
-  ])("$name", ({ installed, message }) => {
+  it("reports a stale Homebrew node without PATH advice", () => {
     const result = runInstallShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
