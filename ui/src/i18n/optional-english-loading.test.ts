@@ -577,3 +577,25 @@ it("loads optional chat copy with its view while keeping admission errors synchr
   expect(en.chat.permissions).toBe(permissions);
   expect(en.chat.workspaceFiles).toBe(workspaceFiles);
 });
+
+it("loads deletion copy with the action without replacing translated session labels", async () => {
+  const { en, manager } = await loadI18n({
+    sessionsView: { deleteSessionTitle: "Sitzung löschen?" },
+  });
+  await manager.setLocale("de");
+  const sessions = en.sessionsView;
+  const { registerSessionOrganizationEnglish } =
+    await import("./locales/en-session-organization.ts");
+  registerSessionOrganizationEnglish();
+  expect(manager.t("sessionsView.deleteIncognitoSessionConfirm")).toBe(
+    "sessionsView.deleteIncognitoSessionConfirm",
+  );
+
+  await import("../lib/sessions/session-delete-confirmation.ts");
+
+  expect(manager.t("sessionsView.deleteIncognitoSessionConfirm")).toContain("without an archive");
+  expect(manager.t("sessionsView.deleteSessionConfirm")).toContain("keeps an archived copy");
+  expect(manager.t("sessionsView.deleteSessionTitle")).toBe("Sitzung löschen?");
+  expect(manager.getLocale()).toBe("de");
+  expect(en.sessionsView).toBe(sessions);
+});

@@ -30,6 +30,7 @@ export type SessionActionRow = Pick<
   | "key"
   | "agentId"
   | "sessionId"
+  | "incognito"
   | "label"
   | "pinned"
   | "archived"
