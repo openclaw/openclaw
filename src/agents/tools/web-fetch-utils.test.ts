@@ -91,6 +91,8 @@ describe("web-fetch-utils", () => {
     ['<a @click="track" href="/real">Read</a>', "[Read](/real)"],
     [`<a @click="track(); href='/bad'" href="/real">Read</a>`, "[Read](/real)"],
     ['<a href="/x">my <3 story</a> rest', "[my <3 story](/x) rest"],
+    ['<a href="/real](https://evil.example/x">Docs</a>', "[Docs](/real]\\(https://evil.example/x)"],
+    ['<a href="/real">Click](https://evil) [here</a>', "[Click\\](https://evil) \\[here](/real)"],
     [`<a href=/x>${"<p></p>".repeat(1_000)}`, "/x"],
     [
       "<a href=/promo>deal <p>Para one.</p><h1>Head</h1><p>Para two.</p>",
