@@ -1,6 +1,6 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { Command } from "commander";
@@ -172,7 +172,51 @@ type PendingPowerShellCompletion = {
 const POWERSHELL_CASE_TIMEOUT_MS = 15_000;
 const POWERSHELL_CLOSE_TIMEOUT_MS = 5_000;
 
-function encodePowerShellHostScript(framePrefix: string): string {
+// Diagnostic only: bounded private observations never replace READY.
+type PowerShellStartupEvent =
+  | "spawn-requested" | "spawn-returned" | "spawn-event"
+  | "stdout-first-data" | "stdout-first-line" | "ready"
+  | "request-write" | "request-write-completed" | "response-matched"
+  | "ready-timeout" | "failure" | "exit";
+type PowerShellStartupDiagnostic = {
+  hostLog: string;
+  hostError: string;
+  record: (event: PowerShellStartupEvent, facts?: {
+    bytes?: number; pid?: number | null; failed?: boolean; code?: number | null;
+  }) => void;
+};
+function createPowerShellStartupDiagnostic(): PowerShellStartupDiagnostic | undefined {
+  const root = process.env.OPENCLAW_TEST_PWSH_DIAGNOSTIC_DIR;
+  if (!root) { return undefined; }
+  // The hosted owner creates the root; failure here is diagnostic setup failure.
+  const directory = mkdtempSync(path.join(root, "host-"));
+  const hostLog = path.join(directory, "host.log");
+  const hostError = path.join(directory, "host-write-error.log");
+  const nodeLog = path.join(directory, "node.log");
+  const nodeError = path.join(directory, "node-write-error.log");
+  for (const file of [hostLog, hostError, nodeLog, nodeError]) {
+    writeFileSync(file, "", { mode: 0o600 });
+  }
+  const startedAt = performance.now();
+  const seen = new Set<PowerShellStartupEvent>();
+  return {
+    hostLog, hostError,
+    record(event, facts = {}) {
+      if (seen.has(event)) { return; }
+      seen.add(event);
+      try {
+        appendFileSync(nodeLog, `${JSON.stringify({ event, atMs: Date.now(),
+          elapsedMs: Math.round(performance.now() - startedAt), ...facts })}\n`);
+      } catch {
+        try { writeFileSync(nodeError, "write-failed\n"); } catch { /* absent stays unknown */ }
+      }
+    },
+  };
+}
+
+function encodePowerShellHostScript(
+  framePrefix: string, diagnostic?: PowerShellStartupDiagnostic,
+): string {
   const script = String.raw`
 $ErrorActionPreference = 'Stop'
 [Console]::Out.WriteLine('${framePrefix}READY')
@@ -210,7 +254,39 @@ while (($encodedRequest = [Console]::In.ReadLine()) -ne $null) {
   [Console]::Out.Flush()
 }
 `;
-  return Buffer.from(script, "utf16le").toString("base64");
+  if (!diagnostic) { return Buffer.from(script, "utf16le").toString("base64"); }
+  const hostLog = diagnostic.hostLog.replaceAll("'", "''");
+  const hostError = diagnostic.hostError.replaceAll("'", "''");
+  const prelude = String.raw`
+function Write-StartupMilestone([string]$Milestone) {
+  try { [IO.File]::AppendAllText('${hostLog}', $Milestone + [Environment]::NewLine) }
+  catch { try { [IO.File]::WriteAllText('${hostError}', 'write-failed') } catch { } }
+}
+Write-StartupMilestone 'script-entry'
+`;
+  const ready = String.raw`
+Write-StartupMilestone 'before-console-out'
+$readyOutput = [Console]::Out
+Write-StartupMilestone 'console-out-obtained'
+$readyOutput.WriteLine('${framePrefix}READY')
+Write-StartupMilestone 'ready-write-returned'
+$readyOutput.Flush()
+Write-StartupMilestone 'ready-flush-returned'
+$firstRead = $true
+while ($true) {
+  if ($firstRead) { Write-StartupMilestone 'before-first-read' }
+  $encodedRequest = [Console]::In.ReadLine()
+  if ($firstRead) {
+    if ($null -eq $encodedRequest) { Write-StartupMilestone 'first-read-null' }
+    else { Write-StartupMilestone 'first-read-value' }
+    $firstRead = $false
+  }
+  if ($null -eq $encodedRequest) { break }
+`;
+  const originalReady = String.raw`[Console]::Out.WriteLine('${framePrefix}READY')
+[Console]::Out.Flush()
+while (($encodedRequest = [Console]::In.ReadLine()) -ne $null) {`;
+  return Buffer.from(prelude + script.replace(originalReady, ready), "utf16le").toString("base64");
 }
 
 function decodePowerShellCompletionResponse(encoded: string): PowerShellCompletionResponse {
@@ -250,6 +326,7 @@ function decodePowerShellCompletionResponse(encoded: string): PowerShellCompleti
 export class PowerShellCompletionRunner {
   private child: ChildProcessWithoutNullStreams | undefined;
   private closing = false;
+  private startupDiagnostic: PowerShellStartupDiagnostic | undefined;
   private exitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
   private failure: Error | undefined;
   private readonly framePrefix = `OPENCLAW_PWSH_V1:${randomBytes(8).toString("hex")}:`;
@@ -361,7 +438,9 @@ export class PowerShellCompletionRunner {
         this.poison(new Error(`PowerShell completion case ${caseId} timed out`));
       }, POWERSHELL_CASE_TIMEOUT_MS);
       this.pending.set(caseId, { reject, resolve, timeout });
+      this.startupDiagnostic?.record("request-write");
       child.stdin.write(`${request}\n`, (error) => {
+        this.startupDiagnostic?.record("request-write-completed", { failed: Boolean(error) });
         if (error) {
           this.poison(new Error(`PowerShell completion write failed: ${error.message}`));
         }
@@ -377,6 +456,8 @@ export class PowerShellCompletionRunner {
       return Promise.reject(new Error("PowerShell is unavailable"));
     }
     const startedAt = performance.now();
+    this.startupDiagnostic = createPowerShellStartupDiagnostic();
+    this.startupDiagnostic?.record("spawn-requested");
     const child = spawn(
       powerShellPath,
       [
@@ -384,26 +465,32 @@ export class PowerShellCompletionRunner {
         "-NoProfile",
         "-NonInteractive",
         "-EncodedCommand",
-        encodePowerShellHostScript(this.framePrefix),
+        encodePowerShellHostScript(this.framePrefix, this.startupDiagnostic),
       ],
       { stdio: "pipe" },
     );
     this.child = child;
+    this.startupDiagnostic?.record("spawn-returned", { pid: child.pid ?? null });
     let spawnElapsedMs: number | null = null;
     child.once("spawn", () => {
       spawnElapsedMs = Math.round(performance.now() - startedAt);
+      this.startupDiagnostic?.record("spawn-event");
     });
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     // Readline cannot expose an incomplete READY frame. Retain only a bounded startup tail.
     let startupStdout: ReturnType<typeof createBoundedChildOutput> | undefined =
       createBoundedChildOutput(4096);
-    const captureStartupStdout = (chunk: string) => startupStdout?.append(chunk);
+    const captureStartupStdout = (chunk: string) => {
+      this.startupDiagnostic?.record("stdout-first-data", { bytes: Buffer.byteLength(chunk) });
+      startupStdout?.append(chunk);
+    };
     child.stdout.on("data", captureStartupStdout);
     this.stdoutLines = createInterface({ input: child.stdout });
     this.readyPromise = new Promise<void>((resolve, reject) => {
       const readyTimeout = setTimeout(
-        () =>
+        () => {
+          this.startupDiagnostic?.record("ready-timeout");
           fail(
             new Error(
               `PowerShell completion runner did not become ready\nStartup: ${JSON.stringify({
@@ -417,11 +504,13 @@ export class PowerShellCompletionRunner {
                 stdoutTail: startupStdout?.text() ?? "",
               })}`,
             ),
-          ),
+          );
+        },
         POWERSHELL_CASE_TIMEOUT_MS,
       );
       // Before READY there are no pending requests; poisoning alone would strand the queue.
       const fail = (error: Error) => {
+        this.startupDiagnostic?.record("failure");
         clearTimeout(readyTimeout);
         child.stdout.removeListener("data", captureStartupStdout);
         startupStdout = undefined;
@@ -429,7 +518,9 @@ export class PowerShellCompletionRunner {
         this.poison(error);
       };
       this.stdoutLines?.on("line", (line) => {
+        this.startupDiagnostic?.record("stdout-first-line", { bytes: Buffer.byteLength(line) });
         if (line === `${this.framePrefix}READY`) {
+          this.startupDiagnostic?.record("ready");
           clearTimeout(readyTimeout);
           child.stdout.removeListener("data", captureStartupStdout);
           startupStdout = undefined;
@@ -447,6 +538,7 @@ export class PowerShellCompletionRunner {
             fail(new Error(`Unexpected PowerShell completion response id: ${response.id}`));
             return;
           }
+          this.startupDiagnostic?.record("response-matched");
           clearTimeout(pending.timeout);
           this.pending.delete(response.id);
           if (response.ok) {
@@ -469,6 +561,7 @@ export class PowerShellCompletionRunner {
       });
       this.exitPromise = new Promise((exitResolve) => {
         child.once("exit", (code, signal) => {
+          this.startupDiagnostic?.record("exit", { code, failed: signal !== null });
           exitResolve({ code, signal });
           if (!this.closing || code !== 0 || signal !== null) {
             fail(
