@@ -17,7 +17,6 @@ import {
   TSGO_CORE_TEST_SHARDS,
 } from "./lib/tsgo-core-test-shards.mts";
 const repoRoot = resolveRepoRoot(import.meta.url);
-const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd: repoRoot });
 const canonicalCoreTestConfig = "test/tsconfig/tsconfig.core.test.json";
 
 function normalizeFilePath(filePath: string, cwd: string) {
@@ -103,6 +102,7 @@ async function readGraphConfig(
   compilerOptions?: { tsBuildInfoFile?: string };
   files?: string[];
 }> {
+  const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd });
   return JSON.parse(
     await runCompilerQuery(tsgoPath, config, "--showConfig", `${config} config expansion`, cwd),
   ) as {
@@ -123,7 +123,7 @@ export async function readTsconfigFileMembership(
   config: string,
   cwd = repoRoot,
 ): Promise<string[]> {
-  const bin = resolveRepoToolBinPath(resolveTypeCheckTool(), { cwd: repoRoot });
+  const bin = resolveRepoToolBinPath(resolveTypeCheckTool(), { cwd });
   // Both compiler packages colocate their bundled libraries with the resolved
   // native executable. Those are compiler identity, not repository membership.
   const libraryDirectory = `${realpathSync(path.dirname(bin))}${path.sep}`;

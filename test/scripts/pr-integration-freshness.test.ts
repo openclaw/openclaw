@@ -1,13 +1,15 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { dirname, delimiter, join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse, stringify } from "yaml";
+import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import {
   expandTsgoExecutionGraphs,
   TSGO_CI_GRAPHS,
 } from "../../scripts/lib/tsgo-core-test-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const root = process.cwd();
@@ -38,14 +40,14 @@ function fixture() {
     git("commit", "-qm", "fixture");
     return git("rev-parse", "HEAD");
   };
-  const admit = (main: string, head: string, localOnly = "false") =>
+  const admit = (main: string, head: string, localOnly = "false", wrapper = root) =>
     spawnSync(
       "bash",
       [
         "-c",
         'script_parent_dir="$1/scripts"; source "$script_parent_dir/pr-lib/merge.sh"; pr_git() { command git "$@"; }; verify_merge_candidate_tree "$2" "$3" "$4"',
         "fixture",
-        root,
+        wrapper,
         main,
         head,
         localOnly,
@@ -61,8 +63,18 @@ function fixture() {
 describePosix("current-main compiler integration admission", () => {
   it("rejects disjoint export-removal/new-consumer interaction through the existing compiler planner", () => {
     const f = fixture();
-    f.put("package.json", JSON.stringify({ private: true, type: "module" }));
-    f.put("pnpm-workspace.yaml", "packages: []\n");
+    const { devDependencies } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    f.put(
+      "package.json",
+      JSON.stringify({
+        private: true,
+        type: "module",
+        devDependencies: {
+          tsrs: devDependencies.tsrs,
+          typescript: devDependencies.typescript,
+        },
+      }),
+    );
     f.put("smoke.ts", "export {};\n");
     for (const graph of [
       ...expandTsgoExecutionGraphs(TSGO_CI_GRAPHS),
@@ -84,38 +96,70 @@ describePosix("current-main compiler integration admission", () => {
         }),
       );
     }
-    // Installation is not the invariant under test. Supply physical copies of
-    // the installed native compilers while keeping the planner and compiler real.
-    const require = createRequire(join(root, "package.json"));
-    const packages: Record<string, string> = {};
+    // Use a populated external store, not the helper's old checkout-local guess.
+    const { storeDir: store } = parse(
+      readFileSync(join(root, "node_modules/.modules.yaml"), "utf8"),
+    );
+    // Cached payloads are under test, not registry-age metadata (as in the Baileys fixture).
+    f.put(
+      "pnpm-workspace.yaml",
+      stringify({
+        packages: [],
+        storeDir: store,
+        minimumReleaseAge: 0,
+        minimumReleaseAgeStrict: false,
+      }),
+    );
+    const lock = parse(
+      pnpmLockfileDocuments(readFileSync(join(root, "pnpm-lock.yaml"), "utf8")).dependencies,
+    );
+    const dependencies = lock.importers["."].devDependencies;
+    const packages = new Set<string>();
     for (const name of ["tsrs", "typescript"]) {
-      const source = dirname(require.resolve(name + "/package.json"));
-      packages[name] = source;
-      const compilerPackage = JSON.parse(readFileSync(join(source, "package.json"), "utf8")) as {
-        optionalDependencies: Record<string, string>;
-      };
-      const ownRequire = createRequire(join(source, "package.json"));
-      for (const dependency of Object.keys(compilerPackage.optionalDependencies)) {
-        try {
-          packages[dependency] = dirname(ownRequire.resolve(dependency + "/package.json"));
-        } catch {
-          /* Other platforms are not installed. */
-        }
+      const key = `${name}@${dependencies[name].version}`;
+      packages.add(key);
+      const platforms: Record<string, string> = lock.snapshots[key].optionalDependencies;
+      for (const [dependency, version] of Object.entries(platforms)) {
+        packages.add(`${dependency}@${version}`);
       }
     }
-    const bin = dirs.make("pr-integration-bin-");
-    writeFileSync(
-      join(bin, "pnpm"),
-      "#!" +
-        process.execPath +
-        "\n" +
-        "const fs=require('node:fs'),p=require('node:path');\n" +
-        "for(const [name,source] of Object.entries(" +
-        JSON.stringify(packages) +
-        ")){const target=p.join(process.cwd(),'node_modules',name);fs.mkdirSync(p.dirname(target),{recursive:true});fs.cpSync(source,target,{recursive:true,dereference:true});}\n",
-      { mode: 0o755 },
+    f.put(
+      "pnpm-lock.yaml",
+      stringify({
+        lockfileVersion: lock.lockfileVersion,
+        settings: lock.settings,
+        importers: {
+          ".": {
+            devDependencies: { tsrs: dependencies.tsrs, typescript: dependencies.typescript },
+          },
+        },
+        ...Object.fromEntries(
+          ["packages", "snapshots"].map((key) => [
+            key,
+            Object.fromEntries(Object.entries(lock[key]).filter(([name]) => packages.has(name))),
+          ]),
+        ),
+      }),
     );
-    f.env.PATH = bin + delimiter + f.env.PATH;
+    execFileSync("pnpm", ["install", "--offline", "--frozen-lockfile", "--ignore-scripts"], {
+      cwd: f.repo,
+      env: f.env,
+      stdio: "pipe",
+      timeout: 30_000,
+    });
+    // Project the real wrapper inventory and dependencies, rather than borrowing
+    // the fully installed source checkout's compilers during graph discovery.
+    const wrapper = dirs.make("pr-integration-wrapper-");
+    copyPrWrapperSources(wrapper);
+    execFileSync(
+      process.execPath,
+      [
+        join(wrapper, "scripts/pr-lib/materialize-dependencies.mjs"),
+        join(root, "node_modules"),
+        join(wrapper, "node_modules"),
+      ],
+      { stdio: "pipe" },
+    );
     const base = f.commit();
     const compile = () =>
       spawnSync(
@@ -140,7 +184,7 @@ describePosix("current-main compiler integration admission", () => {
     const head = f.commit();
     expect(compile().status).toBe(0);
     const tree = f.git("merge-tree", "--write-tree", main, head);
-    const rejected = f.admit(main, head);
+    const rejected = f.admit(main, head, "false", wrapper);
     expect(rejected.status, rejected.stdout + rejected.stderr).toBe(1);
     expect(rejected.stdout + rejected.stderr).toContain("TS2305");
     expect(rejected.stdout).toContain("main=" + main + " head=" + head + " tree=" + tree);
@@ -149,7 +193,7 @@ describePosix("current-main compiler integration admission", () => {
     // Removing the retired import makes the composition valid; drift alone does not refuse it.
     f.put("src/consumer.ts", "export const collected = true;\n");
     const repaired = f.commit();
-    const accepted = f.admit(main, repaired);
+    const accepted = f.admit(main, repaired, "false", wrapper);
     expect(accepted.status, accepted.stdout + accepted.stderr).toBe(0);
     expect(accepted.stdout).toContain("Integration static proof passed");
   }, 90_000);

@@ -1,4 +1,4 @@
-# Six independent CI escape regressions: owner selection, selected declaration
-# emission, and real compiler/native merge-admission boundaries. Keeps exact
-# red/green and no-dispatch proof rather than deleting assertions for the cap.
-14
+# Six CI escape regressions: owner selection, declaration emission, and native
+# merge admission. The same compiler regression now exercises a real offline
+# install and materialized wrapper instead of faking pnpm; net test growth 461.
+61

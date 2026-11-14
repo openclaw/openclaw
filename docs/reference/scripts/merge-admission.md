@@ -22,10 +22,12 @@ title: "PR merge admission"
 ## Current-main static integration proof
 
 When both the PR and main changed compiler inputs, immediate merge admission runs
-the existing affected compiler checks on their exact merge tree, after an offline,
-frozen install without lifecycle scripts. Missing dependencies or a required full
-fallback stop admission: run `prepare-sync-head` and the existing gates. If main
-moves during final authority verification and needs new proof, rerun admission.
+the existing affected compiler checks on their exact merge tree. An offline, frozen
+install uses the prepared installation’s pnpm store without lifecycle scripts;
+graph discovery and checks use the merge tree’s compilers. Missing dependencies or
+a required full fallback stop admission: run `prepare-sync-head` and the existing
+gates. If main moves during final authority verification and needs new proof, rerun
+admission.
 
 Compiler-input PRs cannot submit asynchronous auto-merge or queue requests: their
 eventual base cannot be tested. Admission returns `PENDING` without dispatch;

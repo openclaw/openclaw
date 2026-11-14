@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
+import { parse } from "yaml";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { runManagedCommand } from "../lib/managed-child-process.mts";
 
@@ -78,6 +79,14 @@ export async function verifyIntegrationFreshness(
     const { prepareTsgoCommand, runPreparedTsgoCommand } = await import("../run-tsgo.mts");
     // Keep workspace links inside the exact merge tree. Never borrow another
     // checkout's node_modules or execute package lifecycle scripts.
+    const storeDir: unknown = parse(
+      readFileSync(path.join(root, "node_modules/.modules.yaml"), "utf8"),
+    )?.storeDir;
+    if (typeof storeDir !== "string" || !storeDir) {
+      throw new Error(
+        "Prepared installation has no pnpm store; rerun preparation before admission.",
+      );
+    }
     const install = await runManagedCommand({
       bin: "pnpm",
       args: [
@@ -86,7 +95,7 @@ export async function verifyIntegrationFreshness(
         "--frozen-lockfile",
         "--ignore-scripts",
         "--store-dir",
-        path.join(root, "node_modules/.pnpm-store"),
+        storeDir,
       ],
       cwd: checkout,
       env: process.env,

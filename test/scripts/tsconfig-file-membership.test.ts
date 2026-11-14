@@ -6,6 +6,7 @@ import {
   TSGO_CI_ADDITIONAL_GRAPHS,
 } from "../../scripts/lib/tsgo-core-test-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { materializeNativeCompiler, materializeTypeChecker } from "./native-boundary-fixture.js";
 import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -16,6 +17,8 @@ it.each([undefined, "tsgo"])(
   async (typeChecker) => {
     vi.stubEnv("OPENCLAW_TYPECHECKER", typeChecker);
     const cwd = fs.realpathSync(tempDirs.make("tsconfig-membership-"));
+    materializeNativeCompiler(cwd, { javaScriptApi: false });
+    materializeTypeChecker(cwd);
     const { file, write } = fixtureFiles(cwd);
     write(
       "src/root.ts",
