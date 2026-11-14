@@ -23,7 +23,7 @@ describe("imported Claude history merge", () => {
     const driftNote = kind === "drift" ? `${buildCliSessionDriftNote(["prompt-tools"])}\n\n` : "";
     const gapNote =
       kind === "legacy" || kind === "gap"
-        ? '\n\n[OpenClaw: 2 earlier messages in this chat from 2026-11-03T12:00:00.000Z to 2026-11-03T12:01:00.000Z, using "claude-cli/claude-sonnet-4-6". Their contents are not included here.]'
+        ? `\n\n[OpenClaw: 2 ${kind === "gap" ? "earlier messages in this chat" : "messages occurred outside this Claude session"} from 2026-11-03T12:00:00.000Z to 2026-11-03T12:01:00.000Z, using "claude-cli/claude-sonnet-4-6". Their contents are not included here.]`
         : "";
     const importedMessage = user(
       [
