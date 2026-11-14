@@ -10,6 +10,7 @@ export function resolveContextEngineCapabilities(params: {
   authProfileId?: string;
   contextEnginePluginId?: string;
   purpose: string;
+  abortSignal?: AbortSignal;
 }): Pick<ContextEngineRuntimeContext, "llm"> {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const agentId = resolveBoundAgentIdForSession({
@@ -21,7 +22,9 @@ export function resolveContextEngineCapabilities(params: {
   return {
     llm: {
       complete: async (request) => {
+        params.abortSignal?.throwIfAborted();
         const { createRuntimeLlm } = await import("../../plugins/runtime/runtime-llm.runtime.js");
+        params.abortSignal?.throwIfAborted();
         return await createRuntimeLlm({
           getConfig: () => params.config,
           authority: {
@@ -35,7 +38,16 @@ export function resolveContextEngineCapabilities(params: {
             allowModelOverride: false,
             allowComplete: true,
           },
-        }).complete(request);
+        }).complete({
+          ...request,
+          ...(params.abortSignal
+            ? {
+                signal: request.signal
+                  ? AbortSignal.any([request.signal, params.abortSignal])
+                  : params.abortSignal,
+              }
+            : {}),
+        });
       },
     },
   };
