@@ -47,7 +47,7 @@ function bootSandbox(
   globals: Record<string, unknown> = {},
 ) {
   const posted: unknown[][] = [];
-  const frames: { srcdoc: string }[] = [];
+  const frames: { srcdoc: string; contentWindow: object; load: () => void }[] = [];
   const parent = { postMessage: (...args: unknown[]) => posted.push(args) };
   const location = { href: `${origin}/mcp-app-sandbox`, ancestorOrigins: [parentOrigin] };
   let receive: (event: unknown) => void = () => {};
@@ -70,10 +70,17 @@ function bootSandbox(
       referrer: "",
       body: { appendChild: () => {} },
       createElement: () => {
+        let load = () => {};
         const frame = {
+          contentWindow: { postMessage: vi.fn() },
+          load: () => load(),
           srcdoc: "",
           setAttribute: () => {},
-          addEventListener: () => {},
+          addEventListener: (name: string, listener: () => void) => {
+            if (name === "load") {
+              load = listener;
+            }
+          },
           replaceWith: () => {},
         };
         frames.push(frame);
@@ -178,9 +185,104 @@ describe("MCP App sandbox HTTP origin", () => {
       });
       const widget = expectDefined(frames.at(-1), "rendered widget frame").srcdoc;
       const scripts = [...widget.matchAll(/<script>([\s\S]*?)<\/script>/gu)];
-      expect(scripts.length).toBeGreaterThan(0);
+      const witness = expectDefined(
+        scripts.find(([, source]) =>
+          source?.includes('method:"ui/notifications/sandbox-resource-loaded"'),
+        ),
+        "presentation witness",
+      );
+      expect(witness.index).toBeLessThan(widget.indexOf("<p>Synthetic widget</p>"));
+      // Two frames after load only prove a commit; compositor captures showed raster still pending.
+      const witnessPosts: unknown[][] = [];
+      const frameCallbacks: Array<() => void> = [];
+      let loadListener: (() => void) | undefined;
+      runInNewContext(witness[1]!, {
+        window: {
+          parent: { postMessage: (...args: unknown[]) => witnessPosts.push(args) },
+          requestAnimationFrame: (callback: () => void) => frameCallbacks.push(callback),
+          addEventListener: (name: string, listener: () => void, options: unknown) => {
+            expect([name, options]).toEqual(["load", { capture: true, once: true }]);
+            loadListener = listener;
+          },
+        },
+      });
+      expectDefined(loadListener, "witness load listener")();
+      for (let frame = 0; frame < 3; frame++) {
+        expect(witnessPosts).toEqual([]);
+        expectDefined(frameCallbacks.shift(), "witness animation frame")();
+      }
+      expect(witnessPosts).toEqual([
+        [{ jsonrpc: "2.0", method: "ui/notifications/sandbox-resource-loaded" }, "*"],
+      ]);
       for (const [, source] of scripts) {
         expect(() => new Script(source!)).not.toThrow();
+      }
+    });
+  });
+
+  it("acknowledges each current document only after load and presentation, with a bounded fallback", async () => {
+    await withSandboxHost(async (origin) => {
+      const shell = await (await fetch(new URL(buildMcpAppSandboxPath(), origin))).text();
+      const bootstrap = expectDefined(
+        [...shell.matchAll(/<script>([\s\S]*?)<\/script>/gu)].at(-1)?.[1],
+        "sandbox bootstrap script",
+      );
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const { posted, frames, receive, dispatch } = bootSandbox(bootstrap, origin, undefined, {
+          setTimeout,
+          clearTimeout,
+        });
+        const witness = { jsonrpc: "2.0", method: "ui/notifications/sandbox-resource-loaded" };
+        const render = (renderId: string, allowScripts = true) => {
+          receive({
+            method: "ui/notifications/sandbox-resource-ready",
+            params: { html: "<p>Synthetic widget</p>", renderId, allowScripts },
+          });
+          return expectDefined(frames.at(-1), "current widget frame");
+        };
+        const present = (frame: (typeof frames)[number]) =>
+          dispatch({ source: frame.contentWindow, origin: "null", data: witness });
+        const acknowledged = (renderId: string) => [
+          [{ ...witness, params: { renderId } }, "https://control.example"],
+        ];
+        posted.length = 0;
+        const first = render("first");
+        first.load();
+        receive(witness); // A parent cannot act as the inner document's witness.
+        expect(posted).toEqual([]);
+        present(first);
+        present(first);
+        expect(posted).toEqual(acknowledged("first")); // The bare witness is never relayed.
+
+        const superseded = render("superseded");
+        superseded.load();
+        const early = render("early");
+        posted.length = 0;
+        present(superseded);
+        present(early);
+        expect(posted).toEqual([]);
+        early.load();
+        present(early);
+        vi.advanceTimersByTime(1_000); // A superseded document's fallback cannot acknowledge.
+        expect(posted).toEqual(acknowledged("early"));
+
+        posted.length = 0;
+        const offscreen = render("offscreen");
+        vi.advanceTimersByTime(1_000); // The deadline starts at load, not delivery.
+        expect(posted).toEqual([]);
+        offscreen.load();
+        vi.advanceTimersByTime(999);
+        expect(posted).toEqual([]);
+        vi.advanceTimersByTime(1);
+        present(offscreen);
+        expect(posted).toEqual(acknowledged("offscreen"));
+
+        posted.length = 0;
+        render("script-free", false).load();
+        expect(posted).toEqual(acknowledged("script-free"));
+      } finally {
+        vi.useRealTimers();
       }
     });
   });
