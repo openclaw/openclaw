@@ -5,7 +5,7 @@ import {
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { captureRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
@@ -40,6 +40,7 @@ import {
   GATEWAY_CATALOG_WORKERS,
 } from "./prepared-model-catalog-worker.pool.js";
 import type {
+  PreparedModelCatalogHostRequest,
   PreparedModelCatalogWorkerInput,
   PreparedModelCatalogWorkerTask,
   PreparedModelWorkerCommand,
@@ -66,7 +67,7 @@ import {
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
-type CatalogPool = WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>;
+type CatalogPool = CatalogWorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>;
 // Acknowledgements contain no payloads and expire with the physical singleton pool.
 const acknowledgedContexts = new WeakMap<CatalogPool, Map<string | undefined, string>>();
 type CatalogPoolBorrower = {
@@ -485,6 +486,7 @@ export function createPreparedModelCatalogWorker(
         pool ??
         new CatalogWorkerTaskPool(workerInput.input.env, (result) => receiveResult(result));
       const contexts = getOrCreateWeakOwnerMap(acknowledgedContexts, requestPool);
+      const publishSourceAdmission = requestPool.publishSourceAdmission;
       pending = requestPool.run(
         () => {
           assertCurrent();
@@ -541,7 +543,25 @@ export function createPreparedModelCatalogWorker(
             }
             progress = next;
           },
-          onRequest: async () => {
+          onRequest: async (payload, { signal }) => {
+            // SAFETY: The catalog worker is the sole producer on this private task channel.
+            const hostRequest = payload as PreparedModelCatalogHostRequest;
+            if (hostRequest?.kind === "source-admission") {
+              signal.throwIfAborted();
+              assertCurrent();
+              let accepted = false;
+              try {
+                accepted = (await publishSourceAdmission?.(hostRequest.publication)) ?? false;
+              } catch (error) {
+                // Receipt persistence is advisory; a write failure must not terminate discovery.
+                process.emitWarning(`Plugin source receipt was not recorded: ${String(error)}`);
+              }
+              return {
+                input: accepted,
+                timeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
+                preserveDeadline: true,
+              };
+            }
             clearTimeout(timeout);
             return {
               input: !stoppedError && params.isCurrent(),

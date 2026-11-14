@@ -378,6 +378,54 @@ it("requests a checkpoint when failed bootstrap leaves a healthy host-waiting si
   }
 });
 
+it("keeps advisory exchanges from starting or renewing the discovery deadline", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  const { pool, workers } = createPool();
+  let completed = false;
+  const result = pool.run("catalog discovery", {
+    onRequest: async (value): Promise<WorkerTaskResponse> => {
+      if (value === "advisory") {
+        return { input: value, timeoutMs: 1_000, preserveDeadline: true };
+      }
+      return { input: value, timeoutMs: 1_000 };
+    },
+  });
+  const outcome = Promise.allSettled([result]).then((results) => {
+    completed = true;
+    return results;
+  });
+  const worker = workers[0]!;
+  worker.ready();
+  const taskId = worker.inputs[0]!.taskId;
+  const exchange = async (id: number, value: "advisory" | "discovery") => {
+    worker.emit("message", { status: "request", taskId, id, value });
+    await vi.advanceTimersByTimeAsync(0);
+    worker.emit("message", { status: "consumed", taskId, id });
+  };
+  try {
+    await exchange(1, "advisory");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(completed).toBe(false);
+
+    await exchange(2, "discovery");
+    await vi.advanceTimersByTimeAsync(900);
+    await exchange(3, "advisory");
+    await vi.advanceTimersByTimeAsync(99);
+    expect(completed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(completed).toBe(true);
+    expect(await outcome).toEqual([
+      { status: "rejected", reason: expect.objectContaining({ code: "timeout" }) },
+    ]);
+  } finally {
+    try {
+      await pool.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+});
+
 it("retains rejected owned-task admission until each owner releases its task", async () => {
   const { pool, workers } = createPool();
   const failed = pool.runTask("failed boot", { inputBytes: 16 });

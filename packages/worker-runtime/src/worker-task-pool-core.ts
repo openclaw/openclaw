@@ -586,7 +586,9 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.finishHostWait(task);
       exchange.onConsumed = response.onConsumed;
       exchange.sent = true;
-      armWorkerTaskTimeout(task, response.timeoutMs, this.timeout);
+      if (!response.preserveDeadline) {
+        armWorkerTaskTimeout(task, response.timeoutMs, this.timeout);
+      }
       try {
         slot.worker!.postMessage(
           {
