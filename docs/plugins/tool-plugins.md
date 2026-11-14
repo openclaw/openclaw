@@ -7,6 +7,7 @@ read_when:
   - You want to use defineToolPlugin instead of hand-writing plugin manifest metadata
   - You need to create, generate, validate, test, or publish a tool-only plugin
   - You need the plugin tool context's memory audience and currency guards
+  - A plugin validates or loads successfully but its tool is missing from a session
 ---
 
 `defineToolPlugin` builds a plugin that only adds agent-callable tools: no
@@ -45,7 +46,7 @@ npm test
 | File                   | Purpose                                                           |
 | ---------------------- | ----------------------------------------------------------------- |
 | `src/index.ts`         | `defineToolPlugin` entry with one `echo` tool                     |
-| `src/index.test.ts`    | Metadata test asserting the tool list                             |
+| `src/index.test.ts`    | Tool metadata and callback invocation tests                       |
 | `tsconfig.json`        | NodeNext TypeScript output to `dist/`                             |
 | `vitest.config.ts`     | Vitest config for `src/**/*.test.ts`                              |
 | `package.json`         | Scripts, runtime deps, `openclaw.extensions: ["./dist/index.js"]` |
@@ -59,6 +60,13 @@ Successful validation prints:
 ```text
 Plugin stock-quotes is valid.
 ```
+
+Validation proves authoring metadata is consistent, not that a tool is callable
+in a session. Before calling the quickstart complete, install the plugin and
+invoke its tool in the intended agent session. Restricted profiles such as
+`coding` and `messaging` need a matching manifest profile grant or an operator
+`tools.alsoAllow` entry; `contracts.tools` alone declares ownership, not access.
+See [Tool does not appear after install](#tool-does-not-appear-after-install).
 
 `openclaw plugins init <id>` options:
 
@@ -622,6 +630,23 @@ plugin owns each tool without loading every installed plugin's runtime. A
 stale manifest means a tool can go missing from discovery, or a registration
 error gets blamed on the wrong plugin.
 
+`defineToolPlugin` does not accept a `profiles` option. To include a tool in
+a built-in restricted profile, author `toolMetadata` in `openclaw.plugin.json`:
+
+```json
+{
+  "toolMetadata": {
+    "stock_quote": { "profiles": ["coding"] }
+  }
+}
+```
+
+This is a manifest fragment, not the whole file. The generator preserves
+manifest-authored metadata for tools still declared by the entry, including
+`profiles`; it does not grant profiles by default. Choose only profiles that
+fit the tool. Operator allowlists and denies still apply independently. See
+[Tool metadata](/plugins/manifest/capabilities#tool-metadata-reference).
+
 ## Package metadata
 
 `openclaw plugins build` also aligns `package.json` to the selected runtime
@@ -691,8 +716,10 @@ openclaw plugins inspect stock-quotes --runtime --json
 ```
 
 Installation applies to a running local Gateway automatically; start the Gateway
-if it was stopped. Ask the agent to use the tool. If the tool is not visible, inspect the plugin runtime and the effective
-tool catalog before changing code (see [Troubleshooting](#troubleshooting)).
+if it was stopped. Ask the agent to invoke the tool with known input and check
+the returned value, not just the tool list. If the tool is not visible, inspect
+the plugin runtime and the effective tool catalog before changing code (see
+[Troubleshooting](#tool-does-not-appear-after-install)).
 After later source or manifest edits, use [plugin Reload](/cli/plugins#reload).
 
 ## Publish
@@ -757,11 +784,36 @@ reinstall, rebuild, and rerun validation.
 
 Check these in order:
 
-1. `openclaw plugins inspect <plugin-id> --runtime`
-2. `openclaw plugins validate --root <plugin-root> --entry ./dist/index.js`
-3. `openclaw.plugin.json` has `contracts.tools` with the expected tool names.
-4. `package.json` has `openclaw.extensions: ["./dist/index.js"]`.
-5. Installation reported successful runtime application; after source edits or a repaired activation failure, run `openclaw plugins reload <plugin-id>`.
+1. Run `openclaw plugins inspect <plugin-id> --runtime` for registration or load
+   errors. A loaded CLI module is not proof of session selection or tool health.
+2. Run `openclaw plugins validate --root <plugin-root> --entry ./dist/index.js`.
+   Check `contracts.tools` for the expected names and `package.json` for
+   `openclaw.extensions: ["./dist/index.js"]`. These are discovery/authoring checks.
+3. Query `session_status({ capabilities: true })` in the affected session, or
+   inspect the `tools.effective` Gateway RPC for that session. Check the base
+   **and** provider-specific profiles, allowlists, and deny rules. `coding` and
+   `messaging` exclude an ungranted plugin tool even when it is registered.
+   Add a matching [manifest profile grant](#generated-metadata) as the author,
+   or a narrowly scoped `tools.alsoAllow: ["stock_quote"]` as the operator.
+   `tools.allow` alone cannot restore a tool excluded by a profile. Both profile
+   layers must permit it; explicit denies still win.
+4. If the tool is optional, explicitly select it with the applicable tool
+   policy. `full` selects optional tools too; an unset profile does not apply a
+   profile filter but does not itself select optional tools. A policy-allowed,
+   unconstructed tool has not passed a runtime health check. A factory can also
+   return `null` when the current context is unsuitable. See
+   [Optional tools](/plugins/building-plugins#registering-tools).
+5. Confirm installation reported successful runtime application. After source
+   or manifest edits or a repaired activation failure, run
+   `openclaw plugins reload <plugin-id>`. A tool reloading its own plugin should
+   use [reloadAndResume](/plugins/manage-plugins#manage-plugins-from-an-agent-conversation): it hands off
+   the current turn and resumes the conversation, rather than returning to
+   statements after the handoff.
+6. Invoke the tool with known input in the intended session. If it appears but
+   receives the tool-call ID where an argument object was expected, check the
+   [two execute signatures](#optional-and-factory-tools): declarative tools use
+   `execute(params, config, context)`, while raw `api.registerTool` tools and
+   concrete factory results use `execute(toolCallId, params, signal?, onUpdate?)`.
 
 ## See also
 

@@ -244,6 +244,9 @@ model descriptor.
 - `sideEffecting`: marks execution as potentially changing durable or external state.
 
 These fields supplement the shared `configSignals` and `authSignals` fields above.
+A tool declared in `contracts.tools` without a matching profile grant can still
+be excluded by a restricted session profile. For author and operator remedies,
+see the [missing-tool checklist](/plugins/tool-plugins#tool-does-not-appear-after-install).
 
 If a tool has no `toolMetadata`, OpenClaw preserves the existing behavior and loads the owning plugin when the tool contract matches policy. For hot-path tools whose factory depends on auth/config, plugin authors should declare `toolMetadata` instead of making core import runtime to ask.
 

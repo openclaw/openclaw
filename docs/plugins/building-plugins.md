@@ -376,13 +376,23 @@ plugin manifest:
 }
 ```
 
-Users opt in with `tools.allow`:
+Operators can opt in without replacing their profile:
 
 ```json5
 {
-  tools: { allow: ["workflow_tool"] }, // or ["my-plugin"] for every tool from one plugin
+  tools: {
+    profile: "coding",
+    alsoAllow: ["workflow_tool"], // or ["my-plugin"] for tools from one plugin
+  },
 }
 ```
+
+Plugin enablement, optional-tool selection, profiles, and explicit allow/deny
+policies are independent gates. `tools.allow` can select an optional tool, but
+does not widen a restricted profile; use `alsoAllow` for that. Base and
+provider-specific profiles intersect, and explicit denies still win. If the
+tool loads but is absent from a session, follow the
+[missing-tool checklist](/plugins/tool-plugins#tool-does-not-appear-after-install).
 
 Optional tools control whether a tool is exposed to the model. Use
 [plugin permission requests](/plugins/plugin-permission-requests) when a tool

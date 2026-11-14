@@ -648,6 +648,10 @@ jobs:
     const indexSource = `import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 
+export function echo({ input }: { input: string }) {
+  return { input };
+}
+
 export default defineToolPlugin({
   id: ${idLiteral},
   name: ${JSON.stringify(name)},
@@ -659,24 +663,35 @@ export default defineToolPlugin({
       parameters: Type.Object({
         input: Type.String({ description: "Text to echo." }),
       }),
-      execute: async ({ input }) => ({ input }),
+      execute: echo,
     }),
   ],
 });
 `;
     const testSource = `import { describe, expect, it } from "vitest";
-import entry from "./index.js";
+import entry, { echo } from "./index.js";
 import { getToolPluginMetadata } from "openclaw/plugin-sdk/tool-plugin";
 
 describe(${idLiteral}, () => {
   it("declares tool metadata", () => {
     expect(getToolPluginMetadata(entry)?.tools.map((tool) => tool.name)).toEqual(["echo"]);
   });
+
+  it("invokes the declarative callback with known input", () => {
+    expect(echo({ input: "hello" })).toEqual({ input: "hello" });
+  });
 });
 `;
     const readmeSource = `# ${name}
 
 Simple OpenClaw tool plugin.
+
+Validation checks metadata consistency, not session access. After installing, invoke
+\`echo\` with known input in your intended agent session and check the result.
+Restricted profiles such as \`coding\` and \`messaging\` need a matching manifest
+\`toolMetadata.echo.profiles\` grant or an operator \`tools.alsoAllow: ["echo"]\` entry.
+\`tools.allow\` alone does not widen a profile, and explicit denies still apply.
+See https://docs.openclaw.ai/plugins/tool-plugins#tool-does-not-appear-after-install.
 
 ## Build
 
