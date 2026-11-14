@@ -47,6 +47,7 @@ const endpointCases = [
 
 let state: OpenClawTestState;
 let profileId: string;
+let memberProfileId: string;
 let proxyListener: Awaited<ReturnType<typeof reserveTestPortListener>>;
 let ownerListener: Awaited<ReturnType<typeof reserveTestPortListener>>;
 let releaseProfileCatalog: (() => void) | undefined;
@@ -82,6 +83,7 @@ beforeAll(async () => {
         definitions: {
           guest: { ...ordinaryRole, sandbox: "required" },
           ordinary: ordinaryRole,
+          private: { ...ordinaryRole, sessions: { others: "none" } },
         },
       },
     },
@@ -92,6 +94,9 @@ beforeAll(async () => {
   profileId = ensureProfileForEmail("sandbox-guest@example.test").id;
   const ordinary = ensureProfileForEmail("ordinary@example.test");
   setUserProfileRole(ordinary.id, "ordinary");
+  memberProfileId = ensureProfileForEmail("member@example.test").id;
+  setUserProfileRole(memberProfileId, "private");
+  setUserProfileRole(ensureProfileForEmail("other-member@example.test").id, "private");
   releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
   const overrides = {
     openAiChatCompletionsEnabled: true,
@@ -135,12 +140,14 @@ beforeEach(() => {
 
 async function post(params: {
   endpoint: (typeof endpointCases)[number];
-  sessionKey: string;
+  sessionKey?: string;
+  user?: string;
   email?: string;
   owner?: boolean;
 }) {
   const body = JSON.stringify({
     model: "openclaw/main",
+    user: params.user,
     ...(params.endpoint.key === "chat"
       ? { messages: [{ role: "user", content: "Report execution isolation" }] }
       : { input: "Report execution isolation" }),
@@ -151,7 +158,7 @@ async function post(params: {
     headers: {
       "content-type": "application/json",
       "x-openclaw-scopes": "operator.write",
-      "x-openclaw-session-key": params.sessionKey,
+      ...(params.sessionKey ? { "x-openclaw-session-key": params.sessionKey } : {}),
       ...(params.owner
         ? { authorization: "Bearer test-token" }
         : {
@@ -166,6 +173,48 @@ async function post(params: {
 }
 
 describe.each(endpointCases)("$name session sandbox boundary", (endpoint) => {
+  it("lets a restricted member continue their own user conversation without granting another member access", async () => {
+    const user = `private-${endpoint.key}`;
+    const request = { endpoint, user, email: "member@example.test" };
+    const first = await post(request);
+    expect(first.status, first.body).toBe(200);
+    const second = await post(request);
+    expect(second.status, second.body).toBe(200);
+
+    const prefix = endpoint.key === "chat" ? "openai" : "openresponses";
+    const sessionKey = `agent:main:${prefix}-user:${user}`;
+    const entry = loadSessionEntryReadOnly({ agentId: "main", sessionKey });
+    expect(entry).toMatchObject({
+      createdActor: { type: "human", source: "profile", id: memberProfileId },
+    });
+    expect(entry?.sandbox).toBeUndefined();
+
+    const calls = vi.mocked(runEmbeddedAgent).mock.calls.length;
+    const denied = await post({ ...request, email: "other-member@example.test" });
+    expect(denied.status, denied.body).toBe(403);
+    expect(JSON.parse(denied.body)).toMatchObject({ error: { type: "forbidden" } });
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(calls);
+    expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey })).toMatchObject({
+      sessionId: entry?.sessionId,
+      createdActor: entry?.createdActor,
+    });
+  });
+
+  it("does not assign an existing unattributed session to a restricted caller", async () => {
+    const sessionKey = `agent:main:http-${endpoint.key}-unattributed`;
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      { sessionId: `old-${endpoint.key}`, updatedAt: Date.now(), visibility: "shared" },
+    );
+    const denied = await post({ endpoint, sessionKey, email: "member@example.test" });
+    expect(denied.status, denied.body).toBe(403);
+    expect(JSON.parse(denied.body)).toMatchObject({ error: { type: "forbidden" } });
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    const entry = loadSessionEntryReadOnly({ agentId: "main", sessionKey });
+    expect(entry?.sessionId).toBe(`old-${endpoint.key}`);
+    expect(entry?.createdActor).toBeUndefined();
+  });
+
   it.each([
     { caller: "required", email: "sandbox-guest@example.test", owner: false, required: true },
     { caller: "ordinary", email: "ordinary@example.test", owner: false, required: false },
