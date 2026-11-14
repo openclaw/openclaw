@@ -55,6 +55,7 @@ describe("failover classification", () => {
     ["token has expired", true, "auth"],
     ["API key expired. Please renew the API key.", true, "auth"],
     ["Your session has expired", true, "auth"],
+    ["Explicit auth order for openai has no usable profiles.", true, "auth"],
   ] as const)(
     "keeps auth evidence distinct from deadline failures: %s",
     (message, auth, reason) => {
