@@ -2874,7 +2874,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/session-row-event-ancestor-placement.test.ts",
   "src/gateway/session-row-event-parity.test.ts",
   "src/gateway/session-row-prepared-read.test.ts",
-  "src/gateway/session-row-projection.accepted-facts.test.ts",
   "src/gateway/session-row-projection.backfill.test.ts",
   "src/gateway/session-row-projection.doctor.test.ts",
   "src/gateway/session-row-projection.invalidation.test.ts",

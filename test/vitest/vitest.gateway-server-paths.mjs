@@ -299,7 +299,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-restart-resume.test.ts",
   "src/gateway/session-row-event-ancestor-placement.test.ts",
   "src/gateway/session-row-event-trees.test.ts",
-  "src/gateway/session-row-projection.accepted-facts.test.ts",
   "src/gateway/session-row-projection.actor.test.ts",
   "src/gateway/session-row-projection.backfill.test.ts",
   "src/gateway/session-row-projection.foreground.test.ts",

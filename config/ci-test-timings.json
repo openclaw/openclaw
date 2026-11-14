@@ -4195,7 +4195,6 @@
       "ui/src/e2e/model-providers-progressive.e2e.test.ts": 42,
       "ui/src/e2e/model-providers-studio-shape.e2e.test.ts": 3,
       "ui/src/e2e/model-providers.discovery.e2e.test.ts": 24,
-      "ui/src/e2e/model-providers.e2e.test.ts": 51,
       "ui/src/e2e/model-setup-activation-feedback.e2e.test.ts": 17,
       "ui/src/e2e/model-setup-cancel.e2e.test.ts": 18,
       "ui/src/e2e/model-setup-codex-sign-in.e2e.test.ts": 6,
