@@ -14,8 +14,7 @@ import { workshopPluginConfig } from "./test-support.js";
 
 // The plugin owns what the notice says and how undo reverts; the host's postSessionNotice owns
 // generation fencing, channel delivery, the transcript row and the system event. Those are pinned
-// in src/plugins/runtime/runtime-session-notice.e2e.test.ts and, through a real review, in
-// src/gateway/gateway-review.workshop-contract.e2e.test.ts.
+// in src/plugins/runtime/runtime-session-notice.e2e.test.ts.
 const mocks = vi.hoisted(() => ({
   postSessionNotice: vi.fn(),
   enqueueSystemEvent: vi.fn(() => true),

@@ -14759,7 +14759,6 @@ describe("ci workflow guards", () => {
       "test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts",
       "test/scripts/ci-changed-node-test-plan.policy.test.ts",
       "test/scripts/ci-changed-node-test-plan.process-owners.test.ts",
-      "test/scripts/ci-changed-node-test-plan.source-owners.test.ts",
     ]) {
       expect(runStep.run.split(file)).toHaveLength(3);
     }
