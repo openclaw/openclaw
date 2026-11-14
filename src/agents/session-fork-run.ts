@@ -284,6 +284,16 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       signal: abortSignal,
     });
     assertPreparationCurrent();
+    // This private suffix has a different prompt from the source turn. Keep billing usage,
+    // but do not charge the source prompt's measured size against the fork's smaller budget.
+    for (const entry of sessionManager.getBranch()) {
+      if (entry.type === "message" && entry.message.role === "assistant" && entry.message.usage) {
+        entry.message = {
+          ...entry.message,
+          usage: { ...entry.message.usage, contextUsage: { state: "unavailable" } },
+        };
+      }
+    }
     // Deleting, replacing, or resetting the source session must not revive its captured evidence.
     let sourceEntry:
       | Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "permissionMode">
