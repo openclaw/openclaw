@@ -7,18 +7,12 @@ import {
   resolveChatAvatarRenderUrl,
 } from "../../../lib/avatar.ts";
 import { readCachedAvatarImageUrl } from "../../../lib/identity-avatar-loader.ts";
-import {
-  resolveChannelSessionInfo,
-  resolveSessionDisplayName,
-  resolveSessionWorkSubtitle,
-} from "../../../lib/session-display.ts";
+import { resolveChannelSessionInfo } from "../../../lib/session-display.ts";
 import { filterVisibleSessionRows } from "../../../lib/sessions/navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
 } from "../../../lib/sessions/session-key.ts";
-
-const WELCOME_RECENT_SESSION_LIMIT = 5;
 
 const OPERATOR_WELCOME_SUGGESTION_KEYS = [
   "chat.welcome.suggestions.whatCanYouDo",
@@ -82,43 +76,27 @@ export function resolveAssistantDisplayAvatar(
   };
 }
 
-export type WelcomeRecentSession = ReturnType<typeof prepareWelcomeRecentSessions>[number];
-
 /**
- * Recent user-created chats for the welcome screen: the sidebar's visible-row
- * rules (no archived/cron/subagent/spawned rows, scoped to the active agent)
- * minus channel-originated sessions — those live in their channel sections and
- * are not something the user "starts" from here.
+ * Whether the active agent already has user-created chats: the sidebar's
+ * visible-row rules minus channel-originated sessions and the current draft.
+ * Starter suggestions are for a first chat only.
  */
-export function prepareWelcomeRecentSessions(
+export function hasWelcomeRecentSessions(
   sessions: SessionsListResult | null | undefined,
   sessionKey: string | undefined,
   defaultAgentId: string,
-) {
+): boolean {
   if (!sessions) {
-    return [];
+    return false;
   }
   const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? defaultAgentId;
-  return (
-    filterVisibleSessionRows(sessions.sessions, {
-      agentId,
-      defaultAgentId,
-      filterByAgent: true,
-    })
-      .filter(
-        (row) =>
-          !areUiSessionKeysEquivalent(row.key, sessionKey) &&
-          !resolveChannelSessionInfo(row.key, row.channel).channelSession,
-      )
-      // Pure recency, unlike the sidebar's pin-aware sort: a "Recent chats"
-      // list capped at five must not let stale pinned rows hide newer chats.
-      .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0) || a.key.localeCompare(b.key))
-      .slice(0, WELCOME_RECENT_SESSION_LIMIT)
-      .map((row) => ({
-        key: row.key,
-        name: resolveSessionDisplayName(row.key, row),
-        subtitle: resolveSessionWorkSubtitle(row),
-        updatedAt: row.updatedAt,
-      }))
+  return filterVisibleSessionRows(sessions.sessions, {
+    agentId,
+    defaultAgentId,
+    filterByAgent: true,
+  }).some(
+    (row) =>
+      !areUiSessionKeysEquivalent(row.key, sessionKey) &&
+      !resolveChannelSessionInfo(row.key, row.channel).channelSession,
   );
 }

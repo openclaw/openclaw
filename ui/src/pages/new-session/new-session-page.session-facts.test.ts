@@ -176,8 +176,8 @@ it("retains the welcome agent selector across draft publications and removes it 
   expect(renderSelector).toHaveBeenCalledTimes(2);
 });
 
-it("keeps pin detail enrichment out of composer preparation while live recents update", async () => {
-  const { context, page, recent, pin, describe } = await mountSessionDraft();
+it("keeps pin detail enrichment out of composer preparation", async () => {
+  const { context, page, pin, describe } = await mountSessionDraft();
   const input = page.querySelector<HTMLTextAreaElement>("textarea")!;
   input.value = "Keep this unsent draft";
   input.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
@@ -191,17 +191,6 @@ it("keeps pin detail enrichment out of composer preparation while live recents u
   expect(prepare).not.toHaveBeenCalled();
   expect(page.querySelector("textarea")).toBe(input);
   expect(input.value).toBe("Keep this unsent draft");
-
-  // Reveal recents again; their independent owner must still publish a real title update.
-  input.value = "";
-  input.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
-  await page.updateComplete;
-  prepare.mockClear();
-  context.sessions.captureReconcile()({ ...recent, label: "Live research title", updatedAt: 101 });
-  await waitForSolid(() =>
-    expect(page.querySelector(".agent-chat__recent-name")?.textContent).toBe("Live research title"),
-  );
-  expect(prepare).not.toHaveBeenCalled();
 });
 
 it("keeps default models, group loading, and run presentation live", async () => {

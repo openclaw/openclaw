@@ -50,7 +50,6 @@ suite.define(() => {
           await draft.locator(".agent-chat__welcome").waitFor();
           if (agentModel) {
             await draft.locator(".agent-chat__welcome-avatar").waitFor();
-            await draft.locator(".agent-chat__recents").waitFor();
           } else {
             await draft.getByRole("button", { name: "Set up a model", exact: true }).waitFor();
           }
@@ -79,11 +78,7 @@ suite.define(() => {
           await expect
             .poll(() => pane.locator(".agent-chat__empty").allTextContents())
             .toEqual(["No messages yet"]);
-          expect(
-            await pane
-              .locator(".agent-chat__welcome, .agent-chat__recents, .agent-chat__hint")
-              .count(),
-          ).toBe(0);
+          expect(await pane.locator(".agent-chat__welcome, .agent-chat__hint").count()).toBe(0);
           expect(await composer.isVisible()).toBe(true);
           if (!agentModel) {
             await pane.getByRole("button", { name: "Set up a model", exact: true }).click();

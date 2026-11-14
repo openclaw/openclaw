@@ -237,71 +237,6 @@ suite.define(() => {
     ]);
   });
 
-  it("keeps recent-chat timestamps on one right-aligned line in a narrow column", async () => {
-    const page = await openPage({ viewport: { width: 1280, height: 900 } });
-    const now = Date.now();
-    const checkout = (branch?: string) => ({
-      worktree: { repoRoot: "/workspace/workspace-openclaw", ...(branch ? { branch } : {}) },
-    });
-    await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionList(
-          [5_000, 32 * 60_000, 2 * 86_400_000, 5 * 86_400_000].map((age, index) =>
-            Object.assign(
-              recent(
-                String(index),
-                index === 1 ? "A long recent chat title. ".repeat(4) : "Recent work",
-                now - age,
-              ),
-              index === 3 ? {} : checkout(["neat-lobster", undefined, "tender-krill"][index]),
-            ),
-          ),
-          now,
-        ),
-      },
-    });
-
-    await page.goto(`${suite.server.baseUrl}new`);
-    const rows = page.locator(".agent-chat__recent");
-    await pollCount(rows).toBe(4);
-    await page.evaluate(() => document.fonts.ready);
-    // A narrow chat pane; the second pass lets inherited text wrap, as a
-    // theme or plugin stylesheet may, which must not squeeze the timestamp.
-    await page.addStyleTag({ content: ".agent-chat__recents { width: 320px; }" });
-    for (const textWrap of ["default", "inherited-wrap"] as const) {
-      if (textWrap === "inherited-wrap") {
-        await page.addStyleTag({
-          content: ".agent-chat__recent-time { white-space: normal; }",
-        });
-      }
-      await waitForLayoutSettled(page, ".agent-chat__recent");
-
-      const layout = await rows.evaluateAll((elements) =>
-        elements.map((row) => {
-          const time = row.querySelector<HTMLElement>(".agent-chat__recent-time")!;
-          const name = row.querySelector<HTMLElement>(".agent-chat__recent-name")!;
-          const lineHeight = Number.parseFloat(getComputedStyle(time).lineHeight);
-          return {
-            timeRight: Math.round(time.getBoundingClientRect().right),
-            timeHeight: time.getBoundingClientRect().height,
-            lineHeight,
-            timeClipped: time.scrollWidth > time.clientWidth,
-            nameTruncated: name.scrollWidth > name.clientWidth,
-            rowRight: Math.round(row.getBoundingClientRect().right),
-          };
-        }),
-      );
-      expect(new Set(layout.map((row) => row.timeRight)).size, JSON.stringify(layout)).toBe(1);
-      for (const row of layout) {
-        expect(row.timeHeight, JSON.stringify(row)).toBeLessThanOrEqual(row.lineHeight + 1);
-        expect(row.timeClipped, JSON.stringify(row)).toBe(false);
-        expect(row.timeRight).toBeLessThanOrEqual(row.rowRight);
-      }
-      // The left side gives up the width: the long title truncates instead.
-      expect(layout[1]!.nameTruncated).toBe(true);
-    }
-  });
-
   it("fits the docked mobile composer and scrolls long prompts inside the editor", async () => {
     const page = await openPage({ viewport: { width: 320, height: 568 } });
     await installMockGateway(page, {
@@ -311,8 +246,6 @@ suite.define(() => {
     });
 
     await page.goto(`${suite.server.baseUrl}new`);
-    await pollCount(page.locator(".agent-chat__recent")).toBe(1);
-    expect(await page.locator(".agent-chat__recent").isVisible()).toBe(false);
     const scroll = page.locator(".new-session-page__scroll");
     const composer = page.locator(".new-session-page__composer");
     const textarea = page.locator(".new-session-page__message");
@@ -333,9 +266,6 @@ suite.define(() => {
     await textarea.fill("");
     await waitForLayoutSettled(page, ".new-session-page__composer");
     expect(await scroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBe(0);
-
-    await page.setViewportSize({ width: 1280, height: 900 });
-    expect(await page.locator(".agent-chat__recent").isVisible()).toBe(true);
   });
 
   it("shows font-sized people inline in the cold New Session document-aware editor", async () => {

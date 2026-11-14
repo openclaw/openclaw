@@ -1,5 +1,4 @@
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
-import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { patchSettings } from "../../app/settings.ts";
 import type { GatewayStatusProps } from "../../components/gateway-status.ts";
@@ -10,7 +9,6 @@ import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/age
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { focusComposerInput } from "../../lib/composer-input.ts";
-import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
@@ -501,22 +499,6 @@ export class NewSessionPageOwner {
       operatorAuth: gateway?.hello?.auth ?? null,
       onDraftChange: (next) => this.setMessageFromUser(next),
       onSend: () => void this.submit(),
-      onOpenSession: (sessionKey) => {
-        const { context, submission } = this;
-        if (!context || submission.submitting || submission.pendingPlacement.sessionKey) {
-          return;
-        }
-        selectApplicationSession({
-          selection: context.agentSelection,
-          gateway: context.gateway,
-          sessionKey,
-          agentId: this.place.agentId,
-        });
-        context.navigate(
-          "chat",
-          sessionNavigationTarget({ context, face: "chat", sessionKey }).options,
-        );
-      },
     };
   }
 }
