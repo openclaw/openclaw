@@ -182,6 +182,13 @@ export async function readStoredClaw(): Promise<StoredClaw | undefined> {
     // SAFETY: these fixed keys are written together by clawStoreRows under this module's owner.
     return entries.get(key) as ClawRows[Key];
   };
+  const memberCollection = (value: unknown): AuthorityState["members"] => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("OpenClaw ID claw storage has an invalid member collection");
+    }
+    // SAFETY: the claw writer stores member records in each validated collection container.
+    return value as AuthorityState["members"];
+  };
   return {
     ...record,
     v: 1,
@@ -191,11 +198,10 @@ export async function readStoredClaw(): Promise<StoredClaw | undefined> {
           owner_devices: section("owner-devices"),
           members: Object.assign(
             {},
-            section("members"),
+            memberCollection(section("members")),
             ...[...entries]
               .filter(([key]) => key.startsWith("members:"))
-              // SAFETY: the claw writer stores member records in every members chunk.
-              .map(([, value]) => value as AuthorityState["members"]),
+              .map(([, value]) => memberCollection(value)),
           ),
           invites: section("invites"),
         }
