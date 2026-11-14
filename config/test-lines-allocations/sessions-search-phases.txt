@@ -1,0 +1,2 @@
+# Slow tool diagnostics: exact threshold, success/error settlement, and private-field exclusion.
+75
