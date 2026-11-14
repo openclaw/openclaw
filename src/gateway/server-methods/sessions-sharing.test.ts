@@ -13,11 +13,13 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { prepareSessionGenerationFacts } from "../../config/sessions/session-delivery-generation.js";
 import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import * as sharingLifecycle from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -250,6 +252,43 @@ it("preserves profile actors and distinguishes unknown from absent profileless e
       expect(JSON.stringify([publishedEvidenceEvents, listing])).not.toMatch(
         /local-operator|operator\.admin|actor-evidence:/,
       );
+    }
+  }));
+
+it("keeps other sessions' in-flight delivery generations when membership changes", () =>
+  withState(async () => {
+    const member = ensureProfileForEmail("sharing-generation-member@example.com");
+    const sharedKey = "agent:main:sharing-generation-target";
+    const runningKey = "agent:main:sharing-generation-running";
+    await seed(sharedKey, "session-sharing-generation-target", {
+      visibility: "shared",
+      createdActor: profileActor("profile-ada"),
+    });
+    const running = {
+      sessionId: "session-sharing-generation-running",
+      lifecycleRevision: "running-lifecycle",
+    };
+    await seed(runningKey, running.sessionId, running);
+    const generation = await prepareSessionGenerationFacts({
+      agentId: "main",
+      storePath: openOpenClawAgentDatabase({ agentId: "main" }).path,
+      sessionKey: runningKey,
+      ...running,
+    });
+    try {
+      generation.assertCurrent();
+      const request = requestFor(
+        sharedKey,
+        context(vi.fn()),
+        identifiedClient("profile-ada", "Ada"),
+      );
+      expect(await request("session.members.add", { identityId: member.id })).toEqual([
+        [true, { ok: true, sessionKey: sharedKey, identityId: member.id }, undefined],
+      ]);
+      // A long automation turn in another session must survive unrelated sharing edits.
+      generation.assertCurrent();
+    } finally {
+      generation.release();
     }
   }));
 
