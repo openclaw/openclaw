@@ -7,6 +7,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { FsSafeError } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { retryAsync } from "../infra/retry.js";
+import { decodeUtf8Input, Utf8InputError } from "../infra/utf8-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { exactWorkspaceEntryExists } from "../memory/root-memory-files.js";
 import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
@@ -21,6 +22,7 @@ import {
 import {
   MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   readWorkspaceBootstrapFile,
+  WORKSPACE_BOOTSTRAP_UTF8_SOURCE_LABEL,
 } from "./workspace-bootstrap-read.js";
 import { readWorkspaceFileCache, writeWorkspaceFileCache } from "./workspace-file-cache.js";
 
@@ -131,7 +133,7 @@ export async function readWorkspaceFileWithGuards(params: {
       }
       return {
         ok: true,
-        content: data.toString("utf-8"),
+        content: decodeUtf8Input(data, WORKSPACE_BOOTSTRAP_UTF8_SOURCE_LABEL),
         sourceIdentity: [canonicalPath, undefined, workspaceRelativePath],
       };
     } catch (error) {
@@ -139,7 +141,11 @@ export async function readWorkspaceFileWithGuards(params: {
       if (hasErrnoCode(error, "ENOENT")) {
         return { ok: false, reason: "path", error };
       }
-      return { ok: false, reason: error instanceof RangeError ? "validation" : "io", error };
+      return {
+        ok: false,
+        reason: isWorkspaceReadValidationError(error) ? "validation" : "io",
+        error,
+      };
     }
   }
   try {
@@ -182,11 +188,19 @@ export async function readWorkspaceFileWithGuards(params: {
     });
   } catch (error) {
     // Non-transient read failure, or transient retries exhausted.
-    return { ok: false, reason: error instanceof RangeError ? "validation" : "io", error };
+    return {
+      ok: false,
+      reason: isWorkspaceReadValidationError(error) ? "validation" : "io",
+      error,
+    };
   }
 }
 
-function isTransientWorkspaceReadError(error: unknown): boolean {
+function isWorkspaceReadValidationError(error: unknown): boolean {
+  return error instanceof RangeError || error instanceof Utf8InputError;
+}
+
+export function isTransientWorkspaceReadError(error: unknown): boolean {
   if (error && typeof error === "object") {
     if (
       "code" in error &&

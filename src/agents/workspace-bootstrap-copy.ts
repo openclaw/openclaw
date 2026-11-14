@@ -2,6 +2,7 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { openRootFile } from "../infra/boundary-file-read.js";
+import { Utf8InputError } from "../infra/utf8-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -55,6 +56,10 @@ export async function copyWorkspaceBootstrapFiles(
           log.warn(
             `Ignoring oversized sandbox seed file ${src}: file exceeds the ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES}-byte limit`,
           );
+          continue;
+        }
+        if (err instanceof Utf8InputError) {
+          log.warn(`Ignoring sandbox seed file ${src}: ${err.message}`);
           continue;
         }
         throw err;
