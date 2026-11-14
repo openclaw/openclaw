@@ -46,6 +46,7 @@ import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.j
 import { withEnvAsync } from "../test-utils/env.js";
 import { createManagedArtifactDownload } from "./artifact-download-grants.js";
 import {
+  assistantMessage,
   createFixture,
   createManagedOutgoingImageBlocks,
   createManagedOutgoingImageBlocksWithoutHostSql,
@@ -54,7 +55,10 @@ import {
   prepareAgentSessionStore,
   prepareManagedSessionStore as seedManagedSessionStore,
   replaceTestSessionEntry,
-  requestManagedImageHttp,
+  requestManagedImageWithHandler,
+  mediaMessage,
+  mediaPath,
+  expectManagedImageBlock,
   requireAttachmentIdFromUrl,
   requireBlock,
   requireManagedOriginalPath,
@@ -181,38 +185,8 @@ async function prepareManagedSessionStore(stateDir: string): Promise<void> {
   getRuntimeConfigMock.mockReturnValue({ session: { store } });
 }
 
-function assistantMessage(content: unknown) {
-  return { role: "assistant", content, __openclaw: { id: "msg-1" } };
-}
-
 function mockSessionEntry(storePath: string, sessionId = "sess-1", sessionFile = "session.jsonl") {
   loadSessionEntryMock.mockReturnValue({ storePath, entry: { sessionId, sessionFile } });
-}
-
-function mediaPath(fixture: { sessionKey: string; attachmentId: string }) {
-  return `/api/chat/media/outgoing/${encodeURIComponent(fixture.sessionKey)}/${fixture.attachmentId}/full`;
-}
-
-function mediaMessage(fixture: Parameters<typeof mediaPath>[0], type = "image") {
-  const url = mediaPath(fixture);
-  return assistantMessage([{ type, url, openUrl: url }]);
-}
-
-function expectManagedImageBlock(
-  blocks: Record<string, unknown>[],
-  alt: string,
-  secrets: string[],
-) {
-  expect(blocks).toHaveLength(1);
-  const block = requireBlock(blocks);
-  expect(block).toMatchObject({ type: "image", alt });
-  expect(block.url).toContain("/api/chat/media/outgoing/agent%3Amain%3Amain/");
-  expect(block.openUrl).toContain("/full");
-  expect(block.url).toBe(block.openUrl);
-  for (const secret of secrets) {
-    expect(JSON.stringify(block)).not.toContain(secret);
-  }
-  return requireAttachmentIdFromUrl(block.url);
 }
 
 function playbackFixture(stateDir: string) {
@@ -312,35 +286,10 @@ async function requestManagedImage(params: {
       ],
   );
 
-  const auth = { mode: "test" } as never;
-  const server = http.createServer((req, res) => {
-    void (async () => {
-      const handled = await handleManagedOutgoingImageHttpRequest(req, res, {
-        auth,
-        trustedProxies: ["127.0.0.1/32"],
-        allowRealIpFallback: false,
-        stateDir: params.stateDir,
-        clients: params.clients,
-      });
-      if (!handled) {
-        res.statusCode = 404;
-        res.end("unhandled");
-      }
-    })();
+  return await requestManagedImageWithHandler({
+    ...params,
+    handleRequest: handleManagedOutgoingImageHttpRequest,
   });
-
-  const origin = await listenLoopback(server);
-  try {
-    const result = await requestManagedImageHttp(
-      origin,
-      params.pathName,
-      params.method,
-      params.headers,
-    );
-    return { result, auth };
-  } finally {
-    await closeHttpServer(server);
-  }
 }
 
 describe("handleManagedOutgoingImageHttpRequest", () => {
@@ -1223,6 +1172,49 @@ describe("createManagedOutgoingImageBlocks", () => {
       cwdSpy.mockRestore();
     }
   });
+
+  it.each([
+    { pathname: "/query.sql", headerMime: "text/plain", mimeType: "text/x-sql" },
+    { pathname: "/query", headerMime: "application/sql", mimeType: "application/sql" },
+  ])(
+    "fetches and serves SQL documents reported as $headerMime",
+    async ({ pathname, headerMime, mimeType }) => {
+      const body = Buffer.from("SELECT name FROM widgets;\n");
+      const upstream = http.createServer((_req, res) => {
+        res.setHeader("content-type", headerMime);
+        res.end(body);
+      });
+      const origin = await listenLoopback(upstream);
+      try {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+          const sourceUrl = `${origin}${pathname}`;
+          const blocks = await withStoreRemoteFixture({ url: sourceUrl }, () =>
+            createManagedOutgoingImageBlocksActual({
+              sessionKey: "agent:main:main",
+              items: [{ url: sourceUrl, filename: "query.sql", trustedLocal: false }],
+              messageId: "msg-1",
+              stateDir,
+            }),
+          );
+          expect(blocks).toHaveLength(1);
+          const attachment = (requireBlock(blocks) as { attachment?: { url?: string } }).attachment;
+          expect(attachment).toMatchObject({ kind: "document", label: "query.sql", mimeType });
+          const { result } = await requestManagedImage({
+            stateDir,
+            pathName: attachment?.url ?? "",
+            authResponse: { authMethod: "token" },
+            transcriptMessages: [assistantMessage(blocks)],
+          });
+          expect(result.statusCode).toBe(200);
+          expect(result.headers["content-type"]).toBe(mimeType);
+          expect(result.headers["content-disposition"]).toContain('filename="query.sql"');
+          expect(result.body).toEqual(body);
+        });
+      } finally {
+        await closeHttpServer(upstream);
+      }
+    },
+  );
 
   it("creates managed document attachment envelopes for trusted local files", async () => {
     const pdfPath = path.join(stateDir, "not-an-image.pdf");
