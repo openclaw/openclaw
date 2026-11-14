@@ -9,7 +9,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { writeJsonTarget } from "../infra/json-file.js";
-import { tryReadJsonObjectSync as readJsonObject } from "../infra/json-files.js";
+import {
+  tryReadJson5ObjectSync,
+  tryReadJsonObjectSync as readJsonObject,
+} from "../infra/json-files.js";
 import { normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import type { BundledPluginSource } from "../plugins/bundled-sources.js";
 import { listRecoveredManagedNpmInstallCandidates } from "../plugins/installed-plugin-index-record-reader.js";
@@ -251,7 +254,7 @@ function listStaleManagedNpmBundledPlugins(
         continue;
       }
       const pluginId = normalizeOptionalString(
-        readJsonObject(path.join(packageDir, "openclaw.plugin.json"))?.id,
+        tryReadJson5ObjectSync(path.join(packageDir, "openclaw.plugin.json"))?.id,
       );
       if (!pluginId || pluginId !== bundled.pluginId) {
         continue;

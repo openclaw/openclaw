@@ -12,7 +12,10 @@ import {
   type PluginInstallRecordMapState,
 } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { tryReadJsonObjectSync as readJsonObjectFileSync } from "../infra/json-files.js";
+import {
+  tryReadJson5ObjectSync,
+  tryReadJsonObjectSync as readJsonObjectFileSync,
+} from "../infra/json-files.js";
 import { isPrereleaseResolutionAllowed, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isNotFoundPathError, normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -70,7 +73,7 @@ function hasPackagePluginMetadata(manifest: Record<string, unknown>): boolean {
 }
 
 function readManifestPluginId(packageDir: string): string | undefined {
-  const manifest = readJsonObjectFileSync(path.join(packageDir, "openclaw.plugin.json"));
+  const manifest = tryReadJson5ObjectSync(path.join(packageDir, "openclaw.plugin.json"));
   const id = typeof manifest?.id === "string" ? manifest.id.trim() : "";
   return id || undefined;
 }

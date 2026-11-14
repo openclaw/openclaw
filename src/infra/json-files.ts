@@ -1,6 +1,7 @@
-import { writeTextAtomic as writeFsSafeTextAtomic } from "@openclaw/fs-safe/atomic";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { tryReadJsonSync } from "@openclaw/fs-safe/json";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
 export {
   JsonFileReadError,
@@ -21,6 +22,17 @@ export { createAsyncLock } from "@openclaw/fs-safe/advanced";
 
 export function tryReadJsonObjectSync(filePath: string): Record<string, unknown> | null {
   return asNullableRecord(tryReadJsonSync(filePath));
+}
+
+// Native plugin manifests are documented as JSON5-capable; strict readers would
+// silently reject comments, trailing commas, and unquoted keys on install.
+export function tryReadJson5ObjectSync(filePath: string): Record<string, unknown> | null {
+  try {
+    const { buffer } = readRegularFileSync({ filePath });
+    return asNullableRecord(parseJsonWithJson5Fallback(buffer.toString("utf8")));
+  } catch {
+    return null;
+  }
 }
 
 export const writeTextAtomic: typeof writeFsSafeTextAtomic = async (filePath, content, options) => {
