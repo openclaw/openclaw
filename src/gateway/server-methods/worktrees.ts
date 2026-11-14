@@ -14,6 +14,7 @@ import {
   validateWorktreesRestoreParams,
   validateWorktreesRetireSnapshotParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { WorktreeRecordNotFoundError } from "../../agents/worktrees/errors.js";
 import { managedWorktrees, WorktreeSnapshotError } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { runGitReadOperation } from "../../infra/git-read-cache.js";
@@ -46,6 +47,17 @@ function publicWorktreeRecord(
 function invalidParams(respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"]): void {
   respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid worktrees parameters", {
     details: { mutationAccepted: false },
+  });
+}
+
+/** An id that names no record changed nothing; say so, so the caller can report the id itself. */
+function respondRecordNotFound(
+  respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
+  error: WorktreeRecordNotFoundError,
+): void {
+  respondError(respond, ErrorCodes.UNAVAILABLE, error.message, {
+    details: { reason: "WORKTREE_NOT_FOUND", mutationAccepted: false },
+    retryable: false,
   });
 }
 
@@ -220,6 +232,10 @@ export const worktreesHandlers: GatewayRequestHandlers = {
         respond(true, { removed: false, snapshotError: error.snapshotError }, undefined);
         return;
       }
+      if (error instanceof WorktreeRecordNotFoundError) {
+        respondRecordNotFound(respond, error);
+        return;
+      }
       respondError(respond, ErrorCodes.UNAVAILABLE, String(error), {
         ...(error instanceof WorktreeSnapshotError
           ? { details: { snapshotError: error.snapshotError } }
@@ -235,13 +251,20 @@ export const worktreesHandlers: GatewayRequestHandlers = {
       return;
     }
     const id = normalizeOptionalString(params.id) ?? params.id;
-    const record = await managedWorktrees.restore({
-      id,
-      ...(params.recoverExactState ? { recoverExactState: params.recoverExactState } : {}),
-      ...(commitGuard ? { commitGuard, signal: opts.signal } : {}),
-    });
-    commitGuard?.();
-    respond(true, publicWorktreeRecord(record, Boolean(params.expectedOwnerId)), undefined);
+    try {
+      const record = await managedWorktrees.restore({
+        id,
+        ...(params.recoverExactState ? { recoverExactState: params.recoverExactState } : {}),
+        ...(commitGuard ? { commitGuard, signal: opts.signal } : {}),
+      });
+      commitGuard?.();
+      respond(true, publicWorktreeRecord(record, Boolean(params.expectedOwnerId)), undefined);
+    } catch (error) {
+      if (!(error instanceof WorktreeRecordNotFoundError)) {
+        throw error;
+      }
+      respondRecordNotFound(respond, error);
+    }
   }),
   "worktrees.branches": worktreeHandler(validateWorktreesBranchesParams, async (opts, params) => {
     const { respond } = opts;

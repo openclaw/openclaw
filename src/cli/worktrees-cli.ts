@@ -55,6 +55,12 @@ function mutateWorktree<T>(
     if (error instanceof WorktreeRecordNotFoundError) {
       throwExpectedCliError(error.message);
     }
+    // A running Gateway owns the registry and reports the same refusal as a structured detail.
+    const refusal = error instanceof Error && error.cause instanceof Error ? error.cause : null;
+    const details = (refusal as { details?: { reason?: unknown } } | null)?.details;
+    if (refusal && details?.reason === "WORKTREE_NOT_FOUND") {
+      throwExpectedCliError(refusal.message);
+    }
     throw error;
   });
 }
