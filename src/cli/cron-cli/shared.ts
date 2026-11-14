@@ -396,7 +396,7 @@ export async function callCronReadFromCli(method: string, opts: GatewayRpcOpts, 
 export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   // Old/offline gateways should not make successful cron mutations fail after the fact.
   try {
-    const res = (await callGatewayFromCli("cron.status", opts, {})) as {
+    const res = (await callCronReadFromCli("cron.status", opts, {})) as {
       enabled?: boolean;
       storePath?: string;
       storage?: string;
@@ -434,7 +434,7 @@ export async function buildCronCommandShellArgvForGateway(
     "The Gateway did not report its platform, so --command cannot pick its shell. Pass the exact argv with --command-argv instead.";
   let info: Record<string, unknown>;
   try {
-    info = await callGatewayFromCli("system.info", opts, {});
+    info = await callCronReadFromCli("system.info", opts, {});
   } catch (err) {
     if (err instanceof GatewayClientRequestError && err.message === "unknown method: system.info") {
       throw new CronCliError(unknownPlatform, { cause: err });
