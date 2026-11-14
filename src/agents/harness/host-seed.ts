@@ -13,6 +13,7 @@ import {
   resolveMaxActiveTranscriptBytes,
 } from "../../context-engine/transcript-byte-limit.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { requireCompactionWriterEntry } from "../embedded-agent-runner/compaction-successor.js";
@@ -85,11 +86,16 @@ export function bindBoundedSeed(
     };
     const emitCompactionProgress = async (data: {
       phase: "start" | "end" | "context_bounded";
+      message?: string;
       completed?: boolean;
       qualityDegraded?: true;
       summaryRefused?: true;
     }) => {
       assert();
+      // Host-prepared seed notices bypass the native projector that publishes run events.
+      if (attempt.runId) {
+        emitAgentEvent({ runId: attempt.runId, sessionKey, stream: "compaction", data });
+      }
       // The host observer is advisory. Its failure must not abort the turn.
       try {
         await attempt.onAgentEvent?.({ stream: "compaction", data });
@@ -327,7 +333,7 @@ export function bindBoundedSeed(
     }
     assert();
     if (cut) {
-      await emitCompactionProgress({ phase: "context_bounded" });
+      await emitCompactionProgress({ phase: "context_bounded", message: BOUNDED_CONTEXT_NOTICE });
     }
     return bounded;
   };

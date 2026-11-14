@@ -4,18 +4,14 @@ import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtim
 import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
-import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
+import { registerModelProviderAuthEnglish } from "../../../i18n/locales/en-model-provider-auth.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import {
   ChatModelAccountOptions,
   ChatModelAccountSectionView,
 } from "./chat-model-account-control.tsx";
 import { ChatModelAuthState, modelAuthState } from "./chat-model-auth-state.tsx";
-import {
-  ChatModelCatalogRefresh,
-  ChatModelCatalogState,
-  isModelCatalogLoading,
-} from "./chat-model-catalog-state.tsx";
+import { ChatModelCatalogState, isModelCatalogLoading } from "./chat-model-catalog-state.tsx";
 import {
   createChatModelFavorites,
   createChatModelFavoritesOpening,
@@ -56,7 +52,7 @@ import {
   providerRuntimeOptions,
 } from "./chat-model-settings.tsx";
 
-registerSettingsEnglish();
+registerModelProviderAuthEnglish();
 
 type ChatModelPickerPanelProps = {
   params: ChatModelPickerParams;
@@ -332,7 +328,6 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       <Show when={!activeAuth() || panel.params.modelCatalogState?.status !== "ready"}>
         {renderCatalogStatus()(() => (
           <ChatModelCatalogState
-            loadingSkeleton
             state={panel.params.modelCatalogState}
             hasOptions={modelOptions().length > 0}
             hasSelectableOptions={state().hasSelectableModelOptions}
@@ -532,12 +527,6 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
                 }
                 onKeyDown={handleModelSearchKeydown}
               />
-              {modelOptions().length > 0 ? (
-                <ChatModelCatalogRefresh
-                  state={panel.params.modelCatalogState}
-                  providerLabel={providerDisplayLabel}
-                />
-              ) : undefined}
             </div>
           ) : undefined}
           <Show when={favorites.snapshot().error}>

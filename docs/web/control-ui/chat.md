@@ -594,9 +594,10 @@ The Labs model selector offers:
 - **Default model**: use the agent's configured default model, ignoring the
   conversation's model override.
 
-Predictions use bounded recent text from the current conversation in an isolated,
-tool-free request. Tool calls and results are skipped, and long messages keep
-their endings. They cannot run tools, retrieve memory, or send messages. An
+Predictions use your recent messages in the current conversation (up to 16) and
+the assistant's final reply, in an isolated, tool-free request with low
+reasoning. Tool calls, tool results and the assistant's progress updates are
+skipped, and long messages keep their endings. They cannot run tools, retrieve memory, or send messages. An
 unavailable selected model skips the suggestion rather than silently switching
 to another model. Enabling the experiment can add model usage and cost; existing
 model configuration, provider credentials, and session access rules still apply.
@@ -1146,6 +1147,23 @@ reply to the current Control UI conversation. ClawHub supplies the official
 designation, and the Gateway checks installation status; the agent cannot assign
 those badges. A search with no official match or an unavailable catalog returns
 an explanation in chat.
+
+When the agent already knows the exact plugin, for example one that a Template
+declares, it names the ClawHub package instead of searching:
+
+```json
+{
+  "action": "send",
+  "clawhub": { "plugin": "@expediagroup/expedia-openclaw" }
+}
+```
+
+`plugin` is the exact package name and cannot be combined with `query` or
+`kind`. The chat shows only that plugin's card, never a similar search result.
+A community plugin is shown without the official badge, and its button reads
+**View details** instead of **Install**; install it from the plugin overview.
+A name that ClawHub does not know, or that is not a plugin, shows no card and
+returns an explanation. Searches still return official plugins and skills only.
 
 ### Source previews and copying code
 

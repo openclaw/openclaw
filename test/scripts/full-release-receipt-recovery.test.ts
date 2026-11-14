@@ -19,6 +19,7 @@ import {
   verifyOriginalReceiptQualification,
 } from "../../scripts/full-release-receipt-recovery.mjs";
 import * as candidateReuse from "../../scripts/lib/full-release-candidate-reuse.mjs";
+import { releaseChildReuseSha256 } from "../../scripts/lib/full-release-child-request.mjs";
 import * as childReuse from "../../scripts/lib/full-release-child-reuse.mjs";
 import { retainedPublicationArtifactSource } from "../../scripts/lib/release-evidence-identity.mjs";
 import { validateFullReleaseNpmPreflight } from "../../scripts/npm-preflight-tooling-identity.mjs";
@@ -303,10 +304,16 @@ describe("receipt-backed aggregate recovery", () => {
     ).rejects.toThrow("child verification reached");
     expect(verifyChild).toHaveBeenCalledOnce();
     expect(verifyChild.mock.calls[0]?.[2]?.deadlineMs).toBe(now + 600_000);
+    expect(verifyChild.mock.calls[0]?.[1]?.policyTargetVersion).toBe(
+      recovery.candidateBinding.package.version,
+    );
   });
 
-  it("bounds Docker transfers and reconstructs recovery payloads from live metadata", async () => {
+  it("bounds transfers and verifies adopted child receipts", async () => {
     const { old, recovery } = fixture();
+    const selected = expectDefined(recovery.children.normalCi, "normal CI");
+    selected.sourceParentRunId = "800";
+    selected.workflowRef = "release-ci/earlier-same-candidate";
     vi.spyOn(candidateReuse, "verifySealedFullReleaseCandidate").mockImplementation(vi.fn());
     const verifyChild = vi
       .fn<typeof childReuse.validateReusableReleaseChild>()
@@ -336,7 +343,7 @@ describe("receipt-backed aggregate recovery", () => {
         };
         return {
           selection,
-          run: {},
+          run: { status: "completed", conclusion: "success" },
           jobs: [],
           receipt: {
             jobs: coverage.requiredJobs.map((name) => ({
@@ -368,9 +375,21 @@ describe("receipt-backed aggregate recovery", () => {
           dispatches.find((entry) => entry.id === id),
           "dispatch job",
         );
-        return `TARGET_SHA: ${old.q}\nCI_RELEASE_SCOPE: npm-beta\nhttps://github.com/${old.repository}/actions/runs/${child.runId} (attempt 1)`;
+        const witness =
+          child.runId === selected.runId
+            ? `FRV_CHILD_REUSE_SHA256=${releaseChildReuseSha256(selected)}\n`
+            : "";
+        return `${witness}TARGET_SHA: ${old.q}\nCI_RELEASE_SCOPE: npm-beta\nhttps://github.com/${old.repository}/actions/runs/${child.runId} (attempt 1)`;
       },
     };
+    const adoptedLog = client.getJobLog;
+    client.getJobLog = async (id) =>
+      (await adoptedLog(id)).replace(/FRV_CHILD_REUSE_SHA256=[a-f0-9]{64}/u, "");
+    await expect(verifyOriginalReceiptQualification(recovery, { client })).rejects.toThrow(
+      "reuse adoption witness mismatch",
+    );
+    expect(verifyPayloads).not.toHaveBeenCalled();
+    client.getJobLog = adoptedLog;
     await expect(verifyOriginalReceiptQualification(recovery, { client })).rejects.toThrow(
       "publication verification reached",
     );
@@ -542,6 +561,7 @@ describe("receipt-backed aggregate recovery", () => {
       client: inventoryClient,
       authenticatedPayloads: expectedPayloads,
     });
+    expect(result.children[0]?.sourceParentRunId).toBe("800");
     expect(result.publication.payloads).toEqual(expectedPayloads);
     expect(downloads).toEqual(["904"]);
     expect(inventoryClient.getArtifact.mock.calls.map(([id]) => String(id))).toEqual([
@@ -693,6 +713,22 @@ describe("receipt-backed aggregate recovery", () => {
     };
     await revalidateReceiptRecoveryRuns(recovery, client);
     expect(new Set(calls).size).toBe(8);
+    const normalCi = recovery.children.normalCi;
+    if (!normalCi) {
+      throw new Error("fixture is missing the normal CI child");
+    }
+    const waivedRun = normalCi.runId;
+    const failedClient = {
+      getRun: async (id: string) => ({
+        ...(await client.getRun(id)),
+        conclusion: id === waivedRun ? "failure" : "success",
+      }),
+    };
+    await expect(revalidateReceiptRecoveryRuns(recovery, failedClient)).rejects.toThrow(
+      "current attempt changed",
+    );
+    const verifiedChildren = [{ runId: waivedRun, conclusion: "failure" }];
+    await revalidateReceiptRecoveryRuns(recovery, failedClient, verifiedChildren);
     attempt = 2;
     await expect(revalidateReceiptRecoveryRuns(recovery, client)).rejects.toThrow(
       "current attempt changed",

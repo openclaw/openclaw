@@ -14468,9 +14468,14 @@ struct ChatStreamPresentationTests {
         #expect(bubble.count == 1)
         #expect(transcript.count == 0)
         #expect(vm.timelineRevision == before)
+        // The transcript hides the bubble on a clear; emptied in its own scope, the bubble laid out
+        // at zero before the transcript changed and collapsed it.
+        let cleared = Fired()
+        withObservationTracking { _ = vm.displayedStreamingAssistantText } onChange: { cleared.count += 1 }
         vm.updateStreamingAssistantText(nil)
         #expect(transcript.count == 1)
-        #expect(vm.displayedStreamingAssistantText == nil)
+        #expect(vm.liveAssistantTextShape == nil)
+        #expect(cleared.count == 0)
     }
 
     @Test @MainActor func `retired callback cannot publish old or new session text`() throws {

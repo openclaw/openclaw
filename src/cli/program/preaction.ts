@@ -12,6 +12,7 @@ import {
 } from "../command-execution-startup.js";
 import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
 import { resolveCliStartupPolicy } from "../command-startup-policy.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
 import { isModelsPlainMachineOutput } from "../models-output-mode.js";
 import { getCommanderCommandPath, hasCommanderOptionToken } from "./commander-parse-facts.js";
@@ -49,7 +50,7 @@ async function runStateStoreGuard(commandPath: string[]): Promise<void> {
   if (outcome.kind === "warn") {
     defaultRuntime.log(outcome.message);
   } else if (outcome.kind === "refuse") {
-    throw new Error(outcome.message);
+    throwExpectedCliError(outcome.message);
   }
 }
 

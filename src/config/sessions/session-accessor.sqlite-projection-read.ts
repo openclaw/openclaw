@@ -146,13 +146,12 @@ export function selectActiveTranscriptIdentityRows(database: Pick<TranscriptRead
 }
 
 export function selectActiveTranscriptEventRows(database: Pick<TranscriptReadDatabase, "db">) {
+  // Partial statistics must not turn a bounded active tail into a payload scan and sort.
   return getActiveTranscriptKysely(database)
     .selectFrom("session_transcript_active_events as active")
-    .innerJoin("transcript_events as event", (join) =>
-      join
-        .onRef("event.session_id", "=", "active.session_id")
-        .onRef("event.seq", "=", "active.event_seq"),
-    );
+    .crossJoin("transcript_events as event")
+    .whereRef("event.session_id", "=", "active.session_id")
+    .whereRef("event.seq", "=", "active.event_seq");
 }
 
 /** Missing upgrade-era facts retain native accounting without a reader backfill. */
