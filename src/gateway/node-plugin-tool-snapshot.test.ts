@@ -105,16 +105,21 @@ describe("publishNodeSessionPluginTools", () => {
     ]);
   });
 
-  it("sorts before keeping at most 128 descriptors", () => {
+  it("preserves the full sorted inventory while deduplicating and rejecting unapproved commands", () => {
     const tools = Array.from({ length: 130 }, (_, index) =>
       descriptor(`tool_${String(index).padStart(3, "0")}`),
     ).toReversed();
 
-    const normalized = publish(tools);
+    const normalized = publish([
+      ...tools,
+      descriptor("tool_129"),
+      descriptor("blocked", "demo.blocked"),
+    ]);
 
-    expect(normalized).toHaveLength(128);
+    expect(normalized).toHaveLength(130);
     expect(normalized[0]?.name).toBe("tool_000");
-    expect(normalized[127]?.name).toBe("tool_127");
+    expect(normalized.at(-1)?.name).toBe("tool_129");
+    expect(listConnectedNodePluginTools()).toHaveLength(130);
   });
 
   it("returns no descriptors when gateway publication is disabled", () => {
