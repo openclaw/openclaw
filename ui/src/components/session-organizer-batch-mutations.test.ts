@@ -665,32 +665,48 @@ describe("session organizer destructive confirmations", () => {
     });
   });
 
-  it("warns about bound automations even after the delete confirmation opt-out", async () => {
-    patchSettings({ sessionDeleteConfirm: false });
-    const info = vi.spyOn(console, "info").mockImplementation(() => {});
-    const h = createHarness(destructiveHarness);
-    const original = h.request.getMockImplementation()!;
-    h.request.mockImplementation(async (method, params, options) =>
-      method === "cron.list"
-        ? { jobs: [{ id: "job-1", name: "Nightly digest" }], total: 1 }
-        : original(method, params, options),
-    );
-    const row = makeRow(0, { hasAutomation: true });
-    const pending = h.remove(row, { offerSkip: true });
-    const actions = await waitForConfirmDialogActions();
-    expect(document.body.textContent).toContain('Deleting "Batch 0" pauses its automations.');
-    expect(document.body.textContent).toContain("Nightly digest (job-1)");
-    expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
-    expect(actions.textContent).toContain("Delete anyway");
-    answerConfirmDialog(actions, "cancel");
-    await pending;
-    expect(h.deleteOne).not.toHaveBeenCalled();
-    expect(info.mock.calls.map(([message]) => message)).toEqual([
-      "[session-automation-confirm] delete shown",
-      "[session-automation-confirm] delete cancelled",
-    ]);
-    info.mockRestore();
-  });
+  it.each([1, 2])(
+    "warns that automations can continue after deleting %i conversations",
+    async (count) => {
+      patchSettings({ sessionDeleteConfirm: false });
+      const info = vi.spyOn(console, "info").mockImplementation(() => {});
+      const h = createHarness(destructiveHarness);
+      const original = h.request.getMockImplementation()!;
+      h.request.mockImplementation(async (method, params, options) =>
+        method === "cron.list"
+          ? { jobs: [{ id: "job-1", name: "Nightly digest" }], total: 1 }
+          : original(method, params, options),
+      );
+      const rows = Array.from({ length: count }, (_, index) =>
+        makeRow(index, { hasAutomation: true }),
+      );
+      const pending =
+        count === 1
+          ? h.remove(rows[0]!, { offerSkip: true })
+          : deleteSessionsBatch(h.host, rows, h.scope);
+      const actions = await waitForConfirmDialogActions();
+      expect
+        .soft(document.body.textContent)
+        .toContain(
+          count === 1
+            ? 'Automations linked to "Batch 0" may keep running after deletion.'
+            : "Automations linked to 2 of these conversations may keep running after deletion.",
+        );
+      expect.soft(document.body.textContent).toContain("Disable or remove them separately.");
+      expect(document.body.textContent).toContain("Nightly digest (job-1)");
+      expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
+      expect(actions.textContent).toContain("Delete anyway");
+      answerConfirmDialog(actions, "cancel");
+      await pending;
+      expect(h.deleteOne).not.toHaveBeenCalled();
+      expect(h.deleteMany).not.toHaveBeenCalled();
+      expect(info.mock.calls.map(([message]) => message)).toEqual([
+        "[session-automation-confirm] delete shown",
+        "[session-automation-confirm] delete cancelled",
+      ]);
+      info.mockRestore();
+    },
+  );
 
   it.each(["cloud worker stop", "preserved worktree removal"])(
     "never offers an opt-out on %s",
