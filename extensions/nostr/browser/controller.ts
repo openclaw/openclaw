@@ -83,6 +83,15 @@ export function createProfileController(
     const submitted = form;
     const isCurrent = () => !disposed && !context.signal.aborted && operation === current;
     const busy = action === "save" ? "saving" : "importing";
+    const failure = (error: string) =>
+      t("channels.nostr.notices.operationFailed", {
+        prefix: t(
+          action === "save"
+            ? "channels.nostr.notices.updateFailed"
+            : "channels.nostr.notices.importFailed",
+        ),
+        error,
+      });
     editForm((value) => ({
       ...value,
       [busy]: true,
@@ -141,7 +150,7 @@ export function createProfileController(
       if (!result.ok || result.data?.ok === false || !result.data) {
         form = {
           ...settled,
-          error: result.errorMessage,
+          error: failure(result.errorMessage),
           ...(result.action === "save"
             ? {
                 fieldErrors: parseValidationErrors(
@@ -190,14 +199,7 @@ export function createProfileController(
         error:
           error instanceof DOMException && error.name === "TimeoutError"
             ? t("channels.nostr.notices.timeout")
-            : t("channels.nostr.notices.operationFailed", {
-                prefix: t(
-                  action === "save"
-                    ? "channels.nostr.notices.updateFailed"
-                    : "channels.nostr.notices.importFailed",
-                ),
-                error: context.formatError(error),
-              }),
+            : failure(context.formatError(error)),
       }));
     }
   }

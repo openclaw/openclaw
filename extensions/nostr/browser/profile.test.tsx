@@ -63,7 +63,7 @@ class ProfileFixture {
       mountConfig: () => () => {},
     });
     flush();
-    this.click("Edit Profile");
+    this.click("Edit profile");
     this.field("name", "Alice Updated");
   }
   button(label: string) {
@@ -115,7 +115,7 @@ it("loads a changed locale without replacing the edited profile input", async ()
   input.focus();
   input.setSelectionRange(2, 5);
   f.update({ locale: "sv" });
-  await f.waitForText("Spara och publicera");
+  await f.waitForText("Användarnamn");
   expect(f.input("name")).toBe(input);
   expect(input.value).toBe("Alice Updated");
   expect(document.activeElement).toBe(input);
@@ -123,7 +123,7 @@ it("loads a changed locale without replacing the edited profile input", async ()
   expect(input.selectionEnd).toBe(5);
   expect(f.request).not.toHaveBeenCalled();
   f.update({ locale: "en" });
-  expect(f.button("Save & Publish")).toBeDefined();
+  expect(f.button("Save & publish")).toBeDefined();
 });
 
 it("retains profile facts while refreshed snapshots update their values", () => {
@@ -166,7 +166,7 @@ it.each([true, false])("publishes the live draft with persisted=%s", async (pers
   expect(f.input("name")).toBe(input);
   expect(input.value).toBe("after");
   expect(f.container.textContent).toContain("You have unsaved changes");
-  f.click("Save & Publish");
+  f.click("Save & publish");
   await settle();
   expect(f.request).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
@@ -177,9 +177,11 @@ it.each([true, false])("publishes the live draft with persisted=%s", async (pers
     }),
   );
   expect(f.container.textContent).toContain(
-    persisted ? "Profile published to relays." : "Profile publish failed on all relays.",
+    persisted
+      ? "Profile published to relays."
+      : "Couldn’t publish the profile to any relay. Try again.",
   );
-  expect(f.button("Save & Publish").disabled).toBe(persisted);
+  expect(f.button("Save & publish").disabled).toBe(persisted);
   expect(f.refresh.mock.calls).toEqual(persisted ? [[true]] : []);
 });
 
@@ -190,7 +192,7 @@ it.each([
 ] as const)("imports into the %s profile", async (mode, expected) => {
   const saved = mode === "saved";
   const hidden = mode === "hidden";
-  const pending = f.pending("Import from Relays");
+  const pending = f.pending("Import from relays");
   if (mode === "live draft") {
     f.field("displayName", "Typed during import");
   }
@@ -222,9 +224,11 @@ it("renders validation details and clears a field error on editing", async () =>
     data: { ok: false, details: ["name: Name is too long"] },
     errorMessage: "Invalid profile",
   });
-  f.click("Save & Publish");
+  f.click("Save & publish");
   await settle();
-  expect(f.container.querySelector('[role="alert"]')?.textContent).toContain("Invalid profile");
+  expect(f.container.querySelector('[role="alert"]')?.textContent).toContain(
+    "Couldn’t update the profile. Try again. Invalid profile",
+  );
   expect(f.container.textContent).toContain("Name is too long");
   expect(f.input("name").getAttribute("aria-invalid")).toBe("true");
   f.field("name", "Short");
@@ -232,33 +236,33 @@ it("renders validation details and clears a field error on editing", async () =>
   expect(f.refresh).not.toHaveBeenCalled();
 });
 
-it.each(["Save & Publish", "Import from Relays"])("times out and recovers %s", async (action) => {
+it.each(["Save & publish", "Import from relays"])("times out and recovers %s", async (action) => {
   vi.useFakeTimers();
   const pending = f.pending(action);
   const { signal } = f.request.mock.calls[0]![0];
   signal.addEventListener("abort", () => pending.reject(signal.reason), { once: true });
   await vi.advanceTimersByTimeAsync(29_999);
-  expect(f.container.textContent).not.toContain("Request timed out");
+  expect(f.container.textContent).not.toContain("Couldn’t confirm");
   expect(signal.aborted).toBe(false);
   await vi.advanceTimersByTimeAsync(1);
   await settle();
   expect(signal.aborted).toBe(true);
   expect(f.button(action).disabled).toBe(false);
   expect(f.container.textContent).toContain(
-    "Request timed out after 30 seconds; the server may still have applied the change — check the profile before retrying.",
+    "Couldn’t confirm the profile change within 30 seconds. It may still have applied, so check the profile before you try again.",
   );
   expect(f.refresh).not.toHaveBeenCalled();
 });
 
 it.each(["disconnect", "replacement form", "abort"])("drops imports after %s", async (reason) => {
-  const pending = f.pending("Import from Relays");
+  const pending = f.pending("Import from relays");
   if (reason === "disconnect") {
     f.update({ connected: false, connectionEpoch: 2 });
-    expect(f.button("Save & Publish").disabled).toBe(true);
-    expect(f.button("Import from Relays").disabled).toBe(true);
+    expect(f.button("Save & publish").disabled).toBe(true);
+    expect(f.button("Import from relays").disabled).toBe(true);
   } else if (reason === "replacement form") {
     f.click("Cancel");
-    f.click("Edit Profile");
+    f.click("Edit profile");
     f.field("name", "Fresh draft");
   } else {
     f.abort.abort();
@@ -271,14 +275,14 @@ it.each(["disconnect", "replacement form", "abort"])("drops imports after %s", a
   if (reason === "disconnect") {
     expect(f.input("name").value).toBe("Alice Updated");
     f.update({ connected: true, connectionEpoch: 3 });
-    expect(f.button("Import from Relays").disabled).toBe(false);
+    expect(f.button("Import from relays").disabled).toBe(false);
   } else if (reason === "replacement form") {
     expect(f.input("name").value).toBe("Fresh draft");
   }
 });
 
 it("does not format a late failure after the view aborts", async () => {
-  const pending = f.pending("Save & Publish");
+  const pending = f.pending("Save & publish");
   f.abort.abort();
   pending.reject(new Error("late failure"));
   await settle();

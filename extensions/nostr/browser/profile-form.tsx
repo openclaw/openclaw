@@ -188,7 +188,7 @@ export function createNostrProfileForm(t: Translator) {
               onClick={() => params.callbacks.onSave()}
               disabled={!params.connected || params.state.saving || !isDirty()}
             >
-              {params.state.saving ? t("common.saving") : t("common.saveAndPublish")}
+              {params.state.saving ? t("common.saving") : t("channels.nostr.saveAndPublish")}
             </button>
 
             <button
@@ -196,7 +196,9 @@ export function createNostrProfileForm(t: Translator) {
               onClick={() => params.callbacks.onImport()}
               disabled={!params.connected || params.state.importing || params.state.saving}
             >
-              {params.state.importing ? t("common.importing") : t("common.importFromRelays")}
+              {params.state.importing
+                ? t("common.importing")
+                : t("channels.nostr.importFromRelays")}
             </button>
 
             <button
@@ -204,7 +206,9 @@ export function createNostrProfileForm(t: Translator) {
               aria-expanded={params.state.showAdvanced ? "true" : "false"}
               onClick={() => params.callbacks.onToggleAdvanced()}
             >
-              {params.state.showAdvanced ? t("common.hideAdvanced") : t("common.showAdvanced")}
+              {params.state.showAdvanced
+                ? t("channels.nostr.hideAdvanced")
+                : t("channels.nostr.showAdvanced")}
             </button>
 
             <button
