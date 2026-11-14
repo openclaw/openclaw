@@ -98,6 +98,42 @@ function savedReceipt(read: SkillsLibraryReadResult): SkillsLibraryReceipt {
   };
 }
 
+it("derives unsaved changes from the complete skill bundle rather than edit history", async () => {
+  const { library, draft, read, request } = await openSkill();
+  const confirm = vi.mocked(showConfirmDialog).mockClear().mockResolvedValue(false);
+  onTestFinished(() => confirm.mockReset());
+  expect(library.isDirty()).toBe(false);
+  draft.content += " changed";
+  expect(library.isDirty()).toBe(true);
+  await library.close();
+  expect(confirm).toHaveBeenCalledTimes(1);
+  expect(library.state.draft).toBe(draft);
+  draft.content = read.content;
+  expect(library.isDirty()).toBe(false);
+  draft.slug += "-renamed";
+  expect(library.isDirty()).toBe(true);
+  draft.slug = read.entry.slug;
+  draft.files = [{ ...read.files[0]!, encoding: "utf8", content: "picture" }];
+  expect(library.isDirty()).toBe(false);
+  draft.files = [{ ...draft.files[0]!, executable: true }];
+  expect(library.isDirty()).toBe(true);
+  draft.files = [{ ...draft.files[0]!, executable: false, content: "changed" }];
+  expect(library.isDirty()).toBe(true);
+  draft.files = [...read.files, { path: "empty.txt", content: "", encoding: "utf8" }];
+  expect(library.isDirty()).toBe(true);
+  draft.files = [];
+  expect(library.isDirty()).toBe(true);
+  draft.files = read.files;
+  draft.selectedFile = read.files[0]!.path;
+  draft.rollbackRevision = "not-an-edit";
+  expect(library.isDirty()).toBe(false);
+  await library.save();
+  expect(request).toHaveBeenCalledTimes(1);
+  await library.close();
+  expect(library.state.draft).toBeNull();
+  expect(confirm).toHaveBeenCalledTimes(1);
+});
+
 it.each([
   { action: "disable", outcome: "error" },
   { action: "share", outcome: "success" },
@@ -463,6 +499,7 @@ it("settles support-file saves after caller retirement and retains their baselin
     }),
   );
   expect(draft.baseFiles).toEqual(draft.files);
+  expect(library.isDirty()).toBe(false);
 
   config.current.uploadsEnabled = false;
   draft.content = "# Next edit";
@@ -477,6 +514,11 @@ it("settles support-file saves after caller retirement and retains their baselin
     retainFiles: ["assets/image.png", "notes.txt", "new.txt"],
     files: [],
   });
+  expect(library.isDirty()).toBe(false);
+  draft.content = read.content;
+  expect(library.isDirty()).toBe(true);
+  draft.content = "# Next edit";
+  expect(library.isDirty()).toBe(false);
 });
 
 it("hides pickers and prevents file reads while leaving manual editing available", async () => {

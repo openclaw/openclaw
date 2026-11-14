@@ -109,6 +109,29 @@ async function expectSkillNameValidation(page: Page) {
 }
 
 suite.define(() => {
+  it("closes an existing skill without a discard warning after its edit is reverted", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, locale: "en-US" },
+      async ({ page }) => {
+        await libraryGateway(page, { "skills.library.read": own });
+        await openSkillSettings(page);
+        await page.getByRole("button", { name: /release-notes Draft concise/u }).click();
+        const editor = page.getByLabel("SKILL.md", { exact: true });
+        await expect.poll(() => editor.inputValue()).toBe(own.content);
+        await editor.fill(own.content + "\nTemporary edit");
+        await editor.fill(own.content);
+        await page.getByRole("button", { name: "Close", exact: true }).click();
+        const confirmation = page.getByText("Discard your unsaved skill changes?", { exact: true });
+        await expect
+          .poll(async () => !(await editor.isVisible()) || (await confirmation.isVisible()))
+          .toBe(true);
+        await page.screenshot({ path: suite.artifactDir + "/reverted-edit-close.png" });
+        expect(await confirmation.count()).toBe(0);
+        expect(await editor.isVisible()).toBe(false);
+      },
+    );
+  });
+
   it("saves and edits an operator's complete bundle, preserving a stale draft on a narrow viewport", async () => {
     await suite.withPage({ viewport: { width: 375, height: 844 } }, async ({ page }) => {
       const gateway = await libraryGateway(page, { "skills.library.read": own });
@@ -293,6 +316,7 @@ suite.define(() => {
   it("imports local support files privately and keeps shared entries read-only", async () => {
     await suite.withPage({}, async ({ page }) => {
       const gateway = await libraryGateway(page, {
+        "skills.library.save": { ...published, entry: { ...published.entry, slug: "checklist" } },
         "skills.library.read": {
           cases: [
             { match: { skillId: shared.entry.skillId }, response: shared },
@@ -346,7 +370,7 @@ suite.define(() => {
           },
         ],
       });
-      await page.getByText(/Saved release-notes to personal library/u).waitFor();
+      await page.getByText(/Saved checklist to personal library/u).waitFor();
       await page.getByRole("button", { name: "Close", exact: true }).click();
       await page.getByRole("radio", { name: "Team", exact: true }).click();
       await page.getByRole("button", { name: /release-notes Prepare the team's/u }).click();
