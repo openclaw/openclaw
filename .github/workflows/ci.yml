@@ -5212,7 +5212,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests"]' || '["tests"]') }}
+        phase: [tests]
     runs-on: *hosted_xcode_runner
     timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && matrix.phase == 'tests' && 75 || 30 }}
     env:
@@ -5757,7 +5757,7 @@ jobs:
           path: apps/macos/.build
           key: ${{ steps.swift-build-cache.outputs.cache-primary-key }}
 
-  # Package tests do not consume the Linux runtime or wait for its runner.
+  # Release compilation and package tests do not consume the Linux runtime.
   macos-swift-packages:
     permissions:
       contents: read
@@ -5768,7 +5768,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: ${{ fromJSON(needs.preflight.outputs.run_mlx_native_proof == 'true' && '["packages","mlx","mlx-settings"]' || '["packages","mlx"]') }}
+        phase: ${{ fromJSON(format('[{0}"packages","mlx"{1}]', github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '"release",' || '', needs.preflight.outputs.run_mlx_native_proof == 'true' && ',"mlx-settings"' || '')) }}
     runs-on: *hosted_xcode_runner
     timeout-minutes: 30
     env:
