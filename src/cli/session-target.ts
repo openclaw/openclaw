@@ -20,6 +20,7 @@ import {
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { projectGatewayUrlForDiagnostics } from "../gateway/connection-details.js";
 import { normalizeAgentIdStrict, parseAgentSessionKey } from "../routing/session-key.js";
+import { ExpectedCliError, throwExpectedCliError } from "./expected-cli-error.js";
 import { parseSessionTargetInput, SessionTargetParseError } from "./session-ref.js";
 
 export type SessionTargetGateway = Pick<
@@ -80,6 +81,10 @@ function controlUiBaseUrl(gatewayUrl: string): string {
   return sanitizeTerminalText(url.toString().replace(/\/$/u, ""));
 }
 
+function targetRemedyError(message: string): ExpectedCliError {
+  return new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+}
+
 function shapeTargetError(
   error: unknown,
   gatewayUrl: string | undefined,
@@ -92,12 +97,12 @@ function shapeTargetError(
     error.message.includes("invalid sessions.resolve params:") &&
     error.message.includes("unexpected property 'shortId'")
   ) {
-    return new Error(
+    return targetRemedyError(
       `This gateway predates short-link resolution; pass the full session key. ${sessionsListHint(gatewayUrl)}`,
     );
   }
   if (error instanceof GatewayStoredDeviceAuthUnavailableError && gatewayUrl) {
-    return new Error(
+    return targetRemedyError(
       `No stored device auth for ${gatewayUrl}. Pass --token or --password once, approve the pairing request in that gateway's Control UI (Settings > Devices), then retry.`,
     );
   }
@@ -113,7 +118,7 @@ function shapeTargetError(
     error.gatewayCode === "INVALID_REQUEST" &&
     error.message.includes("No session found")
   ) {
-    return new Error(`${error.message}\n${sessionsListHint(gatewayUrl)}`);
+    return targetRemedyError(`${error.message}\n${sessionsListHint(gatewayUrl)}`);
   }
   const failure = classifyGatewayConnectFailure({
     ...(error instanceof GatewayClientRequestError ? { details: error.details } : {}),
@@ -121,7 +126,7 @@ function shapeTargetError(
     message: error.message,
   });
   if (failure.kind === "identity-proxy") {
-    return new Error(`${failure.userMessage}\n${failure.remediation}`);
+    return targetRemedyError(`${failure.userMessage}\n${failure.remediation}`);
   }
   if (failure.kind === "unreachable") {
     const effectiveGatewayUrl =
@@ -135,11 +140,13 @@ function shapeTargetError(
     const tailscaleHint = hostname.endsWith(".ts.net")
       ? " For this .ts.net host, check that Tailscale is connected and the gateway is reachable on your tailnet."
       : "";
-    return new Error(
+    return targetRemedyError(
       `${error.message}\nCould not reach gateway ${displayGatewayUrl}. Check whether the gateway is down and whether its tailnet or SSH tunnel is reachable.${tailscaleHint}`,
     );
   }
-  return failure.remediation ? new Error(`${failure.userMessage}\n${failure.remediation}`) : error;
+  return failure.remediation
+    ? targetRemedyError(`${failure.userMessage}\n${failure.remediation}`)
+    : error;
 }
 
 export async function resolveSessionTarget(params: {
@@ -150,7 +157,7 @@ export async function resolveSessionTarget(params: {
   const parsed = parseSessionTargetInput(params.raw);
   const targetUrl = parsed.kind === "url" ? `${parsed.origin}${parsed.basePath}` : undefined;
   if (targetUrl && params.gateway?.url) {
-    throw new Error("pass one target: use either the session URL or --url, not both");
+    throwExpectedCliError("pass one target: use either the session URL or --url, not both");
   }
   const gateway: SessionTargetGateway = {
     ...params.gateway,
@@ -210,7 +217,7 @@ export async function resolveSessionTarget(params: {
     }));
     const nameWidth = Math.max(...rows.map((row) => visibleWidth(row.name)));
     const width = Math.max("SESSION".length, Math.min(40, nameWidth));
-    throw new Error(
+    throwExpectedCliError(
       [
         "Session reference is ambiguous:",
         `${"SESSION".padEnd(width)}  ID PREFIX`,
@@ -219,5 +226,5 @@ export async function resolveSessionTarget(params: {
       ].join("\n"),
     );
   }
-  throw new Error(`No session found.\n${sessionsListHint(gateway.url)}`);
+  throwExpectedCliError(`No session found.\n${sessionsListHint(gateway.url)}`);
 }

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../gateway/client.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 
@@ -24,12 +25,10 @@ describe("session target connection errors", () => {
       }),
     );
 
-    let error: unknown;
-    try {
-      await resolveSessionTarget({ raw: "gateway.example/main/a1166b81" });
-    } catch (caught) {
-      error = caught;
-    }
+    const error = await resolveSessionTarget({ raw: "gateway.example/main/a1166b81" }).catch(
+      (caught) => caught,
+    );
+    expect(error).toBeInstanceOf(ExpectedCliError);
     expect(String(error)).toContain("gateway.remote.edgeAuth");
     expect(String(error)).not.toContain("tailnet");
     expect(String(error)).not.toContain("SSH tunnel");
