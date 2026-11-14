@@ -4,9 +4,11 @@ import { iconButtonClass } from "../../../components/solid/icon-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover } from "../../../components/solid/popover.tsx";
 import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
+import { registerQuestionStoreEnglish } from "../../../i18n/locales/en-question-store.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerChatQuestionsEnglish);
+registerEnglishCatalog(registerQuestionStoreEnglish);
 
 export function CredentialRequestIdentity(props: { agentId?: string }) {
   return (

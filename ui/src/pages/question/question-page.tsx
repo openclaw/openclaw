@@ -18,6 +18,7 @@ import {
 } from "../../app/question-prompt.ts";
 import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
 import { registerChatQuestionsEnglish } from "../../i18n/locales/en-chat-questions.ts";
+import { registerQuestionStoreEnglish } from "../../i18n/locales/en-question-store.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { createDocumentTitle } from "../../lib/reactive/document-title.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -29,6 +30,7 @@ import { createGatewayQuestionPanelProps } from "../chat/components/chat-questio
 import { terminalAnswer } from "../chat/components/chat-question-summary.tsx";
 
 registerEnglishCatalog(registerChatQuestionsEnglish);
+registerEnglishCatalog(registerQuestionStoreEnglish);
 
 registerEnglishCatalog(registerApprovalsEnglish);
 

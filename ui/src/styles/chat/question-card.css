@@ -27,6 +27,10 @@ openclaw-chat-question-panel {
 
 .chat-question-panel:focus-visible {
   border-color: var(--chat-composer-hairline, var(--border));
+}
+
+.chat-question-panel:focus-visible,
+.chat-question-panel__credential-body input:focus-visible {
   outline: var(--control-ui-focus-ring);
   outline-offset: var(--control-ui-focus-ring-offset);
 }
@@ -210,13 +214,11 @@ openclaw-chat-question-panel {
 }
 
 .chat-question-panel__option:hover:not(:disabled) {
-  border-color: var(--border);
   background: var(--surface-hover);
   outline: none;
 }
 
 .chat-question-panel__option:focus-visible {
-  border-color: var(--border);
   background: var(--surface-hover);
   outline: var(--control-ui-focus-ring);
   outline-offset: -2px;
@@ -226,13 +228,7 @@ openclaw-chat-question-panel {
   color: var(--text-strong);
 }
 
-.chat-question-panel__option:hover:not(:disabled) .chat-question-panel__option-marker {
-  background: var(--surface-hover);
-  outline: none;
-}
-
 .chat-question-panel__option--selected {
-  border-color: var(--border);
   background: var(--surface-selected);
 }
 
@@ -346,7 +342,6 @@ openclaw-chat-question-panel {
   .agent-row-chip__avatar {
     align-self: flex-start;
     flex-basis: 24px;
-    width: 24px;
     height: 24px;
   }
 }
@@ -366,11 +361,6 @@ openclaw-chat-question-panel {
     height: var(--settings-control-height);
     background: var(--field-bg);
     color: var(--text);
-  }
-
-  input:focus-visible {
-    outline: var(--control-ui-focus-ring);
-    outline-offset: var(--control-ui-focus-ring-offset);
   }
 }
 

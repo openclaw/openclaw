@@ -14,6 +14,7 @@ import { nextRadio } from "../../../components/solid/radio-navigation.ts";
 import { SessionLink } from "../../../components/solid/session-link.tsx";
 import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerQuestionStoreEnglish } from "../../../i18n/locales/en-question-store.ts";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { focusProgrammatically } from "../../../lib/programmatic-focus.ts";
@@ -34,6 +35,7 @@ import type {
 } from "./chat-question-types.ts";
 
 registerEnglishCatalog(registerChatQuestionsEnglish);
+registerEnglishCatalog(registerQuestionStoreEnglish);
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
