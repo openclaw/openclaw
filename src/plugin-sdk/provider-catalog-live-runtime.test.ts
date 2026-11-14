@@ -438,7 +438,7 @@ describe("provider-catalog-live-runtime", () => {
       { id: "model-a", object: "model", output_modalities: ["image"] },
       { id: "model-b", object: "model" },
       { id: "unknown-model", object: "model" },
-      { id: "sunsetting-chat", object: "model", shutdown_date: "2999-01-01", output: ["text"] },
+      { id: "sunsetting-chat", object: "model", shutdown_date: "2999-01-01", type: "chat" },
       { id: "vision-chat", object: "model", pipeline_tag: "image-text-to-text" },
       ...modelRows(
         "gpt-realtime-2",
