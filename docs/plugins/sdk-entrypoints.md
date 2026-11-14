@@ -596,3 +596,16 @@ entries in place from a caller-owned child environment. Copy inherited values
 first; never pass `process.env`. Other preload libraries remain available.
 Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
 the runtime's existing dispatch and delivery authority.
+
+## Native embedding wire codecs
+
+`openclaw/plugin-sdk/embedding-native-runtime` supplies the pure native wire
+builders and vector readers shared by direct Google, Bedrock and Voyage memory
+providers and credential-scoped router consumers. It does not resolve credentials,
+choose offers, fetch URLs, retry requests or set billing rates.
+
+Google helpers preserve task text, inline parts and native dimension checks.
+Bedrock helpers keep each finite model family, inference-profile identity,
+Cohere version and Marengo version distinct. The caller must validate the selected
+offer, enforce request/response limits and reject unsupported input before dispatch.
+Native synchronous batch results must be staged until every vector is validated.

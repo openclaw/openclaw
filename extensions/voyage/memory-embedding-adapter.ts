@@ -1,3 +1,4 @@
+import { voyageEmbeddingRequestFields } from "openclaw/plugin-sdk/embedding-native-runtime";
 import {
   mapBatchEmbeddingsByIndex,
   sanitizeEmbeddingCacheHeaders,
@@ -46,7 +47,7 @@ export const voyageMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
       id: "voyage",
       client,
       errorPrefix: "voyage embeddings failed",
-      buildRequestFields: (kind) => ({ input_type: kind }),
+      buildRequestFields: (kind) => voyageEmbeddingRequestFields(kind),
     });
     provider.maxInputTokens = VOYAGE_MAX_INPUT_TOKENS[client.model];
     return {

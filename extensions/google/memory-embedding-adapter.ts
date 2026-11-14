@@ -1,16 +1,16 @@
 import {
+  buildGeminiEmbeddingRequest,
+  DEFAULT_GEMINI_EMBEDDING_MODEL,
+  isGeminiEmbedding2Model,
+} from "openclaw/plugin-sdk/embedding-native-runtime";
+import {
   hasNonTextEmbeddingParts,
   mapBatchEmbeddingsByIndex,
   sanitizeEmbeddingCacheHeaders,
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { runGeminiEmbeddingBatches } from "./embedding-batch.js";
-import {
-  buildGeminiEmbeddingRequest,
-  createGeminiEmbeddingProvider,
-  DEFAULT_GEMINI_EMBEDDING_MODEL,
-  isGeminiEmbedding2Model,
-} from "./embedding-provider.js";
+import { createGeminiEmbeddingProvider } from "./embedding-provider.js";
 
 export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
   id: "gemini",

@@ -184,6 +184,7 @@ describe("registered ClawRouter memory embeddings", () => {
     format = "future.embeddings";
     await expect(provider!.embed("unknown")).rejects.toThrow("no eligible");
     expect(calls).toHaveLength(1);
+    format = "openai.embeddings";
     await expect(
       provider!.embed({
         text: "image",
@@ -193,6 +194,6 @@ describe("registered ClawRouter memory embeddings", () => {
     const controller = new AbortController();
     controller.abort();
     await expect(provider!.embed("cancelled", { signal: controller.signal })).rejects.toThrow();
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2);
   });
 });
