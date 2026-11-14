@@ -12,6 +12,7 @@ import { handleChatAttachmentPaste } from "./chat-attachments.ts";
 import {
   handleTextareaOverflowInteraction,
   handleTextareaOverflowScroll,
+  paneDomId,
 } from "./chat-composer-dom.ts";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { ComposerPluginPromptSlot } from "./chat-composer-plugin-prompt-slot.tsx";
@@ -64,9 +65,19 @@ export function renderComposerTextarea(
       }
     };
   });
+  const inputId = paneDomId(composer.paneId, "composer-input");
   return (
     <>
+      {/* Safari AutoFill guesses a field's type from nearby page text unless a label
+          element names it; aria-label and autocomplete="off" do not stop that guess, so
+          contact words in a streaming reply put AutoFill Contact over the iPhone
+          keyboard. aria-label stays the accessible name (the mention editor copies it),
+          so this label is hidden from assistive technology. */}
+      <label class="sr-only" for={inputId} aria-hidden="true">
+        {t("chat.composer.composerInput")}
+      </label>
       <textarea
+        id={inputId}
         data-composer-mentions={JSON.stringify(composer.mentions)}
         ref={[textareaRef, editorRef]}
 
