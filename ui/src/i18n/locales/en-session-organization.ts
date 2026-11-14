@@ -94,7 +94,7 @@ const enSessionOrganization = {
     deleteAllArchivedTitle: "Delete {count} archived sessions?",
     archivedOnlyTooltip: sharedSessions.archivedOnlyTooltip,
     minutesPlaceholder: "min",
-    searchPlaceholder: "Filter by key, agent, label, kind…",
+    searchPlaceholder: "Search sessions…",
     transcriptSearchTitle: "Search transcripts",
     transcriptSearchDescription:
       "Find exact words or phrases in your messages and agent replies across the default agent’s sessions.",

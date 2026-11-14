@@ -1,17 +1,27 @@
 import { pathToFileURL } from "node:url";
 import { afterEach, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import * as runtimeWorkerUrl from "./runtime-worker-url.js";
 
 const resolveWorkerExecArgv = runtimeWorkerUrl.resolveRuntimeWorkerThreadExecArgv;
 let restoreWorkerExecArgv: (() => void) | undefined;
+let environment: ReturnType<typeof captureEnv> | undefined;
 
 afterEach(() => {
   restoreWorkerExecArgv?.();
   restoreWorkerExecArgv = undefined;
+  environment?.restore();
+  environment = undefined;
 });
 
 /** Builds preload env and installs explicit Bun Worker preload forwarding for the test. */
 export function sqliteWorkerPreloadEnv(preloadPath: string): Record<string, string> {
+  environment ??= captureEnv([
+    "NODE_OPTIONS",
+    "BUN_OPTIONS",
+    "BUN_RUNTIME_TRANSPILER_CACHE_PATH",
+    "OPENCLAW_TEST_SQLITE_WORKER_PRELOAD",
+  ]);
   if (!process.versions.bun) {
     return {
       NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${JSON.stringify(preloadPath)}`]

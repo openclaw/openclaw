@@ -76,6 +76,7 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "src/infra/ssh-client.windows.test.ts": 0.4,
   "src/infra/state-migrations.audit-logs.windows.test.ts": 1.6,
   "src/infra/state-migrations.legacy-session-store.test.ts": 3.9,
+  "src/infra/update-candidate-state.budget.test.ts": 16.5,
   "src/infra/update-candidate-state.cleanup.test.ts": 23.2,
   "src/infra/update-candidate-state.online-backup.process.test.ts": 4,
   "src/infra/update-managed-service-handoff-command.test.ts": 3.3,
