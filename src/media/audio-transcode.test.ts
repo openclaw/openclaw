@@ -125,3 +125,186 @@ it.each([
   expect(result).toEqual({ ok: false, reason });
   expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
 });
+
+function pcmWav(): Buffer {
+  const b = Buffer.alloc(48);
+  b.write("RIFF");
+  b.writeUInt32LE(40, 4);
+  b.write("WAVEfmt ", 8);
+  b.writeUInt32LE(16, 16);
+  b.writeUInt16LE(1, 20);
+  b.writeUInt16LE(1, 22);
+  b.writeUInt32LE(24000, 24);
+  b.writeUInt32LE(48000, 28);
+  b.writeUInt16LE(2, 32);
+  b.writeUInt16LE(16, 34);
+  b.write("data", 36);
+  b.writeUInt32LE(4, 40);
+  return b;
+}
+
+it("returns failure without throwing or invoking afconvert when FFmpeg is missing, and cleans up", async () => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  let dir = "";
+  runFfmpegMock.mockImplementation(async (args: string[]) => {
+    dir = path.dirname(args.at(-1)!);
+    throw new Error("ffmpeg not found in trusted system directories");
+  });
+  await expect(
+    transcodeAudioBuffer({
+      audioBuffer: Buffer.from("mp3"),
+      sourceExtension: "mp3",
+      targetExtension: "caf",
+    }),
+  ).resolves.toMatchObject({ ok: false, reason: "transcoder-failed" });
+  expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+  expect(dir).not.toBe("");
+  expect(existsSync(dir)).toBe(false);
+});
+
+it.each([false, true])(
+  "shares one budget across decode, encode and probe (exhaust=%s), and cleans up",
+  async (exhaust) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const budgets: number[] = [];
+    let dir = "";
+    runFfmpegMock.mockImplementation(async (args: string[], opts: { timeoutMs: number }) => {
+      budgets.push(opts.timeoutMs);
+      dir = path.dirname(args.at(-1)!);
+      await writeFile(args.at(-1)!, pcmWav());
+      now += 3000;
+    });
+    runCommandWithTimeoutMock.mockImplementation(
+      async (args: string[], opts: { timeoutMs: number }) => {
+        budgets.push(opts.timeoutMs);
+        if (args[0] === "/usr/bin/afconvert") {
+          expect(args.at(-2)).toBe(path.join(dir, "decoded.wav"));
+          await writeFile(args.at(-1)!, Buffer.from("caf"));
+          now += exhaust ? 2100 : 1000;
+        } else {
+          expect(args[0]).toBe("/usr/bin/afinfo");
+        }
+        return { code: 0, stdout: "Data format: 1 ch, 24000 Hz\naudio 2 valid frames", stderr: "" };
+      },
+    );
+    const result = await transcodeAudioBuffer({
+      audioBuffer: Buffer.from("mp3"),
+      sourceExtension: "mp3",
+      targetExtension: "caf",
+    });
+    expect(result.ok).toBe(!exhaust);
+    expect(budgets).toEqual(exhaust ? [5000, 2000] : [5000, 2000, 1000]);
+    expect(existsSync(dir)).toBe(false);
+  },
+);
+
+it.each([
+  "signature-high-bit",
+  "fmt-high-bit",
+  "data-high-bit",
+  "duplicate-fmt",
+  "duplicate-data",
+  "missing-fmt",
+  "missing-data",
+])("rejects malformed decoder WAV: %s", async (kind) => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  let dir = "";
+  runFfmpegMock.mockImplementation(async (args: string[]) => {
+    let b = pcmWav();
+    if (kind.endsWith("high-bit")) {
+      const offset = kind.startsWith("signature") ? 0 : kind.startsWith("fmt") ? 12 : 36;
+      b[offset] |= 128;
+    } else if (kind.startsWith("duplicate")) {
+      b = Buffer.concat([b, kind.endsWith("fmt") ? b.subarray(12, 36) : b.subarray(36)]);
+    } else {
+      b = Buffer.concat([
+        b.subarray(0, 12),
+        kind.endsWith("fmt") ? b.subarray(36) : b.subarray(12, 36),
+      ]);
+    }
+    b.writeUInt32LE(b.length - 8, 4);
+    dir = path.dirname(args.at(-1)!);
+    await writeFile(args.at(-1)!, b);
+  });
+  await expect(
+    transcodeAudioBuffer({
+      audioBuffer: Buffer.from("mp3"),
+      sourceExtension: "mp3",
+      targetExtension: "caf",
+    }),
+  ).resolves.toMatchObject({
+    ok: false,
+    reason: "transcoder-failed",
+    detail: "invalid decoded PCM WAV header",
+  });
+  expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+  expect(existsSync(dir)).toBe(false);
+});
+
+it.each(["encoder-exit", "encoder-timeout", "probe-mismatch", "probe-timeout"])(
+  "falls back and removes all staged files on %s",
+  async (failure) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    let dir = "";
+    runFfmpegMock.mockImplementation(async (args: string[]) => {
+      dir = path.dirname(args.at(-1)!);
+      await writeFile(args.at(-1)!, pcmWav());
+    });
+    runCommandWithTimeoutMock.mockImplementation(async (args: string[]) => {
+      if (args[0] === "/usr/bin/afconvert") {
+        await writeFile(args.at(-1)!, Buffer.from("partial caf"));
+        return {
+          code: failure === "encoder-exit" ? 1 : 0,
+          stdout: "",
+          stderr: "",
+          termination: failure === "encoder-timeout" ? "timeout" : "exit",
+        };
+      }
+      return {
+        code: 0,
+        stdout: "Data format: 1 ch, 24000 Hz\naudio 99 valid frames",
+        stderr: "",
+        termination: failure === "probe-timeout" ? "timeout" : "exit",
+      };
+    });
+    await expect(
+      transcodeAudioBuffer({
+        audioBuffer: Buffer.from("mp3"),
+        sourceExtension: "mp3",
+        targetExtension: "caf",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      reason: "transcoder-failed",
+    });
+    expect(dir).not.toBe("");
+    expect(existsSync(dir)).toBe(false);
+  },
+);
+
+it("preserves the direct afconvert recipe for non-MP3 input", async () => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  let dir = "";
+  runCommandWithTimeoutMock.mockImplementation(async (args: string[]) => {
+    expect(args[0]).toBe("/usr/bin/afconvert");
+    expect(path.basename(args.at(-2)!)).toBe("in.wav");
+    dir = path.dirname(args.at(-1)!);
+    await writeFile(args.at(-1)!, Buffer.from("caf"));
+    return { code: 0, stdout: "", stderr: "" };
+  });
+  await expect(
+    transcodeAudioBuffer({
+      audioBuffer: Buffer.from("wav"),
+      sourceExtension: "wav",
+      targetExtension: "caf",
+    }),
+  ).resolves.toEqual({
+    ok: true,
+    buffer: Buffer.from("caf"),
+  });
+  expect(runFfmpegMock).not.toHaveBeenCalled();
+  expect(runCommandWithTimeoutMock).toHaveBeenCalledOnce();
+  expect(existsSync(dir)).toBe(false);
+});
