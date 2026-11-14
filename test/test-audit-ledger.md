@@ -877,6 +877,30 @@ rows and the bare-WebSocket mock that exposes its Bun transport regression.
 Its sequential cleanup can skip remaining closers after an earlier failure;
 that is a separate source-only follow-up, not a measured leak or applied repair.
 
+### Realtime proxy fixture cleanup
+
+At `98556d69bfb13ac141ba4db884cbc92ab727b7ed`, the realtime proxy fixture
+forgets its remaining closers when an earlier reverse-order cleanup throws.
+The fixture now uses the existing shared cleanup runner, which attempts all
+closers and preserves single or multiple failures. Both admission/refusal rows,
+their assertions and the runtime WebSocket mock remain: one declaration, two
+expanded cases. Test code changes by +4/-5 lines; production and shared support
+are unchanged.
+
+With an injected error after the real bridge closes, the baseline leaves its
+managed proxy registered and both network listeners open in both rows. The
+candidate clears the registration and closes both listeners in reverse order,
+preserving the original error. A second injected failure after proxy shutdown
+preserves both errors in an aggregate without skipping either listener.
+Environment restoration passes throughout. Observations precede emergency
+cleanup, and every temporary probe was restored byte for byte.
+
+The clean baseline passes both cases in 163.76 seconds wall time, including cold
+worker compilation. The warm candidate passes both in 22.06 seconds wall time
+(16.29 seconds reported by Vitest). These are not speed-comparison data.
+Independent preservation review found no lost contract. This closes the earlier
+source-only realtime cleanup follow-up; no production change is claimed.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
