@@ -444,7 +444,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
   const current = createMemo(() => props.readProps());
   const readCurrent = () => props.readProps();
   const drop = PaletteSessionDraft.createDropHandlers(() => readCurrent().draft);
-  const error = createMemo(() => current().draft.error);
+  const error = createMemo(() => current().draft.error ?? current().draft.blockedSubmitNotice);
   const saving = createSubmissionAction(
     () => readCurrent().draft,
     current,

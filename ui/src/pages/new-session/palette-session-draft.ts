@@ -152,6 +152,9 @@ export class PaletteSessionDraft {
       (this.preferences.failed ? t("commandPalette.settingsSaveFailed") : null)
     );
   }
+  get blockedSubmitNotice(): string | undefined {
+    return this.draft?.submission.blockedSubmitNotice({ includePageRendered: true });
+  }
   get disabledReason(): string | undefined {
     return this.draft?.submission.submitDisabledReason();
   }
@@ -394,11 +397,6 @@ export class PaletteSessionDraft {
     this.synchronizePresentationScope();
     const slot = this.slot;
     if (!this.read().open || this.coldSubmit || this.submitting || !this.hasPrompt || !slot) {
-      return;
-    }
-    const blocked = this.disabledReason;
-    if (blocked) {
-      this.setSubmissionError(blocked);
       return;
     }
     const submission = slot.draft.submission.submit(undefined, true);
