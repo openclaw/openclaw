@@ -175,6 +175,19 @@ describe("buildAzureSpeechProvider", () => {
     });
   });
 
+  it("preserves native SSML escaping and regional credentials", async () => {
+    await provider.synthesize({
+      ...synthesisRequest,
+      text: "café & <voice>中文 😀</voice>",
+      providerOverrides: { voice: "en-US-\"quoted'voice", lang: "en-US" },
+      target: "audio-file",
+    });
+    expectFetch(`${regionUrl}/cognitiveservices/v1`, {
+      headers: expect.objectContaining({ "Ocp-Apim-Subscription-Key": "key" }),
+      body: '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US"><voice name="en-US-&quot;quoted&apos;voice">café &amp; &lt;voice&gt;中文 😀&lt;/voice&gt;</voice></speak>',
+    });
+  });
+
   it("uses native Ogg/Opus for voice-note output", async () => {
     const result = await provider.synthesize({
       ...synthesisRequest,
