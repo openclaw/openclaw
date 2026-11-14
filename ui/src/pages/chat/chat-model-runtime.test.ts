@@ -8,7 +8,6 @@ import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { switchChatModel } from "./chat-session.ts";
 import { renderChatModelControls } from "./chat-view.test-helpers.ts";
 import type { ChatModelControls } from "./components/chat-model-controls.tsx";
-import { selectModelProvider } from "./components/chat-model-picker.test-support.tsx";
 
 const codexChoice = {
   agentRuntime: { id: "codex", source: "model" },
@@ -180,9 +179,7 @@ describe("chat model runtime choices", () => {
         model: "openai/gpt-5.6-sol",
         ...(runtimeLocked ? {} : { agentRuntime: null }),
       });
-      expect(Array.from(rows, optionName)).toEqual(
-        runtimeLocked ? ["GPT-5.6 Sol"] : ["GPT-5.6 Sol", "GPT-5.6 Sol"],
-      );
+      expect(Array.from(rows, optionName)).toEqual(["GPT-5.6 Sol"]);
       expect(rows[0]?.getAttribute("data-chat-model-default")).toBeNull();
       expect(rows[0]?.getAttribute("data-chat-model-runtime")).toBe(
         runtimeLocked ? null : "custom-harness",
@@ -225,7 +222,7 @@ describe("chat model runtime choices", () => {
       count("[data-chat-model-runtime]"),
       count('[data-chat-model-runtime][aria-selected="true"]'),
       count('[data-chat-model-option][aria-selected="true"]'),
-    ]).toEqual([2, 0, 1]);
+    ]).toEqual([3, 0, 1]);
   });
 
   it("uses the selected harness capability for the model trigger", async () => {
@@ -255,7 +252,7 @@ describe("chat model runtime choices", () => {
         container.querySelectorAll(".chat-controls__model-option-name"),
         (row) => row.textContent,
       ),
-    ).toEqual(["GPT-5.6 Sol codex", "GPT-5.6 Sol"]);
+    ).toEqual(["GPT-5.6 Sol codex"]);
     expect(triggerLabel(container)).toBe("GPT-5.6 Sol codex");
   });
 
@@ -278,17 +275,24 @@ describe("chat model runtime choices", () => {
     expect(container.querySelector('[data-chat-thinking-option="medium"]')).toBeNull();
   });
 
-  it("groups a pinned session's Default under its configured runtime", async () => {
+  it("retains the configured runtime as a choice for a pinned session", async () => {
     const opus = { ...model, id: "claude-opus-5-5", provider: "anthropic" };
     const claudeCli = { id: "claude-cli", source: "model" } as const;
     const container = await renderRuntimeModel({ ...opus, agentRuntime: claudeCli }, "codex");
-    selectModelProvider(container, "claude-cli");
-    const row = container.querySelector('[data-chat-model-default="true"]');
-    expect(row?.closest("section")?.dataset.chatModelProviderGroup).toBe("claude-cli");
+    const configured = container.querySelector(
+      '.chat-controls__runtime-option[data-chat-model-runtime="claude-cli"]',
+    );
+    expect(configured?.textContent).toContain("Claude CLI");
+    expect(configured?.getAttribute("aria-disabled")).toBe("false");
+    expect(
+      container
+        .querySelector('.chat-controls__runtime-option[data-chat-model-runtime="codex"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
   });
 
   it.each(["missing-auth", "unsupported-runtime", "locked"] as const)(
-    "preserves the %s guard for additional harness rows",
+    "preserves the %s guard for the runtime segment",
     async (guard) => {
       const onSelect = vi.fn();
       const onSetup = vi.fn();
@@ -312,10 +316,13 @@ describe("chat model runtime choices", () => {
       if (guard === "locked") {
         expect(row).toBeNull();
       } else {
-        expect(row && optionName(row)).toBe("GPT-5.6 Sol codex");
-        expect(row?.disabled).toBe(guard === "unsupported-runtime");
+        expect(row?.textContent?.trim()).toBe("Codex");
+        expect(row?.getAttribute("aria-disabled")).toBe(
+          guard === "unsupported-runtime" ? "true" : "false",
+        );
         if (guard === "unsupported-runtime") {
-          expect(row?.getAttribute("aria-label")).toContain(
+          expect(row?.parentElement).toHaveProperty(
+            "content",
             "This harness is unavailable for this model.",
           );
         }

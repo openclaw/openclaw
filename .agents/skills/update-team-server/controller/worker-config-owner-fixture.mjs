@@ -646,7 +646,7 @@ if(command==="busctl") {
   );
 }
 
-function writeRelease(fixture, releaseSha = sha) {
+function writeRelease(fixture, releaseSha = sha, schemaVersions = fixture.schemaVersions) {
   const sha = releaseSha;
   const release = join(fixture.serving, "releases", sha);
   for (const name of [".git/objects/info", "dist/control-ui/assets", "node_modules"])
@@ -656,7 +656,7 @@ function writeRelease(fixture, releaseSha = sha) {
   writeFileSync(join(release, "pnpm-workspace.yaml"), "packages: []\n");
   writeFileSync(
     join(release, "package.json"),
-    JSON.stringify({ version: "2026.9.3", openclaw: { schemaVersions: { state: 1, agent: 1 } } }),
+    JSON.stringify({ version: "2026.9.3", openclaw: { schemaVersions } }),
   );
   for (const stamp of [".buildstamp", ".runtime-postbuildstamp"])
     writeFileSync(join(release, "dist", stamp), JSON.stringify({ head: sha }));
@@ -713,11 +713,11 @@ export function makeWorkerConfigFixture(t, scenario = "success") {
   return makeOwnerFixture(t, scenario, true);
 }
 
-export function makeReleaseFixture(t, scenario = "success") {
-  return makeOwnerFixture(t, scenario, false);
+export function makeReleaseFixture(t, scenario = "success", schemaVersions) {
+  return makeOwnerFixture(t, scenario, false, schemaVersions);
 }
 
-function makeOwnerFixture(t, scenario, workerConfig) {
+function makeOwnerFixture(t, scenario, workerConfig, schemaVersions = { state: 1, agent: 1 }) {
   if (workerConfig && (process.platform !== "linux" || process.getuid() !== 0 || process.getgid() !== 0))
     throw new Error(
       "full owner fixture requires disposable Linux root (UID/GID 0) for real config ownership",
@@ -861,7 +861,7 @@ function makeOwnerFixture(t, scenario, workerConfig) {
   writeFileSync(config, JSON.stringify(original) + "\n", { mode: 0o600 });
   if (workerConfig) chownSync(config, runtimeUid, runtimeGid);
   const database = new DatabaseSync(databasePath);
-  database.exec("PRAGMA user_version=1; CREATE TABLE operator_approvals (source_session_id TEXT)");
+  database.exec(`PRAGMA user_version=${schemaVersions.state}; CREATE TABLE operator_approvals (source_session_id TEXT)`);
   database.close();
   chmodSync(databasePath, 0o600);
   // Canonical discovery scans root/agents; no shared registry entry is needed for this store.
@@ -869,9 +869,9 @@ function makeOwnerFixture(t, scenario, workerConfig) {
   mkdirSync(dirname(agentDatabasePath), { recursive: true });
   const agentDatabase = new DatabaseSync(agentDatabasePath);
   try {
-    agentDatabase.exec(`PRAGMA user_version=1;
+    agentDatabase.exec(`PRAGMA user_version=${schemaVersions.agent};
       CREATE TABLE schema_meta (meta_key TEXT, role TEXT, schema_version INTEGER, agent_id TEXT);
-      INSERT INTO schema_meta VALUES ('primary', 'agent', 1, 'controller-test-agent');
+      INSERT INTO schema_meta VALUES ('primary', 'agent', ${schemaVersions.agent}, 'controller-test-agent');
       CREATE TABLE session_nodes (session_key TEXT PRIMARY KEY, current_session_id TEXT NOT NULL, entry_json TEXT NOT NULL, updated_at INTEGER NOT NULL, archived_at INTEGER);
       CREATE TABLE session_windows (session_id TEXT PRIMARY KEY, session_key TEXT NOT NULL);
       CREATE TABLE transcript_rewrite_watermarks (session_id TEXT PRIMARY KEY, generation TEXT NOT NULL);
@@ -905,6 +905,7 @@ function makeOwnerFixture(t, scenario, workerConfig) {
   const originalConfigBytes = readFileSync(config);
   const fixture = {
     root,
+    schemaVersions,
     state,
     commands,
     serving,
@@ -1030,8 +1031,8 @@ function makeOwnerFixture(t, scenario, workerConfig) {
   };
   writeFileSync(fixture.lockFile, "", { mode: 0o600 });
   writeRelease(fixture);
-  fixture.addRelease = (releaseSha) => {
-    writeRelease(fixture, releaseSha);
+  fixture.addRelease = (releaseSha, versions) => {
+    writeRelease(fixture, releaseSha, versions);
     return join(serving, "releases", releaseSha);
   };
   symlinkSync(fixture.initial, join(serving, "current"));

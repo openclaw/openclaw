@@ -149,7 +149,7 @@ const enNewSessionSetup = {
     draftDescription: "Keep this session to yourself until you publish it",
     draftUnavailable:
       "Draft creation is disabled. Your message and attachments have been kept. Turn off Draft to create a Shared session, or ask an administrator to enable Draft creation.",
-    messagePlaceholder: "What should this session work on?",
+    messagePlaceholder: "Ask me anything, or hand me something to do",
     dictate: "Dictate",
     readingAttachment: "Reading attachment",
     start: "Start session",
