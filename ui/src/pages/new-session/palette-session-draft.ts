@@ -152,6 +152,9 @@ export class PaletteSessionDraft {
       (this.preferences.failed ? t("commandPalette.settingsSaveFailed") : null)
     );
   }
+  get blockedSubmitNotice(): string | undefined {
+    return this.draft?.submission.blockedSubmitNotice({ includePageRendered: true });
+  }
   get disabledReason(): string | undefined {
     return this.draft?.submission.submitDisabledReason();
   }

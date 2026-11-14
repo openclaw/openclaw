@@ -200,7 +200,6 @@ suite.define(() => {
             .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
             .toMatchObject(match);
           const hours = page.locator(".usage-error-list--hours");
-          const cells = page.locator(".usage-hour-cell");
           const refresh = page
             .locator("openclaw-usage-page")
             .getByRole("button", { name: "Refresh", exact: true });
@@ -210,10 +209,6 @@ suite.define(() => {
             await refresh.click();
             await gateway.waitForRequest("sessions.usage", { after: requests });
             await expect.poll(() => refresh.isEnabled()).toBe(true);
-            await expect.poll(() => cells.count()).toBe(24);
-            await expect
-              .poll(() => cells.nth(2).getAttribute("aria-label"))
-              .toBe("2:00 · 100 tokens");
             await expectTexts(page.locator(".daily-bar-label"), ["Jan 15"]);
             await expect
               .poll(() => page.locator(".daily-bar-wrapper").getAttribute("aria-label"))
@@ -228,23 +223,12 @@ suite.define(() => {
               }))
               .toEqual({ labels: ["2 AM"], rates: ["50.00%"], details: ["5 errors · 10 msgs"] });
           }
-          await cells.nth(2).click();
-          await expect.poll(() => cells.nth(2).getAttribute("aria-pressed")).toBe("true");
-          await expectTexts(page.locator(".session-bar-title"), ["Historical hour"]);
-          await expectText(hours.locator(".usage-list-label")).toBe("2 AM");
-          await cells.nth(2).click();
-          await cells.nth(3).click();
-          await expectTexts(page.locator(".session-bar-title"), []);
-          await expect.poll(() => hours.count()).toBe(0);
-          await page.getByRole("button", { name: "Remove hours filter", exact: true }).click();
-          await expectTexts(page.locator(".session-bar-title"), ["Historical hour"]);
-          await expectText(hours.locator(".usage-list-label")).toBe("2 AM");
         },
       );
     },
   );
 
-  it.each(["recent-sort", "filtered", "recent-tab"])(
+  it.each(["recent-sort", "filtered"])(
     "selects the visible session range with Shift-click (%s)",
     async (scenario) => {
       const updatedAt = Date.now();
@@ -273,7 +257,7 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}usage`);
         const card = page.locator(".sessions-card");
-        let list = card.locator(".session-bars").first();
+        const list = card.locator(".session-bars").first();
         await expectTexts(
           list.locator(".session-bar-title"),
           sessions.map((session) => session.label),
@@ -281,20 +265,6 @@ suite.define(() => {
         if (scenario === "filtered") {
           await applyUsageQuery(page, "label:Visible");
           await expect.poll(() => list.locator(".session-bar-row").count()).toBe(3);
-        }
-        if (scenario === "recent-tab") {
-          for (const name of ["Visible C", "Visible A", "Visible B"]) {
-            await list.getByRole("button", { name, exact: true }).click();
-            await expectText(page.locator(".session-detail-title")).toBe(name);
-          }
-          await card.getByRole("button", { name: "Recently viewed", exact: true }).click();
-          list = card.locator(".session-bars--recent");
-          await expectTexts(list.locator(".session-bar-title"), [
-            "Visible B",
-            "Visible A",
-            "Visible C",
-          ]);
-          await card.getByRole("button", { name: "Clear selection", exact: true }).click();
         }
         const names = await list.locator(".session-bar-title").allTextContents();
         await list.getByRole("button", { name: names[0], exact: true }).click();

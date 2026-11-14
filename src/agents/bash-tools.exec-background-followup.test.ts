@@ -199,7 +199,10 @@ test.each([
     const deadlineAtMs = started.details.deadlineAtMs;
     if (args.timeoutSeconds === 0) {
       expect(deadlineAtMs).toBeUndefined();
-      expect(started.details.followUp).not.toContain("Automatic stop will be requested");
+      expect(started.content).not.toContainEqual({
+        type: "text",
+        text: expect.stringContaining("times out in"),
+      });
     } else {
       if (deadlineAtMs === undefined) {
         throw new Error("Expected the actual process timeout deadline");
@@ -208,7 +211,7 @@ test.each([
       expect(deadlineAtMs).toBeLessThanOrEqual(Date.now() + 5_001);
       expect(started.content).toContainEqual({
         type: "text",
-        text: expect.stringContaining(new Date(deadlineAtMs).toISOString()),
+        text: expect.stringMatching(/\), times out in [1-5]s\. /),
       });
     }
     expect(started.details).toMatchObject({ followUp: expect.stringContaining("Use process") });
@@ -459,12 +462,11 @@ test("tells a woken conversation to end its wait and names its other running com
   const release = path.join(state.workspaceDir, "release-waiters");
   try {
     const first = runningSession((await exec("first-waiter", waitForRelease(release))).details);
+    // Every exit wakes by default, so the waiter need not print its result.
     expect(first.followUp).toContain(
-      "Its exit wakes this conversation if it prints output or fails",
+      "Its exit wakes this conversation with the result, silent success included. If only waiting remains, end this turn now; do not poll it or start another command for the same result.",
     );
-    expect(first.followUp).toContain("and it prints its result, end this turn now");
-    // A silent success wakes nobody under the default notifyOnExitEmptySuccess=false.
-    expect(first.followUp).toContain("If it may succeed silently, collect it with poll");
+    expect(first.followUp).toContain("run one command that loops until it holds");
     expect(first.followUp).not.toContain("Also running");
     // A second waiter in the same turn sees the first; the turn-start snapshot cannot.
     const second = runningSession((await exec("second-waiter", waitForRelease(release))).details);
@@ -480,6 +482,27 @@ test("tells a woken conversation to end its wait and names its other running com
   } finally {
     await fs.writeFile(release, "release");
     await withinTest(waitForExecScope(sessionKey), signal);
+  }
+});
+
+test("wakes a dashboard conversation on silent success, with exit, duration and a bounded tail", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:dashboard:silent-waiter";
+  await seedOrigin(sessionKey);
+  const exec = backgroundExec(sessionKey, { agentId: "main" });
+  const wakes = vi.mocked(sessionEvents.enqueueSessionEventForHost);
+  for (const [script, expected] of [
+    ["void 0", /^Exec completed \([^,]+, code 0, [^)]+\) with no output\.$/],
+    [
+      'process.stdout.write("x".repeat(3000) + "TAIL_END")',
+      /^Exec completed \([^,]+, code 0, [^)]+\), last 2000 of 3008 output chars \(process log has the rest\):\nx{1992}TAIL_END$/,
+    ],
+  ] as const) {
+    await exec("silent-waiter", script);
+    await withinTest(waitForExecScope(sessionKey), signal);
+    await completion(signal);
+    expect(wakes.mock.calls.at(-1)?.[0]).toMatch(expected);
   }
 });
 
@@ -541,7 +564,7 @@ test("reports manual collection after destination capture fails, then recovers o
       const handle = runningSession(started.details);
       const followUp = expectDefined(handle.followUp, "background continuation guidance");
       expect(followUp).toContain(
-        recovered ? "Its exit wakes this conversation." : "poll with a timeout",
+        recovered ? "Its exit wakes this conversation with the result" : "poll with a timeout",
       );
       if (!recovered) {
         expect(followUp).not.toContain("wakes this conversation");
