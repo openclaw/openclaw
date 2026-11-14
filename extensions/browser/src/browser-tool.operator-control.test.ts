@@ -9,7 +9,10 @@ import {
 import type { BrowserServerState } from "./browser/server-context.types.js";
 
 let browserState: BrowserServerState | null = null;
-vi.mock("./browser-control-state.js", () => ({ getBrowserControlState: () => browserState }));
+vi.mock("./browser-control-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./browser-control-state.js")>()),
+  getBrowserControlState: () => browserState,
+}));
 
 const {
   browserClientMocks: client,
