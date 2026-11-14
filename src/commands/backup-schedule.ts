@@ -21,6 +21,7 @@ import {
 import { executeGitCommand } from "../infra/git-exec.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { shortenHomePath } from "../utils.js";
 import { GIT_BACKUP_PUSH_CREDENTIAL_WARNING } from "./backup-git.js";
 import { resolveRequiredBackupPath } from "./backup-shared.js";
@@ -213,8 +214,22 @@ export async function backupDisableCommand(
     runtime.log(`${label} are already disabled.`);
     return { removed: false };
   }
+  const signal = getAsyncWorkSignal();
+  let removedCount = 0;
   for (const job of existing) {
+    if (signal?.aborted) {
+      break;
+    }
+    // An admitted removal keeps its reply: cancellation stops the next request,
+    // never aborts a schedule whose removal may already have settled.
     await callGatewayFromCli("cron.remove", options, { id: job.id });
+    removedCount++;
+  }
+  if (removedCount < existing.length) {
+    runtime.log(
+      `${label} disabled before completion: ${existing.length - removedCount} schedule(s) not reached (interrupted).`,
+    );
+    return { removed: true };
   }
   runtime.log(`${label} disabled.`);
   return { removed: true };
