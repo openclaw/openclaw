@@ -126,8 +126,10 @@ new background session without changing your current conversation or composer.
 
 Each newly added attachment switches the palette to **Compose**, including after
 you return to Search with an attachment still in the draft.
-Add optional instructions, choose the agent, folder, and worktree, then send
-or press **Cmd/Ctrl+Enter**. Dropping a file does not start the session by itself.
+Add optional instructions, then send or press **Cmd/Ctrl+Enter**. The settings
+button at the left of the composer opens **New session settings** for the agent,
+folder, worktree, and **Remember settings**; the model picker sits beside Send.
+Dropping a file does not start the session by itself.
 Files remain visible while preparing. If a file is rejected, an error toast
 explains the failure and only that file is removed. You can manually start a
 session with the remaining text and files; a rejected file cancels a pending

@@ -27,6 +27,7 @@ function ModelCatalogStatus(props: {
 export function NewSessionModelControlView(props: {
   control: NewSessionModelControl;
   options: NewSessionModelRenderOptions;
+  showEffort?: boolean;
 }) {
   // Draft revisions replace options, but text is not an input to model controls.
   const control = createMemo(() => props.control);
@@ -88,6 +89,7 @@ export function NewSessionModelControlView(props: {
   return (
     <ChatModelControls
       {...controls()}
+      showEffort={props.showEffort}
       renderModelCatalogStatus={(render) => (
         <ModelCatalogStatus read={metadata} identity={read()}>
           {render}

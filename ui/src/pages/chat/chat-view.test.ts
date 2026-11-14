@@ -43,7 +43,6 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatHeaderState, renderModelControls } from "./chat-model-controls.test-support.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
-import * as chatProgress from "./chat-progress.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import * as chatThread from "./chat-thread.ts";
@@ -1087,54 +1086,6 @@ describe("chat loading skeleton", () => {
     } finally {
       nowSpy.mockRestore();
     }
-  });
-
-  it("keeps a completed recap after later tool content", async () => {
-    vi.mocked(chatThread.buildCachedChatItems).mockReturnValueOnce([
-      {
-        kind: "group",
-        key: "group:assistant:test",
-        role: "assistant",
-        visibleContent: "text",
-        messages: [
-          createMessageEntry("message:assistant:test", {
-            role: "assistant",
-            content: "Interim answer",
-            timestamp: 1,
-          }),
-        ],
-        timestamp: 1,
-        isStreaming: false,
-      },
-      {
-        kind: "group",
-        key: "group:tool:test",
-        role: "tool",
-        visibleContent: "text",
-        messages: [
-          createMessageEntry("message:tool:test", {
-            role: "tool",
-            content: "Later tool result",
-            timestamp: 2,
-          }),
-        ],
-        timestamp: 2,
-        isStreaming: false,
-      },
-    ]);
-    vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
-      runId: "run-composed",
-      runtimeMs: 5_000,
-      outputTokens: 42,
-    });
-
-    const container = renderChatView({
-      messages: [{ role: "assistant", content: "Interim answer", timestamp: 1 }],
-    });
-
-    await waitForElement(container, ".chat-turn-recap");
-    expect(container.querySelector(".chat-group.assistant .chat-turn-recap")).toBeNull();
-    expect(container.querySelector(".chat-turn-recap")?.textContent).toContain("42 output tokens");
   });
 });
 

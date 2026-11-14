@@ -777,6 +777,41 @@ Separate follow-ups are the WSL temporary-family dispatch ordering assertion and
 the supplied-env SOCKS CA fixture's setup/cleanup ownership. These are source-only
 findings; no runtime result or production defect is claimed for those follow-ups.
 
+### WSL managed-dispatch ordering proof
+
+At `82e8cded772dcfc01c4f470b58f123ec7cb22266`, the managed-dispatcher WSL
+case checked the disable/restore setter sequence and eventual dispatch, but did
+not order dispatch between those calls. Both moving dispatch before policy
+activation and moving it after restoration still passed all 19 global-dispatcher
+and runtime cases. The repaired case spies on the existing managed dispatcher
+and checks that its call falls between the two policy writes. Each mutation now
+fails only the WSL case (one failed, 18 passed); restored production passes all
+19 cases in 2.64 seconds. Production was restored byte for byte.
+
+All 17 declarations and 19 expanded cases remain. The repair adds five test
+lines, no cases or production code. Timeout updates, helper/lifecycle binding,
+bootstrap/reset ownership, CA rotation and lazy runtime-loading proof remain in
+their existing cases. This proves the synchronous dispatch ordering under the
+WSL policy fixture; it does not claim live Windows or WSL network coverage.
+
+### Managed proxy CA fixture cleanup
+
+At `9cb3c14855e5a5216148a1c125f9240c5da1f6de`, the supplied-env TLS proxy
+case leaked its CA directory when setup or dispatcher teardown failed. The
+existing auto-cleanup tracker now owns the directory, and the existing dispatcher
+helper owns shutdown. All 17 declarations / 27 cases remain, including the real
+HTTP/SOCKS/TLS payload and routing assertions. Independent preservation review
+found no lost contracts.
+
+The baseline passed 27/27. Temporary probes injected a real certificate-write
+failure and a failure after dispatcher shutdown. Both left the directory present
+at an `afterAll` observation, before runner namespace cleanup. With the repair,
+both directories were absent at the same observation and both original errors
+still failed the test. The probes were removed and the file restored byte for
+byte; the clean candidate passed 27/27. Production changed by 0 lines; the test
+changed by +8/-9 lines. The warm candidate run took 2.92 seconds; the cold baseline
+took 17.87 seconds, so these timings do not establish a speed improvement.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
