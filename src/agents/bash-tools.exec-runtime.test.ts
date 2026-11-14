@@ -701,7 +701,8 @@ it.each([
     const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
     expect(message).not.toMatch(loneSurrogate);
     expect(message).not.toContain("�");
-    expect(message).toContain("output chars (process log has the rest):\n");
+    // The 1,000-char retention cap already dropped the start, so the wake says so.
+    expect(message).toContain("; earlier output was discarded):\n");
     expect(message).toContain(head);
   }
 });

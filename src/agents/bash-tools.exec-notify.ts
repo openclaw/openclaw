@@ -140,7 +140,11 @@ export async function maybeNotifyOnExit(
   const summary = !output
     ? `${header} with no output.`
     : session.totalOutputChars > tail.length
-      ? `${header}, last ${tail.length} of ${session.totalOutputChars} output chars (process log has the rest):\n${output}`
+      ? `${header}, last ${tail.length} of ${session.totalOutputChars} output chars (${
+          session.totalOutputChars > session.aggregated.length
+            ? `process log keeps the last ${session.aggregated.length}; earlier output was discarded`
+            : "process log has the rest"
+        }):\n${output}`
       : `${header}:\n${output}`;
   const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
   const eventSessionKey =
