@@ -34,16 +34,41 @@ const nativeToken = [
   ).toString("base64url"),
   "signature",
 ].join(".");
+const deepseek = {
+  ...model,
+  provider: "deepseek",
+  id: "deepseek-flash",
+  baseUrl: "https://api.deepseek.com",
+};
 const streams = [
-  { name: "managed", native: false, call: (context: Context) => managed(model, context, options) },
+  {
+    name: "DeepSeek managed",
+    native: false,
+    plaintext: true,
+    call: (context: Context) => managed(deepseek, context, options),
+  },
+  {
+    name: "DeepSeek package",
+    native: false,
+    plaintext: true,
+    call: (context: Context) => streamOpenAIResponses(deepseek, context, options),
+  },
+  {
+    name: "managed",
+    native: false,
+    plaintext: false,
+    call: (context: Context) => managed(model, context, options),
+  },
   {
     name: "package",
     native: false,
+    plaintext: false,
     call: (context: Context) => streamOpenAIResponses(model, context, options),
   },
   {
     name: "native ChatGPT",
     native: true,
+    plaintext: false,
     call: (context: Context) =>
       streamOpenAICodexResponses(
         { ...model, api: "openai-chatgpt-responses", baseUrl: "https://chatgpt.test/backend-api" },
@@ -72,7 +97,7 @@ it.each(streams)(
       status: "completed",
       summary: [{ type: "summary_text", text: "Synthetic reasoning summary." }],
       content: [{ type: "reasoning_text", text: "Synthetic cleartext reasoning." }],
-      encrypted_content: "Q".repeat(128),
+      ...(fixture.plaintext ? {} : { encrypted_content: "Q".repeat(128) }),
     };
     const tool = {
       id: "fc_synthetic_replay",
@@ -93,6 +118,21 @@ it.each(streams)(
         throw new Error("SDK request body is not a JSON object");
       }
       requests.push(request);
+      if (
+        fixture.plaintext &&
+        requests.length > 1 &&
+        JSON.stringify(reasoningInput(request)?.content) !== JSON.stringify(reasoning.content)
+      ) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              type: "invalid_request_error",
+              message: "The `reasoning_text` in the thinking mode must be passed back to the API.",
+            },
+          }),
+          { status: 400, headers: { "content-type": "application/json" } },
+        );
+      }
       if (requests.length > 3) {
         throw new Error("Unexpected physical SDK request");
       }
@@ -100,7 +140,7 @@ it.each(streams)(
       const response = {
         id: `resp_synthetic_${requests.length}`,
         object: "response",
-        model: model.id,
+        model: fixture.plaintext ? deepseek.id : model.id,
         status: "completed",
         output,
         usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
@@ -138,7 +178,8 @@ it.each(streams)(
       timestamp: 2,
     } satisfies Context["messages"][number];
     const history = [...firstContext.messages, assistant, toolResult];
-    expect((await call({ messages: history })).stopReason).toBe("stop");
+    const warmResult = await call({ messages: history });
+    expect(warmResult.stopReason, warmResult.errorMessage).toBe("stop");
 
     const prepared = prepareTranscriptMessageAppendForWorker({ message: assistant });
     const [entry] = parseSessionEntries(
@@ -154,7 +195,11 @@ it.each(streams)(
     }
     const storedSignature: unknown = JSON.parse(persistedThinking.thinkingSignature);
     expect(storedSignature).toMatchObject({ summary: [] });
-    expect(storedSignature).not.toHaveProperty("content");
+    if (fixture.plaintext) {
+      expect(storedSignature).toHaveProperty("content", reasoning.content);
+    } else {
+      expect(storedSignature).not.toHaveProperty("content");
+    }
     expect(
       (await call({ messages: [...firstContext.messages, reloaded, toolResult] })).stopReason,
     ).toBe("stop");
@@ -164,7 +209,10 @@ it.each(streams)(
     expect(warm).toBeDefined();
     expect(warm?.encrypted_content).toBe(reasoning.encrypted_content);
     expect(cold?.encrypted_content).toBe(reasoning.encrypted_content);
-    if (fixture.native) {
+    if (fixture.plaintext) {
+      expect(warm?.content).toEqual(reasoning.content);
+      expect(cold?.content).toEqual(reasoning.content);
+    } else if (fixture.native) {
       // Codex's native reasoning input preserves its summary and reasoning-text payloads.
       expect(warm?.summary).toEqual(reasoning.summary);
       expect(warm?.content).toEqual(reasoning.content);
