@@ -4,6 +4,7 @@ import { formatByteSize, resolveIntegerOption } from "@openclaw/normalization-co
 import { LruCache } from "../infra/lru-cache.js";
 import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { MAX_IMAGE_DOWNSCALE_SOURCE_PIXELS } from "../media/image-processor-config.js";
 import {
   buildImageResizeSideGrid,
   getImageMetadata,
@@ -264,11 +265,13 @@ export async function sanitizeContentBlocksImages(
         let smallestSize: number | undefined;
         for (const side of sideGrid) {
           for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
+            // Every candidate is downscaled to maxDimensionPx, so oversized sources stay admissible.
             const candidateBuffer = await resizeToJpeg({
               buffer: buf,
               maxSide: side,
               quality,
               withoutEnlargement: true,
+              maxInputPixels: MAX_IMAGE_DOWNSCALE_SOURCE_PIXELS,
             });
             if (smallestSize === undefined || candidateBuffer.byteLength < smallestSize) {
               smallestSize = candidateBuffer.byteLength;

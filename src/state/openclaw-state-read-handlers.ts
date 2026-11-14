@@ -1,9 +1,5 @@
 import type { ExecutionIdentityInspectionOutcome } from "../audit/execution-identity-inspection.types.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
-import {
-  isCronStateReadCommand,
-  readCronStateCommandInDatabase,
-} from "../cron/store/read-command.js";
 import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isUpdateRunAdmissionReadCommand } from "../infra/update-run-admission.types.js";
@@ -104,7 +100,13 @@ export async function prepareOpenClawStateRead(
     const { readBackupRunsInDatabase } = await import("./backup-run-records.kernel.js");
     return (db: EngineConnection) => ({ type: command.type, runs: readBackupRunsInDatabase(db) });
   }
-  if (isCronStateReadCommand(command)) {
+  if (
+    command.type === "cron.currentReceipt" ||
+    command.type === "cron.scratch" ||
+    command.type === "cron.jobNames" ||
+    command.type === "cron.quarantine"
+  ) {
+    const { readCronStateCommandInDatabase } = await import("../cron/store/read-command.js");
     return (db: EngineConnection) => readCronStateCommandInDatabase(db, command);
   }
   if (

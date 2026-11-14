@@ -125,9 +125,10 @@ send the prompt the Scribes tab would send; the
 settings are plain bullets, so set your schedule (`45 3 * * 0` weekly or
 `45 3 * * *` nightly) and IANA time zone there.
 
-The conversation creates the automation, targets itself, and ends with a
-`Scribe status: on — …` line. Each scheduled run receives the automation's run
-message, which you can edit on the Automations page. To fix a broken setup,
+The conversation creates the automation, which runs each time in a fresh
+session of that conversation, and ends with a `Scribe status: on — …` line.
+Each scheduled run receives the automation's run message, which you can edit on
+the Automations page. To fix a broken setup,
 use **Repair** on the Scribes tab. If the scribe's conversation is reset or
 removed, it loses access: start the scribe again from a new conversation.
 Conversation partitions are not reviewed.

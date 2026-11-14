@@ -16,6 +16,7 @@ import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 const status: OpenClawIdStatusResult = {
   status: { state: "keys_refused", key: "gateway", reason: "keys_missing" },
   channel: "local_operator",
+  remoteAccessSetup: "local",
   accountSignIn: "popup",
   owner: true,
   link: { linked: true, clawId: "test-claw", hostname: "test.claw.example" },

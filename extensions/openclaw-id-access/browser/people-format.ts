@@ -72,7 +72,7 @@ export function memberRunning(
 
 /** Display role names consistently in invite summaries and the picker. */
 export function roleName(role: string): string {
-  return role.charAt(0).toUpperCase() + role.slice(1);
+  return role === "operator" ? "Operator" : role === "viewer" ? "Viewer" : role;
 }
 
 /** What a removal changed, e.g. "Bob removed · 1 connection closed · 1 task stopped". */

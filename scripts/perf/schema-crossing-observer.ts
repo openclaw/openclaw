@@ -13,6 +13,7 @@ export function observeSchemaCrossing() {
     bytes?: number;
   }> = [];
   const integrityRequests: Array<{ transport: string; options: unknown }> = [];
+  const snapshotRequests: Array<{ args: unknown; stack: string | undefined }> = [];
   // eslint-disable-next-line @typescript-eslint/unbound-method -- The observer forwards each native receiver and restores this exact method.
   const prepare = DatabaseSync.prototype.prepare;
   DatabaseSync.prototype.prepare = function (sql) {
@@ -82,6 +83,9 @@ export function observeSchemaCrossing() {
   const spawn = childProcess.spawnSync;
   childProcess.spawnSync = new Proxy(spawn, {
     apply(target, thisArg, args) {
+      if (Array.isArray(args[1]) && args[1].includes("--openclaw-sqlite-readonly-child")) {
+        snapshotRequests.push({ args: args[1], stack: new Error().stack });
+      }
       if (Array.isArray(args[1]) && args[1].includes("--check-sync")) {
         const request = deserialize(args[2].input);
         integrityRequests.push({ transport: "sync", options: request.integrity });
@@ -90,31 +94,47 @@ export function observeSchemaCrossing() {
     },
   });
   const fork = childProcess.fork;
+  const spawnAsync = childProcess.spawn;
+  const observeChild = (child: childProcess.ChildProcess) => {
+    if (!child.send) {
+      return child;
+    }
+    const send = child.send.bind(child);
+    child.send = new Proxy(send, {
+      apply(sendTarget, sendThisArg, sendArgs) {
+        const request = sendArgs[0];
+        if (Array.isArray(request?.args)) {
+          snapshotRequests.push({ args: request.args, stack: new Error().stack });
+        }
+        if (request?.integrity && request?.databaseLabel) {
+          integrityRequests.push({ transport: "async", options: request.integrity });
+        }
+        return Reflect.apply(sendTarget, sendThisArg, sendArgs);
+      },
+    });
+    return child;
+  };
+  childProcess.spawn = new Proxy(spawnAsync, {
+    apply(target, thisArg, args) {
+      return observeChild(Reflect.apply(target, thisArg, args));
+    },
+  });
   childProcess.fork = new Proxy(fork, {
     apply(target, thisArg, args) {
-      const child = Reflect.apply(target, thisArg, args) as ReturnType<typeof fork>;
-      const send = child.send.bind(child);
-      child.send = new Proxy(send, {
-        apply(sendTarget, sendThisArg, sendArgs) {
-          const request = sendArgs[0];
-          if (request?.integrity && request?.databaseLabel) {
-            integrityRequests.push({ transport: "async", options: request.integrity });
-          }
-          return Reflect.apply(sendTarget, sendThisArg, sendArgs);
-        },
-      });
-      return child;
+      return observeChild(Reflect.apply(target, thisArg, args));
     },
   });
   syncBuiltinESMExports();
   return {
     events,
     integrityRequests,
+    snapshotRequests,
     close() {
       DatabaseSync.prototype.prepare = prepare;
       fs.promises.open = originalOpen;
       childProcess.spawnSync = spawn;
       childProcess.fork = fork;
+      childProcess.spawn = spawnAsync;
       syncBuiltinESMExports();
     },
   };

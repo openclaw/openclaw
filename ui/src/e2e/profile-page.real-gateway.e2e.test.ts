@@ -172,6 +172,7 @@ suite.define(() => {
             };
             const name = page.locator(".identity-name-control input");
             await expect.poll(() => name.isEnabled()).toBe(true);
+            await page.locator("#personal-instructions-content:enabled").waitFor();
             await capture("proxy-profile.png", "#settings-profile-identity");
             await text(".profile-hero__name").toBe(`Person ${guest.id.slice(0, 8)}`);
             await expect.poll(() => name.inputValue()).toBe("");
@@ -183,7 +184,6 @@ suite.define(() => {
             await name.press("Enter");
             await text(".profile-hero__name").toBe("Test Person");
             expect(await page.locator(".identity-emails").count()).toBe(0);
-            await page.locator("#personal-instructions-content:enabled").waitFor();
             await capture("guest-profile.png", "#settings-profile-access");
             await text(".profile-hero__handle").not.toContain(authenticatedUser);
             await text(".profile-hero").not.toContain("Clipper");
@@ -196,14 +196,17 @@ suite.define(() => {
             await nameInput.fill("Remote Person");
             await nameInput.press("Enter");
             await text(".profile-hero__name").toBe("Remote Person");
-            await editor.locator('#settings-profile-identity input[type="file"]').setInputFiles({
-              name: "avatar.png",
-              mimeType: "image/png",
-              buffer: Buffer.from(
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a6kAAAAASUVORK5CYII=",
-                "base64",
-              ),
-            });
+            // The sibling's profile event can arrive before this editor's save completes.
+            await editor
+              .locator('#settings-profile-identity input[type="file"]:enabled')
+              .setInputFiles({
+                name: "avatar.png",
+                mimeType: "image/png",
+                buffer: Buffer.from(
+                  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a6kAAAAASUVORK5CYII=",
+                  "base64",
+                ),
+              });
             const image = editor.locator(".identity-avatar-control img");
             await expect
               .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))

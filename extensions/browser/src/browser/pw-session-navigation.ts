@@ -84,6 +84,7 @@ export async function assertPageNavigationCompletedSafely(
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
     assertNavigationCurrent: opts.assertNavigationCurrent,
+    allowOperatorPages: opts.allowOperatorPages,
   });
   const policySignal = opts.signal ? { signal: opts.signal } : {};
   try {
@@ -374,6 +375,7 @@ export async function gotoPageWithNavigationGuard(
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
     assertNavigationCurrent: opts.assertNavigationCurrent,
+    allowOperatorPages: opts.allowOperatorPages,
   });
   let blockedError: unknown = null;
 

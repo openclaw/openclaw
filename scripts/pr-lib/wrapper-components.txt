@@ -160,6 +160,12 @@ packages/normalization-core/src/string-normalization.ts
 packages/normalization-core/src/stringified-error.ts
 packages/normalization-core/src/text-decoding.ts
 packages/normalization-core/src/utf16-slice.ts
+packages/openclaw-id-protocol/src/bytes.ts
+packages/openclaw-id-protocol/src/crypto.ts
+packages/openclaw-id-protocol/src/keys.ts
+packages/openclaw-id-protocol/src/statements/types.ts
+packages/openclaw-id-protocol/src/statements/validate.ts
+packages/openclaw-id-protocol/src/version.ts
 packages/plugin-package-contract/package.json
 packages/plugin-package-contract/src/categories.ts
 packages/plugin-package-contract/src/index.ts
@@ -1188,6 +1194,7 @@ src/infra/package-update-integrity.ts
 src/infra/package-update-publication-tree.ts
 src/infra/package-update-recovery-contract.ts
 src/infra/package-update-refusal.ts
+src/infra/operator-authority-error.ts
 src/infra/path-case.ts
 src/infra/path-containment.ts
 src/infra/path-existence.ts
@@ -1382,6 +1389,8 @@ src/infra/thread-disk-io.ts
 src/infra/test-runtime-env.ts
 src/infra/tls-certificate-errors.ts
 src/infra/tmp-openclaw-dir.ts
+src/infra/update-capture-paths.ts
+src/infra/update-capture-privacy-marker.ts
 src/infra/update-candidate-io.ts
 src/infra/update-candidate-state.diagnostics.ts
 src/infra/update-candidate-state.inspection.ts
@@ -1469,6 +1478,7 @@ src/infra/update-state-inspection-protocol.ts
 src/infra/update-step-identity.ts
 src/infra/utf8-input.ts
 src/infra/warning-filter.ts
+src/infra/windows-appcontainer-spawn-log.runtime.ts
 src/infra/windows-appcontainer-spawn.ts
 src/infra/windows-encoding.ts
 src/infra/windows-install-roots.ts
@@ -1487,6 +1497,7 @@ src/infra/worker-mutation-authority.ts
 src/infra/worker-native-error.ts
 src/infra/worker-native-handle.ts
 src/infra/worker-native-lifecycle.ts
+src/infra/worker-native-lifecycle.types.ts
 src/infra/worker-native-lifecycle.worker.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-task-port.ts
@@ -1519,12 +1530,14 @@ src/logging/json-console-line.ts
 src/logging/levels.ts
 src/logging/log-file-path.ts
 src/logging/log-file-shared.ts
+src/logging/log-tail.ts
 src/logging/logger-file-message.ts
 src/logging/logger-file-transport.ts
 src/logging/logger-file-io.ts
 src/logging/logger-file-worker.ts
 src/logging/logger-file.worker.ts
 src/logging/logger.ts
+src/logging/parse-log-line.ts
 src/logging/redact-bounded.ts
 src/logging/redact-edit-composition.ts
 src/logging/redact-json-tokens.ts
@@ -2143,6 +2156,7 @@ src/state/openclaw-agent-standing-intents-schema.ts
 src/state/openclaw-agent-storage-migration.ts
 src/state/openclaw-agent-storage-schema.ts
 src/state/openclaw-agent-text-search-migration.ts
+src/state/openclaw-agent-tool-usage-schema.ts
 src/state/openclaw-agent-trajectory-storage-migration.ts
 src/state/openclaw-agent-transcript-fts-schema-source.ts
 src/state/openclaw-agent-transcript-fts-schema.ts

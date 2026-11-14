@@ -147,6 +147,11 @@ it("links one OCID account to one personal profile, carried by merge and removed
   // Membership-style ensure reuses the linked profile rather than creating another.
   expect((await ensureIdentity({ accountId: "acct-josh" }, options)).id).toBe(person.id);
 
+  // A linked profile takes no second account by linking.
+  expect(
+    await link({ profileId: person.id, accountId: "acct-other", email: null }, options),
+  ).toEqual({ ok: false, code: "profile_linked" });
+
   // Merging linked profiles keeps every account; status lists them and unlink removes them all.
   await link({ profileId: other.id, accountId: "acct-second", email: "second@id.test" }, options);
   await mergeCanonicalUserProfiles(person.id, other.id, options);
