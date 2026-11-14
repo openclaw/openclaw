@@ -38,10 +38,15 @@ import {
   TemplatesLabsDisabledError,
 } from "../../templates/labs-gate.js";
 import { buildTemplateOpeningMessage } from "../../templates/setup-prompt.js";
+import { measureTemplateAddStage, withTemplateAddTimings } from "../../templates/timings.js";
 import type { TemplateAddPlan } from "../../templates/types.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { deleteAgentConfigEntry } from "./agents-config-mutations.js";
-import { completeAgentOnboarding, startAgentOnboardingConversation } from "./agents-onboarding.js";
+import {
+  completeAgentOnboarding,
+  startAgentOnboardingConversation,
+  startTemplateDependencyConversation,
+} from "./agents-onboarding.js";
 import { captureCronCreatorSession } from "./cron-input-validation.js";
 import { publishTemplateInstallEvent } from "./templates-add-conversation.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -180,193 +185,218 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           );
         }
       };
-      const result = await applyTemplateAddForGateway({
-        source: params.source,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-        ...("mode" in params
-          ? {
-              mode: params.mode,
-              ...(params.resume ? { resume: true as const } : {}),
-              // Creation has finished: the first turn starts now, with its outcome, and
-              // nothing was installed here that needs an installer card in the chat.
-              onAgentCreated: async (agent, report) => {
-                assertCurrent();
-                await startAgentOnboardingConversation(
-                  options,
-                  agent.agentId,
-                  agent.sessionKey,
-                  "template",
-                  buildTemplateOpeningMessage(report, agent),
-                );
-                publishProgress("agent-ready", agent);
-              },
-            }
-          : {
-              planIntegrity: params.planIntegrity,
-              ...(params.acknowledgeCapabilities
-                ? { acknowledgeCapabilities: params.acknowledgeCapabilities }
-                : {}),
-              ...(params.acknowledgeSkillWarnings
-                ? { acknowledgeSkillWarnings: params.acknowledgeSkillWarnings }
-                : {}),
-              onAgentReady: async (agent) => {
-                assertCurrent();
-                publishProgress("agent-ready", agent);
-                await startAgentOnboardingConversation(
-                  options,
-                  agent.agentId,
-                  agent.sessionKey,
-                  "template",
-                );
-              },
-              onSetupEvent: async (event) => {
-                assertCurrent();
-                await publishTemplateInstallEvent(options.context, event, assertCurrent);
-                assertCurrent();
-              },
-            }),
-        getPlanningContext: async () => {
-          assertCurrent();
-          const config = await readCurrentConfigForPolicyCheckAsync({
-            configPath,
-            env: configEnv,
-          });
-          assertCurrent();
-          assertTemplatesLabsEnabled(config);
-          return {
-            config,
-            sourceMcpServers: async () => {
-              const listedMcp = await listConfiguredMcpServers();
+      const result = await withTemplateAddTimings(
+        options.req.id,
+        async () =>
+          await applyTemplateAddForGateway({
+            source: params.source,
+            ...(params.agentId ? { agentId: params.agentId } : {}),
+            ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
+            ...("mode" in params
+              ? {
+                  mode: params.mode,
+                  ...(params.resume ? { resume: true as const } : {}),
+                  // Creation has finished: the first turn starts now, with its outcome, and
+                  // nothing was installed here that needs an installer card in the chat.
+                  onAgentCreated: async (agent, report, dependenciesPending) => {
+                    assertCurrent();
+                    await measureTemplateAddStage(
+                      "opening.total",
+                      async () =>
+                        await startAgentOnboardingConversation(
+                          options,
+                          agent.agentId,
+                          agent.sessionKey,
+                          "template",
+                          buildTemplateOpeningMessage(report, agent, dependenciesPending),
+                          () => {
+                            assertCurrent();
+                            publishProgress("agent-ready", agent);
+                          },
+                        ),
+                    );
+                  },
+                  onDependenciesSettled: async (agent, report) => {
+                    assertCurrent();
+                    await measureTemplateAddStage(
+                      "dependencies.report",
+                      async () => await startTemplateDependencyConversation(options, agent, report),
+                    );
+                  },
+                }
+              : {
+                  planIntegrity: params.planIntegrity,
+                  ...(params.acknowledgeCapabilities
+                    ? { acknowledgeCapabilities: params.acknowledgeCapabilities }
+                    : {}),
+                  ...(params.acknowledgeSkillWarnings
+                    ? { acknowledgeSkillWarnings: params.acknowledgeSkillWarnings }
+                    : {}),
+                  onAgentReady: async (agent) => {
+                    assertCurrent();
+                    publishProgress("agent-ready", agent);
+                    await startAgentOnboardingConversation(
+                      options,
+                      agent.agentId,
+                      agent.sessionKey,
+                      "template",
+                    );
+                  },
+                  onSetupEvent: async (event) => {
+                    assertCurrent();
+                    await publishTemplateInstallEvent(options.context, event, assertCurrent);
+                    assertCurrent();
+                  },
+                }),
+            getPlanningContext: async () => {
               assertCurrent();
-              if (!listedMcp.ok) {
-                throw new Error(listedMcp.error);
-              }
-              return listedMcp.mcpServers;
+              const config = await readCurrentConfigForPolicyCheckAsync({
+                configPath,
+                env: configEnv,
+              });
+              assertCurrent();
+              assertTemplatesLabsEnabled(config);
+              return {
+                config,
+                sourceMcpServers: async () => {
+                  const listedMcp = await listConfiguredMcpServers();
+                  assertCurrent();
+                  if (!listedMcp.ok) {
+                    throw new Error(listedMcp.error);
+                  }
+                  return listedMcp.mcpServers;
+                },
+              };
             },
-          };
-        },
-        policyConfig: { configPath, env: configEnv },
-        assertCurrent,
-        ...(signal ? { signal } : {}),
-        ...(reloadPlugins ? { reloadPlugins } : {}),
-        configWriteOptions: attachRuntimeConfigWriteApplication({}, application),
-        admissionConfigWriteOptions: attachRuntimeConfigWriteApplication({}, admissionApplication),
-        waitForAdmissionRuntime: async (retainedAgent) => {
-          if (retainedAgent) {
-            assertRetainedRuntime(retainedAgent);
-            return "applied";
-          }
-          const outcome = admissionApplication.claimed
-            ? await admissionApplication.result
-            : "unclaimed";
-          if (outcome !== "applied" && outcome !== "applied-restart-required") {
-            throw new Error(
-              "Ordinary agent admission was saved but runtime application was not confirmed (" +
-                (typeof outcome === "string" ? outcome : JSON.stringify(outcome)) +
-                "); inspect config.get before retrying.",
-            );
-          }
-          return outcome;
-        },
-        onAgentAdmitted: async (agent) => {
-          assertCurrent();
-          publishProgress("agent-admitted", agent);
-        },
-        waitForAgentRuntime: async (retainedAgent) => {
-          if (retainedAgent) {
-            assertRetainedRuntime(retainedAgent);
-            return "applied";
-          }
-          const outcome = application.claimed ? await application.result : "unclaimed";
-          // Report publication before the caller rechecks authority: an already exposed
-          // ordinary agent must be retained even when installation authority expires.
-          if (outcome !== "applied" && outcome !== "applied-restart-required") {
-            throw new Error(
-              `Template agent configuration was saved but its application to the active Gateway was not confirmed (${typeof outcome === "string" ? outcome : JSON.stringify(outcome)}); inspect config.get before retrying.`,
-            );
-          }
-          return outcome;
-        },
-        prepareAgentChat: async (agentId, config, pending) => {
-          assertCurrent();
-          const onboarding = await completeAgentOnboarding(options, agentId, {
-            config,
-            ...pending,
-          });
-          if (onboarding.preparationUncertain) {
-            throw new TemplateAddMutationError(
-              "agent_session_outcome_uncertain",
-              onboarding.status === "error"
-                ? onboarding.error
-                : "Ordinary session preparation outcome is uncertain",
-            );
-          }
-          if (onboarding.status !== "completed" || !onboarding.rollback) {
-            throw new Error(
-              onboarding.status === "error"
-                ? onboarding.error
-                : "The agent's conversation could not be saved.",
-            );
-          }
-          return onboarding.rollback;
-        },
-        cronGateway: createTemplateCronGateway(
-          context.cron,
-          context.getRuntimeConfig,
-          assertCurrent,
-          (job, cfg) =>
-            captureCronCreatorSession(
-              job,
-              undefined,
-              {
-                client,
-                context,
-                signal,
-                hasCurrentClientAuthority,
-                ...(client ? { captureIndependentOperatorSource: true as const } : {}),
-              },
-              cfg,
+            policyConfig: { configPath, env: configEnv },
+            assertCurrent,
+            ...(signal ? { signal } : {}),
+            ...(reloadPlugins ? { reloadPlugins } : {}),
+            configWriteOptions: attachRuntimeConfigWriteApplication({}, application),
+            admissionConfigWriteOptions: attachRuntimeConfigWriteApplication(
+              {},
+              admissionApplication,
             ),
-        ),
-        rollbackNewAgent: async (
-          agentId: string,
-          expectedAgentConfig: TemplateAddPlan["agent"]["config"],
-          expectedCronJobs: PersistedTemplateCronRef[],
-        ) => {
-          assertCurrent();
-          const createdJobsById = new Map(
-            expectedCronJobs.flatMap((job) =>
-              job.schedulerJobId ? [[job.schedulerJobId, job] as const] : [],
-            ),
-          );
-          const liveJobs = (await context.cron.list({ includeDisabled: true })).filter(
-            (job) => job.agentId === agentId,
-          );
-          for (const job of liveJobs) {
-            const created = createdJobsById.get(job.id);
-            if (!created || !templateCronGatewayJobMatchesRef(agentId, created, job)) {
-              throw new Error(
-                "Agent automations changed during Template Add; rollback left it intact.",
+            waitForAdmissionRuntime: async (retainedAgent) => {
+              if (retainedAgent) {
+                assertRetainedRuntime(retainedAgent);
+                return "applied";
+              }
+              const outcome = admissionApplication.claimed
+                ? await admissionApplication.result
+                : "unclaimed";
+              if (outcome !== "applied" && outcome !== "applied-restart-required") {
+                throw new Error(
+                  "Ordinary agent admission was saved but runtime application was not confirmed (" +
+                    (typeof outcome === "string" ? outcome : JSON.stringify(outcome)) +
+                    "); inspect config.get before retrying.",
+                );
+              }
+              return outcome;
+            },
+            onAgentAdmitted: async (agent) => {
+              assertCurrent();
+              publishProgress("agent-admitted", agent);
+            },
+            waitForAgentRuntime: async (retainedAgent) => {
+              if (retainedAgent) {
+                assertRetainedRuntime(retainedAgent);
+                return "applied";
+              }
+              const outcome = application.claimed ? await application.result : "unclaimed";
+              // Report publication before the caller rechecks authority: an already exposed
+              // ordinary agent must be retained even when installation authority expires.
+              if (outcome !== "applied" && outcome !== "applied-restart-required") {
+                throw new Error(
+                  `Template agent configuration was saved but its application to the active Gateway was not confirmed (${typeof outcome === "string" ? outcome : JSON.stringify(outcome)}); inspect config.get before retrying.`,
+                );
+              }
+              return outcome;
+            },
+            prepareAgentChat: async (agentId, config, pending) => {
+              assertCurrent();
+              const onboarding = await measureTemplateAddStage(
+                "session.prepare",
+                async () =>
+                  await completeAgentOnboarding(options, agentId, {
+                    config,
+                    ...pending,
+                  }),
               );
-            }
-          }
-          await context.cron.removeAgentJobsTransactional(agentId, async () => {
-            assertCurrent();
-            await deleteAgentConfigEntry({
-              agentId,
+              if (onboarding.preparationUncertain) {
+                throw new TemplateAddMutationError(
+                  "agent_session_outcome_uncertain",
+                  onboarding.status === "error"
+                    ? onboarding.error
+                    : "Ordinary session preparation outcome is uncertain",
+                );
+              }
+              if (onboarding.status !== "completed" || !onboarding.rollback) {
+                throw new Error(
+                  onboarding.status === "error"
+                    ? onboarding.error
+                    : "The agent's conversation could not be saved.",
+                );
+              }
+              return onboarding.rollback;
+            },
+            cronGateway: createTemplateCronGateway(
+              context.cron,
+              context.getRuntimeConfig,
               assertCurrent,
-              validate: (agent) => {
-                if (!isDeepStrictEqual(agent, expectedAgentConfig)) {
+              (job, cfg) =>
+                captureCronCreatorSession(
+                  job,
+                  undefined,
+                  {
+                    client,
+                    context,
+                    signal,
+                    hasCurrentClientAuthority,
+                    ...(client ? { captureIndependentOperatorSource: true as const } : {}),
+                  },
+                  cfg,
+                ),
+            ),
+            rollbackNewAgent: async (
+              agentId: string,
+              expectedAgentConfig: TemplateAddPlan["agent"]["config"],
+              expectedCronJobs: PersistedTemplateCronRef[],
+            ) => {
+              assertCurrent();
+              const createdJobsById = new Map(
+                expectedCronJobs.flatMap((job) =>
+                  job.schedulerJobId ? [[job.schedulerJobId, job] as const] : [],
+                ),
+              );
+              const liveJobs = (await context.cron.list({ includeDisabled: true })).filter(
+                (job) => job.agentId === agentId,
+              );
+              for (const job of liveJobs) {
+                const created = createdJobsById.get(job.id);
+                if (!created || !templateCronGatewayJobMatchesRef(agentId, created, job)) {
                   throw new Error(
-                    "New agent changed during Template Add; rollback left it intact.",
+                    "Agent automations changed during Template Add; rollback left it intact.",
                   );
                 }
-              },
-            });
-          });
-        },
-      });
+              }
+              await context.cron.removeAgentJobsTransactional(agentId, async () => {
+                assertCurrent();
+                await deleteAgentConfigEntry({
+                  agentId,
+                  assertCurrent,
+                  validate: (agent) => {
+                    if (!isDeepStrictEqual(agent, expectedAgentConfig)) {
+                      throw new Error(
+                        "New agent changed during Template Add; rollback left it intact.",
+                      );
+                    }
+                  },
+                });
+              });
+            },
+          }),
+      );
       respond(true, result);
     } catch (error) {
       log.error(

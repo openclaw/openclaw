@@ -110,11 +110,7 @@ export function createChatSubmissions() {
     retain,
     // Display-only admission state; no run id, outbox attempt or accepted send.
     beginCreate: (pending: PendingChatCreate) => {
-      if (
-        pendingCreate &&
-        !pendingCreate.creation.admitted &&
-        pendingCreate.composer?.canRecover()
-      ) {
+      if (pendingCreate && pendingCreate.composer?.canRecover()) {
         // Starting another chat cannot revoke an admitted agent's setup recovery.
         backgroundCreates.set(pendingCreate.creation.sessionKey, pendingCreate);
       }
@@ -129,6 +125,17 @@ export function createChatSubmissions() {
           createListeners.publish();
         }
       };
+    },
+    /** Move the existing setup custody when the Gateway chooses its canonical session. */
+    retargetCreate: (creation: { sessionKey: string; admitted: boolean }, sessionKey: string) => {
+      const previousKey = creation.sessionKey;
+      const background = backgroundCreates.get(previousKey);
+      creation.sessionKey = sessionKey;
+      if (background?.creation === creation) {
+        backgroundCreates.delete(previousKey);
+        backgroundCreates.set(sessionKey, background);
+      }
+      createListeners.publish();
     },
     /** Display-only preview of a background start until its owner admits or retires it. */
     beginBackgroundCreate: (pending: PendingChatCreate) => {
@@ -180,7 +187,21 @@ export function createChatSubmissions() {
     },
     readCreateMessage: (sessionKey: string) => readCreateFor(sessionKey)?.message ?? null,
     readCreateComposer: (sessionKey: string) => readCreateFor(sessionKey)?.composer,
+    /** Live panes may be docked independently of the provisional page route. */
+    readSessionSetupComposer: (sessionKey: string) => {
+      const pending =
+        pendingCreate?.creation.sessionKey === sessionKey
+          ? pendingCreate
+          : backgroundCreates.get(sessionKey);
+      const composer = pending?.composer;
+      return pending?.creation.admitted &&
+        composer?.acceptedSessionKey === sessionKey &&
+        composer.canDisplay()
+        ? composer
+        : undefined;
+    },
     subscribeCreate: createListeners.subscribe,
+    notifyCreate: createListeners.publish,
     readInitial,
     observeInitialSession: (sessionKey: string, owner: object | null, sessionId: string | null) => {
       const submission = readInitial(sessionKey, owner);

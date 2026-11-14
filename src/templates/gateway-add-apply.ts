@@ -72,6 +72,7 @@ export async function applyTemplateAddForGateway(
     mode?: "chat";
     resume?: true;
     onAgentCreated?: ChatTemplateAddInput["onAgentCreated"];
+    onDependenciesSettled?: ChatTemplateAddInput["onDependenciesSettled"];
     planIntegrity?: string;
     acknowledgeClawHubRisk?: boolean;
     acknowledgeCapabilities?: readonly TemplatePluginAcknowledgement[];

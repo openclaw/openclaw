@@ -8,14 +8,18 @@ import { sessionEntryCommitGuardOptions } from "../config/sessions/session-sourc
 import { normalizeAgentId } from "../routing/session-key.js";
 import { withOpenClawStateLeaseAsync } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { withResolvedClawHubSource } from "./clawhub-source.js";
 import type { ChatTemplateAddInput } from "./gateway-add-input.js";
 import type { GatewayTemplateAddApplyResult } from "./gateway-add-result.js";
+import { finishTemplateDependencies } from "./setup-dependencies.js";
+import type { TemplateReadResult } from "./types.js";
 
 /** The ordinary session owns this one-shot continuation, not an installed Template ledger. */
 export async function continueTemplateSetup(
   input: ChatTemplateAddInput,
   agentIdInput: string,
   stateContext: OpenClawStateWorkerContext,
+  preparedSource?: Extract<TemplateReadResult, { ok: true }>,
 ): Promise<GatewayTemplateAddApplyResult | undefined> {
   const agentId = normalizeAgentId(agentIdInput);
   const config = (await input.getPlanningContext()).config;
@@ -32,8 +36,8 @@ export async function continueTemplateSetup(
     storePath: resolveSessionStorePathCore(config.session?.store, { agentId }),
   };
   const entry = await readSessionEntryReadOnlyInWorker(scope, input.assertCurrent);
-  const setup = entry?.templateSetup;
-  let report = setup?.report;
+  const pendingSetup = entry?.templateSetup;
+  let report = pendingSetup?.report;
   if (!entry) {
     if (input.resume) {
       throw new Error(
@@ -67,11 +71,12 @@ export async function continueTemplateSetup(
       ...(openingError ? { initializationPending: true } : {}),
     };
   };
-  if (!setup) {
+  if (!pendingSetup) {
     // A stale Retry can outlive the consumed setup receipt. Reconcile the
     // existing conversation instead of falling through to a fresh Add.
     return input.resume && !entry.initializationPending ? result() : undefined;
   }
+  let setup = pendingSetup;
   if (!isDeepStrictEqual(setup.source, input.source)) {
     if (input.resume) {
       throw new Error("The Template setup source changed; Retry left the agent intact.");
@@ -98,27 +103,109 @@ export async function continueTemplateSetup(
           input.assertCurrent();
           lease.assertCurrent();
         };
-        const current = await readSessionEntryReadOnlyInWorker(scope, assertCurrent);
-        if (current?.sessionId !== entry.sessionId) {
+        const currentEntry = await readSessionEntryReadOnlyInWorker(scope, assertCurrent);
+        if (currentEntry?.sessionId !== entry.sessionId) {
           throw new Error("The Template conversation changed before setup; it was left intact.");
         }
-        if (!current.templateSetup) {
+        if (!currentEntry.templateSetup) {
           // The consumed receipt cannot prove success, even if our pre-lease report was empty.
           report = undefined;
           return result();
         }
-        if (!isDeepStrictEqual(current.templateSetup, setup)) {
+        if (!isDeepStrictEqual(currentEntry.templateSetup, setup)) {
           throw new Error("The Template setup continuation changed; it was left intact.");
         }
+        const agent = { agentId, sessionKey };
+        // One ordinary session receipt owns both branches. Keep its agent lease until
+        // installation and the source turn settle; Retry cannot duplicate live work.
+        let checkpoints = Promise.resolve();
+        const save = (update: (current: typeof setup) => typeof setup) => {
+          const saved = checkpoints.then(async () => {
+            const expected = setup;
+            const next = update(setup);
+            await patchSessionEntryCore(
+              scope,
+              (latest) => {
+                assertCurrent();
+                if (
+                  latest?.sessionId !== entry.sessionId ||
+                  !isDeepStrictEqual(latest.templateSetup, expected)
+                ) {
+                  throw new Error("The Template setup continuation changed before checkpointing.");
+                }
+                return { templateSetup: next };
+              },
+              {
+                preserveActivity: true,
+                requireWriteSuccess: true,
+                ...sessionEntryCommitGuardOptions(assertCurrent),
+              },
+            );
+            setup = next;
+            report = next.report;
+          });
+          checkpoints = saved;
+          return saved;
+        };
+        const openingIncludesReport = !setup.dependenciesPending && !setup.openingComplete;
+        if (setup.dependenciesPending) {
+          const install = async () => {
+            const workspace = config.agents!.entries![agentId]!.workspace!;
+            const run = (source: Extract<TemplateReadResult, { ok: true }>) =>
+              finishTemplateDependencies(source, input, agentId, workspace, stateContext, lease);
+            if (preparedSource) {
+              return await run(preparedSource);
+            }
+            const resolved = await withResolvedClawHubSource({
+              ...input,
+              coordinate: input.source,
+              mode: "apply",
+              run: async (source) => await run(source),
+            });
+            return resolved.value;
+          };
+          const [opening, dependencies] = await Promise.allSettled([
+            setup.openingComplete
+              ? Promise.resolve()
+              : (async () => {
+                  await input.onAgentCreated?.(agent, setup.report, true);
+                  await save((current) => ({ ...current, openingComplete: true }));
+                })(),
+            (async () => {
+              const installed = await install();
+              await save((current) => {
+                const { dependenciesPending: _pending, ...settled } = current;
+                return { ...settled, report: installed };
+              });
+            })(),
+          ]);
+          if (dependencies.status === "rejected") {
+            throw dependencies.reason;
+          }
+          if (opening.status === "rejected") {
+            throw opening.reason;
+          }
+        }
         assertCurrent();
-        await input.onAgentCreated?.({ agentId, sessionKey }, setup.report);
+        if (!setup.openingComplete) {
+          // A failed first turn retries with the settled report, without reinstalling anything.
+          await input.onAgentCreated?.(agent, setup.report);
+          await save((current) => ({ ...current, openingComplete: true }));
+        }
+        if (
+          !openingIncludesReport &&
+          (setup.report.failures.length || setup.report.mcpServers.length)
+        ) {
+          await input.onDependenciesSettled?.(agent, setup.report);
+        }
+        const completed = setup;
         await patchSessionEntryCore(
           scope,
           (latest) => {
             assertCurrent();
             if (
               latest?.sessionId !== entry.sessionId ||
-              !isDeepStrictEqual(latest.templateSetup, setup)
+              !isDeepStrictEqual(latest.templateSetup, completed)
             ) {
               throw new Error("The Template setup continuation changed before completion.");
             }

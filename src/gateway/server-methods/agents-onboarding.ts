@@ -28,7 +28,9 @@ import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
 } from "../../shared/transcript-only-openclaw-assistant.js";
 import { verifySetupInferenceConfig } from "../../system-agent/setup-inference-turn.js";
+import type { TemplateSetupReport } from "../../templates/conversation.js";
 import { TEMPLATE_AGENT_OPENING_MESSAGE } from "../../templates/conversation.js";
+import { buildTemplateDependencyMessage } from "../../templates/setup-prompt.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
@@ -349,6 +351,7 @@ export async function startAgentOnboardingConversation(
   opening: "new-agent" | "template" = "new-agent",
   /** Chat-based Template Add only: the caller has built the one setup opening. */
   templateSetupPrompt?: string,
+  onStarted?: () => void,
 ): Promise<void> {
   const releaseAuthorization = options.sessionMutationAuthorization?.retain?.();
   using _ = { [Symbol.dispose]: () => releaseAuthorization?.() };
@@ -384,7 +387,13 @@ export async function startAgentOnboardingConversation(
             },
           },
           respond: (...args) => {
-            response ??= args;
+            if (!response) {
+              response = args;
+              // The ordinary source owns its run/queue admission before revealing chat.
+              if (args[0]) {
+                onStarted?.();
+              }
+            }
           },
         },
         undefined,
@@ -429,4 +438,19 @@ export async function startAgentOnboardingConversation(
       `could not start onboarding for agent ${agentId}: ${formatErrorMessage(error)}`,
     );
   }
+}
+
+/** Install outcomes are delivered as a new hidden turn, after the opening settles. */
+export async function startTemplateDependencyConversation(
+  options: GatewayRequestHandlerOptions,
+  agent: { agentId: string; sessionKey: string },
+  report: TemplateSetupReport,
+): Promise<void> {
+  await startAgentOnboardingConversation(
+    options,
+    agent.agentId,
+    agent.sessionKey,
+    "template",
+    buildTemplateDependencyMessage(report),
+  );
 }

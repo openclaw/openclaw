@@ -280,8 +280,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     });
     const initialHistoryUnavailable = !catalogKey && isInitialChatHistoryUnavailable(state);
     const catalogCanContinue = this.history.catalogSession?.canContinue === true;
-    const auth = gatewaySnapshot.hello?.auth ?? null;
-    const hasWriteScope = hasOperatorWriteAccess(auth);
+    const hasWriteScope = hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null);
     const composerAccess = catalogKey
       ? hasWriteScope ||
         (catalogKey.catalogId === "beam" &&
@@ -379,6 +378,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onActivityPillsLayout: this.onActivityPillsLayout,
       onScrollPortRef: this.mobileScrollFades.register,
       paneId: this.presentationId,
+      ownsComposer: this.active && this.presented,
       sessionKey: state.sessionKey,
       announceTranscript: this.active && this.presented,
       showThinking: state.settings.chatShowThinking,

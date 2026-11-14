@@ -53,6 +53,7 @@ import {
 import "../../components/resizable-divider.ts";
 import { ChatThread } from "./components/chat-thread-view.tsx";
 import { TranscriptSearch } from "./components/chat-transcript-search.tsx";
+import { TemplateSetupComposer } from "./template-setup-composer.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -336,6 +337,7 @@ function ChatComposerView(input: ChatViewInput) {
 }
 
 function ChatComposerCompanion(input: ChatViewInput) {
+  const composer = createMemo(() => merge(input.props, { displayQueue: input.frame.displayQueue }));
   const questionPanel = createComposerQuestionPanel(
     () => input.questions,
     undefined,
@@ -349,7 +351,7 @@ function ChatComposerCompanion(input: ChatViewInput) {
       </div>
       <ComposerQuestionDock panel={questionPanel()} />
       <ComposerQueue
-        composer={merge(input.props, { displayQueue: input.frame.displayQueue })}
+        composer={composer()}
         showAbortableUi={
           Boolean(input.props.canAbort && input.props.onAbort) &&
           !hasTerminalRunStatus(input.props.runStatus)
@@ -685,27 +687,29 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                       ref={[bindComposerFooter, elementRef(input.props.onFooterElementRef)]}
                       onWheel={forwardWheel}
                     >
-                      <ChatSurface
-                        binding={{
-                          "prop:surface": "composer",
-                          "prop:props": {
-                            sessionKey: input.props.sessionKey,
-                            agentId: input.props.currentAgentId,
-                            draft: input.props.draft,
-                            canSend: input.props.canSend && !input.props.submitDisabledReason,
-                            sending: input.props.sending,
-                            disabledReason:
-                              input.props.submitDisabledReason ?? input.props.disabledReason,
-                            setDraft: input.props.onDraftChange,
-                            send: async () => input.props.onSend(),
-                            abort: input.props.onAbort,
-                          },
-                        }}
-                        viewProps={viewProps()}
-                        view={ChatComposerView}
-                        companion={ChatComposerCompanion}
-                        replacementRef={replacementComposer.bind}
-                      />
+                      <TemplateSetupComposer chat={input.props}>
+                        <ChatSurface
+                          binding={{
+                            "prop:surface": "composer",
+                            "prop:props": {
+                              sessionKey: input.props.sessionKey,
+                              agentId: input.props.currentAgentId,
+                              draft: input.props.draft,
+                              canSend: input.props.canSend && !input.props.submitDisabledReason,
+                              sending: input.props.sending,
+                              disabledReason:
+                                input.props.submitDisabledReason ?? input.props.disabledReason,
+                              setDraft: input.props.onDraftChange,
+                              send: async () => input.props.onSend(),
+                              abort: input.props.onAbort,
+                            },
+                          }}
+                          viewProps={viewProps()}
+                          view={ChatComposerView}
+                          companion={ChatComposerCompanion}
+                          replacementRef={replacementComposer.bind}
+                        />
+                      </TemplateSetupComposer>
                     </div>
                   </div>
                 </div>

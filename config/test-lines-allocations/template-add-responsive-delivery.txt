@@ -1,0 +1,6 @@
+# Deferred Template setup reuses the existing Gateway Add and rendered composer seams.
+# It covers live dependency overlap, same-agent Retry, buffered input ownership,
+# mixed referenced/bundled plugin failure attribution, and verified-card location
+# conflict normalization. The 421 net test lines need 21 beyond the global 400;
+# no global allowance, runtime assertion, or performance budget is changed.
+21
