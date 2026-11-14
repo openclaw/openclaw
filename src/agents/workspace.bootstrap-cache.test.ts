@@ -10,7 +10,11 @@ import {
   retireWorkspaceFileCache,
   writeWorkspaceFileCache,
 } from "./workspace-file-cache.js";
-import { loadWorkspaceBootstrapFiles, DEFAULT_AGENTS_FILENAME } from "./workspace.js";
+import {
+  loadWorkspaceBootstrapFiles,
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+} from "./workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -114,7 +118,21 @@ describe("workspace bootstrap file caching", () => {
         exactIdentity: { ...opened.exactIdentity, ino: fileId },
       };
     });
-    await expectAgents("# old guidance");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_SOUL_FILENAME), "# persona");
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => loadWorkspaceBootstrapFiles(workspaceDir)),
+    );
+    for (const files of results) {
+      expect(files).toEqual(results[0]);
+      expect(files.find((file) => file.name === DEFAULT_AGENTS_FILENAME)).toMatchObject({
+        content: "# old guidance",
+        missing: false,
+      });
+      expect(files.find((file) => file.name === DEFAULT_SOUL_FILENAME)).toMatchObject({
+        content: "# persona",
+        missing: false,
+      });
+    }
     await expectAgents("# old guidance");
     await writeAgents("# new guidance");
     fileId += 1n;

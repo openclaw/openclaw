@@ -52,7 +52,7 @@ describe("Telegram transcript echo durable ownership", () => {
         MessageSid: "42",
         ...overrides,
       },
-      transcript: "identical synthetic transcript",
+      transcript: "tickets cost $$40, wait for the deal & confirm with $&",
     });
   }
 
@@ -75,6 +75,11 @@ describe("Telegram transcript echo durable ownership", () => {
     try {
       await echo();
       expect(sendText).toHaveBeenCalledOnce();
+      expect(sendText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: '📝 "tickets cost $$40, wait for the deal & confirm with $&"',
+        }),
+      );
     } finally {
       finish.resolve({ channel: "telegram", messageId: "first-echo" });
       await first;
@@ -90,6 +95,21 @@ describe("Telegram transcript echo durable ownership", () => {
     await echo({ MessageSid: "43" });
     await echo({ AccountId: "second-account" });
     await echo({ OriginatingTo: "telegram:-100456:topic:7" });
-    expect(sendText).toHaveBeenCalledTimes(4);
+    await echo({ OriginatingTo: undefined, From: "telegram:-100789:topic:7" });
+    expect(sendText).toHaveBeenCalledTimes(5);
+  });
+
+  it.each([{ Provider: "internal-system" }, { OriginatingTo: undefined, From: undefined }])(
+    "skips undeliverable transcript destinations: %j",
+    async (context) => {
+      await echo(context);
+      expect(sendText).not.toHaveBeenCalled();
+    },
+  );
+
+  it("swallows delivery failures", async () => {
+    sendText.mockRejectedValueOnce(new Error("delivery timeout"));
+    await expect(echo()).resolves.toBeUndefined();
+    expect(sendText).toHaveBeenCalledOnce();
   });
 });

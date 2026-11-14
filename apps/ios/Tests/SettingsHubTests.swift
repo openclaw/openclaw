@@ -395,6 +395,9 @@ struct SettingsHubTests {
         let text = try await fixture.load()
         let visibleText = response.mimeType == "text/html" ? "Sign in" : response.body
         #expect(text.contains(visibleText) == response.renders)
+        #expect(fixture.compatibility.httpErrorStatus == (response.renders ? nil : response.statusCode))
+        fixture.compatibility.reload()
+        #expect(fixture.compatibility.httpErrorStatus == nil)
     }
 }
 

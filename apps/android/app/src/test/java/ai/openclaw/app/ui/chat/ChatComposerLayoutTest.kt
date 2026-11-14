@@ -6295,6 +6295,29 @@ class ChatComposerLayoutTest {
       capture("confirmed")
       verifyGeometry("confirmed")
       assertTrue(geometryFailures.joinToString("\n"), geometryFailures.isEmpty())
+
+      val image = ChatMessageContent(type = "image", mimeType = "image/jpeg", base64 = syntheticLargeChatPhotoBase64())
+      composeRule.runOnIdle {
+        controllerFlow<List<ChatMessage>>("_messages").value = listOf(
+          ChatMessage("garden-question", "user", listOf(ChatMessageContent(text = "Which garden layout works best?"), image, image), null),
+          ChatMessage("garden-answer", "assistant", listOf(ChatMessageContent(text = "The sunny bed has room for herbs. Keep a clear path between the planters.")), null),
+        )
+      }
+      composeRule.waitForIdle()
+      composeRule.onAllNodesWithContentDescription("image/jpeg", useUnmergedTree = true).assertCountEquals(0)
+      imageDecodeDispatcher.scheduler.advanceUntilIdle()
+      composeRule.waitForIdle()
+      composeRule.onAllNodesWithContentDescription("image/jpeg", useUnmergedTree = true).assertCountEquals(2)
+      composeRule.onNodeWithText("Which garden layout works best?", useUnmergedTree = true).assertIsDisplayed()
+      composeRule.onNodeWithText("The sunny bed has room for herbs. Keep a clear path between the planters.", useUnmergedTree = true).assertIsDisplayed()
+      System.getenv("OPENCLAW_MEDIA_PROOF_DIR")?.let { directory ->
+        val bitmap = composeRule.onNodeWithTag("chat-viewport").captureToImage().asAndroidBitmap()
+        assertEquals(360, bitmap.width)
+        assertEquals(800, bitmap.height)
+        val file = File(directory, "phone-full-chat.png")
+        file.parentFile!!.mkdirs()
+        file.outputStream().use { assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+      }
     }
 
   private fun readerMarkerBounds(

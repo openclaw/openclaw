@@ -265,6 +265,7 @@ struct RootTabsPresentationTests {
             let data = try #require(paramsJSON.data(using: .utf8))
             let params = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
+            #expect(params["agentScope"] as? String == "all")
             #expect(params["days"] as? Int == 31)
             #expect(params["mode"] as? String == "specific")
             #expect(params["timeZone"] as? String == testCase.timeZoneID)

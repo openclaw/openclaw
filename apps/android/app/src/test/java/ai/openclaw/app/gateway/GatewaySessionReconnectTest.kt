@@ -2656,7 +2656,7 @@ class GatewaySessionReconnectTest {
             "question.list" -> {
               webSocket.send(
                 """
-                {"type":"res","id":"$id","ok":false,"error":{"code":"FORBIDDEN","message":"permission denied","details":{"code":"MISSING_SCOPE","missingScope":"operator.questions","requiredScopes":["operator.questions"]}}}
+                {"type":"res","id":"$id","ok":false,"error":{"code":"FORBIDDEN","message":"permission denied","details":{"code":"MISSING_SCOPE","missingScope":"operator.questions","requiredScopes":["operator.read","operator.questions"]}}}
                 """.trimIndent(),
               )
             }
@@ -2673,8 +2673,17 @@ class GatewaySessionReconnectTest {
         assertFalse(result.ok)
         assertEquals("MISSING_SCOPE", result.error?.details?.code)
         assertEquals("operator.questions", result.error?.details?.missingScope)
-        assertEquals(listOf("operator.questions"), result.error?.details?.requiredScopes)
+        assertEquals(listOf("operator.read", "operator.questions"), result.error?.details?.requiredScopes)
         assertEquals("operator.questions", result.error?.missingScope())
+        assertEquals(
+          GatewayMissingScopeErrorDetails("operator.questions", listOf("operator.read", "operator.questions")),
+          result.error?.missingScopeDetails(),
+        )
+        assertEquals(
+          "operator.read",
+          GatewaySession.ErrorShape(code = "INVALID_REQUEST", message = "missing scope: operator.read").missingScope(),
+        )
+        assertNull(GatewaySession.ErrorShape(code = "UNAVAILABLE", message = "missing scope: operator.read").missingScope())
       } finally {
         shutdownReconnectHarness(harness, server)
       }

@@ -1,0 +1,2 @@
+removed_file	removed_case	removed_lines	keeper_file	keeper_case	retained_failure_classes
+src/cli/command-path-matches.test.ts	matches prefix and exact command paths	12	src/cli/command-path-policy.test.ts;src/cli/command-startup-policy.test.ts	loads only sandbox backend owner plugins for runtime commands;resolves static startup policies for %s;reserves stdout only for protocol command %s: %s	Prefix policies apply to descendants;exact root/deep policies match only their own path;nonmatching paths remain separate

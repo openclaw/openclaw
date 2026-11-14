@@ -788,7 +788,11 @@ struct ChatGatewayRequestTests {
             message: "hello",
             thinking: " low ",
             idempotencyKey: "send-1",
-            attachments: [.init(type: "image", mimeType: "image/png", fileName: "a.png", content: "abc")])
+            attachments: [
+                .init(type: "image", mimeType: "image/png", fileName: "a.png", content: "abc"),
+                .init(type: "file", mimeType: "application/pdf", fileName: "report.pdf", content: "ZmlsZQ=="),
+                .init(type: "file", mimeType: "audio/mpeg", fileName: "recording.mp3", content: "ZmlsZQ=="),
+            ])
 
         #expect(request.method == "chat.send")
         #expect(request.timeoutMs == 30000)
@@ -802,8 +806,12 @@ struct ChatGatewayRequestTests {
         #expect(request.params["thinking"]?.value as? String == "low")
         #expect(request.params["timeoutMs"] == nil)
         let encoded = try JSONEncoder().encode(request.params["attachments"])
-        let json = try #require(String(bytes: encoded, encoding: .utf8))
-        #expect(json.contains("a.png"))
+        let json = try #require(JSONSerialization.jsonObject(with: encoded) as? [[String: String]])
+        #expect(json == [
+            ["type": "image", "mimeType": "image/png", "fileName": "a.png", "content": "abc"],
+            ["type": "file", "mimeType": "application/pdf", "fileName": "report.pdf", "content": "ZmlsZQ=="],
+            ["type": "file", "mimeType": "audio/mpeg", "fileName": "recording.mp3", "content": "ZmlsZQ=="],
+        ])
     }
 
     @Test func `audio send waits for admission while explicit request deadlines remain caller owned`() {

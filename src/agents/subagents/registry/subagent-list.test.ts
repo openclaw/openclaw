@@ -6,6 +6,9 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import * as entrySnapshots from "../../../config/sessions/session-accessor.sqlite-entry-cache-projection.js";
+import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import * as entryStatus from "../../../config/sessions/session-accessor.sqlite-status.js";
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -13,6 +16,7 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
+import { buildActiveSubagentRuntimeContext } from "./subagent-active-context.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { buildSubagentListForTests as buildSubagentList } from "./subagent-list.test-support.js";
 import {
@@ -155,18 +159,20 @@ describe("buildSubagentList", () => {
       const storePath = state.statePath("shared-{agentId}.sqlite");
       const cfg: OpenClawConfig = { session: { store: storePath } };
       const now = Date.now();
-      const runs = ["main", "research"].map((childAgentId): SubagentRunRecord => ({
-        runId: `run-${childAgentId}`,
-        childSessionKey: "global",
-        childAgentId,
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        task: childAgentId,
-        model: "openai/run-fallback",
-        cleanup: "keep",
-        createdAt: now,
-        execution: { status: "running", startedAt: now },
-      }));
+      const runs = ["main", "research"].map(
+        (childAgentId): SubagentRunRecord => ({
+          runId: `run-${childAgentId}`,
+          childSessionKey: "global",
+          childAgentId,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: childAgentId,
+          model: "openai/run-fallback",
+          cleanup: "keep",
+          createdAt: now,
+          execution: { status: "running", startedAt: now },
+        }),
+      );
       for (const run of runs) {
         await replaceSessionEntry(
           {
@@ -205,20 +211,22 @@ describe("buildSubagentList", () => {
         { agentId: "research", name: "missing", ended: false },
         { agentId: "main", name: "main-global", ended: false, raw: true },
         { agentId: "research", name: "research-global", ended: false, raw: true },
-      ].map(({ agentId, name, ended, raw }, index): SubagentRunRecord => ({
-        runId: `run-${name}`,
-        childSessionKey: raw ? "global" : `agent:${agentId}:subagent:${name}`,
-        childAgentId: raw ? agentId : undefined,
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        task: name,
-        model: "openai/run-fallback",
-        cleanup: "keep",
-        createdAt: now - 1000 - index,
-        execution: ended
-          ? { status: "terminal", endedAt: now - 100, outcome: { status: "ok" } }
-          : { status: "running", startedAt: now - 1000 - index },
-      }));
+      ].map(
+        ({ agentId, name, ended, raw }, index): SubagentRunRecord => ({
+          runId: `run-${name}`,
+          childSessionKey: raw ? "global" : `agent:${agentId}:subagent:${name}`,
+          childAgentId: raw ? agentId : undefined,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: name,
+          model: "openai/run-fallback",
+          cleanup: "keep",
+          createdAt: now - 1000 - index,
+          execution: ended
+            ? { status: "terminal", endedAt: now - 100, outcome: { status: "ok" } }
+            : { status: "running", startedAt: now - 1000 - index },
+        }),
+      );
       for (const run of runs.filter((entry) => entry.task !== "missing")) {
         await replaceSessionEntry(
           { sessionKey: run.childSessionKey, agentId: run.childAgentId },
@@ -306,80 +314,131 @@ describe("buildSubagentList", () => {
 
   it("builds the subagent list without decoding unrelated session metadata or saved prompts", async () => {
     const stateDir = await fs.mkdtemp(path.join(testWorkspaceDir, "metadata-"));
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      try {
-        const storePath = path.join(stateDir, "agents/main/sessions/sessions.json");
-        const cfg: OpenClawConfig = { session: { store: storePath } };
-        setRuntimeConfigSnapshot(cfg);
-        const childSessionKey = "agent:main:subagent:target";
-        for (let i = 0; i < 20; i++) {
+    await withEnvAsync(
+      {
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1",
+      },
+      async () => {
+        try {
+          const storePath = path.join(stateDir, "agents/main/sessions/sessions.json");
+          const cfg: OpenClawConfig = { session: { store: storePath } };
+          setRuntimeConfigSnapshot(cfg);
+          const childSessionKey = "agent:main:subagent:target";
+          for (let i = 0; i < 20; i++) {
+            await replaceSessionEntry(
+              { storePath, sessionKey: `agent:main:subagent:other-${i}` },
+              {
+                sessionId: `other-${i}`,
+                updatedAt: 1,
+                label: `UNRELATED_PAYLOAD_${i}`,
+                skillsSnapshot: { prompt: `UNRELATED_PAYLOAD_${"x".repeat(4096)}`, skills: [] },
+              },
+            );
+          }
           await replaceSessionEntry(
-            { storePath, sessionKey: `agent:main:subagent:other-${i}` },
+            { storePath, sessionKey: childSessionKey },
             {
-              sessionId: `other-${i}`,
-              updatedAt: 1,
-              label: `UNRELATED_PAYLOAD_${i}`,
-              skillsSnapshot: { prompt: `UNRELATED_PAYLOAD_${"x".repeat(4096)}`, skills: [] },
+              sessionId: "target",
+              updatedAt: Date.now(),
+              inputTokens: 12,
+              outputTokens: 1000,
+              totalTokens: 197000,
+              totalTokensFresh: true,
+              totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+              model: "demo/runtime-model",
             },
           );
-        }
-        await replaceSessionEntry(
-          { storePath, sessionKey: childSessionKey },
-          {
-            sessionId: "target",
-            updatedAt: Date.now(),
-            inputTokens: 12,
-            outputTokens: 1000,
-            totalTokens: 197000,
-            totalTokensFresh: true,
-            totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-            model: "demo/runtime-model",
-          },
-        );
-        const run = {
-          runId: "run-metadata-target",
-          childSessionKey,
-          requesterSessionKey: "agent:main:main",
-          requesterDisplayKey: "main",
-          task: "inspect metadata reads",
-          cleanup: "keep",
-          createdAt: Date.now(),
-          execution: { status: "queued" },
-        } satisfies SubagentRunRecord;
-        await addSubagentRunForTests(run);
+          const run = {
+            runId: "run-metadata-target",
+            childSessionKey,
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            task: "inspect metadata reads",
+            cleanup: "keep",
+            createdAt: Date.now(),
+            execution: { status: "queued" },
+          } satisfies SubagentRunRecord;
+          await addSubagentRunForTests(run);
 
-        const parse = vi.spyOn(JSON, "parse");
-        try {
-          const list = await buildSubagentList({
+          await buildActiveSubagentRuntimeContext({
             cfg,
-            runs: [run],
-            recentMinutes: 30,
-            taskMaxChars: 110,
+            controllerSessionKey: run.requesterSessionKey,
           });
-          expect(list.active).toHaveLength(1);
-          expect(list.active[0]).toMatchObject({
-            runId: run.runId,
-            sessionKey: childSessionKey,
-            model: "demo/runtime-model",
-            status: "queued",
-            totalTokens: 197000,
-          });
-          expect(list.active[0]?.line).toContain("context 197k");
-          expect(list.active[0]?.line).toMatch(/tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/);
-          expect(list.active[0]?.line).not.toContain("1k io");
-          const unrelatedParses = parse.mock.calls.filter(
-            ([value]) => typeof value === "string" && value.includes("UNRELATED_PAYLOAD_"),
-          ).length;
-          expect(unrelatedParses).toBe(0);
+          const initial = await buildSubagentList({ cfg, runs: [run], recentMinutes: 30 });
+          expect(initial.active[0]?.model).toBe("demo/runtime-model");
+          const parse = vi.spyOn(JSON, "parse");
+          const fullSnapshot = vi.spyOn(entrySnapshots, "loadSessionEntrySnapshot");
+          const parsedEntries = vi.spyOn(entryStatus, "parseSessionEntryJson");
+          try {
+            for (const surface of ["prompt", "list"] as const) {
+              await applySessionEntryExactReplacements({
+                agentId: "main",
+                storePath,
+                sessionKeys: [childSessionKey],
+                update: ([row]) => ({
+                  result: undefined,
+                  replacements: [
+                    {
+                      sessionKey: childSessionKey,
+                      entry: {
+                        ...row!.entry,
+                        label: `Changed before ${surface}`,
+                        model: surface === "list" ? "demo/refreshed-model" : "demo/runtime-model",
+                      },
+                    },
+                  ],
+                }),
+              });
+              parse.mockClear();
+              fullSnapshot.mockClear();
+              parsedEntries.mockClear();
+              if (surface === "prompt") {
+                const prompt = await buildActiveSubagentRuntimeContext({
+                  cfg,
+                  controllerSessionKey: run.requesterSessionKey,
+                });
+                expect(prompt).toContain(`session=${childSessionKey}`);
+                expect(fullSnapshot).not.toHaveBeenCalled();
+                expect(parsedEntries.mock.calls.length).toBeLessThanOrEqual(3);
+                continue;
+              }
+              const list = await buildSubagentList({
+                cfg,
+                runs: [run],
+                recentMinutes: 30,
+                taskMaxChars: 110,
+              });
+              expect(list.active).toHaveLength(1);
+              expect(list.active[0]).toMatchObject({
+                runId: run.runId,
+                sessionKey: childSessionKey,
+                model: "demo/refreshed-model",
+                status: "queued",
+                totalTokens: 197000,
+              });
+              expect(list.active[0]?.line).toContain("context 197k");
+              expect(list.active[0]?.line).toMatch(/tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/);
+              expect(list.active[0]?.line).not.toContain("1k io");
+              const unrelatedParses = parse.mock.calls.filter(
+                ([value]) => typeof value === "string" && value.includes("UNRELATED_PAYLOAD_"),
+              ).length;
+              expect(unrelatedParses).toBe(0);
+              expect(fullSnapshot).not.toHaveBeenCalled();
+              expect(parsedEntries).not.toHaveBeenCalled();
+            }
+          } finally {
+            parsedEntries.mockRestore();
+            fullSnapshot.mockRestore();
+            parse.mockRestore();
+          }
         } finally {
-          parse.mockRestore();
+          await resetSubagentRegistryForTests();
+          await cleanupSessionStateForTest({ stateDir });
+          await fs.rm(stateDir, { recursive: true, force: true });
         }
-      } finally {
-        await resetSubagentRegistryForTests();
-        await cleanupSessionStateForTest({ stateDir });
-        await fs.rm(stateDir, { recursive: true, force: true });
-      }
-    });
+      },
+    );
   });
 
   it("shows taskName in list lines and structured views", async () => {

@@ -156,7 +156,13 @@ describe("buildAgentSystemPrompt", () => {
         sourcePath: "/tmp/openclaw",
         toolNames: ["read"],
       },
-      ["## Documentation", "Docs: /tmp/openclaw/docs", "Source: /tmp/openclaw"],
+      [
+        "## Documentation",
+        "Docs: /tmp/openclaw/docs",
+        "Source: /tmp/openclaw",
+        "For official OpenClaw support, visit https://community.openclaw.ai/.",
+        "Keep self-service docs, Discord social chat, reproducible GitHub bug reports, and private security reporting separate.",
+      ],
     ],
     [
       "points can't-do claims at session capabilities and the docs index",

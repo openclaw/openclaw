@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { setJsoncOcPath } from "../jsonc/edit.js";
 import { parseJsonc } from "../jsonc/parse.js";
 import { parseJsonl } from "../jsonl/parse.js";
 import { parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
+import { resolveMdOcPath } from "../resolve.js";
 import { REDACTED_SENTINEL } from "../sentinel.js";
 import { resolveOcPath, setOcPath, type OcAst } from "../universal.js";
 import { parseYaml } from "../yaml/parse.js";
@@ -26,6 +28,19 @@ function expectLeaf(match: ReturnType<typeof resolve>, valueText: string, leafTy
 }
 
 describe("resolveOcPath", () => {
+  it.each(["item", "field"] as const)(
+    "resolves the first Markdown frontmatter entry through %s",
+    (slot) => {
+      const ast = parseMd("---\nk: first\nk: second\n---\n");
+      const path = { file: "X.md", section: "[frontmatter]" };
+      expect(resolveMdOcPath(ast, { ...path, [slot]: "k" })).toMatchObject({
+        kind: "frontmatter",
+        node: { value: "first" },
+      });
+      expect(resolveMdOcPath(ast, { ...path, [slot]: "missing" })).toBeNull();
+      expect(resolveMdOcPath(ast, path)).toBeNull();
+    },
+  );
   it.each([
     ["Markdown", () => parseMd("---\nname: github\n---\n\n## Boundaries\n\n- enabled: true\n")],
     ["JSONC", () => parseJsonc('{ "enabled": true }')],
@@ -54,6 +69,13 @@ describe("resolveOcPath", () => {
       { kind: "leaf", leafType: "null", valueText: "null" },
     ],
     [parseJsonc('{"arr":[1]}'), "oc://config/arr", { kind: "node", descriptor: "jsonc-array" }],
+    [
+      parseJsonc('{"limits":[99],"limits":[10,20,30]}'),
+      "oc://config/limits.1",
+      { kind: "leaf", leafType: "number", valueText: "20" },
+    ],
+    [parseJsonc('{"a-b_c":{"x":1}}'), "oc://config/a-b_c.x", { kind: "leaf", valueText: "1" }],
+    [parseJsonc('{"héllo":1}'), "oc://config/héllo", { kind: "leaf", valueText: "1" }],
     [parseJsonl('{"event":"start"}\n'), "oc://log/L1", { kind: "node", descriptor: "jsonl-line" }],
   ])("resolves the value at %s %s", (ast, uri, expected) => {
     expect(resolve(ast, uri)).toMatchObject(expected);
@@ -70,6 +92,19 @@ describe("resolveOcPath", () => {
 
   it.each([
     [parseJsonc('{ "k": 42 }'), "oc://config/k/+"],
+    [parseJsonc('{"k":42}'), "oc://config/k/x"],
+    [parseJsonc('{"limits":[10,20,30]}'), "oc://config/limits.99"],
+    [parseJsonc('{"limits":[10,20,30]}'), "oc://config/limits.foo"],
+    [parseJsonc(""), "oc://config/x"],
+    [parseJsonl('{"a":1}\n\n'), "oc://log/L2/anything"],
+    [parseJsonl('{"a":1}\n'), "oc://log/L99"],
+    [parseJsonl('{"a":1}\n'), "oc://log/garbage"],
+    [parseMd("## Tools\n- gh: GitHub CLI\n"), "oc://X.md/tools/nonexistent"],
+    [parseMd("## Tools\n- gh: GitHub CLI\n"), "oc://X.md/tools/gh/nonexistent"],
+    [
+      parseMd("## Boundaries\n- never write to /etc\n"),
+      "oc://X.md/boundaries/never-write-to-etc/risk",
+    ],
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/absent"],
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/+added"],
   ])("returns null for an invalid target at %s %s", (ast, uri) => {
@@ -83,6 +118,11 @@ describe("resolveOcPath", () => {
 });
 
 describe("setOcPath", () => {
+  it("preserves the direct JSONC no-root error", () => {
+    expect(() =>
+      setJsoncOcPath(parseJsonc(""), parseOcPath("oc://config/x"), { kind: "string", value: "y" }),
+    ).toThrow(expect.objectContaining({ reason: "no-root" }));
+  });
   it.each([
     ['{"é":true,"e\\u0301":true}', "e\u0301", "false", '{"é":true,"e\\u0301":false}', false],
     [
@@ -106,11 +146,45 @@ describe("setOcPath", () => {
       '{"plugins":{"gitlab":{"token":"xyz","enabled":true}}}',
       false,
     ],
+    [
+      '{"plugins":{"entries":{"shadowed":true}},"plugins":{"entries":{"github":{"token":"old"}}}}',
+      "plugins.entries",
+      '{"gitlab":"tok"}',
+      '{"plugins":{"entries":{"gitlab":"tok"}}}',
+      true,
+    ],
+    ['{"items":[0],"items":[10,20,30]}', "items/$last", "99", '{"items":[10,20,99]}', false],
+    [
+      '{"models":{"provider/model":{"alias":"old"}}}',
+      'models/"provider/model"/alias',
+      "new",
+      '{"models":{"provider/model":{"alias":"new"}}}',
+      false,
+    ],
+    [
+      '{"a":1,"b":{"c":2,"d":3},"e":4}',
+      "b.c",
+      "99",
+      '{"a":1,"b":{"c":99,"d":3},"e":4}',
+      false,
+    ],
     ['{"items":[1,2]}', "items.+", "3", '{"items":[1,2,3]}', false],
     ['{"items":[1,3]}', "items.+1", "2", '{"items":[1,2,3]}', false],
   ])("edits JSONC %s at %s", (raw, path, value, expected, valueJson) => {
-    const result = edit(parseJsonc(raw), "oc://openclaw.json/" + path, value, { valueJson });
+    const ast = parseJsonc(raw);
+    const before = structuredClone(ast);
+    const result = edit(ast, "oc://openclaw.json/" + path, value, { valueJson });
     expect(JSON.parse(result.raw)).toEqual(JSON.parse(expected));
+    expect(ast).toEqual(before);
+  });
+
+  it("preserves JSONC comments and prior edits when composing replacements", () => {
+    const ast = parseJsonc('{"a":1,"b":2 // comment\n}');
+    const first = edit(ast, "oc://config/a", "10");
+    const second = edit(first, "oc://config/b", "20");
+    expect(second.raw).toContain("// comment");
+    expectLeaf(resolve(second, "oc://config/a"), "10", "number");
+    expectLeaf(resolve(second, "oc://config/b"), "20", "number");
   });
 
   it.each([
@@ -126,6 +200,7 @@ describe("setOcPath", () => {
 
   it.each([
     [parseJsonc('{"k":1}'), "oc://config/k", "not-a-number", "parse-error"],
+    [parseJsonc('{"items":[]}'), "oc://config/items/$last", "99", "unresolved"],
     [parseJsonc('{"k":true}'), "oc://config/k", "maybe", "parse-error"],
     [parseJsonl('{"event":"start"}\n'), "oc://log/L1", "not json", "parse-error"],
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/+name", "y", "type-mismatch"],
