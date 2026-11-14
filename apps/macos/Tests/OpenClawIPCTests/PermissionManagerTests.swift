@@ -1,4 +1,5 @@
 import CoreLocation
+import Dispatch
 import OpenClawIPC
 import Speech
 import Testing
@@ -56,6 +57,15 @@ struct PermissionManagerTests {
         #expect(!PermissionManager.isNotificationAuthorized(status: .denied))
         let ephemeral = try #require(UNAuthorizationStatus(rawValue: 4))
         #expect(!PermissionManager.isNotificationAuthorized(status: ephemeral))
+    }
+
+    @Test func `speech authorization completion can enter from a background queue`() async {
+        await PermissionManager.requestSpeechRecognitionAuthorization { completion in
+            // Match the legacy framework callback type without imposing Sendable inference.
+            nonisolated(unsafe) let callback = completion
+            DispatchQueue.global().async { callback(.authorized) }
+        }
+        MainActor.assertIsolated()
     }
 
     @Test func `voice wake permission helpers match status`() async {
