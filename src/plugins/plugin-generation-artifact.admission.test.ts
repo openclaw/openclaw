@@ -25,6 +25,7 @@ import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lo
 import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import {
+  nativeAdmissionStateFor,
   preparePluginNativeAdmissions,
   settlePluginNativeAdmissions,
 } from "./plugin-native-admission-state.js";
@@ -725,5 +726,26 @@ it("snapshots a mutable native edit once while retained generations keep their p
     } finally {
       observer.restore();
     }
+  });
+});
+
+it("keeps only the current namespace in the admission state as retired generations are released", async () => {
+  await withOpenClawTestState({ label: "native-admission-retention" }, async (state) => {
+    await using resources = captureResources();
+    const fixture = createFixture(state.path("source"), false);
+    const helper = path.join(fixture.root, "helper.cjs");
+    fs.writeFileSync(helper, "module.exports = 0;");
+    await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
+    const cache = resources.cache();
+    preparePluginNativeAdmissions(fixture.index, cache);
+    for (let edit = 1; edit <= 4; edit += 1) {
+      // Each companion edit admits a new namespace; the retired generation is released.
+      const generation = resources.capture(cache, fixture.root);
+      await generation.disposeAsync();
+      fs.writeFileSync(helper, `module.exports = ${edit};`);
+    }
+    const current = resources.capture(cache, fixture.root);
+    expect(nativeAdmissionStateFor(cache).namespaces.size).toBe(1);
+    expectBytes(current.resolve(fixture.filename), fixture.bytes);
   });
 });

@@ -94,6 +94,7 @@ export function adoptPluginNativeAdmissions(
     state.roots.add(root);
   }
   for (const [key, receipt] of transfer.receipts) {
+    const replaced = state.receipts.get(key);
     state.receipts.set(key, receipt);
     for (const [source, fact] of Object.entries(receipt.nativeArtifacts)) {
       state.files.set(source, fact);
@@ -103,10 +104,26 @@ export function adoptPluginNativeAdmissions(
       state.namespaces.set(directory, namespace);
       retainNativePath(state, path.join(directory, "content"));
     }
+    releaseReplacedNamespaces(state, replaced);
   }
   if (publish) {
     for (const publication of transfer.publications) {
       queuePluginNativeAdmissionPublication(state, publication, publish);
+    }
+  }
+}
+
+/** A replaced receipt releases the member maps that no remaining receipt or file fact names. */
+export function releaseReplacedNamespaces(
+  state: AdmissionState,
+  replaced: PluginSourceAdmissionReceipt | undefined,
+): void {
+  for (const id of Object.keys(replaced?.nativeNamespaces ?? {})) {
+    if (
+      ![...state.receipts.values()].some((receipt) => id in receipt.nativeNamespaces) &&
+      ![...state.files.values()].some((file) => file.namespace === id)
+    ) {
+      state.namespaces.delete(id);
     }
   }
 }
