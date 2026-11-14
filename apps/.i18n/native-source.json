@@ -239,7 +239,7 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.88431c5853ea5e93","source":"Sort: $sortOrder"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.0a047512bbbf8a70","source":"Start Chat"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.95a27ddcdce61af6","source":"Start a new conversation and it will show up here."},
-    {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.20305e68fdb3894d","source":"This permanently deletes the thread and its transcript."},
+    {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.0af0513f22b30707","source":"This deletes the thread entry. Regular transcripts are archived; incognito transcripts are deleted without an archive."},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.9b0665c5dd020488","source":"Thread failed"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.0622b4b9cd3412dc","source":"Threads"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.7f20c6ce2f139c17","source":"Threads in \"$group\" are kept and move back to Ungrouped."},
