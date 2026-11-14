@@ -1,7 +1,7 @@
 // Covers exec command resolution and allowlist paths.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   makeExecutable,
@@ -20,6 +20,7 @@ import {
   resolvePolicyTargetTrustPath,
 } from "./exec-approvals.js";
 import { parseExecArgvToken } from "./exec-command-resolution.js";
+import * as execRealpathWorker from "./exec-realpath-worker.js";
 
 function buildNestedEnvShellCommand(params: {
   envExecutable: string;
@@ -29,14 +30,18 @@ function buildNestedEnvShellCommand(params: {
   return [...Array(params.depth).fill(params.envExecutable), "/bin/sh", "-c", params.payload];
 }
 
-function analyzeEnvWrapperAllowlist(params: { argv: string[]; envPath: string; cwd: string }) {
+async function analyzeEnvWrapperAllowlist(params: {
+  argv: string[];
+  envPath: string;
+  cwd: string;
+}) {
   const analysis = {
     ok: true as const,
     segments: [
       {
         raw: params.argv.join(" "),
         argv: params.argv,
-        resolution: resolveCommandResolutionFromArgv(
+        resolution: await resolveCommandResolutionFromArgv(
           params.argv,
           params.cwd,
           makePathEnv(params.envPath),
@@ -44,7 +49,7 @@ function analyzeEnvWrapperAllowlist(params: { argv: string[]; envPath: string; c
       },
     ],
   };
-  const allowlistEval = evaluateExecAllowlist({
+  const allowlistEval = await evaluateExecAllowlist({
     analysis,
     allowlist: [{ pattern: params.envPath }],
     safeBins: resolveSafeBins([]),
@@ -71,7 +76,7 @@ function createPathExecutableFixture(params?: { executable?: string }): {
 
 function expectResolutionPathCase(params: {
   name: string;
-  resolution: ReturnType<typeof resolveCommandResolutionFromArgv>;
+  resolution: Awaited<ReturnType<typeof resolveCommandResolutionFromArgv>>;
   cwd?: string;
   expectedExecutionPath: string;
   expectedPolicyPath?: string;
@@ -103,6 +108,79 @@ type CommandResolutionFixture = {
 };
 
 describe("exec-command-resolution", () => {
+  it("resolves identical execution and policy targets once without main-thread filesystem probes", async () => {
+    const fixture = createPathExecutableFixture();
+    await resolveCommandResolutionFromArgv(
+      [fixture.exeName],
+      undefined,
+      makePathEnv(fixture.binDir),
+    );
+    using stat = vi.spyOn(fs, "statSync");
+    using access = vi.spyOn(fs, "accessSync");
+    using realpath = vi.spyOn(fs, "realpathSync");
+    using physicalRealpath = vi.spyOn(fs.promises, "realpath");
+    using ordinaryRealpath = vi.spyOn(fs, "realpath");
+    using nativeRealpath = vi.spyOn(execRealpathWorker, "resolveExecRealpathInWorker");
+    const resolution = await resolveCommandResolutionFromArgv(
+      [fixture.exeName],
+      undefined,
+      makePathEnv(fixture.binDir),
+      process.platform,
+      { useCache: false },
+    );
+    expect(resolution?.execution.resolvedPath).toBe(fixture.exePath);
+    expect(resolution?.policy).toEqual(resolution?.execution);
+    expect(await resolveExecutionTargetTrustPath(resolution)).toBe(
+      resolution?.execution.resolvedRealPath,
+    );
+    expect([stat.mock.calls.length, access.mock.calls.length, realpath.mock.calls.length]).toEqual([
+      0, 0, 0,
+    ]);
+    expect(
+      physicalRealpath.mock.calls.length +
+        ordinaryRealpath.mock.calls.length +
+        nativeRealpath.mock.calls.length,
+    ).toBe(1);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "authorizes the physical execute-only target of a symlink-parent PATH entry",
+    async () => {
+      const root = makeExecApprovalsTempDir();
+      const configured = path.join(root, "configured");
+      const actual = path.join(root, "MixedCase");
+      fs.mkdirSync(configured);
+      fs.mkdirSync(path.join(actual, "bin"), { recursive: true });
+      fs.symlinkSync(path.join(actual, "bin"), path.join(configured, "alias"));
+      const executable = makeExecutable(actual, "runner");
+      const decoy = makeExecutable(configured, "runner");
+      fs.chmodSync(executable, 0o111);
+      const env = makePathEnv(`${configured}/alias/..`);
+      const argv = ["runner", "--version"];
+      const resolution = await resolveCommandResolutionFromArgv(argv, root, env);
+      const physicalTarget = fs.realpathSync.native(executable);
+      const segment = { raw: argv.join(" "), argv, resolution };
+      const analysis = { ok: true as const, segments: [segment] };
+
+      expect(resolution?.execution.resolvedPath).toBe(`${configured}/alias/../runner`);
+      expect(await resolveExecutionTargetTrustPath(resolution)).toBe(physicalTarget);
+      expect(resolvePlannedSegmentArgv(segment)).toEqual([physicalTarget, "--version"]);
+      for (const [pattern, allowed] of [
+        [executable, true],
+        [decoy, false],
+      ] as const) {
+        const result = await evaluateExecAllowlist({
+          analysis,
+          allowlist: [{ pattern }],
+          safeBins: resolveSafeBins([]),
+          cwd: root,
+          env,
+        });
+        expect(result.allowlistSatisfied, pattern).toBe(allowed);
+      }
+    },
+  );
+
   it.each([
     {
       name: "PATH executable",
@@ -153,21 +231,21 @@ describe("exec-command-resolution", () => {
         };
       },
     },
-  ])("resolves $name", ({ setup }) => {
+  ])("resolves $name", async ({ setup }) => {
     const params = setup();
     expectResolutionPathCase({
       name: params.argv.join(" "),
-      resolution: resolveCommandResolutionFromArgv(params.argv, params.cwd, params.envPath),
+      resolution: await resolveCommandResolutionFromArgv(params.argv, params.cwd, params.envPath),
       cwd: params.cwd,
       expectedExecutionPath: params.expectedExecutionPath,
       expectedExecutableName: params.expectedExecutableName,
     });
   });
 
-  it("unwraps transparent env and nice wrappers to the effective executable", () => {
+  it("unwraps transparent env and nice wrappers to the effective executable", async () => {
     const fixture = createPathExecutableFixture();
 
-    const envResolution = resolveCommandResolutionFromArgv(
+    const envResolution = await resolveCommandResolutionFromArgv(
       ["/usr/bin/env", "rg", "-n", "needle"],
       undefined,
       makePathEnv(fixture.binDir),
@@ -175,7 +253,7 @@ describe("exec-command-resolution", () => {
     expect(envResolution?.execution.resolvedPath).toBe(fixture.exePath);
     expect(envResolution?.execution.executableName).toBe(fixture.exeName);
 
-    const niceResolution = resolveCommandResolutionFromArgv([
+    const niceResolution = await resolveCommandResolutionFromArgv([
       "/usr/bin/nice",
       "bash",
       "-lc",
@@ -184,7 +262,7 @@ describe("exec-command-resolution", () => {
     expect(niceResolution?.execution.rawExecutable).toBe("bash");
     expect(niceResolution?.execution.executableName.toLowerCase()).toContain("bash");
 
-    const timeResolution = resolveCommandResolutionFromArgv(
+    const timeResolution = await resolveCommandResolutionFromArgv(
       ["/usr/bin/time", "-p", "rg", "-n", "needle"],
       undefined,
       makePathEnv(fixture.binDir),
@@ -193,8 +271,8 @@ describe("exec-command-resolution", () => {
     expect(timeResolution?.execution.executableName).toBe(fixture.exeName);
   });
 
-  it("keeps file-writing dispatch wrappers on the policy boundary", () => {
-    const timeResolution = resolveCommandResolutionFromArgv([
+  it("keeps file-writing dispatch wrappers on the policy boundary", async () => {
+    const timeResolution = await resolveCommandResolutionFromArgv([
       "/usr/bin/time",
       "-o",
       "/tmp/time.log",
@@ -208,7 +286,7 @@ describe("exec-command-resolution", () => {
     expect(timeResolution?.blockedWrapper).toBe("time");
     expect(timeResolution?.execution.rawExecutable).toBe("/usr/bin/time");
 
-    const scriptResolution = resolveCommandResolutionFromArgv(
+    const scriptResolution = await resolveCommandResolutionFromArgv(
       ["script", "/tmp/session.log", "git", "status"],
       undefined,
       undefined,
@@ -219,7 +297,7 @@ describe("exec-command-resolution", () => {
     expect(scriptResolution?.execution.rawExecutable).toBe("script");
   });
 
-  it("keeps shell multiplexer wrappers as a separate policy target", () => {
+  it("keeps shell multiplexer wrappers as a separate policy target", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -228,7 +306,7 @@ describe("exec-command-resolution", () => {
     fs.writeFileSync(busybox, "");
     fs.chmodSync(busybox, 0o755);
 
-    const resolution = resolveCommandResolutionFromArgv([busybox, "sh", "-lc", "echo hi"]);
+    const resolution = await resolveCommandResolutionFromArgv([busybox, "sh", "-lc", "echo hi"]);
     expect(resolution?.execution.rawExecutable).toBe("sh");
     expect(resolution?.effectiveArgv).toEqual(["sh", "-lc", "echo hi"]);
     expect(resolution?.wrapperChain).toEqual(["busybox"]);
@@ -238,7 +316,7 @@ describe("exec-command-resolution", () => {
     expect(resolution?.execution.executableName.toLowerCase()).toContain("sh");
   });
 
-  it("exposes canonical trust paths separately from display candidate paths", () => {
+  it("exposes canonical trust paths separately from display candidate paths", async () => {
     const resolution = {
       kind: "command" as const,
       execution: {
@@ -258,19 +336,19 @@ describe("exec-command-resolution", () => {
     };
 
     expect(resolveExecutionTargetCandidatePath(resolution)).toBe("/opt/homebrew/bin/rg");
-    expect(resolveExecutionTargetTrustPath(resolution)).toBe(
+    expect(await resolveExecutionTargetTrustPath(resolution)).toBe(
       "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
     );
     expect(resolvePolicyTargetCandidatePath(resolution)).toBe("/opt/homebrew/bin/rg");
-    expect(resolvePolicyTargetTrustPath(resolution)).toBe(
+    expect(await resolvePolicyTargetTrustPath(resolution)).toBe(
       "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
     );
-    expect(resolveApprovalAuditTrustPath(resolution)).toBe(
+    expect(await resolveApprovalAuditTrustPath(resolution)).toBe(
       "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
     );
   });
 
-  it("does not satisfy inner-shell allowlists when invoked through busybox wrappers", () => {
+  it("does not satisfy inner-shell allowlists when invoked through busybox wrappers", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -279,11 +357,16 @@ describe("exec-command-resolution", () => {
     fs.writeFileSync(busybox, "");
     fs.chmodSync(busybox, 0o755);
 
-    const shellResolution = resolveCommandResolutionFromArgv(["sh", "-lc", "echo hi"]);
+    const shellResolution = await resolveCommandResolutionFromArgv(["sh", "-lc", "echo hi"]);
     expect(shellResolution?.execution.resolvedPath).toMatch(/sh$/);
 
-    const wrappedResolution = resolveCommandResolutionFromArgv([busybox, "sh", "-lc", "echo hi"]);
-    const evalResult = evaluateExecAllowlist({
+    const wrappedResolution = await resolveCommandResolutionFromArgv([
+      busybox,
+      "sh",
+      "-lc",
+      "echo hi",
+    ]);
+    const evalResult = await evaluateExecAllowlist({
       analysis: {
         ok: true,
         segments: [
@@ -302,8 +385,8 @@ describe("exec-command-resolution", () => {
     expect(evalResult.allowlistSatisfied).toBe(false);
   });
 
-  it("blocks semantic env wrappers, env -S, and deep transparent-wrapper chains", () => {
-    const blockedEnv = resolveCommandResolutionFromArgv([
+  it("blocks semantic env wrappers, env -S, and deep transparent-wrapper chains", async () => {
+    const blockedEnv = await resolveCommandResolutionFromArgv([
       "/usr/bin/env",
       "FOO=bar",
       "rg",
@@ -324,7 +407,7 @@ describe("exec-command-resolution", () => {
     fs.writeFileSync(envPath, "#!/bin/sh\n");
     fs.chmodSync(envPath, 0o755);
 
-    const envS = analyzeEnvWrapperAllowlist({
+    const envS = await analyzeEnvWrapperAllowlist({
       argv: [envPath, "-S", 'sh -c "echo pwned"'],
       envPath,
       cwd: dir,
@@ -332,7 +415,7 @@ describe("exec-command-resolution", () => {
     expect(envS.analysis.segments[0]?.resolution?.policyBlocked).toBe(true);
     expect(envS.allowlistEval.allowlistSatisfied).toBe(false);
 
-    const deep = analyzeEnvWrapperAllowlist({
+    const deep = await analyzeEnvWrapperAllowlist({
       argv: buildNestedEnvShellCommand({
         envExecutable: envPath,
         depth: 5,
@@ -375,20 +458,20 @@ describe("exec-command-resolution", () => {
       "unshare",
       "watch",
       "xvfb-run",
-    ])("blocks opaque dispatch wrapper allowlist matches: %s", (wrapperName) => {
+    ])("blocks opaque dispatch wrapper allowlist matches: %s", async (wrapperName) => {
     const dir = makeExecApprovalsTempDir();
     const wrapperPath = makeExecutable(dir, wrapperName);
     const pythonPath = makeExecutable(dir, "python3");
     const env = makePathEnv(dir);
     const argv = [wrapperPath, pythonPath, "-c", "print(1)"];
-    const resolution = resolveCommandResolutionFromArgv(argv, dir, env);
+    const resolution = await resolveCommandResolutionFromArgv(argv, dir, env);
     const segment = { raw: argv.join(" "), argv, resolution };
 
     expect(resolution?.policyBlocked).toBe(true);
     expect(resolution?.blockedWrapper).toBe(wrapperName);
     expect(resolvePlannedSegmentArgv(segment)).toBeNull();
 
-    const evaluation = evaluateExecAllowlist({
+    const evaluation = await evaluateExecAllowlist({
       analysis: { ok: true, segments: [segment] },
       allowlist: [{ pattern: wrapperPath }],
       safeBins: resolveSafeBins([]),
@@ -487,7 +570,7 @@ describe("exec-command-resolution", () => {
     },
   ] as const)(
     "keeps execution and policy targets coherent across wrapper classes: $name",
-    (testCase) => {
+    async (testCase) => {
       const dir = makeExecApprovalsTempDir();
       const binDir = path.join(dir, "bin");
       fs.mkdirSync(binDir, { recursive: true });
@@ -501,7 +584,7 @@ describe("exec-command-resolution", () => {
       const fixture = { binDir, envPath, rgPath, busybox } as const;
       const argv = [...testCase.argvFactory(fixture)];
       const env = testCase.envFactory(fixture);
-      const resolution = resolveCommandResolutionFromArgv(argv, dir, env);
+      const resolution = await resolveCommandResolutionFromArgv(argv, dir, env);
       const segment = {
         raw: argv.join(" "),
         argv,
@@ -517,7 +600,7 @@ describe("exec-command-resolution", () => {
       expect(resolvePlannedSegmentArgv(segment), `${testCase.name} planned argv`).toEqual(
         testCase.expectedPlannedArgvFactory(fixture),
       );
-      const evaluation = evaluateExecAllowlist({
+      const evaluation = await evaluateExecAllowlist({
         analysis: { ok: true, segments: [segment] },
         allowlist: [{ pattern: testCase.allowlistPatternFactory(fixture) }],
         safeBins: resolveSafeBins([]),
@@ -530,13 +613,13 @@ describe("exec-command-resolution", () => {
     },
   );
 
-  it("keeps package-manager exec as the planned execution argv", () => {
+  it("keeps package-manager exec as the planned execution argv", async () => {
     const dir = makeExecApprovalsTempDir();
     const pnpmPath = makeExecutable(dir, "pnpm");
     makeExecutable(dir, "eslint");
     const env = makePathEnv(dir);
     const argv = ["pnpm", "exec", "eslint", "."];
-    const resolution = resolveCommandResolutionFromArgv(argv, dir, env);
+    const resolution = await resolveCommandResolutionFromArgv(argv, dir, env);
     const segment = {
       raw: argv.join(" "),
       argv,

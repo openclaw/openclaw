@@ -1,4 +1,4 @@
-import type { AgentsListResult, ModelCatalogResult } from "../../api/types.ts";
+import type { ModelCatalogResult } from "../../api/types.ts";
 import {
   resolveChatFastModeSelectState,
   resolveChatModelSelectValues,
@@ -40,7 +40,8 @@ export function cacheChatComposerSnapshot(host: ChatPageHost, result: ModelCatal
     ) {
       return;
     }
-    const agents: AgentsListResult | null = host.agentsList;
+    const previous = readChatSessionSnapshot(host.chatMessagesBySession, host, target);
+    const agents = host.readChatAgentsList();
     const agent = agents?.agents.find((row) => row.id === resolveChatAgentId(host));
     const selection = resolveChatModelSelectValues({
       activeSession: session,
@@ -72,7 +73,6 @@ export function cacheChatComposerSnapshot(host: ChatPageHost, result: ModelCatal
       loading: host.chatLoading,
       sessionsResult: host.sessionsResult,
     });
-    const previous = readChatSessionSnapshot(host.chatMessagesBySession, host, target);
     const composer = entry
       ? {
           id: entry.id,
@@ -84,7 +84,14 @@ export function cacheChatComposerSnapshot(host: ChatPageHost, result: ModelCatal
           thinkingDefault: profile?.thinkingDefault,
           thinkingLevels: profile?.thinkingLevels?.slice(0, 30),
           permissionMode: session.permissionMode,
-          defaultPermissionMode: agent?.defaultPermissionMode,
+          defaultPermissionMode: agents
+            ? agent?.defaultPermissionMode
+            : previous?.composer?.defaultPermissionMode,
+          contextWindowDisplay: session.contextWindows && {
+            contextWindow: session.contextWindow,
+            contextWindowDefault: session.contextWindowDefault,
+            contextWindows: session.contextWindows.slice(0, 30),
+          },
         }
       : null;
     if (JSON.stringify(previous?.composer) === JSON.stringify(composer)) {
@@ -102,4 +109,27 @@ export function cacheChatComposerSnapshot(host: ChatPageHost, result: ModelCatal
   } else {
     persist();
   }
+}
+
+export function cacheChatComposerAgentDefault(host: ChatPageHost): void {
+  const agents = host.readChatAgentsList();
+  const snapshot = readChatSessionSnapshot(host.chatMessagesBySession, host, host);
+  const defaultPermissionMode = agents?.agents.find(
+    (agent) => agent.id === resolveChatAgentId(host),
+  )?.defaultPermissionMode;
+  if (
+    !host.connected ||
+    !host.client?.recoveryScopeReady ||
+    host.client.offlineRecoveryRetired ||
+    !agents ||
+    !snapshot?.composer ||
+    snapshot.composer.defaultPermissionMode === defaultPermissionMode
+  ) {
+    return;
+  }
+  // Agent reads settle independently of the pane's history-gated metadata projection.
+  cacheChatSessionSnapshot(host.chatMessagesBySession, host, host, {
+    ...snapshot,
+    composer: { ...snapshot.composer, defaultPermissionMode },
+  });
 }

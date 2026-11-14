@@ -4,9 +4,11 @@ import {
 } from "../state/openclaw-agent-db-contract.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
+import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { requireNativeDatabaseFile } from "./database-engine/physical-facts.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
 import { mediaRowsNeedMigration } from "./state-migrations.media-persistence-database.js";
 import { transformMediaArchiveContent } from "./state-migrations.media-persistence-transform.js";
 import { transcriptDirectiveArchivesNeedMigration } from "./state-migrations.transcript-directives-archives.js";
@@ -29,6 +31,7 @@ export async function inspectPostgresMediaPersistence(params: {
   env: NodeJS.ProcessEnv;
   pathname: string;
   migratedFromVersion?: number;
+  maintenance: Pick<OpenClawStateLeaseContext, "signal">;
 }) {
   const retained = retainOpenClawAgentDatabaseReadOnly({
     agentId: params.agentId,
@@ -45,7 +48,9 @@ export async function inspectPostgresMediaPersistence(params: {
     if (
       !deferred &&
       ((!hasMediaRowsMigrationReceipt(database) &&
-        mediaRowsNeedMigration(database, params.pathname)) ||
+        (await mediaRowsNeedMigration(database, params.pathname, {
+          signal: resolveSqliteInspectionSignal(params.maintenance.signal),
+        }))) ||
         (await transcriptDirectiveArchivesNeedMigration(
           database,
           { generation: "", sessionId: "" },

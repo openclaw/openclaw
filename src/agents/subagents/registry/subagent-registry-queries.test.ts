@@ -14,6 +14,7 @@ import {
   getLatestSubagentRunByChildSessionKeyFromRuns,
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
 } from "./subagent-registry-queries.js";
+import { listSubagentRunsForRequester } from "./subagent-registry-read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
@@ -54,6 +55,7 @@ describe("subagent registry query regressions", () => {
     const index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap([parent, child]) });
     const root = parent.requesterSessionKey;
     index.listDescendantRunsForRequester(root);
+    index.countActiveDescendantRuns(root);
     const iterate = Array.prototype[Symbol.iterator];
     let iterations = 0;
     // eslint-disable-next-line no-extend-native -- Measure native iterator work; restore synchronously below.
@@ -73,6 +75,14 @@ describe("subagent registry query regressions", () => {
     expect(active).toBe(0);
     expect(pending).toBe(2);
     expect(iterations).toBe(0);
+    using clears = vi.spyOn(Set.prototype, "clear");
+    using writes = vi.spyOn(Map.prototype, "set");
+    for (let window = 0; window < 10; window++) {
+      expect(index.atTime(Date.now()).countActiveDescendantRuns(root)).toBe(0);
+    }
+    // Clearing an empty dirty set replaces its backing store on every warm read.
+    expect(clears).not.toHaveBeenCalled();
+    expect(writes).not.toHaveBeenCalled();
   });
 
   it.each([50, 150, 500])("repairs active descendants without reading %i siblings", (size) => {
@@ -98,6 +108,22 @@ describe("subagent registry query regressions", () => {
       expect(index.hasUnendedRuns(root)).toBe(event % 2 === 1);
       expect(index.hasUnendedRuns(child.childSessionKey)).toBe(event % 2 === 1);
     }
+  });
+
+  it("refreshes a wide expiry batch without repeatedly scanning its boundary minima", () => {
+    const now = Date.UTC(2026, 9, 25);
+    const children = Array.from({ length: 100 }, (_, i) =>
+      makeRun(`expiry-${i}`, { createdAt: now + i, startedAt: now + i }),
+    );
+    const root = children[0]!.requesterSessionKey;
+    const index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap(children), now });
+    expect(index.countActiveDescendantRuns(root)).toBe(100);
+    using scans = vi.spyOn(Map.prototype, "values");
+    const expired = index.atTime(now + STALE_UNENDED_SUBAGENT_RUN_MS + 100);
+    expect(expired.countActiveDescendantRuns(root)).toBe(0);
+    expect(expired.nextChangeAt(root)).toBe(Infinity);
+    // A batch advances the root minimum once, rather than once per expired child.
+    expect(scans.mock.calls.length).toBeLessThanOrEqual(1);
   });
 
   it.each([undefined, 0, -1, Number.NaN, Infinity, -Infinity])(
@@ -202,10 +228,14 @@ describe("subagent registry query regressions", () => {
       const second = makeRun("second", { childSessionKey: "child", generation: 2 });
       const memory =
         kind === "absent" ? undefined : kind === "same object" ? second : { ...second };
+      using copies = vi.spyOn(Array.prototype, "slice");
       let index = buildSubagentRunReadIndexFromRuns({
         runs: toRunMap([first, second]),
         inMemoryRuns: memory ? [memory, memory] : [],
       });
+      const initialCopies = copies.mock.calls.length;
+      copies.mockRestore();
+      expect(initialCopies).toBe(0);
       const captured = index.runsByChildSessionKey.get("child");
       const expected = kind === "distinct object" ? [first, second, memory] : [first, second];
       expect(captured).toEqual(expected);
@@ -221,6 +251,26 @@ describe("subagent registry query regressions", () => {
       );
       expect(captured).toEqual(expected);
       expect(captured?.[0]).toBe(first);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps retired child snapshots after a memory-only update (%s)",
+    (same) => {
+      const first = makeRun("first", { childSessionKey: "child" });
+      let index = buildSubagentRunReadIndexFromRuns({
+        runs: toRunMap([first]),
+        inMemoryRuns: same ? [first] : [],
+      });
+      const captured = index.runsByChildSessionKey.get("child");
+      const memory = { ...first, cleanupCompletedAt: 50 };
+      index = index.patch(new Map(), toRunMap([memory]));
+      expect(index.runsByChildSessionKey.get("child")).toEqual([first, memory]);
+      const replacement = { ...first, cleanupCompletedAt: 100 };
+      index = index.patch(toRunMap([replacement]), new Map());
+      index = index.patch(new Map([[first.runId, undefined]]), new Map());
+      expect(index.runsByChildSessionKey.get("child")).toEqual([memory]);
+      expect(captured).toEqual([first]);
     },
   );
 
@@ -439,6 +489,56 @@ describe("subagent registry query regressions", () => {
       expect(entry).toEqual(before);
     },
   );
+
+  it("preserves requester registration order and incarnations without scanning unrelated runs", () => {
+    const root = "agent:main:bucket-requester";
+    const child = makeRun("bucket-child", {
+      requesterSessionKey: root,
+      completionRequesterSessionId: "incarnation",
+      childSessionKey: "shared-child",
+      childAgentId: "main",
+    });
+    const otherAgent = makeRun("bucket-other-agent", {
+      childSessionKey: child.childSessionKey,
+      childAgentId: "research",
+      generation: 2,
+    });
+    const sibling = makeRun("bucket-sibling", {
+      requesterSessionKey: root,
+      completionRequesterSessionId: "incarnation",
+    });
+    const successor = makeRun("bucket-successor", {
+      childSessionKey: child.childSessionKey,
+      childAgentId: "main",
+      requesterSessionKey: "agent:main:another-requester",
+      generation: 3,
+    });
+    const rows = [
+      child,
+      sibling,
+      otherAgent,
+      ...Array.from({ length: 100 }, (_, i) => makeRun(`bucket-${i}`)),
+    ];
+    try {
+      for (const row of rows) {
+        subagentRuns.set(row.runId, row);
+      }
+      using scans = vi.spyOn(subagentRuns, "values");
+      const read = () => listSubagentRunsForRequester(root, { requesterSessionId: "incarnation" });
+      expect(read()).toEqual([subagentRuns.get(child.runId), subagentRuns.get(sibling.runId)]);
+      subagentRuns.set(child.runId, { ...child, task: "updated task" });
+      expect(read()).toEqual([subagentRuns.get(child.runId), subagentRuns.get(sibling.runId)]);
+      subagentRuns.set(successor.runId, successor);
+      expect(read()).toEqual([subagentRuns.get(sibling.runId)]);
+      subagentRuns.delete(successor.runId);
+      expect(read()).toEqual([subagentRuns.get(child.runId), subagentRuns.get(sibling.runId)]);
+      expect(scans).not.toHaveBeenCalled();
+    } finally {
+      for (const row of [...rows, successor]) {
+        subagentRuns.delete(row.runId);
+      }
+    }
+  });
 
   it("scopes direct children to the requester run window", () => {
     const parent = makeRun("parent", { createdAt: 200, startedAt: 200, endedAt: 260 });

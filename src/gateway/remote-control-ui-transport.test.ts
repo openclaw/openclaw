@@ -53,6 +53,7 @@ function fixture(overrides: Partial<GatewayControlUiIngressHost> = {}) {
   });
   const host: GatewayControlUiIngressHost = {
     signal: new AbortController().signal,
+    admissionSignal: new AbortController().signal,
     controlUiBasePath: "/claw",
     getRuntimeConfig: () => ({}),
     getResolvedAuth: () => ({
@@ -204,34 +205,39 @@ describe("remote Control UI memory transport", () => {
     }
   });
 
-  it("keeps accepted WebSocket authority with the grant when the browser transport disconnects", async () => {
-    const wss = websocketServer();
-    const admitted = createDeferred<RemoteControlUiIngressContext>();
-    const { transport, revoke } = fixture({
-      handleUpgrade: async (req, socket, head) => {
-        const provenance = readGatewayIngressTransport(req);
-        if (provenance?.kind !== "remote-forwarded") {
-          throw new Error("Missing remote provenance");
-        }
-        admitted.resolve(provenance.context);
-        wss.handleUpgrade(req, socket, head, () => {});
-      },
-    });
-    const browser = new AbortController();
-    const { socket } = await transport.openWebSocket({
-      pathAndQuery: "/claw",
-      origin: "https://ui.example.test",
-      protocols: [],
-      signal: browser.signal,
-    });
-    const authority = await admitted.promise;
-    browser.abort(new Error("Browser disconnected"));
-    await socket.closed;
-    expect(authority.signal.aborted).toBe(false);
-    expect(() => authority.assertCurrent()).not.toThrow();
-    revoke();
-    expect(() => authority.assertCurrent()).toThrow("Grant revoked");
-  });
+  it.each(["browser", "admission"] as const)(
+    "keeps accepted WebSocket authority when %s closes",
+    async (kind) => {
+      const wss = websocketServer();
+      const admitted = createDeferred<RemoteControlUiIngressContext>();
+      const admission = new AbortController();
+      const { transport, revoke } = fixture({
+        admissionSignal: admission.signal,
+        handleUpgrade: async (req, socket, head) => {
+          const provenance = readGatewayIngressTransport(req);
+          if (provenance?.kind !== "remote-forwarded") {
+            throw new Error("Missing remote provenance");
+          }
+          admitted.resolve(provenance.context);
+          wss.handleUpgrade(req, socket, head, () => {});
+        },
+      });
+      const browser = new AbortController();
+      const { socket } = await transport.openWebSocket({
+        pathAndQuery: "/claw",
+        origin: "https://ui.example.test",
+        protocols: [],
+        signal: browser.signal,
+      });
+      const authority = await admitted.promise;
+      (kind === "browser" ? browser : admission).abort(new Error("Transport closed"));
+      await socket.closed;
+      expect(authority.signal.aborted).toBe(false);
+      expect(() => authority.assertCurrent()).not.toThrow();
+      revoke();
+      expect(() => authority.assertCurrent()).toThrow("Grant revoked");
+    },
+  );
 
   it("delivers the final buffered response chunk before normal transport completion", async () => {
     const { transport, input } = fixture({

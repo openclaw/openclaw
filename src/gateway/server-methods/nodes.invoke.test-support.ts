@@ -1,7 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NodeInvokeParams, NodeInvokeResult } from "../node-invoke.types.js";
 import type { NodeRegistry } from "../node-registry.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions } from "./types.js";
 
 export type RespondCall = Parameters<GatewayRequestHandlerOptions["respond"]>;
@@ -241,4 +249,33 @@ export function registerNodeInvokeUploadTests({
       }
     },
   );
+}
+
+export function registerNodeInvokeWakeFixture() {
+  let previousConfig: OpenClawConfig | null;
+  let previousSourceConfig: OpenClawConfig | null;
+
+  beforeEach(() => {
+    previousConfig = getRuntimeConfigSnapshot();
+    previousSourceConfig = getRuntimeConfigSourceSnapshot();
+    setRuntimeConfigSnapshot({
+      gateway: {
+        roles: {
+          definitions: {
+            operator: { sessions: { others: "write" }, agents: "*", scopes: ["operator.write"] },
+          },
+        },
+      },
+    });
+  });
+
+  afterEach(() => {
+    if (previousConfig) {
+      setRuntimeConfigSnapshot(previousConfig, previousSourceConfig ?? undefined);
+    } else {
+      clearRuntimeConfigSnapshot();
+    }
+    vi.useRealTimers();
+    setOpenClawIdTunnelPrincipalLookup(undefined);
+  });
 }

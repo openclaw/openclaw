@@ -3,6 +3,7 @@ import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
 import * as json from "../lib/snapshot-json.ts";
+import { resolveChatSnapshotSessionKey } from "../pages/chat/session-snapshot-key.ts";
 
 const text = json.text;
 const optionalText = json.optional(text);
@@ -28,9 +29,10 @@ const childrenState = {
   runningChildCount: json.optional(json.number),
   queuedChildCount: json.optional(json.number),
   unreadChildCount: json.optional(json.number),
-  failedChildCount: json.optional(json.number),
 };
 const state = json.object({
+  pinnable: json.optional(json.literal(false)),
+  childCount: json.optional(json.number),
   unread: json.optional(json.boolean),
   isRunVisuallyActive: json.optional(json.boolean),
   hasAutomation: json.optional(json.boolean),
@@ -68,6 +70,7 @@ const sessionFields = {
   color: optionalText,
   pinned: json.boolean,
   archived: json.optional(json.boolean),
+  snoozedUntil: json.optional(json.number),
   isChild: json.boolean,
   category: optionalText,
   boardFace: json.optional(json.enumeration(["chat", "dashboard"])),
@@ -187,6 +190,8 @@ export const sidebarSnapshotSchema = json.object({
   ),
   ownerId: json.nullable(text),
   involvingMe: json.boolean,
+  windowKeys: json.array(sessionKey),
+  rowFloor: json.number,
   footer: json.nullable(user),
   brand: json.object({
     name: text,
@@ -202,4 +207,66 @@ export type SidebarSnapshotModel = json.SnapshotValue<typeof sidebarSnapshotSche
 
 export function parseSidebarSnapshot(value: unknown): SidebarSnapshotModel | null {
   return json.parseSnapshot(sidebarSnapshotSchema, value);
+}
+
+export function removeSidebarSnapshotSession(
+  model: SidebarSnapshotModel,
+  key: string,
+): SidebarSnapshotModel {
+  const host = { assistantAgentId: model.roster?.agentId, agentsList: model.routingDefaults };
+  const deleted = resolveChatSnapshotSessionKey(host, { sessionKey: key });
+  let changed = false;
+  const retain = (row: { key: string; agentId?: string }) => {
+    const keep =
+      resolveChatSnapshotSessionKey(host, { sessionKey: row.key, agentId: row.agentId }) !==
+      deleted;
+    changed ||= !keep;
+    return keep;
+  };
+  const prune = (rows: SidebarSnapshotSession[]): SidebarSnapshotSession[] => {
+    const kept: SidebarSnapshotSession[] = [];
+    for (const row of rows) {
+      if (retain(row)) {
+        kept.push({
+          ...row,
+          children: prune(row.children),
+          childLoadParentKeys: row.childLoadParentKeys?.filter((parentKey) =>
+            retain({ key: parentKey }),
+          ),
+        });
+      }
+    }
+    return kept;
+  };
+  const next = {
+    ...model,
+    windowKeys: model.windowKeys.filter((value) => retain({ key: value })),
+    pinnedSessions: prune(model.pinnedSessions),
+    pages: prune(model.pages),
+    entries: model.entries.filter(
+      (entry) => !entry.startsWith("session:") || retain({ key: entry.slice(8) }),
+    ),
+    sections: model.sections.map((section) => {
+      const rows = prune(section.rows);
+      const removed = section.rows.length - rows.length;
+      return {
+        ...section,
+        rows,
+        totalRowCount: Math.max(0, section.totalRowCount - removed),
+        visibleRowCount: Math.min(section.visibleRowCount, rows.length),
+        collapsedVisibleRowCount: Math.min(section.collapsedVisibleRowCount, rows.length),
+      };
+    }),
+    roster: model.roster && {
+      ...model.roster,
+      result: {
+        ...model.roster.result,
+        sessions: model.roster.result.sessions.filter(retain),
+      },
+    },
+  };
+  if (next.roster) {
+    next.roster.result.count = next.roster.result.sessions.length;
+  }
+  return changed ? next : model;
 }

@@ -119,6 +119,23 @@ beforeEach(() => {
 });
 
 describe("pw-session getPageForTargetId", () => {
+  it("reuses page identities across selections but still enforces quarantine", async () => {
+    const { pages } = installBrowser([{ targetId: "A" }, { targetId: "B" }]);
+    const attach = vi.spyOn(pages[0]!.context(), "newCDPSession");
+    await expect(getPageForTargetId({ cdpUrl, targetId: "A" })).resolves.toBe(pages[0]);
+    const initialReads = attach.mock.calls.length;
+    for (let index = 0; index < 5; index++) {
+      await expect(getPageForTargetId({ cdpUrl, targetId: "B" })).resolves.toBe(pages[1]);
+      await expect(getPageForTargetId({ cdpUrl, targetId: "A" })).resolves.toBe(pages[0]);
+    }
+    expect(attach.mock.calls.length).toBe(initialReads);
+    markTargetBlocked(cdpUrl, "A");
+    await expect(getPageForTargetId({ cdpUrl, targetId: "A" })).rejects.toThrow(
+      "Browser target is unavailable",
+    );
+    await expect(getPageForTargetId({ cdpUrl })).resolves.toBe(pages[1]);
+  });
+
   it("namespaces reused Lightpanda target IDs and refuses stale IDs without reconnecting", async () => {
     const endpoint = "ws://127.0.0.1:9222/";
     const first = installBrowser([{ targetId: "reused-target" }]);
@@ -154,6 +171,27 @@ describe("pw-session getPageForTargetId", () => {
     );
     expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["lightpanda", "kitesurf"] as const)(
+    "closes only the Kitesurf page but retires a single-page Lightpanda connection (%s)",
+    async (engine) => {
+      const endpoint = "ws://127.0.0.1:9222/";
+      const bundle = installBrowser([{ targetId: "first" }, { targetId: "second" }]);
+      const tabs = await listPagesViaPlaywright({ cdpUrl: endpoint, engine });
+      await closePageByTargetIdViaPlaywright({ cdpUrl: endpoint, targetId: tabs[0]!.targetId });
+      if (engine === "lightpanda") {
+        expect(bundle.browserClose).toHaveBeenCalledOnce();
+        expect(bundle.pageActions[0]!.close).not.toHaveBeenCalled();
+      } else {
+        expect(bundle.browserClose).not.toHaveBeenCalled();
+        expect(bundle.pageActions[0]!.close).toHaveBeenCalledOnce();
+        expect(bundle.pageActions[1]!.close).not.toHaveBeenCalled();
+        await expect(
+          getPageForTargetId({ cdpUrl: endpoint, targetId: tabs[1]!.targetId }),
+        ).resolves.toBe(bundle.pages[1]);
+      }
+    },
+  );
 
   it("stale Lightpanda page cleanup closes its captured browser, not the same-URL successor", async () => {
     const endpoint = "ws://127.0.0.1:9222/";
@@ -263,12 +301,13 @@ describe("pw-session getPageForTargetId", () => {
     const endpoint = "http://127.0.0.1:9333";
     const lookupStarted = createDeferred<void>();
     const finishLookup = createDeferred<void>();
-    const stalePage: MockPageSpec = { targetId: "OLD_TARGET" };
+    const stalePage: MockPageSpec = { targetId: "OLD_TARGET", targetLookupError: "Not ready" };
     const stale = makeBrowser([stalePage]);
     const fresh = makeBrowser([{ targetId: "TARGET_OK" }]);
     connectOverCdpSpy.mockResolvedValueOnce(stale.browser).mockResolvedValue(fresh.browser);
     await getPageForTargetId({ cdpUrl: endpoint });
 
+    stalePage.targetLookupError = undefined;
     stalePage.beforeTargetLookup = () => {
       lookupStarted.resolve();
       return finishLookup.promise;

@@ -96,6 +96,36 @@ enum DashboardFailurePage {
         """
     }
 
+    static func html(removal: MacOpenClawIDRemoval, now: Date = Date()) -> String {
+        """
+        <!doctype html>
+        <html><head><meta charset="utf-8"><style>
+        \(self.styles)
+        :root { --primary: #0067df; --primary-hover: #005bc8; --primary-active: #004fae; --focus-ring: #007aff; }
+        main { width: min(900px, calc(100vw - 72px)); padding: 32px; text-align: center;
+          background: transparent; border: 0; box-shadow: none; }
+        h1 { font-size: 28px; margin-top: 24px; }
+        p { line-height: 1.5; }
+        .device { width: 64px; height: 64px; color: #8e8e93; }
+        .actions { flex-direction: column; margin-top: 32px; gap: 10px; }
+        @media (prefers-color-scheme: light) { body { background: #fff; } }
+        </style></head><body><main>
+        <svg class="device" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="3"
+          aria-hidden="true"><rect x="8" y="8" width="46" height="34" rx="4"/>
+          <path d="M3 49h39"/><circle cx="49" cy="43" r="12"/><path d="M42 43h14"/></svg>
+        <h1>\(self.htmlEscape(removal.title))</h1>
+        <p>\(self.htmlEscape(removal.dashboardMessage(now: now)))</p>
+        <div class="actions">
+          <button class="primary" onclick="window.webkit.messageHandlers.openclawGateways
+            .postMessage({type:'openclaw-id-sign-in'})">Sign in with OpenClaw ID…</button>
+          <button class="settings" onclick="window.webkit.messageHandlers.openclawDeviceSettings
+            .postMessage({type:'open',panel:'connection'})">Set up a different connection</button>
+          <button onclick="window.webkit.messageHandlers.openclawGateways
+            .postMessage({type:'close-recovery'})">Close</button>
+        </div></main></body></html>
+        """
+    }
+
     private static let styles = """
     :root {
       color-scheme: light dark;

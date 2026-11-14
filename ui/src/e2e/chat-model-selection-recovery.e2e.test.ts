@@ -8,7 +8,7 @@ import {
   createControlUiE2eSuite,
   holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { pollText, pollCount, pollAttribute } from "./new-session-page.test-support.ts";
+import { pollCount, pollAttribute } from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Model selection recovery" });
 
@@ -17,8 +17,7 @@ const holdOptions = (page: Page) =>
     page,
     controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-model-picker-options.tsx"),
   );
-const expectLoading = (picker: Locator) =>
-  pollText(picker.locator('[role="status"]')).toContain("Loading models");
+const expectLoading = (picker: Locator) => pollCount(picker.locator('[role="status"]')).toBe(0);
 
 suite.define(() => {
   it("retains a confirmed model selection when the roster refresh fails", () =>
@@ -100,6 +99,13 @@ suite.define(() => {
     ["chat", "focus moved"],
   ] as const)("keeps /%s usable while model choices load (%s)", (route, state) =>
     suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      // Exercise cold demand without racing the shell's intentional idle warmup.
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator, "connection", {
+          configurable: true,
+          value: Object.assign(new EventTarget(), { saveData: true, effectiveType: "4g" }),
+        });
+      });
       const held = await holdOptions(page);
       const models = ["Alpha", "Beta"].map((name) => ({
         id: name.toLowerCase(),

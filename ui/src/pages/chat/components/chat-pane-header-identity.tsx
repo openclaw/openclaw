@@ -50,22 +50,30 @@ function CrumbSeparator(props: { merged: boolean }) {
 }
 
 export function IdentityCrumbs(props: ChatPaneHeaderProps) {
-  const hasProject = () => !props.catalog && Boolean(props.workspaceLabel);
+  const hasAgent = () => Boolean(props.agent) && !props.mergedChrome;
+  const hasProject = () => !hasAgent() && !props.catalog && Boolean(props.workspaceLabel);
   const status = () =>
     props.mergedChrome && props.gatewayStatus?.kind !== "connected" && props.gatewayStatus?.kind;
   return (
     <div class="chat-pane__crumbs">
-      <Show when={hasProject() || status()}>
+      <Show when={hasAgent() || hasProject() || status()}>
         <div class="chat-pane__project-row">
-          <Show when={status()} fallback={<ProjectCrumb {...props} />}>
-            <div class="mobile-connection-status">
-              <GatewayStatus {...props.gatewayStatus!} />
-            </div>
+          <Show
+            when={hasAgent()}
+            fallback={
+              <Show when={status()} fallback={<ProjectCrumb {...props} />}>
+                <div class="mobile-connection-status">
+                  <GatewayStatus {...props.gatewayStatus!} />
+                </div>
+              </Show>
+            }
+          >
+            <AgentCrumb {...props} agent={props.agent!} />
           </Show>
         </div>
       </Show>
       <div class="chat-pane__session-trail">
-        <Show when={hasProject()}>
+        <Show when={hasAgent() || hasProject()}>
           <CrumbSeparator merged={props.mergedChrome} />
         </Show>
         <Show when={props.parentSession}>
@@ -74,7 +82,7 @@ export function IdentityCrumbs(props: ChatPaneHeaderProps) {
               <button
                 class="chat-pane__parent-session"
                 type="button"
-                title={t("chat.sessionHeader.openParent", { title: parent().title })}
+                title={parent().title}
                 aria-label={t("chat.sessionHeader.openParent", { title: parent().title })}
                 onClick={() => props.onOpenParentSession(parent().key)}
               >
@@ -90,7 +98,7 @@ export function IdentityCrumbs(props: ChatPaneHeaderProps) {
   );
 }
 
-// Roster mode keeps the session crumbs off the agent pill: it is one settings target.
+// Roster identity remains one settings target.
 export function AgentCrumb(
   props: ChatPaneHeaderProps & { agent: NonNullable<ChatPaneHeaderProps["agent"]> },
 ) {
@@ -104,10 +112,9 @@ export function AgentCrumb(
       <span class="chat-pane__agent-avatar" aria-hidden="true">
         <AgentIdentityAvatar agent={props.agent} />
       </span>
-      <span class="chat-pane__agent-name">{props.agent.name}</span>
-      <span class="chat-pane__agent-settings" aria-hidden="true">
-        <Icon name="settings" />
-      </span>
+      <Show when={props.mergedChrome}>
+        <span class="chat-pane__agent-name">{props.agent.name}</span>
+      </Show>
     </button>
   );
 }
@@ -115,7 +122,9 @@ export function AgentCrumb(
 function SessionTitle(props: ChatPaneHeaderProps) {
   return (
     <>
-      <SessionColorDot value={props.catalog ? props.catalogColor : props.session?.color} />
+      <SessionColorDot
+        value={props.catalog ? props.catalogColor : (props.sessionColor ?? props.session?.color)}
+      />
       <span class="chat-pane__session-title-text">
         <Show
           when={
@@ -160,7 +169,12 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
   );
 }
 
-function SessionRenameInput(props: ChatPaneHeaderProps) {
+export function SessionRenameInput(
+  props: Pick<
+    ChatPaneHeaderProps,
+    "renameValue" | "renameDisabledReason" | "onRenameInput" | "onCommitRename" | "onCancelRename"
+  > & { class?: string; renameBusy?: boolean },
+) {
   let input!: HTMLInputElement;
   onSettled(() => {
     input.focus();
@@ -168,8 +182,10 @@ function SessionRenameInput(props: ChatPaneHeaderProps) {
   });
   return (
     <input
-      class="chat-pane__session-title-input"
+      class={["chat-pane__session-title-input", props.class]}
       value={props.renameValue}
+      readonly={props.renameBusy}
+      aria-busy={props.renameBusy ? "true" : undefined}
       aria-label={t("chat.sessionHeader.renameInputAria")}
       placeholder={t("chat.sessionHeader.renameInputPlaceholder")}
       onInput={(event) => props.onRenameInput(event.currentTarget.value)}

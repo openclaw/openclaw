@@ -7,6 +7,7 @@ import { PassThrough, Writable, type Readable } from "node:stream";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import { resolveSecretSentinel, sealSecretSentinel } from "../sentinel.js";
 import { createSecretEgressBodyBudget, forwardSecretEgressRequest } from "./proxy-forward.js";
 
@@ -51,6 +52,53 @@ function forwarding(
     audit() {},
   };
 }
+
+it("forwards stream headers before the upstream sends its first body byte", async () => {
+  const ports = await acquireTestPortBlock({ offsets: [0, 1] });
+  let sendBody!: () => void;
+  const origin = http.createServer((_request, response) => {
+    sendBody = () => response.end("keepalive\n");
+    response.writeHead(200, { "content-type": "application/x-ndjson" });
+    response.flushHeaders();
+  });
+  const proxy = http.createServer((request, response) => {
+    forwardSecretEgressRequest({
+      ...forwarding(request, response),
+      host: "127.0.0.1",
+      prepareRequest: () => ({
+        target: new URL(`http://127.0.0.1:${ports.port}/stream`),
+        headers: {},
+        substituted: false,
+      }),
+    });
+  });
+  cleanups.push(async () => {
+    for (const server of [proxy, origin]) {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+    await ports.release();
+  });
+  await once(origin.listen(ports.port, "127.0.0.1"), "listening");
+  await once(proxy.listen(ports.port + 1, "127.0.0.1"), "listening");
+  const request = http.get({ host: "127.0.0.1", port: ports.port + 1, agent: false });
+  cleanups.push(() => {
+    request.destroy();
+  });
+  // The body remains held until the real downstream client receives its headers.
+  const [response] = (await once(request, "response")) as [http.IncomingMessage];
+  expect(response.statusCode).toBe(200);
+  expect(response.headers["content-type"]).toBe("application/x-ndjson");
+  expect(response.readableLength).toBe(0);
+  sendBody();
+  const chunks: Buffer[] = [];
+  for await (const chunk of response) {
+    chunks.push(Buffer.from(chunk));
+  }
+  expect(Buffer.concat(chunks).toString()).toBe("keepalive\n");
+});
 
 it.each([undefined, 0])(
   "releases body streams when upstream construction fails (length: %s)",

@@ -1,0 +1,6 @@
+# A scheduler regression that keeps condition checks running while every run slot is busy and
+# runs the fired payload on its one check when a slot frees, one that keeps that wait across a
+# cron config reload and ends it on a stop, plus queue rows for a fired condition waiting for a
+# run slot in due order with queued runs. Exact net growth for the checks-off-run-slots change
+# (#196859).
+161

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
+import type { TemplateInstallOutcome } from "../shared/template-install-notice.js";
 import type { TemplateAddStateOptions } from "./add-state-write.js";
 import type { PlannedTemplatePackage } from "./package-plan-action.js";
 import type { TemplatePluginRuntimeOptions } from "./plugin-runtime.js";
@@ -9,11 +10,11 @@ export type TemplatePluginInstallConsent = {
   confirmInstall?: (pluginId: string, warning?: string) => Promise<boolean>;
 };
 
-export type TemplateSkillInstallConsent = {
-  assertApproved: (
-    pkg: Pick<PlannedTemplatePackage, "ref" | "version" | "integrity"> & { riskWarning: string },
-  ) => void;
-};
+export type TemplateSkillWarning = (
+  | Pick<PlannedTemplatePackage, "ref" | "version" | "integrity">
+  | { source: "bundled"; path: string; name: string; digest: string }
+) & { riskWarning: string };
+export type TemplateSkillInstallConsent = { assertApproved: (pkg: TemplateSkillWarning) => void };
 
 export type InstallTemplatePackagesOptions = TemplatePluginRuntimeOptions &
   TemplateAddStateOptions & {
@@ -22,4 +23,5 @@ export type InstallTemplatePackagesOptions = TemplatePluginRuntimeOptions &
     pluginConsent?: TemplatePluginInstallConsent;
     skillConsent?: TemplateSkillInstallConsent;
     nowMs?: number;
+    onSetupOutcome?: (outcome: TemplateInstallOutcome) => Promise<void>;
   };

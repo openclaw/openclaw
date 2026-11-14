@@ -4,6 +4,7 @@ import {
   hasGatewayClientCap,
   normalizeGatewayClientName,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
 type IndexedClient = {
@@ -15,6 +16,7 @@ export class GatewayClientRegistry extends Set<GatewayWsClient> {
   readonly #byConnectionId = new Map<string, IndexedClient>();
   readonly #unscopedSessionEventConnIds = new Set<string>();
   onChange?: () => void;
+  readonly #changeListeners = new Set<() => void>();
   #nextOrder = 0;
   readonly #onRemove?: (client: GatewayWsClient) => void;
   readonly #activeRequests = new Map<GatewayWsClient, number>();
@@ -66,6 +68,7 @@ export class GatewayClientRegistry extends Set<GatewayWsClient> {
       }
       super.add(client);
       this.onChange?.();
+      notifyListeners(this.#changeListeners, undefined);
     }
     return this;
   }
@@ -80,6 +83,7 @@ export class GatewayClientRegistry extends Set<GatewayWsClient> {
       this.#unscopedSessionEventConnIds.delete(client.connId);
     }
     this.onChange?.();
+    notifyListeners(this.#changeListeners, undefined);
     return true;
   }
 
@@ -94,6 +98,12 @@ export class GatewayClientRegistry extends Set<GatewayWsClient> {
     this.#byConnectionId.clear();
     this.#unscopedSessionEventConnIds.clear();
     this.onChange?.();
+    notifyListeners(this.#changeListeners, undefined);
+  }
+
+  /** Observes committed connection additions/removals without replacing another owner. */
+  subscribeChanges(listener: () => void): () => void {
+    return registerListener(this.#changeListeners, listener);
   }
 
   getByConnectionId(connId: string): GatewayWsClient | undefined {

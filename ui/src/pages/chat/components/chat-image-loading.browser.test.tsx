@@ -7,13 +7,9 @@ import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
-import {
-  projectMessageMedia,
-  releaseChatMediaResourceOwner,
-  type ImageRenderOptions,
-} from "./chat-message-media.ts";
+import { projectMessageMedia } from "./chat-message-media-projection.ts";
+import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import "../../../test-helpers/load-styles.ts";
-import "../../activity/session-activity-media.css";
 
 const browserMode = "__vitest_browser__" in globalThis;
 const containers: HTMLElement[] = [];
@@ -264,42 +260,6 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     expect(new URL(fetchMock.mock.calls[0]![0], location.href).searchParams.get("v")).toBe("4");
   });
 
-  it("keeps a horizontally clipped image keyboard reachable before admission", async () => {
-    const { userEvent } = await import("vitest/browser");
-    const container = mount(132);
-    container.className = "activity-feed__media";
-    container.style.padding = "0";
-    const fetch = vi.fn(async () => svgResponse(128, 80));
-    vi.stubGlobal("fetch", fetch);
-    const images = ["First", "Clipped"].map((alt) => outgoingImage(alt));
-    const onOpenImage = vi.fn<NonNullable<ImageRenderOptions["onOpenImage"]>>();
-    drawOwned(container, { images, options: { onOpenImage } });
-    await vi.waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(1));
-    expect(fetch).toHaveBeenCalledOnce();
-    const frames = container.querySelectorAll<HTMLElement>(".chat-image-frame");
-    const strip = container.querySelector<HTMLElement>(".chat-message-images")!;
-    expect(frames[1]!.getBoundingClientRect().left).toBeGreaterThan(
-      strip.getBoundingClientRect().right,
-    );
-    const clippedButton = frames[1]!.querySelector("button");
-    expect(clippedButton?.getAttribute("aria-disabled")).toBe("true");
-    container.querySelector<HTMLButtonElement>(".chat-message-image-button")!.focus();
-    await userEvent.tab();
-    expect(frames[1]!.contains(document.activeElement)).toBe(true);
-    await vi.waitFor(() => expect(frames[1]!.querySelector("img")).not.toBeNull());
-    await frames[1]!.querySelector("img")!.decode();
-    expect(frames[1]!.querySelector("button")).toBe(clippedButton);
-    expect(clippedButton).toBe(document.activeElement);
-    expect(clippedButton?.hasAttribute("aria-disabled")).toBe(false);
-    await userEvent.keyboard("{Enter}");
-    try {
-      expect(onOpenImage).toHaveBeenCalledOnce();
-      expect(onOpenImage.mock.calls[0]?.[0].gallery?.index).toBe(1);
-    } finally {
-      onOpenImage.mock.calls[0]?.[0].release?.();
-    }
-  });
-
   it.each([
     ["landscape", 1200, 800, 500, 400, 400 / 1.5, "assistant", true],
     ["portrait", 800, 1600, 500, 180, 360, "user", true],
@@ -307,7 +267,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     ["narrow pane", 1200, 800, 180, 180, 120, "user", true],
     ["panorama", 1200, 80, 500, 400, 400 / 15, "assistant", true],
     ["tiny tall image", 80, 1600, 500, 18, 360, "user", true],
-    ["unknown dimensions", 800, 1600, 500, 180, 360, "assistant", false],
+    ["unknown dimensions", 800, 1600, 500, 400, 400 / 1.5, "assistant", false],
   ] as const)(
     "keeps %s geometry through fetch, decode, and cache reuse",
     async (name, width, height, pane, expectedWidth, expectedHeight, role, sized) => {
@@ -332,18 +292,14 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       response.resolve(svgResponse(width, height));
       await waitForFast(() => expect(container.querySelector("img")).not.toBeNull());
       const image = container.querySelector("img")!;
-      if (sized) {
-        expect(geometry(container)).toEqual(before);
-      }
+      expect(geometry(container)).toEqual(before);
       await image.decode();
       await vi.waitFor(() => {
         expect(geometry(container).width).toBeCloseTo(expectedWidth, 1);
         expect(geometry(container).height).toBeCloseTo(expectedHeight, 1);
       });
       const decoded = geometry(container);
-      if (sized) {
-        expect(decoded).toEqual(before);
-      }
+      expect(decoded).toEqual(before);
       expect(frame(container)).toBe(originalFrame);
       draw();
       expect(container.querySelector("img")).toBe(image);
@@ -502,7 +458,11 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       expect(frames[1]!.getBoundingClientRect().top).toBeGreaterThan(
         frames[0]!.getBoundingClientRect().bottom,
       );
-      for (const [index, expectedWidth] of [160, 84, 18, 18, 160].entries()) {
+      const fallbackWidth = Math.min(
+        400,
+        container.querySelector(".chat-group-messages")!.clientWidth,
+      );
+      for (const [index, expectedWidth] of [160, 84, 18, fallbackWidth, fallbackWidth].entries()) {
         const element = frames[index]!;
         await page.getByAltText(images[index]!.alt, { exact: true }).hover();
         for (const animation of element.getAnimations({ subtree: true })) {

@@ -40,6 +40,33 @@ describe("VisitorPolicyClient", () => {
     provider = { ...githubProvider };
   });
 
+  it.each([1, 32])("bounds a streamed %i MiB Cloudflare response", async (paddingMiB) => {
+    const padding = new Uint8Array(1024 * 1024).fill(32);
+    let remaining = paddingMiB;
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"success":true,"result":[]}'));
+      },
+      pull(controller) {
+        if (remaining-- > 0) {
+          controller.enqueue(padding);
+        } else {
+          controller.close();
+        }
+      },
+      cancel,
+    });
+    respond(new Response(body));
+    if (paddingMiB === 1) {
+      await expect(client.read()).resolves.toBeUndefined();
+    } else {
+      await expect(client.read()).rejects.toThrow("Cloudflare returned an unreadable response");
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(remaining).toBeGreaterThan(0);
+    }
+  });
+
   it.each([
     ["githubAccountIdClaim", false],
     ["issuer", true],

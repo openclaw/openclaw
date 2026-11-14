@@ -1,11 +1,7 @@
 import { expect, it } from "vitest";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
-import {
-  button,
-  expectNoRequests,
-  sessionPatch,
-} from "./session-management.compact.test-support.ts";
+import { button, expectNoRequests } from "./session-management.compact.test-support.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -47,19 +43,26 @@ suite.define(() => {
       // Browser key events exercise the registered receiver; CDP input does not
       // certify interception of physical operating-system accelerators.
       await composer.press(`${modifier}+Shift+A`);
-      const archived = await sessionPatch(gateway, target.key, { archived: true });
-      expect(archived.params).toMatchObject({
-        key: target.key,
-        expectedSessionId: target.sessionId,
-        archived: true,
-      });
-      await expectNoRequests(gateway, "sessions.patchMany", "sessions.abort", "sessions.delete");
       const undo = button(page, "Undo");
       await undo.waitFor({ state: "visible" });
+      // Only the current conversation is held; the other selected rows stay put.
+      await page.locator(`.sidebar-recent-session[data-session-key="${target.key}"]`).waitFor({
+        state: "detached",
+      });
+      for (const row of others) {
+        await page.locator(`.sidebar-recent-session[data-session-key="${row.key}"]`).waitFor();
+      }
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(target.key));
       await pane.getByText("Current conversation content", { exact: true }).waitFor();
       await undo.click();
-      await sessionPatch(gateway, target.key, { archived: false });
+      await page.locator(`.sidebar-recent-session[data-session-key="${target.key}"]`).waitFor();
+      await expectNoRequests(
+        gateway,
+        "sessions.patch",
+        "sessions.patchMany",
+        "sessions.abort",
+        "sessions.delete",
+      );
       await expect.poll(() => composer.inputValue()).toBe("Preserve this unsent draft");
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(target.key));
 
@@ -68,7 +71,7 @@ suite.define(() => {
       const newSessionHelp = shortcuts.getByText("Open New Session", { exact: true });
       await newSessionHelp.waitFor({ state: "visible" });
       await page.keyboard.press(`${modifier}+Shift+A`);
-      expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       await page.keyboard.press(`${modifier}+Shift+O`);
       const newComposer = page.locator("openclaw-new-session-page .new-session-page__message");
       await newComposer.waitFor({ state: "visible" });

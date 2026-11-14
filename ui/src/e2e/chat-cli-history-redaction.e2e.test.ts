@@ -56,7 +56,10 @@ suite.define(() => {
       } as AgentMessage;
       const mergedMessages = mergeImportedChatHistoryMessages({
         localMessages: [localUserMessage],
-        importedMessages: await readClaudeCliSessionMessagesAsync({ cliSessionId, homeDir }),
+        importedMessages: await readClaudeCliSessionMessagesAsync({
+          cliSessionId,
+          projectsDir: path.join(homeDir, ".claude", "projects"),
+        }),
       });
 
       expect(mergedMessages).toHaveLength(2);

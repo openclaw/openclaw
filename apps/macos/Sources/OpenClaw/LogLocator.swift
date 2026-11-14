@@ -18,12 +18,23 @@ enum LogLocator {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
     }
 
-    /// Returns the newest log file under /tmp/openclaw/ (rolling or stdout), or nil if none exist.
+    /// Prefer the current state's structured logs; retain launchd and pre-migration logs as fallback.
     static func bestLogFile() -> URL? {
-        self.ensureLogDirExists()
+        let stateDir = OpenClawPaths.stateDirURL
+        let directories = ProcessInfo.processInfo.environment["OPENCLAW_LOG_DIR"]?.isEmpty == false
+            ? [self.logDir]
+            : [
+                stateDir.appendingPathComponent("logs"),
+                stateDir.appendingPathComponent("tmp/openclaw-\(getuid())"),
+                self.logDir,
+            ]
+        return directories.lazy.compactMap { self.newestLogFile(in: $0) }.first
+    }
+
+    private static func newestLogFile(in directory: URL) -> URL? {
         let fm = FileManager()
         let files = (try? fm.contentsOfDirectory(
-            at: self.logDir,
+            at: directory,
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles])) ?? []
 

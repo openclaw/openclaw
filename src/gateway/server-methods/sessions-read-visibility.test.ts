@@ -41,6 +41,121 @@ afterEach(async () => {
   await closeStateDatabaseForTest();
 });
 
+test("session-only roles filter people within readable sessions without exposing hidden owners", async () => {
+  const viewer = ensureProfileForEmail("timeline-viewer@example.test").id;
+  const foreign = ensureProfileForEmail("timeline-foreign@example.test").id;
+  const hidden = ensureProfileForEmail("timeline-hidden@example.test").id;
+  const sessionless = ensureProfileForEmail("timeline-sessionless@example.test").id;
+  replaceSessionEntrySync(
+    { agentId: "main", sessionKey: "agent:main:timeline-hidden" },
+    {
+      sessionId: hidden,
+      updatedAt: Date.now(),
+      visibility: "draft",
+      createdActor: { type: "human", source: "profile", id: hidden },
+    },
+  );
+  for (const id of [viewer, foreign]) {
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: `agent:main:timeline-${id}` },
+      {
+        sessionId: id,
+        updatedAt: Date.now(),
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id },
+      },
+    );
+  }
+  const client = identifiedClient(viewer);
+  client.connect.scopes = ["operator.sessions.write"];
+  for (const cap of ["view", "none", "write"] as const) {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "limited",
+          definitions: {
+            limited: {
+              sessions: { others: cap },
+              agents: "*",
+              scopes: ["operator.sessions.write"],
+            },
+            member: { sessions: { others: "write" }, agents: "*", scopes: ["operator.write"] },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    setUserProfileRole(viewer, "limited");
+    const context = requestContext(cfg);
+    const read = (request: Parameters<typeof listSessions>[0]["request"]) =>
+      listSessions({
+        client,
+        context,
+        request: {
+          source: "activity",
+          includePeople: true,
+          includeOwnerSessionCounts: true,
+          activityPulseBoundaries: [0, Date.now() + 1],
+          ...request,
+        },
+      });
+    for (const selector of [
+      { involvingProfileId: foreign },
+      { involvingProfileId: foreign.replaceAll("-", "").slice(0, 12) },
+      { profileRelation: { profileId: foreign, relationship: "involving" as const } },
+      { profileRelation: { profileId: foreign, relationship: "owned" as const } },
+      { profileRelation: { profileId: foreign, relationship: "created" as const } },
+      { creatorId: foreign },
+      { ownerId: foreign },
+    ]) {
+      const selected = await read(selector);
+      expect(selected.sessions.map((row) => row.sessionId)).toEqual(
+        cap === "none" ? [] : [foreign],
+      );
+    }
+    for (const id of [hidden, sessionless]) {
+      for (const selector of [{ ownerId: id }, { creatorId: id }, { involvingProfileId: id }]) {
+        expect((await read(selector)).sessions).toEqual([]);
+      }
+    }
+    const own = await read({ involvingProfileId: viewer });
+    expect(own.sessions.map((row) => row.sessionId)).toEqual([viewer]);
+    expect(own.people?.map((person) => person.identity.id).toSorted()).toEqual(
+      (cap === "none" ? [viewer] : [viewer, foreign]).toSorted(),
+    );
+    for (const key of ["creatorId", "ownerId"] as const) {
+      const ownPadded = await read({ [key]: ` ${viewer} ` });
+      expect(ownPadded.sessions.map((row) => row.sessionId)).toEqual([viewer]);
+    }
+    if (cap !== "none") {
+      const ordinary = await read({});
+      expect(ordinary.sessions).toHaveLength(2);
+      expect(ordinary.sessions.map((row) => row.sessionId)).toEqual(
+        expect.arrayContaining([viewer, foreign]),
+      );
+      for (const ids of [
+        ordinary.owners?.map((owner) => owner.id),
+        ordinary.people?.map((person) => person.identity.id),
+        ordinary.ownerSessionCounts?.map((owner) => owner.profileId),
+      ]) {
+        expect(ids?.toSorted()).toEqual([viewer, foreign].toSorted());
+      }
+      expect(JSON.stringify(ordinary.owners)).not.toContain("@example.test");
+      expect(JSON.stringify(ordinary.people)).not.toContain("@example.test");
+      expect(ordinary).toMatchObject({
+        totalCount: 2,
+        peopleSessionCount: 2,
+        activityPulse: { people: 2 },
+      });
+    }
+    // A member can request reduced socket scopes without becoming a guest.
+    setUserProfileRole(viewer, "member");
+    expect(
+      (await read({ involvingProfileId: foreign })).sessions.map((row) => row.sessionId),
+    ).toEqual([foreign]);
+  }
+});
+
 test("projects recap eligibility from current sharing authority, including capped shared viewers", async () => {
   const now = Date.now();
   using _ = vi.spyOn(Date, "now").mockReturnValue(now);

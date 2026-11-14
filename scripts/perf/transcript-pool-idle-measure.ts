@@ -3,14 +3,15 @@
  * Run paired arms from this tooling checkout against identical built workers:
  * node --import ./scripts/tsx.mjs scripts/perf/transcript-pool-idle-measure.ts \
  *   --built-root <built-checkout> --output "$PWD/.local/transcript-idle-candidate"
- * Baseline: add --owner-file <frozen-session-transcript-worker-resources.ts>.
+ * Run each arm with its matching tooling; --owner-file can select a frozen owner
+ * with the same lane exports.
  * --iterations 1000 --quiet-seconds 95 --sessions 10000 are the defaults.
- * Iterations are per lane per sustained stage (5,000 total requests by default).
+ * Iterations are per lane per sustained stage.
  * Repeat with --mode allocation: collected-object main-thread sampling and the
  * existing worker startup preload are diagnostic passes, never latency gates.
  * Each arm runs concurrency 1 -> 8 -> 1, idles, then repeats to expose cold growth.
- * Five real history/search/projection/maintenance/discovery pools retain their
- * production limits (2/2/1/1/1); eight callers do not imply eight pool slots.
+ * The history, search, and session-store pools retain their production limits;
+ * eight callers do not imply eight pool slots.
  * Usage, model-context/export and archive lanes are excluded. This measures lane
  * lifetime with presence reads, not their full payload mix or a Gateway load test.
  * RSS is process-wide; worker heaps come from native telemetry. Startup allocation
@@ -103,7 +104,7 @@ const { resolveOpenClawAgentSqlitePath } =
   await import("../../src/state/openclaw-agent-db.paths.js");
 const { withSessionHistoryWorkerDatabase } =
   await import("../../src/config/sessions/session-transcript-worker-runtime.js");
-const { historyLane, transcriptSearchLane, projectionLane, maintenanceLane, targetDiscoveryLane } =
+const { historyLane, transcriptSearchLane, sessionStoreLane } =
   await import("../../src/config/sessions/session-transcript-worker-resources.js");
 const { getTrackedWorkerLifecycleSnapshot, sampleTrackedWorkerMemory } =
   await import("../../src/infra/worker-cpu.js");
@@ -113,13 +114,7 @@ assert.equal(
   resolveRuntimeProcessEntrypointUrl("sessionTranscript").href,
   pathToFileURL(workerFile).href,
 );
-const lanes = [
-  historyLane,
-  transcriptSearchLane,
-  projectionLane,
-  maintenanceLane,
-  targetDiscoveryLane,
-];
+const lanes = [historyLane, transcriptSearchLane, sessionStoreLane];
 const database = {
   agentId: "main",
   env: process.env,

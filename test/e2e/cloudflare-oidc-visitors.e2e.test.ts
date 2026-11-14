@@ -172,7 +172,7 @@ it.for(["email", "github"] as const)(
                 return undefined;
               }
               if (requiresGitHub && !getUserProfileListItem(profile.profileId).githubIdentity) {
-                throw new Error("Verified GitHub identity required");
+                return undefined;
               }
               return visitor.service.authorize(
                 profile.emails,

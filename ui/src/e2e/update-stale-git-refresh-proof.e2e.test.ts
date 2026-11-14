@@ -54,19 +54,28 @@ suite.define(() => {
           pathname: "/settings/appearance",
           routeId: "appearance",
         });
-        await gateway.deferNext("update.status");
+        const after = await gateway.deferNext("update.status", { refreshCheckout: true });
         await page.locator('a[href="/settings/updates"]').click();
         await waitForControlUiRoute(page, { pathname: "/settings/updates", routeId: "updates" });
-        await gateway.waitForRequest("update.status");
+        await gateway.waitForRequest("update.status", { after, match: { refreshCheckout: true } });
         const staleStatus = page.locator(".settings-status", { hasText: "12 commits behind" });
-        await page.locator(".settings-status", { hasText: "Checking for updates…" }).waitFor();
+        const checking = page.locator(".settings-status", { hasText: "Checking for updates…" });
+        await checking.waitFor();
+        const checkingBounds = await checking.boundingBox();
+        expect(checkingBounds).not.toBeNull();
         expect(
           await gateway.getRequests("update.status", { refreshCheckout: true }),
         ).not.toHaveLength(0);
         const refreshedStatus = { sentinel: null, schedule: currentSchedule, updateAvailable };
         await gateway.setMethodResponse("update.status", refreshedStatus);
-        await gateway.resolveDeferred("update.status", refreshedStatus);
-        await page.getByText("Up to date", { exact: true }).waitFor();
+        await gateway.resolveDeferred("update.status", refreshedStatus, {
+          match: { refreshCheckout: true },
+        });
+        const current = page.getByText("Up to date", { exact: true });
+        await current.waitFor();
+        const currentBounds = await current.boundingBox();
+        expect(currentBounds).not.toBeNull();
+        expect(currentBounds!.x).toBeCloseTo(checkingBounds!.x, 1);
         await page
           .locator(".settings-status", { hasText: "Checking for updates…" })
           .waitFor({ state: "hidden" });

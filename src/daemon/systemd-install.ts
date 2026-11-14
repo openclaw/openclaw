@@ -4,6 +4,7 @@ import {
   isUnresolvedShellReference,
   readStateDirDotEnvFromStateDir,
 } from "../config/state-dir-dotenv.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import {
   GATEWAY_SERVICE_KIND,
@@ -29,7 +30,10 @@ import {
   type GatewayServiceInstallArgs,
   type GatewayServiceManageArgs,
 } from "./service-types.js";
-import { withGatewayServiceInstallationRecovery } from "./service-update-authority.js";
+import {
+  isUpdateOwnedGatewayServiceCommand,
+  withGatewayServiceInstallationRecovery,
+} from "./service-update-authority.js";
 import { withSystemdDefinitionMutation } from "./systemd-definition-mutation.js";
 import {
   readSystemdEnvironmentFile,
@@ -204,6 +208,7 @@ async function writeSystemdUnit(
     description,
     definitionTransaction,
     warn,
+    beforeRecovery,
   }: Omit<GatewayServiceInstallArgs, "stdout">,
   load?: (beforeAction?: (action: string) => void) => Promise<void>,
 ): Promise<{ unitPath: string; backedUp: boolean }> {
@@ -280,7 +285,21 @@ async function writeSystemdUnit(
                         await run(["enable", "--runtime", unit]);
                       }
                     }
-                    if (restartAttempted) {
+                    if (restartAttempted && beforeRecovery) {
+                      // The hook runs only once the replacement has stopped, before the
+                      // previous unit starts; a failing hook never skips the restart.
+                      await run(["stop", unit]);
+                      const hook = await beforeRecovery().then(
+                        () => undefined,
+                        (error: unknown) => ({ error }),
+                      );
+                      if (running) {
+                        await run(["start", unit]);
+                      }
+                      if (hook) {
+                        throw hook.error;
+                      }
+                    } else if (restartAttempted) {
                       await run([running ? "restart" : "stop", unit]);
                     }
                   },
@@ -415,6 +434,11 @@ async function writeSystemdUnit(
           }),
           existingUnit?.contents.toString("utf8") ?? "",
           definitionTransaction?.preservePolicy,
+          {
+            preserveExecDelegation:
+              isUpdateOwnedGatewayServiceCommand() ||
+              isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS),
+          },
         );
         await assertNoSystemGatewayOwnership(env);
         await mutation.publish(unitPath, unit, restrictSystemdArtifactMode(existingUnit?.mode));

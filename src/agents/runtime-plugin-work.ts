@@ -20,39 +20,59 @@ export function retainRuntimePluginWork(
   reason: PluginRetentionReason = "unknown",
   onReplacementRequested?: (pluginId: string, yieldHold: () => void) => void,
 ): PluginWorkRelease {
+  const work = createRuntimePluginWork(reason, onReplacementRequested);
+  try {
+    for (const registry of registries) {
+      for (const instance of collectRegistryInvocationInstances(registry)) {
+        work.retain(instance);
+      }
+    }
+    return work.release;
+  } catch (error) {
+    work.release();
+    throw error;
+  }
+}
+
+/** A turn acquires work custody when it resolves or invokes an exact plugin capability. */
+export function createRuntimePluginWork(
+  reason: PluginRetentionReason,
+  onReplacementRequested?: (pluginId: string, yieldHold: () => void) => void,
+) {
+  const instances = new Set<PluginInstanceHandle>();
   const releases: PluginWorkRelease[] = [];
   const release: PluginWorkRelease = Object.assign(
-    () => releases.splice(0).forEach((close) => close()),
+    () => {
+      releases.splice(0).forEach((close) => close());
+      instances.clear();
+    },
     {
       setCleanupState: (state: PluginRetainedReference["cleanupState"]) =>
         releases.forEach((close) => close.setCleanupState?.(state)),
     },
   );
-  try {
-    const instances = new Set<PluginInstanceHandle>();
-    // A partial acquisition never owns physical resources; unwind before reporting refusal.
-    for (const registry of registries) {
-      for (const instance of collectRegistryInvocationInstances(registry)) {
-        if (!instances.has(instance)) {
-          const close = instance.retainWork(reason);
-          releases.push(close);
-          if (onReplacementRequested) {
-            const unwatch = watchPluginReplacement(instance, () =>
-              onReplacementRequested(instance.pluginId, close),
-            );
-            releases.push(() => {
-              unwatch();
-            });
-          }
-          instances.add(instance);
-        }
+  return {
+    instances,
+    release,
+    retain(instance: PluginInstanceHandle) {
+      if (instances.has(instance)) {
+        return;
       }
-    }
-    return release;
-  } catch (error) {
-    release();
-    throw error;
-  }
+      const close = instance.retainWork(reason);
+      releases.push(close);
+      instances.add(instance);
+      if (onReplacementRequested) {
+        releases.push(
+          watchPluginReplacement(instance, () =>
+            onReplacementRequested(instance.pluginId, () => {
+              instances.delete(instance);
+              close();
+            }),
+          ),
+        );
+      }
+    },
+  };
 }
 
 /** Keep replacement blocked through physical cleanup, including retained cleanup failures. */

@@ -9,6 +9,10 @@ import {
   importStateMigrationFixtureGraph,
   rerunStateMigrationFixtureAfterRestart,
 } from "./state-migrations.native-graph.test-support.js";
+import {
+  legacyChannelStateMigrationEntries,
+  pluginDoctorStateMigrationEntries,
+} from "./state-migrations.plugin-fixture.test-support.js";
 let native = await importStateMigrationFixtureGraph();
 import type { OpenClawConfig } from "../config/config.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
@@ -51,6 +55,19 @@ function autoMigrateLegacyState(params: CoreMigrationParams<AutoMigrateLegacySta
   });
 }
 
+function runDoctorMigrations(
+  cfg: AutoMigrateLegacyStateParams["cfg"],
+  env: NodeJS.ProcessEnv,
+  root: string,
+) {
+  return autoMigrateLegacyState({
+    cfg,
+    env,
+    homedir: () => root,
+    doctorOnlyStateMigrations: true,
+  });
+}
+
 // Static helpers can retain earlier cohorts after resetModules; close every cohort at teardown.
 const migrationDatabaseClosers = new Set<() => void | Promise<void>>([
   native.closeOpenClawAgentDatabasesAsync,
@@ -70,49 +87,6 @@ async function reloadStateDirFixtureGraph() {
 async function rerunAutomaticMigrationAfterRestart(params: AutoMigrateLegacyStateParams) {
   return await rerunStateMigrationFixtureAfterRestart(params, native, migrationDatabaseClosers);
 }
-
-const pluginDoctorStateMigrationEntries = vi.hoisted(
-  (): {
-    entries: Array<{
-      pluginId: string;
-      channelIds?: string[];
-      trustedForDurableStores?: boolean;
-      migration: PluginDoctorStateMigration;
-    }>;
-  } => ({ entries: [] }),
-);
-
-const legacyChannelStateMigrationEntries = vi.hoisted(() => ({
-  entries: [] as Array<{ pluginId: string; migration: PluginDoctorStateMigration }>,
-}));
-
-vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
-  const buildStateMigrationInventory = (params?: { config?: OpenClawConfig }) => ({
-    knownPluginIds: actual.collectRelevantDoctorPluginIds(params?.config ?? {}),
-    sessionStoreOwnerPluginIds: [],
-    descriptors: [
-      ...pluginDoctorStateMigrationEntries.entries,
-      ...legacyChannelStateMigrationEntries.entries,
-    ].map((entry) =>
-      Object.assign(
-        { pluginId: entry.pluginId, id: entry.migration.id },
-        entry.migration.doctorOnly === true ? { doctorOnly: true as const } : {},
-        entry.migration.phase ? { phase: entry.migration.phase } : {},
-      ),
-    ),
-    unresolvedPluginIds: [],
-  });
-  return {
-    ...actual,
-    listPluginDoctorStateMigrationEntries: vi.fn(() => [
-      ...pluginDoctorStateMigrationEntries.entries,
-      ...legacyChannelStateMigrationEntries.entries,
-    ]),
-    resolveLivePluginDoctorStateMigrationInventory: vi.fn(buildStateMigrationInventory),
-    resolvePluginDoctorStateMigrationInventory: vi.fn(buildStateMigrationInventory),
-  };
-});
 
 const tempDirs = createTrackedTempDirs();
 const APNS_DEVICE_FIELD = "token";
@@ -165,6 +139,26 @@ async function createDefaultMigrationFixture() {
 
 async function writeJsonFixture(filePath: string, value: unknown) {
   await fs.writeFile(filePath, JSON.stringify(value), "utf8");
+}
+
+function expectAmbiguousSessionMigrationReceipts(
+  result: Awaited<ReturnType<typeof autoMigrateLegacyState>>,
+  storePath: string,
+  preservedKeys: number,
+) {
+  const orphanWarning = `Preserved ${preservedKeys} ambiguous session key(s) in potentially shared store ${storePath}`;
+  const orphanReceipt = result.stepReceipts.find((receipt) => receipt.id === "orphan-session-keys");
+  expect(orphanReceipt).toMatchObject({ outcome: "warning", warnings: [orphanWarning] });
+  expect(orphanReceipt?.refusal).toBeUndefined();
+  const acpWarningPrefix = `Preserved ACP metadata for ${preservedKeys} ambiguous session key(s) in potentially shared store `;
+  expect(result.warnings.filter((warning) => warning.startsWith(acpWarningPrefix))).toHaveLength(1);
+  expect(
+    result.stepReceipts.find((receipt) => receipt.id === "acp-session-metadata"),
+  ).toMatchObject({
+    outcome: "refused",
+    warnings: [`${acpWarningPrefix}${storePath}`],
+    refusal: { code: "step-refused" },
+  });
 }
 
 function readConfigHealthRows(env: NodeJS.ProcessEnv): Array<{
@@ -338,12 +332,7 @@ describe("state migrations", () => {
     await autoMigrateLegacyState({ cfg, env, homedir: () => root });
     expect(assertReady).toThrow("Legacy workspace setup state requires migration");
 
-    const repaired = await autoMigrateLegacyState({
-      cfg,
-      env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
+    const repaired = await runDoctorMigrations(cfg, env, root);
 
     expect(repaired.warnings).toEqual([]);
     expect(assertReady).not.toThrow();
@@ -807,12 +796,7 @@ describe("state migrations", () => {
     expect(fsSync.existsSync(databasePath)).toBe(true);
     expect(fsSync.existsSync(path.join(stateDir, "agents", "main", "agent"))).toBe(false);
 
-    const doctor = await autoMigrateLegacyState({
-      cfg,
-      env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
+    const doctor = await runDoctorMigrations(cfg, env, root);
     expect(doctor.skipped).toBe(false);
     expect(doctor.warnings).toContainEqual(
       expect.stringContaining("agent schema owner is missing or blank"),
@@ -844,12 +828,7 @@ describe("state migrations", () => {
     );
     expect(fsSync.readFileSync(legacyAgentPath, "utf8")).toBe('{"legacy":true}\n');
 
-    const doctor = await autoMigrateLegacyState({
-      cfg,
-      env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
+    const doctor = await runDoctorMigrations(cfg, env, root);
     expect(doctor.skipped).toBe(false);
     expect(doctor.warnings).toContain(
       "Deferred legacy agent/session migration: select an agent owner",
@@ -1402,12 +1381,7 @@ describe("state migrations", () => {
 
     const rewritten = `${JSON.stringify({ ...event, query: "rewritten archive" })}\n`;
     await fs.writeFile(`${eventPath}.migrated`, rewritten);
-    const continued = await autoMigrateLegacyState({
-      cfg,
-      env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
+    const continued = await runDoctorMigrations(cfg, env, root);
     expect(
       continued.stepReceipts.find((receipt) => receipt.id === "plugin-doctor-state"),
     ).toMatchObject({
@@ -1675,12 +1649,7 @@ describe("state migrations", () => {
       },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({
-      cfg,
-      env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
+    const result = await runDoctorMigrations(cfg, env, root);
     const targetStore = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
       string,
       { sessionId: string }
@@ -1733,12 +1702,7 @@ describe("state migrations", () => {
     await fs.symlink(outsideStorePath, storePath);
     const cfg = { agents: { entries: { main: {} } } } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({
-      cfg,
-      env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
+    const result = await runDoctorMigrations(cfg, env, root);
 
     expect((await fs.lstat(storePath)).isSymbolicLink()).toBe(true);
     const outsideStore = JSON.parse(await fs.readFile(outsideStorePath, "utf8")) as Record<
@@ -1786,12 +1750,7 @@ describe("state migrations", () => {
       agents: { entries: { main: {} } },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({
-      cfg,
-      env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
+    const result = await runDoctorMigrations(cfg, env, root);
 
     expect((await fs.lstat(configuredStorePath)).isSymbolicLink()).toBe(true);
     const outsideStore = JSON.parse(await fs.readFile(outsideStorePath, "utf8")) as Record<
@@ -1836,12 +1795,7 @@ describe("state migrations", () => {
       agents: { entries: { main: {} } },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({
-      cfg,
-      env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
+    const result = await runDoctorMigrations(cfg, env, root);
 
     for (const storePath of [targetStorePath, configuredStorePath]) {
       const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
@@ -1882,12 +1836,7 @@ describe("state migrations", () => {
       },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({
-      cfg,
-      env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
+    const result = await runDoctorMigrations(cfg, env, root);
 
     const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
       string,
@@ -1899,24 +1848,7 @@ describe("state migrations", () => {
     expect(result.changes).not.toContain(
       "Migrated 1 ACP session metadata row → shared SQLite state",
     );
-    const orphanWarning = `Preserved 1 ambiguous session key(s) in potentially shared store ${storePath}`;
-    const orphanReceipt = result.stepReceipts.find(
-      (receipt) => receipt.id === "orphan-session-keys",
-    );
-    expect(orphanReceipt).toMatchObject({ outcome: "warning", warnings: [orphanWarning] });
-    expect(orphanReceipt?.refusal).toBeUndefined();
-    const acpWarningPrefix =
-      "Preserved ACP metadata for 1 ambiguous session key(s) in potentially shared store ";
-    expect(result.warnings.filter((warning) => warning.startsWith(acpWarningPrefix))).toHaveLength(
-      1,
-    );
-    expect(
-      result.stepReceipts.find((receipt) => receipt.id === "acp-session-metadata"),
-    ).toMatchObject({
-      outcome: "refused",
-      warnings: [`${acpWarningPrefix}${storePath}`],
-      refusal: { code: "step-refused" },
-    });
+    expectAmbiguousSessionMigrationReceipts(result, storePath, 1);
   });
 
   it("migrates malformed agent-shaped rows in single-owner plugin stores", async () => {
@@ -1957,12 +1889,7 @@ describe("state migrations", () => {
       },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({
-      cfg,
-      env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
+    const result = await runDoctorMigrations(cfg, env, root);
 
     const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
       string,
@@ -2051,12 +1978,7 @@ describe("state migrations", () => {
       acp: { allowedAgents: ["voice"] },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({
-      cfg,
-      env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
+    const result = await runDoctorMigrations(cfg, env, root);
 
     const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
       string,
@@ -2076,24 +1998,7 @@ describe("state migrations", () => {
     expect(result.changes).not.toContain(
       "Migrated 1 ACP session metadata row → shared SQLite state",
     );
-    const orphanWarning = `Preserved 3 ambiguous session key(s) in potentially shared store ${storePath}`;
-    const orphanReceipt = result.stepReceipts.find(
-      (receipt) => receipt.id === "orphan-session-keys",
-    );
-    expect(orphanReceipt).toMatchObject({ outcome: "warning", warnings: [orphanWarning] });
-    expect(orphanReceipt?.refusal).toBeUndefined();
-    const acpWarningPrefix =
-      "Preserved ACP metadata for 3 ambiguous session key(s) in potentially shared store ";
-    expect(result.warnings.filter((warning) => warning.startsWith(acpWarningPrefix))).toHaveLength(
-      1,
-    );
-    expect(
-      result.stepReceipts.find((receipt) => receipt.id === "acp-session-metadata"),
-    ).toMatchObject({
-      outcome: "refused",
-      warnings: [`${acpWarningPrefix}${storePath}`],
-      refusal: { code: "step-refused" },
-    });
+    expectAmbiguousSessionMigrationReceipts(result, storePath, 3);
   });
 
   it("leaves standalone ACP session metadata unchanged until Doctor repair", async () => {
@@ -2140,12 +2045,7 @@ describe("state migrations", () => {
       }),
     ).toBeUndefined();
 
-    const result = await autoMigrateLegacyState({
-      cfg,
-      env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
+    const result = await runDoctorMigrations(cfg, env, root);
 
     expect(result.changes).toContain("Migrated 1 ACP session metadata row → shared SQLite state");
     const afterStore = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
@@ -2227,12 +2127,7 @@ describe("state migrations", () => {
       agents: { list: [{ id: "main", default: true }, { id: "voice" }] },
     };
 
-    const result = await autoMigrateLegacyState({
-      cfg,
-      env,
-      homedir: () => root,
-      doctorOnlyStateMigrations: true,
-    });
+    const result = await runDoctorMigrations(cfg, env, root);
 
     expect(
       native.readAcpSessionMetaForEntry({

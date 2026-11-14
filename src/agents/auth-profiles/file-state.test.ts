@@ -50,29 +50,22 @@ it.skipIf(process.platform === "win32")(
       const { DatabaseSync } = require("node:sqlite");
       const { parentPort, workerData } = require("node:worker_threads");
       let spawned = 0;
-      require("node:child_process").spawn = () => {
-        spawned++;
-        throw new Error("Worker auth observation requested a row child");
-      };
-      fs.watch = () => { throw new Error("synthetic unavailable watcher"); };
-      // macOS admits hosted watchers by opening their directory before spawning.
-      const watchDirectories = new Set();
-      for (let current = workerData.directory; ; current = path.dirname(current)) {
-        watchDirectories.add(current);
-        if (path.dirname(current) === current) break;
-      }
-      const openSync = fs.openSync;
-      fs.openSync = (file, ...args) => {
-        if (process.platform === "darwin" && watchDirectories.has(file)) {
+      let watchArgv;
+      require("node:child_process").spawn = (_command, args) => {
+        if (watchArgv && args.length === watchArgv.length && args.every((arg, index) => arg === watchArgv[index])) {
           throw new Error("synthetic unavailable watcher");
         }
-        return openSync(file, ...args);
+        spawned++;
+        throw new Error("Worker auth observation requested a row child");
       };
       syncBuiltinESMExports();
       (async () => {
         const { register } = await import(workerData.loader);
         const unregister = register();
         const load = (relative) => import(new URL(relative, workerData.base).href);
+        const { resolveRuntimeProcessEntrypointUrl } = await load("../../infra/runtime-process-url.ts");
+        const { resolveRuntimeWorkerArgv } = await load("../../infra/runtime-worker-url.ts");
+        watchArgv = [...resolveRuntimeWorkerArgv(resolveRuntimeProcessEntrypointUrl("directoryWatchHost")), String(process.pid)];
         const files = await load("./file-state.ts");
         const snapshots = await load("./runtime-snapshots.ts");
         const { runtimeAuthProfileRowsCache } = await load("./runtime-persisted-rows.ts");
@@ -166,14 +159,16 @@ function fixture(options: { timers?: boolean; fallback?: boolean; existing?: boo
   return { directory, databasePath, legacyPath: path.join(directory, "auth.json") };
 }
 function useObservationTimers() {
+  const access = fs.accessSync;
+  vi.spyOn(fs.promises, "access").mockImplementation(async (...args) => access(...args));
   vi.useFakeTimers({
     toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
 }
 function disableWatcher() {
-  vi.spyOn(fs, "watch").mockImplementation(() => {
-    throw new Error("synthetic unavailable watcher");
-  });
+  vi.spyOn(directoryWatch, "watchDirectory").mockImplementation(() =>
+    Object.assign(new EventEmitter(), { close() {} }),
+  );
 }
 function nextChange(directory: string) {
   return new Promise<void>((resolve) => {
@@ -358,14 +353,19 @@ it("invalidates admitted auth facts after a separate process replaces their file
   const captured = captureAuthProfileFileIdentity(databasePath);
   const before = captured.identity;
   expect(authProfileSourceExists(legacyPath)).toBe(false);
-  const changed = nextChange(directory);
+  const changed = Promise.withResolvers<void>();
+  listen(directory, (change) => {
+    if (change.identityChanged) {
+      changed.resolve();
+    }
+  });
   await promisify(execFile)(process.execPath, [
     "-e",
     'const fs = require("node:fs"); const [db, legacy] = process.argv.slice(1); fs.writeFileSync(db + ".replacement", "replacement synthetic database"); fs.renameSync(db + ".replacement", db); fs.writeFileSync(legacy, "{}");',
     databasePath,
     legacyPath,
   ]);
-  await observe(changed);
+  await observe(changed.promise);
   expect(() => captured.assertCurrent()).toThrow("database file identity changed");
   const stat = vi.spyOn(fs, "statSync");
   const exists = vi.spyOn(fs, "existsSync");

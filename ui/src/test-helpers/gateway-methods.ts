@@ -27,7 +27,6 @@ export const SESSION_MUTATION_TEST_METHODS = [
   "sessions.patch",
   "sessions.patchMany",
   "sessions.reclaim",
-  "sessions.recover",
   "sessions.reset",
   "sessions.rewind",
   "worktrees.create",

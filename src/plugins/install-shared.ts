@@ -22,8 +22,7 @@ import {
   type PluginInstallLogger,
   type PluginInstallPolicyRequest,
 } from "./install-types.js";
-import { resolvePackageExtensionEntries, type OpenClawPackageManifest } from "./manifest.js";
-import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
+import { resolvePackageExtensionEntries } from "./manifest.js";
 import {
   emitPluginAuditSecurityEvent,
   emitPluginInstallSecurityEvent,
@@ -38,10 +37,6 @@ export async function loadPluginInstallRuntime() {
 }
 
 export type PluginInstallRuntime = Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
-type PluginCompatibilityRuntime = Pick<
-  PluginInstallRuntime,
-  "checkMinHostVersion" | "resolveCompatibilityHostVersion"
->;
 
 export const defaultLogger: PluginInstallLogger = {};
 
@@ -51,57 +46,6 @@ export function formatUnresolvedOpenClawPeerLinkError(packageName: string): stri
 
 const MISSING_EXTENSIONS_ERROR =
   'package.json missing openclaw.extensions; update the plugin package to include openclaw.extensions (for example ["./dist/index.js"]). See https://docs.openclaw.ai/help/troubleshooting#plugin-install-fails-with-missing-openclaw-extensions';
-export function validateOpenClawPackageInstallCompatibility(params: {
-  runtime: PluginCompatibilityRuntime;
-  pluginId: string;
-  packageMetadata?: OpenClawPackageManifest;
-}): PluginInstallFailureResult | null {
-  const currentHostVersion = params.runtime.resolveCompatibilityHostVersion();
-  const minHostVersionCheck = params.runtime.checkMinHostVersion({
-    currentVersion: currentHostVersion,
-    minHostVersion: params.packageMetadata?.install?.minHostVersion,
-  });
-  if (!minHostVersionCheck.ok) {
-    if (minHostVersionCheck.kind === "invalid") {
-      return {
-        ok: false,
-        error: `invalid package.json openclaw.install.minHostVersion: ${minHostVersionCheck.error}`,
-        code: PLUGIN_INSTALL_ERROR_CODE.INVALID_MIN_HOST_VERSION,
-      };
-    }
-    if (minHostVersionCheck.kind === "unknown_host_version") {
-      return {
-        ok: false,
-        error: `plugin "${params.pluginId}" requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined. Re-run from a released build or set OPENCLAW_VERSION and retry.`,
-        code: PLUGIN_INSTALL_ERROR_CODE.UNKNOWN_HOST_VERSION,
-      };
-    }
-    return {
-      ok: false,
-      error: `plugin "${params.pluginId}" requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}. Upgrade OpenClaw and retry.`,
-      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION,
-    };
-  }
-
-  const pluginApiRangeCheck = resolvePackagePluginApiRange(params.packageMetadata);
-  if (!pluginApiRangeCheck.ok) {
-    return {
-      ok: false,
-      error: `invalid package.json openclaw.compat.pluginApi: ${pluginApiRangeCheck.error}`,
-      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_PLUGIN_API,
-    };
-  }
-  const pluginApiRange = pluginApiRangeCheck.range;
-  if (pluginApiRange && !satisfiesPluginApiRange(currentHostVersion, pluginApiRange)) {
-    return {
-      ok: false,
-      error: `plugin "${params.pluginId}" requires plugin API ${pluginApiRange}, but this OpenClaw runtime exposes ${currentHostVersion}. Upgrade OpenClaw or install a compatible plugin version and retry.`,
-      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
-    };
-  }
-  return null;
-}
-
 export async function readOptionalPackageManifest(params: {
   runtime: PluginInstallRuntime;
   packageDir: string;
@@ -187,7 +131,7 @@ export function emitSuccessfulPluginInstallSecurityEvent(
     trustedSourceLinkedOfficialInstall?: boolean;
   },
 ) {
-  if (params.dryRun || !result.ok) {
+  if (params.dryRun || !result.ok || result.outcome === "prepared") {
     return;
   }
   emitPluginInstallSecurityEvent({
@@ -200,9 +144,23 @@ export function emitSuccessfulPluginInstallSecurityEvent(
   });
 }
 
-function buildBlockedInstallResult(params: {
+export function reportBlockedPluginInstall(params: {
   blocked: NonNullable<NonNullable<InstallSecurityScanResult>["blocked"]>;
+  pluginId?: string;
+  mode?: "install" | "update";
+  sourceFamily?: PluginSecuritySourceFamily;
 }): Extract<InstallPluginResult, { ok: false }> {
+  const reason =
+    params.blocked.code === "security_scan_failed"
+      ? "security_scan_failed"
+      : "security_scan_blocked";
+  emitPluginAuditSecurityEvent({
+    outcome: pluginAuditOutcomeForReason(reason),
+    reason,
+    pluginId: params.pluginId,
+    mode: params.mode,
+    sourceFamily: params.sourceFamily,
+  });
   return {
     ok: false,
     error: params.blocked.reason,
@@ -306,18 +264,12 @@ export async function runInstallSourceScan(params: {
   try {
     const scanResult = await params.scan();
     if (scanResult?.blocked) {
-      const reason =
-        scanResult.blocked.code === "security_scan_failed"
-          ? "security_scan_failed"
-          : "security_scan_blocked";
-      emitPluginAuditSecurityEvent({
-        outcome: pluginAuditOutcomeForReason(reason),
-        reason,
+      return reportBlockedPluginInstall({
+        blocked: scanResult.blocked,
         pluginId: params.pluginId,
         mode: params.mode,
         sourceFamily: params.sourceFamily,
       });
-      return buildBlockedInstallResult({ blocked: scanResult.blocked });
     }
     return null;
   } catch (err) {
@@ -350,6 +302,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
   workTimeoutMs?: number | null;
   mode: "install" | "update";
   dryRun: boolean;
+  prepareOnly?: boolean;
   copyErrorPrefix: string;
   hasDeps: boolean;
   sourceHardlinks?: "package-manager" | "reject";
@@ -413,6 +366,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     logger: params.logger,
     copyErrorPrefix: params.copyErrorPrefix,
     hasDeps: params.hasDeps,
+    prepareOnly: params.prepareOnly,
     omitOpenClawHostDependency: true,
     sourceHardlinks: params.sourceHardlinks ?? "reject",
     depsLogMessage: params.depsLogMessage,
@@ -425,7 +379,10 @@ export async function installPluginDirectoryIntoExtensions(params: {
       }
       try {
         // Consent must bind to the final staged bytes, never their mutable source tree.
-        await params.onBeforePluginArtifactCommit?.({
+        const inspect = params.prepareOnly
+          ? params.onPluginArtifactInspect
+          : params.onBeforePluginArtifactCommit;
+        await inspect?.({
           pluginId: params.pluginId,
           ...(params.mode === "update" ? { currentArtifactDir: targetDir } : {}),
           stagedArtifactDir: installedDir,
@@ -456,14 +413,17 @@ export async function installPluginDirectoryIntoExtensions(params: {
     return installRes;
   }
 
-  const result = buildDirectoryInstallResult({
-    pluginId: params.pluginId,
-    targetDir,
-    manifestName: params.manifestName,
-    version: params.version,
-    extensions: params.extensions,
-    setup: params.setup,
-  });
+  const result: InstallPluginResult = {
+    ...buildDirectoryInstallResult({
+      pluginId: params.pluginId,
+      targetDir,
+      manifestName: params.manifestName,
+      version: params.version,
+      extensions: params.extensions,
+      setup: params.setup,
+    }),
+    ...(params.prepareOnly ? { outcome: "prepared" } : {}),
+  };
   const transaction = resolvePackageDirInstallTransaction(installRes);
   return transaction ? attachPluginInstallTransaction(result, transaction) : result;
 }

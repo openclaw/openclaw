@@ -1,3 +1,97 @@
+function stripCompletedLongOrTildeFences(text: string): string {
+  if (!text.includes("````") && !text.includes("~~~")) {
+    return text;
+  }
+  let open: { start: number; marker: string } | undefined;
+  let cursor = 0;
+  let output = "";
+  // Keep complete marker runs from backtracking into the trailing text.
+  const fenceLines = /(?:^|\n) {0,3}(`{3,}(?!`)|~{3,}(?!~))([^\r\n\u2028\u2029]*)\r?(?=\n|$)/g;
+  for (const match of text.matchAll(fenceLines)) {
+    const [, marker, trailing] = match;
+    if (marker === undefined || trailing === undefined) {
+      continue;
+    }
+    if (!open) {
+      if (marker[0] === "`" && trailing.includes("`")) {
+        continue;
+      }
+      open = { start: match.index, marker };
+    } else if (
+      marker[0] === open.marker[0] &&
+      marker.length >= open.marker.length &&
+      /^[ \t]*$/.test(trailing)
+    ) {
+      // Track other fences so their literal long markers cannot consume later prose.
+      // Triple-backtick and unfinished fences retain the existing flattening behavior.
+      if (open.marker[0] === "~" || open.marker.length > 3) {
+        output += text.slice(cursor, open.start) + " ";
+        cursor = match.index + match[0].length;
+      }
+      open = undefined;
+    }
+  }
+  return output + text.slice(cursor);
+}
+
+function splitTableRow(line: string): string[] | undefined {
+  if (
+    !line.includes("|") ||
+    /^(?: {4}| {0,3}\t)/.test(line) ||
+    /^ {0,3}(?:>|#{1,6}(?:\s|$)|(?:[-+*]|\d+[.)])\s)/.test(line)
+  ) {
+    return undefined;
+  }
+  const cells: string[] = [];
+  let start = 0;
+  for (let index = 0; index < line.length; index += 1) {
+    if (line[index] === "\\") {
+      index += 1;
+    } else if (line[index] === "|") {
+      cells.push(line.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  if (cells.length === 0) {
+    return undefined;
+  }
+  cells.push(line.slice(start).trim());
+  if (cells[0] === "") {
+    cells.shift();
+  }
+  if (cells.at(-1) === "") {
+    cells.pop();
+  }
+  return cells.length > 0 ? cells : undefined;
+}
+
+function stripTables(text: string): string {
+  if (!text.includes("|")) {
+    return text;
+  }
+  const lines = text.split("\n");
+  const rows = lines.map(splitTableRow);
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    const header = rows[index];
+    const delimiter = rows[index + 1];
+    // Only a matching header and delimiter establish a table; prose pipes stay literal.
+    if (
+      !header ||
+      !delimiter ||
+      header.length !== delimiter.length ||
+      !delimiter.every((cell) => /^:?-+:?$/.test(cell))
+    ) {
+      continue;
+    }
+    lines[index] = header.join(" ").replace(/\\\|/g, "|");
+    lines[++index] = "";
+    for (let row = rows[index + 1]; row; row = rows[index + 1]) {
+      lines[++index] = row.join(" ").replace(/\\\|/g, "|");
+    }
+  }
+  return lines.join("\n");
+}
+
 /**
  * Flattens Markdown into a single line of readable plain text.
  *
@@ -7,18 +101,30 @@
  * link/image text, so it must not be used where the Markdown is rendered.
  */
 export function flattenMarkdownToPlainText(text: string): string {
-  const withoutCode = text
+  const code: string[] = [];
+  const withoutFences = stripCompletedLongOrTildeFences(text)
     .replace(/```[\s\S]*?```/g, " ")
-    .replace(/```/g, " ")
-    .replace(/`([^`]*)`/g, "$1");
-  let flattened = stripInlineLinks(withoutCode).replace(
-    /^\s{0,3}(?:#{1,6}|>|[-+*]|\d+[.)])\s+/gm,
+    .replace(/```/g, " ");
+  // Code spans become `\0<index>\0` so block and emphasis stripping cannot rewrite them; other NULs are doubled.
+  // A span closes on the next backtick run of its own length, so ``a`b`` keeps its inner backtick.
+  const withoutCode = stripInlineLinks(withoutFences).replace(
+    /\0|(?<!`)(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g,
+    (_match, _run: string | undefined, literal: string | undefined) =>
+      literal === undefined ? "\0\0" : `\0${code.push(literal) - 1}\0`,
+  );
+  // Quote markers may nest with horizontal whitespace, but must not consume another line.
+  // Recognize tables before removing block markers: a following heading or list is not a row.
+  let flattened = stripTables(withoutCode).replace(
+    /^[\t ]{0,3}(?:(?:>[\t ]*)+|(?:#{1,6}|[-+*]|\d+[.)])\s+)/gm,
     "",
   );
   for (const marker of ["*", "_", "~"] as const) {
     flattened = stripEmphasis(flattened, marker);
   }
-  return flattened.replace(/\s+/g, " ").trim();
+  return flattened
+    .replace(/\0(\d*)\0/g, (_match, index: string) => (index ? (code[Number(index)] ?? "") : "\0"))
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function stripEmphasis(text: string, marker: "*" | "_" | "~"): string {
@@ -163,8 +269,8 @@ function findDestinationEnd(
 
 /**
  * Maps each link label's `[` to its `]` and that `]` to the end of the `(destination "title")`
- * that follows it, skipping backslash-escaped characters. Brackets inside a destination or title
- * are not labels, so they never pair with a label bracket.
+ * that follows it, skipping backslash-escaped characters. Brackets inside a code span, destination
+ * or title are not labels, so they never pair with a label bracket.
  */
 function matchLinks(text: string): {
   labelEnds: Map<number, number>;
@@ -178,6 +284,8 @@ function matchLinks(text: string): {
     const char = text.charAt(index);
     if (char === "\\") {
       index += 1;
+    } else if (char === "`") {
+      index = Math.max(index, text.indexOf("`", index + 1));
     } else if (char === "[") {
       brackets.push(index);
     } else if (char === "]") {

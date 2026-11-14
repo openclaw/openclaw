@@ -27,12 +27,16 @@ import type {
   ThemesSetParams,
   ThemesImportParams,
 } from "./schema/themes.js";
+import type * as ToolUsageSchema from "./schema/tools-catalog.js";
 import type { UiCommandParams, UiCommandReportParams } from "./schema/ui-command.js";
 import type { UpdateRunsGetParams, UpdateRunsListParams } from "./schema/update-runs.js";
 import type * as UsersSchema from "./schema/users.js";
 
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
 export type GatewayCoreRequestParams = {
+  "toolUsage.status": ToolUsageSchema.ToolUsageStatusParams;
+  "toolUsage.import": ToolUsageSchema.ToolUsageImportParams;
+  "toolUsage.reset": ToolUsageSchema.ToolUsageResetParams;
   "agents.avatar.generate": AgentsAvatarGenerateParams;
   "templates.drafts.create": TemplateDraftSchema.TemplatesDraftsCreateParams;
   "templates.drafts.read": TemplateDraftSchema.TemplatesDraftsReadParams;
@@ -82,6 +86,7 @@ export type GatewayCoreRequestParams = {
   "portal.session.open": Static<typeof PortalSchema.SessionPortalOpenParamsSchema>;
   "sessions.github.publish": GitHubSchema.SessionGitHubPublishParams;
   "sessions.github.action": GitHubSchema.SessionGitHubActionParams;
+  "sessions.github.readiness": Static<typeof GitHubSchema.SessionGitHubReadinessParamsSchema>;
   "sessions.github.options": Static<typeof GitHubSchema.SessionGitHubOptionsParamsSchema>;
   "sessions.github.status": Static<typeof GitHubSchema.SessionGitHubStatusParamsSchema>;
   "sessions.github.confirm": GitHubSchema.SessionGitHubConfirmParams;
@@ -101,6 +106,7 @@ export type GatewayCoreRequestParams = {
   "users.unlinkChannelIdentity": UsersSchema.UsersUnlinkChannelIdentityParams;
   "users.listChannelIdentities": UsersSchema.UsersListChannelIdentitiesParams;
   "users.unlinkAuthProfile": UsersSchema.UsersUnlinkAuthProfileParams;
+  "users.channelIdentity": Static<typeof UsersSchema.UsersChannelIdentityParamsSchema>;
   "users.github.status": Static<typeof UsersSchema.UsersGitHubStatusParamsSchema>;
   "users.github.authorize.start": Static<typeof UsersSchema.UsersGitHubAuthorizeStartParamsSchema>;
   "users.github.authorize.poll": Static<typeof UsersSchema.UsersGitHubAuthorizePollParamsSchema>;

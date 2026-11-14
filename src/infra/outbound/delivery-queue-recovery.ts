@@ -54,13 +54,14 @@ import {
   settleDurableDelivery,
 } from "./delivery-completion.js";
 import { prepareOutboundDeliveryGeneration } from "./delivery-generation.js";
+import { settleFailedQueuedDeliveryCompletion } from "./delivery-queue-failure-completion.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
   cancelDeliveryQueueMediaRetention,
   createDeliveryQueueMediaRetention,
 } from "./delivery-queue-media-staging.js";
 import {
-  captureReconciledSentResult,
+  buildReconciledSentResult,
   buildUnknownSendContext,
   needsUnknownSendReconciliation,
   reconcileUnknownQueuedDelivery,
@@ -291,11 +292,9 @@ async function settleQueuedFailure(
     // Failed custody forbids sends even after a restart. Keep the completion
     // payload until its idempotent owner projection succeeds, then compact once.
     if (entry.deliveryCompletion) {
-      await settleDurableDelivery(
+      await settleFailedQueuedDeliveryCompletion(
         entry.deliveryCompletion,
-        settlement.outcome === "failed" && settlement.rejectionError !== undefined
-          ? { rejectionError: settlement.rejectionError }
-          : { platformSendStarted: true },
+        settlement,
         params.stateDir,
         stateContext,
       );
@@ -386,7 +385,7 @@ async function runReconciledSentCommitHooks(params: {
   if (!afterCommit) {
     return;
   }
-  const { result } = captureReconciledSentResult(params.entry, params.reconciliation);
+  const result = buildReconciledSentResult(params.entry, params.reconciliation);
   try {
     const { entry } = params;
     const payload = preparedOutboundPayloads(entry.preparedBatch)[0] ?? {};
@@ -553,7 +552,7 @@ async function drainQueuedEntry(
       }));
     if (reconciliation?.status === "sent") {
       try {
-        const { result, placement } = captureReconciledSentResult(entry, reconciliation);
+        const result = buildReconciledSentResult(entry, reconciliation);
         if (entry.deliveryCompletion) {
           await completeDurableDelivery(
             entry.deliveryCompletion,
@@ -570,7 +569,7 @@ async function drainQueuedEntry(
           );
         }
         await owner.ack();
-        await commitRecoveredVisibleMessages(opts, stateContext, placement);
+        await commitRecoveredVisibleMessages(opts, stateContext);
         emitRecoveredTerminalEvents(entry, { result });
         await runReconciledSentCommitHooks({
           entry,

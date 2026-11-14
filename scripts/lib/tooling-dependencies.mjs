@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, realpathSync, statSync } from "node:fs";
-import { createRequire, registerHooks } from "node:module";
+import module, { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveConfiguredModulesDir } from "./tsx-cli-shim.mjs";
@@ -200,7 +200,7 @@ if (root) {
     }
     return { directory, manifest: manifests.get(directory) };
   };
-  registerHooks({
+  module.registerHooks({
     resolve(specifier, context, nextResolve) {
       if (isAbsolute(specifier) || /^(?:\.{1,2}(?:\/|$)|[a-z][a-z\d+.-]*:|#)/i.test(specifier)) {
         return nextResolve(specifier, context);
@@ -237,9 +237,15 @@ if (root) {
           ? root
           : contained(root, join(root, relative(checkout, owner.directory)));
       const directory = qualifiedPackage(owner.manifest, root, specifier, consumer, donor);
-      resolved = nextResolve(specifier, {
+      const donorParent = join(donor, "package.json");
+      // CJS nextResolve retains its original parent. Resolve exports from the
+      // qualified donor before passing its absolute entry through the hook chain.
+      const request = context.conditions.includes("require")
+        ? createRequire(donorParent).resolve(specifier)
+        : specifier;
+      resolved = nextResolve(request, {
         ...context,
-        parentURL: pathToFileURL(join(donor, "package.json")).href,
+        parentURL: pathToFileURL(donorParent).href,
       });
       contained(directory, fileURLToPath(resolved.url));
       return resolved;

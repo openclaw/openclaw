@@ -37,7 +37,8 @@ export function createCronCompletionDeliveryFence(params: {
       );
     }
     if (
-      state.lifecycleGeneration !== generation ||
+      // A reload handover retires scheduling only; its runs still deliver.
+      (state.lifecycleGeneration !== generation && !state.handedOver) ||
       !isCronActiveJobMarkerCurrent(activeJobMarker) ||
       activeJobMarker?.cancellation?.kind === "requested" ||
       (activeJobMarker?.jobRemoved && !allowMissingJob()) ||

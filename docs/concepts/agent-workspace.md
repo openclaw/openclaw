@@ -64,6 +64,36 @@ If you already manage the workspace files yourself, disable bootstrap file creat
 { agents: { defaults: { skipBootstrap: true } } }
 ```
 
+## Sharing generated memory files
+
+For a workspace shared with trusted local users, set
+`agents.defaults.workspaceFileMode` or override it with
+`agents.entries.<agentId>.workspaceFileMode`:
+
+```json5
+{
+  agents: {
+    defaults: { workspaceFileMode: "0660" },
+    entries: { main: { workspace: "/srv/shared/openclaw" } },
+  },
+}
+```
+
+Accepted values are the octal strings `"0600"`, `"0620"`, `"0640"`, and `"0660"`.
+The setting applies only when memory-core creates `DREAMS.md`, `MEMORY.md`, or
+reports under `memory/dreaming/`. Existing files keep their permissions. Daily
+memory files and the session corpus under `memory/.dreams/` keep their private
+creation mode, as do configuration, credentials, logs, and other state.
+
+When configured, the host writing the file applies its own umask. For example,
+`"0660"` with umask `022` creates mode `0640`; a remote workspace uses the remote
+host's umask. When unset, new files retain the exact private mode `0600`.
+
+Provision directory traversal permissions and default ACLs separately. This
+setting does not repair directory access or grant access to a user absent from
+the directory's group or ACL. Generated memory can contain sensitive information;
+share it only with users who should read it.
+
 ## Extra workspace folders
 
 Older installs may have created `~/openclaw`. Each agent uses one resolved workspace; keeping extra directories does not merge their persona or memory files into the active workspace.
@@ -86,7 +116,7 @@ Standard files OpenClaw expects inside the workspace:
     Persona, tone, and boundaries. Loaded every session. Guide: [SOUL.md personality guide](/concepts/soul).
   </Accordion>
   <Accordion title="USER.md - directive-based user model (optional)">
-    Stable preferences, communication style, relationships, and active-project context. Write entries as dated active or superseded directives. Loaded every session with a separate 4,000-character budget. See [User model](/concepts/user-model). Template: [USER.md](/reference/templates/USER).
+    Stable preferences, communication style, relationships, and active-project context. Write current directives without date/status metadata; keep preference history in daily memory. Loaded every session with a separate 4,000-character budget. See [User model](/concepts/user-model). Template: [USER.md](/reference/templates/USER).
   </Accordion>
   <Accordion title="IDENTITY.md - name, vibe, emoji">
     The agent's name, vibe, and emoji. Created/updated during the bootstrap ritual. Template: [IDENTITY.md](/reference/templates/IDENTITY).

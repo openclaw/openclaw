@@ -5,7 +5,6 @@
 // warm routes, and keeps fetched modules reachable from what each route requested.
 import fs from "node:fs";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
@@ -19,6 +18,7 @@ import {
   resolvePlaywrightChromiumExecutablePath,
 } from "../src/test-helpers/control-ui-e2e.ts";
 import controlUiViteConfig from "../vite.config.ts";
+import { deferControlUiBootSpeculation } from "./control-ui-boot-capture.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const manifestPath = path.join(repoRoot, "ui", "config", "control-ui-boot-modules.json");
@@ -55,16 +55,11 @@ function serveDist(distDir: string): Promise<{ baseUrl: string; close: () => Pro
     }
     res.setHeader("Content-Type", mime[path.extname(filePath)] ?? "application/octet-stream");
     const source = fs.readFileSync(filePath);
-    // Like the Gateway, anchor the portable entry before a canonical deep route
-    // reloads; otherwise /chat/main asks this fixture for /chat/assets/*.js.
+    // Like the Gateway, anchor entries and import-map keys/targets before a
+    // deep-route reload; rooting only src/href leaves placeholder imports unmapped.
     res.end(
       filePath.endsWith("index.html")
-        ? source
-            .toString("utf8")
-            // Measure requested boot code, not speculative idle preparation.
-            .replace(/<meta id="openclaw-navigation-preloads"[^>]*>/u, "")
-            .replaceAll('src="./assets/', 'src="/assets/')
-            .replaceAll('href="./assets/', 'href="/assets/')
+        ? source.toString("utf8").replaceAll('"./assets/', '"/assets/')
         : source,
     );
   });
@@ -109,7 +104,12 @@ async function collectBootChunkPaths(
       // the next capture. Keep cold sign-in and authorized warm boot distinct.
       const context = await browser.newContext({ serviceWorkers: "block" });
       try {
+        await context.addInitScript(deferControlUiBootSpeculation);
         const page = await context.newPage();
+        // Capture required boot code, not the shell's optional idle menu/route warmups.
+        // Removing navigation metadata alone does not disable registered menu warmups.
+        const protocol = await context.newCDPSession(page);
+        await protocol.send("Emulation.setDataSaverOverride", { dataSaverEnabled: true });
         page.on("request", (request) => {
           const { pathname } = new URL(request.url());
           if (pathname.startsWith("/assets/") && pathname.endsWith(".js")) {
@@ -226,7 +226,9 @@ function partitionBootKeys(routes: Record<"new" | "chat", Set<string>>) {
 }
 
 async function main(): Promise<void> {
-  const distDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-control-ui-boot-"));
+  const artifactRoot = path.join(repoRoot, ".artifacts");
+  fs.mkdirSync(artifactRoot, { recursive: true });
+  const distDir = fs.mkdtempSync(path.join(artifactRoot, "control-ui-boot-"));
   try {
     const config = controlUiViteConfig({ outDir: distDir });
     const graph: BootCaptureGraph = {
@@ -237,6 +239,9 @@ async function main(): Promise<void> {
     };
     await build({
       ...config,
+      // This fixture is root-mounted. Root import-map keys and targets as well
+      // as entry links so canonical /chat/main reloads use the same asset URLs.
+      base: "/",
       configFile: false,
       root: path.join(repoRoot, "ui"),
       plugins: [

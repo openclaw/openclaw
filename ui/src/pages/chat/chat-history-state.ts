@@ -59,6 +59,7 @@ type ChatHistoryLoadState =
         promise: Promise<ObservedChatHistoryResult | undefined>;
         startup: boolean;
         deferBranches: boolean;
+        version: number;
       };
     } & ChatHistoryLoadRequest)
   | {
@@ -74,6 +75,9 @@ type ChatHistoryLoadState =
   | ({ phase: "failed"; message: string; retryable: boolean } & ChatHistoryLoadRequest);
 
 type ChatHistoryPaneRequests = {
+  // A failed authoritative read must not restore a prefix invalidated by a
+  // cursor reset. Keep that fact only for the connection and selected session.
+  windowReset?: { isCurrent: () => boolean };
   historyVersion: number;
   branchVersion: number;
   branchQuery: ChatBranchesQueryReceipt | undefined;
@@ -274,22 +278,32 @@ export function getAcceptedChatHistorySession(state: ChatState) {
     : undefined;
 }
 
-/** A successful scoped read can prove an ephemeral session is gone; roster absence cannot. */
-export function isExpiredIncognitoSession(
+/** A successful read on this connection can prove a session has no row; roster absence cannot. */
+export function isChatSessionProvenAbsent(
   state: ChatState,
   sessionKey = state.sessionKey,
 ): boolean {
   const accepted = chatHistoryRequests(state).acceptedHistory;
-  const creation = state.chatSubmissions?.creation;
   return (
-    isIncognitoSessionKey(sessionKey) &&
     accepted?.sessionId === null &&
     state.connected &&
     state.client === accepted.client &&
     state.sessions === accepted.sessions &&
     state.connectionEpoch === accepted.connectionEpoch &&
     state.sessionKey === sessionKey &&
-    accepted.sessionKey === sessionKey &&
+    accepted.sessionKey === sessionKey
+  );
+}
+
+/** A successful scoped read can prove an ephemeral session is gone; roster absence cannot. */
+export function isExpiredIncognitoSession(
+  state: ChatState,
+  sessionKey = state.sessionKey,
+): boolean {
+  const creation = state.chatSubmissions?.creation;
+  return (
+    isIncognitoSessionKey(sessionKey) &&
+    isChatSessionProvenAbsent(state, sessionKey) &&
     !(creation?.sessionKey === sessionKey && !creation.admitted) &&
     !state.hasPendingInitialTurn?.(sessionKey)
   );
@@ -363,7 +377,11 @@ export function acceptsHistoryResult(
   );
 }
 
-export function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
+export function resetChatHistoryProjection(
+  state: ChatState,
+  agentId?: string,
+  retainedHistory: unknown[] = [],
+): void {
   retireChatHistoryRead(state);
   retireInitialChatSnapshot(state);
   retirePullRequestRefreshes(state);
@@ -373,6 +391,7 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // snapshot owner and its coalesced request before creating the next epoch.
   requests.historyVersion += 1;
   delete requests.initialHistory;
+  delete requests.windowReset;
   // Keep the presentation accessor installed when clearing accepted history.
   requests.acceptedHistory = undefined;
   setChatHistoryLoad(state, { phase: "idle" });
@@ -381,6 +400,15 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // Destructive operations keep the public session key, so only an explicit
   // reducer reset can prevent old live or pending rows from crossing epochs.
   reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
+  if (retainedHistory.length) {
+    // A successful rewind proves its unchanged prefix. Publish it in the same
+    // turn as the epoch reset so the mounted transcript never becomes empty.
+    reduceChatSessionProjection(
+      state,
+      { type: "snapshotLoaded", messages: retainedHistory },
+      { scope },
+    );
+  }
 }
 
 export function setChatError(
@@ -413,7 +441,8 @@ export function readChatTranscriptAttachmentSource(state: ChatState) {
     messages: state.chatMessages,
     pagination: state.chatHistoryPagination,
     coverage: known ? (state.chatHistoryPagination.hasMore ? "partial" : "complete") : "unknown",
-    loading: isChatHistoryLoading(load),
+    // Refreshing an accepted window does not make its attachment coverage unknown.
+    loading: !known && isChatHistoryLoading(load),
     error: load.phase === "failed" ? load.message : undefined,
   } as const;
 }

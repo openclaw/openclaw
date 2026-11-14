@@ -1,4 +1,5 @@
 import type { DiagnosticSessionActiveWorkKind } from "../infra/diagnostic-events.js";
+import { formatAdmissionDiagnostics } from "../process/command-lane-diagnostics.js";
 import type { DiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
 
 export type SessionAttentionClassification =
@@ -137,4 +138,37 @@ export function isTerminalDiagnosticProgressReason(reason: string | undefined): 
     reason.includes("raw_response_item.completed") ||
     reason.includes("output_item.done")
   );
+}
+
+export function formatSessionActivityLogFields(
+  activity: DiagnosticSessionActivitySnapshot,
+): string {
+  const fields: string[] = [];
+  if (activity.admission) {
+    fields.push(formatAdmissionDiagnostics(activity.admission));
+  }
+  if (activity.lastProgressReason) {
+    fields.push(`lastProgress=${activity.lastProgressReason}`);
+  }
+  if (activity.lastProgressAgeMs !== undefined) {
+    fields.push(`lastProgressAge=${Math.round(activity.lastProgressAgeMs / 1000)}s`);
+  }
+  if (activity.activeToolName) {
+    fields.push(`activeTool=${activity.activeToolName}`);
+  }
+  if (activity.activeToolCallId) {
+    fields.push(`activeToolCallId=${activity.activeToolCallId}`);
+  }
+  if (activity.activeToolAgeMs !== undefined) {
+    fields.push(`activeToolAge=${Math.round(activity.activeToolAgeMs / 1000)}s`);
+  }
+  if (activity.repeatedRequestNoProgressAgeMs !== undefined) {
+    fields.push(
+      `repeatedRequestNoProgressAge=${Math.round(activity.repeatedRequestNoProgressAgeMs / 1000)}s`,
+    );
+  }
+  if (isTerminalDiagnosticProgressReason(activity.lastProgressReason)) {
+    fields.push("terminalProgressStale=true");
+  }
+  return fields.join(" ");
 }

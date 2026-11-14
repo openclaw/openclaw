@@ -18,7 +18,11 @@ import {
 } from "./agents-page.test-support.ts";
 import { Agents } from "./view.tsx";
 
-const AGENT_FILE_GATEWAY_HELLO = gatewayHelloForMethods(["agents.files.set"]);
+const AGENT_FILE_GATEWAY_HELLO = gatewayHelloForMethods([
+  "agents.files.list",
+  "agents.files.get",
+  "agents.files.set",
+]);
 
 function snapshot(client: GatewayBrowserClient) {
   return { ...gatewaySnapshot(client), hello: AGENT_FILE_GATEWAY_HELLO };

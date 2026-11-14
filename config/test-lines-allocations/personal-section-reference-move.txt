@@ -1,0 +1,4 @@
+# 77 regression lines for personal-section reference moves.
+# 5 inherited lines reconciled by the explicitly approved exact grant.
+# Compared with 4092d358a35afd2a8e2f28326175c8b631dd8855; no spare headroom.
+82

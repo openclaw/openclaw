@@ -2,18 +2,39 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import * as gitExec from "../../infra/git-exec.js";
 import {
+  closeUpdateFixtureDatabases,
+  resetUpdateFixtureModules,
+} from "../../infra/update-fixture.test-support.js";
+import type { TempHomeEnv } from "../../test-utils/temp-home.js";
+
+let gitExec = await import("../../infra/git-exec.js");
+let {
   finalizeUpdateRestartSentinelRunningVersion,
   readVerifiedGitUpdateReceipt,
   writeRestartSentinel,
-} from "../../infra/restart-sentinel.js";
-import { createGatewayUpdateLifecycle } from "../../infra/update-check-lifecycle.js";
-import { refreshGatewayUpdateStatus } from "../../infra/update-status-schedule.js";
-import { getUpdateSchedule, resetUpdateStatusState } from "../../infra/update-status-state.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+} = await import("../../infra/restart-sentinel.js");
+let { createGatewayUpdateLifecycle } = await import("../../infra/update-check-lifecycle.js");
+let { refreshGatewayUpdateStatus } = await import("../../infra/update-status-schedule.js");
+let { getUpdateSchedule } = await import("../../infra/update-status-state.js");
+let { runCommandWithTimeout } = await import("../../process/exec.js");
+let { createTestGatewayScheduler } = await import("../../test-utils/gateway-scheduler-clock.js");
+let { createTempHomeEnv } = await import("../../test-utils/temp-home.js");
+
+async function importUpdateFixtureModules() {
+  gitExec = await import("../../infra/git-exec.js");
+  ({
+    finalizeUpdateRestartSentinelRunningVersion,
+    readVerifiedGitUpdateReceipt,
+    writeRestartSentinel,
+  } = await import("../../infra/restart-sentinel.js"));
+  ({ createGatewayUpdateLifecycle } = await import("../../infra/update-check-lifecycle.js"));
+  ({ refreshGatewayUpdateStatus } = await import("../../infra/update-status-schedule.js"));
+  ({ getUpdateSchedule } = await import("../../infra/update-status-state.js"));
+  ({ runCommandWithTimeout } = await import("../../process/exec.js"));
+  ({ createTestGatewayScheduler } = await import("../../test-utils/gateway-scheduler-clock.js"));
+  ({ createTempHomeEnv } = await import("../../test-utils/temp-home.js"));
+}
 
 const mocks = vi.hoisted(() => ({
   root: "",
@@ -62,7 +83,8 @@ async function git(...args: string[]) {
 }
 
 beforeEach(async () => {
-  resetUpdateStatusState();
+  await resetUpdateFixtureModules();
+  await importUpdateFixtureModules();
   home = await createTempHomeEnv("openclaw-update-admission-freshness-");
   mocks.root = await fs.realpath(home.home);
   await fs.writeFile(
@@ -99,9 +121,9 @@ beforeEach(async () => {
 afterEach(async () => {
   await lifecycle?.stop();
   await scheduler?.stop();
+  await closeUpdateFixtureDatabases();
   vi.restoreAllMocks();
   await home?.restore();
-  resetUpdateStatusState();
 });
 
 async function publishReceipt(root = mocks.root, revision = sha, upstreamRef = "origin/main") {

@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type CDPSession } from "playwright";
 import { analyzeReloadFrames } from "./warm-reload-frames.ts";
 
 const featureMembers = (arguments_: string[], name: string) =>
@@ -24,7 +24,7 @@ async function browserArguments(browser: Browser) {
 }
 
 /** Playwright disables PaintHolding by default; use full headless Chrome and verify the cutover. */
-export async function launchWarmReloadBrowser() {
+export async function launchWarmReloadBrowser(args: string[] = []) {
   let probe: Browser | undefined, browser: Browser | undefined;
   try {
     probe = await chromium.launch({
@@ -49,6 +49,7 @@ export async function launchWarmReloadBrowser() {
         /^--(?:en|dis)able-features=/u.test(argument),
       ),
       args: [
+        ...args,
         "--enable-automation",
         `--disable-features=${disabled.join(",")}`,
         `--enable-features=${enabled.join(",")}`,
@@ -81,6 +82,60 @@ export async function launchWarmReloadBrowser() {
     await Promise.allSettled([probe?.close(), browser?.close()]);
     throw error;
   }
+}
+
+/** Keep the pre-navigation surface and native timestamps without starting a trace. */
+export async function startWarmReloadSurfaceCapture(cdp: CDPSession, directory: string) {
+  await mkdir(directory, { recursive: true });
+  const frames: Array<{ file: string; epochMs: number }> = [];
+  const writes: Promise<void>[] = [];
+  const first = Promise.withResolvers<void>();
+  let invalidClock = false;
+  const capture = (event: {
+    data: string;
+    sessionId: number;
+    metadata: { timestamp?: number };
+  }) => {
+    const timestamp = event.metadata.timestamp;
+    invalidClock ||= timestamp === undefined || !Number.isFinite(timestamp);
+    const file = path.join(directory, `frame-${String(frames.length).padStart(5, "0")}.png`);
+    frames.push({ file, epochMs: (timestamp ?? Number.NaN) * 1000 });
+    writes.push(writeFile(file, Buffer.from(event.data, "base64")));
+    writes.push(cdp.send("Page.screencastFrameAck", { sessionId: event.sessionId }).then(() => {}));
+    first.resolve();
+  };
+  cdp.on("Page.screencastFrame", capture);
+  await cdp.send("Page.enable");
+  await cdp.send("Page.startScreencast", { format: "png", everyNthFrame: 1 });
+  try {
+    await bounded(first.promise);
+  } catch (error) {
+    await cdp.send("Page.stopScreencast");
+    cdp.off("Page.screencastFrame", capture);
+    await Promise.all(writes);
+    throw error;
+  }
+  return async (timeOrigin: number) => {
+    await cdp.send("Page.stopScreencast");
+    cdp.off("Page.screencastFrame", capture);
+    await Promise.all(writes);
+    if (
+      invalidClock ||
+      frames.some((frame, index) => index && frame.epochMs < frames[index - 1]!.epochMs)
+    ) {
+      throw new Error("Invalid or backward compositor timestamp; no paint verdict");
+    }
+    const old = frames.findLast((frame) => frame.epochMs < timeOrigin);
+    const current = frames.filter((frame) => frame.epochMs >= timeOrigin);
+    if (!old || !current.length) {
+      throw new Error("Missing old/new compositor surfaces");
+    }
+    await writeFile(path.join(directory, "frames.json"), JSON.stringify({ frames, timeOrigin }));
+    return [
+      { file: old.file, atMs: 0 },
+      ...current.map((frame) => ({ file: frame.file, atMs: frame.epochMs - timeOrigin })),
+    ];
+  };
 }
 
 async function bounded<T>(promise: Promise<T>) {

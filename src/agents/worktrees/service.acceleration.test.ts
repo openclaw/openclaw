@@ -34,7 +34,8 @@ import { git } from "./git-fixture.test-support.js";
 import { readPendingWorktrees } from "./pending-slots.js";
 import * as preparationTiming from "./preparation-timing.js";
 import { updateRegistryWorktree } from "./registry.js";
-import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
+import { IDLE_GC_MS } from "./retention.js";
+import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import {
   ageManagedWorktreeTemplates,
   useManagedWorktreeTestRepository,
@@ -42,6 +43,7 @@ import {
 import {
   listTemplatesAsync,
   markTemplateReadyAsync,
+  readTemplateAsync,
   releaseTemplateReaderAsync,
   retainTemplateReaderAsync,
 } from "./template-registry-async.js";
@@ -176,6 +178,11 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       true,
     );
     expect(await listTemplatesAsync(env)).toEqual([
+      expect.objectContaining({
+        status: "preparing",
+        id: template.id,
+        cacheKey: `retired:${template.id}`,
+      }),
       expect.objectContaining({ status: "ready", id: expect.not.stringMatching(template.id) }),
     ]);
   });
@@ -604,10 +611,10 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         provisionIgnoredFiles,
       });
 
-      const replacement = (await listTemplatesAsync(env))[0];
+      const replacement = await readTemplateAsync(env, original.cacheKey);
       assert(replacement);
       expect(replacement.id).not.toBe(original.id);
-      await expect(fs.access(original.path)).rejects.toMatchObject({ code: "ENOENT" });
+      await fs.access(original.path);
       expect((await fs.readdir(created.path)).toSorted()).toEqual([
         ".git",
         ".gitignore",

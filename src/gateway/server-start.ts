@@ -131,7 +131,7 @@ async function startGatewayServerWithSdkHost(
   } catch (err) {
     // Failed startup must release work whose normal timer was never armed.
     releasePostReadyWork();
-    return await rethrowGatewayStartupError(err, closeOnStartupFailure);
+    return await rethrowGatewayStartupError(err, () => closeOnStartupFailure(err));
   } finally {
     if (stopStartingTailscale) {
       signal?.removeEventListener("abort", stopStartingTailscale);
@@ -161,12 +161,13 @@ async function startGatewayServerWithSdkHost(
     getTailscaleIngressEndpoint: gatewayKernel.transportBridge.getTailscaleIngressEndpoint,
     close: (optsLocal) => {
       if (!closePromise) {
-        closePromise = sdkResourceHost
-          .run(async () => {
+        closePromise = gatewayKernel
+          .runClose(async () => {
             const preparedClose = prepareClose(optsLocal);
             releasePostReadyWork();
             await runGatewayCloseSteps({
               owner: gatewayKernel,
+              exitAfterClose: optsLocal?.exitAfterClose,
               close: await preparedClose,
               disposeTerminalSessions: () => terminalSessions.disposeAll(),
               runStopHooks: async () => {

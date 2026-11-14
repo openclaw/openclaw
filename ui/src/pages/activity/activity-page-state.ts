@@ -14,7 +14,6 @@ import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gatew
 import { projectPresencePayload } from "../../lib/presence-users.ts";
 import { projectOwner, projectMutableSource } from "../../lib/reactive/projection.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
-import { createLiveActivity } from "./live-activity.ts";
 import {
   activityRunInspectorSearch,
   mergeDecisionPage,
@@ -50,6 +49,7 @@ export function createActivityPageState(context: ApplicationContext) {
   let runInspector: RunInspectorState = { status: "empty" };
   let presencePayload: PresencePayload | undefined;
   let sessionActivityRevision = -1;
+  let sessionActivityHello = context.gateway.snapshot.hello;
   let inspectorAbort: AbortController | null = null;
   let inspectorRead:
     | {
@@ -65,7 +65,6 @@ export function createActivityPageState(context: ApplicationContext) {
   let active = true;
   let publish = () => {};
   const sessionActivity = createSessionActivity(reconcileSessions);
-  const liveActivity = createLiveActivity(context.gateway, context.sessions);
   const projection = projectMutableSource(context, () => ({
     context,
     routeLocation,
@@ -81,9 +80,6 @@ export function createActivityPageState(context: ApplicationContext) {
     if (!active) {
       return;
     }
-    liveActivity.syncSessions(
-      routeData?.mode === "live" ? (sessionActivity.result?.sessions ?? []) : [],
-    );
     const canonical = routeLocation
       ? sessionActivity.canonicalLocation(
           routeLocation,
@@ -103,6 +99,11 @@ export function createActivityPageState(context: ApplicationContext) {
     sourceChanged: boolean,
   ) {
     const nextPresentationScope = gatewayPresentationScope(gateway);
+    const authorityChanged =
+      snapshot.phase === "connected" && snapshot.hello !== sessionActivityHello;
+    if (snapshot.phase === "connected") {
+      sessionActivityHello = snapshot.hello;
+    }
     const identityChanged =
       sourceChanged ||
       nextPresentationScope !== presentationScope ||
@@ -122,11 +123,11 @@ export function createActivityPageState(context: ApplicationContext) {
       presencePayload = presence ? { presence } : undefined;
     }
     syncRunInspector(gateway, snapshot, identityChanged);
-    syncSessionActivity();
+    syncSessionActivity(authorityChanged ? "authority" : "query");
     reconcileSessions();
   }
 
-  function syncSessionActivity(reason: "query" | "retry" = "query") {
+  function syncSessionActivity(reason: "query" | "retry" | "authority" = "query") {
     const snapshot = context.gateway.snapshot;
     // Session-scoped operators may read sessions.list, matching the roster activity store.
     const accessLost =
@@ -370,16 +371,12 @@ export function createActivityPageState(context: ApplicationContext) {
   );
   onCleanup(() => {
     active = false;
-    liveActivity.dispose();
     stopGateway();
     stopEvents();
     cancelInspectorRequest();
     sessionActivity.dispose();
   });
   return {
-    liveActivity: projectOwner(liveActivity, (source) => source.snapshot),
-    retryLiveActivity: () => liveActivity.retry(),
-    clearLiveActivity: () => liveActivity.clear(),
     agents: projectOwner(context.agents, (source) => source.state),
     read: projection.read,
     revision: projection.revision,

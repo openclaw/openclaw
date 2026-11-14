@@ -1,6 +1,11 @@
 // Embedded-agent runner barrel. Focused submodules own run orchestration,
 // compaction, queues, sandbox metadata, and SDK tool splitting.
-export { compactEmbeddedAgentSession } from "./embedded-agent-runner/compact.queued.js";
+export const compactEmbeddedAgentSession: typeof import("./embedded-agent-runner/compact.queued.js").compactQueuedEmbeddedAgentSession =
+  async (params, options) => {
+    const { compactQueuedEmbeddedAgentSession: compact } =
+      await import("./embedded-agent-runner/compact.queued.js");
+    return compact(params, options);
+  };
 
 export { runEmbeddedAgent } from "./embedded-agent-runner/run.js";
 export {

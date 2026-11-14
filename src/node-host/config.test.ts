@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { fingerprint, signStatement } from "../../packages/openclaw-id-protocol/src/index.js";
+import { buildWorld, WORLD_NOW } from "../../packages/openclaw-id-protocol/src/testing/world.js";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { createBoundedChildOutput } from "../../test/helpers/bounded-child-output.js";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
@@ -30,11 +32,55 @@ import {
   configureNodeHost,
   loadNodeHostConfig,
   NODE_HOST_CONFIG_KEY,
+  refreshNodeHostOpenClawIdTarget,
   type NodeHostConfig,
 } from "./config.js";
+import {
+  dialableNodeHostOpenClawIdTarget,
+  type NodeHostOpenClawIdTarget,
+} from "./openclaw-id-target.js";
 
 const fixtureDigest = ["fixture", "digest"].join("-");
 const fixture = createFixtureLifetime();
+
+async function idTarget(
+  bindingSeq = 1,
+  snapshotSeq = bindingSeq,
+): Promise<NodeHostOpenClawIdTarget> {
+  const world = await buildWorld();
+  return {
+    hostname: world.binding.body.hostname,
+    pin: {
+      claw_id: world.binding.body.claw_id,
+      root_fp: await fingerprint(world.rootPub),
+      binding_seq: bindingSeq,
+      k_gw: world.gateway.pub,
+    },
+    evidence: {
+      root_pub: world.rootPub,
+      binding: await signStatement(
+        "ServerBinding",
+        {
+          ...world.binding.body,
+          binding_seq: bindingSeq,
+          k_srv: bindingSeq === 1 ? world.server.peer : world.mallory.peer,
+        },
+        world.root,
+      ),
+    },
+    relayUrl: "https://relay.example/",
+    discoveryUrl: "https://discovery.example",
+    freshness: {
+      claw_id: world.binding.body.claw_id,
+      snapshot: {
+        seq: snapshotSeq,
+        issued_at: WORLD_NOW,
+        binding_seq: bindingSeq,
+        k_gw: world.gateway.pub,
+      },
+    },
+  };
+}
 
 vi.mock("../logger.js", () => ({ logInfo: vi.fn() }));
 
@@ -127,6 +173,119 @@ describe("node-host SQLite config", () => {
       load: () => loadNodeHostConfig(env),
     };
   }
+
+  it("retains stronger OpenClaw ID trust when startup rewrites a stale saved endpoint", async () => {
+    const { configure, load } = makeTestEnv();
+    const initial = await idTarget();
+    const advanced = await idTarget(2, 3);
+    await configure({ gateway: { kind: "openclaw-id", openclawId: initial } });
+    await configure({ gateway: { kind: "openclaw-id", openclawId: advanced } });
+    await configure({
+      gateway: { kind: "openclaw-id", openclawId: initial },
+      displayName: "Updated display name",
+    });
+    await closeOpenClawStateDatabaseAsync();
+    await expect(load()).resolves.toMatchObject({
+      displayName: "Updated display name",
+      gateway: { kind: "openclaw-id", openclawId: advanced },
+    });
+    await configure({
+      gateway: {
+        kind: "openclaw-id",
+        openclawId: {
+          ...initial,
+          discoveryUrl: "https://next-discovery.example",
+          relayUrl: "https://next-relay.example/",
+        },
+      },
+    });
+    await closeOpenClawStateDatabaseAsync();
+    await expect(load()).resolves.toMatchObject({
+      gateway: {
+        openclawId: {
+          ...advanced,
+          discoveryUrl: "https://next-discovery.example",
+          relayUrl: "https://next-relay.example/",
+        },
+      },
+    });
+  });
+
+  it("commits reconnect evidence, refuses stale completions and preserves node configuration", async () => {
+    const { env, configure, load } = makeTestEnv();
+    const initial = await idTarget();
+    const advanced = await idTarget(2, 3);
+    const config = await configure({
+      gateway: { kind: "openclaw-id", openclawId: initial },
+      displayName: "Build node",
+      commands: ["fixture.read"],
+      installedAppsSharing: true,
+    });
+    const refresh = (
+      target: NodeHostOpenClawIdTarget,
+      expected = initial,
+      nodeId = config.nodeId,
+    ) => refreshNodeHostOpenClawIdTarget({ env, nodeId, expected, target });
+    await expect(refresh(advanced)).resolves.toEqual(advanced);
+    await expect(refresh(initial)).rejects.toThrow("advanced during refresh");
+    await expect(refresh(advanced, initial, "another-node")).rejects.toThrow(
+      "configuration changed",
+    );
+    await expect(
+      refresh(advanced, { ...initial, discoveryUrl: "https://other.example" }),
+    ).rejects.toThrow("configuration changed");
+    // The client verified binding 3 but refused it (stale snapshot), so its pin stays at 2.
+    const staleBinding = {
+      ...advanced,
+      freshness: {
+        claw_id: advanced.pin.claw_id,
+        snapshot: { seq: 4, issued_at: WORLD_NOW, binding_seq: 3, k_gw: advanced.pin.k_gw! },
+      },
+    };
+    await expect(refresh(staleBinding)).resolves.toEqual(staleBinding);
+    await closeOpenClawStateDatabaseAsync();
+    await expect(load()).resolves.toEqual({
+      ...config,
+      gateway: { kind: "openclaw-id", openclawId: staleBinding },
+    });
+    await expect(refresh(advanced)).rejects.toThrow("advanced during refresh");
+    await expect(load()).resolves.toMatchObject({ gateway: { openclawId: staleBinding } });
+  });
+
+  it("retains the strongest pin and both concurrent snapshot high-water facts before refusing", async () => {
+    const { env, configure, load } = makeTestEnv();
+    const initial = await idTarget(2, 5);
+    initial.freshness = {
+      claw_id: initial.pin.claw_id,
+      snapshot: { seq: 5, issued_at: WORLD_NOW, binding_seq: 4, k_gw: initial.pin.k_gw! },
+    };
+    const config = await configure({ gateway: { kind: "openclaw-id", openclawId: initial } });
+    const candidate = await idTarget(3, 6);
+    candidate.freshness = {
+      claw_id: candidate.pin.claw_id,
+      snapshot: { seq: 6, issued_at: WORLD_NOW, binding_seq: 1, k_gw: initial.pin.k_gw! },
+    };
+    await expect(
+      refreshNodeHostOpenClawIdTarget({
+        env,
+        nodeId: config.nodeId,
+        expected: initial,
+        target: candidate,
+      }),
+    ).rejects.toThrow("advanced during refresh");
+    await closeOpenClawStateDatabaseAsync();
+    await expect(load()).resolves.toMatchObject({
+      gateway: {
+        openclawId: {
+          pin: { binding_seq: 3 },
+          evidence: candidate.evidence,
+          freshness: {
+            snapshot: { seq: 6, issued_at: WORLD_NOW, binding_seq: 4, k_gw: initial.pin.k_gw! },
+          },
+        },
+      },
+    });
+  });
 
   it("persists complete snapshots, replaces endpoint fields and enables app sharing across reopen", async () => {
     const { env, stateDir, configure, load } = makeTestEnv();
@@ -249,6 +408,43 @@ describe("node-host SQLite config", () => {
     expect(second.gateway).toBeUndefined();
     await expect(loadNodeHostConfig(env)).resolves.toEqual(second);
   }, 30_000);
+
+  it("loads a preview target without a Discovery origin for an explicit-origin rejoin, never to dial", async () => {
+    const { env, configure, load } = makeTestEnv();
+    const { discoveryUrl: _origin, ...legacy } = await idTarget(2, 3);
+    writeConfigMachineState(
+      NODE_HOST_CONFIG_KEY,
+      { version: 1, nodeId: "preview-node", gateway: { kind: "openclaw-id", openclawId: legacy } },
+      { env },
+    );
+    const saved = (await load())?.gateway?.openclawId;
+    expect(saved).toEqual(legacy);
+    expect(() => dialableNodeHostOpenClawIdTarget(saved!)).toThrow(
+      "re-join this node with a new link and --discovery-url",
+    );
+    // A refused rejoin retains stronger trust without inventing routing.
+    const stronger = { ...(await idTarget(3, 4)), discoveryUrl: undefined };
+    await expect(
+      refreshNodeHostOpenClawIdTarget({
+        env,
+        nodeId: "preview-node",
+        expected: saved!,
+        target: stronger,
+      }),
+    ).resolves.toMatchObject({ pin: { binding_seq: 3 } });
+    // An admitted rejoin saves the explicit origin and keeps the retained trust.
+    await configure({ gateway: { kind: "openclaw-id", openclawId: await idTarget() } });
+    await closeOpenClawStateDatabaseAsync();
+    const rejoined = (await load())?.gateway?.openclawId;
+    expect(rejoined).toMatchObject({
+      pin: { binding_seq: 3 },
+      discoveryUrl: "https://discovery.example",
+      freshness: { snapshot: { seq: 4, binding_seq: 3 } },
+    });
+    expect(dialableNodeHostOpenClawIdTarget(rejoined!).discoveryUrl).toBe(
+      "https://discovery.example",
+    );
+  });
 
   it("rejects corrupt canonical rows instead of rotating identity", async () => {
     const { env, configure, load } = makeTestEnv();

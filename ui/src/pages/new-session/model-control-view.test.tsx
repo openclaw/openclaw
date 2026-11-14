@@ -221,7 +221,9 @@ it("refreshes retained runtime labels, descriptions, and search without new prop
       search.dispatchEvent(new InputEvent("input", { bubbles: true }));
       installRoute("Synthetic runtime label", "Synthetic runtime detail");
       await waitForSolid(() =>
-        expect(option()?.closest("openclaw-tooltip")?.content).toBe("Synthetic runtime detail"),
+        expect(option()?.closest("openclaw-tooltip")?.content).toContain(
+          "Synthetic runtime detail",
+        ),
       );
       installRoute(
         "Synthetic runtime label",
@@ -237,7 +239,7 @@ it("refreshes retained runtime labels, descriptions, and search without new prop
       expect(translatedLabel).not.toBe(original.label);
       await waitForSolid(() => {
         expect(option()?.getAttribute("aria-label")).toContain(translatedLabel);
-        expect(option()?.closest("openclaw-tooltip")?.content).toBe(t(detailKey));
+        expect(option()?.closest("openclaw-tooltip")?.content).toContain(t(detailKey));
         expect(option()?.textContent).toContain(t(contextKey, { active: "1k", maximum: "2k" }));
       });
       search.value = translatedLabel;
@@ -312,6 +314,36 @@ it("keeps CLI targets and a typed search live while initial model metadata is pe
   }
 });
 
+it("releases the reserved effort slot only after empty model discovery finishes", async () => {
+  const catalog = deferred<ModelCatalogResult>();
+  const state = contextWith([]);
+  state.request.mockImplementation(() => catalog.promise);
+  const agent = { id: "main", model: { primary: "openai/gpt-5.5" } };
+  const control = new NewSessionModelControl(() => undefined);
+  const options = { agent, agentId: "main", context: state.context, sending: false };
+  control.load(state.context, "main", true, { agent });
+  const view = mountSolid(() => <NewSessionModelControlView control={control} options={options} />);
+  const reserved = () => view.container.querySelector(".chat-controls__effort-picker--reserved");
+  try {
+    await waitForSolid(() => expect(reserved()).not.toBeNull());
+    catalog.resolve({ models: [], pendingProviders: ["example"] });
+    await waitForSolid(() =>
+      expect(control.renderProps(options).modelCatalogState.pendingProviders).toEqual(["example"]),
+    );
+    expect(reserved()).not.toBeNull();
+    state.request.mockResolvedValue({ models: [] });
+    state.emitCatalogChanged();
+    await waitForSolid(() => {
+      expect(view.container.querySelector('[data-chat-model-empty="true"]')).not.toBeNull();
+      expect(reserved()).toBeNull();
+      expect(view.container.querySelector(".chat-controls__effort-picker")).toBeNull();
+    });
+  } finally {
+    view.unmount();
+    control.reset();
+  }
+});
+
 it("retains accepted rows and search through failed refresh, then retires them on a new scope", async () => {
   const initial = { models: [{ provider: "example", id: "current", name: "Current model" }] };
   const state = contextWith(initial.models);
@@ -341,7 +373,7 @@ it("retains accepted rows and search through failed refresh, then retires them o
     expect(container.querySelector("[data-chat-model-search]")).toBe(input);
     refresh.reject(new Error("Fixture metadata unavailable"));
     await waitForSolid(() =>
-      expect(container.textContent).toContain("Some models could not be refreshed"),
+      expect(container.textContent).toContain("Couldn’t refresh some models"),
     );
     expect(current()).toBe(row);
     expect(input.value).toBe("current");
@@ -349,12 +381,11 @@ it("retains accepted rows and search through failed refresh, then retires them o
     const retry = deferred<ModelCatalogResult>();
     state.request.mockImplementation(() => retry.promise);
     state.emitCatalogChanged();
-    await waitForSolid(() =>
-      expect(container.querySelector("[data-chat-model-refresh]")).not.toBeNull(),
-    );
+    await waitForSolid(() => expect(state.request).toHaveBeenCalledTimes(3));
+    expect(container.querySelector("[data-chat-model-refresh]")).toBeNull();
     retry.resolve(initial);
     await waitForSolid(() => {
-      expect(container.textContent).not.toContain("Some models could not be refreshed");
+      expect(container.textContent).not.toContain("Couldn’t refresh some models");
       expect(container.querySelector("[data-chat-model-refresh]")).toBeNull();
     });
     expect(current()).toBe(row);

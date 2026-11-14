@@ -1,6 +1,11 @@
 import "../../styles/skill-reader-dialog.css";
 import type { JSX } from "@solidjs/web";
-import { Icon } from "../../components/solid/icon.tsx";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SkillLibraryModel } from "./library-state.ts";
 
@@ -19,11 +24,11 @@ export function LibraryDialog(props: {
       onModal-cancel={(event: Event) => {
         // Native dismissal must not bypass the library's busy and discard checks.
         event.preventDefault();
-        props.library.close();
+        void props.library.close();
       }}
     >
       <form
-        class="exec-approval-card skill-reader-dialog"
+        class="oc-dialog skill-library-dialog"
         onSubmit={(event: SubmitEvent) => {
           event.preventDefault();
           const source = current().importSource;
@@ -35,7 +40,13 @@ export function LibraryDialog(props: {
             void props.library.importFiles(current().importSelection);
           }
         }}
+        onCompositionEnd={recordCompositionEnd}
+        onFocusOut={clearCompositionEnd}
+        onKeyUp={clearCompositionEnd}
         onKeyDown={(event) => {
+          if (isComposingKeyboardEvent(event)) {
+            return;
+          }
           if (
             props.editor &&
             (event.ctrlKey || event.metaKey) &&
@@ -47,26 +58,12 @@ export function LibraryDialog(props: {
           }
         }}
       >
-        <div class="exec-approval-header">
-          <strong class="exec-approval-title">
-            {props.editor?.title ?? t("skillLibrary.import")}
-          </strong>
-          <button
-            type="button"
-            class="btn btn--icon btn--ghost"
-            aria-label={t("common.close")}
-            disabled={busy()}
-            onClick={() => props.library.close()}
-          >
-            <Icon name="x" />
-          </button>
-        </div>
-        <div
-          class={["skill-reader-dialog__body", { "skill-library-import": !props.editor }]}
-          style={
-            props.editor ? { display: "grid", gap: "var(--space-4)", "min-width": "0" } : undefined
-          }
-        >
+        <DialogHeader
+          title={props.editor?.title ?? t("skillLibrary.import")}
+          closeDisabled={busy()}
+          onClose={() => void props.library.close()}
+        />
+        <div class={["oc-dialog__body", { "skill-library-import": !props.editor }]}>
           {props.children}
         </div>
         {props.footer}

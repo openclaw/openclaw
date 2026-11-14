@@ -4,13 +4,12 @@ import {
   inspectCronRowsForDoctor,
 } from "../../commands/doctor/cron/store-inventory.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import { runSqliteReadOnlyWorkerSync } from "../../infra/sqlite-readonly-worker.js";
-import { serveWorkerTasks } from "../../infra/worker-task-server.js";
-import { isStatePostgres } from "../../state/openclaw-state-db-engine.js";
 import {
-  assertStateReadSchema,
-  openOpenClawStateReadConnection,
-} from "../../state/openclaw-state-db-read-connection.js";
+  runSqliteReadOnlyWorker,
+  withSqliteReadOnlyWorkerScope,
+} from "../../infra/sqlite-readonly-worker.js";
+import { serveWorkerTasks } from "../../infra/worker-task-server.js";
+import { stateEngineInput } from "../../state/openclaw-state-db-engine-input.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { cronRunRecordToRunLogEntry } from "../run-history-detail.js";
 import { serializeCronLoadError } from "./load-error.js";
@@ -89,83 +88,98 @@ serveWorkerTasks<CronReadOnlyResult, CronReadOnlyRequest>(async (input, _channel
     }
     const { location, storeKey, stagingRoot } = input;
     const jobNameById = input.history?.jobNameById;
-    return await control.runNativeSection(() => {
-      // Copying stays in a separate process; the parent owns every unpublished child artifact.
-      const connection = isStatePostgres()
-        ? openOpenClawStateReadConnection(location, location)
-        : stagingRoot
-          ? openOpenClawStateReadConnection(
-              location,
-              runSqliteReadOnlyWorkerSync(location, stagingRoot),
-              undefined,
-              stagingRoot,
-            )
-          : undefined;
-      // The connection owner retains failed-close token custody without imposing a schema gate.
-      const db = connection?.database.db ?? openNodeSqliteDatabase(location, { readOnly: true });
-      try {
-        if (input.inspect) {
-          assertStateReadSchema(db, location);
-          return {
-            ok: true,
-            owners:
-              input.inspect === "owners" && storeKey !== undefined
-                ? inspectCronOwnerRowsForDoctor(db, storeKey)
-                : undefined,
-          } satisfies CronReadOnlyResult;
-        }
-        if (input.history && storeKey !== undefined) {
-          // History consumes the canonical released table only after read admission.
-          assertStateReadSchema(db, location);
-          if (input.history.taskIds) {
-            return {
-              ok: true,
-              history: readCronRunHistoryRecordsInDatabase(
+    const postgres = stateEngineInput() !== undefined;
+    const stateRead =
+      postgres || stagingRoot || input.inspect || (input.history && storeKey !== undefined)
+        ? await import("../../state/openclaw-state-db-read-connection.js")
+        : undefined;
+    return await control.runNativeSection(() =>
+      withSqliteReadOnlyWorkerScope(
+        async () => {
+          // Copying stays in a separate process; the parent owns every unpublished child artifact.
+          const connection = postgres
+            ? stateRead!.openOpenClawStateReadConnection(location, location)
+            : stagingRoot
+              ? stateRead!.openOpenClawStateReadConnection(
+                  location,
+                  await runSqliteReadOnlyWorker(location, {
+                    mode: "sync",
+                    stagingRoot,
+                    signal: control.signal,
+                  }),
+                  undefined,
+                  stagingRoot,
+                )
+              : undefined;
+          // The connection owner retains failed-close token custody without imposing a schema gate.
+          const db =
+            connection?.database.db ?? openNodeSqliteDatabase(location, { readOnly: true });
+          try {
+            if (input.inspect) {
+              stateRead!.assertStateReadSchema(db, location);
+              return {
+                ok: true,
+                owners:
+                  input.inspect === "owners" && storeKey !== undefined
+                    ? inspectCronOwnerRowsForDoctor(db, storeKey)
+                    : undefined,
+              } satisfies CronReadOnlyResult;
+            }
+            if (input.history && storeKey !== undefined) {
+              // History consumes the canonical released table only after read admission.
+              stateRead!.assertStateReadSchema(db, location);
+              if (input.history.taskIds) {
+                return {
+                  ok: true,
+                  history: readCronRunHistoryRecordsInDatabase(
+                    db,
+                    storeKey,
+                    input.history.taskIds,
+                    input.history.view === "summary" ? "summary" : "full",
+                  ),
+                } satisfies CronReadOnlyResult;
+              }
+              const candidates = readCronRunHistoryCandidatesInDatabase(
                 db,
                 storeKey,
-                input.history.taskIds,
-                input.history.view === "summary" ? "summary" : "full",
-              ),
-            } satisfies CronReadOnlyResult;
-          }
-          const candidates = readCronRunHistoryCandidatesInDatabase(
-            db,
-            storeKey,
-            input.history.jobId,
-            input.history.query,
-            jobNameById,
-          );
-          if (input.history.transcript) {
+                input.history.jobId,
+                input.history.query,
+                jobNameById,
+              );
+              if (input.history.transcript) {
+                return {
+                  ok: true,
+                  binding: selectTranscriptBinding(
+                    candidates.records,
+                    storeKey,
+                    input.history.transcript,
+                  ),
+                } satisfies CronReadOnlyResult;
+              }
+              return {
+                ok: true,
+                candidates,
+              } satisfies CronReadOnlyResult;
+            }
             return {
               ok: true,
-              binding: selectTranscriptBinding(
-                candidates.records,
-                storeKey,
-                input.history.transcript,
-              ),
+              inventory: storeKey === undefined ? inspectCronRowsForDoctor(db) : undefined,
+              loaded:
+                storeKey !== undefined && tableExists(db, "cron_jobs")
+                  ? loadCronStoreFromDatabase(db, storeKey)
+                  : undefined,
             } satisfies CronReadOnlyResult;
+          } finally {
+            if (connection) {
+              connection.close();
+            } else {
+              db.close();
+            }
           }
-          return {
-            ok: true,
-            candidates,
-          } satisfies CronReadOnlyResult;
-        }
-        return {
-          ok: true,
-          inventory: storeKey === undefined ? inspectCronRowsForDoctor(db) : undefined,
-          loaded:
-            storeKey !== undefined && tableExists(db, "cron_jobs")
-              ? loadCronStoreFromDatabase(db, storeKey)
-              : undefined,
-        } satisfies CronReadOnlyResult;
-      } finally {
-        if (connection) {
-          connection.close();
-        } else {
-          db.close();
-        }
-      }
-    });
+        },
+        { signal: control.signal, deadlineOwnedByCaller: true },
+      ),
+    );
   } catch (error) {
     return { ok: false, error: serializeCronLoadError(error) };
   }

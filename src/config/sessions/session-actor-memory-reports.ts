@@ -288,7 +288,7 @@ export function executeSessionActorMemoryReportCommand(
         }
       }
       const selected = selectManualCompactTranscriptLines(
-        state.events.map((row) => row.eventJson),
+        (visit) => state.events.forEach((row) => visit(row.eventJson)),
         command.input.maxLines,
       );
       if (selected.result.compacted) {

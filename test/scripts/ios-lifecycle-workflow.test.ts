@@ -111,6 +111,8 @@ if (tool === "installer") {
   } else if (args[1] === "install" && !existsSync(args[3])) {
     process.exit(24);
   }
+} else if (args.includes("build-for-testing") && mode === "voice-build-failed-" + args[args.indexOf("-scheme") + 1]) {
+  process.exit(26);
 } else if (args.includes("-showBuildSettings")) {
   const product = {
     target: "OpenClawWatchApp",
@@ -210,6 +212,7 @@ exec '${pythonExecutable}' "$@"
     commands,
     product,
     summary: readFileSync(summaryFile, "utf8"),
+    environment: readFileSync(environmentFile, "utf8"),
   };
 }
 
@@ -274,11 +277,19 @@ describe.skipIf(process.platform === "win32")("Watch simulator workflow", () => 
 });
 
 describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", () => {
-  it.each(["smoke", "tests"])("executes auth and admitted lifecycle/UI suites in %s", (phase) => {
-    const { result, commands } = runSimulatorStep("voice", [...configuredSteps, iosStep], {
+  it.each([
+    ["smoke", "voice"],
+    ["tests", "voice"],
+    ["smoke", "voice-tests-failed"],
+    ["tests", "voice-tests-failed"],
+  ])("runs suites and retains auth errors (%s, %s)", (phase, mode) => {
+    const { result, commands } = runSimulatorStep(mode, [...configuredSteps, iosStep], {
       IOS_CI_PHASE: phase,
     });
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stderr).toBe(mode === "voice" ? 0 : 1);
+    if (mode === "voice-tests-failed") {
+      expect(result.stdout).toContain("[apple-command] Exit 25");
+    }
     const tests = commands.filter(isTestCommand);
     expect(tests).toHaveLength(phase === "smoke" ? 1 : 2);
     expect(tests[0]?.args).toContain("platform=iOS Simulator,id=watch-fixture");
@@ -289,14 +300,19 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       resultBundle("OpenClawLifecycleTests"),
       "-only-testing:OpenClawTests/ChatComposerTextViewIOSTests",
     ]);
-    const authSelectors = selectors("OpenClawTests", [
+    const lifecycleSelectors = selectors("OpenClawTests", [
       "CloudflareAccessClientTests",
       "CloudflareAccessBrowserPresenterTests",
       "CloudflareAccessTransferTests",
       "CloudflareAccessSessionStoreTests",
+      "SettingsHubTests",
+      "SettingsHubVisualProofTests/testIngressAuthorizedDashboardEntryPointsLoadTheSelectedGatewayPage",
+      "GatewayAccessDeviceAuthBindingTests",
       "GatewayConnectionSecurityTests",
+      "QRScannerResultHandoffTests",
     ]);
-    expect(tests[0]?.args).toEqual(expect.arrayContaining(authSelectors));
+    expect(tests[0]?.args).toEqual(expect.arrayContaining(lifecycleSelectors));
+    expect(selectedTests(tests[0]!.args).join("\n")).not.toMatch(/\/(?:ESPSetup|Security2)/u);
     expect(commands.filter((command) => command.tool === "python3")).toHaveLength(1);
     if (phase === "smoke") {
       expect(commands.at(-1)).toEqual({
@@ -308,7 +324,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       return;
     }
     expectArgs(tests[0]?.args, [
-      ...authSelectors,
+      ...lifecycleSelectors,
       "-only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests",
       "-only-testing:OpenClawTests/NodeAppModelInvokeTests",
     ]);
@@ -320,21 +336,60 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     expect(restart).toBeGreaterThan(commands.indexOf(tests[0]!));
     expect(restart).toBeLessThan(commands.indexOf(tests[1]!));
   });
+});
 
-  it.each(["smoke", "tests"])("retains auth errors after restart/UI checks (%s)", (phase) => {
+it.skipIf(process.platform === "win32")(
+  "reuses universal full-validation test products across focused suites",
+  () => {
     const { result, commands } = runSimulatorStep(
-      "voice-tests-failed",
-      [...configuredSteps, iosStep],
+      "voice",
+      [...configuredSteps, voiceStep, iosStep],
       {
-        IOS_CI_PHASE: phase,
+        IOS_CI_PHASE: "tests",
       },
     );
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("[apple-command] Exit 25");
-    expect(commands.filter(isTestCommand)).toHaveLength(phase === "smoke" ? 1 : 2);
-    expect(commands.filter((command) => command.tool === "python3")).toHaveLength(1);
-  });
-});
+    expect(result.status, result.stderr).toBe(0);
+    const builds = argsFor(commands, "xcodebuild").filter((args) =>
+      args.includes("build-for-testing"),
+    );
+    expect(builds.map((args) => args[args.indexOf("-scheme") + 1])).toEqual([
+      "OpenClaw",
+      "OpenClawUITests",
+    ]);
+    for (const args of builds) {
+      expect(args).toContain("generic/platform=iOS Simulator");
+    }
+    expect(commands.every((command) => command.settings === undefined)).toBe(true);
+    const tests = commands.filter(isTestCommand);
+    expect(tests).toHaveLength(3);
+    for (const test of tests) {
+      expect(test.args).toContain("test-without-building");
+      expect(test.args).not.toContain("test");
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32").each([
+  { scheme: "OpenClaw", attempted: ["OpenClaw"] },
+  { scheme: "OpenClawUITests", attempted: ["OpenClaw", "OpenClawUITests"] },
+])(
+  "does not publish prepared products after $scheme preparation fails",
+  ({ scheme, attempted }) => {
+    const { result, commands, environment } = runSimulatorStep(
+      `voice-build-failed-${scheme}`,
+      [...configuredSteps, voiceStep, iosStep],
+      { IOS_CI_PHASE: "tests" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(
+      argsFor(commands, "xcodebuild")
+        .filter((args) => args.includes("build-for-testing"))
+        .map((args) => args[args.indexOf("-scheme") + 1]),
+    ).toEqual(attempted);
+    expect(environment).not.toContain("IOS_TEST_BUILD_PREPARED=true");
+    expect(commands.filter(isTestCommand)).toHaveLength(0);
+  },
+);
 
 describe("iOS simulator owner selection", () => {
   it.each(["apps/swabble/Sources/SwabbleKit/Speech.swift", "scripts/lib/swift-toolchain.sh"])(
@@ -399,7 +454,13 @@ function admittedSimulatorSteps(selection: ReturnType<typeof resolveIosSimulator
 it.skipIf(process.platform === "win32").each([
   { owner: "apps/ios/fastlane/Fastfile", groups: [] },
   { owner: "apps/ios/Tests/TalkModeConfigParsingTests.swift", groups: ["voice"] },
+  { owner: "apps/ios/Tests/TalkTranscriptCompletionTests.swift", groups: ["voice"] },
   { owner: "apps/ios/Tests/ChatSendHydrationTests.swift", groups: ["lifecycle"] },
+  { owner: "apps/ios/ThirdParty/ESPProvision/ESPProvision/ESPDevice.swift", groups: [] },
+  { owner: "apps/ios/Tests/ESPSetupWireTests.swift", groups: [] },
+  { owner: "apps/ios/Tests/ESPSetupSessionTests.swift", groups: [] },
+  { owner: "apps/ios/Tests/ESPSetupGatewayPreviewTests.swift", groups: [] },
+  { owner: "apps/ios/Tests/QRScannerResultHandoffTests.swift", groups: ["lifecycle"] },
   {
     owner: "apps/shared/OpenClawKit/Tests/OpenClawKitTests/ChatComposerTextViewIOSTests.swift",
     groups: ["lifecycle"],
@@ -494,6 +555,8 @@ def run(args, capture=False, env=None, timeout=None):
         return json.dumps([{"target": "OpenClaw", "buildSettings": {
             "BUILD_DIR": str(products), "TARGET_BUILD_DIR": str(app.parent), "FULL_PRODUCT_NAME": app.name}}])
     if "test-without-building" in args:
+        result_bundle = pathlib.Path(args[args.index("-resultBundlePath") + 1])
+        result_bundle.mkdir()
         booted = mode == "already-booted"
         config = plistlib.loads(pathlib.Path(args[args.index("-xctestrun") + 1]).read_bytes())
         runs.append({"config": config, "environment": {key: value for key, value in env.items()
@@ -501,7 +564,7 @@ def run(args, capture=False, env=None, timeout=None):
         nonce = env["TEST_RUNNER_OPENCLAW_ACCESS_RESTART_NONCE"]
         receipt = data / "Library/Application Support" / ("access-restart-" + nonce + ".plist")
         if mode != "missing-handoff":
-            receipt.parent.mkdir(parents=True)
+            receipt.parent.mkdir(parents=True, exist_ok=True)
             handoff = {"phase": "verified", "nonce": nonce, "source": source, "simulator": "simulator-fixture",
                 "installation": proof.installation_identity(app, tests, data), "seedPID": 2147483647,
                 "verifyPID": 2147483646, "seedProcessExited": True,
@@ -588,6 +651,8 @@ error = None
 with contextlib.redirect_stdout(io.StringIO()):
     try:
         proof.main("simulator-fixture")
+        if mode == "rerun":
+            proof.main("simulator-fixture")
     except Exception as failure:
         error = str(failure)
 print(json.dumps({"error": error, "commands": commands, "runs": runs, "bootTimeouts": boot_timeouts,
@@ -676,6 +741,15 @@ describe("iOS Access process restart proof", () => {
     }
   });
 
+  it("retains separate result bundles when repeated in the same checkout", () => {
+    const { error, commands, runs } = runRestartProof("rerun");
+    expect(error).toBeNull();
+    expect(runs).toHaveLength(2);
+    const resultPaths = commands
+      .filter((args) => args.includes("test-without-building"))
+      .map((args) => args[args.indexOf("-resultBundlePath") + 1]);
+    expect(new Set(resultPaths).size).toBe(2);
+  });
   it("rejects xcodebuild failure even when the result records and final receipt would pass", () => {
     const { error, commands, receiptRetained } = runRestartProof("xcodebuild-failed");
     expect(error).toContain("exit status 65");

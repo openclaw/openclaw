@@ -298,7 +298,7 @@ it.each([
       let config: OpenClawConfig = withModelPolicy
         ? {
             agents: { defaults: { model: defaultModel } },
-            gateway: { roles: { definitions: { writer } } },
+            gateway: { roles: { default: "writer", definitions: { writer } } },
           }
         : {};
       const context = { getRuntimeConfig: () => config };
@@ -527,8 +527,6 @@ it("projects inbound authority without forwarding a changed approval destination
     { gatewayUiCommandTarget: undefined },
     { toolBindings: { browser: { clientId: "different-browser" } } },
     { permissionMode: "guarded" },
-    { forceRestartSafeTools: true },
-    { forceCodeModeTools: true },
   ] satisfies Partial<ReplyToolAuthorityOverlay>[]) {
     await expect(inject({ ...overlay, ...restricted })).resolves.toMatchObject(rejected);
     expect(queueMessage).toHaveBeenCalledOnce();

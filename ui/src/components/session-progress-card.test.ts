@@ -2,6 +2,7 @@
 
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { publishTranscriptScroll } from "../pages/chat/components/chat-transcript-scroll-events.ts";
 import {
   observeTranscript,
   cardPart,
@@ -130,7 +131,7 @@ describe("renderSessionProgressCard", () => {
             known: true,
             connected: true,
             children: { running: 1, queued: 1, waiting: 0, failed: 1 },
-            childError: "Review: Access denied",
+            childError: "Review: Access denied".padEnd(237, "x") + "🦞🦞",
           },
         },
         container,
@@ -138,14 +139,16 @@ describe("renderSessionProgressCard", () => {
       expect(container.querySelector('[role="status"]')?.textContent).toContain(
         "1 running · 1 queued · 1 failed",
       );
-      expect(container.querySelector('[role="status"]')?.textContent).toContain(
-        "Review: Access denied",
+      expect(query(container, ".session-progress-card__runtime-detail")?.textContent).toBe(
+        "Review: Access denied".padEnd(237, "x") + "🦞",
       );
       expect(container.querySelector('[data-error="true"]')).not.toBeNull();
       expect(container.querySelector("details")).toBe(details);
       expect(container.querySelectorAll(".session-progress-card__step")).toHaveLength(3);
       render({ ...input, runtime: { connected: false, hasActiveSubagentRun: true } }, container);
-      expect(container.querySelector('[role="status"]')?.textContent).toContain("Connection lost");
+      expect(container.querySelector('[role="status"]')?.textContent).toContain(
+        "Disconnected · Activity may be outdated",
+      );
       expect(container.querySelector(".session-run-spinner")).toBeNull();
       render({ ...input, runtime: { known: false } }, container);
       expect(container.querySelector('[role="status"]')?.textContent).toBe("Activity unavailable");
@@ -447,6 +450,21 @@ describe("renderSessionProgressCard", () => {
     previousTouches = [];
     expectOpen(card, true, 300);
     drag(0, 25);
+    expectOpen(card, false, 300);
+    replaceCard();
+    touch("touchstart", 0);
+    // Geometry settling under a held finger must preserve its upcoming native movement.
+    publishTranscriptScroll(transcript.thread, {
+      type: "offset",
+      delta: 0,
+      scrolling: false,
+      touching: true,
+      programmatic: true,
+    });
+    touch("touchmove", 160);
+    touch("touchend", 160);
+    expectOpen(card, true, 300);
+    drag(0, 160);
     expectOpen(card, false, 300);
     replaceCard();
     drag(0, 200);

@@ -54,9 +54,11 @@ function pending(state: OpenClawTestState, agentId = "worker") {
 
 function expectDeleted(refusal: unknown, agentId: string) {
   expect(refusal).toMatchObject({
-    code: "agent-database-inspection-failed",
+    code: "agent-deletion",
     reason: `Agent ${agentId} was deleted during startup inspection`,
+    repairHint: expect.stringContaining("retry agents.delete"),
   });
+  expect(refusal).not.toMatchObject({ repairHint: expect.stringContaining("doctor --fix") });
 }
 
 it.each(["warm", "cold"] as const)(
@@ -152,7 +154,7 @@ it("invalidates known aliases of the same state without changing another state o
       expect([
         readRefusal("worker", options)?.code,
         readRefusal("worker", aliasOptions)?.code,
-      ]).toEqual(["agent-database-inspection-failed", "agent-database-inspection-failed"]);
+      ]).toEqual(["agent-deletion", "agent-deletion"]);
       expect(readRefusal("other", options)).toBe(sibling);
       expect(readRefusal("worker", otherOptions)).toBe(foreign);
     } finally {

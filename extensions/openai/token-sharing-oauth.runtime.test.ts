@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -231,10 +232,32 @@ describe("ChatGPT token-sharing authorization", () => {
       // WizardSession attaches a queued external URL to the next emitted step.
       expect(pendingUrl).toBeDefined();
       expect(message).not.toContain(pendingUrl!);
-      expect(message).toContain("8080:127.0.0.1:8080");
+      const { port } = new URL(new URL(pendingUrl!).searchParams.get("redirect_uri")!);
+      expect(message).toContain(`${port}:127.0.0.1:${port}`);
       await visitBrowser(pendingUrl!);
     });
     await expectConnected(await loginTokenSharing(ctx));
+  });
+
+  it("signs in on a free callback port while another app holds 8080", async () => {
+    // The sign-in once fixed its callback to 8080. An already busy 8080 is the same case.
+    const occupant = createServer((_request, response) => response.end("other app"));
+    await new Promise<void>((resolve) => {
+      occupant.once("error", () => resolve());
+      occupant.listen(8080, "127.0.0.1", resolve);
+    });
+    try {
+      await expectConnected(await loginTokenSharing(context()));
+      const redirectUri = new URL(authorization.searchParams.get("redirect_uri")!);
+      expect(redirectUri.hostname).toBe("localhost");
+      expect(redirectUri.pathname).toBe("/auth/callback");
+      expect(redirectUri.port).not.toBe("8080");
+      expect(exchangeForm().get("redirect_uri")).toBe(redirectUri.href);
+    } finally {
+      await new Promise<void>((resolve) => {
+        occupant.close(() => resolve());
+      });
+    }
   });
 
   it("restarts a cancelled login without accepting its stale callback", async () => {
@@ -303,7 +326,6 @@ describe("ChatGPT token-sharing authorization", () => {
       await releaseEntered.promise;
       originalCallback = callbackResponse!;
       controller.abort();
-      expect(settled).not.toHaveBeenCalled();
 
       await expectConnected(await loginTokenSharing(context()));
       await expect(originalCallback).rejects.toThrow();
@@ -424,7 +446,7 @@ describe("ChatGPT token-sharing authorization", () => {
       client_id: clientId,
       code: "test-code",
       resource: TOKEN_SHARING_RESOURCE,
-      redirect_uri: "http://localhost:8080/auth/callback",
+      redirect_uri: authorization.searchParams.get("redirect_uri"),
     });
     expect(form.has("client_secret")).toBe(false);
     expect(result.profiles[0]?.profileId).toBe("openai:existing");

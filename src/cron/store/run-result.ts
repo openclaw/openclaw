@@ -27,6 +27,9 @@ export function cronRunResultEvent(
     summary: quiet ? undefined : result.summary,
     result: quiet ? undefined : result.result,
     diagnostics: result.diagnostics,
+    ...(result.status === "error" && result.agentTerminal
+      ? { agentTerminal: result.agentTerminal }
+      : {}),
     delivered: result.deliveryState.delivered,
     deliveryStatus: result.deliveryState.status,
     deliveryError: result.deliveryState.error,
@@ -35,11 +38,11 @@ export function cronRunResultEvent(
     delivery: result.delivery,
     sessionId: result.sessionId,
     sessionKey: result.sessionKey,
-    runId: result.request?.runId,
+    runId: result.request?.runId ?? result.taskRunId,
     runAtMs: result.startedAt,
     durationMs: Math.max(0, result.endedAt - result.startedAt),
     nextRunAtMs: job.state.nextRunAtMs,
-    ...(result.triggerEval?.fired ? { triggerFired: true } : {}),
+    ...(result.triggerEval ? { triggerFired: result.triggerEval.fired } : {}),
     model: result.model,
     provider: result.provider,
     usage: result.usage,

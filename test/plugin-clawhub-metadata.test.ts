@@ -12,6 +12,14 @@ import { writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+it("keeps Parallel publication metadata on its single web category", () => {
+  const metadata = JSON.parse(
+    readFileSync(new URL("../extensions/parallel/openclaw.plugin.json", import.meta.url), "utf8"),
+  );
+  expect(metadata.id).toBe("parallel");
+  expect(metadata.categories).toEqual(["web"]);
+});
+
 function fixture({
   version = "2026.9.4",
   categories = ["tools", "web"],
@@ -82,6 +90,7 @@ function pack(packageDir: string, destination: string) {
 }
 
 it.each([
+  ["2026.11.2", ["web"], "web", "web"],
   ["2026.9.4", ["tools", "web"], "web", "web"],
   ["2026.9.4", ["runtime", "tools", "web"], "agent-runtimes", "runtime"],
   ["2026.9.3", ["agent-runtimes"], "agent-runtimes", "agent-runtimes"],

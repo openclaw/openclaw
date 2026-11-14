@@ -505,6 +505,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     const pending = executeCatalog({
       tool: target,
       toolName: "memory_forget",
+      toolId: "openclaw:memory-lancedb:memory_forget",
       source: "openclaw",
       sourceName: "memory-lancedb",
       toolCallId: "catalog-forget-1",

@@ -13,6 +13,7 @@ import { withBoundWebPushSubscriptions, type BoundWebPushSubscription } from "..
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { getUserPreferenceValues } from "../state/user-preferences.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import type { PreparedSessionMutationFacts } from "./session-sharing-policy.js";
@@ -77,7 +78,10 @@ export function listCurrentWebPushTargets(
 
     const storedProfileId = subscription.userProfileId;
     const userProfileId = profile?.profileId ?? null;
-    if ((storedProfileId && !userProfileId) || (cfg.gateway?.roles && !userProfileId)) {
+    if (
+      (storedProfileId && !userProfileId) ||
+      (isNamedOperatorRoleEnforcementEnabled(cfg) && !userProfileId)
+    ) {
       return [];
     }
     const rolePolicy = userProfileId
@@ -88,7 +92,7 @@ export function listCurrentWebPushTargets(
           profile?.githubLogin ?? null,
         )
       : undefined;
-    if (cfg.gateway?.roles && !rolePolicy) {
+    if (isNamedOperatorRoleEnforcementEnabled(cfg) && !rolePolicy) {
       return [];
     }
     const scopesAllowed = (requestedScopes: readonly string[]) =>

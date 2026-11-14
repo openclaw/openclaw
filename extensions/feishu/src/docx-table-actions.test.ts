@@ -109,7 +109,7 @@ function expectResult(
   };
   expect(content).toHaveLength(1);
   expect(content[0]?.type).toBe("text");
-  expect(content[0]?.text).toContain(`\nSource: API\n---\n${JSON.stringify(details, null, 2)}\n`);
+  expect(content[0]?.text).toContain(`\nSource: API\n---\n${JSON.stringify(details)}\n`);
 }
 
 describe("registered feishu_doc table patches", () => {

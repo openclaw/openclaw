@@ -48,14 +48,14 @@ suite.define(() => {
     }
     const native = install === installNativeWebChrome;
     const toggle = native
-      ? ".sidebar-session-toolbar__collapse"
+      ? ".macos-titlebar-controls__sidebar"
       : '[data-navigation-view][aria-pressed="true"]';
     await page.locator(toggle).click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
     const box = await page
-      .locator(native ? ".macos-titlebar-controls" : ".shell-chrome-controls")
+      .locator(native ? ".macos-titlebar-controls" : ".sidebar-rail")
       .boundingBox();
     expect(box).not.toBeNull();
     return { page, gateway, toolbar: box! };
@@ -84,19 +84,20 @@ suite.define(() => {
     );
     const header = page.locator(".content .content-header").first();
     const title = header.locator(".page-title");
-    const y = native ? center(toolbar, "y") : 24;
-    await expectAligned(title, y, "y");
+    if (!native) {
+      await expectAligned(title, 24, "y");
+    }
     await expectAligned(title, header, "x");
     const titleBox = (await title.boundingBox())!;
     if (native) {
-      expect(toolbar.y + toolbar.height).toBe(52);
-      expect(titleBox.x).toBeGreaterThan(toolbar.x + toolbar.width);
-      expect((await header.locator(".page-subtitle").boundingBox())!.y).toBeGreaterThanOrEqual(52);
+      expect(titleBox.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
+      expect((await header.locator(".page-subtitle").boundingBox())!.y).toBeGreaterThanOrEqual(
+        toolbar.y + toolbar.height,
+      );
     } else {
-      const edges = await page
-        .locator(".shell-chrome-controls button:visible")
-        .evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().right));
-      expect(titleBox.x).toBeGreaterThan(Math.max(...edges));
+      expect(
+        titleBox.x >= toolbar.x + toolbar.width || titleBox.x + titleBox.width <= toolbar.x,
+      ).toBe(true);
     }
   });
 
@@ -163,7 +164,7 @@ suite.define(() => {
       if (native) {
         expect(heading.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
       }
-      const search = page.getByRole("searchbox", { name: "Search Templates", exact: true });
+      const search = page.getByRole("searchbox", { name: "Search templates", exact: true });
       const { box, introBox } = await search.evaluate((element) => {
         const bounds = (target: Element): Box => {
           const rect = target.getBoundingClientRect();
@@ -194,7 +195,7 @@ suite.define(() => {
     { width: 1280, height: 900, direction: "rtl" },
     { width: 390, height: 844, direction: "ltr" },
   ] as const)(
-    "shares a stacked title and aligned tabs across Sessions and Worktrees at $width px ($direction)",
+    "keeps Sessions and Worktrees headings accessible and desktop tabs aligned at $width px ($direction)",
     async ({ width, height, direction }) => {
       const { page, toolbar } = await openPage(
         "sessions",
@@ -226,6 +227,14 @@ suite.define(() => {
           };
         });
       const expectAlignedHub = async () => {
+        if (width <= 560) {
+          await expect.poll(() => header.getByRole("heading", { level: 1 }).count()).toBe(1);
+          await expect.poll(() => tabs.isVisible()).toBe(true);
+          const box = (await tabs.boundingBox())!;
+          expect(box.x).toBeGreaterThanOrEqual(0);
+          expect(box.x + box.width).toBeLessThanOrEqual(width);
+          return;
+        }
         await expect
           .poll(async () => {
             const { titleWidth, tabsBelowTitle, xDelta } = await alignment();
@@ -264,7 +273,7 @@ suite.define(() => {
       await page
         .locator(".shell-chrome-controls button, .shell-chrome-controls a")
         .evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))),
-    ).toEqual(["Expand sidebar", "Command palette"]);
+    ).toEqual(["Expand sidebar", "Search"]);
     expect(controls.y + controls.height).toBeGreaterThan(52);
     const header = page.locator(".content .content-header").first();
     await expectAligned(header.locator(".page-title"), 25, "y");

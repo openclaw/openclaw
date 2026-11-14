@@ -20,6 +20,26 @@ openclaw gateway restart
 openclaw gateway uninstall
 ```
 
+When `openclaw gateway install` runs from `npx`, `pnpm dlx`, or another
+temporary copy, the service runs the same OpenClaw version from the `npm` folder
+of the state directory (`~/.openclaw/npm` by default) instead, because the
+temporary copy can be deleted. After the runtime and wrapper checks pass, npm
+stages that copy while any existing service keeps running; the copy is replaced
+only as the service definition is written. If another update replaces that copy
+while the install waits, the install stops without changing the copy or the
+service; rerun it. If the install fails after replacing the copy, the previous
+copy is restored only once the service manager's recovery has stopped the new
+service, just before it puts the previous service back. On any other
+failure, for example when the new service does not exit, the new copy stays in
+place with a backup of the previous copy, and the command warns you to check the
+service and rerun the install. A first install has no previous copy and keeps
+the new one.
+`openclaw update` updates that copy in place. An existing service that still
+points into a temporary copy is refreshed by the next `openclaw gateway install`.
+`openclaw doctor` run from a temporary copy never installs one: when the copy in
+the state directory is missing or does not match, it keeps the service's current
+OpenClaw and prints the install command to run.
+
 Queued native service commands use elapsed-time deadlines, so system-clock
 corrections do not prematurely expire or extend their admission budgets.
 
@@ -126,6 +146,7 @@ values. Then, from an external shell using the same account and profile:
 ```bash
 openclaw gateway uninstall
 openclaw gateway install
+openclaw gateway start
 openclaw gateway health
 ```
 
@@ -276,7 +297,7 @@ openclaw gateway restart
   </Accordion>
   <Accordion title="Service runtime">
     - Node is the primary and recommended managed Gateway runtime and the default for fresh installations; with no explicit runtime, pin, or wrapper, an install running under supported Bun uses that executable without creating a pin if no supported Node is found. Implicit reinstalls retain a supported recorded Node or Bun runtime as described above.
-    - For unpinned services, `gateway install` checks the Node executable recorded in the managed service. If it is missing, non-executable, or unsupported, installation refreshes the service without requiring `--force` and reports the replacement path. This also applies when an installer or update refreshes the service. Repair prefers the current CLI's supported Node, retaining stable Homebrew paths, then checks supported system installations. Custom wrappers keep control of their runtime; protected service definitions still require their deployment owner to repair them.
+    - For unpinned services, `gateway install` checks the Node executable recorded in the managed service. If it is missing, non-executable, or unsupported, installation refreshes the service without requiring `--force` and reports the replacement path. This also applies when an installer or update refreshes the service. Repair prefers the current CLI's supported Node, retaining stable Homebrew paths, then checks supported system installations. Custom wrappers keep control of their runtime; protected service definitions still require their deployment owner to repair them. A service Node that still exists while its package lives under a different or deleted version-manager version is not that refresh: gateway startup, `openclaw gateway status`, and `openclaw doctor` report it. Doctor keeps a supported recorded Node and any explicit runtime pin, so `openclaw doctor --fix` reinstalls that same Node. After stopping the service, select the Node that owns the install with `openclaw gateway install --runtime-path <path> --force`.
     - Bun 1.4.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in with `gateway install --runtime bun`.
 
   </Accordion>

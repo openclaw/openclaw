@@ -19,6 +19,10 @@ import {
   reserveSessionControllerSource,
   tryClaimSessionControllerTask,
 } from "../../sessions/session-controller.mailbox.js";
+import {
+  captureSessionControllerStop,
+  stopSession,
+} from "../../sessions/session-controller.stop.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../state/agent-database-admission-error.js";
 import {
@@ -114,7 +118,7 @@ it.each([
             },
       );
       release.resolve();
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(500);
       expect(attempts).toBe(2);
       if (stillClosed) {
         expect(delivered).not.toHaveBeenCalled();
@@ -159,7 +163,7 @@ it("parks queued input when database admission closes until a fresh drain is req
     await withAgentDatabaseCloseFence(target, async () => {
       enqueueFollowupRun(key, queued, defaults);
       scheduleFollowupDrain(key, runFollowup);
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(250);
 
       expect(attempts).toBe(1);
       expect(queuedState()?.items).toEqual([queued]);
@@ -256,7 +260,7 @@ it("restarts an idle drain across distinct enqueue and drain module instances wh
 });
 
 it.each(["open", "draining", "pending restart"] as const)(
-  "does not replay a selected turn after a draining error with %s admission",
+  "does not retry a selected turn inside the mailbox after a draining error with %s admission",
   async (admission) => {
     const firstFailed = createDeferred();
     const abandoned = vi.fn();
@@ -286,7 +290,7 @@ it.each(["open", "draining", "pending restart"] as const)(
     await waitForRoots();
     expect(attempts).toBe(1);
     if (admission === "open") {
-      expect(abandoned).not.toHaveBeenCalled();
+      expect(abandoned).toHaveBeenCalledOnce();
     }
   },
 );
@@ -367,9 +371,9 @@ it.each(["old", "new"] as const)(
     expect(queue).toMatchObject({
       dropPolicy: "summarize",
       droppedCount: 1,
-      summaryLines: ["first overflowed message"],
+      summaryEntries: [{ source: first, line: "first overflowed message" }],
     });
-    expect(queue?.summarySources).toEqual([first]);
+    expect(queue?.summaryEntries.map(({ source }) => source)).toEqual([first]);
     expect(queue?.items).toEqual([second]);
 
     const admitted = enqueueFollowupRun(key, third, {
@@ -381,9 +385,9 @@ it.each(["old", "new"] as const)(
     expect(queue).toMatchObject({
       dropPolicy,
       droppedCount: 1,
-      summaryLines: ["first overflowed message"],
+      summaryEntries: [{ source: first, line: "first overflowed message" }],
     });
-    expect(queue?.summarySources).toEqual([first]);
+    expect(queue?.summaryEntries.map(({ source }) => source)).toEqual([first]);
     expect(queue?.items).toEqual([dropPolicy === "old" ? third : second]);
 
     const timer = new Promise<void>((resolve) => {
@@ -421,7 +425,7 @@ it.each(["old", "new"] as const)(
   },
 );
 
-it("retires queued followups and callbacks when one-way restart drain begins", async () => {
+it("retires queued followups and callbacks when restart shutdown commits", async () => {
   const abandoned = vi.fn();
   const settled = vi.fn();
   const staleCalls: FollowupRun[] = [];
@@ -446,6 +450,11 @@ it("retires queued followups and callbacks when one-way restart drain begins", a
   expect(queuedState()?.items).toEqual([queued]);
 
   markGatewayRestartDraining();
+  expect(queuedState()?.items).toEqual([queued]);
+  await stopSession({
+    source: "restart",
+    capture: captureSessionControllerStop({ inputs: [queued.controllerInput!] }),
+  }).completed;
   await queued.controllerInput!.settlement.promise;
 
   expect(queuedState()).toBeUndefined();
@@ -483,6 +492,12 @@ it.each(["outside the turn", "inside the turn"] as const)(
       } else {
         markGatewayRestartDraining();
       }
+      expect(getExistingFollowupQueue(otherKey)?.items).toEqual([queued]);
+      expect(waiting.abortSignal.aborted).toBe(false);
+      await stopSession({
+        source: "restart",
+        capture: captureSessionControllerStop({ inputs: [queued.controllerInput!, waiting] }),
+      }).completed;
       await queued.controllerInput!.settlement.promise;
       await waiting.settlement.promise;
       expect(isAgentRunRestartAbortReason(waiting.abortSignal.reason)).toBe(true);

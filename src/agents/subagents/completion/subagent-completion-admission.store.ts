@@ -1,19 +1,22 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { appendSessionTranscriptReport } from "../../../config/sessions/session-accessor.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
 import type { DeliveryQueueStoredStatus } from "../../../infra/delivery-queue-sqlite.kernel.js";
 import type { QueuedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
 import type { SessionDeliveryWorkerOperations } from "../../../infra/session-delivery-queue.worker.js";
 import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
+import { renderRuntimeCoordinationFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { retireSubagentCompletionControllerInput } from "../registry/subagent-controller-inputs.js";
 import { ensureDeliveryState } from "../registry/subagent-delivery-state.js";
-import {
-  SUBAGENT_ENDED_REASON_ERROR,
-  SUBAGENT_ENDED_REASON_KILLED,
-} from "../registry/subagent-lifecycle-events.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
+import { subagentRegistryLog } from "../registry/subagent-registry-lifecycle-log.js";
 import {
   getSubagentRunsForChildSession,
   subagentRuns,
@@ -27,6 +30,7 @@ import {
 import { isCanonicalSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
+  buildRequesterSettleWakeIdentity,
   sameRequesterSettleRunIdentity,
   captureRequesterSettleWakeProgress,
 } from "../registry/subagent-requester-settle-identity.js";
@@ -50,6 +54,74 @@ export class SubagentRequesterWakeProgressChangedError extends SubagentCompletio
 type AdmissionReceipt =
   SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"]["output"];
 type MutationReceipt = SubagentCompletionMutationResult & { writeId: string };
+
+async function recordRequiredCompletionFailure(
+  entry: SubagentRunRecord,
+  reason: string,
+  batch: readonly SubagentRunRecord[] = [entry],
+): Promise<void> {
+  subagentRegistryLog.warn("Subagent completion delivery failed", {
+    runId: entry.runId,
+    requesterSessionKey: entry.requesterSessionKey,
+    reason,
+  });
+  if (
+    entry.expectsCompletionMessage !== true ||
+    entry.completionTarget !== "parent" ||
+    entry.execution.status !== "terminal" ||
+    entry.pauseReason === "sessions_yield" ||
+    !entry.completionRequesterSessionId ||
+    !entry.completionRequesterLifecycleRevision
+  ) {
+    return;
+  }
+  const wake = entry.requesterSettleWake;
+  // Share the yielded requester's failure identity with its lifecycle settlement.
+  const runId =
+    wake?.requesterYieldBatch || batch.length > 1
+      ? (wake?.requesterRunId ??
+        buildAnnounceIdempotencyKey(
+          `${
+            buildRequesterSettleWakeIdentity({
+              requesterSessionKey: entry.requesterSessionKey,
+              requesterAgentId: entry.requesterAgentId,
+              batchRunIds: wake?.batchRunIds ?? batch.map((member) => member.runId),
+              rearmGeneration: wake?.rearmGeneration,
+            }).batchKey
+          }:delivery-failure`,
+        ))
+      : `subagent-delivery-failure:${entry.taskRunId ?? entry.runId}:${entry.delivery?.generation ?? 1}`;
+  // This records a failed obligation, without borrowing its retired execution authority.
+  // A deleted/reset requester refuses the append; never redirect it to a replacement.
+  await runWithoutOwnedSessionTranscriptWrites(() =>
+    appendSessionTranscriptReport(
+      {
+        agentId: entry.requesterAgentId,
+        sessionKey: entry.requesterSessionKey,
+        storePath: entry.requesterStorePath,
+        sessionId: entry.completionRequesterSessionId,
+        expectedLifecycleRevision: entry.completionRequesterLifecycleRevision,
+      },
+      {
+        kind: "custom",
+        customTypes: ["run-failed-before-reply"],
+        selectReport: (latest) =>
+          isRecord(latest?.details) && latest.details.runId === runId
+            ? undefined
+            : {
+                customType: "run-failed-before-reply",
+                display: true,
+                excludeFromContext: true,
+                content: expectDefined(
+                  renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed"),
+                  "child completion failure notice",
+                ),
+                details: { runId, childRunId: entry.runId },
+              },
+      },
+    ),
+  );
+}
 
 function parseAcknowledgedRecord(value: unknown): SubagentCompletionRecord {
   if (
@@ -217,32 +289,6 @@ type CompletionMutationPublication = {
   publication: "published" | "unchanged";
 };
 
-function sameCompletionTerminalOwner(
-  current: SubagentRunRecord,
-  expected: SubagentRunRecord,
-): boolean {
-  if (current.terminalOwner === expected.terminalOwner) {
-    return true;
-  }
-  // Cleanup retires the transient recovery marker, not the interrupted winner's settlement custody.
-  return (
-    expected.terminalOwner === "interrupted-recovery" &&
-    current.terminalOwner === undefined &&
-    current.cleanupCompletedAt !== undefined &&
-    current.execution.suppressSessionEffects === true &&
-    current.execution.status === "terminal" &&
-    expected.execution.status === "terminal" &&
-    current.endedReason === SUBAGENT_ENDED_REASON_ERROR &&
-    expected.endedReason === current.endedReason &&
-    current.execution.interruptionReason === "gateway-restart" &&
-    expected.execution.interruptionReason === current.execution.interruptionReason &&
-    current.execution.startedAt === expected.execution.startedAt &&
-    current.execution.endedAt === expected.execution.endedAt &&
-    current.execution.outcome?.status === "error" &&
-    isDeepStrictEqual(current.execution.outcome, expected.execution.outcome)
-  );
-}
-
 function sameCompletionCancellationOwner(
   current: SubagentRunRecord,
   expected: SubagentRunRecord,
@@ -272,7 +318,6 @@ function currentCompletionOwner(
     current.execution.lifecycleGeneration !== expected.execution.lifecycleGeneration ||
     !isDeepStrictEqual(current.childSessionIdentity, expected.childSessionIdentity) ||
     !sameCompletionCancellationOwner(current, expected) ||
-    !sameCompletionTerminalOwner(current, expected) ||
     current.suppressAnnounceReason !== expected.suppressAnnounceReason
   ) {
     throw new SubagentCompletionSourceChangedError(
@@ -415,12 +460,14 @@ export async function settleSubagentCompletionDelivery(
 }
 
 export async function blockSubagentCompletionDelivery(
-  params: BlockSubagentCompletionRequest & CompletionMutationOptions,
+  params: BlockSubagentCompletionRequest &
+    CompletionMutationOptions & { requesterBatch?: readonly SubagentRunRecord[] },
 ): Promise<boolean> {
   const {
     context: _context,
     databaseOptions: _databaseOptions,
     assertCurrent: _assertCurrent,
+    requesterBatch: _requesterBatch,
     ...request
   } = params;
   if (params.storeReplaced) {
@@ -454,6 +501,14 @@ export async function blockSubagentCompletionDelivery(
       },
     },
   );
+  if (
+    result.applied &&
+    (params.storeReplaced ||
+      params.suspendedReason === "permanent_failure" ||
+      params.disposition === "permanent_failure")
+  ) {
+    await recordRequiredCompletionFailure(params.subagent, params.reason, params.requesterBatch);
+  }
   return result.applied === true;
 }
 
@@ -493,7 +548,7 @@ function currentRequesterEntries(
       return { subagent: expected };
     }
     // Terminal bookkeeping settles the owed wake, not the child's old execution custody.
-    // Cleanup and recovery can change that custody while this exact wave remains owed.
+    // Cleanup can change that custody while this exact wave remains owed.
     // Committed receipts validate their own postimages in the transaction owner.
     const current =
       operation === "transition" && !committed
@@ -555,7 +610,7 @@ export async function mutateRequesterCompletionBatch(
     operation: RequesterWakeMutation | { kind: "settle"; outcome: SubagentAnnounceDeliveryResult };
   },
 ): Promise<CompletionMutationPublication> {
-  return mutateCompletion(
+  const publication = await mutateCompletion(
     params.entries,
     (rows) => {
       const cohort = {
@@ -584,4 +639,18 @@ export async function mutateRequesterCompletionBatch(
       },
     },
   );
+  if (
+    publication.applied &&
+    params.operation.kind === "settle" &&
+    !params.operation.outcome.delivered
+  ) {
+    for (const entry of params.entries) {
+      await recordRequiredCompletionFailure(
+        entry,
+        params.operation.outcome.error ?? params.operation.outcome.disposition ?? "not delivered",
+        params.entries,
+      );
+    }
+  }
+  return publication;
 }

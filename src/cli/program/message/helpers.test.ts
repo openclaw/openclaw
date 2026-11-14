@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addTestHook, createMockPluginRegistry } from "../../../plugins/hooks.test-helpers.js";
+import { ExpectedCliError } from "../../expected-cli-error.js";
 import {
   applyResolvedCommandOutputMode,
   withConsoleLogsRoutedToStderrForJson,
@@ -83,8 +84,6 @@ const { registerMessageCommands } = await import("../register.message.js");
 const { initializeGlobalHookRunner, resetGlobalHookRunner } =
   await import("../../../plugins/hook-runner-global.js");
 afterEach(resetGlobalHookRunner);
-
-const NON_NEGATIVE_INTEGER_FLAGS = new Set(["--delete-days", "--duration-min"]);
 
 const baseSendOptions = { channel: "discord", target: "123", message: "hi" };
 
@@ -188,11 +187,11 @@ function expectConfigReady(action: string, validateConfigOnly: boolean, json = f
   }
 }
 
-function expectRejectedBeforeDispatch(error: string): void {
-  expect(errorMock).toHaveBeenCalledWith(error);
+async function expectRejectedBeforeDispatch(run: Promise<unknown>, error: string): Promise<void> {
+  await expect(run).rejects.toBeInstanceOf(ExpectedCliError);
+  await expect(run).rejects.toThrow(error);
   expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
   expect(messageCommandMock).not.toHaveBeenCalled();
-  expect(exitMock).toHaveBeenCalledExactlyOnceWith(1);
 }
 
 function mockResult(action: string, payload: unknown, extra: Record<string, unknown> = {}) {
@@ -370,39 +369,39 @@ describe("message actions through the CLI parser", () => {
 
   it("rejects conflicting poll visibility flags before loading channel plugins", async () => {
     const opts = { channel: "telegram", target: "123", pollAnonymous: true, pollPublic: true };
-    await runAction("poll", opts);
-    expectRejectedBeforeDispatch("--poll-anonymous and --poll-public are mutually exclusive.");
+    const error = "--poll-anonymous and --poll-public are mutually exclusive.";
+    await expectRejectedBeforeDispatch(parseAction("poll", opts), error);
   });
 
   it.each([
-    ["poll", "pollDurationHours", "1.5"],
-    ["poll", "pollDurationSeconds", "60s"],
-    ["timeout", "durationMin", "5m"],
-    ["ban", "deleteDays", "7d"],
-    ["read", "limit", "10x"],
-    ["search", "limit", "10x"],
-    ["list-pins", "limit", "10x"],
-    ["reactions", "limit", "10x"],
-    ["thread-create", "autoArchiveMin", "60m"],
-    ["thread-list", "limit", "10x"],
-    ["poll", "pollDurationHours", "0"],
-    ["poll", "pollDurationSeconds", "-1"],
-    ["timeout", "durationMin", ""],
-    ["ban", "deleteDays", Number.NaN],
-    ["read", "limit", 1.2],
-    ["thread-create", "autoArchiveMin", null],
-  ] as const)("rejects invalid %s %s=%s", async (action, key, value) => {
-    await runAction(action, {
-      ...baseSendOptions,
-      guildId: "g",
-      userId: "u",
-      query: "hello",
-      messageId: "m",
-      [key]: value,
-    });
-    const flag = `--${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`;
-    const kind = NON_NEGATIVE_INTEGER_FLAGS.has(flag) ? "non-negative" : "positive";
-    expectRejectedBeforeDispatch(`${flag} must be a ${kind} integer.`);
+    ["poll", "pollDurationHours", "1.5", "--poll-duration-hours must be a positive integer."],
+    ["poll", "pollDurationSeconds", "60s", "--poll-duration-seconds must be a positive integer."],
+    ["timeout", "durationMin", "5m", "--duration-min must be a non-negative integer."],
+    ["ban", "deleteDays", "7d", "--delete-days must be a non-negative integer."],
+    ["read", "limit", "10x", "--limit must be a positive integer."],
+    ["search", "limit", "10x", "--limit must be a positive integer."],
+    ["list-pins", "limit", "10x", "--limit must be a positive integer."],
+    ["reactions", "limit", "10x", "--limit must be a positive integer."],
+    ["thread-create", "autoArchiveMin", "60m", "--auto-archive-min must be a positive integer."],
+    ["thread-list", "limit", "10x", "--limit must be a positive integer."],
+    ["poll", "pollDurationHours", "0", "--poll-duration-hours must be a positive integer."],
+    ["poll", "pollDurationSeconds", "-1", "--poll-duration-seconds must be a positive integer."],
+    ["timeout", "durationMin", "", "--duration-min must be a non-negative integer."],
+    ["ban", "deleteDays", Number.NaN, "--delete-days must be a non-negative integer."],
+    ["read", "limit", 1.2, "--limit must be a positive integer."],
+    ["thread-create", "autoArchiveMin", null, "--auto-archive-min must be a positive integer."],
+  ] as const)("rejects invalid %s %s=%s", async (action, key, value, error) => {
+    await expectRejectedBeforeDispatch(
+      parseAction(action, {
+        ...baseSendOptions,
+        guildId: "g",
+        userId: "u",
+        query: "hello",
+        messageId: "m",
+        [key]: value,
+      }),
+      error,
+    );
   });
 
   it.each([

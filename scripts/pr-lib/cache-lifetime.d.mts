@@ -18,6 +18,10 @@ export declare function withDependencyCacheLock<T>(
   cache: string,
   operation: (lock: CacheLock) => T,
 ): T;
+export declare function recoverDependencyCache(
+  planPath: string,
+  planSha256: string,
+): { state: "recovered" | "already-recovered"; installations: number; planSha256: string };
 export declare function holdDependencyCache(
   lock: CacheLock,
   entry: string,
@@ -29,7 +33,33 @@ export declare function publishDependencyCache(
   entry: string,
   anchor: AnchorIdentity,
 ): void;
+export declare function stageDependencyCache(
+  lock: CacheLock,
+  entry: string,
+  anchor: AnchorIdentity,
+): string;
+export declare function sweepDependencyCaches(): void;
 export declare function assertDependencyTarget(target: string, destination: string): void;
 export declare function privateDependencyDonor(root: string, destination: string): boolean;
 export declare function collectUnusedDependencyCaches(lock: CacheLock, current?: string): string[];
 export declare function retireAnchorDependencies(anchor: AnchorIdentity, retire: () => void): void;
+
+export type DependencyHold = {
+  path: string;
+  dev: string;
+  ino: string;
+  uid: string;
+  mode: string;
+  holds: Array<Omit<DependencyHold, "path" | "holds"> & { key: string }>;
+};
+export declare function readDependencyHolds(): { cache: string; holds: DependencyHold[] };
+export declare function dependencyHoldState(hold: DependencyHold): {
+  anchor: "present" | "missing" | "changed";
+  created?: string;
+  entriesIntact: boolean;
+};
+export declare function releaseFinishedAnchor(reviewed: DependencyHold): {
+  state: "released" | "already-released";
+  settled: string[];
+  retained: string[];
+};

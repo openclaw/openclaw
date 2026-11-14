@@ -101,21 +101,56 @@ openclaw-browser-panel {
     outline-offset: 1px;
   }
   .bp-toolbar .bp-toolbar-location {
+    position: relative;
     display: flex;
     flex: 1;
     min-width: 0;
     align-items: center;
     gap: 8px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
   }
   .bp-toolbar[data-mobile="false"] .bp-toolbar-location {
     height: auto;
     align-self: stretch;
     min-height: var(--session-rail-target);
   }
+  .bp-toolbar .bp-toolbar-hint {
+    position: absolute;
+    inset: calc(100% + 6px) 0 auto;
+    z-index: 2;
+    padding: 6px 10px;
+    border: 1px solid var(--danger);
+    border-radius: 6px;
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-md);
+    color: var(--danger);
+    font-size: 12px;
+    line-height: 16px;
+  }
+  .bp-toolbar .bp-toolbar-go {
+    position: absolute;
+    inset: calc(100% + 6px) 0 auto;
+    z-index: 2;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-md);
+    color: var(--text);
+    font-size: 12px;
+    line-height: 16px;
+    text-align: start;
+  }
+  /* The "Go to" option belongs to the address being typed: hidden once focus leaves it. */
+  .bp-toolbar .bp-toolbar-location:not(:focus-within) .bp-toolbar-go {
+    display: none;
+  }
   .bp-toolbar .bp-toolbar-location:focus-within {
     outline: 1px solid var(--muted);
     outline-offset: 2px;
+  }
+  .bp-toolbar .bp-toolbar-location[data-invalid="true"] {
+    outline-color: var(--danger);
   }
   .bp-toolbar .bp-toolbar-favicon {
     display: flex;
@@ -242,7 +277,7 @@ openclaw-browser-panel {
     color: var(--text);
     font-size: 12px;
     font-family: inherit;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     padding: 3px 10px;
   }
   .bp-btn:hover {
@@ -274,7 +309,7 @@ openclaw-browser-panel {
     display: block;
     padding: var(--space-2);
     color: var(--muted);
-    font-size: var(--font-size-xs);
+    font-size: var(--control-ui-text-xs);
   }
   .bp-shot {
     display: block;
@@ -336,7 +371,7 @@ openclaw-browser-panel {
     z-index: 3;
     max-width: 320px;
     padding: 8px 10px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     border: 1px solid var(--border);
     background: var(--bg);
     box-shadow: var(--shadow-md);

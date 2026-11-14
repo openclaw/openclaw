@@ -243,19 +243,25 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           }),
         });
         if (scenario === repairDeadlineScenarios.ready) {
-          check(result.stderr).toContain("Gateway restarted and verified after Doctor repair.");
+          check(result.stderr).toContain(
+            "Gateway restarted and verified after Doctor maintenance.",
+          );
         } else {
-          check(result.stderr).not.toContain("Gateway restarted and verified after Doctor repair.");
+          check(result.stderr).not.toContain(
+            "Gateway restarted and verified after Doctor maintenance.",
+          );
           if (scenario === repairDeadlineScenarios.starting) {
             expectText(
               result.stderr,
               failure,
-              "Gateway started but readiness was not verified",
+              "Gateway started after Doctor maintenance, but readiness was not verified",
               "openclaw gateway status --deep",
               "openclaw gateway diagnostics export",
             );
           } else {
-            check(result.stderr).not.toContain("Gateway started but readiness was not verified");
+            check(result.stderr).not.toContain(
+              "Gateway started after Doctor maintenance, but readiness was not verified",
+            );
           }
         }
         return;
@@ -474,7 +480,7 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
           "Update mode: package",
           "Reason code: doctor-failed",
           "Failed phase finalize-doctor: exit 1",
-          "Recovery outcome: not serving (timeout)",
+          "Recovery outcome: readiness unverified (timeout)",
           "Gateway readiness was not verified; service status: unknown. Check openclaw gateway status --deep.",
         );
         expect(run.steps.filter((step) => step.step === "gateway recovery verification")).toEqual([

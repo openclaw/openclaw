@@ -44,7 +44,7 @@ it.each([
     expect(queued).toHaveBeenCalledWith({ ...ref, channel: "cron", source: "dispatch" });
     expect(state.mock.calls).toEqual([
       [{ ...ref, state: "waiting", reason: undefined }],
-      [{ ...finalRef, state: "idle", reason: "finished" }],
+      [{ ...finalRef, state: "idle", reason: "finished", consumeQueuedTurn: true }],
     ]);
   } else {
     expect(queued).not.toHaveBeenCalled();

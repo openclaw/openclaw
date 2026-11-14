@@ -15,14 +15,23 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { retainPreparedSessionSharingFacts } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "../../config/sessions/session-accessor.sqlite-maintenance-kick.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import * as reclamationRun from "../../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
+import type { SessionMentionInvitation } from "../../config/sessions/session-sharing-authority.types.js";
+import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import {
+  attachRuntimeUserTurnTranscriptRecorder,
+  withCurrentRuntimeUserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript-runtime-context.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
@@ -593,19 +602,24 @@ it("commits user and custom messages in FIFO order without host writes, and chec
     ]);
     expect(manager.getLeafId()).toBe(lastId);
     expect(beforeFreshMessageCommit).toHaveBeenCalledTimes(3);
-    const beforeRejectedReplay = manager.getPersistedEntries();
-    const refusedReplay = await manager.appendMessageAsync(user("first")).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    expect(refusedReplay).toMatchObject({
-      name: "Error",
-      message: `Session transcript keyed user is outside the current turn: ${first.entryId}`,
+    const beforeReplay = manager.getPersistedEntries();
+    expect(await manager.appendMessageWithTranscriptAnchorAsync(user("first"))).toMatchObject({
+      appended: false,
+      entryId: first.entryId,
+      message: first.message,
     });
-    expect(isRecordedModelFallbackStop(refusedReplay)).toBe(false);
-    expect(manager.getPersistedEntries()).toEqual(beforeRejectedReplay);
-    const afterRefusal = await manager.appendMessageAsync(user("after-replay-refusal"));
-    expect(manager.getLeafEntry()).toMatchObject({ id: afterRefusal, parentId: lastId });
+    for (const conflicting of [
+      { ...user("first"), content: "Different input" },
+      { ...user("first"), __openclaw: { senderId: "different-principal" } },
+    ]) {
+      await expect(manager.appendMessageAsync(conflicting)).rejects.toThrow(
+        "conflicts with the admitted message",
+      );
+    }
+    expect(manager.getPersistedEntries()).toEqual(beforeReplay);
+    expect(manager.getLeafId()).toBe(lastId);
+    const afterReplay = await manager.appendMessageAsync(user("after-replay"));
+    expect(manager.getLeafEntry()).toMatchObject({ id: afterReplay, parentId: lastId });
     expect(hostExec.mock.calls.filter(([sql]) => /^BEGIN\b/iu.test(sql))).toEqual([]);
     expect(await loadTranscriptEvents(target)).toEqual(manager.getPersistedEntries());
   } finally {
@@ -613,7 +627,7 @@ it("commits user and custom messages in FIFO order without host writes, and chec
   }
 });
 
-it("revalidates overtaken keyed replays while retaining fresh committed pending users", async () => {
+it("acknowledges overtaken keyed replays while retaining fresh committed pending users", async () => {
   const { target, manager } = await fixture(state, "overtaken-keyed-replay");
   const originalId = await manager.appendMessageAsync(user("original"));
   let newerId: string | undefined;
@@ -631,15 +645,11 @@ it("revalidates overtaken keyed replays while retaining fresh committed pending 
       spy.mockRestore();
     }
   };
-  const replayFailure = await appendOvertaken(user("original"), "after-replay").then(
-    () => undefined,
-    (error: unknown) => error,
-  );
-  expect(replayFailure).toMatchObject({
-    name: "Error",
-    message: `Session transcript keyed user is outside the current turn: ${originalId}`,
+  expect(await appendOvertaken(user("original"), "after-replay")).toMatchObject({
+    entryId: originalId,
+    appended: false,
+    viewWasSuperseded: true,
   });
-  expect(isRecordedModelFallbackStop(replayFailure)).toBe(false);
   expect(manager.getEntries()).toMatchObject([
     { id: originalId, parentId: null },
     { id: newerId, parentId: originalId },
@@ -764,6 +774,136 @@ it("rolls back worker promotion when pending authority retires at commit", async
   }
   expect(await loadTranscriptEvents(target)).toEqual(before);
 });
+
+it.each([
+  [false, false],
+  [true, false],
+  [false, true],
+  [true, true],
+])(
+  "settles appended invitations with live commit authority (actor: %s, revoked: %s)",
+  async (retainActor, revoked) => {
+    const name = `mention-invitation-${retainActor}-${revoked}`;
+    const target = {
+      agentId: "main",
+      sessionId: name,
+      sessionKey: `agent:main:${name}`,
+      storePath: state.statePath(`${name}.sqlite`),
+    };
+    const createdActor = { type: "human", source: "profile", id: "alice" } as const;
+    await upsertSessionEntryCore(target, { sessionId: name, updatedAt: 1, createdActor });
+    await withSelectedTranscriptReader(
+      target,
+      async () => {
+        const manager = await SessionManager.openAsync(target, state.workspaceDir);
+        if (revoked) {
+          await manager.appendMessageAsync(user(`${name}-seed`));
+        }
+        const beforeEvents = revoked ? await loadTranscriptEvents(target) : undefined;
+        const before = await readSessionMembersInWorker(target);
+        const retained = retainPreparedSessionSharingFacts({
+          databaseIdentity: readDatabasePathIdentitySync(target.storePath).key,
+          sessionKey: target.sessionKey,
+          entry: before.entry,
+          membership: new Set(before.members.map((member) => member.identityId)),
+        });
+        const acquiring = retainPreparedSessionSharingFacts({
+          databaseIdentity: readDatabasePathIdentitySync(target.storePath).key,
+          sessionKey: target.sessionKey,
+          acquiring: true,
+        });
+        try {
+          expect(retained.readCurrent()?.membership.has("bob")).toBe(false);
+          const message = {
+            ...user(name),
+            content: "@bob please review",
+            __openclaw: { humanMentions: [{ profileId: "bob", start: 0, end: 4 }] },
+          };
+          const mentionInvitation: SessionMentionInvitation = {
+            addedBy: "alice",
+            expectedEntry: {
+              sessionId: name,
+              createdActor,
+              visibility: undefined,
+              incognito: undefined,
+            },
+            profiles: [{ profileId: "bob", aliases: ["bob"], tokens: ["@bob"] }],
+          };
+          let current = true;
+          let reachedCommit = false;
+          const assertInvitation = vi.fn(() => {
+            if (!current) {
+              throw new Error("Prepared invitation retired at worker commit");
+            }
+          });
+          const recorder = createUserTurnTranscriptRecorder({
+            target: { ...target, sessionEntry: before.entry },
+            message,
+            prepareMentionInvitation: () => ({
+              invitation: mentionInvitation,
+              assertCurrent: assertInvitation,
+            }),
+          });
+          attachRuntimeUserTurnTranscriptRecorder(message, recorder);
+          const observe = revoked
+            ? probe.admission(workerAdmission, (request, grant, admit) => {
+                // Header setup must not retire authority before the first fresh-message check.
+                if (request.stage === "commit" && assertInvitation.mock.calls.length > 0) {
+                  reachedCommit = true;
+                  current = false;
+                }
+                admit(request, grant);
+              })
+            : undefined;
+          try {
+            const append = withCurrentRuntimeUserTurnTranscriptRecorder(
+              message,
+              (beforeFreshMessageCommit) =>
+                manager.appendMessageAsync(message, { beforeFreshMessageCommit }),
+            );
+            if (revoked) {
+              await expect(append).rejects.toThrow(
+                "Message injection authority is no longer current",
+              );
+              expect(reachedCommit).toBe(true);
+              expect(assertInvitation.mock.calls.length).toBeGreaterThanOrEqual(2);
+              expect(retained.readCurrent()?.membership.has("bob")).toBe(false);
+              expect(
+                acquiring
+                  .initialize({ entry: before.entry, membership: new Set() })
+                  .membership.has("bob"),
+              ).toBe(false);
+              expect((await readSessionMembersInWorker(target)).members).toEqual([]);
+              expect(await loadTranscriptEvents(target)).toEqual(beforeEvents);
+              expect(loadSessionEntry(target)?.profileInvolvement).toBeUndefined();
+            } else {
+              const entryId = await append;
+              // A fresh read must not be what repairs the already retained authorization facts.
+              expect(retained.readCurrent()?.membership.has("bob")).toBe(true);
+              expect(
+                acquiring
+                  .initialize({ entry: before.entry, membership: new Set() })
+                  .membership.has("bob"),
+              ).toBe(true);
+              expect((await readSessionMembersInWorker(target)).members).toEqual([
+                expect.objectContaining({ identityId: "bob", addedBy: "alice" }),
+              ]);
+              expect(await loadTranscriptEvents(target)).toContainEqual(
+                expect.objectContaining({ id: entryId, message }),
+              );
+            }
+          } finally {
+            observe?.mockRestore();
+          }
+        } finally {
+          retained.release();
+          acquiring.release();
+        }
+      },
+      retainActor,
+    );
+  },
+);
 
 it("lets another session write between actor appends while retaining manager order", async () => {
   const target = {

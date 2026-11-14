@@ -1,6 +1,7 @@
 // Memory Core tests cover manager keyword retrieval behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
@@ -8,7 +9,6 @@ import {
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
-import type { EmbeddingProvider } from "./embeddings.js";
 import * as memoryCpuWorkerRuntime from "./manager-cpu-worker-runtime.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
@@ -380,7 +380,7 @@ describe("memory index", () => {
     );
     await manager.sync({ reason: "test" });
     const degraded = manager as unknown as {
-      provider: EmbeddingProvider | null;
+      provider: MemoryEmbeddingProvider | null;
       markLocalEmbeddingProviderDegraded: (err: unknown) => void;
     };
     const provider = degraded.provider;

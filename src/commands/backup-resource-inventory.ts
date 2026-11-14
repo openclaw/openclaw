@@ -20,6 +20,7 @@ export type BackupAgentRoot = Readonly<{
 }>;
 
 export type BackupRegenerableKind =
+  | "worktree template"
   | "agent temporary files"
   | "managed state"
   | "plugin skills"
@@ -35,7 +36,10 @@ export type BackupCoreDatabase = Readonly<
   {
     sourcePath: string;
     identity?: BigIntStats;
-  } & ({ role: "global" | "quarantine" | "client" } | { role: "agent"; agentId: string })
+  } & (
+    | { role: "global" | "quarantine" | "client" | "services" }
+    | { role: "agent"; agentId: string }
+  )
 >;
 
 /** Ephemeral coverage of a captured canonical image; never part of the archive manifest. */
@@ -128,10 +132,13 @@ export async function createBackupResourcePlan(params: {
   oauthDirs: readonly string[];
   workspaceDirs: readonly string[];
   excludedWorkspaceDirs: readonly string[];
+  excludedWorktreeTemplateDirs?: readonly string[];
+  excludedMigrationBackupPaths?: readonly string[];
   agentRoots: readonly BackupAgentRoot[];
   pluginResources: readonly ResolvedPluginBackupResource[];
   pluginRoots: readonly string[];
   onlyConfig?: boolean;
+  localCompanion?: boolean;
 }): Promise<BackupResourcePlan> {
   const stateDir = path.resolve(params.stateDir);
   const pluginResourceRoots: string[] = [];
@@ -161,12 +168,18 @@ export async function createBackupResourcePlan(params: {
     for (const root of MANAGED_STATE_ROOTS) {
       exclude("managed state", path.join(stateDir, root));
     }
+    for (const templateDir of params.excludedWorktreeTemplateDirs ?? []) {
+      exclude("worktree template", templateDir);
+    }
     for (const temporaryRoot of await listDefaultAgentTemporaryRoots(stateDir, agentRoots)) {
       exclude("agent temporary files", temporaryRoot);
     }
     exclude("plugin skills", path.join(stateDir, "plugin-skills"));
 
     for (const resource of params.pluginResources) {
+      if (resource.profile === "local-companion" && !params.localCompanion) {
+        continue;
+      }
       const anchors = resource.scope === "state" ? [{ sourcePath: stateDir }] : agentRoots;
       for (const anchor of anchors) {
         const sourcePath = path.resolve(anchor.sourcePath, ...resource.relativePath.split("/"));
@@ -196,11 +209,15 @@ export async function createBackupResourcePlan(params: {
     (resource) => `${resource.kind}\0${resource.sourcePath}`,
   );
   const protectedPaths = [...protectedPathSet].toSorted();
-  // Workspace exclusions stop traversal but are not regenerable resources;
-  // protected nested owners remain reachable through isIncluded below.
+  // Workspace exclusions and requested migration-original omissions stop traversal
+  // but are not regenerable resources; protected nested owners remain reachable.
   const excludedPaths = [
     ...uniqueRegenerableRoots.map((resource) => resource.sourcePath),
-    ...new Set(params.excludedWorkspaceDirs.map((dir) => path.resolve(dir))),
+    ...new Set(
+      [...params.excludedWorkspaceDirs, ...(params.excludedMigrationBackupPaths ?? [])].map(
+        (excluded) => path.resolve(excluded),
+      ),
+    ),
   ].toSorted((left, right) => right.length - left.length || left.localeCompare(right));
 
   const resources = {

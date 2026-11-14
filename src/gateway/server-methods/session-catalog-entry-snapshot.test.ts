@@ -100,10 +100,11 @@ describe("session catalog entry snapshots", () => {
     const key = "agent:main:lazy";
     setEntries({ [key]: { label: "Before" } });
     let cfg = {};
-    const capture = () => {
+    let fallbackAgentId = "main";
+    const capture = (config = cfg) => {
       const value = createSessionCatalogRequestEntrySnapshot({
-        cfg,
-        fallbackAgentId: "main",
+        cfg: config,
+        fallbackAgentId,
         projection,
       });
       value.freeze();
@@ -136,5 +137,37 @@ describe("session catalog entry snapshots", () => {
     const reconfigured = capture();
     expect(reconfigured.sessionEntries.revision).not.toBe(current.sessionEntries.revision);
     expect(reconfigured.entryForSession(key)?.label).toBe("After");
+    // Compare cached capture with the full-rebuild path across deterministic mixed writes.
+    let seed = 707;
+    for (let index = 0; index < 120; index++) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      const target = `agent:main:mixed-${seed % 7}`;
+      if (seed % 5 === 0) {
+        projection.setEntry(target, undefined);
+      } else {
+        setEntries({
+          [target]: {
+            updatedAt: index,
+            label: `Title ${seed % 3}`,
+            inputTokens: seed % 100,
+            outputTokens: seed % 31,
+            pluginOwnerId: seed % 2 ? "fixture" : "other",
+            initializationPending: seed % 3 === 0 ? (true as const) : undefined,
+          },
+        });
+      }
+      if (index % 11 === 0) {
+        cfg = {};
+      }
+      if (index % 13 === 0) {
+        fallbackAgentId = fallbackAgentId === "main" ? "other" : "main";
+      }
+      const cached = capture();
+      const rebuilt = capture({ ...cfg });
+      expect(cached.sessionEntries.entriesForCatalog!()).toEqual(
+        rebuilt.sessionEntries.entriesForCatalog!(),
+      );
+      expect(capture().sessionEntries.revision).toBe(cached.sessionEntries.revision);
+    }
   });
 });

@@ -1,22 +1,11 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { summarizeAgentActivity } from "../../../../src/agents/agent-activity-presentation.js";
 import { t } from "../../i18n/index.ts";
 import { registerChatToolLabelsEnglish } from "../../i18n/locales/en-chat-tool-labels.ts";
-import { isAgentActivityItem } from "../protocol-validators.generated/activity.js";
+
+export { readPreparedActivity, hasVisiblePreparedActivity } from "./prepared-activity.ts";
 
 registerChatToolLabelsEnglish();
-
-export function readPreparedActivity(message: unknown): AgentActivityItem[] {
-  const activity = asOptionalRecord(message)?.activity;
-  return Array.isArray(activity) ? activity.filter(isAgentActivityItem) : [];
-}
-
-export function hasVisiblePreparedActivity(message: unknown): boolean {
-  return readPreparedActivity(message).some(
-    (activity) => !activity.hideFromChannelProgress && !activity.suppressChannelProgress,
-  );
-}
 
 type ToolGroupOptions = {
   /** Calls of launches that opened a session in its own right, not a subagent. */

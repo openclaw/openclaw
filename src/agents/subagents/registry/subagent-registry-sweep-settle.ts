@@ -1,101 +1,25 @@
-import { hasLiveAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { isTerminalSessionStatus } from "../../../config/sessions/types.js";
+import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
+import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
 } from "./subagent-lifecycle-events.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { resolveSubagentYieldWaitSource } from "./subagent-registry-read.js";
 import { resolveYieldedRunContinuation } from "./subagent-registry-run-pause.js";
 import type { createSubagentSweepReadScope } from "./subagent-registry-sweep-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { isStaleUnendedSubagentRun, isYieldedSubagentRun } from "./subagent-run-liveness.js";
-import {
-  loadSubagentSessionEntry,
-  resolveCompletionForSubagentRun,
-  resolveSubagentRunOrphanReason,
-} from "./subagent-session-reconciliation.js";
+import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { isYieldedSubagentRun } from "./subagent-run-liveness.js";
 
 type CompleteRun = ReturnType<
   typeof createSubagentRegistryCompletionRuntime
 >["completeSubagentRunWithRecovery"];
 type SweepReadScope = ReturnType<typeof createSubagentSweepReadScope>;
-
-/** Settles a run with no live execution owner, from its session or as lost. */
-export async function settleStaleActiveSubagentRun(params: {
-  runId: string;
-  entry: SubagentRunRecord;
-  now: number;
-  readScope: SweepReadScope;
-  complete: CompleteRun;
-}): Promise<void> {
-  const { runId, entry, now, readScope, complete } = params;
-  const assertActiveReadCurrent = () => {
-    readScope.assertRunCurrent(entry);
-    if (
-      typeof entry.execution.endedAt === "number" ||
-      entry.execution.status === "queued" ||
-      entry.killIntent ||
-      entry.killReconciliation ||
-      hasLiveAgentRunContext(runId)
-    ) {
-      throw readScope.retiredRead;
-    }
-  };
-  let observation;
-  let completion;
-  try {
-    assertActiveReadCurrent();
-    const classification = resolveSubagentRunOrphanReason({ entry });
-    observation =
-      typeof classification === "object" && classification !== null
-        ? await classification.read(assertActiveReadCurrent)
-        : {
-            orphanReason: classification,
-            sessionEntry: await loadSubagentSessionEntry({
-              childSessionKey: entry.childSessionKey,
-              childAgentId: entry.childAgentId,
-              assertCurrent: assertActiveReadCurrent,
-            }),
-          };
-    assertActiveReadCurrent();
-    completion = await resolveCompletionForSubagentRun(
-      entry,
-      observation.sessionEntry,
-      assertActiveReadCurrent,
-    );
-  } catch (error) {
-    if (error === readScope.retiredRead) {
-      return;
-    }
-    throw error;
-  }
-  const { orphanReason } = observation;
-  // Unknown execution identity is not completion evidence. Keep the existing
-  // wait/recovery owners until orphanhood or the bounded stale-run cutoff.
-  if (!completion && !orphanReason && !isStaleUnendedSubagentRun(entry, now)) {
-    return;
-  }
-  await complete(
-    {
-      runId,
-      expectedEntry: entry,
-      recoveryCurrent: readScope.completionCurrent,
-      ...(completion ?? {
-        endedAt: now,
-        outcome: {
-          status: "error" as const,
-          error: orphanReason
-            ? `subagent run orphaned: ${orphanReason}`
-            : "subagent run lost active execution context",
-        },
-        reason: SUBAGENT_ENDED_REASON_ERROR,
-      }),
-      sendFarewell: true,
-      accountId: entry.requesterOrigin?.accountId,
-      triggerCleanup: true,
-    },
-    completion ? "sweeper-session-completion" : "sweeper-lost-context",
-  );
-}
 
 /**
  * Settles a yielded run that no continuation can reach (see
@@ -104,16 +28,51 @@ export async function settleStaleActiveSubagentRun(params: {
 export async function settleUnreachableYieldedSubagentRun(params: {
   runId: string;
   entry: SubagentRunRecord;
-  readScope: Pick<SweepReadScope, "completionCurrent">;
+  readScope?: Pick<SweepReadScope, "completionCurrent">;
   complete: CompleteRun;
 }): Promise<boolean> {
   const { runId, entry, readScope, complete } = params;
-  const continuation = isYieldedSubagentRun(entry)
-    ? resolveYieldedRunContinuation(entry)
+  let requesterEnded = false;
+  if (isYieldedSubagentRun(entry) && entry.waitForMessage) {
+    // An unclaimed wait belongs to the session across turns. Only a real
+    // continuation claim makes the requester's committed turn end close it.
+    const requester = await loadSessionEntryByKey(
+      entry.requesterSessionKey,
+      entry.requesterAgentId,
+    );
+    const requesterCompletion = subagentRuns.getRequesterCompletion(entry);
+    requesterEnded =
+      requesterCompletion?.ended === true ||
+      !requester ||
+      requester.archivedAt !== undefined ||
+      (requesterCompletion !== undefined &&
+        isTerminalSessionStatus(requester.status) &&
+        requester.lastRunId === requesterCompletion.runId);
+  }
+  const retired = subagentRuns.isCompletionAuthorityRetired(entry);
+  let continuation = isYieldedSubagentRun(entry)
+    ? resolveYieldedRunContinuation(entry, requesterEnded)
     : undefined;
+  if (
+    continuation?.state === "continuable" &&
+    retired &&
+    !entry.collect &&
+    !resolveSubagentYieldWaitSource(entry)
+  ) {
+    continuation = {
+      state: "unreachable",
+      error: "Descendant completion can no longer continue this yielded requester.",
+    };
+  }
   if (continuation?.state !== "unreachable") {
     return false;
   }
+  subagentRegistryLog.warn("Settling unreachable yielded subagent", {
+    runId,
+    requesterSessionKey: entry.requesterSessionKey,
+    reason: continuation.error,
+    yieldedAt: entry.execution.endedAt,
+  });
   // An outcome the yield already recorded is kept, as a collector that yields now ends with its
   // yielded turn as its result; only a run with no recorded outcome takes the diagnostic error.
   const outcome = entry.execution.outcome ?? {
@@ -124,7 +83,7 @@ export async function settleUnreachableYieldedSubagentRun(params: {
     {
       runId,
       expectedEntry: entry,
-      recoveryCurrent: readScope.completionCurrent,
+      recoveryCurrent: readScope?.completionCurrent,
       // The run ended when it yielded; settling now must not rewrite that time.
       endedAt: entry.execution.endedAt,
       outcome,
@@ -137,5 +96,28 @@ export async function settleUnreachableYieldedSubagentRun(params: {
     },
     "sweeper-unreachable-yield",
   );
+  // A restored task has no old delivery authority. Close only its exact parked
+  // lifecycle through the system projection; never revive its execution or tools.
+  if (retired) {
+    const authority = resolveSubagentChildAuthority(entry);
+    const settled = subagentRuns.get(runId);
+    if (
+      authority.status === "verified" &&
+      isSameSubagentRunOwner(settled, entry) &&
+      settled?.endedReason === SUBAGENT_ENDED_REASON_ERROR
+    ) {
+      await persistGatewaySessionLifecycleEvent({
+        sessionKey: entry.childSessionKey,
+        agentId: authority.childAgentId,
+        expectedWriter: { ...authority.sessionIdentity, runId, requireYielded: true },
+        event: {
+          runId,
+          sessionId: authority.sessionIdentity.sessionId,
+          ts: Date.now(),
+          data: { phase: "error", error: outcome.status === "error" ? outcome.error : undefined },
+        },
+      });
+    }
+  }
   return true;
 }

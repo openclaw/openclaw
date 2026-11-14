@@ -75,21 +75,10 @@ suite.define(() => {
       expect(await rows.count()).toBe(2);
       expect(await entries.count()).toBe(0);
 
-      await gateway.emitGatewayEvent("session.tool", {
-        stream: "tool",
-        runId: "run-review",
-        sessionKey: running.key,
-        data: {
-          phase: "result",
-          name: "read",
-          toolCallId: "read-release-notes",
-          result: { text: "Release notes checked." },
-        },
-      });
-      await expectCount(entries).toBe(1);
-      await page.getByRole("button", { name: "Clear", exact: true }).click();
-      await expectCount(entries).toBe(0);
-      expect(await rows.count()).toBe(2);
+      // Sidebar narration remains; Activity must not acquire full tool streams.
+      for (const { params } of await gateway.getRequests("sessions.messages.subscribe")) {
+        expect(params).toMatchObject({ mode: "narration" });
+      }
 
       await gateway.setMethodResponse("sessions.list", listing([queued]));
       await gateway.emitGatewayEvent("sessions.changed", {
@@ -102,9 +91,7 @@ suite.define(() => {
       expect(await current.getByText("Check documentation links", { exact: true }).count()).toBe(1);
       expect(await rows.count()).toBe(1);
       expect(
-        await current
-          .getByText("Connect to the Gateway to load active sessions.", { exact: true })
-          .count(),
+        await current.getByText("Reconnect to load active sessions.", { exact: true }).count(),
       ).toBe(0);
       await gateway.setMethodResponse("sessions.list", listing([]));
       const previousReads = await gateway.deferNext("sessions.list", { activeOnly: true });
@@ -125,7 +112,7 @@ suite.define(() => {
       await gateway.emitGatewayEvent("sessions.changed", { reason: "update" });
       // Cross the full refresh window and deliver its nested mock response timer.
       await page.clock.runFor(5_001);
-      await showText(current, "Could not load active sessions.");
+      await showText(current, "Couldn’t load active sessions. Try again.");
       await page.clock.resume();
       await gateway.setMethodResponse("sessions.list", listing([]));
       await current.getByRole("button", { name: "Retry", exact: true }).click();

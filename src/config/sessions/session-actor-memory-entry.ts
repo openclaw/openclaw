@@ -157,6 +157,7 @@ export function executeSessionActorMemoryEntryCommand(
       planSessionEntryMaintenance({
         maintenance: maintenance.config,
         initialUnarchivedCount: countUnarchivedSessionEntries(store),
+        deferArchiving: maintenance.preservation.archivingDeferred === true,
         readPreserveKeys: () =>
           resolveSessionMaintenancePreserveKeys({
             store,

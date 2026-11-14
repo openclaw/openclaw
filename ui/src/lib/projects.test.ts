@@ -42,6 +42,31 @@ function harness() {
   };
 }
 
+it("records an initial discovery failure without treating the catalog as ready", async () => {
+  const request = vi.fn(async (): Promise<ProjectsListResult> => {
+    throw new Error("Project discovery unavailable");
+  });
+  const hello = gatewayHelloForMethods(["projects.list"], ["operator.read", "operator.write"]);
+  const connection = watchedGateway({
+    client: createTestGatewayClient(request),
+    hello,
+    sessionKey: "agent:main:first",
+  });
+  const store = projectsForGateway(connection.gateway);
+  const detach = store.subscribe(vi.fn());
+  onTestFinished(detach);
+  await store.pendingRead;
+  expect(store.snapshot).toMatchObject({ result: null, ready: false });
+  expect(store.snapshot.error).toEqual(new Error("Project discovery unavailable"));
+  request.mockResolvedValue({ projects: [project] });
+  await store.refresh();
+  expect(store.snapshot).toMatchObject({
+    ready: true,
+    error: null,
+    result: { projects: [project] },
+  });
+});
+
 it("shares one cold read across chat and the picker, preserving recents", async () => {
   const h = harness();
   const picker = projectsForGateway(h.gateway);
@@ -97,12 +122,14 @@ describe("registered project catalog", () => {
     const invalidated = h.store.snapshot;
     failed.reject(new Error("catalog unavailable"));
     await refresh;
-    expect(invalidated).toEqual({ result: null, ready: false });
+    expect(invalidated).toEqual({ result: null, ready: false, error: null });
     expect(listener).toHaveBeenCalledTimes(3);
-    expect(h.store.snapshot).toEqual({ result: null, ready: false });
+    expect(h.store.snapshot).toMatchObject({ result: null, ready: false });
+    expect(h.store.snapshot.error).toEqual(new Error("catalog unavailable"));
     const replacement = { ...project, originUrl: "https://github.com/replacement/clawsweeper.git" };
     await h.replace([replacement]);
     expect(h.store.snapshot.result?.projects).toEqual([replacement]);
+    expect(h.store.snapshot.error).toBeNull();
   });
 
   it.each(["client", "reconnect", "principal", "scope", "connection"])(

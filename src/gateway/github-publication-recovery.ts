@@ -20,11 +20,15 @@ import {
 import {
   assertSafeGitPublicationWorkspace,
   createGitHubPublicationCommandRunner,
+  githubPublicationRemoteHeadArgs,
   runPublicationCommand,
 } from "./github-publication-git-transport.js";
 import { reconcileGitHubPublicationPullRequest } from "./github-publication-pull-requests.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
-import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
+import {
+  prepareGitHubPublicationTarget,
+  preparePublishedPullRequestTarget,
+} from "./github-publication-target.js";
 
 export type GitHubPublicationRecoveryBackoff = ReturnType<
   typeof createGitHubPublicationRecoveryBackoff
@@ -48,7 +52,7 @@ export function createGitHubPublicationRecoveryBackoff() {
     },
     async run(
       row: { request_id: string; created_at_ms: number },
-      operation: () => Promise<SessionGitHubPublicationResult | void>,
+      operation: () => Promise<SessionGitHubPublicationResult | void | null>,
       settle: (result: SessionGitHubPublicationResult) => Promise<SessionGitHubPublicationResult>,
     ) {
       const requestId = row.request_id;
@@ -73,7 +77,12 @@ export function createGitHubPublicationRecoveryBackoff() {
         if ((previous?.attempts ?? 0) >= 3) {
           throw new Error(previous?.diagnostic);
         }
-        result = await operation();
+        const attempted = await operation();
+        // A skipped attempt preserves prior failures; a healthy wait clears them.
+        if (attempted === null) {
+          return;
+        }
+        result = attempted;
         if (!result || (result.status !== "requested" && result.status !== "publishing")) {
           failures.delete(requestId);
           return result;
@@ -109,7 +118,7 @@ export function createGitHubPublicationRecoveryBackoff() {
       return failure && (result.status === "requested" || result.status === "publishing")
         ? {
             ...result,
-            message: `Automatic recovery deferred; next attempt in ${Math.max(0, Math.ceil((failure.retryAtMs - performance.now()) / 1_000))} seconds. Recorded effects are retained; do not request another publication. ${failure.diagnostic}`,
+            message: `Automatic recovery deferred; next attempt in ${Math.max(0, Math.ceil(Math.min(failure.delayMs, failure.retryAtMs - performance.now()) / 1_000))} seconds. Recorded effects are retained; do not request another publication. ${failure.diagnostic}`,
           }
         : result;
     },
@@ -242,6 +251,35 @@ type GitHubPublicationObservation<Row extends GitHubPublicationExecutionRow> = {
   beforeRetry?: boolean;
 };
 
+export async function observeGitHubPublicationRemoteHead(
+  run: ReturnType<typeof createGitHubPublicationCommandRunner>["run"],
+  remote: string,
+  branch: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  const result = await run(githubPublicationRemoteHeadArgs(remote, branch), {
+    cwd,
+    env,
+  });
+  if (result.code !== 0) {
+    throw new Error("GitHub publication remote branch could not be verified.");
+  }
+  const observed = result.stdout.toString("utf8").trim();
+  if (!observed) {
+    return "";
+  }
+  const fields = observed.split(/\s+/u);
+  if (
+    fields.length !== 2 ||
+    fields[1] !== `refs/heads/${branch}` ||
+    !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/iu.test(fields[0]!)
+  ) {
+    throw new Error("GitHub publication remote branch could not be verified.");
+  }
+  return fields[0]!;
+}
+
 /** Observe a recorded update independently of fresh branch, base and workspace eligibility. */
 export async function observeGitHubPublication<Row extends GitHubPublicationExecutionRow>(
   params: GitHubPublicationObservation<Row>,
@@ -279,27 +317,31 @@ export async function observeGitHubPublication<Row extends GitHubPublicationExec
     releaseWorktree = worktreeOwner.release;
     const { worktree } = worktreeOwner;
     assertCurrent();
-    if (params.beforeRetry && worktreeOwner.loaded.entry.worktree?.githubPullRequest) {
+    const pullRequest = worktreeOwner.loaded.entry.worktree?.githubPullRequest;
+    if (params.beforeRetry && pullRequest) {
       return undefined;
     }
+    const sharedOriginal = row.identity_source !== "personal" && !pullRequest;
     const target = await prepareGitHubPublicationTarget({
       worktree,
-      pullRequest: worktreeOwner.loaded.entry.worktree?.githubPullRequest,
+      pullRequest,
       identity: await refreshIdentity(),
       assertCurrent,
     });
     if (
       target.repository !== row.repository ||
       target.branch !== row.branch ||
-      target.baseBranch !== row.base_branch
+      (!sharedOriginal && target.baseBranch !== row.base_branch)
     ) {
       throw new Error("GitHub publication's original target is unavailable.");
     }
-    const knownPullRequestUrls = await readKnownGitHubPublicationPullRequestUrls(row);
+    const knownPullRequestUrls = sharedOriginal
+      ? []
+      : await readKnownGitHubPublicationPullRequestUrls(row);
     assertCurrent();
     url = await reconcileGitHubPublicationPullRequest({
       requestId: row.request_id,
-      pullRequest: worktreeOwner.loaded.entry.worktree?.githubPullRequest,
+      pullRequest,
       pushRepository: target.pushRepository,
       repository: row.repository,
       pushOwner: target.pushOwner,
@@ -310,6 +352,23 @@ export async function observeGitHubPublication<Row extends GitHubPublicationExec
       parentCommit: row.source_head_commit,
       marker: `<!-- openclaw-publication:${row.request_id} -->`,
       knownPullRequestUrls,
+      readContinuation: sharedOriginal
+        ? async () =>
+            preparePublishedPullRequestTarget(
+              {
+                session: {
+                  agentId: row.agent_id,
+                  sessionKey: row.session_key,
+                  sessionId: row.session_id,
+                  lifecycleRevision: worktreeOwner.loaded.entry.lifecycleRevision ?? null,
+                },
+                reconcile: true,
+                identity: await refreshIdentity(),
+                assertCurrent,
+              },
+              target,
+            )
+        : undefined,
       refreshIdentity,
       assertCurrent,
       pushOnly: params.beforeRetry ? "observed" : params.pushOnly,

@@ -84,7 +84,11 @@ it("gives a Telegram reply on the rich account its contract once", () =>
         cfg,
       );
       const prompt = runAgent.mock.calls.at(-1)?.[0].extraSystemPrompt ?? "";
-      expect(prompt.split("### Delivery Format")).toHaveLength(2);
+      expect(prompt.match(/^### .+$/gm)).toEqual([
+        "### Message Context",
+        "### Delivery Format",
+        "### Conversation Behavior",
+      ]);
       expect(prompt).toContain('"text_markup": "markdown_telegram_rich"');
     },
   ));

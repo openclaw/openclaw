@@ -14,7 +14,8 @@ import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-jo
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAgentSchemaInspectionWorker } from "../state/openclaw-agent-schema-inspection-worker.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { inspectSqliteSchemaHeaderInProcess } from "./sqlite-readonly-location.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
+import { inspectSqliteSchemaHeaderInProcess } from "./sqlite-schema-header-inspection.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -120,7 +121,7 @@ describe("schema-header native reader lifetime", () => {
         writerAppVersion: "committed",
       });
       expect(readFamily(pathname, "-journal")).toEqual(before);
-      expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+      expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
     },
   );
   it.each([false, true])(

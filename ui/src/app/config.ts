@@ -1,3 +1,4 @@
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { normalizeRouteBasePath } from "@openclaw/uirouter";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
@@ -24,11 +25,13 @@ type ApplicationConfig = {
   serverBuildId?: string | null;
   devGitBranch: string | null;
   environment: ControlUiEnvironment | null;
+  readOnlyConfig?: ReadOnlyConfigNotice;
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
   automaticallyFetchFavicons: boolean;
   communityInvite: boolean;
   chatBubblesEnabled?: boolean;
+  openclawIdEnabled?: boolean;
   composerPredictionsEnabled?: boolean;
   /** Null until the serving Gateway publishes its bootstrap policy. */
   newSessionModelDefaults?: "last-used" | "configured" | null;
@@ -41,6 +44,16 @@ type ApplicationConfig = {
 };
 
 export type ApplicationConfigCapability = ReturnType<typeof createApplicationConfigCapability>;
+
+export type ReadOnlyConfigNotice = { message: string; docsUrl?: string };
+
+function readOnlyConfigNotice(text = ""): ReadOnlyConfigNotice {
+  const message = text.trim();
+  const docsUrl = /(?:^|\s)(https?:\/\/\S+)$/iu.exec(message)?.[1];
+  return docsUrl && isHttpUrl(docsUrl)
+    ? { message: message.slice(0, -docsUrl.length).trimEnd(), docsUrl }
+    : { message };
+}
 
 function readDocumentTerminalEnabled(): boolean | null {
   if (typeof document === "undefined") {
@@ -61,6 +74,7 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
   automaticallyFetchFavicons: false,
   communityInvite: false,
   chatBubblesEnabled: false,
+  openclawIdEnabled: false,
   composerPredictionsEnabled: false,
   newSessionModelDefaults: null,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
@@ -107,11 +121,16 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
     serverBuildId: parsed.serverBuildId ?? null,
     devGitBranch: parsed.devGitBranch?.trim() || null,
     environment: parsed.environment ?? null,
+    readOnlyConfig:
+      parsed.configReadOnly === true
+        ? readOnlyConfigNotice(parsed.configReadOnlyNotice)
+        : undefined,
     embedSandboxMode: parsed.embedSandbox ?? "scripts",
     allowExternalEmbedUrls: Boolean(parsed.allowExternalEmbedUrls),
     automaticallyFetchFavicons: Boolean(parsed.automaticallyFetchFavicons),
     communityInvite: parsed.communityInvite === true,
     chatBubblesEnabled: parsed.chatBubblesEnabled === true,
+    openclawIdEnabled: parsed.openclawIdEnabled === true,
     composerPredictionsEnabled: parsed.composerPredictionsEnabled === true,
     newSessionModelDefaults: parsed.newSessionModelDefaults ?? "last-used",
     terminalEnabled: Boolean(parsed.terminalEnabled),

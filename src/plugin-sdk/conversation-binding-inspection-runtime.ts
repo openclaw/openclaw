@@ -5,3 +5,5 @@ export { inspectSessionBindingByConversation as inspectConversationBinding } fro
 export type ConversationBindingInspection = ReturnType<typeof inspectSessionBindingByConversation>;
 
 export { inspectSessionBindingByConversationAsync as inspectConversationBindingAsync } from "../infra/outbound/session-binding-service.js";
+
+export { prepareSessionBindingInspections as prepareConversationBindingInspections } from "../infra/outbound/session-binding-service.js";

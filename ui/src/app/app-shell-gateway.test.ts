@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import type { UsersPrefsGetResult } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -35,6 +36,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
 
   afterEach(() => {
     resetServerUiPrefsSync();
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -157,6 +159,32 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     },
   );
 
+  it("restores profile overrides while operator defaults are still loading", async () => {
+    const { context, owner, snapshot, request, refreshTheme } =
+      createProfileAppearanceGateway("profile-owner");
+    const { readStarted, reply } = holdProfileAppearanceRead(request);
+    const config = createDeferred();
+    Object.assign(context.runtimeConfig.state, { configSnapshot: null });
+    vi.spyOn(context.runtimeConfig, "ensureDisplayLoaded").mockImplementation(async () => {
+      await config.promise;
+      Object.assign(context.runtimeConfig.state, {
+        configSnapshot: { config: { ui: { prefs: { theme: "knot" } } } },
+      });
+    });
+    patchSettings({ theme: "claw", accent: "#112233" });
+    const ready = owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    await readStarted.promise;
+    const applied = createDeferred();
+    refreshTheme.mockImplementationOnce(applied.resolve);
+    reply.resolve(profileAppearanceReply("#336699"));
+    await applied.promise;
+    expect(loadSettings()).toMatchObject({ theme: "claw", accent: "#336699", sidebarEntries: [] });
+    config.resolve();
+    await ready;
+    expect(loadSettings()).toMatchObject({ theme: "knot", accent: "#336699", sidebarEntries: [] });
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   it("reconciles a profile read retired by a theme commit without reusing its pending source", async () => {
     const { context, owner, snapshot } = createProfileAppearanceGateway("profile-owner");
     const writeStarted = createDeferred();
@@ -237,7 +265,99 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     expect(loadSettings().accent).toBe("#445566");
   });
 
-  it("refuses profile hydration from a superseded config snapshot", async () => {
+  it.each(["error", "no_durable_identity"])(
+    "automatically recovers an initial %s profile read on the same connection",
+    async (failure) => {
+      vi.useFakeTimers();
+      vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const { context, owner, snapshot, request } = createProfileAppearanceGateway("profile-owner");
+      patchSettings({ theme: "claw", themeMode: "system" });
+      const saved: UsersPrefsGetResult = {
+        status: "ok",
+        entries: {
+          "ui.theme": "knot",
+          "ui.themeMode": "dark",
+          "ui.fontUi": "jetbrains-mono",
+          "ui.fontChat": "lora",
+          "ui.railShortcuts": [],
+        },
+      };
+      request.mockResolvedValue(saved);
+      if (failure === "error") {
+        request.mockRejectedValueOnce(new Error("temporary preference read failure"));
+      } else {
+        request.mockResolvedValueOnce({ status: "no_durable_identity" });
+      }
+      await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+      expect(loadSettings()).toMatchObject({ theme: "claw", themeMode: "system" });
+      owner.synchronizeGateway(snapshot);
+      await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+      expect(request).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.dynamicImportSettled();
+      expect(loadSettings()).toMatchObject({
+        theme: "knot",
+        themeMode: "dark",
+        fontUi: "jetbrains-mono",
+        fontChat: "lora",
+      });
+      await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+      expect(request).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("bounds automatic failures but allows later synchronization to retry", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { context, owner, snapshot, request } = createProfileAppearanceGateway("profile-owner");
+    request.mockRejectedValue(new Error("preferences offline"));
+    await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    // Initial config reconciliation and redundant callers must not bypass backoff.
+    await owner.reconcileServerUiPrefs(context.runtimeConfig);
+    await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    expect(request).toHaveBeenCalledOnce();
+    for (const delay of [1_000, 2_000, 4_000]) {
+      await vi.advanceTimersByTimeAsync(delay);
+      await vi.dynamicImportSettled();
+    }
+    expect(request).toHaveBeenCalledTimes(4);
+    await vi.runAllTimersAsync();
+    expect(request).toHaveBeenCalledTimes(4);
+    request.mockResolvedValue(profileAppearanceReply("#445566"));
+    owner.synchronizeGateway(snapshot);
+    await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    expect(loadSettings().accent).toBe("#445566");
+    await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+    expect(request).toHaveBeenCalledTimes(5);
+  });
+
+  it.each(["disconnect", "reset", "profile"])(
+    "retires a scheduled profile retry on %s",
+    async (replacement) => {
+      vi.useFakeTimers();
+      vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const { context, owner, snapshot, request } = createProfileAppearanceGateway("profile-owner");
+      request.mockRejectedValue(new Error("preferences offline"));
+      await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+      if (replacement === "disconnect") {
+        snapshot.phase = "reconnecting";
+        owner.synchronizeGateway(snapshot);
+      } else if (replacement === "reset") {
+        owner.reset();
+      } else {
+        snapshot.selfUser = { id: "replacement" };
+      }
+      await vi.runAllTimersAsync();
+      await vi.dynamicImportSettled();
+      expect(request).toHaveBeenCalledOnce();
+      request.mockResolvedValue(profileAppearanceReply("#445566"));
+      snapshot.phase = "connected";
+      await owner.ensureRuntimeConfig(snapshot, context.runtimeConfig);
+      expect(loadSettings().accent).toBe("#445566");
+    },
+  );
+
+  it("applies the current config when an independent profile read finishes", async () => {
     const { context, owner, snapshot, request, refreshTheme, invalidate } =
       createProfileAppearanceGateway("profile-owner");
     const { readStarted, reply } = holdProfileAppearanceRead(request);
@@ -246,12 +366,14 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     // Initial identity adoption published its navigation reset before the held profile read.
     expect(refreshTheme).toHaveBeenCalledOnce();
     refreshTheme.mockClear();
-    Object.assign(context.runtimeConfig.state, { configSnapshot: { config: {} } });
+    Object.assign(context.runtimeConfig.state, {
+      configSnapshot: { config: { ui: { prefs: { theme: "knot" } } } },
+    });
     reply.resolve(profileAppearanceReply("#336699"));
     await ready;
-    expect(loadSettings().accent).not.toBe("#336699");
-    expect(refreshTheme).not.toHaveBeenCalled();
-    expect(invalidate).not.toHaveBeenCalled();
+    expect(loadSettings()).toMatchObject({ theme: "knot", accent: "#336699" });
+    expect(refreshTheme).toHaveBeenCalledOnce();
+    expect(invalidate).toHaveBeenCalledOnce();
   });
 
   it("loads current agent discovery when hello lands", async () => {

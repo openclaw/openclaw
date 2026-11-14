@@ -152,6 +152,7 @@ export function completeEmbeddedAttemptResult(
   const hookAgentId = input.setup.sessionAgentId;
   // Output hooks can reenter the runtime; project only the state settled before they run.
   const state = {
+    agentTerminal: input.state.agentTerminal,
     terminal: input.state.terminal,
     preflightRecovery: prompt.preflightRecovery,
     sessionIdUsed: prompt.sessionIdUsed,
@@ -181,6 +182,7 @@ export function completeEmbeddedAttemptResult(
   const evidence = readSubscriptionCompletionEvidence(subscription);
 
   if (
+    !attempt.inputAlreadyDelivered &&
     attempt.operation !== "settled-tool-finalization" &&
     hookRunner?.hasHooks("llm_output") &&
     terminal.promptErrorSource !== "hook:before_agent_run" &&
@@ -274,6 +276,9 @@ export function completeEmbeddedAttemptResult(
   });
   const keptAnswer = evidence.keptAnswer;
   const keptReply = keptAnswer ? prepareTerminalAssistantReply(keptAnswer.assistant) : closingReply;
+  const finalPresentation = input.preparedStreamRuntime.stream.getFinalPresentation(
+    keptAnswer?.assistant ?? terminalAssistant,
+  );
   const assistant = resolveCurrentAttemptAssistant(state);
   let textToolCallAttempt = false;
   if (
@@ -303,7 +308,9 @@ export function completeEmbeddedAttemptResult(
     ...(textToolCallAttempt ? { textToolCallAttempt: true } : {}),
     ...state,
     ...evidence,
+    ...(attempt.inputAlreadyDelivered ? { inputAlreadyDelivered: true as const } : {}),
     preparedTerminalReply: keptReply,
+    ...(finalPresentation ? { finalPresentation } : {}),
     sandboxRuntime: input.setup.sandboxRuntime,
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     replayMetadata,

@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
 import {
   registerContextEngineForOwner,
@@ -21,6 +20,7 @@ import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { expectCallCount as expectCalls } from "../../test-utils/mock-call-assertions.js";
 import { observeSettlement } from "../promise-settlement.test-support.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   createBackgroundMaintenanceEngine,
@@ -50,13 +50,6 @@ vi.mock("./context-engine-capabilities.js", () => ({
 // mock-isolation: Maintenance assertions control transcript writes through rewriteMock.
 vi.mock("./transcript-rewrite.js", () => ({
   rewriteTranscriptEntriesInSessionManager: (params: unknown) => rewriteMock(params),
-}));
-
-// mock-isolation: Use the in-memory session fixture instead of opening real transcript files.
-vi.mock("../sessions/index.js", () => ({
-  SessionManager: {
-    openAsync: (target: SessionTranscriptRuntimeTarget) => openMock(target),
-  },
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
@@ -126,10 +119,12 @@ describe("runContextEngineMaintenance", () => {
     resetCommandQueueStateForTest();
     rewriteMock.mockClear();
     sessionManagerFixture.reset();
+    vi.spyOn(SessionManager, "openAsync").mockImplementation(openMock);
     resolveTargetMock.mockClear();
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     process.off("SIGTERM", keepProcessAlive);
     vi.useRealTimers();
   });
@@ -165,7 +160,6 @@ describe("runContextEngineMaintenance", () => {
       const { executeContextEngineMaintenance } =
         await import("./context-engine-maintenance-execution.js");
       const coldStorage = await import("../../config/sessions/session-cold-storage.js");
-      const { SessionManager } = await import("../sessions/index.js");
       const controller = new AbortController();
       const entered = createDeferred();
       const cancelled = new Error("maintenance cancelled during transcript read");

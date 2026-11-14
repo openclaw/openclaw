@@ -3,13 +3,13 @@ import type { ChatPendingInputsPage } from "../../../../packages/gateway-protoco
 import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
-import { buildPendingInputItems } from "./chat-pending-inputs.ts";
+import { buildPendingInputItems } from "./chat-pending-input-presentation.ts";
 import { isQueuedSendInlineState, shouldRenderQueuedSendInThread } from "./chat-progress.ts";
 import {
   buildMessageItems,
   hasRenderableNormalizedMessage,
   insertChatItemsByTimestamp,
-  messageMatchesSearchQuery,
+  createChatSearchMatcher,
   queuedSendThreadMessage,
 } from "./chat-thread-items.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
@@ -58,12 +58,12 @@ export function placeChatInputs(
   const blocks: InputBlock[] = [];
   let activeInputKey: string | undefined;
   let previousStoppedKey: string | undefined;
+  const matchesSearch = createChatSearchMatcher(
+    props.searchOpen ? (props.searchQuery ?? "") : "",
+    props.messageRecovery,
+  );
   const markSearchVisibility = (message: unknown, inputItems: readonly ChatItem[]) => {
-    if (
-      props.searchOpen &&
-      props.searchQuery?.trim() &&
-      !messageMatchesSearchQuery(message, props.searchQuery, props.messageRecovery)
-    ) {
+    if (props.searchOpen && props.searchQuery?.trim() && !matchesSearch(message)) {
       for (const item of inputItems) {
         hiddenKeys.add(item.key);
       }

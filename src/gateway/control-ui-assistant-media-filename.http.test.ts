@@ -7,7 +7,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
-import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
+import { handleControlUiAssistantMediaRequest } from "./control-ui-assistant-media-http.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 describe("inbound attachment download filenames", () => {

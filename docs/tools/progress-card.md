@@ -99,22 +99,20 @@ proceed; keep any other unresolved dependencies in the note.
 
 ## Format the note
 
-For eligible multi-step work with a known total, prefer a leading progress bar using observed completed/total counts: PRs reviewed, tests finished, files processed, or other meaningful work units. Prefer those counts over coarse phase counts such as "1 of 3 steps." Label exactly what the count measures: reviewed PRs are not merged PRs, and finished tests are not necessarily passing tests. Never invent percentages or infer completion from elapsed time. When the total is unknown, use a compact status note or table instead.
+For eligible multi-step work with a known total, prefer a leading progress bar using observed completed/total counts: PRs reviewed, tests finished, files processed, or other meaningful work units. Prefer those counts over coarse phase counts such as "1 of 3 steps." Label exactly what the count measures: reviewed PRs are not merged PRs, and finished tests are not necessarily passing tests. Never invent percentages or infer completion from elapsed time. When the total is unknown, use a compact status note instead.
 
-Follow the bar with a short result, blocker, or next action. Use tables for comparisons and a checklist only when the work is genuinely sequential. Omit the checklist when a table, bar, or sentence says it better, and do not repeat the same facts across the plan and Markdown. Update after meaningful batches or state changes, keeping the bar and its label current in every replacement. Markdown accepts ordinary formatting, links, and progress bars:
+Follow the bar with a short result, blocker, or next action. Use a checklist only when the work is genuinely sequential. Omit the checklist when a bar or sentence says it better, and do not repeat the same facts across the plan and Markdown. Update after meaningful batches or state changes, keeping the bar and its label current in every replacement. Markdown accepts ordinary formatting, links, and progress bars:
 
 ```md
 <progress aria-label="Checks finished · 3/7" value="3" max="7"></progress>
 
 Tests are running.
 
-| check      | state   |
-| ---------- | ------- |
-| unit tests | passed  |
-| live flow  | running |
+- Unit tests: passed.
+- Live flow: running.
 ```
 
-Put one progress bar first and give it a short `aria-label` with its purpose and current/total values. In the session hovercard, the Agent Notepad pins the bar above the note and shows that label. Other raw HTML is stripped by the Markdown sanitizer.
+Put one progress bar first and give it a short `aria-label` with its purpose and current/total values. The session hovercard shows a compact note and the current step; it omits progress bars. Other raw HTML is stripped by the Markdown sanitizer.
 
 ## Limits
 
@@ -155,7 +153,7 @@ The progress card retains its disclosure choice for the same Gateway, session, a
 
 On mobile, open **Details → Task progress** and use **Show in chat** in the bottom-right **⋯** menu beside Refresh. It hides or restores progress in chat using the same preference as Settings, while keeping the saved card available in Details. New activity, refreshing, and navigation do not turn the preference back on.
 
-The dashboard widget and session hovercard remain separate read-only placements. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session, even when the chat-card preference is off. All placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications. A notification is a refresh hint, including a null revision; clients confirm removal with a read or clear response for that session and agent.
+The dashboard widget and session hovercard remain separate read-only placements. Hover a session row in the sidebar or a session-reference link in chat to see its compact task summary, even when the chat-card preference is off. All placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications. A notification is a refresh hint, including a null revision; clients confirm removal with a read or clear response for that session and agent.
 
 ### Embedded composer placements
 
@@ -182,6 +180,9 @@ Transient refresh failures retain the last loaded card. The dashboard widget sho
 The Details, composer, and dashboard placements show the local time of the last progress update. The hovercard instead shows the current-or-next plan step and its completed/total count, followed by Markdown in a separate Agent Notepad when a note is present.
 
 The saved checklist and live activity are separate. Ending the parent turn does not complete unfinished steps. The card shows active delegated work, current child failures and stops, and a short error when available. Exact child counts appear only after the session’s own child list has loaded. Connection loss or unavailable activity is labeled explicitly; these updates do not request a new agent turn. Without a matching terminal outcome, unfinished steps appear paused when there is no active work or the card predates a later run. The last-update time shows when the agent last revised the card; elapsed time alone does not expire a card belonging to an active run.
+
+Short error details keep their existing redaction and 240-unit display limit.
+Truncation preserves UTF-16 surrogate pairs rather than showing a broken glyph.
 
 ## Refresh current work status
 

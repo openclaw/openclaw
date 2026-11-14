@@ -59,6 +59,26 @@ afterEach(() => {
 });
 
 describe("release evidence API reads", () => {
+  it("reads a complete fresh artifact inventory once per authentication", () => {
+    let artifacts = Array.from({ length: 101 }, (_, index) => ({ id: index + 1 }));
+    transport.read.mockImplementation((_bin: string, args: string[]) => {
+      const query = new URLSearchParams((args[1] ?? "").split("?")[1]);
+      const start = (Number(query.get("page")) - 1) * 100;
+      return JSON.stringify({
+        total_count: artifacts.length,
+        artifacts: artifacts.slice(start, start + 100),
+      });
+    });
+    const client = createReleaseEvidenceClient("openclaw/openclaw");
+    expect(client.getRunArtifacts("42")).toEqual(artifacts);
+    expect(transport.read).toHaveBeenCalledTimes(2);
+    artifacts = artifacts.slice(1);
+    expect(client.getRunArtifacts("42")).toEqual(artifacts);
+    expect(transport.read).toHaveBeenCalledTimes(3);
+    artifacts = [{ id: 1 }, { id: 1 }];
+    expect(() => client.getRunArtifacts("42")).toThrow("incomplete or duplicated");
+  });
+
   it("reads only the named plugin artifact after a transient metadata failure", () => {
     vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
     transport.read.mockImplementationOnce(() => {

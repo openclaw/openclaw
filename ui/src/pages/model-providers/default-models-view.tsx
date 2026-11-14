@@ -4,6 +4,7 @@ import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profi
 import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode, ModelAuthStatusProvider, ModelAuthStatusResult } from "../../api/types.ts";
+import { pathForAgentPanel } from "../../app-route-paths.ts";
 import {
   DecisionModelPicker,
   type DecisionModelEntry,
@@ -15,6 +16,7 @@ import {
   SettingsSection,
   SettingsSegmented,
 } from "../../components/solid/settings-ui.tsx";
+import { isChatFastModeProviderSupported } from "../../lib/chat/model-select-state.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -24,10 +26,16 @@ import {
 import { describeModelProviderAuth } from "../../lib/model-provider-auth-label.ts";
 import { formatCompletionRoute, type CompletionRoute } from "../../lib/model-runtime-label.ts";
 import { modelSettingFallbacks, modelSettingPrimary } from "../../lib/model-setting.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ModelDefaultsSaveField, ModelProviderRowMessage } from "./config-mutation.ts";
 import type { ModelProviderCatalogReceipt } from "./core-load.ts";
-import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
+import {
+  modelCatalogRef,
+  type AgentUtilityOverride,
+  type DefaultModelSelection,
+  type ModelPickerEntry,
+} from "./data.ts";
 import { renderMutationMessage } from "./view-status.tsx";
 
 export type DefaultModelsViewProps = {
@@ -36,6 +44,10 @@ export type DefaultModelsViewProps = {
   selection: DefaultModelSelection;
   authStatus?: ModelAuthStatusResult | null;
   automaticUtilityModel?: string | null;
+  /** Agents with their own utility model settings; the rest use this default. */
+  utilityOverrides?: AgentUtilityOverride[];
+  onOpenAgent: (agentId: string) => void;
+  basePath: string;
   /** Route the utility model in effect (automatic or explicit) runs on. */
   utilityRuntime?: CompletionRoute;
   thinkingLevel: string | undefined;
@@ -52,6 +64,8 @@ export type DefaultModelsViewProps = {
   busy: Record<string, boolean>;
   defaultsSaving?: boolean;
   defaultsSavingField?: ModelDefaultsSaveField | null;
+  /** The last defaults write was acknowledged; later discovery runs in the background. */
+  defaultsSaved?: boolean;
   message?: ModelProviderRowMessage;
   onPrimaryChange: (model: string) => void;
   onFallbackChange: (model: string | null) => void;
@@ -68,6 +82,7 @@ export type DefaultModelsViewProps = {
 const AUTOMATIC_UTILITY_VALUE = "__openclaw_automatic_utility__";
 const UTILITY_MODEL_PICKER_ID = "model-providers-utility-model";
 const UTILITY_MODEL_HELP_ID = "model-providers-utility-help";
+const DECISION_MODEL_HELP_ID = "model-providers-decision-help";
 const THINKING_HELP_ID = "model-providers-thinking-help";
 const FAST_MODE_HELP_ID = "model-providers-fast-mode-help";
 const TRANSLATED_THINKING_LEVELS = new Set(["off", "low", "medium", "high"]);
@@ -115,7 +130,7 @@ function HelpTitle(params: {
               }
             }}
           >
-            <Icon name="info" />
+            <Icon name="circleQuestionMark" />
           </button>
           <div slot="content" class="settings-section__help-panel">
             <For each={params.paragraphs}>{(text) => <p>{text}</p>}</For>
@@ -184,20 +199,9 @@ function fastModeOptionValue(value: ReturnType<typeof formatFastModeValue>): Fas
   return value === "auto" || value === "ultrafast" ? value : value === "on";
 }
 
-// Discovery progress does not change the saved selection or disable known models.
-function CatalogFeedback(props: {
-  discovering: boolean;
-  error?: string;
-  onRetry: () => void;
-}): JSX.Element {
+function CatalogFeedback(props: { error?: string; onRetry: () => void }): JSX.Element {
   return (
     <>
-      {props.discovering ? (
-        <div class="model-providers__catalog-progress" role="status" aria-live="polite">
-          <span class="btn__spinner" aria-hidden="true" />
-          <span>{t("modelProviders.defaults.discoveringMore")}</span>
-        </div>
-      ) : undefined}
       {props.error ? (
         <div class="model-providers__catalog-progress" role="alert" aria-live="polite">
           <span>{props.error}</span>
@@ -232,9 +236,8 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
             reset();
           };
           return (
-            <Loading fallback={<CatalogFeedback discovering onRetry={retry} />}>
+            <Loading>
               <CatalogFeedback
-                discovering={isPending(read) || Boolean(props.catalogDiscovering)}
                 error={isPending(read) ? undefined : formatUiError(failure())}
                 onRetry={retry}
               />
@@ -242,20 +245,7 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
           );
         }}
       >
-        <Loading
-          fallback={
-            <CatalogFeedback
-              discovering={Boolean(receipt()) || Boolean(props.catalogDiscovering)}
-              onRetry={() => props.onCatalogRetry()}
-            />
-          }
-        >
-          {latest(read)}
-          <CatalogFeedback
-            discovering={isPending(read) || Boolean(props.catalogDiscovering)}
-            onRetry={() => props.onCatalogRetry()}
-          />
-        </Loading>
+        <Loading>{latest(read)}</Loading>
       </Errored>
     </div>
   );
@@ -350,20 +340,19 @@ export function DefaultModels(props: DefaultModelsViewProps) {
   );
   const fastModeOptions = createMemo(() => {
     const model = primaryModel();
-    const priority =
-      model?.supportsFastMode === true &&
-      (model.serviceTiers === undefined || model.serviceTiers.includes("priority"));
+    // Request support can be omitted by native catalogs; tier advertisements only gate Ultrafast.
+    const fast =
+      model?.supportsFastMode ??
+      (model?.available === true && isChatFastModeProviderSupported(model.provider));
     const ultrafast =
-      model?.supportsFastMode === true &&
-      model.available === true &&
-      model.serviceTiers?.includes("ultrafast") === true;
+      fast && model?.available === true && model.serviceTiers?.includes("ultrafast") === true;
     const options = [
       {
         value: "auto" as const,
         label: t("quickSettings.model.fastModes.auto"),
-        supported: priority,
+        supported: fast,
       },
-      { value: "on" as const, label: t("quickSettings.model.fastModes.on"), supported: priority },
+      { value: "on" as const, label: t("chat.modelControls.fast"), supported: fast },
       {
         value: "ultrafast" as const,
         label: t("chat.modelControls.ultrafast"),
@@ -449,15 +438,15 @@ export function DefaultModels(props: DefaultModelsViewProps) {
     return choices;
   });
 
+  // Discovery reports on the heading line, so the rows below it never move.
+  const catalogProgress = <CatalogProgress {...props} />;
   return (
     <SettingsSection
       title={t("modelProviders.defaults.title")}
       description={t("modelProviders.defaults.subtitle")}
+      actions={catalogProgress}
     >
       <div class="model-providers__defaults">
-        {!props.loading && props.models.length === 0 ? (
-          <div class="callout warning">{t("modelProviders.defaults.noModels")}</div>
-        ) : undefined}
         <SettingsRow
           title={t("modelProviders.defaults.primary")}
           control={
@@ -469,56 +458,6 @@ export function DefaultModels(props: DefaultModelsViewProps) {
               disabled={props.models.length === 0 || saving()}
               title={title()}
               onChange={props.onPrimaryChange}
-            />
-          }
-        />
-        <SettingsRow
-          title={
-            <HelpTitle
-              title={t("modelProviders.defaults.utility")}
-              label={t("modelProviders.defaults.utilityHelpLabel")}
-              triggerId={UTILITY_MODEL_HELP_ID}
-              paragraphs={[
-                t("modelProviders.defaults.utilityHelpPurpose"),
-                t("modelProviders.defaults.utilityHelpAutomatic"),
-              ]}
-            />
-          }
-          control={
-            <ModelPicker
-              windowed
-              id={UTILITY_MODEL_PICKER_ID}
-              label={t("modelProviders.defaults.utility")}
-              value={utilityValue()}
-              options={utilityOptions()}
-              disabled={modelControlsDisabled() || saving()}
-              title={title() || utilityRoute()?.detail || ""}
-              onChange={(value) =>
-                props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value)
-              }
-            />
-          }
-        />
-        <FallbackModel
-          label={t("modelProviders.defaults.utilityFallback")}
-          fallbacks={modelSettingFallbacks(props.selection.utilityModel)}
-          primary={modelSettingPrimary(props.selection.utilityModel)}
-          options={options()}
-          disabled={modelControlsDisabled() || saving() || utilityValue() === ""}
-          title={title()}
-          onChange={props.onUtilityFallbackChange}
-        />
-        <SettingsRow
-          title={t("chat.modelControls.decisionLabel")}
-          description={t("chat.modelControls.decisionHelp")}
-          control={
-            <DecisionModelPicker
-              id={"model-providers-decision-model"}
-              models={props.decisionModels}
-              value={props.selection.decisionModel}
-              disabled={!props.canMutate || saving()}
-              title={title()}
-              onChange={props.onDecisionChange}
             />
           }
         />
@@ -553,9 +492,115 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           }}
           onReset={props.onFastModeReset}
         />
-        <CatalogProgress {...props} />
+        <SettingsRow
+          title={
+            <HelpTitle
+              title={t("modelProviders.defaults.utility")}
+              label={t("modelProviders.defaults.utilityHelpLabel")}
+              triggerId={UTILITY_MODEL_HELP_ID}
+              paragraphs={[
+                t("modelProviders.defaults.utilityHelpPurpose"),
+                t("modelProviders.defaults.utilityHelpAutomatic"),
+              ]}
+            />
+          }
+          description={
+            props.utilityOverrides?.length ? (
+              <UtilityOverrides
+                overrides={props.utilityOverrides}
+                basePath={props.basePath}
+                onOpen={props.onOpenAgent}
+              />
+            ) : undefined
+          }
+          control={
+            <ModelPicker
+              windowed
+              id={UTILITY_MODEL_PICKER_ID}
+              label={t("modelProviders.defaults.utility")}
+              value={utilityValue()}
+              options={utilityOptions()}
+              disabled={modelControlsDisabled() || saving()}
+              title={title() || utilityRoute()?.detail || ""}
+              onChange={(value) =>
+                props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value)
+              }
+            />
+          }
+        />
+        <FallbackModel
+          label={t("modelProviders.defaults.utilityFallback")}
+          fallbacks={modelSettingFallbacks(props.selection.utilityModel)}
+          primary={modelSettingPrimary(props.selection.utilityModel)}
+          options={options()}
+          disabled={modelControlsDisabled() || saving() || utilityValue() === ""}
+          title={title()}
+          onChange={props.onUtilityFallbackChange}
+        />
+        <SettingsRow
+          title={
+            <HelpTitle
+              title={t("chat.modelControls.decisionLabel")}
+              label={t("modelProviders.defaults.decisionHelpLabel")}
+              triggerId={DECISION_MODEL_HELP_ID}
+              paragraphs={[t("chat.modelControls.decisionHelp")]}
+            />
+          }
+          control={
+            <DecisionModelPicker
+              id={"model-providers-decision-model"}
+              models={props.decisionModels}
+              value={props.selection.decisionModel}
+              disabled={!props.canMutate || saving()}
+              title={title()}
+              onChange={props.onDecisionChange}
+            />
+          }
+        />
         {props.canMutate ? renderMutationMessage(props.message) : undefined}
       </div>
     </SettingsSection>
+  );
+}
+
+function UtilityOverrides(props: {
+  overrides: AgentUtilityOverride[];
+  basePath: string;
+  onOpen: (agentId: string) => void;
+}) {
+  const selection = (entry: AgentUtilityOverride) =>
+    [
+      entry.model === undefined
+        ? t("modelProviders.defaults.utilityOverrideDefaultModel")
+        : entry.model || t("modelProviders.defaults.disabled"),
+      ...(entry.fallbacks.length
+        ? [
+            t("modelProviders.defaults.utilityOverrideFallbacks", {
+              models: entry.fallbacks.join(", "),
+            }),
+          ]
+        : []),
+    ].join(" · ");
+  return (
+    <span>
+      {t("modelProviders.defaults.utilityOverridesTitle")}
+      <For each={props.overrides}>
+        {(entry) => (
+          <span data-agent-id={entry.agentId}>
+            <br />
+            <a
+              class="model-providers__agent-link"
+              href={pathForAgentPanel(entry.agentId, null, props.basePath)}
+              onClick={(event) => handleNavigationClick(event, () => props.onOpen(entry.agentId))}
+            >
+              {entry.label}
+            </a>
+            {`: ${selection(entry)}`}
+          </span>
+        )}
+      </For>
+      <br />
+      {t("modelProviders.defaults.utilityOverridesOthers")}
+    </span>
   );
 }

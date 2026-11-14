@@ -650,6 +650,15 @@ describe("sidebar attention source publication", () => {
     containsLabel("Cached auth");
     invalidateModelAuthStatusRequests(harness.gateway.snapshot.client!);
     harness.emitEvent("chat.metadata.changed", {
+      agentId: "other",
+      modelCatalogChanged: true,
+      authChanged: true,
+      commandsChanged: false,
+    });
+    await Promise.resolve();
+    expect(authCalls).toBe(3);
+    containsLabel("Cached auth");
+    harness.emitEvent("chat.metadata.changed", {
       agentId: "main",
       usageUpdatedAt: now,
       modelCatalogChanged: false,
@@ -831,8 +840,7 @@ describe("sidebar attention source publication", () => {
     expect(store.entries.map((entry) => entry.type)).toEqual(["outbox", "attention"]);
     expect(sidebarInboxTabCounts(store.entries)).toMatchObject({
       all: 2,
-      system: 1,
-      automations: 1,
+      system: 2,
     });
     store.dismiss(dismissal!);
     expect(store.entries.map((entry) => entry.type)).toEqual(["attention"]);

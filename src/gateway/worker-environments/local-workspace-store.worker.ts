@@ -11,7 +11,9 @@ import type { LocalWorkspacePreparation } from "./local-workspace-cas.js";
 import {
   beginLocalWorkspaceSweepInDatabase,
   deleteLocalWorkspaceSweepBatchInDatabase,
+  finishLocalWorkspaceSweepInDatabase,
   prepareLocalWorkspaceContentInDatabase,
+  requestLocalWorkspaceSweepInDatabase,
   pruneLocalWorkspaceLegacyBatchInDatabase,
   type LocalWorkspaceSweepCandidates,
 } from "./local-workspace-cas.kernel.js";
@@ -27,7 +29,9 @@ export const localWorkspaceOperations = {
     const preparation = deserialize(inflateRawSync(input.preparation)) as LocalWorkspacePreparation;
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
-        return prepareLocalWorkspaceContentInDatabase(db, preparation);
+        const epoch = prepareLocalWorkspaceContentInDatabase(db, preparation);
+        requestLocalWorkspaceSweepInDatabase(db, epoch);
+        return epoch;
       },
       { database: open() },
     );
@@ -41,6 +45,13 @@ export const localWorkspaceOperations = {
     runOpenClawStateWriteTransaction(({ db }) => beginLocalWorkspaceSweepInDatabase(db), {
       database: open(),
     }),
+  "localWorkspace.finishSweep": (input: { epoch: number }, { open }: WorkerOperationContext) =>
+    runOpenClawStateWriteTransaction(
+      ({ db }) => finishLocalWorkspaceSweepInDatabase(db, input.epoch),
+      {
+        database: open(),
+      },
+    ),
   "localWorkspace.sweepBatch": (
     input: { epoch: number; batch: LocalWorkspaceSweepCandidates },
     { open }: WorkerOperationContext,
@@ -78,6 +89,17 @@ export const localWorkspaceOperations = {
           mutateLocalWorkspaceProjection(db, input.id, mutation, input.preparationEpoch) ?? null;
         assertOpenClawStateLeasesWorkerOwnedInTransaction(db, input.leases, "commit");
         assertWorktreeRegistryPredicates(db, input.predicates);
+        if (
+          mutation.kind === "delete" ||
+          (mutation.kind === "update" &&
+            (mutation.manifest ||
+              mutation.rejectedResult ||
+              "tree_root_digest" in mutation.patch ||
+              "source_paths_digest" in mutation.patch ||
+              "checkpoint_json" in mutation.patch))
+        ) {
+          requestLocalWorkspaceSweepInDatabase(db);
+        }
         deferSqliteWorkerCommitReceipt(db, committed);
         return committed;
       },

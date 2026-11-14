@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { isPathInside } from "./path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
@@ -29,6 +30,28 @@ export function buildUpdateRehearsalPathEnv(root: string): NodeJS.ProcessEnv {
     OPENCLAW_NO_AUTO_UPDATE: "1",
     NODE_DISABLE_COMPILE_CACHE: "1",
   };
+}
+
+/**
+ * Rehearsal copies are private SQLite images, never live PostgreSQL anchors.
+ * Current drivers already write this projection into the rehearsal config
+ * (update-candidate-rehearsal.ts isolatedConfig); 2026.11.3 and older drivers
+ * copy PostgreSQL selections unchanged, so the candidate's config read applies
+ * it too. Removable once those drivers are no longer supported update sources.
+ */
+export function projectUpdateRehearsalDatabaseConfig(
+  raw: unknown,
+  env: NodeJS.ProcessEnv,
+): unknown {
+  if (!isRecord(raw) || !isRecord(raw.database) || !resolveUpdateRehearsalRoot(env)) {
+    return raw;
+  }
+  const { engine, families } = raw.database;
+  const postgres =
+    engine === "postgres" ||
+    (isRecord(families) &&
+      Object.values(families).some((family) => isRecord(family) && family.engine === "postgres"));
+  return postgres ? { ...raw, database: { engine: "sqlite" } } : raw;
 }
 
 /** Recognize the complete 9.3+ driver contract; update-in-progress alone is also used by live Doctor. */

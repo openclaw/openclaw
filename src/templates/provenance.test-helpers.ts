@@ -11,7 +11,6 @@ import type { PersistedTemplateInstall } from "./provenance-types.js";
 import { parseTemplateManifest } from "./schema.js";
 import type {
   TemplateAddPlan,
-  TemplateOpenClawProfile,
   TemplateSourceIdentity,
   TemplateWorkspaceSourceSnapshot,
 } from "./types.js";
@@ -21,7 +20,6 @@ export async function makeProvenancePlan(
   manifestValue: unknown,
   options: {
     workspace?: string;
-    openClawProfile?: TemplateOpenClawProfile;
     packageBootstrap?: TemplateWorkspaceSourceSnapshot;
     packagePreflight?: NonNullable<
       Parameters<typeof buildTemplateAddPlan>[0]["context"]
@@ -44,7 +42,6 @@ export async function makeProvenancePlan(
   };
   const plan = await buildTemplateAddPlan({
     manifest: parsed.manifest,
-    openClawProfile: options.openClawProfile,
     packageBootstrap: options.packageBootstrap,
     source,
     context: {

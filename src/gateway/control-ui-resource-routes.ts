@@ -18,6 +18,7 @@ const CONTROL_UI_RESOURCE_ROUTES = {
   channelAvatar: { prefix: "/__openclaw__/channel-avatar", suffix: "" },
   linkFavicon: { prefix: "/__openclaw__/link-favicon", suffix: "" },
   pluginIcon: { prefix: "/__openclaw__/plugin-icon", suffix: "" },
+  providerIcon: { prefix: "/__openclaw__/provider-icon", suffix: "" },
   pluginActivityIcon: { prefix: "/__openclaw__/plugin-activity-icon", suffix: "" },
   pluginThemeArt: { prefix: "/__openclaw__/plugin-theme-art", suffix: "" },
   userAvatar: {

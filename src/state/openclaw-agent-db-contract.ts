@@ -1,5 +1,5 @@
 import type { EngineConnection } from "../infra/sql-connection.js";
-import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import type { SqliteWalHealth, SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type {
   DatabaseFileIdentity,
   DatabasePathIdentity,
@@ -7,6 +7,7 @@ import type {
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 
 export { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
+export const AGENT_COLD_NAVIGATION_SCHEMA_VERSION = 39;
 export const AGENT_TEXT_SEARCH_SCHEMA_VERSION = 38;
 export const AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION = 37;
 export const AGENT_VECTOR_SEARCH_SCHEMA_VERSION = 33;
@@ -33,6 +34,20 @@ export type OpenClawAgentDatabase = {
   db: EngineConnection;
   path: string;
   walMaintenance: SqliteWalMaintenance;
+  closeTiming?: {
+    startedAt: number;
+    walStopMs?: number;
+    checkpointMs?: number;
+    nativeCloseMs?: number;
+    checkpoint?: {
+      alreadyClosed: boolean;
+      pathCurrent: boolean;
+      state?: SqliteWalHealth["state"];
+      logFrames?: number | null;
+      checkpointedFrames?: number | null;
+      walBytes?: number;
+    };
+  };
 };
 
 export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {

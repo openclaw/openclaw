@@ -34,7 +34,8 @@ function mediaError(message: string, retryable = false) {
 }
 
 async function readUploadResponse(response: Response, allowEmpty = false) {
-  const text = await response.text();
+  const { readProviderTextResponse } = await import("openclaw/plugin-sdk/provider-http");
+  const text = await readProviderTextResponse(response, "X media upload");
   if (allowEmpty && !text.trim()) {
     return undefined;
   }

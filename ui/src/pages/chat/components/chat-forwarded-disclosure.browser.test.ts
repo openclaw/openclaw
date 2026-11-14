@@ -80,8 +80,8 @@ function fixture(
     ),
   };
   const expanded = new Set<string>();
-  const draw = () =>
-    root.render(group, {
+  const draw = (current: MessageGroup = group) =>
+    root.render(current, {
       agentId: "main",
       mainKey: "main",
       senderAgentAvatars,
@@ -169,9 +169,8 @@ it.each([
 
 it("keeps a forwarded stream open until final while collapsing prior messages", async () => {
   const { group, draw } = fixture("assistant", 700);
-  group.messages = group.messages.slice(0, 2);
-  group.isStreaming = true;
-  draw();
+  const messages = group.messages.slice(0, 2);
+  draw({ ...group, messages, isStreaming: true });
   await expect
     .poll(() =>
       Array.from(
@@ -180,8 +179,7 @@ it("keeps a forwarded stream open until final while collapsing prior messages", 
       ),
     )
     .toEqual([true, false]);
-  group.isStreaming = false;
-  draw();
+  draw({ ...group, messages, isStreaming: false });
   await expect
     .poll(
       () =>

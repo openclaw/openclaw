@@ -1,8 +1,17 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it } from "vitest";
-import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { readGlobalSingleton } from "../shared/global-singleton.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createSessionCatalogRequestEntrySnapshot,
+  type SessionCatalogInstances,
+} from "./server-methods/session-catalog-entry-snapshot.js";
+import {
+  catalogHost,
+  catalogSession,
+} from "./server-methods/session-catalog.fixtures.test-support.js";
 import { expectCollected, weak, weakControl } from "./session-collection.test-support.js";
 import { ready } from "./session-row-projection-record.js";
 import {
@@ -11,6 +20,80 @@ import {
   seedRow as writeEntry,
 } from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions, prepareSessionRowSelection } from "./session-utils-list.js";
+
+it("releases superseded display configs while resident row facts remain usable", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const config = (name: string) => ({ agents: { entries: { main: { identity: { name } } } } });
+    setRuntimeConfigSnapshot(config("Initial"));
+    const keys = Array.from({ length: 4 }, (_, index) => `agent:main:config-retention-${index}`);
+    for (const key of keys) {
+      writeEntry(key, { sessionId: key, updatedAt: 1 });
+    }
+    using _ = holdForeground();
+    using projection = await createTestProjection({
+      cfg: getRuntimeConfigSnapshot()!,
+      getConfig: () => getRuntimeConfigSnapshot()!,
+      modelCatalog: [],
+    });
+    async function refreshConfigs() {
+      const retired: WeakRef<object>[] = [];
+      for (const [index, key] of keys.entries()) {
+        setRuntimeConfigSnapshot(config(`Revision ${index}`));
+        await projection.ensureMaterialized();
+        expect(projection.describe({ agentId: "main", key })).toBeDefined();
+        // Check retired generations, excluding the last prepared config.
+        if (index < keys.length - 1) {
+          retired.push(weak(getRuntimeConfigSnapshot()!));
+        }
+      }
+      setRuntimeConfigSnapshot(config("Current"));
+      return retired;
+    }
+    const retired = await refreshConfigs();
+    await expectCollected(weakControl(), ...retired);
+    for (const key of keys) {
+      expect(projection.snapshot({ agentId: "main", key }, {}).row?.sessionId).toBe(key);
+    }
+  });
+});
+
+it("releases old catalog planning rosters while published adoption identities remain usable", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const key = "agent:main:catalog-retention";
+    writeEntry(key, { sessionId: "original", updatedAt: 1 });
+    using _ = holdForeground();
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    await projection.ensureMaterialized();
+    const host = catalogHost({ sessions: [catalogSession("thread", { sessionKey: key })] });
+    const instances: SessionCatalogInstances = new Map();
+    function capture() {
+      const planning = createSessionCatalogRequestEntrySnapshot({
+        cfg,
+        fallbackAgentId: "main",
+        projection,
+      });
+      planning.freeze();
+      planning.captureHostInstances(host, instances);
+      const entries = planning.sessionEntries.entriesForCatalog!();
+      return [weak(entries), ...entries.map(weak)];
+    }
+    const retired = capture();
+    writeEntry(key, { sessionId: "replacement", updatedAt: 2 });
+    await projection.ensureMaterialized();
+    // Publication alone retires the roster; no subsequent catalog request is needed.
+    await expectCollected(weakControl(), ...retired);
+    expect(instances.get(key)?.sessionId).toBe("original");
+    const delivery = createSessionCatalogRequestEntrySnapshot({
+      cfg,
+      fallbackAgentId: "main",
+      projection,
+      sessionKeys: [key],
+    });
+    expect(delivery.projectHostSessions(host, instances).sessions[0]?.sessionKey).toBeUndefined();
+  });
+});
 
 it("collects superseded resident rows and their materializations after metadata refreshes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -28,6 +111,13 @@ it("collects superseded resident rows and their materializations after metadata 
       write(key, 0);
     }
     // Optional transcript work must not borrow a row while collection is measured.
+    const listeners = readGlobalSingleton(
+      Symbol.for("openclaw.internalSessionTranscriptListeners"),
+    );
+    if (!(listeners instanceof Set)) {
+      throw new Error("Transcript listener registry is unavailable");
+    }
+    const listenersBefore = listeners.size;
     const release = holdForeground();
     const projection = await createTestProjection({ cfg, modelCatalog: [] });
     const rows = () => projection.selectEntries().filter(ready);
@@ -48,7 +138,7 @@ it("collects superseded resident rows and their materializations after metadata 
     const control = weakControl();
     function refreshEntries(revision: number) {
       for (const row of rows()) {
-        retired.push(...[row, row.entry, row.materialized].map(weak));
+        retired.push(...[row, row.entry, row.materialized, row.materialized.row].map(weak));
         write(row.key, revision);
       }
     }
@@ -89,6 +179,7 @@ it("collects superseded resident rows and their materializations after metadata 
       const disposedEntries = projection.selectEntries().map((row) => weak(row.entry));
       captureSelections();
       projection.dispose();
+      expect(listeners.size).toBe(listenersBefore);
       await expectCollected(...materializations, ...disposedEntries, ...selections);
     } finally {
       projection.dispose();

@@ -1,26 +1,27 @@
 import { describe, expect, it } from "vitest";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { formatTokenUsageDisplay, resolveTotalTokens, truncateLine } from "./subagents-format.js";
 
 const freshUsage = (totalTokens: number) => ({
   totalTokens,
   totalTokensFresh: true,
-  totalTokensVersion: 1 as const,
+  totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
 });
 
 describe("shared/subagents-format", () => {
   it("formats token counts with integer, kilo, and million branches", () => {
     expect(formatTokenUsageDisplay()).toBe("");
-    expect(formatTokenUsageDisplay(freshUsage(999.9))).toBe("tokens 999 prompt/cache");
-    expect(formatTokenUsageDisplay(freshUsage(1_500))).toBe("tokens 1.5k prompt/cache");
-    expect(formatTokenUsageDisplay(freshUsage(10_000))).toBe("tokens 10k prompt/cache");
-    expect(formatTokenUsageDisplay(freshUsage(15_400))).toBe("tokens 15k prompt/cache");
+    expect(formatTokenUsageDisplay(freshUsage(999.9))).toBe("tokens 999 context");
+    expect(formatTokenUsageDisplay(freshUsage(1_500))).toBe("tokens 1.5k context");
+    expect(formatTokenUsageDisplay(freshUsage(10_000))).toBe("tokens 10k context");
+    expect(formatTokenUsageDisplay(freshUsage(15_400))).toBe("tokens 15k context");
     // Rollover boundary: rounding to thousands must not emit an out-of-scheme
     // "1000k" — it has to advance to the million branch.
-    expect(formatTokenUsageDisplay(freshUsage(999_499))).toBe("tokens 999k prompt/cache");
-    expect(formatTokenUsageDisplay(freshUsage(999_500))).toBe("tokens 1m prompt/cache");
-    expect(formatTokenUsageDisplay(freshUsage(999_999))).toBe("tokens 1m prompt/cache");
-    expect(formatTokenUsageDisplay(freshUsage(1_000_000))).toBe("tokens 1m prompt/cache");
-    expect(formatTokenUsageDisplay(freshUsage(1_250_000))).toBe("tokens 1.3m prompt/cache");
+    expect(formatTokenUsageDisplay(freshUsage(999_499))).toBe("tokens 999k context");
+    expect(formatTokenUsageDisplay(freshUsage(999_500))).toBe("tokens 1m context");
+    expect(formatTokenUsageDisplay(freshUsage(999_999))).toBe("tokens 1m context");
+    expect(formatTokenUsageDisplay(freshUsage(1_000_000))).toBe("tokens 1m context");
+    expect(formatTokenUsageDisplay(freshUsage(1_250_000))).toBe("tokens 1.3m context");
   });
 
   it("keeps truncated lines within the requested max length", () => {
@@ -56,16 +57,16 @@ describe("shared/subagents-format", () => {
     expect(formatTokenUsageDisplay({ inputTokens: Number.NaN, outputTokens: 0 })).toBe("");
   });
 
-  it("formats io and prompt-cache usage displays with fallback branches", () => {
+  it("formats io and context usage displays with fallback branches", () => {
     expect(
       formatTokenUsageDisplay({
         inputTokens: 1_200,
         outputTokens: 300,
         ...freshUsage(2_100),
       }),
-    ).toBe("tokens 1.5k (in 1.2k / out 300), prompt/cache 2.1k");
+    ).toBe("tokens 1.5k (in 1.2k / out 300), context 2.1k");
 
-    expect(formatTokenUsageDisplay(freshUsage(500))).toBe("tokens 500 prompt/cache");
+    expect(formatTokenUsageDisplay(freshUsage(500))).toBe("tokens 500 context");
     expect(
       formatTokenUsageDisplay({
         inputTokens: 1_200,

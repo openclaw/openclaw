@@ -10,7 +10,7 @@ const callGateway = vi.mocked(callAgentToolGatewayRequest);
 const runtime = { operationId: "reload-1", generation: 2, pluginIds: ["local-tool"] };
 const reloadArgs = { action: "reload", pluginId: "local-tool" };
 type Result = Awaited<ReturnType<ReturnType<typeof createPluginsTool>["execute"]>>;
-const json = (value: unknown) => JSON.stringify(value, null, 2);
+const json = (value: unknown) => JSON.stringify(value);
 const execute = (args: Record<string, unknown>) => createPluginsTool().execute("call", args);
 const reload = () => execute(reloadArgs);
 function fail(
@@ -81,9 +81,22 @@ it.each([
     params: { pluginId: "local-tool", enabled: true },
   },
   {
-    args: { action: "install", source: "clawhub", packageName: "local-tool", version: "1.0.0" },
+    args: {
+      action: "install",
+      source: "clawhub",
+      packageName: "local-tool",
+      version: "1.0.0",
+      expectedPluginId: "local-tool",
+      expectedIntegrity: "sha256:" + "a".repeat(64),
+    },
     method: "plugins.install",
-    params: { source: "clawhub", packageName: "local-tool", version: "1.0.0" },
+    params: {
+      source: "clawhub",
+      packageName: "local-tool",
+      version: "1.0.0",
+      expectedPluginId: "local-tool",
+      expectedIntegrity: "sha256:" + "a".repeat(64),
+    },
   },
 ])(
   "routes $args.action through the authorized management owner",
@@ -159,7 +172,7 @@ it.each([
     action: "inspect",
     payload: {
       ok: true,
-      declared: { tools: Array.from({ length: 600 }, () => "x") },
+      declared: { tools: Array.from({ length: 1_200 }, () => "x") },
       reviewToken: "complete-review-only",
     },
   },
@@ -236,21 +249,19 @@ it.each([false, true])(
   },
 );
 
-it("bounds inventory and narrows it without hiding the omitted count", async () => {
+it.each(["plugin-24", "café"])("bounds inventory and narrows it with %s", async (query) => {
   const plugins = Array.from({ length: 25 }, (_, index) => ({
     id: `plugin-${index}`,
     version: "1.0.0",
     state: "enabled",
+    name: index === 24 ? "Cafe\u0301 tools" : undefined,
   }));
   callGateway.mockResolvedValue({ plugins, mutationAllowed: true });
   const tool = createPluginsTool();
   const all = await tool.execute("inventory", { action: "list" });
   expect(all.details).toMatchObject({ matching: 25, omitted: 5, mutationAllowed: true });
   expect((all.details as { plugins: unknown[] }).plugins).toHaveLength(20);
-  const narrowed = await tool.execute("filter", { action: "list", query: "plugin-24" });
-  expect(narrowed.details).toMatchObject({
-    plugins: [{ id: "plugin-24", state: "enabled", version: "1.0.0" }],
-    matching: 1,
-    omitted: 0,
-  });
+  const narrowed = await tool.execute("filter", { action: "list", query });
+  const selected = { id: "plugin-24", state: "enabled", version: "1.0.0" };
+  expect(narrowed.details).toMatchObject({ plugins: [selected], matching: 1, omitted: 0 });
 });

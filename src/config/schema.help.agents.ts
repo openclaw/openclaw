@@ -33,8 +33,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Per-plugin enablement override for a specific entry, applied on top of global plugin policy. With the default hybrid reload mode, changes hot-reload the plugin runtime for new agent turns without restarting the Gateway unless the plugin requires a restart for this path. Use this to stage plugin rollout gradually across environments.",
   "plugins.entries.*.hooks":
     "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
-  "plugins.entries.*.hooks.allowPromptInjection":
-    "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build`.",
+  "plugins.entries.*.hooks.allowPromptModification":
+    "Allows this plugin to add or change the context and instructions sent to the model, which can influence its responses. Only allow this for plugins you trust. Allowed by default. Set false to block prompt-modifying hooks, tool prompt guidance, next-turn prompt contributions, and active-run steering.",
   "plugins.entries.*.hooks.allowConversationAccess":
     "Controls whether this plugin may read raw conversation content from typed hooks such as `before_agent_run`, `before_model_resolve`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
   "plugins.entries.*.hooks.timeoutMs":
@@ -97,7 +97,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.modelPolicy":
     "Per-agent model override policy. An explicit allow list replaces the default policy for this agent.",
   "agents.entries.*.modelPolicy.allow":
-    'Allowed model override refs for this agent. Accepts aliases, full "provider/model" refs, and trailing prefix wildcards such as "provider/*" or "provider/namespace/*"; empty permits any model.',
+    'Allowed model override refs for this agent. Accepts aliases, full "provider/model" refs, and trailing prefix wildcards such as "provider/*", "provider/namespace/*" or "provider/family-*"; empty permits any model.',
   "agents.entries.*.models.*.agentRuntime":
     "Optional per-model runtime policy for this agent. Use this for agent-specific model exceptions instead of setting a whole-agent runtime.",
   "agents.entries.*.models.*.agentRuntime.id":
@@ -150,6 +150,12 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     'Thinking level used only for embedded OpenClaw compaction summaries: "off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra", or "inherit". Defaults to the provider compaction preference, otherwise "low"; native local Ollama prefers "off". Set "inherit" to reuse the session level. Explicit settings override provider defaults, and the selected level is clamped to the actual compaction model/runtime. Native Codex app-server compaction ignores this setting because its compact request has no per-operation thinking override, and OpenClaw logs a warning.',
   "agents.defaults.compaction.keepRecentTokens":
     "Minimum token budget preserved from the most recent conversation window during compaction. Use higher values to protect immediate context continuity and lower values to keep more long-tail history.",
+  "agents.defaults.compaction.maxSummaryChars":
+    "Maximum characters in a persisted client-side compaction summary (default: 16000; range: 1000–200000). Larger summaries retain more generated context but increase replay cost on later requests. The active model token budget can require a smaller summary. Does not control provider-native compaction.",
+  "agents.entries.*.compaction":
+    "Per-agent client-side compaction overrides. Omitted settings inherit agents.defaults.compaction.",
+  "agents.entries.*.compaction.maxSummaryChars":
+    "Per-agent persisted client-side summary character ceiling (1000–200000), overriding agents.defaults.compaction.maxSummaryChars. The active model token budget may require a smaller summary.",
   "agents.defaults.compaction.identifierPolicy":
     'Identifier-preservation policy for compaction summaries: "strict" prepends built-in opaque-identifier retention guidance (default), while "off" disables this prefix.',
   "agents.defaults.compaction.recentTurnsPreserve":
@@ -161,9 +167,9 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.qualityGuard.maxRetries":
     "Maximum number of regeneration retries after a failed safeguard summary quality audit. Use small values to bound extra latency and token cost.",
   "agents.defaults.compaction.midTurnPrecheck":
-    "Optional embedded OpenClaw tool-loop precheck that detects context pressure after a tool result is appended and before the next model call. When enabled, OpenClaw reuses existing precheck recovery to truncate tool results or compact before retrying.",
+    "Optional estimated-pressure threshold between tool rounds using the compaction reserve. Provider-measured threshold maintenance and hard context-window admission run independently, reusing safe truncation or compaction recovery.",
   "agents.defaults.compaction.midTurnPrecheck.enabled":
-    "Enable structured mid-turn context pressure checks for embedded OpenClaw tool loops. Default: false. Keep disabled unless long tool-heavy sessions hit context overflow before normal turn-end compaction can run.",
+    "Enable the optional estimated-pressure threshold between tool rounds. Default: false. Measured threshold maintenance and the hard context-window check remain active when this is disabled.",
   "agents.defaults.compaction.postIndexSync":
     'Controls post-compaction session memory reindex mode: "off", "async", or "await" (default: "async"). Use "await" for strongest freshness, "async" for lower compaction latency, and "off" only when session-memory sync is handled elsewhere.',
   "agents.defaults.compaction.postCompactionSections":

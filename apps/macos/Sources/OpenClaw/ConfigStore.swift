@@ -144,19 +144,12 @@ enum ConfigStore {
             guard origin.isCurrent else { throw self.sourceChanged() }
         } else if let save = overrides.saveLocal {
             save(document.root)
+        } else if origin.lease == nil, overrides.saveGateway == nil {
+            try self.saveLocal(document, allowGatewayAuthMutation: allowGatewayAuthMutation)
         } else {
-            do {
-                if origin.lease == nil, overrides.saveGateway == nil {
-                    try self.saveLocal(document, allowGatewayAuthMutation: allowGatewayAuthMutation)
-                } else {
-                    try await self.saveToGateway(document, overrides: overrides)
-                }
-            } catch {
-                guard origin.isCurrent, self.permitsLocalFallback(after: error) else {
-                    throw error
-                }
-                try self.saveLocal(document, allowGatewayAuthMutation: allowGatewayAuthMutation)
-            }
+            // A Gateway-loaded root holds config.get's redacted secrets, which only config.set
+            // restores; a failed Gateway save must never reach the local file writer.
+            try await self.saveToGateway(document, overrides: overrides)
         }
         guard origin.selectionIsCurrent else { throw self.sourceChanged() }
         #if DEBUG

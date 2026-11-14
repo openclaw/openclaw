@@ -518,10 +518,10 @@ export function isQueuedAnswerBlock(
 }
 
 export function beginDraftQueuedFollowup(turn: Turn): void {
-  if (turn.progressContinuationAdopted) {
+  if (turn.finalHandoff === "progress-continuation") {
     turn.answerLane.stream = turn.createAnswerStream();
   }
-  turn.progressContinuationAdopted = false;
+  turn.finalHandoff = undefined;
   for (const lane of [turn.answerLane, turn.reasoningLane]) {
     if (!lane.stream) {
       continue;

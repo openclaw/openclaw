@@ -18,10 +18,31 @@ type XaiFallbackAuth = {
 const XAI_API_KEY_ENV_VAR = "XAI_API_KEY";
 const XAI_PROVIDER_ID = "xai";
 
+type XaiToolAuthQuery = { credentialType?: "api_key" | "oauth" | "token" };
+
 export type XaiToolAuthContext = {
-  hasAuthForProvider?: (providerId: string) => boolean;
-  resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
+  hasAuthForProvider?: (providerId: string, query?: XaiToolAuthQuery) => boolean;
+  resolveApiKeyForProvider?: (
+    providerId: string,
+    query?: XaiToolAuthQuery,
+  ) => Promise<string | undefined>;
 };
+
+const XAI_SUBSCRIPTION_AUTH_QUERY: XaiToolAuthQuery = { credentialType: "oauth" };
+
+/** Grok OAuth signs in with the user's SuperGrok/X Premium subscription, not Console API credits. */
+export function hasXaiSubscriptionToolAuth(auth?: XaiToolAuthContext): boolean {
+  return auth?.hasAuthForProvider?.(XAI_PROVIDER_ID, XAI_SUBSCRIPTION_AUTH_QUERY) === true;
+}
+
+/** Resolves only a Grok OAuth credential; configured keys, API-key profiles and env never substitute. */
+export async function resolveXaiSubscriptionToolApiKey(
+  auth?: XaiToolAuthContext,
+): Promise<string | undefined> {
+  return normalizeSecretInputString(
+    await auth?.resolveApiKeyForProvider?.(XAI_PROVIDER_ID, XAI_SUBSCRIPTION_AUTH_QUERY),
+  );
+}
 
 function readConfiguredOrManagedApiKey(value: unknown): string | undefined {
   const literal = normalizeSecretInputString(value);

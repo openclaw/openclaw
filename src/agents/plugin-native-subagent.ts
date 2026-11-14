@@ -18,9 +18,9 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import type { NativeSubagentRequestSource } from "./plugin-native-subagent.types.js";
 import { preparePluginCommandScheduledTurns } from "./plugin-scheduled-command.js";
 import { matchesSubagentRequesterSession } from "./subagents/registry/subagent-registry-queries.js";
+import { isSubagentRunQueued } from "./subagents/registry/subagent-registry-read.js";
 import {
   getSwarmRunByLaunchReplayKey,
-  initSubagentRegistry,
   listCollectorRunsForRequesterIncarnation,
   prepareSubagentRunsByRunIds,
   type SubagentRunRecord,
@@ -142,6 +142,9 @@ export function createRequestNativeSubagentRuntime(
           ? { model: `${child.modelProvider}/${child.model}` }
           : {}),
         ...(child.thinkingLevel !== undefined ? { thinking: child.thinkingLevel } : {}),
+        ...(child.cyberAccessProgram !== undefined
+          ? { cyberAccessProgram: child.cyberAccessProgram }
+          : {}),
         ...(child.fastMode !== undefined ? { fastMode: child.fastMode } : {}),
       };
       // Session controls are not provider telemetry: do not infer observed facts.
@@ -186,7 +189,7 @@ export function createRequestNativeSubagentRuntime(
     assertCurrent();
     const prepare = () =>
       withCaller(async () => {
-        const { createOpenClawCodingToolsInternalAsync } = await import("./agent-tools.js");
+        const { createOpenClawCodingToolsInternalAsync } = await import("./agent-tools.async.js");
         assertCurrent();
         if (
           currentConfig &&
@@ -282,6 +285,9 @@ export function createRequestNativeSubagentRuntime(
         label: params.label,
         model: params.model,
         thinking: params.thinking,
+        ...(params.cyberAccessProgram !== undefined
+          ? { cyberAccessProgram: params.cyberAccessProgram }
+          : {}),
         fastMode: params.fastMode,
         context: params.context,
         // Present only when requested, so existing replay fingerprints stay unchanged.
@@ -295,6 +301,9 @@ export function createRequestNativeSubagentRuntime(
       const requested: NativeSubagentSelection["requested"] = {
         ...(args.model !== undefined ? { model: args.model } : {}),
         ...(args.thinking !== undefined ? { thinking: args.thinking } : {}),
+        ...(args.cyberAccessProgram !== undefined
+          ? { cyberAccessProgram: args.cyberAccessProgram }
+          : {}),
         ...(args.fastMode !== undefined ? { fastMode: args.fastMode } : {}),
       };
       const replayKey = createHash("sha256")
@@ -320,7 +329,7 @@ export function createRequestNativeSubagentRuntime(
         return await inFlight.result;
       }
       const result = (async (): Promise<NativeSubagentAccepted> => {
-        let existing = await getSwarmRunByLaunchReplayKey(
+        const existing = await getSwarmRunByLaunchReplayKey(
           replayKey,
           source.options.sessionKey,
           source.options.agentId,
@@ -336,22 +345,8 @@ export function createRequestNativeSubagentRuntime(
           ) {
             throw new Error("Native subagent replay does not match the admitted request.");
           }
-          if (existing.swarmLaunchPending) {
-            if (!existing.queuedLaunch) {
-              throw new Error("Native subagent launch reservation cannot be recovered.");
-            }
-            await initSubagentRegistry();
-            assertSpawnCurrent();
-            existing =
-              (await getSwarmRunByLaunchReplayKey(
-                replayKey,
-                source.options.sessionKey,
-                source.options.agentId,
-              )) ?? existing;
-            assertSpawnCurrent();
-            if (existing.swarmLaunchPending && !existing.queuedLaunch) {
-              throw new Error("Native subagent launch reservation cannot be recovered.");
-            }
+          if (existing.swarmLaunchPending && !isSubagentRunQueued(existing)) {
+            throw new Error("Native subagent launch is no longer active; start a new request.");
           }
           return {
             runId: existing.swarmRunId ?? existing.runId,

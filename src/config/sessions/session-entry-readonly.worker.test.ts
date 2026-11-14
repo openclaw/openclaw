@@ -41,9 +41,9 @@ import {
   readSessionEntryReadOnlyInWorker,
   withSessionEntryReadOnlyInWorker,
 } from "./session-entry-read-runtime.js";
-import { readSessionEntryWorkerRequest } from "./session-entry-read.worker.js";
+import { readSessionRuntimeTargetWorkerRequest } from "./session-runtime-target-read.worker.js";
 import { readSessionStoreTargetResult } from "./session-store-target-inventory.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 
 const sqliteError = (message: string, errcode = 26) =>
   Object.assign(new Error(message), { code: "ERR_SQLITE_ERROR", errcode });
@@ -66,6 +66,27 @@ function createEntryFixture(env: NodeJS.ProcessEnv) {
   };
   return { database, scope };
 }
+
+it("hydrates only selected entries in a worker listing", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const { database, scope } = createEntryFixture(env);
+    for (let index = 0; index < 32; index++) {
+      writeSessionEntry(database, `agent:main:unrelated-${index}`, {
+        sessionId: `unrelated-${index}`,
+        updatedAt: 1,
+      });
+    }
+    using parsed = vi.spyOn(JSON, "parse");
+    const result = await readSessionEntryList({
+      kind: "session-entry-list",
+      database: databaseTarget(database),
+      scope: { ...scope, sessionKeys: [scope.sessionKey], projection: "full" },
+    });
+    expect(result.entries).toMatchObject([{ sessionKey: scope.sessionKey, entry: sessionEntry() }]);
+    expect(
+      parsed.mock.calls.filter(([json]) => json.includes('"sessionId":"unrelated-')),
+    ).toHaveLength(0);
+  }));
 
 it("reuses listing revisions and invalidates sibling edits and reopened readers", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -148,13 +169,13 @@ it("resolves runtime targets and refuses replacement by a newer schema", () =>
       key = "agent:main:fallback",
       keyFormat?: "agent-qualified",
     ) =>
-      readSessionEntryWorkerRequest({
+      readSessionRuntimeTargetWorkerRequest({
         kind: "session-runtime-target",
         database: databaseTarget(database),
         scope: { agentId, env, sessionId: selectedId, sessionKey: key, storePath: database.path },
         keyFormat,
       });
-    expect(await read()).toMatchObject({
+    expect(read()).toMatchObject({
       kind: "session-runtime-target",
       target: { agentId: "main", sessionId, sessionKey, storePath: database.path },
       source: { agentId: database.agentId, path: database.path },
@@ -166,9 +187,7 @@ it("resolves runtime targets and refuses replacement by a newer schema", () =>
       lifecycleRevision: "helper-lifecycle",
       updatedAt: 1,
     });
-    expect(
-      await read("helper", "missing-window", "runtime-fallback", "agent-qualified"),
-    ).toMatchObject({
+    expect(read("helper", "missing-window", "runtime-fallback", "agent-qualified")).toMatchObject({
       target: {
         agentId: "helper",
         sessionId: "missing-window",
@@ -189,7 +208,7 @@ it("resolves runtime targets and refuses replacement by a newer schema", () =>
       peer.close();
     }
     renameSync(replacement, database.path);
-    await expect(read()).rejects.toThrow("newer schema version");
+    expect(() => read()).toThrow("newer schema version");
   }));
 
 it("reads session projections in the worker and observes the next sibling commit", () =>
@@ -351,7 +370,7 @@ it("keeps source refusal outside the ordinary row-error result", () =>
 it("propagates raw worker failure without calling the optional-data consumer", () =>
   withOpenClawTestState({ label: "readonly-entry-transport" }, async ({ env, path }) => {
     const failure = new Error("worker could not start");
-    using _ = vi.spyOn(targetDiscoveryLane.pool, "run").mockRejectedValueOnce(failure);
+    using _ = vi.spyOn(sessionStoreLane.pool, "run").mockRejectedValueOnce(failure);
     const consume = vi.fn(async () => undefined);
 
     await expect(

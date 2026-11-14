@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../lib/presentation.ts";
 import { createMobileSheetScrollFadeConnection } from "./chat-mobile-scroll-fades.runtime.ts";
 import { createMobileSheetScrollFades } from "./chat-mobile-scroll-fades.ts";
 
@@ -45,8 +46,14 @@ const edges = (host: HTMLElement) => [
   ...host.querySelectorAll<HTMLElement>(".chat-mobile-host__scroll-edge"),
 ];
 
-function connect(fades: ReturnType<typeof createMobileSheetScrollFades>, host: HTMLElement) {
-  const disconnect = fades.connect((ports) => createMobileSheetScrollFadeConnection(ports, host));
+function connect(
+  fades: ReturnType<typeof createMobileSheetScrollFades>,
+  host: HTMLElement,
+  presentation?: PresentationBinding,
+) {
+  const disconnect = fades.connect((ports) =>
+    createMobileSheetScrollFadeConnection(ports, host, presentation),
+  );
   releases.push(disconnect);
   vi.advanceTimersToNextFrame();
   return disconnect;
@@ -115,4 +122,41 @@ it("reconnects retained ports only within the current shell and releases dispose
   await Promise.resolve();
   vi.advanceTimersToNextFrame();
   expect(edges(nextHost)).toHaveLength(0);
+});
+
+it("cancels hidden paints and refreshes retained edges when the pane or sheet returns", async () => {
+  const host = shell();
+  const content = port(host, 30);
+  const owner = new EventTarget();
+  let presented = true;
+  const fades = createMobileSheetScrollFades();
+  releases.push(fades.register(content));
+  connect(fades, host, { owner, isPresented: () => presented });
+  const top = edges(host)[0]!;
+  const bounds = vi.spyOn(host, "getBoundingClientRect");
+  bounds.mockClear();
+
+  content.dispatchEvent(new Event("scroll"));
+  presented = false;
+  owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+  vi.advanceTimersToNextFrame();
+  expect(bounds).not.toHaveBeenCalled();
+
+  content.scrollTop = 0;
+  presented = true;
+  owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+  vi.advanceTimersToNextFrame();
+  expect(edges(host)[0]).toBe(top);
+  expect(top.hidden).toBe(true);
+  expect(bounds).toHaveBeenCalledTimes(1);
+
+  host.hidden = true;
+  await Promise.resolve();
+  scroll(content, 25);
+  expect(bounds).toHaveBeenCalledTimes(1);
+  host.hidden = false;
+  await Promise.resolve();
+  vi.advanceTimersToNextFrame();
+  expect(bounds).toHaveBeenCalledTimes(2);
+  expect(top.hidden).toBe(false);
 });

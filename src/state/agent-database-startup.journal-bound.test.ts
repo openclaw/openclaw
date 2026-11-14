@@ -3,14 +3,22 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { SqliteWorkerError, wrapSqliteWorkerError } from "../infra/sqlite-worker-error.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   AgentDatabaseSchemaAdmissionChangedError as ChangedAdmission,
   AgentDatabaseSchemaAdmissionInvalidError as InvalidAdmission,
 } from "./agent-database-admission-error.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  failPendingAgentDatabase,
+  recordAgentDatabaseAdmissions,
+  readAgentDatabaseAdmissionRefusal,
+} from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import { readAgentDeletionJournalStatusInWorker } from "./agent-deletion-journal.read.js";
+import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
 
 const tempDirTracker = useAutoCleanupTempDirTracker(afterEach);
 const admissionState = vi.hoisted(() => ({ failed: [] as string[], prepared: [] as string[] }));
@@ -25,15 +33,25 @@ vi.mock("./agent-database-admission.js", async (importOriginal) => {
   return {
     ...actual,
     preparePendingAgentDatabase: vi.fn<typeof actual.preparePendingAgentDatabase>(
-      async (refusal, _options, run) => {
-        await run();
+      async (refusal, options, run) => {
+        await actual.preparePendingAgentDatabase(refusal, options, run);
         admissionState.prepared.push(refusal.agentId);
       },
     ),
-    failPendingAgentDatabase: vi.fn<typeof actual.failPendingAgentDatabase>((refusal) => {
-      admissionState.failed.push(refusal.agentId);
-    }),
-    readAgentDatabaseAdmissionRefusal: () => undefined,
+    failPendingAgentDatabase: vi.fn<typeof actual.failPendingAgentDatabase>(
+      (refusal, cause, options) => {
+        const previous = actual.listAgentDatabaseAdmissionRefusals(options);
+        actual.failPendingAgentDatabase(refusal, cause, options);
+        // Observe recorded verdicts; repeating an already-recorded refusal is idempotent.
+        if (
+          actual
+            .listAgentDatabaseAdmissionRefusals(options)
+            .some((entry) => !previous.includes(entry))
+        ) {
+          admissionState.failed.push(refusal.agentId);
+        }
+      },
+    ),
   };
 });
 
@@ -70,6 +88,7 @@ async function prepareAgents(
     migrateAgent?: () => Promise<void>;
     publishAgent?: () => Promise<void>;
     afterActivation?: () => Promise<void>;
+    inspection?: OpenClawDatabaseSchemaPreflight;
   } = {},
 ) {
   const env = { OPENCLAW_STATE_DIR: tempDirTracker.make("journal-bound-") };
@@ -79,14 +98,15 @@ async function prepareAgents(
   await withAgentDatabaseStartupAdmission(async (admission) => {
     const lifetime = admission.adopt();
     try {
-      admission.defer({
+      const refusals = admission.defer({
         env,
         inspections: agentIds.map((agentId) => ({
           target: { agentId, path: pathname },
-          result: Promise.resolve({ incompatible: [], indeterminate: [] }),
+          result: Promise.resolve(options.inspection ?? { incompatible: [], indeterminate: [] }),
         })),
         reason: "startup journal admission regression",
       });
+      recordAgentDatabaseAdmissions(refusals, { env, source: "startup" });
       admission.activate({
         isCurrent: options.isCurrent ?? (() => true),
         preparationReady: Promise.resolve(),
@@ -98,6 +118,9 @@ async function prepareAgents(
       // Four attempts, including jitter, finish before the progress interval fires.
       await vi.advanceTimersByTimeAsync(10_000);
       await admission.pendingPreparation;
+      for (const agentId of admissionState.prepared) {
+        expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
+      }
     } finally {
       await lifetime.stop();
     }
@@ -163,6 +186,19 @@ it("prepares more than 128 agents without overflowing state-read admission", asy
 it.each([
   ["migrateAgent", Object.assign(new Error("locked"), { code: "SQLITE_LOCKED" }), 4, 4],
   ["migrateAgent", new AggregateError([locked(), new Error("cleanup failed")]), 1, 1],
+  ["migrateAgent", overload(), 4, 4],
+  ["migrateAgent", new SqliteWorkerError("capacity reached", "overloaded"), 4, 4],
+  ["migrateAgent", new SqliteWorkerError("unknown settlement", "outcome-unknown"), 1, 1],
+  [
+    "migrateAgent",
+    wrapSqliteWorkerError(
+      "capacity reached",
+      "overloaded",
+      new SqliteWorkerError("unknown settlement", "outcome-unknown"),
+    ),
+    1,
+    1,
+  ],
   ["publishAgent", new ChangedAdmission(), 4, 4],
   ["publishAgent", new InvalidAdmission(), 1, 1],
 ] as const)("refuses %s for %s after %i attempts", async (operation, error, attempts, reads) => {
@@ -178,19 +214,39 @@ it("retries shared-pool capacity rejections and prepares the agent", async () =>
   expectAdmission(["agent-0"], [], 4);
 });
 
-it.each(["openAgent", "migrateAgent"] as const)(
-  "recovers a transient lock in %s",
-  async (operation) => {
-    const run = vi.fn().mockRejectedValueOnce(locked()).mockResolvedValue(undefined);
-    const opened = vi.fn().mockResolvedValue(undefined);
-    await prepareAgents(1, { openAgent: opened, [operation]: run });
-    expectAdmission(["agent-0"], [], 3);
-    expect(run).toHaveBeenCalledTimes(2);
-    if (operation === "migrateAgent") {
-      expect(opened).toHaveBeenCalledOnce();
-    }
-  },
-);
+it.each([
+  ["openAgent", locked()],
+  ["migrateAgent", locked()],
+  ["openAgent", overload()],
+  ["migrateAgent", overload()],
+  ["migrateAgent", new SqliteWorkerError("capacity reached", "overloaded")],
+  ["publishAgent", overload()],
+] as const)("recovers a transient failure in %s: %s", async (operation, error) => {
+  const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValue(undefined);
+  const opened = vi.fn().mockResolvedValue(undefined);
+  await prepareAgents(1, { openAgent: opened, [operation]: run });
+  expectAdmission(["agent-0"], [], 3);
+  expect(run).toHaveBeenCalledTimes(2);
+  if (operation === "migrateAgent") {
+    expect(opened).toHaveBeenCalledOnce();
+  }
+});
+
+it("preserves preflight overload guidance when deferred inspection fails", async () => {
+  const refusal = createAgentDatabaseInspectionRefusal({
+    agentId: "agent-0",
+    paths: [],
+    reason: "worker capacity reached",
+    cause: overload(),
+  });
+  await prepareAgents(1, {
+    inspection: { incompatible: [], indeterminate: [], agentRefusals: [refusal] },
+  });
+  const options = vi.mocked(failPendingAgentDatabase).mock.lastCall![2];
+  const recorded = readAgentDatabaseAdmissionRefusal("agent-0", options);
+  expect(recorded?.repairHint).toContain("restart the Gateway");
+  expect(recorded?.repairHint).not.toContain("doctor --fix");
+});
 
 it.each(["deletion", "replacement"] as const)(
   "refuses %s before retrying a locked migration",
@@ -247,6 +303,12 @@ it.each([
   }
   await prepareAgents(1);
   expectAdmission([], ["agent-0"], attempts);
+  if (typeof outcome === "string") {
+    const options = vi.mocked(failPendingAgentDatabase).mock.lastCall![2];
+    const refusal = readAgentDatabaseAdmissionRefusal("agent-0", options);
+    expect(refusal?.repairHint).toContain("retry agents.delete");
+    expect(refusal?.repairHint).not.toContain("doctor --fix");
+  }
 });
 
 it("does not start queued journal reads after Gateway ownership changes", async () => {

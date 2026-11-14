@@ -19,7 +19,7 @@ const BYTE_SIZE_STYLES = {
 
 export type RelativeTimeUnit = "second" | "minute" | "hour" | "day";
 
-/** Buckets an absolute duration while preserving nested display rounding at unit boundaries. */
+/** Buckets an absolute duration, rounding each display unit from the original milliseconds. */
 export function bucketRelativeTimeMs(durationMs: number): {
   value: number;
   unit: RelativeTimeUnit;
@@ -28,14 +28,14 @@ export function bucketRelativeTimeMs(durationMs: number): {
   if (seconds < 60) {
     return { value: seconds, unit: "second" };
   }
-  const minutes = Math.round(seconds / 60);
+  const minutes = Math.round(durationMs / 60_000);
   if (minutes < 60) {
     return { value: minutes, unit: "minute" };
   }
-  const hours = Math.round(minutes / 60);
+  const hours = Math.round(durationMs / 3_600_000);
   return hours < 48
     ? { value: hours, unit: "hour" }
-    : { value: Math.round(hours / 24), unit: "day" };
+    : { value: Math.round(durationMs / 86_400_000), unit: "day" };
 }
 
 /** Formats a byte count with caller-explicit scale, labels, precision, and unit cap. */
@@ -49,19 +49,27 @@ export function formatByteSize(bytes: number, options: ByteSizeFormatOptions): s
     unitIndex += 1;
   }
 
-  const unit = expectDefined(BYTE_SIZE_UNITS[unitIndex], "byte-size unit");
-  const label = expectDefined(labels[unitIndex], "byte-size label");
-  const fractionDigits =
-    typeof options.fractionDigits === "function"
-      ? options.fractionDigits(value, unit)
-      : options.fractionDigits;
-  if (fractionDigits === null) {
-    return `${value}${options.separator}${label}`;
+  for (;;) {
+    const unit = expectDefined(BYTE_SIZE_UNITS[unitIndex], "byte-size unit");
+    const label = expectDefined(labels[unitIndex], "byte-size label");
+    const fractionDigits =
+      typeof options.fractionDigits === "function"
+        ? options.fractionDigits(value, unit)
+        : options.fractionDigits;
+    if (fractionDigits === null) {
+      return `${value}${options.separator}${label}`;
+    }
+    const shown = options.floorUnits?.includes(unit)
+      ? Math.floor(value * 10 ** fractionDigits) / 10 ** fractionDigits
+      : value;
+    // Rounding can reach the next unit ("1024 MiB"); show it in that unit instead.
+    if (unitIndex < maxUnitIndex && Number(shown.toFixed(fractionDigits)) >= base) {
+      value /= base;
+      unitIndex += 1;
+      continue;
+    }
+    return `${shown.toFixed(fractionDigits)}${options.separator}${label}`;
   }
-  if (options.floorUnits?.includes(unit)) {
-    value = Math.floor(value * 10 ** fractionDigits) / 10 ** fractionDigits;
-  }
-  return `${value.toFixed(fractionDigits)}${options.separator}${label}`;
 }
 
 /** Formats token units while callers retain input validation and whole-token rounding. */

@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { sha256Hex } from "./crypto-digest.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
@@ -9,6 +8,7 @@ import type {
 import { planShellAuthorization } from "./exec-authorization-plan.js";
 import {
   type ExecutableResolution,
+  realpathForExec,
   resolveCommandResolutionFromArgv,
 } from "./exec-command-resolution.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
@@ -24,7 +24,7 @@ import {
 } from "./system-run-mutable-file-operand.js";
 import {
   looksLikeExplicitPathToken,
-  pathLooksMutableForShellPayloadSync,
+  pathLooksMutableForShellPayload,
 } from "./system-run-mutable-file-policy.js";
 import {
   normalizeNonEmptyString,
@@ -184,12 +184,12 @@ export function toSystemRunApprovalMismatchError(params: {
 }
 
 /** Captures file identity for a mutable script operand that approval is bound to. */
-export function resolveMutableFileOperandSnapshotSync(params: {
+export async function resolveMutableFileOperandSnapshot(params: {
   argv: string[];
   cwd: string | undefined;
   shellCommand: string | null;
-}): { ok: true; snapshot: SystemRunApprovalFileOperand | null } | SystemRunBindingFailure {
-  const target = resolveSystemRunMutableFileOperandTarget(params);
+}): Promise<{ ok: true; snapshot: SystemRunApprovalFileOperand | null } | SystemRunBindingFailure> {
+  const target = await resolveSystemRunMutableFileOperandTarget(params);
   if (!target.ok) {
     return target;
   }
@@ -203,7 +203,7 @@ export function resolveMutableFileOperandSnapshotSync(params: {
       message: "SYSTEM_RUN_DENIED: approval requires a stable script operand",
     };
   }
-  return snapshotFileOperandAtPath({
+  return await snapshotFileOperandAtPath({
     argvIndex: target.argvIndex,
     filePath: path.resolve(params.cwd ?? process.cwd(), operand),
   });
@@ -242,12 +242,12 @@ type SystemRunMutableFileBindingResult =
 const SHELL_CWD_MUTATORS = new Set(["cd", "chdir", "popd", "pushd"]);
 const SHELL_BUILTIN_DISPATCHERS = new Set(["builtin", "command"]);
 
-function prepareMutableFileBindingsForArgv(params: {
+async function prepareMutableFileBindingsForArgv(params: {
   commands: readonly string[][];
   cwd?: string;
   shellCommand?: string | null;
   allowCommandTextBinding?: boolean;
-}): SystemRunMutableFileBindingResult {
+}): Promise<SystemRunMutableFileBindingResult> {
   const operands: SystemRunMutableFileBinding["operands"] = [];
   const commands: string[][] = [];
   const seen = new Set<string>();
@@ -258,7 +258,7 @@ function prepareMutableFileBindingsForArgv(params: {
     }
     seen.add(key);
     commands.push([...argv]);
-    const prepared = resolveMutableFileOperandSnapshotSync({
+    const prepared = await resolveMutableFileOperandSnapshot({
       argv,
       cwd: params.cwd,
       shellCommand: params.shellCommand ?? extractShellCommandFromArgv(argv),
@@ -283,12 +283,12 @@ function prepareMutableFileBindingsForArgv(params: {
   };
 }
 
-function prepareMutableFileBindingsForSegments(params: {
+async function prepareMutableFileBindingsForSegments(params: {
   segments: ExecCommandSegment[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   shellCommand?: boolean;
-}): SystemRunMutableFileBindingResult {
+}): Promise<SystemRunMutableFileBindingResult> {
   if (params.segments.length === 0) {
     return {
       ok: false,
@@ -339,14 +339,14 @@ function prepareMutableFileBindingsForSegments(params: {
     }
     ordinaryCommands.push(segment.argv);
   }
-  const ordinary = prepareMutableFileBindingsForArgv({
+  const ordinary = await prepareMutableFileBindingsForArgv({
     commands: ordinaryCommands,
     cwd: params.cwd,
   });
   if (!ordinary.ok) {
     return ordinary;
   }
-  const executables = prepareSystemRunExecutableIdentityBinding({
+  const executables = await prepareSystemRunExecutableIdentityBinding({
     ...params,
     shellCommand: params.shellCommand ?? true,
   });
@@ -363,12 +363,12 @@ function prepareMutableFileBindingsForSegments(params: {
 }
 
 /** In-memory executable identities; wire approval plans retain their script snapshot shape. */
-export function prepareSystemRunExecutableIdentityBinding(params: {
+export async function prepareSystemRunExecutableIdentityBinding(params: {
   segments: ExecCommandSegment[];
   env?: NodeJS.ProcessEnv;
   cwd?: string;
   shellCommand: boolean;
-}): SystemRunMutableFileBindingResult {
+}): Promise<SystemRunMutableFileBindingResult> {
   const operands: SystemRunMutableFileBinding["operands"] = [];
   for (const segment of params.segments) {
     const executions: Array<{ argv: string[]; execution: ExecutableResolution | undefined }> = [];
@@ -387,12 +387,10 @@ export function prepareSystemRunExecutableIdentityBinding(params: {
       }
       shellCommandPosition = false;
       const argv = sourceArgv.slice(0, 1);
-      const execution = resolveCommandResolutionFromArgv(
-        argv,
-        params.cwd,
-        params.env,
-        process.platform,
-        { useCache: false },
+      const execution = (
+        await resolveCommandResolutionFromArgv(argv, params.cwd, params.env, process.platform, {
+          useCache: false,
+        })
       )?.execution;
       if (!execution?.resolvedRealPath && !execution?.resolvedPath) {
         return { ok: false, message: "SYSTEM_RUN_DENIED: approval requires a resolved executable" };
@@ -413,7 +411,7 @@ export function prepareSystemRunExecutableIdentityBinding(params: {
       );
       let realPath: string;
       try {
-        realPath = fs.realpathSync(resolvedExecutable);
+        realPath = execution.resolvedRealPath ?? (await realpathForExec(resolvedExecutable));
       } catch {
         return { ok: false, message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE };
       }
@@ -429,8 +427,8 @@ export function prepareSystemRunExecutableIdentityBinding(params: {
               ".EXE;.CMD;.BAT;.COM",
           }
         : undefined;
-      if (pathLooksMutableForShellPayloadSync(resolvedExecutable)) {
-        const snapshot = snapshotFileOperandAtPath({ argvIndex: 0, filePath: realPath });
+      if (await pathLooksMutableForShellPayload(resolvedExecutable)) {
+        const snapshot = await snapshotFileOperandAtPath({ argvIndex: 0, filePath: realPath });
         if (!snapshot.ok) {
           return snapshot;
         }
@@ -465,7 +463,7 @@ export async function prepareSystemRunMutableFileBinding(params: {
   platform?: NodeJS.Platform;
 }): Promise<SystemRunMutableFileBindingResult> {
   if (params.command.kind === "argv") {
-    return prepareMutableFileBindingsForArgv({
+    return await prepareMutableFileBindingsForArgv({
       commands: [params.command.argv],
       cwd: params.cwd,
       shellCommand: params.command.shellCommand,
@@ -473,7 +471,7 @@ export async function prepareSystemRunMutableFileBinding(params: {
     });
   }
   if (params.command.kind === "segments") {
-    return prepareMutableFileBindingsForSegments({
+    return await prepareMutableFileBindingsForSegments({
       segments: params.command.segments,
       cwd: params.cwd,
       env: params.env,
@@ -495,7 +493,7 @@ export async function prepareSystemRunMutableFileBinding(params: {
     };
   }
   if ((params.platform ?? process.platform) === "win32") {
-    const analysis = analyzeWindowsShellCommand({
+    const analysis = await analyzeWindowsShellCommand({
       command: commandText,
       cwd: params.cwd,
       env: params.env,
@@ -507,7 +505,7 @@ export async function prepareSystemRunMutableFileBinding(params: {
         message: "SYSTEM_RUN_DENIED: approval cannot safely bind this command",
       };
     }
-    return prepareMutableFileBindingsForSegments({
+    return await prepareMutableFileBindingsForSegments({
       segments: analysis.segments,
       cwd: params.cwd,
       env: params.env,
@@ -535,7 +533,11 @@ export async function prepareSystemRunMutableFileBinding(params: {
   const segments = plan.groups.flatMap((group) =>
     group.candidates.map((candidate) => candidate.sourceSegment),
   );
-  return prepareMutableFileBindingsForSegments({ segments, cwd: params.cwd, env: params.env });
+  return await prepareMutableFileBindingsForSegments({
+    segments,
+    cwd: params.cwd,
+    env: params.env,
+  });
 }
 
 /** Revalidates approved executable identities and bytes after awaited approval work. */
@@ -543,17 +545,9 @@ export async function revalidateSystemRunMutableFileBinding(params: {
   binding: SystemRunMutableFileBinding;
   cwd?: string;
 }): Promise<{ ok: true } | { ok: false; message: string }> {
-  return revalidateSystemRunMutableFileBindingSync(params);
-}
-
-/** Commit guards use the same file checks without yielding their current authority. */
-export function revalidateSystemRunMutableFileBindingSync(params: {
-  binding: SystemRunMutableFileBinding;
-  cwd?: string;
-}): { ok: true } | { ok: false; message: string } {
   // Carry the prepared argv forward instead of reparsing after the approval;
   // parser drift must not change which executable operands were authorized.
-  const current = prepareMutableFileBindingsForArgv({
+  const current = await prepareMutableFileBindingsForArgv({
     commands: params.binding.commands,
     cwd: params.cwd,
   });
@@ -588,7 +582,7 @@ export function revalidateSystemRunMutableFileBindingSync(params: {
             : {}),
         }
       : undefined;
-    const resolution = resolveCommandResolutionFromArgv(
+    const resolution = await resolveCommandResolutionFromArgv(
       operand.argv,
       params.cwd,
       env,
@@ -610,7 +604,7 @@ export function revalidateSystemRunMutableFileBindingSync(params: {
       return { ok: false, message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE };
     }
     if (operand.kind === "mutable") {
-      const snapshot = snapshotFileOperandAtPath({ argvIndex: 0, filePath: resolvedPath });
+      const snapshot = await snapshotFileOperandAtPath({ argvIndex: 0, filePath: resolvedPath });
       if (!snapshot.ok || snapshot.snapshot.sha256 !== operand.snapshot.sha256) {
         return { ok: false, message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE };
       }

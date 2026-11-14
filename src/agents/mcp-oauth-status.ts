@@ -8,7 +8,12 @@ export type McpOAuthPrincipalStatus =
   | { state: "unauthenticated" };
 
 export function projectMcpOAuthCredentialsStatus(store: McpOAuthStore): McpOAuthPrincipalStatus {
-  if (store.pendingAuthorizationChallenge?.requiresAuthorization === true) {
+  // A refresh claim also exists briefly during a live exchange; a fenced one persists
+  // and blocks every token use until a new sign-in replaces the grant.
+  if (
+    store.pendingAuthorizationChallenge?.requiresAuthorization === true ||
+    store.refreshClaim !== undefined
+  ) {
     return { state: "requires-authorization" };
   }
   if (store.tokens) {

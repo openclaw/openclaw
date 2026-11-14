@@ -43,9 +43,36 @@ records, and records whose structured dependencies, endpoints, or entities are
 unavailable are excluded in every mode. Authored prose without declared
 dependencies cannot be redacted automatically.
 
+### Superseded wording
+
+An `active` search also matches the superseded records it hides and returns
+their current replacements, so a query worded like an earlier version still
+finds the current answer.
+
+- Each match follows `superseded_by` through eligible superseded records to an
+  active record. A chain that reaches a missing, withdrawn, ineligible, or
+  filtered-out record returns nothing.
+- `kind`, `type`, `tag`, and date filters apply to the returned current record,
+  not to the earlier record that matched. Earlier records rank only among those
+  whose current record passes the filters.
+- Replacements come after every direct match, ranked by the earlier record's
+  BM25 score, then ID. A record that is already a direct match, or reached from
+  a better-ranked earlier record, appears once.
+- `via` identifies the earlier record that matched by ID and revision. In the
+  complete hits the Control UI receives, these hits also have
+  `matches: ["superseded"]`, `score: null` (so a memory search with `minScore`
+  leaves them out), an opening excerpt (`snippet.matchLocated: false`), a
+  citation for the current record, and the earlier record's title, path, and
+  hash in `via`.
+- `total`, `offset`, and `nextOffset` count direct and replacement hits
+  together. `lifecycle: "superseded"` and `"all"` return superseded records
+  directly and do not follow replacements.
+
 ## Results and citations
 
-Each hit has a summary, lifecycle, matched fields, attribution and assertion
+Agent tools receive [list rows](/plugins/knowledge/tools#agent-response-shapes)
+with a short snippet. Complete hits, as the Control UI receives them, have a
+summary, lifecycle, matched fields, attribution and assertion
 origin, and the stable ID, path, revision, and SHA-256 of the observed Markdown.
 
 - Snippets are at most 480 UTF-16 characters with zero-based start/end offsets.
@@ -66,13 +93,18 @@ or snippets.
 ## Index behavior
 
 Markdown is authoritative. Each search first runs the scoped scan and
-validation, then reconciles a per-scope FTS5 projection in the store's
-`state.sqlite`. These tables are not shared with `memory-core` or other plugins.
+validation, then reconciles per-scope FTS5 projections in the store's
+`state.sqlite`: one for the searched records and one for superseded records
+whose replacement chain reaches a current record. Only records whose content
+hash changed are re-indexed. These tables are not shared with `memory-core` or
+other plugins.
 
-- A publication receipt's `indexed: false` means indexing is pending until the
-  next search, not a failed save.
-- `index.state: "ready"` with `lag: false` means the projection matches this
-  query's snapshot. Compare `snapshot` across pages and restart if it changes.
+- A complete publication receipt's `indexed: false` (shown by
+  `knowledge_mutation` and `knowledge_history`) means indexing is pending until
+  the next search, not a failed save.
+- `index.state: "ready"` with `lag: false` means the projections match this
+  query's snapshot. Compare `snapshot` across pages and restart if it changes;
+  edits to superseded records change it too.
 - `index.state: "unavailable"` with `total: null` is a failed retrieval. Retry;
   exact lookup and `knowledge_records` do not depend on FTS5.
 - Authority, identity, publication-conflict, and scan-limit failures reject the
@@ -83,7 +115,8 @@ There is no background indexing worker.
 
 ### What is rebuildable
 
-The `keyword_fts_v1_*` tables, `keyword_state_v1`, and the temporal tables are
+The `keyword_fts_v1_*`, `keyword_rows_v1_*`, `keyword_history_fts_v1_*`, and
+`keyword_history_rows_v1_*` tables, `keyword_state_v1`, and the temporal tables are
 projections. Missing tables or changed fingerprints are rebuilt on the next
 query.
 
@@ -97,8 +130,8 @@ record, and cannot be rebuilt from Markdown or Git.
 
 Knowledge projects validated structured dates and entity associations into
 scoped SQLite tables. Each date query reconciles its authorized snapshot first.
-Dates written only in page prose, such as Timeline bullets, do not create
-structured records.
+Dates written only in page prose, such as older written Timeline bullets, do
+not create structured records.
 
 | Date field    | Meaning                                                                 |
 | ------------- | ----------------------------------------------------------------------- |
@@ -120,9 +153,22 @@ ranges without claiming an exact instant.
 | `knowledge_chronicle_since`     | Occurrence-time range, oldest first. Not "recently imported"                                            |
 | `knowledge_chronicle_last_seen` | Latest dated context for an entity at or before `occurredOnOrBefore` (default now)                      |
 
+- On `knowledge_timeline`, `knowledge_chronicle_day`, and
+  `knowledge_chronicle_since`, `kind` matches the exact `record.type`, such as
+  `decision`, `event`, or `meeting`. It is not the record-kind category used by
+  `knowledge_grep` and `knowledge_lookup` (`page`, `claim`, or `relationship`).
+  Omit `kind` to include all eligible dated types; `kind: "claim"` does not select
+  all claims.
 - To find recently recorded or updated records, query `knowledge_timeline` with
   `timeField: "recorded_at"` or `"updated_at"`. This is a current-record query,
   not a change cursor; use history for audit.
+- `group: "source"` with an `entity` returns that entity's Timeline: one row per
+  dated source connected to it by a relationship or a sourced claim, dated by
+  the source. The row's `summary` is the body of the relationship between them
+  (`noteRecord`), else the source's event claim, and `claims` counts the
+  entity's claims from that source, and `links` lists the summary's links
+  that resolve to a record in the same scope. Claims with no dated source, or dated
+  outside their source's date, keep their own rows. It takes occurrence time only and no `kind` filter.
 - A shared event claim with `source_event: true` represents its source meeting.
   On occurrence timelines it replaces the meeting page row; a `kind: "meeting"`
   query still returns the page.
@@ -136,6 +182,6 @@ ranges without claiming an exact instant.
   24 KiB response budget.
 - Follow `nextOffset` with unchanged filters and the returned `snapshot`.
 
-Query responses report `freshness.queriedAt`, `freshness.scannedAt`, and, for
-keyword queries, `freshness.indexedAt`. An older `scannedAt` means the scan was
+Complete query responses (Control UI) report `freshness.queriedAt`,
+`freshness.scannedAt`, and, for keyword queries, `freshness.indexedAt`. An older `scannedAt` means the scan was
 reused while files were unchanged, not that results are stale.

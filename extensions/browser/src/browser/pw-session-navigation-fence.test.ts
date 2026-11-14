@@ -11,15 +11,27 @@ afterEach(() => {
 
 async function fence(
   options: {
-    send?: (method: string) => Promise<void>;
+    send?: (method: string) => Promise<unknown>;
     detach?: () => Promise<void>;
     isClosed?: () => boolean;
     assertCurrent?: () => void;
+    handleDocument?: Parameters<typeof installNavigationAuthorityFence>[3];
   } = {},
 ) {
-  const send = vi.fn(options.send ?? (async () => {}));
+  const send = vi.fn(async (method: string, _params?: unknown) => {
+    if (method === "Page.getFrameTree") {
+      return { frameTree: { frame: { id: "MAIN_FRAME" } } };
+    }
+    return await options.send?.(method);
+  });
   const detach = vi.fn(options.detach ?? (async () => {}));
-  const session = Object.assign(new EventEmitter(), { send, detach });
+  const session = Object.assign(new EventEmitter(), {
+    send: async (method: string, params?: unknown) =>
+      method === "Page.getFrameTree"
+        ? { frameTree: { frame: { id: "main" } } }
+        : send(method, params),
+    detach,
+  });
   const page = Object.assign(new EventEmitter(), {
     context: () => ({ newCDPSession: async () => session }),
     isClosed: options.isClosed ?? (() => false),
@@ -29,6 +41,7 @@ async function fence(
     page as unknown as Page,
     { assertNavigationCurrent: options.assertCurrent ?? (() => {}) },
     (error) => errors.push(error),
+    options.handleDocument,
   );
   const pause = (requestId: string, url = "http://127.0.0.1/target") =>
     session.emit("Fetch.requestPaused", { requestId, resourceType: "Document", request: { url } });
@@ -36,6 +49,74 @@ async function fence(
 }
 
 describe("navigation authority fence lifecycle", () => {
+  it("observes queued document interception before an idle cleanup", async () => {
+    const releaseBarrier = Promise.withResolvers<void>();
+    const { send, session, dispose } = await fence({
+      send: async (method) => {
+        if (method === "Runtime.evaluate") {
+          await releaseBarrier.promise;
+        }
+      },
+      handleDocument: async (route) => {
+        await route.preserve();
+      },
+    });
+    const cleanup = dispose();
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Runtime.evaluate", { expression: "void 0" }),
+    );
+    session.emit("Network.requestWillBeSent", {
+      requestId: "document",
+      type: "Document",
+      frameId: "MAIN_FRAME",
+    });
+    session.emit("Fetch.requestPaused", {
+      requestId: "interception",
+      networkId: "document",
+      frameId: "MAIN_FRAME",
+      resourceType: "Document",
+      request: { url: "http://127.0.0.1/blocked" },
+    });
+    releaseBarrier.resolve();
+    await expect(cleanup).resolves.toBeUndefined();
+    expect(send).toHaveBeenCalledWith("Fetch.disable", undefined);
+  });
+
+  it("settles a document completed by the operation-owned interceptor", async () => {
+    const releaseFulfillment = Promise.withResolvers<void>();
+    const { send, detach, session, dispose } = await fence({
+      send: async (method) => {
+        if (method === "Fetch.failRequest") {
+          await releaseFulfillment.promise;
+        }
+      },
+      handleDocument: async (route) => {
+        await route.preserve();
+      },
+    });
+    session.emit("Network.requestWillBeSent", {
+      requestId: "document",
+      type: "Document",
+      frameId: "MAIN_FRAME",
+    });
+    session.emit("Fetch.requestPaused", {
+      requestId: "interception",
+      frameId: "MAIN_FRAME",
+      resourceType: "Document",
+      request: { url: "http://127.0.0.1/blocked" },
+    });
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Fetch.failRequest", {
+        requestId: "interception",
+        errorReason: "Aborted",
+      }),
+    );
+    const cleanup = dispose();
+    releaseFulfillment.resolve();
+    await expect(cleanup).resolves.toBeUndefined();
+    expect(detach).toHaveBeenCalledOnce();
+  });
+
   it("keeps a pending document redirect fenced after its initiating action returns", async () => {
     vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed").mockResolvedValue(undefined);
     const { send, detach, session, dispose } = await fence();
@@ -57,11 +138,48 @@ describe("navigation authority fence lifecycle", () => {
     expect(detach).toHaveBeenCalledOnce();
   });
 
+  it("stops a timed-out committed document before waiting for cleanup", async () => {
+    const { send, session, dispose } = await fence();
+    session.emit("Network.requestWillBeSent", {
+      requestId: "streaming-document",
+      type: "Document",
+      frameId: "MAIN_FRAME",
+    });
+
+    await expect(dispose({ stopLoading: true })).resolves.toBeUndefined();
+    expect(send).toHaveBeenCalledWith("Page.stopLoading", undefined);
+  });
+
+  it("retires committed bodies while retaining a simultaneous child redirect", async () => {
+    const { send, detach, session, dispose } = await fence();
+    for (const frameId of ["main", "child"]) {
+      session.emit("Network.requestWillBeSent", {
+        requestId: frameId + "-document",
+        type: "Document",
+        frameId,
+      });
+    }
+    const cleanup = dispose();
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Runtime.evaluate", { expression: "void 0" }),
+    );
+    session.emit("Page.frameNavigated", { frame: { id: "main" } });
+    await Promise.resolve();
+    expect(detach).not.toHaveBeenCalled();
+    // Neither body reaches EOF. Only the child's own commit retires its chain.
+    session.emit("Page.frameNavigated", { frame: { id: "child" } });
+    await expect(cleanup).resolves.toBeUndefined();
+    expect(send).not.toHaveBeenCalledWith("Page.stopLoading", undefined);
+    expect(detach).toHaveBeenCalledOnce();
+  });
+
   it("removes the paused-request listener before detachment releases interception", async () => {
     let detached = false;
+    const lateCommands: string[] = [];
     const { session, errors, dispose } = await fence({
-      send: async () => {
+      send: async (method) => {
         if (detached) {
+          lateCommands.push(method);
           throw new Error("Invalid InterceptionId");
         }
       },
@@ -75,6 +193,10 @@ describe("navigation authority fence lifecycle", () => {
       },
     });
     expect(await dispose()).toBeUndefined();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(lateCommands).toEqual([]);
     expect(errors).toEqual([]);
     expect(session.listenerCount("Fetch.requestPaused")).toBe(0);
   });
@@ -199,4 +321,77 @@ describe("navigation authority fence lifecycle", () => {
       expect(detach).toHaveBeenCalledOnce();
     },
   );
+
+  describe("page-cancelled interceptions", () => {
+    const stale = new Error(
+      "cdpSession.send: Protocol error (Fetch.continueRequest): Invalid InterceptionId.",
+    );
+
+    it.each([
+      ["policy", undefined],
+      ["document route", async (route: { continue: () => Promise<void> }) => route.continue()],
+    ] as const)("treats a retired id on %s resume as settled", async (_owner, handleDocument) => {
+      vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed").mockResolvedValue(undefined);
+      const { send, errors, dispose, pause } = await fence({
+        send: async (method) => {
+          if (method === "Fetch.continueRequest") {
+            throw stale;
+          }
+        },
+        handleDocument,
+      });
+      pause("cancelled-frame");
+      await vi.waitFor(() =>
+        expect(send).toHaveBeenCalledWith("Fetch.continueRequest", {
+          requestId: "cancelled-frame",
+        }),
+      );
+      await expect(dispose()).resolves.toBeUndefined();
+      expect(errors).toEqual([]);
+      expect(send).not.toHaveBeenCalledWith("Fetch.failRequest", expect.anything());
+    });
+
+    it("still reports a denied document whose id retired before cancellation", async () => {
+      const denial = new Error("navigation blocked by policy");
+      vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed").mockRejectedValue(denial);
+      const { send, errors, dispose, pause } = await fence({
+        send: async (method) => {
+          if (method === "Fetch.failRequest") {
+            throw stale;
+          }
+        },
+      });
+      pause("denied-frame", "http://127.0.0.1/denied");
+      await vi.waitFor(() =>
+        expect(send).toHaveBeenCalledWith("Fetch.failRequest", {
+          requestId: "denied-frame",
+          errorReason: "Aborted",
+        }),
+      );
+      await dispose();
+      expect(errors).toEqual([denial]);
+      expect(send).not.toHaveBeenCalledWith("Fetch.continueRequest", expect.anything());
+    });
+
+    it("surfaces other protocol failures on resume", async () => {
+      vi.spyOn(navigationGuard, "assertBrowserNavigationAllowed").mockResolvedValue(undefined);
+      const failure = new Error(
+        "cdpSession.send: Protocol error (Fetch.continueRequest): Internal error",
+      );
+      const { send, errors, dispose, pause } = await fence({
+        send: async (method) => {
+          if (method === "Fetch.continueRequest") {
+            throw failure;
+          }
+        },
+      });
+      pause("live-request");
+      await vi.waitFor(() => expect(errors).toEqual([failure]));
+      await dispose();
+      expect(send).toHaveBeenCalledWith("Fetch.failRequest", {
+        requestId: "live-request",
+        errorReason: "Aborted",
+      });
+    });
+  });
 });

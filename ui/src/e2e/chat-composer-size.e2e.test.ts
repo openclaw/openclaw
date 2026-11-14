@@ -13,7 +13,7 @@ suite.define(() => {
         ],
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      const newComposer = page.locator(".new-session-page__composer");
+      const newComposer = page.locator(".new-session-page__composer > .agent-chat__input");
       await expect
         .poll(() => newComposer.evaluate((element) => element.getBoundingClientRect().height))
         .toBe(112);
@@ -43,8 +43,16 @@ suite.define(() => {
       await editor.fill("A mobile follow-up");
       const send = composer.getByRole("button", { name: "Send message", exact: true });
       await send.waitFor({ state: "visible" });
-      const composerBox = await composer.boundingBox();
-      const sendBox = await send.boundingBox();
+      // A responsive layout can move the whole composer between protocol calls.
+      const [composerBox, sendBox] = await send.evaluate((button) =>
+        [button.closest(".agent-chat__input"), button].map((element) => {
+          if (!element || element.getClientRects().length === 0) {
+            return null;
+          }
+          const { x, y, width, height: boxHeight } = element.getBoundingClientRect();
+          return { x, y, width, height: boxHeight };
+        }),
+      );
       expect(composerBox).not.toBeNull();
       expect(sendBox).not.toBeNull();
       if (!composerBox || !sendBox) {

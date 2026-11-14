@@ -1,19 +1,20 @@
 /** The Scribes tab: the list of scribes grouped by state, and one scribe's detail and controls. */
 import type { Page } from "./page-context.js";
 import { button, chip, clock, el } from "./page-dom.js";
-import { openConfirmDialog, openStartDialog, scribeTile } from "./scribe-dialog.js";
 import {
-  repairScribe,
-  runScribeNow,
-  setScribePaused,
-  startScribe,
-  turnOffScribe,
-} from "./scribes-actions.js";
+  openConfirmDialog,
+  openStartDialog,
+  pluginButton,
+  pluginStateText,
+  scribeTile,
+} from "./scribe-dialog.js";
+import { runScribeNow, setScribePaused, startScribe, turnOffScribe } from "./scribes-actions.js";
 import { scribeById, scribeLabel } from "./scribes-catalog.js";
 import {
   detectSources,
   loadRuns,
   loadScribes,
+  neededPluginState,
   statusFromText,
   type ScribeDetection,
   type ScribeJob,
@@ -21,6 +22,15 @@ import {
   type ScribeSnapshot,
   type ScribeStatus,
 } from "./scribes-state.js";
+import {
+  repair,
+  settleUpdates,
+  update,
+  updateNotice,
+  updateState,
+  updatingNotice,
+  watchUpdates,
+} from "./scribes-updates.js";
 import { storeLabel, storeOf } from "./stores-view.js";
 import { icon } from "./ui-icons.js";
 
@@ -28,6 +38,7 @@ const STATUS: Record<ScribeStatus, [string, string]> = {
   available: ["Available", ""],
   starting: ["Starting", ""],
   on: ["On", "scribe-chip-on"],
+  attention: ["Needs attention", "scribe-chip-warn"],
   paused: ["Paused", ""],
   failing: ["Failing", "scribe-chip-warn"],
   done: ["Done", "scribe-chip-on"],
@@ -56,6 +67,9 @@ const when = (ms: number) => {
   const at = new Date(ms);
   return `${at.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${clock(at.toISOString())}`;
 };
+// "a, b and c".
+const listText = (items: string[]) =>
+  items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : (items[0] ?? "");
 const plural = (n: number, one: string) => `${n.toLocaleString()} ${one}${n === 1 ? "" : "s"}`;
 
 /** Human schedule for a scribe automation; daily cron expressions read as a time of day. */
@@ -77,6 +91,17 @@ function scheduleText(job: ScribeJob) {
       });
       return `Weekly on ${day}, ${clockText}${tz}`;
     }
+    // Weekdays at one or more hours ("M H1,H2 * * 1-5") read as their times of day.
+    const weekdays = /^(\d{1,2}) (\d{1,2}(?:,\d{1,2})*) \* \* 1-5$/.exec(schedule.expr.trim());
+    if (weekdays) {
+      const times = weekdays[2]!.split(",").map((hour) =>
+        new Date(2000, 0, 1, Number(hour), Number(weekdays[1])).toLocaleTimeString(undefined, {
+          hour: "numeric",
+          minute: "2-digit",
+        }),
+      );
+      return `Weekdays, ${listText(times)}${tz}`;
+    }
     return `${schedule.expr}${tz}`;
   }
   if (schedule.kind === "every" && schedule.everyMs) {
@@ -96,7 +121,7 @@ function activeMeta(snapshot: ScribeSnapshot) {
   const { status, job, result } = snapshot;
   const meta = el("span", undefined, "scribe-meta");
   const dot = el("span", undefined, "scribe-dot");
-  if (status === "failing" || status === "missing") {
+  if (status === "failing" || status === "missing" || status === "attention") {
     dot.classList.add("scribe-dot-warn");
   } else if (status !== "on") {
     dot.classList.add("scribe-dot-idle");
@@ -141,8 +166,11 @@ function detectionMeta(snapshot: ScribeSnapshot, detection: ScribeDetection, age
   const { scribe } = snapshot;
   const meta = el("span", undefined, "scribe-meta");
   const { activeConversations: active, archivedConversations: archived, memoryFile } = detection;
+  const readiness = neededPluginState(scribe, detection);
   if (snapshot.status === "done" && snapshot.result) {
     meta.append(el("span", `Done · ${snapshot.result.summary}`));
+  } else if (scribe.plugin && readiness) {
+    meta.append(el("span", pluginStateText(scribe.plugin, readiness)));
   } else if (scribe.id === "conversations" && (active !== undefined || archived !== undefined)) {
     const counts = [
       active === undefined ? "" : `${active.toLocaleString()} active`,
@@ -169,12 +197,23 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
   const host = s.context.host;
   const agentId = ui.viewedAgent();
   const selected = scribeById(s.scribe);
-  const [snapshots, detection] = await Promise.all([
+  const [loaded, detection] = await Promise.all([
     loadScribes(host, agentId),
-    selected ? Promise.resolve({}) : detectSources(host, agentId).catch(() => ({})),
+    // A detail only needs detection for its plugin; the list shows every scribe's facts.
+    selected && !selected.plugin
+      ? Promise.resolve({})
+      : detectSources(host, agentId).catch(() => ({})),
   ]);
+  const snapshots = loaded;
+  settleUpdates(ui, agentId, snapshots);
+  watchUpdates(ui);
   if (host.connection.canWrite) {
-    await Promise.all(snapshots.map((snapshot) => startFirstRun(ui, snapshot)));
+    await Promise.all(
+      snapshots.map(async (snapshot) => {
+        await update(ui, snapshot, agentId);
+        await startFirstRun(ui, snapshot);
+      }),
+    );
   }
   const snapshot = selected && snapshots.find((entry) => entry.scribe.id === selected.id);
   const runs = snapshot?.job ? await loadRuns(host, snapshot.job, agentId).catch(() => []) : [];
@@ -182,7 +221,10 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
     return;
   }
   renderScribesTab(ui.scribesTab, snapshots.filter((entry) => isOn(entry.status)).length);
-  target.replaceChildren(snapshot ? detail(ui, snapshot, runs) : list(ui, snapshots, detection));
+  s.scribesCountAgent = agentId;
+  target.replaceChildren(
+    snapshot ? detail(ui, snapshot, runs, detection) : list(ui, snapshots, detection),
+  );
 }
 
 /**
@@ -213,8 +255,13 @@ const firstRunPending = (snapshot: ScribeSnapshot) =>
     (snapshot.job.state.runningAtMs || firstRuns.has(snapshot.job.id)),
   );
 
+/** Number of the agent's scribes that are on, for the Scribes tab count. */
+export async function countScribesOn(host: Parameters<typeof loadScribes>[0], agentId: string) {
+  return (await loadScribes(host, agentId)).filter((entry) => isOn(entry.status)).length;
+}
+
 /** Tab label with the count of scribes that are on. */
-function renderScribesTab(tab: HTMLButtonElement, on: number) {
+export function renderScribesTab(tab: HTMLButtonElement, on: number) {
   tab.replaceChildren(document.createTextNode("Scribes"));
   if (on) {
     const badge = el("span", String(on), "knowledge-tab-count");
@@ -245,6 +292,7 @@ function start(ui: Page, snapshot: ScribeSnapshot, detection: ScribeDetection) {
     storeName,
     detection,
     canWrite: host.connection.canWrite,
+    basePath: host.basePath,
     start: async (prompt) => {
       await startScribe(host, snapshot, agentId, prompt, attempt);
       ui.announce(`Started ${scribeLabel(snapshot.scribe)}.`);
@@ -315,6 +363,12 @@ function activeRow(ui: Page, snapshot: ScribeSnapshot) {
   );
   chevron.setAttribute("aria-label", `Open ${scribe.title}`);
   chevron.append(icon("chevronRight", 16));
+  const state = updateState(ui, snapshot.job);
+  if (state === "updating") {
+    actions.append(chip("Updating…"));
+  } else if (snapshot.runMessage?.state === "differs") {
+    actions.append(chip("New run instructions"));
+  }
   actions.append(statusChip(snapshot.status), chevron);
   row.append(link, actions);
   return row;
@@ -341,14 +395,24 @@ function availableRow(
       button("Details", () => openScribe(ui, scribe.id), "knowledge-quiet knowledge-small"),
     );
   }
+  // A needed plugin that is not ready comes first: the scribe can't start until it is.
+  const readiness = neededPluginState(scribe, detection);
+  const blocked = readiness && readiness !== "ready" ? readiness : undefined;
+  if (scribe.plugin && blocked) {
+    actions.append(pluginButton(ui.s.context.host.basePath, scribe.plugin, blocked));
+  }
   const startButton = button(
     scribe.startLabel,
     () => start(ui, snapshot, detection),
-    "knowledge-button knowledge-primary knowledge-small",
+    blocked
+      ? "knowledge-button knowledge-small"
+      : "knowledge-button knowledge-primary knowledge-small",
   );
-  startButton.disabled = !canWrite;
+  startButton.disabled = !canWrite || Boolean(blocked);
   if (!canWrite) {
     startButton.title = "Starting a scribe needs write access to this Gateway.";
+  } else if (scribe.plugin && blocked) {
+    startButton.title = `Connect the ${scribe.plugin.name} plugin first.`;
   }
   actions.append(startButton);
   row.append(scribeTile(scribe), copy, actions);
@@ -385,7 +449,7 @@ function runText(run: ScribeRun) {
   return run.summary ? statusFromText(run.summary)?.summary || run.summary : "Finished";
 }
 
-function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
+function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection: ScribeDetection) {
   const { scribe, job, session, status } = snapshot;
   const host = ui.s.context.host;
   const { agentId, agentName, storeName } = pageNames(ui);
@@ -453,7 +517,7 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
     actions.append(
       control(
         "Repair",
-        () => repairScribe(host, snapshot, job, agentId),
+        () => repair(ui, snapshot, job, agentId),
         status === "missing" && session?.archived
           ? `Restored ${scribeLabel(scribe)} and turned it back on.`
           : `Asked ${scribeLabel(scribe)} to repair its setup.`,
@@ -492,7 +556,7 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
   if (!job && status !== "starting") {
     const again = button(
       status === "failing" ? "Start again…" : scribe.startLabel,
-      () => start(ui, snapshot, {}),
+      () => start(ui, snapshot, detection),
       "knowledge-button knowledge-primary knowledge-small",
     );
     again.disabled = !canWrite;
@@ -552,6 +616,17 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
     ["Store", storeName],
   );
   facts.push(["Follows", `${scribe.skill} skill · ships with Knowledge`]);
+  const readiness = neededPluginState(scribe, detection);
+  if (scribe.plugin && readiness) {
+    const value = el("span", undefined, "scribe-status");
+    value.append(el("span", pluginStateText(scribe.plugin, readiness)));
+    if (readiness !== "ready") {
+      value.append(
+        pluginButton(host.basePath, scribe.plugin, readiness, "knowledge-quiet knowledge-small"),
+      );
+    }
+    facts.push(["Source", value]);
+  }
   if (job) {
     facts.push([
       "If it fails",
@@ -576,11 +651,20 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
   const rows = el("div", undefined, "knowledge-surface");
   for (const run of runs) {
     const line = el("div", undefined, "scribe-run");
-    line.append(
-      el("time", when(run.runAtMs ?? run.ts)),
-      el("span", runText(run)),
-      runFailed(run) ? statusChip("failing") : el("span"),
-    );
+    const end = el("span", undefined, "scribe-run-end");
+    if (runFailed(run)) {
+      end.append(statusChip("failing"));
+    }
+    // A run in its own session keeps its transcript there, not in the scribe's conversation;
+    // the Automations page shows it, also after that session is cleaned up.
+    if (job && run.runId && run.sessionKey && run.sessionKey !== session?.key) {
+      const params = new URLSearchParams({ job: job.id, run: run.runId });
+      const href = `${host.basePath}/automations?${params}`;
+      end.append(
+        button("Open run", () => window.location.assign(href), "knowledge-quiet knowledge-small"),
+      );
+    }
+    line.append(el("time", when(run.runAtMs ?? run.ts)), el("span", runText(run)), end);
     rows.append(line);
   }
   if (!runs.length && firstRunPending(snapshot)) {
@@ -602,6 +686,13 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {
     );
   }
   history.append(rows);
-  root.append(crumb, head, feedback, grid, history);
+  root.append(crumb, head, feedback);
+  const state = updateState(ui, job);
+  if (state) {
+    root.append(updatingNotice(ui, snapshot, state));
+  } else if (job && snapshot.runMessage?.state === "differs") {
+    root.append(updateNotice(ui, snapshot, job, agentId, snapshot.runMessage.current));
+  }
+  root.append(grid, history);
   return root;
 }

@@ -37,6 +37,12 @@ Model fallback and other model-routing updates do not invalidate prepared
 completion or child follow-up authority. Changes to session identity, lifecycle,
 spawn lineage, tool policy, sandbox, or execution host still reject stale work.
 
+New-turn capability preparation refreshes stale inherited session metadata once
+per affected lookup before evaluating current policy again. This lets ordinary
+metadata updates coexist with child follow-ups and completion turns. It does not
+renew an active turn's retained authority: session replacement, policy revocation,
+and closed owners still fail their existing checks.
+
 The requester turn's captured origin owns completion routing, including after
 `sessions_yield` and for child pause notices. A WebChat origin does not inherit a
 previous external destination from the session. Without a captured origin, the
@@ -85,8 +91,11 @@ append, so a requester waiting on its child can resume. These tagged mirrors
 record history without closing an open keyed input; ordinary final replies still
 close the turn. Mirrors remain best-effort bookkeeping after a successful send.
 
-Completion failures retain the concrete delivery error in the run's delivery state
-without queuing a system notice into the parent session. A confirmed handoff remains delivered even if its receipt
+Completion failures retain the concrete delivery error in the run's delivery state.
+A required parent completion that permanently fails also records a visible failure
+notice in the original requester conversation, without starting another agent turn.
+A deleted or reset requester never redirects that notice into a replacement session.
+A confirmed handoff remains delivered even if its receipt
 callback fails; cleanup must not replay an already consumed result. Failures before
 a delivery result is reported follow the same retryability policy as direct sends.
 

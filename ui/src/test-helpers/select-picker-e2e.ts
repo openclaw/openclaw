@@ -31,7 +31,6 @@ export async function selectPickerValue(picker: Locator, value: string) {
 type ChatModelOptionOptions = {
   timeout?: number;
   provider?: string;
-  runtime?: string;
   default?: boolean;
 };
 
@@ -42,18 +41,16 @@ export async function revealChatModelOption(
 ) {
   const menu = scope.locator(".chat-controls__model-menu:visible");
   await menu.waitFor({ state: "visible", timeout: options.timeout });
-  const selector = `[data-chat-model-option=${JSON.stringify(model)}]${
-    options.runtime ? `[data-chat-model-runtime=${JSON.stringify(options.runtime)}]` : ""
-  }${options.default ? '[data-chat-model-default="true"]' : ""}`;
+  const selector = `[data-chat-model-option=${JSON.stringify(model)}]${options.default ? '[data-chat-model-default="true"]' : ""}`;
   const option = menu.locator(selector).first();
   if (!(await option.isVisible())) {
     const provider = options.provider ?? model.split("/")[0];
     const group = menu.locator(`[data-chat-model-provider-group=${JSON.stringify(provider)}]`);
-    const toggle = group.locator("[data-chat-model-provider-toggle]");
-    if ((await toggle.count()) > 0 && (await toggle.getAttribute("aria-expanded")) === "false") {
+    const toggle = menu.locator(`[data-chat-model-provider-toggle=${JSON.stringify(provider)}]`);
+    if ((await toggle.count()) > 0 && (await toggle.getAttribute("aria-selected")) === "false") {
       await toggle.click({ timeout: options.timeout });
       await expect
-        .poll(() => toggle.getAttribute("aria-expanded"), { timeout: options.timeout })
+        .poll(() => toggle.getAttribute("aria-selected"), { timeout: options.timeout })
         .toBe("true");
     }
     const more = group.locator("[data-chat-model-more-toggle]");

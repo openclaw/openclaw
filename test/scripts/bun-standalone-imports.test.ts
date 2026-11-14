@@ -43,6 +43,58 @@ function rewrite(
 }
 
 describe("standalone import relocation", () => {
+  it.each([
+    '"commander"',
+    "`commander`",
+    '"@openclaw/ai/internal/runtime"',
+    "`@openclaw/ai/internal/runtime`",
+    "`./worker-runtime.js`",
+  ])("keeps a static import available to the bundler: %s", (specifier) => {
+    const source = `() => import(${specifier})`;
+    expect(rewrite(source)).toBe(source);
+  });
+
+  it("routes a template CommonJS import without making computed imports static", async () => {
+    const calls: string[] = [];
+    const load = vm.runInNewContext(
+      rewrite("async (name) => [await import(`./leaf.cjs`), await import(`./${name}.js`)]"),
+      {
+        __openclawStandaloneRootUrl: relocatedRoot,
+        __openclawStandaloneImport: async (_parent: string, target: string) => {
+          calls.push(target);
+          return { target };
+        },
+      },
+    );
+    expect(await load("computed")).toEqual([{ target: "./leaf.cjs" }, { target: "./computed.js" }]);
+    expect(calls).toEqual(["./leaf.cjs", "./computed.js"]);
+  });
+
+  it.each([
+    "((e) => e(0))((value) => value + 1)",
+    "(({ run: e }) => e(0))({ run: (value) => value + 1 })",
+    "(() => { const e = (value) => value + 1; return e(0); })()",
+    "(() => { { let e = (value) => value + 1; return e(0); } })()",
+    "(() => { try { throw (value) => value + 1; } catch (e) { return e(0); } })()",
+    "(() => { for (const e of [(value) => value + 1]) return e(0); })()",
+    "(function e(value) { return value === 0 ? 1 : e(0); })(2)",
+  ])("preserves a callback shadowing an imported require factory: %s", (expression) => {
+    const source = `import { createRequire as e } from "node:module";\n[e("/owner.mjs"), ${expression}];`;
+    const contents = rewrite(source);
+    const calls: string[] = [];
+    const factory = (owner: string) => owner;
+    const result = vm.runInNewContext(contents.slice(contents.indexOf("\n") + 1), {
+      e: factory,
+      __openclawStandaloneCreateRequire: (create: typeof factory, owner: string) => {
+        expect(create).toBe(factory);
+        calls.push(owner);
+        return create(owner);
+      },
+    });
+    expect(result).toEqual(["/owner.mjs", 1]);
+    expect(calls).toEqual(["/owner.mjs"]);
+  });
+
   it("relocates free CommonJS paths while preserving local bindings and property names", () => {
     const source = `[
       { __dirname, __filename },
@@ -382,12 +434,17 @@ const later = "./later.js";
     expect(targets).toEqual(["./leaf.js", "./shadow.js"]);
   });
 
-  it.each([
-    [moduleAliases.ws, embeddedPaths["node_modules/ws/index.js"]],
-    [workerThreadsShim, embeddedPaths["../standalone-worker-threads.cjs"]],
-  ])("loads the embedded image after the build path disappears: %s", async (source, expected) => {
+  it.each(
+    [
+      [moduleAliases.ws, embeddedPaths["node_modules/ws/index.js"]],
+      [workerThreadsShim, embeddedPaths["../standalone-worker-threads.cjs"]],
+    ].flatMap(([source, expected]) => [
+      [JSON.stringify(source), expected],
+      [`\`${source}\``, expected],
+    ]),
+  )("loads the embedded image after the build path disappears: %s", async (source, expected) => {
     const calls: { parent: string; target: string }[] = [];
-    const load = vm.runInNewContext(rewrite(`(async () => import(${JSON.stringify(source)}))`), {
+    const load = vm.runInNewContext(rewrite(`(async () => import(${source}))`), {
       __openclawStandaloneRootUrl: relocatedRoot,
       __openclawStandaloneImport: async (parent: string, target: string) => {
         calls.push({ parent, target });

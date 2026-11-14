@@ -9,10 +9,12 @@ import {
   closeHttpServer as closeServer,
   listenLoopback as listen,
 } from "../../test/helpers/gateway-integration-fixtures.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as gitExec from "../infra/git-exec.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import * as processExec from "../process/exec.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -24,6 +26,7 @@ import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers
 import {
   cloneProjectCheckout,
   ensureProjectCheckoutCommit,
+  prepareProjectCheckoutDefaultBase,
   ProjectCloneError,
   refreshProjectCheckout,
 } from "./project-clone-runtime.js";
@@ -158,6 +161,62 @@ describe("project registry persistence", () => {
         "false",
       );
       expect(await gitText(worktree, "config", "--local", "--get", "gc.auto")).toBe("0");
+    },
+  );
+
+  it.each(["reused", "refreshed"] as const)(
+    "does not wait for unshallow when a linked agent base is %s",
+    async (mode) => {
+      const source = await initializeRepository(root, "history");
+      await commitFile(source, "README.md", "second commit\n");
+      await git(source, "config", "uploadpack.allowFilter", "true");
+      const target = path.join(root, "managed");
+      await git(root, "clone", "--filter=blob:none", pathToFileURL(source).href, target);
+      const worktree = path.join(root, "linked-agent");
+      await git(target, "worktree", "add", "--detach", worktree);
+      const originUrl = mode === "reused" ? "https://github.com/example/history.git" : source;
+      const project = await registerClone(target, originUrl);
+      const head = await gitText(worktree, "rev-parse", "HEAD");
+      await git(worktree, "fetch", "--depth", "1", "origin");
+      expect(await gitText(target, "rev-parse", "--is-shallow-repository")).toBe("true");
+      const repairGate = createDeferred();
+      const repairStarted = createDeferred();
+      const execute = gitExec.executeGitCommand;
+      using commands = vi
+        .spyOn(gitExec, "executeGitCommand")
+        .mockImplementation(async (...args) => {
+          if (args[1].includes("--unshallow")) {
+            repairStarted.resolve();
+            await repairGate.promise;
+          }
+          return execute(...args);
+        });
+      const logs = createWarnLogCapture("project-history");
+      const operation =
+        mode === "reused"
+          ? materializeProjectClone({ cfg: {}, gitUrl: originUrl }, options)
+          : refreshProjectClone(project, options);
+      try {
+        await awaitGateBeforeSettlement<Awaited<typeof operation>>(
+          operation,
+          repairStarted.promise,
+          "Preparation started unshallow",
+        );
+        expect(commands.mock.calls.some(([, args]) => args.includes("--unshallow"))).toBe(false);
+        expect(await logs.findText("openclaw doctor --fix")).toContain(target);
+      } finally {
+        repairGate.resolve();
+        await operation;
+        logs.cleanup();
+      }
+      for (const checkout of [target, worktree]) {
+        expect(await gitText(checkout, "rev-parse", "--is-shallow-repository")).toBe("true");
+        expect(await gitText(checkout, "rev-list", "--count", "HEAD")).toBe("1");
+        expect(await gitText(checkout, "config", "remote.origin.partialclonefilter")).toBe(
+          "blob:none",
+        );
+      }
+      expect(await gitText(worktree, "rev-parse", "HEAD")).toBe(head);
     },
   );
 
@@ -407,8 +466,7 @@ describe("project registry persistence", () => {
     const target = path.join(root, "partial");
     const url = pathToFileURL(source).href;
     await git(root, "clone", "--filter=blob:none", "--no-checkout", url, target);
-    await git(target, "config", `remote.${url}.promisor`, "true");
-    await git(target, "config", `remote.${url}.partialclonefilter`, "blob:none");
+    await git(target, "config", "fetch.unpackLimit", "1");
     const base = await gitText(target, "rev-parse", "HEAD");
     const packs = path.join(target, ".git", "objects", "pack");
     const before = new Set(await fs.readdir(packs));
@@ -424,9 +482,11 @@ describe("project registry persistence", () => {
       (name) => name.endsWith(".idx") && !before.has(name),
     );
     expect(added).toHaveLength(1);
+    await fs.stat(path.join(packs, added[0]!.replace(/\.idx$/, ".promisor")));
     const indexed = (await git(target, "verify-pack", "-v", path.join(packs, added[0]!))).stdout;
     expect(indexed).toContain(`${commit} commit`);
     expect(indexed).not.toContain(`${base} commit`);
+    expect(indexed).not.toContain(" blob ");
     expect(await gitText(target, "rev-parse", "HEAD")).toBe(base);
     expect(await gitText(target, "cat-file", "-t", commit)).toBe("commit");
     await ensureProjectCheckoutCommit(
@@ -447,6 +507,62 @@ describe("project registry persistence", () => {
       "keep refreshed blobs lazy\n",
     );
   });
+
+  it("preserves partial-clone filtering and promisor packs when the default advances", async () => {
+    const source = await initializeRepository(root, "source");
+    await git(source, "config", "uploadpack.allowFilter", "true");
+    const target = path.join(root, "partial");
+    const url = pathToFileURL(source).href;
+    await git(root, "clone", "--filter=blob:none", "--no-checkout", url, target);
+    const packs = path.join(target, ".git", "objects", "pack");
+    const before = new Set(await fs.readdir(packs));
+    const commit = await commitFile(source, "later.txt", "keep the new default blob lazy\n");
+    const blob = await gitText(source, "rev-parse", "HEAD:later.txt");
+    expect(await prepareProjectCheckoutDefaultBase({ url, target }, {})).toEqual({
+      baseRef: "origin/main",
+      baseCommit: commit,
+    });
+    const added = (await fs.readdir(packs)).filter(
+      (name) => name.endsWith(".idx") && !before.has(name),
+    );
+    expect(added.length).toBeGreaterThan(0);
+    for (const pack of added) {
+      await fs.stat(path.join(packs, pack.replace(/\.idx$/, ".promisor")));
+    }
+    await expect(
+      execFileAsync("git", ["-C", target, "cat-file", "-e", blob], {
+        env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+    expect(await gitText(target, "config", "remote.origin.partialclonefilter")).toBe("blob:none");
+  });
+
+  it.each(["main", "renamed"])(
+    "publishes the advanced %s default to the source cache for offline reuse",
+    async (branch) => {
+      const { source, target } = await cloneFixture();
+      if (branch !== "main") {
+        await git(source, "branch", "-m", branch);
+      }
+      const commit = await commitFile(source, "later.txt", "new default\n");
+      // Local transport rewrites cannot redirect the registry's canonical URL.
+      await git(target, "config", `url.${path.join(root, "unavailable")}.insteadOf`, source);
+      const expected = { baseRef: `origin/${branch}`, baseCommit: commit };
+      expect(await prepareProjectCheckoutDefaultBase({ url: source, target }, {})).toEqual(
+        expected,
+      );
+      expect(await gitText(target, "rev-parse", `origin/${branch}`)).toBe(commit);
+      expect(await gitText(target, "symbolic-ref", "refs/remotes/origin/HEAD")).toBe(
+        `refs/remotes/origin/${branch}`,
+      );
+      expect(
+        await prepareProjectCheckoutDefaultBase(
+          { url: source, target },
+          { env: { ...process.env, GIT_ALLOW_PROTOCOL: "" } },
+        ),
+      ).toEqual(expected);
+    },
+  );
 
   it.each([
     ["initial", false],

@@ -26,7 +26,7 @@ import { mergeProfiles, setUserProfileRole } from "../state/user-profile-writes.
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
+import { handleControlUiAssistantMediaRequest } from "./control-ui-assistant-media-http.js";
 import { resolveHttpProfile } from "./http-auth-user-profile.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
@@ -53,7 +53,10 @@ vi.mock("../config/io.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/io.js")>()),
   getRuntimeConfig: () => state.config ?? {},
 }));
-vi.mock("./http-utils.js", () => ({ authorizeControlUiReadRequestOrReply: state.auth }));
+vi.mock("./http-auth-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-auth-utils.js")>()),
+  authorizeControlUiReadRequestOrReply: state.auth,
+}));
 vi.mock("./session-worker-placement-context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-worker-placement-context.js")>()),
   resolveSessionWorkerPlacementContext: () => ({
@@ -276,6 +279,22 @@ it("binds relative media tickets to the execution directory within the session r
   expect((await request("image.png", { ticket, bytes: true })).res.statusCode).toBe(404);
   expect((await request("image.png")).payload).toMatchObject({ available: true });
   expect((await request("image.png", { unscoped: true })).res.statusCode).toBe(404);
+});
+
+it("reports expired relative scratch media in metadata and existing byte tickets", async () => {
+  const relative = ".openclaw/tmp/proof/expired.png";
+  const source = await image(relative);
+  const ticket = await mediaTicket(relative);
+  await fs.unlink(source);
+  await expectMetadata(relative, {
+    available: false,
+    code: "artifact-file-expired",
+    reason: "file expired (scratch cleaned after 24 h)",
+    retryable: false,
+  });
+  const downloaded = await request(relative, { ticket, bytes: true });
+  expect(downloaded.res.statusCode).toBe(410);
+  expect(downloaded.bytes.toString()).toBe("file expired (scratch cleaned after 24 h)");
 });
 
 it.each(["metadata", "bytes"] as const)(

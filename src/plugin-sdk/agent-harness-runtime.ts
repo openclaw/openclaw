@@ -26,6 +26,10 @@ import {
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
 import { queueDetachedEmbeddedAgentMessage } from "../agents/embedded-agent-runner/runs.message-injection.js";
+import {
+  buildDeprecatedSkillWorkshopPromptSection,
+  DEPRECATED_SKILL_WORKSHOP_TOOL_NAME,
+} from "../agents/harness/deprecated-skill-workshop-prompt.js";
 import { runStructuredInput } from "../agents/harness/structured-input-execution.js";
 import {
   compileStructuredInputForm,
@@ -66,7 +70,10 @@ export type {
 } from "../plugins/agent-executor-controller.types.js";
 export { resolveAgentExecutorController } from "../plugins/agent-executor-controller.js";
 
-export { projectAgentActivityItem } from "../agents/agent-activity-presentation.js";
+export {
+  formatSubagentProgressReference,
+  projectAgentActivityItem,
+} from "../agents/agent-activity-presentation.js";
 export { projectAgentToolActivity } from "../infra/agent-activity-events.js";
 export { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 export { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
@@ -159,6 +166,7 @@ export type {
   AgentHarnessSupportContext,
 } from "../agents/harness/types.js";
 export {
+  AgentHarnessModelRequestPolicyError,
   AgentHarnessPreflightError,
   AgentHarnessSessionCleanupError,
   AgentHarnessSessionSupersededError,
@@ -307,8 +315,10 @@ export {
 } from "../agents/embedded-agent-tool-results.js";
 export {
   formatToolExecutionErrorMessage,
-  isToolResultError,
   resolveToolExecutionErrorKind,
+} from "../agents/tool-execution-error.js";
+export {
+  isToolResultError,
   resolveToolResultFailureKind,
   type ToolResultFailureKind,
 } from "../agents/tool-result-error.js";
@@ -341,16 +351,24 @@ export const agentHarnessStructuredInput = Object.freeze({
   run: runStructuredInput,
   snapshot: snapshotStructuredInput,
 });
-export {
-  buildSkillWorkshopPromptSection,
-  SKILL_WORKSHOP_TOOL_NAME,
-} from "../agents/skill-workshop-prompt.js";
+export { listToolPromptGuidance } from "../agents/tool-prompt-guidance.js";
+/**
+ * @deprecated Pass the run's callable tool names to listToolPromptGuidance; it includes
+ * this section while `skill_workshop` is callable.
+ */
+export const SKILL_WORKSHOP_TOOL_NAME = DEPRECATED_SKILL_WORKSHOP_TOOL_NAME;
+/**
+ * @deprecated Pass the run's callable tool names to listToolPromptGuidance; it includes
+ * this section while `skill_workshop` is callable.
+ */
+export const buildSkillWorkshopPromptSection = buildDeprecatedSkillWorkshopPromptSection;
 export {
   buildDelegationGuidanceSection,
   resolveMainSessionDelegationMode,
 } from "../agents/delegation-guidance.js";
 export { buildHarnessVisibleReplyGuidance } from "../auto-reply/source-reply-delivery-mode.js";
 export { buildCredentialSafetyPrompt } from "../agents/credential-safety-prompt.js";
+export { buildAgentHarnessBasePrompt } from "../agents/system-prompt-harness-base.js";
 export { buildUiPresentationPrompt } from "../agents/ui-presentation-prompt.js";
 export { normalizeQuestionTimeoutSeconds } from "../agents/tools/ask-user-tool-normalization.js";
 export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
@@ -536,7 +554,8 @@ export const mcpStdioRuntime = Object.freeze({
   },
 });
 
-export type { McpToolCatalog, SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
+export type { McpToolCatalog } from "../agents/agent-bundle-mcp-catalog.types.js";
+export type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 export { assignSafeServerNames as assignMcpCatalogSafeServerNames } from "../agents/agent-bundle-mcp-names.js";
 
 /**

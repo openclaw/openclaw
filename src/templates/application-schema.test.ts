@@ -1,31 +1,28 @@
 import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildTemplateAddPlan } from "./lifecycle.js";
 import { emptyPluginCapabilityEvidence } from "./packages.test-support.js";
-import { parseTemplateManifest, parseTemplateOpenClawProfile } from "./schema.js";
-import type {
-  TemplateManifest,
-  TemplatePackagePreflightResult,
-  TemplateSourceIdentity,
-} from "./types.js";
+import { parseTemplateManifest } from "./schema.js";
+import type { TemplatePackagePreflightResult } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function requireManifest(value: unknown): TemplateManifest {
-  const result = parseTemplateManifest(value);
-  if (!result.ok) {
-    throw new Error(JSON.stringify(result.diagnostics));
-  }
-  return result.manifest;
-}
+const extension = { ref: "@acme/market-data", version: "2.0.1" } as const;
 
-async function createPlanSource(): Promise<{ source: TemplateSourceIdentity; workspace: string }> {
+async function planApplication(
+  manifest: Record<string, unknown>,
+  packagePreflight?: () => Promise<TemplatePackagePreflightResult>,
+  options: { defaultWorkspace?: boolean } = {},
+) {
   const root = tempDirs.make("openclaw-template-application-plan-");
   await mkdir(join(root, "workspace", "schemas"), { recursive: true });
   await writeFile(join(root, "workspace", "schemas", "market.json"), "{}\n", "utf8");
-  return {
+  const parsed = parseTemplateManifest({ schemaVersion: 1, agent: { id: "analyst" }, ...manifest });
+  assert(parsed.ok, JSON.stringify(parsed.diagnostics));
+  return buildTemplateAddPlan({
+    manifest: parsed.manifest,
     source: {
       kind: "package",
       name: "@acme/market-analyst",
@@ -36,18 +33,14 @@ async function createPlanSource(): Promise<{ source: TemplateSourceIdentity; wor
       integrity: "sha256:test",
       byteLength: 0,
     },
-    workspace: join(await realpath(root), "new-workspace"),
-  };
+    context: {
+      ...(options.defaultWorkspace
+        ? {}
+        : { workspace: join(await realpath(root), "new-workspace") }),
+      ...(packagePreflight ? { packagePreflight } : {}),
+    },
+  });
 }
-
-const extension = {
-  id: "market-data",
-  kind: "plugin",
-  format: "claude",
-  source: "clawhub",
-  ref: "@acme/market-data",
-  version: "2.0.1",
-} as const;
 
 function extensionPreflight(
   overrides: Partial<TemplatePackagePreflightResult> = {},
@@ -71,45 +64,43 @@ function extensionPreflight(
 }
 
 describe("Template application schema v1", () => {
-  it("accepts strict native extension assertions without a schema bump", () => {
+  it("accepts inline native settings and exact ClawHub requirements without a schema bump", () => {
     expect(
-      parseTemplateOpenClawProfile({
+      parseTemplateManifest({
         schemaVersion: 1,
-        agent: { tools: { profile: "coding", allow: ["read"] } },
-        extensions: [extension],
+        agent: { id: "analyst", tools: { profile: "coding", allow: ["read"] } },
+        plugins: [extension],
       }),
     ).toMatchObject({
       ok: true,
-      profile: { schemaVersion: 1, extensions: [{ id: "market-data", format: "claude" }] },
+      manifest: { schemaVersion: 1, plugins: [{ ref: "@acme/market-data", version: "2.0.1" }] },
     });
   });
-
-  it("rejects duplicate extensions and unknown formats", () => {
+  it("rejects duplicate plugin requirements", () => {
     expect(
-      parseTemplateOpenClawProfile({
+      parseTemplateManifest({
         schemaVersion: 1,
-        agent: {},
-        extensions: [extension, extension],
-      }).ok,
-    ).toBe(false);
-    expect(
-      parseTemplateOpenClawProfile({
-        schemaVersion: 1,
-        agent: {},
-        extensions: [{ ...extension, format: "future" }],
+        agent: { id: "analyst" },
+        plugins: [extension, { ...extension }],
       }).ok,
     ).toBe(false);
   });
 });
 
 describe("Template application planning v1", () => {
-  it("allows ordinary sessions_spawn tool authority without model or named delegates", async () => {
-    const { source, workspace } = await createPlanSource();
-    const plan = await buildTemplateAddPlan({
-      manifest: requireManifest({ schemaVersion: 1, agent: { id: "analyst" } }),
-      openClawProfile: { schemaVersion: 1, agent: { tools: { allow: ["sessions_spawn"] } } },
-      source,
-      context: { workspace },
+  it("defaults a new agent's workspace to the state directory", async () => {
+    const stateDir = await realpath(tempDirs.make("openclaw-template-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    try {
+      const plan = await planApplication({}, undefined, { defaultWorkspace: true });
+      expect(plan.agent.workspace).toBe(join(stateDir, "workspace-analyst"));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+  it("allows ordinary sessions_spawn authority without model or named delegates", async () => {
+    const plan = await planApplication({
+      agent: { id: "analyst", tools: { allow: ["sessions_spawn"] } },
     });
     expect(plan.agent.config).not.toHaveProperty("model");
     expect(plan.agent.config).not.toHaveProperty("subagents");
@@ -117,39 +108,18 @@ describe("Template application planning v1", () => {
       expect.objectContaining({ kind: "agent", effect: { tools: { allow: ["sessions_spawn"] } } }),
     );
     expect(plan.blockers).toEqual([]);
-    expect(plan.diagnostics).toEqual([]);
   });
-
-  it("plans a canonical extension and an ordinary managed schema asset", async () => {
-    const { source, workspace } = await createPlanSource();
-    const manifest = requireManifest({
-      schemaVersion: 1,
-      agent: { id: "market-analyst" },
-      workspace: {
-        files: [{ source: "workspace/schemas/market.json", path: "schemas/market.json" }],
+  it("plans an inspected plugin and an ordinary managed schema asset", async () => {
+    const plan = await planApplication(
+      {
+        plugins: [extension],
+        workspace: {
+          files: [{ source: "workspace/schemas/market.json", path: "schemas/market.json" }],
+        },
       },
-    });
-    const plan = await buildTemplateAddPlan({
-      manifest,
-      openClawProfile: { schemaVersion: 1, agent: {}, extensions: [extension] },
-      source,
-      context: {
-        workspace,
-        packagePreflight: async () =>
-          extensionPreflight({ mapped: ["commands", "skills"], unavailable: ["agents"] }),
-      },
-    });
-
-    expect(plan.extensions).toEqual([
-      expect.objectContaining({
-        id: "market-data",
-        detectedFormat: "claude",
-        mapped: ["commands", "skills"],
-        unavailable: ["agents"],
-        requirementState: "missing-installable",
-        blocked: false,
-      }),
-    ]);
+      async () => extensionPreflight({ mapped: ["commands", "skills"], unavailable: ["agents"] }),
+    );
+    expect(plan.blockers).toEqual([]);
     expect(plan.actions).toContainEqual(
       expect.objectContaining({
         kind: "package",
@@ -158,6 +128,8 @@ describe("Template application planning v1", () => {
         details: expect.objectContaining({
           extension: expect.objectContaining({
             id: "market-data",
+            detectedFormat: "claude",
+            mapped: ["commands", "skills"],
             adapterIdentity: "openclaw/test",
           }),
         }),
@@ -167,9 +139,7 @@ describe("Template application planning v1", () => {
       expect.objectContaining({ kind: "workspaceFile", id: "schemas/market.json" }),
     );
   });
-
-  it("reports a reused extension with remaining local setup as setup-required", async () => {
-    const { source, workspace } = await createPlanSource();
+  it("reports a reused plugin with remaining local setup as setup-required", async () => {
     const prerequisite = {
       kind: "plugin-setup" as const,
       plugin: "market-data",
@@ -177,21 +147,9 @@ describe("Template application planning v1", () => {
       envVars: ["MARKET_DATA_TOKEN"],
       authMethods: [],
     };
-    const plan = await buildTemplateAddPlan({
-      manifest: requireManifest({ schemaVersion: 1, agent: { id: "market-analyst" } }),
-      openClawProfile: { schemaVersion: 1, agent: {}, extensions: [extension] },
-      source,
-      context: {
-        workspace,
-        packagePreflight: async () =>
-          extensionPreflight({ action: "reuse", requirements: [prerequisite] }),
-      },
-    });
-
-    expect(plan.extensions?.[0]).toMatchObject({
-      requirementState: "setup-required",
-      ownerAction: "reuse",
-    });
+    const plan = await planApplication({ plugins: [extension] }, async () =>
+      extensionPreflight({ action: "reuse", requirements: [prerequisite] }),
+    );
     expect(plan.actions).toContainEqual(
       expect.objectContaining({
         kind: "package",
@@ -201,86 +159,20 @@ describe("Template application planning v1", () => {
     );
     expect(plan.readiness).toEqual({ ready: false, requirements: [prerequisite] });
   });
-
-  it("blocks incomplete adapter provenance", async () => {
-    const { source, workspace } = await createPlanSource();
-    const plan = await buildTemplateAddPlan({
-      manifest: requireManifest({ schemaVersion: 1, agent: { id: "market-analyst" } }),
-      openClawProfile: { schemaVersion: 1, agent: {}, extensions: [extension] },
-      source,
-      context: {
-        workspace,
-        packagePreflight: async () => extensionPreflight({ adapterIdentity: undefined }),
-      },
-    });
-
+  it("blocks incomplete plugin adapter provenance", async () => {
+    const plan = await planApplication({ plugins: [extension] }, async () =>
+      extensionPreflight({ adapterIdentity: undefined }),
+    );
     expect(plan.blockers).toContainEqual(
-      expect.objectContaining({ code: "extension_provenance_incomplete" }),
+      expect.objectContaining({ code: "plugin_capability_provenance_incomplete" }),
     );
     expect(plan.actions).toContainEqual(
       expect.objectContaining({ id: "plugin:@acme/market-data", blocked: true }),
     );
   });
-
-  it("blocks duplicate portable and profile package declarations", async () => {
-    const { source, workspace } = await createPlanSource();
-    const manifest = requireManifest({
-      schemaVersion: 1,
-      agent: { id: "market-analyst" },
-      packages: [
-        {
-          kind: "plugin",
-          source: "clawhub",
-          ref: "@acme/market-data",
-          version: "2.0.1",
-        },
-      ],
-    });
-    const plan = await buildTemplateAddPlan({
-      manifest,
-      openClawProfile: { schemaVersion: 1, agent: {}, extensions: [extension] },
-      source,
-      context: {
-        workspace,
-        packagePreflight: async () => extensionPreflight(),
-      },
-    });
-
-    expect(plan.blockers).toContainEqual(
-      expect.objectContaining({ code: "extension_package_collision" }),
-    );
-    expect(plan.actions.filter((action) => action.id === "plugin:@acme/market-data")).toHaveLength(
-      1,
-    );
-  });
-
-  it("blocks a declared format that differs from canonical detection", async () => {
-    const { source, workspace } = await createPlanSource();
-    const plan = await buildTemplateAddPlan({
-      manifest: requireManifest({ schemaVersion: 1, agent: { id: "market-analyst" } }),
-      openClawProfile: {
-        schemaVersion: 1,
-        agent: {},
-        extensions: [{ ...extension, format: "codex" }],
-      },
-      source,
-      context: {
-        workspace,
-        packagePreflight: async () => extensionPreflight(),
-      },
-    });
-
-    expect(plan.extensions?.[0]?.blocked).toBe(true);
-    expect(plan.blockers).toContainEqual(
-      expect.objectContaining({
-        code: "extension_format_mismatch",
-        path: "$.profiles.openclaw.extensions[0].format",
-      }),
-    );
-  });
 });
 
-describe("parseTemplateOpenClawProfile package authority", () => {
+describe("inline agent policy", () => {
   it.each([
     { model: { primary: "acme/model" } },
     { provider: "acme" },
@@ -289,16 +181,14 @@ describe("parseTemplateOpenClawProfile package authority", () => {
     { model: {} },
     { model: "acme/model" },
     { subagents: {} },
-  ])("rejects host-owned profile fields: %j", (agent) => {
-    expect(parseTemplateOpenClawProfile({ schemaVersion: 1, agent }).ok).toBe(false);
-  });
-
-  it("accepts the ordinary sessions_spawn tool grant", () => {
-    expect(
-      parseTemplateOpenClawProfile({
-        schemaVersion: 1,
-        agent: { tools: { allow: ["sessions_spawn"] } },
-      }).ok,
-    ).toBe(true);
+    { tools: { fs: { workspaceOnly: false } } },
+    { tools: { allow: ["*"] } },
+    { tools: { profile: "full" } },
+    { heartbeat: { target: "last" } },
+    { memory: { search: { sources: ["sessions"] } } },
+  ])("rejects host-owned settings or unbounded authority: %j", (agent) => {
+    expect(parseTemplateManifest({ schemaVersion: 1, agent: { id: "analyst", ...agent } }).ok).toBe(
+      false,
+    );
   });
 });

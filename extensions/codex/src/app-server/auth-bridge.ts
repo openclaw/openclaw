@@ -1,13 +1,8 @@
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 import { randomUUID } from "node:crypto";
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import {
-  AgentHarnessPreflightError,
-  resolveDefaultAgentDir,
-} from "openclaw/plugin-sdk/agent-harness-registration";
+import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-harness-registration";
 import {
   ensureAuthProfileStoreAsync,
   findPersistedAuthProfileCredentialAsync,
@@ -23,14 +18,14 @@ import {
   resolveOpenAICodexAuthIdentity,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
-  CODEX_AUTH_JSON_FILENAME,
   CODEX_APP_SERVER_API_KEY_ENV_VARS,
-  resolveCodexAppServerFallbackApiKeyCacheKey,
   fingerprintApiKeyAuthProfileCacheKey,
   fingerprintTokenAuthProfileCacheKey,
   readCodexCliAuthFileApiKey,
   readFirstNonEmptyEnv,
 } from "./auth-cache-key.js";
+import { assertNoUnimportedAgentCodexAuthFile } from "./auth-legacy-file.js";
+import { unresolvedCodexOAuthError } from "./auth-oauth-unresolved.js";
 import {
   CodexAppServerAuthProfileUnavailableError,
   formatCodexAuthProfileUnavailableMessage,
@@ -43,7 +38,6 @@ import {
   type CodexAppServerAuthProfileLookup,
 } from "./auth-profile.js";
 import {
-  resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
   withClearedEnvironmentVariables,
   withEphemeralCodexAuthStore,
@@ -58,6 +52,10 @@ import type {
 } from "./auth-types.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerHomeScope, CodexAppServerStartOptions } from "./config-contracts.js";
+import {
+  assertNativeCodexAccountMatchesRoute,
+  createCodexAppServerAuthError,
+} from "./native-auth-validation.js";
 import type {
   CodexChatgptAuthTokensRefreshResponse,
   CodexGetAccountResponse,
@@ -65,6 +63,7 @@ import type {
 } from "./protocol.js";
 import {
   isCodexResponsesOAuthCredential,
+  resolveCodexInferenceCredential,
   resolveCodexResponsesOAuthProfileFingerprint,
 } from "./responses-oauth.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
@@ -102,7 +101,7 @@ export async function bridgeCodexAppServerStartOptions(
       params.agentDir,
     );
 
-  if (params.preparedAuth) {
+  if (params.preparedAuth || params.authRequirement === "native-command") {
     const scopedStartOptions = await scopeStartOptions();
     return withClearedEnvironmentVariables(
       scopedStartOptions,
@@ -131,40 +130,6 @@ export async function bridgeCodexAppServerStartOptions(
   return shouldClearOpenAiApiKeyForCodexAuthProfile({ store, authProfileId })
     ? withClearedEnvironmentVariables(scopedStartOptions, CODEX_APP_SERVER_API_KEY_ENV_VARS)
     : scopedStartOptions;
-}
-
-function assertNoUnimportedAgentCodexAuthFile(params: {
-  startOptions: CodexAppServerStartOptions;
-  agentId?: string;
-  agentDir?: string;
-  authRequirement?: CodexAppServerAuthRequirement;
-}): void {
-  // Ephemeral stdio starts cannot load this stale file, and the shared-client key
-  // separates auth requirements plus fallback identities. Preserve the supported
-  // stdio API-key login instead of turning a leftover file into a hard failure.
-  if (
-    (params.authRequirement === "api-key" || params.authRequirement === "environment-api-key") &&
-    resolveCodexAppServerFallbackApiKeyCacheKey({
-      startOptions: params.startOptions,
-      allowNativeAuthFile: params.authRequirement === "api-key",
-    })
-  ) {
-    return;
-  }
-  if (params.startOptions.transport !== "stdio" || params.startOptions.homeScope === "user") {
-    return;
-  }
-  const codexHome = resolveCodexAppServerHomeDir(params.agentDir);
-  const authPath = path.join(codexHome, CODEX_AUTH_JSON_FILENAME);
-  // OpenClaw-owned starts force ephemeral Codex auth, so this file would otherwise be
-  // ignored and the operator would receive only the downstream authentication error.
-  if (!fsSync.existsSync(authPath)) {
-    return;
-  }
-  const targetAgentId = params.agentId?.trim() || "<agent-id>";
-  throw new AgentHarnessPreflightError(
-    `A Codex auth file exists at ${authPath}, but agent-scoped Codex runs use OpenClaw's auth store and do not read that file. Preview only that credential import with \`openclaw migrate plan codex --from <codex-home> --agent ${targetAgentId} --include-secrets --item auth:openai\`, then run \`openclaw migrate apply codex --from <codex-home> --agent ${targetAgentId} --include-secrets --item auth:openai --yes\`. If the plan finds no credentials, remove the stale auth file.`,
-  );
 }
 
 async function resolveCodexAppServerAuthProfile(params: CodexAppServerAuthProfileLookup) {
@@ -258,10 +223,14 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   // api-key logins into CODEX_HOME/auth.json and swaps the live account for external
   // token logins, so a prepared OpenClaw handoff here would rewrite the account that
   // Codex CLI and Desktop share. Native homes are verified, never logged into.
+  if (params.authRequirement === "native-command") {
+    if (params.authProfileId || params.resolvedApiKey || params.requirePreparedAuth) {
+      throw new Error("Native command auth cannot use host credentials or remote-exec placement.");
+    }
+    return { nativeAuthProfile: true };
+  }
   const usesNativeHome = params.homeScope === "user";
-  const selectedCredential = params.authProfileId
-    ? params.authProfileStore.profiles[params.authProfileId]
-    : undefined;
+  const selectedCredential = resolveCodexInferenceCredential(params);
   if (isCodexResponsesOAuthCredential(selectedCredential)) {
     if (usesNativeHome || params.requirePreparedAuth || params.authRequirement !== "api-key") {
       throw new Error(
@@ -492,47 +461,6 @@ export async function applyCodexAppServerAuthProfile(params: {
     }
   }
   return undefined;
-}
-
-/**
- * Native-home connections are verified, never logged into. Both directions of the
- * check protect the same billing boundary: a subscription route cannot run without
- * ChatGPT tokens, and a Platform route must not silently spend the operator's
- * ChatGPT plan. An absent account is left alone because the native home may serve a
- * custom model provider that reports no OpenAI account at all.
- */
-async function assertNativeCodexAccountMatchesRoute(
-  client: CodexAppServerClient,
-  authRequirement: CodexAppServerAuthRequirement | undefined,
-  assertCurrent?: () => void,
-  withCurrent?: (write: () => void) => Promise<void>,
-): Promise<void> {
-  if (!authRequirement) {
-    return;
-  }
-  const response = await client.request<CodexGetAccountResponse>(
-    "account/read",
-    { refreshToken: false },
-    { assertCurrent, withCurrent },
-  );
-  const accountType = response.account?.type;
-  if (authRequirement === "subscription") {
-    if (accountType !== "chatgpt") {
-      throw createCodexAppServerAuthError(
-        'Codex subscription route requires ChatGPT auth in the native Codex home. Run `codex login` for that home, or use appServer.homeScope="agent" with an OpenClaw OAuth profile, then retry.',
-      );
-    }
-    return;
-  }
-  if (accountType === "chatgpt") {
-    throw createCodexAppServerAuthError(
-      'Codex Platform route requires an API-key account, but the native Codex home is signed in with a ChatGPT subscription. Sign that home in with `codex login --with-api-key`, or set appServer.homeScope="agent" so OpenClaw can inject its own key.',
-    );
-  }
-}
-
-function createCodexAppServerAuthError(message: string): Error & { status: 401 } {
-  return Object.assign(new Error(message), { status: 401 as const });
 }
 
 export async function refreshCodexAppServerAuthTokens(
@@ -793,9 +721,7 @@ async function resolveOAuthCredentialForCodexAppServer(
     !isCodexAppServerAuthProvider(resolved.credential.provider) ||
     !resolved.apiKey.trim()
   ) {
-    throw new CodexAppServerAuthProfileUnavailableError(
-      `Codex app-server auth profile "${profileId}" could not resolve usable OAuth credentials from its OpenClaw credential store. Run "openclaw doctor" to inspect credential ownership, or select an existing OpenAI profile.`,
-    );
+    throw unresolvedCodexOAuthError(profileId, [currentCredential, store.profiles[profileId]]);
   }
   const candidate = { ...resolved.credential, access: resolved.apiKey };
   if (isDeepStrictEqual(params.store.profiles[profileId], credential)) {

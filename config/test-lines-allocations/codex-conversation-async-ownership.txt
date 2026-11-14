@@ -1,0 +1,3 @@
+# PR #192623: async inspection fixture adaptation and two ownership-race regressions.
+# Exact net counted test/helper growth; retains both inspection/policy await checks.
+34

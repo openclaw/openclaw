@@ -1,5 +1,5 @@
 ---
-summary: "How ask_user pauses an agent turn for a structured human decision"
+summary: "Pause for a human decision or a required manual step without losing the task"
 read_when:
   - You want an agent to ask the user a structured question
   - You are answering or debugging an ask_user prompt
@@ -10,11 +10,14 @@ title: "Ask user"
 `ask_user` lets the agent ask the human one to three structured questions and
 wait for the answers. It is for decisions that genuinely belong to the user,
 not routine confirmation or information the agent can derive from the request,
-code, or a sensible default.
+code, or a sensible default. Alternatively, `requiredAction` waits for a necessary
+human-only step before the agent rechecks its prerequisite and continues the
+original task.
 
-The tool is available only in the main session on a surface that supports
-question input: Discord, Slack, Telegram, and WebChat (including the Control UI
-and native OpenClaw clients). Subagents and other non-primary runs do not
+The tool is available in primary sessions, including visible sessions created
+with `sessions_spawn`, on a surface that supports question input: Discord,
+Slack, Telegram, and WebChat (including the Control UI and native OpenClaw
+clients). Hidden subagents, ACP sessions, and other non-primary runs do not
 receive it, and an explicit tool denial still takes precedence.
 
 On the ACP bridge, iMessage, Mattermost, Signal, WhatsApp, and other surfaces without
@@ -32,6 +35,11 @@ You can answer from any supported conversation surface:
   through a short stepper. After resolution, the panel closes and the chat
   keeps the full question alongside your answer in a compact summary. Skipped
   or expired questions keep their wording alongside the outcome.
+  A pending question from a direct child session also docks in the parent
+  chat, marked **Asked by** with a link to the child's session. The parent's
+  composer stays available, including its draft and attachments. Collapsing the
+  panel does not cancel the question. Answering in either session resolves the
+  same question; its history stays in the child's transcript.
   Switching between pending questions preserves both selected choices and typed
   answers, even when typed text matches an option label.
   Use number keys to choose an option and Ctrl+Enter (Cmd+Enter on macOS) to
@@ -73,12 +81,57 @@ If a standalone question link cannot refresh after reconnecting, use **Retry**
 to load it again without losing the answer you typed in that page. A question
 that is no longer available remains unavailable.
 
-OpenClaw always enables a free-text **Other** answer. The agent must not add an
+For ordinary decision questions, OpenClaw enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
 
 Never answer `ask_user` with a credential. When the agent needs an API key it
 uses the [`secrets` tool](/tools/secrets), whose masked prompt stores the value
 without it entering the chat, the transcript, or the model's context.
+
+## Required manual steps
+
+Use `requiredAction` instead of `questions` when the task is blocked on a
+specific, observed external step only the human can perform while the current
+run waits—for example, completing a browser challenge or a manual device step
+in an already selected surface.
+The existing question panel shows the reason, instructions, and an optional
+**Open link** action while the original agent turn waits.
+Code mode includes this handoff guidance when the built-in `ask_user` tool is
+available, even when full tool descriptions are deferred. The agent should use
+the handoff for these external steps instead of ending the task with manual
+sign-in instructions.
+
+Do not invent an approval or manual prerequisite for work the user has already
+authorized. An inactive [Goal](/tools/goal) stops automatic pursuit, not the
+current user-requested turn: executable work can continue within its actual
+permissions without Goal Resume. Do not wait in `ask_user` for Goal Resume or
+any native session control that requires an idle session. If such a control is
+genuinely needed, explain it and finish the current turn so the user can use it.
+
+Opening the link does not answer the question. **Ready to recheck** returns
+`status: "ready_to_verify"`: the agent must re-observe the original target through
+its owning tool. The OpenClaw agent runtime refreshes its tool catalog before
+continuing so a completed sign-in can make its tools available. The answer is not proof of authentication, permission, or
+successful completion, and it grants no additional authority. The agent
+continues from the conversation's recorded progress only when the prerequisite
+is actually satisfied, without repeating completed or uncertain side effects.
+
+**Stop this task**, **Skip**, and expiry return `status: "action_unresolved"`
+with `declined`, `cancelled`, or `expired`. Dependent work stays blocked; the
+agent reports the outcome instead of using a best-judgment fallback or repeatedly
+requesting the same handoff. Free-text answers are disabled for this fixed manual
+step. A failed recheck must remain a blocker, not a successful recovery.
+
+Reuse existing approval and native permission cards when they already own the
+interruption; this is not another approval prompt. An incorrect denial must be
+fixed at its gate. An unavailable capability must be described honestly rather
+than offering an unsupported action. The tool does not seize or arbitrate browser
+or desktop control; their existing ownership rules still apply.
+
+The wait is attributed to the original run and retains its cancellation and
+current-authority checks. It uses the existing process-local question lifecycle,
+not a durable recovery ledger. A Gateway restart or an aborted/replaced run does
+not turn an unresolved step into success.
 
 ## Platform behavior
 
@@ -111,8 +164,8 @@ and the current question visible. New messages, the question's own completed
 turn, and collapsed work history do not dismiss the question or reopen a minimized
 panel. When a later run completes successfully, older reminders leave the dock.
 Overlapping runs, commentary, interruptions, and failed runs do not retire a
-question. Successful restart recovery also moves older reminders into history;
-restarting alone does not.
+question. A later successful turn can move older reminders into history; restarting alone
+does not.
 The transcript keeps the question with **No longer pending** and an **Answer**
 button to reopen it. Reopening preserves the draft until you submit, skip, or a
 later run completes. Moving a reminder into history never answers it, grants
@@ -142,7 +195,7 @@ The default timeout is 900 seconds. `timeoutSeconds` is clamped to the range
 run cancellation or the current model attempt's timeout. A pending question
 does not pause or extend that attempt's execution budget.
 
-If the question expires or is cancelled before an answer arrives, the tool
+For an ordinary decision question, if it expires or is cancelled before an answer arrives, the tool
 returns `status: "no_answer"`. The agent then continues with its best judgment.
 An aborted agent run cancels its pending Gateway question.
 
@@ -155,7 +208,7 @@ turn, including after reconnecting and recovering the question with
 
 ```ts
 {
-  questions: Array<{
+  questions?: Array<{
     id: string; // unique snake_case answer key
     header: string; // short label; truncated to 12 characters
     question: string; // one sentence
@@ -165,6 +218,11 @@ turn, including after reconnecting and recovering the question with
     }>; // 2-4 options
     multiSelect?: boolean;
   }>; // 1-3 questions
+  requiredAction?: { // use instead of questions
+    reason: string; // specific observed blocker
+    instructions: string; // supported human-only step
+    url?: string; // verified HTTP(S), no embedded credentials
+  };
   timeoutSeconds?: number; // integer; default 900, clamped to 30-3600
 }
 ```
@@ -193,14 +251,17 @@ question.
 
 The model-facing contract tells the agent to:
 
-- ask only when blocked on a genuinely user-owned decision;
+- use ordinary questions only for genuinely user-owned decisions;
+- use `requiredAction` only for a specific, supported human-only step;
 - ask exactly one question per call unless several answers must be submitted
   together, because one-question prompts can use native messaging controls;
 - put every selectable choice in `options`, never only in question prose;
 - use `multiSelect` only when several choices can be selected at once;
 - put the recommended option first and suffix its label with `(Recommended)`;
 - omit an authored `Other` option because free text is added automatically;
-- continue with best judgment after `no_answer`.
+- continue with best judgment after ordinary decision `no_answer`;
+- verify the actual prerequisite after `ready_to_verify`;
+- keep dependent work blocked after `action_unresolved`.
 
 The agent should not use `ask_user` to ask whether it may proceed or to confirm
 its own plan.

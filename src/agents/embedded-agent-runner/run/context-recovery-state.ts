@@ -1,4 +1,4 @@
-import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.types.js";
 import {
   restoreEmbeddedRunTimeoutAbandonment,
   type EmbeddedRunTimeoutRecoveryMarker,
@@ -26,7 +26,7 @@ export function createEmbeddedRunContextRecoveryState() {
       if (event.kind === "compaction") {
         state.autoCompactionCount += 1;
         state.lastCompactionTokensAfter = tokens;
-      } else if (event.successful) {
+      } else if (event.kind === "model" && event.successful) {
         state.overflowCompactionAttempts = 0;
         state.toolResultTruncationAttempted = false;
       }

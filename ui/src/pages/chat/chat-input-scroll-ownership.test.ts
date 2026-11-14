@@ -74,6 +74,58 @@ function setup() {
 }
 
 describe("transcript arrival scroll ownership", () => {
+  it("keeps tool activity out of an unchanged text projection while publishing output and receipts", () => {
+    const { state, published } = setup();
+    state.chatRunId = "tool-run";
+    const text = vi.fn();
+    disposals.push(
+      createRoot((stop) => {
+        createEffect(() => state.chatStream, text);
+        return stop;
+      }),
+    );
+    flush();
+    text.mockClear();
+    published.mockClear();
+    for (const seq of [1, 2, 3]) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "agent",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId: "tool-run",
+          seq,
+          ts: seq,
+          stream: "tool",
+          data: {
+            toolCallId: "command",
+            name: "exec",
+            phase: seq === 1 ? "start" : "update",
+            partialResult: `Output ${seq}`,
+          },
+        },
+      });
+      vi.advanceTimersToNextFrame();
+      flush();
+    }
+    vi.advanceTimersByTime(80);
+    flush();
+    expect(state.chatRunStartup).toMatchObject({ state: "activity", seq: 3 });
+    expect(state.chatToolMessages[0]?.content).toContainEqual({
+      type: "toolresult",
+      name: "exec",
+      text: "Output 3",
+    });
+    expect(published).toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+    state.chatStream = "Actual answer";
+    flush();
+    expect(text).toHaveBeenCalledExactlyOnceWith("Actual answer", null);
+    state.chatStream = null;
+    flush();
+    expect(text).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps text publications out of the message and run-state projections", () => {
     const { state, runtime, stream, dispose, published } = setup();
     state.chatRunId = "stream-run";

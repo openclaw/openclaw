@@ -49,7 +49,7 @@ describe("AppSidebar footer identity menu", () => {
 
   it("keeps release availability on Updates after dismissing the Inbox notice", async () => {
     const subscribers = new Set<Parameters<ApplicationOverlays["subscribe"]>[0]>();
-    const { gateway, context, dom, open } = await mountIdentity((ctx, harness) => {
+    const { gateway, context, dom, navigate, open } = await mountIdentity((ctx, harness) => {
       const hello = harness.gateway.snapshot.hello!;
       harness.publish({
         selfUser: { id: "alice", name: "Alice" },
@@ -76,7 +76,8 @@ describe("AppSidebar footer identity menu", () => {
     const updates = () => dom.query<HTMLElement>('[data-value="command:updates"]');
     expect(updates()?.textContent).toContain("Available");
     expect(updates()?.getAttribute("aria-label")).toBe("Updates. Update available");
-    expect(dom.query(".sidebar-footer-build__update")).toBeNull();
+    expect(updates()?.closest(".sidebar-identity-menu__footer")).toBeNull();
+    expect(updates()?.querySelector(".sidebar-identity-menu__update-badge")).not.toBeNull();
 
     (context.overlays as unknown as { snapshot: ApplicationOverlays["snapshot"] }).snapshot = {
       ...context.overlays.snapshot,
@@ -86,7 +87,10 @@ describe("AppSidebar footer identity menu", () => {
     await waitForSolid(() => {
       expect(updates()?.textContent).not.toContain("Available");
       expect(updates()?.getAttribute("aria-label")).toBe("Updates");
+      expect(updates()?.querySelector(".sidebar-identity-menu__update-badge")).toBeNull();
     });
+    await dom.click(updates()!);
+    expect(navigate).toHaveBeenCalledWith("updates", undefined);
   });
 
   it("shows account identity, utilities, and pairing access", async () => {
@@ -118,14 +122,51 @@ describe("AppSidebar footer identity menu", () => {
     }
     expect(view.attr(".sidebar-identity-menu__avatar", "aria-hidden")).toBe("true");
     const shortcut = view.query('[data-value="command:settings"] .session-menu__shortcut');
-    expect(shortcut?.textContent?.replace(/\s+/gu, "").trim()).toMatch(/^(⌘⇧,|Ctrl\+Shift\+,)$/u);
+    expect(shortcut?.textContent?.replace(/\s+/gu, "").trim()).toMatch(/^(⌘⇧,|Ctrl⇧,)$/u);
     expect(view.query(".sidebar-pair-mobile")?.hasAttribute("disabled")).toBe(true);
 
+    expect(
+      [...view.all(":scope > [role=menuitem]")].map((item) => item.getAttribute("data-value")),
+    ).toEqual([
+      "command:profile",
+      "command:pair-mobile",
+      "command:apps",
+      "command:settings",
+      "command:updates",
+      "command:usage",
+      "command:debug-overlay",
+    ]);
+    expect(
+      view.query('[data-value="command:debug-overlay"]')?.closest(".sidebar-identity-menu__footer"),
+    ).toBeNull();
     const helpRow = view.query<HTMLElement>(".sidebar-identity-menu__help");
     expect(helpRow?.getAttribute("aria-haspopup")).toBe("menu");
     const links = domProbe(helpRow!.parentElement!).all('[role="menu"] a[href]');
     const support = [...links].find((link) => link.textContent?.includes("Get support"));
     expect(support?.getAttribute("href")).toBe("https://community.openclaw.ai/");
+  });
+
+  it("keeps one account avatar and photo while the open menu rebuilds", async () => {
+    const avatarUrl = "/api/users/self/avatar?v=1";
+    const { gateway, dom, open } = await mountIdentity();
+    await dom.update({ connected: true, canPairDevice: false });
+    const user = { id: "self", name: "Ada", email: "ada@example.test", avatarUrl };
+    gateway.publish({ selfUser: user });
+    await dom.update();
+    await open();
+    const photo = () => dom.query<HTMLImageElement>(".sidebar-identity-menu__avatar img");
+    const mounted = photo();
+    expect(mounted?.getAttribute("src")).toBe(avatarUrl);
+
+    await dom.update({ canPairDevice: true });
+    await waitForSolid(() => {
+      expect(dom.query(".sidebar-pair-mobile")?.hasAttribute("disabled")).toBe(false);
+    });
+    gateway.publish({ selfUser: { ...user, name: "Ada Lovelace" } });
+    await waitForSolid(() => {
+      expect(dom.query(".sidebar-identity-menu__name")?.textContent).toBe("Ada Lovelace");
+    });
+    expect(photo()).toBe(mounted);
   });
 
   it("wraps between Profile and the footer while reconnecting", async () => {

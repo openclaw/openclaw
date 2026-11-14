@@ -104,8 +104,8 @@ suite.define(() => {
           const row = page.locator(".device-entry", { hasText: DISPLAY_NAME });
           await row.waitFor();
 
-          await row.locator(".device-entry__menu-trigger").click();
-          await row.locator('[role="menuitem"][data-value="editAlias"]').click();
+          await row.locator(":scope > summary").click();
+          await row.getByRole("button", { name: "Edit alias", exact: true }).click();
           const dialog = page.locator("openclaw-modal-dialog").last();
           await dialog.locator('input[name="value"]').waitFor();
 

@@ -7,7 +7,6 @@ import {
   decodeGitHubPathSegment,
   formatGitHubItemReference,
   parseGitHubItemPath,
-  parseGitHubLinkTarget,
 } from "./github-link-target.ts";
 import { installAssistantTranscriptRoleMarkdown } from "./markdown-assistant-transcript.ts";
 import { markdownCodeBlockCopyText, renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
@@ -16,6 +15,7 @@ import {
   isHostLocalMarkdownFileHref,
   MARKDOWN_FILE_LINK_SCAN_RE,
   parseMarkdownFileLinkTarget,
+  parseMarkdownDocumentFileLinkTarget,
   splitMarkdownFileLineSuffix,
 } from "./markdown-file-links.ts";
 import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
@@ -28,25 +28,25 @@ import {
   markdownInlineChildren,
   replaceMarkdownTextMatches,
 } from "./markdown-text-replacements.ts";
+import { installMarkdownWindowsPaths } from "./markdown-windows-paths.ts";
 
 // formatAudioTranscriptForAgent stores this model-facing label in conversation history.
 const AUDIO_TRANSCRIPT_PREFIX = '[Audio transcript (machine-generated, untrusted)]: "';
 
-const HEX_COLOR_RE = /#(?:[\da-f]{8}|[\da-f]{6}|[\da-f]{4}|[\da-f]{3})(?![\da-f])/gi;
+// Only #RRGGBB previews; shorter forms collide with issue/PR numbers like #2536.
+const HEX_COLOR_RE = /#[\da-f]{6}(?![\da-f])/gi;
 
 const DISALLOWED_LINK_SCHEME_RE = /^(?!(?:https?|mailto):)[a-z][a-z0-9+.-]*:/i;
 // Raw CJK suffixes delimit autolinks; percent-encoded URL content stays intact.
-const CJK_RE = new RegExp(
-  "[\\u2E80-\\u2FFF\\u3000-\\u303F\\u3040-\\u309F\\u30A0-\\u30FF\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uAC00-\\uD7AF\\uF900-\\uFAFF\\uFF01-\\uFF60]",
-);
+const CJK_CHARACTER_RE =
+  /[\u2E80-\u2FFF\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60]/;
 
 // CSS paints the decorative mark outside the accessibility tree and copied text.
 const GITHUB_LINK_CLASS = "markdown-github-link";
 // Only generated URL labels may wrap at any character.
 const BARE_URL_CLASS = "markdown-bare-url";
-// Code-span URLs use the same generated labels as autolinks.
-const CODE_SPAN_LINK_MARKUP = "code-span-url";
 const CODE_SPAN_URL_BREAK_RE = /[\s\p{Cc}]/u;
+const FILE_REFERENCE_MARKER_RE = /[/\\:]/;
 
 // Label shortening needs every file target before applying any label.
 type MarkdownFileLinkDecoration = {
@@ -111,23 +111,17 @@ function parseWebLinkHref(href: string): URL | null {
 
 function formatGitHubLinkLabel(url: URL): string {
   const segments = url.pathname.split("/").filter(Boolean);
-  if (segments.length === 2) {
-    return segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment).join("/");
+  const path = segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment);
+  if (path.length === 2) {
+    return path.join("/");
   }
   if ((segments[2] === "blob" || segments[2] === "tree") && segments.length > 4) {
-    const basename = decodeGitHubPathSegment(segments.at(-1) ?? "");
+    const basename = decodeGitHubPathSegment(segments.at(-1)!);
     if (basename) {
-      // Tree URLs can contain slash-separated refs, not just folder paths.
-      // Show the omission rather than presenting the suffix as a folder name.
-      return segments[2] === "tree"
-        ? `${segments
-            .slice(0, 2)
-            .map((segment) => decodeGitHubPathSegment(segment) ?? segment)
-            .join("/")}/…/${basename}`
-        : basename;
+      // Tree refs may contain slashes; the omitted path is not just a folder.
+      return segments[2] === "tree" ? path.slice(0, 2).join("/") + "/…/" + basename : basename;
     }
   }
-  const path = segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment);
   return ["github.com", ...path].join("/");
 }
 
@@ -171,6 +165,7 @@ export function createMarkdownParser(): MarkdownItParser {
   installAssistantTranscriptRoleMarkdown(markdownParser);
   installMarkdownDetails(markdownParser);
   installMarkdownTables(markdownParser);
+  installMarkdownWindowsPaths(markdownParser);
 
   // Bare filenames such as README.md are not web destinations.
   markdownParser.linkify.set({ fuzzyLink: false });
@@ -211,22 +206,10 @@ export function createMarkdownParser(): MarkdownItParser {
         "'": "'",
       };
 
-      // Pre-count delimiters to avoid quadratic suffix scans.
-      const balance: Record<string, number> = {};
-      for (const [close, open] of Object.entries(balancePairs)) {
-        balance[close] = 0;
-        for (let index = 0; index < length; index++) {
-          const character = tail.charAt(index);
-          if (open === close) {
-            if (character === open) {
-              balance[close] = balance[close] === 0 ? 1 : 0;
-            }
-          } else if (character === open) {
-            balance[close] = (balance[close] ?? 0) + 1;
-          } else if (character === close) {
-            balance[close] = (balance[close] ?? 0) - 1;
-          }
-        }
+      // Count delimiters in one pass; suffix removal never rescans the URL.
+      const counts: Record<string, number> = {};
+      for (const character of match[0]) {
+        counts[character] = (counts[character] ?? 0) + 1;
       }
 
       while (length > 0) {
@@ -237,30 +220,23 @@ export function createMarkdownParser(): MarkdownItParser {
         }
         // GFM entity reference rule: strip trailing &entity; sequences.
         if (character === ";") {
-          let index = length - 2;
-          while (index >= 0 && /[a-zA-Z0-9]/.test(tail.charAt(index))) {
-            index--;
-          }
-          // index < length - 2 ensures at least one alphanumeric between & and ;
-          if (index >= 0 && tail.charAt(index) === "&" && index < length - 2) {
+          const index = tail.lastIndexOf("&", length - 1);
+          if (/^&[a-zA-Z0-9]+;$/.test(tail.slice(index, length))) {
             length = index;
             continue;
           }
           break;
         }
         const open = balancePairs[character];
-        if (open !== undefined) {
-          if (open === character) {
-            if ((balance[character] ?? 0) !== 0) {
-              balance[character] = 0;
-              length--;
-              continue;
-            }
-          } else if ((balance[character] ?? 0) < 0) {
-            balance[character] = (balance[character] ?? 0) + 1;
-            length--;
-            continue;
-          }
+        if (
+          open !== undefined &&
+          (open === character
+            ? counts[character]! % 2 !== 0
+            : counts[character]! > (counts[open] ?? 0))
+        ) {
+          counts[character]!--;
+          length--;
+          continue;
         }
         break;
       }
@@ -275,76 +251,8 @@ export function createMarkdownParser(): MarkdownItParser {
   // link wrapper so rejected Markdown stays readable without a false affordance.
   markdownParser.validateLink = () => true;
 
-  markdownParser.core.ruler.after("linkify", "disallowed-link-schemes", (state) => {
-    for (const children of markdownInlineChildren(state.tokens)) {
-      let hideClose = false;
-      for (const token of children) {
-        if (
-          token.type === "link_open" &&
-          DISALLOWED_LINK_SCHEME_RE.test(String(token.attrGet("href") ?? ""))
-        ) {
-          token.hidden = true;
-          hideClose = true;
-        } else if (token.type === "link_close" && hideClose) {
-          token.hidden = true;
-          hideClose = false;
-        }
-      }
-    }
-  });
-
-  // Linkify can swallow adjacent CJK prose; return only its suffix to plain text.
-  markdownParser.core.ruler.after("linkify", "linkify-cjk-trim", (state) => {
-    for (const children of markdownInlineChildren(state.tokens)) {
-      for (let index = children.length - 1; index >= 0; index--) {
-        const token = children[index];
-        if (!token || token.type !== "link_open") {
-          continue;
-        }
-        // Authored labels and destinations keep their intentional CJK content.
-        if (token.markup !== "linkify") {
-          continue;
-        }
-        // Use the display text to find CJK boundary (href may be percent-encoded)
-        const textToken = children[index + 1];
-        if (!textToken || textToken.type !== "text") {
-          continue;
-        }
-        const displayText = textToken.content;
-        // Interior CJK stays in the URL (https://example.com/你/test).
-        let cjkIndex = displayText.length;
-        while (cjkIndex > 0 && CJK_RE.test(displayText.charAt(cjkIndex - 1))) {
-          cjkIndex--;
-        }
-        if (cjkIndex <= 0 || cjkIndex === displayText.length) {
-          continue;
-        }
-        const trimmedDisplay = displayText.slice(0, cjkIndex);
-        const cjkTail = displayText.slice(cjkIndex);
-        // Rebuild href by preserving the scheme prefix that linkify added but
-        // display text omits (e.g. "mailto:" for emails, "http://" for www links).
-        const href = String(token.attrGet("href") ?? "");
-        const prefixLength = href.indexOf(displayText);
-        const hrefPrefix = prefixLength > 0 ? href.slice(0, prefixLength) : "";
-        token.attrSet("href", hrefPrefix + trimmedDisplay);
-        textToken.content = trimmedDisplay;
-        for (let closeIndex = index + 1; closeIndex < children.length; closeIndex++) {
-          if (children[closeIndex]?.type === "link_close") {
-            const tailToken = new state.Token("text", "", 0);
-            tailToken.content = cjkTail;
-            children.splice(closeIndex + 1, 0, tailToken);
-            break;
-          }
-        }
-      }
-    }
-  });
-
-  markdownParser.core.ruler.after("linkify-cjk-trim", "file-links", (state) => {
-    const env = state.env as Partial<MarkdownRenderEnv> | undefined;
-    if (env?.fileLinks !== true) {
-      return;
-    }
+  markdownParser.core.ruler.after("linkify", "file-links", (state) => {
+    const env = state.env as Partial<MarkdownRenderEnv>;
     const decorations: MarkdownFileLinkDecoration[] = [];
     const fileLinkTokens = (
       label: Token,
@@ -369,7 +277,8 @@ export function createMarkdownParser(): MarkdownItParser {
       return [open, label, close];
     };
     for (const children of markdownInlineChildren(state.tokens)) {
-      let linkDepth = 0;
+      // Markdown links cannot nest; the opening token owns both wrapper states.
+      let openLink: Token | undefined;
       for (let index = 0; index < children.length; index++) {
         const token = children[index];
         if (!token) {
@@ -377,22 +286,40 @@ export function createMarkdownParser(): MarkdownItParser {
         }
         if (token.type === "link_open") {
           const href = String(token.attrGet("href") ?? "");
-          if (href && !token.attrGet("data-session-href")) {
+          if (
+            href &&
+            (env.fileLinks || env.documentFileLinks) &&
+            !token.attrGet("data-session-href") &&
+            !token.attrGet("data-template-package")
+          ) {
             let decodedHref = href;
             try {
               decodedHref = decodeURIComponent(href);
             } catch {
               // Keep the raw href when malformed percent escapes cannot be decoded.
             }
-            if (!decodedHref.includes("://")) {
+            // Query values may contain URLs; selection parsing owns the destination's scheme check.
+            if (env.documentFileLinks === "select" || !decodedHref.includes("://")) {
+              const documentTarget = env.documentFileLinks
+                ? parseMarkdownDocumentFileLinkTarget(
+                    href,
+                    env.documentFileLinks === "select" ? "select" : "read",
+                  )
+                : null;
               const target =
-                parseMarkdownFileLinkTarget(decodedHref, { authored: true }) ??
-                (isHostLocalMarkdownFileHref(decodedHref)
-                  ? splitMarkdownFileLineSuffix(decodedHref.trim())
+                documentTarget ??
+                (env.fileLinks
+                  ? (parseMarkdownFileLinkTarget(decodedHref, { authored: true }) ??
+                    (isHostLocalMarkdownFileHref(decodedHref)
+                      ? splitMarkdownFileLineSuffix(decodedHref.trim())
+                      : null))
                   : null);
               if (target) {
                 token.attrs = token.attrs?.filter(([name]) => name !== "href") ?? null;
                 decorateFileLink(token, target);
+                if (documentTarget) {
+                  token.attrSet("data-file-document-relative", "true");
+                }
                 // Keep authored labels; expose their reference only when different.
                 const reference = decodedHref.trim();
                 if (linkLabelText(children, index) !== reference) {
@@ -401,14 +328,17 @@ export function createMarkdownParser(): MarkdownItParser {
               }
             }
           }
-          linkDepth += 1;
+          // Local file decoration removes hrefs such as C:/notes.md before scheme rejection.
+          token.hidden = DISALLOWED_LINK_SCHEME_RE.test(String(token.attrGet("href") ?? ""));
+          openLink = token;
           continue;
         }
         if (token.type === "link_close") {
-          linkDepth = Math.max(0, linkDepth - 1);
+          token.hidden = openLink?.hidden ?? false;
+          openLink = undefined;
           continue;
         }
-        if (linkDepth > 0) {
+        if (openLink || !env.fileLinks) {
           continue;
         }
         if (token.type === "code_inline") {
@@ -419,7 +349,8 @@ export function createMarkdownParser(): MarkdownItParser {
           }
           continue;
         }
-        if (token.type !== "text") {
+        // Prose references need a path separator or a bare filename's :line suffix.
+        if (token.type !== "text" || !FILE_REFERENCE_MARKER_RE.test(token.content)) {
           continue;
         }
 
@@ -457,95 +388,153 @@ export function createMarkdownParser(): MarkdownItParser {
 
   installMarkdownSessionLinks(markdownParser);
 
-  // Give bare and code-span GitHub URLs the same label; image-only links get no mark.
+  // One link pass owns URL labels and source-footer labels alike.
   markdownParser.core.ruler.after("linkify", "web-link-classes", (state) => {
+    const paragraph = state.tokens.at(-3);
+    const tail = state.tokens.at(-2);
     for (const children of markdownInlineChildren(state.tokens)) {
-      let linkDepth = 0;
+      let footer =
+        state.env.mode === "message" &&
+        !state.env.streamingPrefix &&
+        paragraph?.type === "paragraph_open" &&
+        paragraph.level === 0 &&
+        tail?.children === children;
+      const links = [];
+      const repositories = new Set<string>();
+      let items = 0;
       for (let index = 0; index < children.length; index++) {
-        let open = children[index];
-        if (open?.type === "link_close") {
-          linkDepth = Math.max(0, linkDepth - 1);
-          continue;
-        }
-        if (open?.type === "code_inline" && linkDepth === 0) {
-          // URL parsing absorbs whitespace/control characters, so reject mixed prose first.
-          // CommonMark already removed symmetric code-span padding.
+        let open = children[index]!;
+        if (open.type === "code_inline") {
+          // URL parsing absorbs whitespace/control characters; reject mixed prose first.
           const content = open.content;
-          const codeUrl = CODE_SPAN_URL_BREAK_RE.test(content) ? null : parseWebLinkHref(content);
-          if (!codeUrl || !isGitHubHost(codeUrl.hostname)) {
-            continue;
+          const url = CODE_SPAN_URL_BREAK_RE.test(content) ? null : parseWebLinkHref(content);
+          if (url && isGitHubHost(url.hostname)) {
+            const label = new state.Token("text", "", 0);
+            label.content = content;
+            open = new state.Token("link_open", "a", 1);
+            open.markup = "autolink";
+            open.attrSet("href", content);
+            children.splice(index, 1, open, label, new state.Token("link_close", "a", -1));
           }
-          const label = new state.Token("text", "", 0);
-          label.content = content;
-          open = new state.Token("link_open", "a", 1);
-          open.markup = CODE_SPAN_LINK_MARKUP;
-          open.attrSet("href", label.content);
-          children.splice(index, 1, open, label, new state.Token("link_close", "a", -1));
         }
-        if (open?.type !== "link_open") {
+        if (open.type !== "link_open") {
+          footer &&=
+            open.type === "softbreak" ||
+            open.type === "hardbreak" ||
+            (open.type === "text" && /^[\s,·]*$/u.test(open.content));
           continue;
         }
-        linkDepth += 1;
+        let end = index + 1;
+        let label: Token | undefined;
+        while (children[end]!.type !== "link_close") {
+          const token = children[end]!;
+          footer &&= token.type !== "image";
+          if (
+            !label &&
+            (token.type === "text" || token.type === "code_inline") &&
+            token.content.trim()
+          ) {
+            label = token;
+          }
+          end++;
+        }
         const href = String(open.attrGet("href") ?? "");
-        const url = href ? parseWebLinkHref(href) : null;
-        if (!url) {
-          continue;
+        const url = parseWebLinkHref(href);
+        const github = url && isGitHubHost(url.hostname);
+        if (url && !github && label && state.env.linkFavicons) {
+          const favicon = new state.Token("link_favicon", "img", 0);
+          favicon.meta = { hostname: url.hostname };
+          children.splice(index + 1, 0, favicon);
+          end++;
         }
-        const generatedUrlLabel =
-          open.markup === "linkify" ||
-          open.markup === "autolink" ||
-          open.markup === CODE_SPAN_LINK_MARKUP;
-        const host = url.hostname.toLowerCase();
-        const githubLink = isGitHubHost(host);
-        const githubPreview = githubLink ? parseGitHubLinkTarget(href) : null;
-        if (generatedUrlLabel) {
+        const content = children.slice(index, end + 1);
+        footer &&= Boolean(url);
+        if (url) {
+          const item = github ? parseGitHubItemPath(url) : null;
+          links.push({ content, url, label, item });
+          if (item && url.href.startsWith("https://github.com/")) {
+            items++;
+            repositories.add(`${item.owner}/${item.repo}`.toLowerCase());
+          }
+        }
+        index = end;
+      }
+      footer &&= items >= 2;
+      if (footer) {
+        children.length = 0;
+      }
+      const comma = new state.Token("text", "", 0);
+      comma.content = ", ";
+      for (const { content, url, item, label } of links) {
+        const open = content[0]!;
+        const github = isGitHubHost(url.hostname);
+        const generated = ["linkify", "autolink"].includes(open.markup);
+        if (generated) {
           open.attrJoin("class", BARE_URL_CLASS);
         }
-        let labelToken: Token | null = null;
-        for (let cursor = index + 1; cursor < children.length; cursor++) {
-          const token = children[cursor];
-          if (!token || token.type === "link_close") {
-            break;
-          }
-          if (
-            (token.type === "text" || token.type === "code_inline") &&
-            token.content.trim() !== ""
-          ) {
-            labelToken = token;
-            break;
-          }
-        }
-        if (githubLink && labelToken) {
+        const preview = item && url.href.startsWith("https://github.com/");
+        const compact = footer && links.length >= 5 && preview;
+        if (github && label) {
           open.attrJoin("class", GITHUB_LINK_CLASS);
-          const item = githubPreview ?? parseGitHubItemPath(url);
-          const label =
-            labelToken.type === "text" &&
-            children[index + 1] === labelToken &&
-            children[index + 2]?.type === "link_close"
-              ? labelToken.content
-              : null;
-          const itemChip =
+          const reference = item ? formatGitHubItemReference(item) : "";
+          const chip =
             item &&
-            (generatedUrlLabel ||
-              label === `#${item.number}` ||
-              label === `${item.owner}/${item.repo}#${item.number}`);
-          if (itemChip) {
+            (compact ||
+              generated ||
+              (content.length === 3 &&
+                label.type === "text" &&
+                [`#${item.number}`, reference].includes(label.content)));
+          if (chip) {
             open.attrJoin("class", "markdown-github-item");
             open.attrSet("data-github-kind", item.kind);
-            labelToken.content = formatGitHubItemReference(item);
-          } else if (generatedUrlLabel) {
-            labelToken.content = formatGitHubLinkLabel(url);
+            if (compact) {
+              const title = content.map((token) => token.content).join("");
+              label.type = "text";
+              label.tag = "";
+              content.splice(1, content.length - 2, label);
+              label.content = repositories.size === 1 ? `#${item.number}` : reference;
+              open.attrSet("aria-label", `${label.content}: ${title}`);
+            } else {
+              label.content = reference;
+            }
+          } else if (generated) {
+            label.content = formatGitHubLinkLabel(url);
           }
-          if (!githubPreview && (generatedUrlLabel || itemChip)) {
-            open.attrSet("title", href);
+          if (!preview && (generated || chip)) {
+            open.attrSet("title", String(open.attrGet("href")));
           }
         }
-        if (!githubLink && labelToken && state.env.linkFavicons) {
-          const favicon = new state.Token("link_favicon", "img", 0);
-          favicon.meta = { hostname: host };
-          children.splice(index + 1, 0, favicon);
-          index += 1;
+        if (footer) {
+          if (children.length) {
+            children.push(comma);
+          }
+          children.push(...content);
         }
+      }
+      // Keep CJK trimming after URL labeling, before session/file decoration.
+      for (let index = 0; index < children.length; index++) {
+        const token = children[index]!;
+        // Linkify emits open/text/close triples; authored links are not normalized.
+        if (token.type !== "link_open" || token.markup !== "linkify") {
+          continue;
+        }
+        const textToken = children[index + 1]!;
+        const displayText = textToken.content;
+        let end = displayText.length;
+        while (end > 0 && CJK_CHARACTER_RE.test(displayText[end - 1]!)) {
+          end--;
+        }
+        if (end === 0 || end === displayText.length) {
+          continue;
+        }
+        const trimmed = displayText.slice(0, end);
+        const href = String(token.attrGet("href") ?? "");
+        const prefix = href.indexOf(displayText);
+        token.attrSet("href", (prefix > 0 ? href.slice(0, prefix) : "") + trimmed);
+        textToken.content = trimmed;
+        const suffixToken = new state.Token("text", "", 0);
+        suffixToken.content = displayText.slice(end);
+        children.splice(index + 3, 0, suffixToken);
       }
     }
   });

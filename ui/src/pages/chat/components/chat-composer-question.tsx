@@ -1,4 +1,5 @@
 import { createEffect, createMemo, Show } from "solid-js";
+import { focusComposerInput } from "../../../lib/composer-input.ts";
 import type { ComposerQuestions } from "./chat-composer-questions.ts";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import type { QuestionPanelProps } from "./chat-question-card.ts";
@@ -28,7 +29,7 @@ export function createComposerQuestionPanel(
         (item) => item.key === questions.disclosure.activeQuestionKey,
       );
       return {
-        active: request?.asyncIdentity === null && !questions.disclosure.questionCollapsed,
+        active: request?.takesOverComposer === true && !questions.disclosure.questionCollapsed,
         source,
         composition: readComposition?.(),
         state: questions.state,
@@ -52,7 +53,7 @@ export function createComposerQuestionPanel(
       // A derived disclosure can mount the input before this effect applies.
       if (!active && state.restoreComposerFocus && state.composerTextarea?.isConnected) {
         state.restoreComposerFocus = false;
-        state.composerTextarea.focus({ preventScroll: true });
+        focusComposerInput(state.composerTextarea, { preventScroll: true });
       }
     },
   );
@@ -80,12 +81,13 @@ export function createComposerQuestionPanel(
       collapsed: questions.disclosure.questionCollapsed,
       onCollapsedChange: (collapsed) => {
         questions.setCollapsed(collapsed);
-        state.restoreComposerFocus = collapsed;
+        state.restoreComposerFocus =
+          collapsed && (request.takesOverComposer || request.asyncIdentity !== null);
         if (collapsed) {
           queueMicrotask(() => {
             if (state.restoreComposerFocus && state.composerTextarea?.isConnected) {
               state.restoreComposerFocus = false;
-              state.composerTextarea.focus({ preventScroll: true });
+              focusComposerInput(state.composerTextarea, { preventScroll: true });
             }
           });
         }

@@ -1,19 +1,16 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import type { createQaGatewayChild, QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { NodePluginToolDescriptor } from "../../../../packages/gateway-protocol/src/schema/nodes.js";
 import type { McpServerConfig } from "../../../../src/config/types.mcp.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import { hasErrnoCode } from "../../../../src/infra/errno.js";
 import { signalProcessTree } from "../../../../src/process/kill-tree.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../helpers/promise.js";
 
@@ -125,66 +122,6 @@ export function startMcpGateway(
           },
         },
       }),
-  });
-}
-
-export async function waitForMcpFixtureGate(filePath: string, signal: AbortSignal): Promise<void> {
-  try {
-    await fs.access(filePath);
-    return;
-  } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
-  }
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    const finish = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      signal.removeEventListener("abort", aborted);
-      clearInterval(poll);
-      watcher.close();
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    const inspect = () => {
-      void fs.access(filePath).then(
-        () => finish(),
-        (error: unknown) => {
-          if (!hasErrnoCode(error, "ENOENT")) {
-            finish(toErrorObject(error, "Fixture gate inspection failed"));
-          }
-        },
-      );
-    };
-    const watcher = watch(path.dirname(filePath), (_event, filename) => {
-      if (!filename || filename === path.basename(filePath)) {
-        inspect();
-      }
-    });
-    const aborted = () =>
-      finish(
-        new Error(`timed out waiting for fixture gate: ${path.basename(filePath)}`, {
-          cause: signal.reason,
-        }),
-      );
-    // oxlint-disable-next-line no-warning-comments -- remove after the upstream Bun fs.watch fix ships.
-    // TODO(bun): remove polling when Bun's fs.watch reliably reports file creation.
-    const poll = setInterval(inspect, 50);
-    poll.unref();
-    watcher.once("error", finish);
-    signal.addEventListener("abort", aborted, { once: true });
-    if (signal.aborted) {
-      aborted();
-    } else {
-      inspect();
-    }
   });
 }
 

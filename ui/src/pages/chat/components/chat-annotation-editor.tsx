@@ -12,11 +12,10 @@ import {
 } from "../../../lib/keyboard-shortcut-contract.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import {
-  isChatSelectionPopupElement,
   mountChatSelectionPopup,
   positionChatSelectionPopup,
-  removeChatSelectionPopup,
-} from "./chat-selection-popup.tsx";
+} from "./chat-selection-popup-view.tsx";
+import { isChatSelectionPopupElement, removeChatSelectionPopup } from "./chat-selection-popup.tsx";
 
 export function showChatAnnotationEditor(options: {
   paneId: string;
@@ -133,7 +132,7 @@ export function showChatAnnotationEditor(options: {
                 remove = element;
               }}
               type="button"
-              class="btn btn--icon btn--ghost chat-annotation-editor__delete"
+              class="oc-icon-button chat-annotation-editor__delete"
               aria-label={t("chat.messages.deleteAnnotation")}
               title={t("chat.messages.deleteAnnotation")}
               onClick={() => {

@@ -163,7 +163,7 @@ describe("root startup policy", () => {
   it("uses root help only for root invocations and aliases", () => {
     expect(shouldUseRootHelpFastPath(cliArgs("--help"))).toBe(true);
     expect(shouldUseRootHelpFastPath(cliArgs("help", "--help"))).toBe(true);
-    expect(shouldUseRootHelpFastPath(cliArgs("tools", "--help"))).toBe(true);
+    expect(shouldUseRootHelpFastPath(cliArgs("tools", "--help"))).toBe(false);
     expect(shouldUseRootHelpFastPath(cliArgs("status", "--help"))).toBe(false);
     expect(shouldUseRootHelpFastPath(cliArgs("--help", "status"))).toBe(false);
     expect(shouldUseRootHelpFastPath(cliArgs("help", "gateway"))).toBe(false);

@@ -7,14 +7,12 @@ import {
   type ThinkingConfig,
   ThinkingLevel,
 } from "@google/genai";
-import {
-  isGoogleGemini3ProModel,
-  isGoogleGemini3ThinkingLevelModel,
-} from "../internal/google-model-family.js";
+import { isGoogleGemini3ThinkingLevelModel } from "../internal/google-model-family.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
 import {
+  awaitProviderLifecycleCallback,
   failTransportStream,
   notifyProviderStreamOpened,
   transportAbortError,
@@ -47,6 +45,8 @@ type GoogleThinkingOptions = {
 };
 
 export type GoogleProviderOptions = StreamOptions & {
+  topP?: number;
+  seed?: number;
   toolChoice?: "auto" | "none" | "any";
   thinking?: GoogleThinkingOptions;
 };
@@ -65,6 +65,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
   stream: AssistantMessageEventStream;
   model: Model<T>;
   output: AssistantMessage;
+  tools?: Context["tools"];
   options?: Pick<StreamOptions, "signal" | "onPayload">;
   createClient: () => GoogleGenerateContentClient;
   buildParams: () => GenerateContentParameters;
@@ -75,7 +76,10 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
   try {
     const client = params.createClient();
     let requestParams = params.buildParams();
-    const nextParams = await options?.onPayload?.(requestParams, model);
+    const nextParams = await awaitProviderLifecycleCallback(
+      options?.onPayload ? () => options.onPayload?.(requestParams, model) : undefined,
+      options?.signal,
+    );
     if (nextParams !== undefined) {
       requestParams = nextParams as GenerateContentParameters;
     }
@@ -91,6 +95,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       chunks: { [Symbol.asyncIterator]: () => googleIterator },
       model,
       output,
+      tools: params.tools,
       stream,
       signal: options?.signal,
       nextToolCallId: params.nextToolCallId,
@@ -111,6 +116,7 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
     messages: transformMessages(context.messages, model, (id) =>
       requiresGoogleToolCallId(model.id) ? id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) : id,
     ),
+    tools: context.tools,
     replay: "signed-parts",
     requiresToolCallSignature:
       model.provider !== "google-gemini-cli" && isGoogleGemini3ThinkingLevelModel(model.id),
@@ -118,6 +124,8 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
 
   const config: GenerateContentConfig = {
     ...(options.temperature !== undefined && { temperature: options.temperature }),
+    ...(options.topP !== undefined && { topP: options.topP }),
+    ...(options.seed !== undefined && { seed: options.seed }),
     ...buildGoogleGenerationConfig(model, options.thinking, options.maxTokens),
     ...(options.stop !== undefined && options.stop.length > 0 && { stopSequences: options.stop }),
     ...(context.systemPrompt && {
@@ -308,9 +316,6 @@ function getDisabledGoogleThinkingConfig(model: Pick<Model, "id">): ThinkingConf
   // Google docs: Gemini 3.1 Pro cannot disable thinking, and Gemini 3 Flash / Flash-Lite
   // do not support full thinking-off either. For Gemini 3 and 4, use the lowest supported
   // thinkingLevel without includeThoughts so hidden thinking remains invisible to OpenClaw.
-  if (isGoogleGemini3ProModel(model.id)) {
-    return { thinkingLevel: ThinkingLevel.LOW };
-  }
   if (isGoogleGemini3ThinkingLevelModel(model.id)) {
     return {
       thinkingLevel: googleFlashSupportsMinimalThinking(model.id)
@@ -335,12 +340,8 @@ function getGoogleThinkingLevel(
   effort: ClampedGoogleThinkingLevel,
   model: Pick<Model, "id">,
 ): ThinkingLevel {
-  const lowEffort = effort === "minimal" || effort === "low";
-  if (isGoogleGemini3ProModel(model.id)) {
-    return lowEffort ? ThinkingLevel.LOW : ThinkingLevel.HIGH;
-  }
   if (isGemma4Model(model)) {
-    return lowEffort ? ThinkingLevel.MINIMAL : ThinkingLevel.HIGH;
+    return effort === "minimal" || effort === "low" ? ThinkingLevel.MINIMAL : ThinkingLevel.HIGH;
   }
   switch (effort) {
     case "minimal":

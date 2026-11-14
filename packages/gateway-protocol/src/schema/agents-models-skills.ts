@@ -43,6 +43,7 @@ export { SkillWorkshopDraftSchema } from "./skill-workshop-drafts.js";
 export type { SkillWorkshopDraft } from "./skill-workshop-drafts.js";
 
 export {
+  ProviderPresentationSchema,
   ModelChoiceSchema,
   ModelRuntimeChoiceSchema,
   ModelCatalogProviderOutcomeSchema,
@@ -50,6 +51,7 @@ export {
   ModelsListResultSchema,
 } from "./model-catalog.js";
 export type {
+  ProviderPresentation,
   ModelChoice,
   ModelRuntimeChoice,
   ModelCatalogProviderOutcome,
@@ -101,6 +103,8 @@ export const AgentSummarySchema = closedObject({
   thinkingDefault: Type.Optional(NonEmptyString),
   // Configured posture for display only, never an authorization decision.
   defaultPermissionMode: Type.Optional(SessionPermissionModeSchema),
+  /** Explicit default for new attended sessions; existing-session Default keeps tool policy. */
+  newSessionPermissionMode: Type.Optional(SessionPermissionModeSchema),
 });
 
 export const AgentsListResultSchema = closedObject({

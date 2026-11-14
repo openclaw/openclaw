@@ -5,6 +5,7 @@ import {
   asOptionalRecord as readRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { prepareAgentRunReplyText } from "../agents/agent-run-terminal-reply.js";
+import { decodeRequesterOrigin } from "../agents/requester-origin.js";
 import { normalizeContextUsage } from "../agents/usage.js";
 import { buildInboundMediaUriFromPath } from "../media/inbound-media-path.js";
 import { parseInboundMediaUri } from "../media/inbound-media-uri.js";
@@ -457,6 +458,18 @@ export function sanitizeChatHistoryMessage(
     delete projectedMeta.modelPromptProjection;
     // Durable delivery facts contain private endpoint bindings, not display data.
     delete projectedMeta.sessionSendDelivery;
+    // Keep only the direct channel/account provenance needed for native-reference
+    // display. Never expose the requester's profile, grants, or endpoint bindings.
+    const origin = decodeRequesterOrigin(projectedMeta.requesterOrigin);
+    const transport = readRecord(projectedMeta.transport);
+    if (
+      entry.role === "user" &&
+      origin?.accountId &&
+      origin.messageProvider &&
+      transport?.channel === origin.messageProvider
+    ) {
+      projectedMeta.transport = { ...transport, accountId: origin.accountId };
+    }
     // Operational requester custody is independent of redacted display identity.
     delete projectedMeta.requesterOrigin;
     delete projectedMeta.chatInputRecovery;
@@ -541,19 +554,14 @@ export function sanitizeChatHistoryMessage(
     role === "assistant" && !shouldPreserveAssistantControlReplyText(entry);
 
   const projectText = (text: string) => {
+    const res = truncateChatHistoryText(text, maxChars, preserveExactToolPayload, resultMaxChars);
     const controlStripped = stripAssistantMedia
-      ? stripAssistantMediaDirectivesForDisplay(text, managedMedia.urls)
-      : text;
-    changed ||= controlStripped !== text;
-    const res = truncateChatHistoryText(
-      controlStripped,
-      maxChars,
-      preserveExactToolPayload,
-      resultMaxChars,
-    );
+      ? stripAssistantMediaDirectivesForDisplay(res.text, managedMedia.urls)
+      : res.text;
+    changed ||= controlStripped !== res.text;
     changed ||= res.truncated;
     truncated ||= res.truncated;
-    return res.text;
+    return controlStripped;
   };
   if (typeof entry.content === "string") {
     entry.content = projectText(entry.content);

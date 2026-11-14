@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { CronJob } from "../cron/types.js";
+import type { CronStoredJob } from "../cron/types.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   invalidateSessionAutomationIndex,
@@ -23,7 +23,7 @@ function watchChanges() {
     );
   };
 }
-function registerJobs(jobs?: CronJob[]) {
+function registerJobs(jobs?: CronStoredJob[]) {
   const source = { jobs, defaultAgentId: "main" };
   registerSessionAutomationSource({
     getJobs: () => source.jobs,
@@ -32,8 +32,8 @@ function registerJobs(jobs?: CronJob[]) {
   return source;
 }
 
-function job(partial: Partial<CronJob> & Pick<CronJob, "id">): CronJob {
-  return { enabled: true, sessionTarget: "isolated", ...partial } as CronJob;
+function job(partial: Partial<CronStoredJob> & Pick<CronStoredJob, "id">): CronStoredJob {
+  return { enabled: true, sessionTarget: "isolated", ...partial } as CronStoredJob;
 }
 
 afterEach(() => {
@@ -81,14 +81,24 @@ test("publishes additions, removals, retargets, and mutable routing config delta
   publish("agent:work:second", "agent:work:target");
   source.jobs = [];
   publish("agent:work:target");
-  const global = job({ id: "global", sessionTarget: "main" });
+  const global = job({
+    id: "global",
+    agentId: "ops",
+    owner: { agentId: "creator" },
+    sessionTarget: "session:global",
+  });
   source.jobs = [global];
   config.session!.scope = "global";
-  publish(["global", "work"]);
-  expect(sessionHasAutomation("global", config, "work")).toBe(true);
+  publish(["global", "ops"]);
+  expect(sessionHasAutomation("global", config, "ops")).toBe(true);
   expect(sessionHasAutomation("global", config, "main")).toBe(false);
+  expect(sessionHasAutomation("global", config, "creator")).toBe(false);
+  global.agentId = "research";
+  publish(["global", "ops"], ["global", "research"]);
+  expect(sessionHasAutomation("global", config, "ops")).toBe(false);
+  expect(sessionHasAutomation("global", config, "research")).toBe(true);
   global.enabled = false;
-  publish(["global", "work"]);
+  publish(["global", "research"]);
 });
 
 test("reads adopt replacement config and default agents without replacing jobs", () => {

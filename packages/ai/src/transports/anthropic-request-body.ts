@@ -4,10 +4,23 @@ import type { Model } from "@openclaw/llm-core";
 import { getAiTransportHost } from "../host.js";
 import type { AnthropicOptions } from "../provider-options.js";
 import { markEncodedModelRequestBody } from "./model-request-body.js";
+import { awaitProviderLifecycleCallback } from "./transport-stream-shared.js";
 
 // Converted identities are owned by frozen history; neither this map nor its
 // immutable byte fragments extend the lifetime of that history.
-const fragments = new WeakMap<object, Blob>();
+const fragments = new WeakMap<object, Uint8Array<ArrayBuffer>>();
+const encoder = new TextEncoder();
+
+function encodeMessageFragment(message: unknown, source?: object): Uint8Array<ArrayBuffer> {
+  let fragment = source ? fragments.get(source) : undefined;
+  if (!fragment) {
+    fragment = encoder.encode("," + JSON.stringify(message));
+    if (source) {
+      fragments.set(source, fragment);
+    }
+  }
+  return fragment;
+}
 
 function copyPlainData<T>(value: T, retainFrozen = false, copies = new Map<object, unknown>()): T {
   if (!value || typeof value !== "object") {
@@ -89,7 +102,7 @@ function samePlainData(left: unknown, right: unknown, seen = new Map<object, obj
   return true;
 }
 
-/** Hooks receive editable containers; any edit opts the whole request out of fragment reuse. */
+/** Hooks receive editable containers; envelope edits preserve unchanged history fragments. */
 export async function applyAnthropicPayloadHook(
   params: MessageCreateParamsStreaming,
   model: Model<"anthropic-messages">,
@@ -101,8 +114,9 @@ export async function applyAnthropicPayloadHook(
   if (!options?.onPayload) {
     return { params };
   }
-  const plain = getAiTransportHost().immutableData?.isPlainData;
-  const snapshot = plain?.(params) ? copyPlainData(params, true) : undefined;
+  const immutable = getAiTransportHost().immutableData;
+  const plain = immutable?.isPlainData;
+  const snapshot = plain?.(params) ? copyPlainData(params.messages, true) : undefined;
   // Opaque caller values retain their original behavior. Converter-owned plain
   // messages still need detaching when an unrelated envelope value is opaque.
   const editable = snapshot
@@ -113,15 +127,35 @@ export async function applyAnthropicPayloadHook(
           plain?.(message) ? copyPlainData(message) : message,
         ),
       };
-  const replacement = await options.onPayload(editable, model);
-  const unchanged =
-    (replacement === undefined || replacement === editable) &&
-    snapshot !== undefined &&
-    samePlainData(snapshot, editable);
+  const replacement = await awaitProviderLifecycleCallback(
+    () => options.onPayload?.(editable, model),
+    options.signal,
+  );
+  let unchanged = false;
+  if ((replacement === undefined || replacement === editable) && snapshot !== undefined) {
+    const { messages, ...envelope } = Object.getOwnPropertyDescriptors(editable);
+    // Equality already checks every message descriptor. Admit only the remaining
+    // envelope, preserving accessors/prototypes without invoking hook-created getters.
+    unchanged =
+      messages !== undefined &&
+      "value" in messages &&
+      samePlainData(snapshot, messages.value) &&
+      plain?.(Object.create(Object.getPrototypeOf(editable), envelope)) === true;
+    if (unchanged && !("toJSON" in Object.prototype) && !("toJSON" in Array.prototype)) {
+      // Encode equal editable copies before yielding: hooks may retain and mutate them.
+      // Keep frozen keys, while avoiding the slow JSON path for their frozen arrays.
+      for (let index = 0; index < snapshot.length; index++) {
+        const source = snapshot[index];
+        if (immutable?.isDeeplyFrozenPlainData(source)) {
+          encodeMessageFragment(editable.messages[index], source);
+        }
+      }
+    }
+  }
   return {
     // SAFETY: The public payload hook owns its replacement shape.
     params: (replacement === undefined ? editable : replacement) as MessageCreateParamsStreaming,
-    messageSources: unchanged ? snapshot.messages : null,
+    messageSources: unchanged ? snapshot : null,
   };
 }
 
@@ -129,7 +163,7 @@ export async function applyAnthropicPayloadHook(
 export function serializeAnthropicRequestBody(
   payload: MessageCreateParamsStreaming,
   messageSources?: readonly unknown[] | null,
-): string | Blob {
+): string | Uint8Array<ArrayBuffer> {
   const immutable = getAiTransportHost().immutableData;
   if (
     messageSources === null ||
@@ -144,13 +178,13 @@ export function serializeAnthropicRequestBody(
     return JSON.stringify(payload);
   }
   const messages = messageSources ?? payload.messages;
-  const parts: Array<string | Blob> = [];
+  const parts: Uint8Array<ArrayBuffer>[] = [];
   let envelope = "{";
   let separator = "";
   for (const key of Object.keys(payload)) {
     const value: unknown = Reflect.get(payload, key);
     if (key === "messages") {
-      parts.push(`${envelope}${separator}"messages":[`);
+      parts.push(encoder.encode(`${envelope}${separator}"messages":[`));
       envelope = "]";
       for (let index = 0; index < messages.length; index++) {
         const message = messages[index];
@@ -158,14 +192,8 @@ export function serializeAnthropicRequestBody(
           message !== null &&
           typeof message === "object" &&
           immutable.isDeeplyFrozenPlainData(message);
-        let fragment = reusable ? fragments.get(message) : undefined;
-        if (!fragment) {
-          fragment = new Blob(["," + JSON.stringify(message)]);
-          if (reusable) {
-            fragments.set(message, fragment);
-          }
-        }
-        parts.push(index === 0 ? fragment.slice(1) : fragment);
+        const fragment = encodeMessageFragment(message, reusable ? message : undefined);
+        parts.push(index === 0 ? fragment.subarray(1) : fragment);
       }
     } else {
       const json = JSON.stringify(value);
@@ -176,8 +204,14 @@ export function serializeAnthropicRequestBody(
     }
     separator = ",";
   }
-  parts.push(`${envelope}}`);
-  const body = new Blob(parts, { type: "application/json" });
+  parts.push(encoder.encode(`${envelope}}`));
+  // Fetch receives an owned contiguous body; cached fragments never escape this module.
+  const body = new Uint8Array(parts.reduce((size, part) => size + part.byteLength, 0));
+  let offset = 0;
+  for (const part of parts) {
+    body.set(part, offset);
+    offset += part.byteLength;
+  }
   markEncodedModelRequestBody(body, payload.stream);
   return body;
 }

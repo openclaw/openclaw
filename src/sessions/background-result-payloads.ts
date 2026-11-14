@@ -3,7 +3,6 @@ import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import { isAudioFileName, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
-import type { RecoveryNoticeDestination } from "../config/sessions/recovery-notice.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -16,6 +15,10 @@ import {
   hasManagedOutgoingAssistantContent,
 } from "../gateway/server-methods/chat-assistant-content.js";
 import {
+  captureWebchatReplyMediaScope,
+  prepareWebchatReplyMediaForDisplay,
+} from "../gateway/server-methods/chat-reply-media.js";
+import {
   createStructuredOutboundPayloadPlan,
   projectOutboundPayloadPlanForMirror,
   resolveOutboundPayloadMirrorText,
@@ -23,7 +26,7 @@ import {
 import { collectReplyMediaEntries } from "../infra/outbound/reply-media-entries.js";
 import { hasReplyChannelData } from "../interactive/payload.js";
 import { logWarn } from "../logger.js";
-import { getAgentScopedMediaLocalRootsForSources } from "../media/local-roots.js";
+import { resolveLocalMediaPath } from "../media/local-media-path.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import {
   commitBackgroundResultToSession,
@@ -38,14 +41,12 @@ export type BackgroundPayloadsCommit =
 /** Inputs for committing delivered payloads into one conversation generation. */
 export type BackgroundPayloadsCommitParams = {
   agentId: string;
-  storePath?: string;
   sessionKey: string;
   expectedGeneration: { sessionId: string; lifecycleRevision: string | undefined };
   /** The payloads that were shown; the stored row is their transcript projection. */
   payloads: readonly ReplyPayload[];
   idempotencyKey: string;
   provenance?: BackgroundSessionResultProvenance;
-  acceptedDestination?: RecoveryNoticeDestination;
   config: OpenClawConfig;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -72,7 +73,6 @@ export async function commitBackgroundPayloadsToSession(
   try {
     return await commitBackgroundResultToSession({
       agentId: params.agentId,
-      storePath: params.storePath,
       sessionKey: params.sessionKey,
       expectedGeneration: params.expectedGeneration,
       text,
@@ -82,13 +82,13 @@ export async function commitBackgroundPayloadsToSession(
           sessionKey: params.sessionKey,
           config: params.config,
           payloads,
-          mediaSources: mirror.mediaUrls,
+          signal: params.signal,
+          assertCurrent: params.assertCurrent,
         });
         return hasAssistantDisplayMediaContent(preparedContent) ? preparedContent : undefined;
       },
       idempotencyKey: params.idempotencyKey,
       provenance: params.provenance,
-      acceptedDestination: params.acceptedDestination,
       config: params.config,
       signal: params.signal,
       assertCurrent: params.assertCurrent,
@@ -133,14 +133,15 @@ function toTranscriptPayload(payload: ReplyPayload): ReplyPayload {
 }
 
 // Builds display blocks for delivered media. Images become managed media;
-// documents are recorded as named references because delivery confirms the
-// reference, not permission to ingest the local file.
+// documents and untrusted local audio/video are recorded as named references
+// because delivery confirms the reference, not permission to ingest the local file.
 async function buildResultDisplayContent(params: {
   agentId: string;
   sessionKey: string;
   config: OpenClawConfig;
   payloads: readonly ReplyPayload[];
-  mediaSources: readonly string[];
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<Record<string, unknown>[]> {
   const documentReferences = new Map<string, Record<string, unknown>>();
   const displayPayloads = params.payloads.map((payload) => {
@@ -148,7 +149,12 @@ async function buildResultDisplayContent(params: {
     // Split each payload's media into embeddable entries and document references.
     const media = collectReplyMediaEntries(payload).filter(({ url, attachment }) => {
       const mimeType = attachment?.mimeType ?? mimeTypeFromFilePath(url);
-      if (payload.sensitiveMedia === true || mediaKindFromMime(mimeType) !== "document") {
+      const kind = mediaKindFromMime(mimeType);
+      const trusted = attachment?.trustedLocalMedia ?? payload.trustedLocalMedia === true;
+      const local = resolveLocalMediaPath(url) !== undefined;
+      const reference =
+        kind === "document" || ((kind === "audio" || kind === "video") && !trusted && local);
+      if (payload.sensitiveMedia === true || !reference) {
         return true;
       }
       if (!documentReferences.has(url)) {
@@ -156,7 +162,7 @@ async function buildResultDisplayContent(params: {
         documentReferences.set(url, {
           type: "attachment",
           attachment: {
-            kind: "document",
+            kind,
             label: resolveMirroredTranscriptText({ mediaUrls: [attachment?.name || url] }),
             mimeType,
           },
@@ -176,17 +182,32 @@ async function buildResultDisplayContent(params: {
       attachments: media.map(({ attachment }) => attachment ?? {}),
     });
   });
-  const { assistantContent } = await buildAssistantReplyContent({
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    payloads: displayPayloads,
-    managedMediaLocalRoots: getAgentScopedMediaLocalRootsForSources({
-      cfg: params.config,
+  if (!displayPayloads.some((payload) => collectReplyMediaEntries(payload).length > 0)) {
+    const { assistantContent } = await buildAssistantReplyContent({
+      sessionKey: params.sessionKey,
       agentId: params.agentId,
-      mediaSources: [...params.mediaSources],
-    }),
-    includeSensitiveMedia: false,
-    onManagedMediaPrepareError: (message) => logWarn(`Result media embedding skipped: ${message}`),
+      payloads: displayPayloads,
+      includeSensitiveMedia: false,
+    });
+    return [...(assistantContent ?? []), ...documentReferences.values()];
+  }
+  // Background results use the same workspace and live read authority as normal replies.
+  const scope = await captureWebchatReplyMediaScope({
+    cfg: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    assertCurrent: params.assertCurrent,
   });
-  return [...(assistantContent ?? []), ...documentReferences.values()];
+  try {
+    const { assistantContent } = await prepareWebchatReplyMediaForDisplay({
+      scope,
+      inputs: displayPayloads.map((payload) => ({ kind: "raw", payload })),
+      abortSignal: params.signal,
+      includeSensitiveMedia: false,
+      logGateway: { warn: (message) => logWarn(message) },
+    });
+    return [...(assistantContent ?? []), ...documentReferences.values()];
+  } finally {
+    scope.release();
+  }
 }

@@ -1,5 +1,6 @@
 import type { Server as HttpServer } from "node:http";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import photon from "@silvia-odwyer/photon-node";
 import type { Locator, Page } from "playwright";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
@@ -7,6 +8,7 @@ import { buildBoardWidgetSandboxPath } from "../../../src/gateway/board-sandbox.
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   controlUiBundledSettingsStorageKey,
@@ -14,6 +16,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
+import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -189,6 +192,108 @@ async function expectPaneHeaderGeometry(page: Page, dock: "left" | "right" | "bo
 }
 
 suite.define(() => {
+  it("keeps launcher and panel chrome opaque over wallpaper on desktop and mobile", async () => {
+    for (const guest of [false, true]) {
+      await suite.withPage(
+        {
+          viewport: { width: 1440, height: 960 },
+          reducedMotion: "reduce",
+          deviceScaleFactor: 1,
+          colorScheme: guest ? "dark" : "light",
+        },
+        async ({ page }) => {
+          await seedChatSettings(page, suite.server.baseUrl, {
+            theme: "claw",
+            themeMode: guest ? "dark" : "light",
+          });
+          await installMockGateway(page, {
+            sessionKey,
+            featureMethods: [...defaultControlUiFeatureMethods, "browser.request"],
+            methodResponses: {
+              "browser.request": {
+                cases: [
+                  {
+                    match: { method: "GET", path: "/tabs" },
+                    response: { running: true, tabs: [] },
+                  },
+                ],
+              },
+            },
+            roleAllowsAdmin: !guest,
+            ...(guest
+              ? { operatorScopes: ["operator.sessions.write"], operatorSessionCap: "view" as const }
+              : {}),
+            historyMessages: [{ role: "assistant", content: "The synthetic workspace is ready." }],
+          });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          await openChatPanels(page, "desktop");
+          const launcher = page.locator(".side-panel-launcher");
+          await launcher.waitFor();
+          expect(await page.locator("html").getAttribute("data-theme-mode")).toBe(
+            guest ? "dark" : "light",
+          );
+          const header = page
+            .locator('[data-region-header="side"], .chat-mobile-host__header')
+            .filter({ visible: true });
+          const wallpaper = await page.addStyleTag({
+            content: ".sidebar-region { background: #ff00ff; }",
+          });
+          const expectOpaque = async (wallpaperVisible = true) => {
+            const body = page.locator('[data-region="side"]').filter({ visible: true });
+            const capture = async (color: string) => {
+              await wallpaper.evaluate((element, value) => {
+                element.textContent = ".sidebar-region { background: " + value + "; }";
+              }, color);
+              return takeControlUiScreenshotFrame(page, body, [header], {
+                animations: "disabled",
+                elements: [header, body],
+              });
+            };
+            const first = await capture("#ff00ff");
+            const second = await capture("#00ff00");
+            if (wallpaperVisible) {
+              expect(
+                first.png.equals(second.png),
+                "Wallpaper must still paint outside the panel",
+              ).toBe(false);
+            }
+            for (const [index, name] of ["header", "body"].entries()) {
+              const bounds = first.elements[index]!.bounds;
+              expect(second.elements[index]!.bounds).toEqual(bounds);
+              // Enclosing frame crops include neighboring wallpaper at fractional edges.
+              // Compare every pixel fully inside the actual painted surface instead.
+              const pixels = (png: Buffer) => {
+                const image = photon.PhotonImage.new_from_byteslice(png);
+                const crop = photon.crop(
+                  image,
+                  Math.ceil(bounds.x),
+                  Math.ceil(bounds.y),
+                  Math.floor(bounds.x + bounds.width),
+                  Math.floor(bounds.y + bounds.height),
+                );
+                try {
+                  return Buffer.from(crop.get_raw_pixels());
+                } finally {
+                  crop.free();
+                  image.free();
+                }
+              };
+              expect(
+                pixels(first.png).equals(pixels(second.png)),
+                "Wallpaper leaked through the side-panel " + name,
+              ).toBe(true);
+            }
+          };
+          await expectOpaque();
+          await page.setViewportSize({ width: 640, height: 800 });
+          await page.locator(".sidebar-region--narrow").waitFor();
+          await openChatPanels(page, "mobile");
+          await expectOpaque(false);
+        },
+      );
+    }
+  });
+
   it("opens this dashboard's chat and details independently without losing either draft", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 960 }, permissions: ["local-network-access"] },
@@ -235,13 +340,13 @@ suite.define(() => {
         await page.getByText("The release overview is ready.", { exact: false }).waitFor();
         expect(await panels.getAttribute("aria-expanded")).toBe("true");
         expect(await input.isVisible()).toBe(true);
-        // Allow the card inset, but not a fixed-height row when opening Chat.
-        const pageHeight = await regionSize(
-          page.locator('[data-region="main"]:not([hidden])'),
+        // Allow the card inset within the canvas below host controls, not a fixed-height row.
+        const canvasHeight = await regionSize(
+          page.locator(".board-session-surface__board"),
           "height",
         );
         expect(await regionSize(page.locator(".board-widget__frame"), "height")).toBeGreaterThan(
-          pageHeight - 32,
+          canvasHeight - 32,
         );
         await panels.click();
         await composer.waitFor({ state: "hidden" });

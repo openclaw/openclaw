@@ -90,6 +90,12 @@ not overwrite the existing skill.
 
 ## Flags
 
+Local non-interactive onboarding migrates legacy credential JSON before applying
+an auth choice. It uses Doctor's verified SQLite import and archives the original
+files. Migration warnings name any recovery still needed. Deployment wrappers
+should pass credentials through supported onboarding or model-auth commands
+instead of writing `auth-profiles.json` or modifying SQLite directly.
+
 - `--classic`: opens the full step-by-step wizard. It cannot be combined with
   `--non-interactive`; omit `--classic` for automated setup.
 - `--agent-name <name>`: names the first agent when no roster exists. Interactive

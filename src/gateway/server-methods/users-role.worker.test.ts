@@ -65,6 +65,7 @@ function roleConfig(): OpenClawConfig {
   return {
     gateway: {
       roles: {
+        default: "reader",
         definitions: {
           administrator: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
           reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "none" } },

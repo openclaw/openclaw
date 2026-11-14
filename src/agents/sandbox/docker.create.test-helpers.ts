@@ -81,9 +81,10 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
   const globalArgs: string[] = [];
   let args = rawArgs;
   if (command === "podman") {
-    while (args[0] === "--url" || args[0] === "--identity") {
-      globalArgs.push(...args.slice(0, 2));
-      args = args.slice(2);
+    while (["--url", "--identity", "--remote=false"].includes(args[0] ?? "")) {
+      const width = args[0] === "--remote=false" ? 1 : 2;
+      globalArgs.push(...args.slice(0, width));
+      args = args.slice(width);
     }
   }
   const envFileIndex = args.indexOf("--env-file");
@@ -206,7 +207,6 @@ export function createSandboxContainerTestHarness() {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeAll(async () => {
-    vi.resetModules();
     // mock-isolation: keep container registration in the suite-owned registry fixture.
     vi.doMock("./registry.js", () => registryMocks);
     // mock-isolation: route runtime logging and exits to fixture spies.
@@ -217,8 +217,6 @@ export function createSandboxContainerTestHarness() {
       ...(await importOriginal<typeof import("../../process/exec.js")>()),
       spawnCommand: spawnDockerProcess,
     }));
-    ({ prepareSandboxMountPlan } = await import("./mount-plan.js"));
-    docker = await import("./docker.js");
   });
 
   async function computeTestSandboxHash(input: Parameters<typeof computeSandboxConfigHash>[0]) {
@@ -257,7 +255,10 @@ export function createSandboxContainerTestHarness() {
     return createCall;
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ prepareSandboxMountPlan } = await import("./mount-plan.js"));
+    docker = await import("./docker.js");
     Object.assign(spawnState, freshSpawnState());
     resolveDockerSourceNamespace.mockResolvedValue(undefined);
     registryMocks.readRegistryEntry.mockClear();

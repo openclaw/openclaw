@@ -17,11 +17,21 @@ import { createAgentsPageState } from "./agents-page-state.ts";
 import type { AgentsRouteData } from "./route.ts";
 
 const AGENTS_PAGE_GATEWAY_HELLO = gatewayHelloForMethods([
+  "agents.list",
+  "agent.identity.get",
+  "agents.files.list",
+  "agents.files.get",
+  "skills.status",
+  "channels.status",
+  "config.get",
+  "models.list",
   "config.patch",
   "config.set",
   "agents.update",
   "cron.list",
   "cron.status",
+  "tools.effective",
+  "tools.catalog",
 ]);
 
 const pages = new Set<() => void>();
@@ -140,7 +150,6 @@ export function createAgentsPage(context: ApplicationContext, routeData?: Agents
   };
   pages.add(dispose);
   return {
-    identitySavePending: state.identitySavePending,
     read: () => state.read(),
     data: () => state.read().readData(),
     setRouteData(next?: AgentsRouteData) {

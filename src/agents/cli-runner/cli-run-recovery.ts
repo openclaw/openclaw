@@ -79,13 +79,27 @@ export async function runCliRecovery<TAttempt>(params: {
   const onForkSuccessorPersisted = (sessionId: string) => {
     retryableSessionId = sessionId;
   };
+  const logFailure = (kind: "terminal" | "delivered", error: unknown) =>
+    cliBackendLog.warn(
+      `cli ${kind} failure: provider=${runParams.provider} model=${context.modelId} durationMs=${Date.now() - context.started} runId=${runParams.runId} error=${formatErrorMessageForDisplay(error)}`,
+    );
   const failTerminal = async (error: unknown): Promise<never> => {
     // Record only after every eligible recovery path is exhausted.
-    cliBackendLog.warn(
-      `cli terminal failure: provider=${runParams.provider} model=${context.modelId} durationMs=${Date.now() - context.started} runId=${runParams.runId} error=${formatErrorMessageForDisplay(error)}`,
-    );
+    logFailure("terminal", error);
     await params.onTerminalFailure(error);
     throw error;
+  };
+  // A failure after a message-tool send ends the run here instead of in failTerminal,
+  // so it needs its own record of the cause.
+  const finishDeliveredFailure = async (error: unknown) => {
+    const result = await params.finishDeliveredFailure(
+      error,
+      retryableSessionId !== reusableCliSessionId,
+    );
+    if (result) {
+      logFailure("delivered", error);
+    }
+    return result;
   };
   try {
     return await params.finishAttempt(
@@ -96,10 +110,7 @@ export async function runCliRecovery<TAttempt>(params: {
       reusableCliSessionId,
     );
   } catch (err) {
-    const deliveredFailure = await params.finishDeliveredFailure(
-      err,
-      retryableSessionId !== reusableCliSessionId,
-    );
+    const deliveredFailure = await finishDeliveredFailure(err);
     if (deliveredFailure) {
       return deliveredFailure;
     }
@@ -157,10 +168,7 @@ export async function runCliRecovery<TAttempt>(params: {
           }),
         );
       } catch (retryError) {
-        const deliveredRetryFailure = await params.finishDeliveredFailure(
-          retryError,
-          retryableSessionId !== reusableCliSessionId,
-        );
+        const deliveredRetryFailure = await finishDeliveredFailure(retryError);
         if (deliveredRetryFailure) {
           return deliveredRetryFailure;
         }

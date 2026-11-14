@@ -2,13 +2,14 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import * as cryptoDigest from "@openclaw/normalization-core/node-crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Usage } from "../../llm/types.js";
 import { normalizeUsage } from "../usage.js";
 import * as promptCacheFacts from "./prompt-cache-facts.js";
 import {
   collectPromptCacheTools,
   completePromptCacheObservation,
+  declarePromptSystemPromptRebuild,
   recordAggregateTruncation,
 } from "./prompt-cache-observability.js";
 import {
@@ -21,6 +22,15 @@ import {
   prepareSessionSystemPrompt,
   retainEmbeddedSessionPromptState,
 } from "./session-prompt-state.js";
+
+// These tests change the prefix on purpose to exercise the production drop diagnostics and
+// warnings; the suite-wide prefix assertion stays on only where a test opts in.
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_PROMPT_CACHE_ASSERT", "0");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 let testScope = 0;
 
@@ -163,12 +173,11 @@ describe("prompt cache observability", () => {
     };
     const first = collectPromptCacheTools([{ name: "read", parameters: source }]);
     const parameters = publishRuntimeToolInputSchema(source).schema;
-    if (parameters === null || typeof parameters !== "object") {
-      throw new Error("Expected published object schema");
-    }
+    assert(parameters !== null && typeof parameters === "object");
     const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
     expect(collectPromptCacheTools([{ name: "read", parameters }])).toEqual(first);
-    expect(hashes).not.toHaveBeenCalled();
+    expect(collectPromptCacheTools([{ name: "read", parameters }])).toEqual(first);
+    expect(hashes).toHaveBeenCalledTimes(1);
   });
 
   it("fingerprints own __proto__ schema properties without prototype pollution", () => {
@@ -444,6 +453,19 @@ describe("prompt cache observability", () => {
       previousCacheRead: null,
       changes: null,
     });
+  });
+
+  it("enforces only the immediate prefix change after an unmeasured rebuild", () => {
+    vi.stubEnv("OPENCLAW_PROMPT_CACHE_ASSERT", "1");
+    const identity = { sessionId: scopedKey("rebuild-unmeasured") };
+    const begin = (systemPrompt: string) =>
+      beginAnthropicObservation({ ...identity, systemPrompt });
+    begin("prompt A");
+    declarePromptSystemPromptRebuild(identity);
+    begin("prompt B");
+    completePromptCacheObservation(identity);
+    expect(() => begin("prompt B")).not.toThrow();
+    expect(() => begin("prompt C")).toThrow("systemPrompt(");
   });
 
   it.each([

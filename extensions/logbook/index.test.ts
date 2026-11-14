@@ -22,9 +22,13 @@ function registerLogbook(runtimeSource = fileURLToPath(new URL("./index.ts", imp
   const service = vi.spyOn(captured.api, "registerService").mockImplementation(() => {});
   const rpc = vi.spyOn(captured.api, "registerGatewayMethod").mockImplementation(() => {});
   plugin.register({ ...captured.api, runtimeSource });
+  const registeredService = service.mock.calls[0]![0];
+  if (registeredService.apiVersion !== 2) {
+    throw new Error("Expected Logbook service API version 2");
+  }
   return {
     policy: policy.mock.calls[0]![0],
-    service: service.mock.calls[0]![0],
+    service: registeredService,
     methods: rpc.mock.calls,
   };
 }

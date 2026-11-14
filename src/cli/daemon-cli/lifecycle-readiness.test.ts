@@ -145,10 +145,19 @@ describe("Gateway service readiness", () => {
   );
 
   it.each([
-    { outcome: "still-starting", runtime: "running", code: 2 },
+    { outcome: "still-starting", code: 2, message: /still starting.*openclaw gateway status/ },
     { outcome: "stopped-free", runtime: "stopped", code: 1 },
-    { outcome: "timeout", runtime: "running", code: 1 },
-  ])("reports managed start $outcome with exit $code", async ({ outcome, runtime, code }) => {
+    { outcome: "timeout", code: 1, message: "Gateway start timed out after 45s" },
+    {
+      outcome: "plugin-errors",
+      code: 1,
+      message: "Gateway start failed: activated plugins reported load errors.",
+    },
+    { outcome: "auth-rejected", code: 1, message: "Gateway start failed: the Gateway rejected" },
+  ])("reports managed start $outcome with exit $code", async (testCase) => {
+    const { outcome, runtime = "running", code, message } = testCase;
+    // The 45s timeout message is the non-Windows startup deadline.
+    mockProcessPlatform("linux");
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "exit").mockImplementation((exitCode) => {
       throw new Error(`exit ${exitCode}`);
@@ -174,11 +183,12 @@ describe("Gateway service readiness", () => {
 
     const response = writeJson.mock.calls[0]?.[0];
     expect(response).toMatchObject({ ok: false, action: "start" });
+    // Each failure names what actually happened rather than a generic timeout.
+    if (message) {
+      expect(response).toHaveProperty("error", expect.stringMatching(message));
+    }
     if (outcome === "still-starting") {
-      expect(response).toMatchObject({
-        result: "still-starting",
-        error: expect.stringMatching(/still starting.*openclaw gateway status/),
-      });
+      expect(response).toHaveProperty("result", "still-starting");
     } else {
       expect(response).not.toHaveProperty("result", "still-starting");
     }
@@ -189,35 +199,16 @@ describe("Gateway service readiness", () => {
   });
 
   it.each([
-    {
-      outcome: "channel-errors",
-      reason: /channel health checks failed/,
-      json: true,
-      updateMarker: undefined,
-      code: 1,
-      result: "restart-health-failed",
-    },
-    {
-      outcome: "plugin-errors",
-      reason: /plugins reported load errors/,
-      json: true,
-      updateMarker: undefined,
-      code: 1,
-      result: "restart-health-failed",
-    },
-    { json: true, updateMarker: undefined, code: 2, result: "still-starting" },
-    { json: false, updateMarker: undefined, code: 2, result: "still-starting" },
-    { json: true, updateMarker: "1", code: 1, result: "restart-health-failed" },
+    { outcome: "stopped-free", reason: /service stayed stopped/, json: true, code: 1 },
+    { outcome: "channel-errors", reason: /channel health checks failed/, json: true, code: 1 },
+    { outcome: "plugin-errors", reason: /plugins reported load errors/, json: true, code: 1 },
+    { json: true, code: 2 },
+    { json: false, code: 2 },
+    { json: true, updateMarker: "1", code: 1 },
   ])(
     "reports restart readiness with the caller's response contract ($outcome, json=$json, update=$updateMarker)",
-    async ({
-      outcome = "still-starting",
-      reason,
-      json,
-      updateMarker,
-      code: expectedExitCode,
-      result,
-    }) => {
+    async ({ outcome = "still-starting", reason, json, updateMarker, code: expectedExitCode }) => {
+      const result = expectedExitCode === 2 ? "still-starting" : "restart-health-failed";
       vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", updateMarker);
       const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
       const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -236,11 +227,11 @@ describe("Gateway service readiness", () => {
       waitForGatewayHealthyRestart.mockResolvedValue({
         healthy: false,
         staleGatewayPids: [],
-        runtime: { status: "running", pid: 4242 },
+        runtime: { status: outcome === "stopped-free" ? "stopped" : "running", pid: 4242 },
         portUsage: {
           port: 18789,
-          status: reason ? "busy" : "free",
-          listeners: reason ? [{ pid: 4242 }] : [],
+          status: reason && outcome !== "stopped-free" ? "busy" : "free",
+          listeners: reason && outcome !== "stopped-free" ? [{ pid: 4242 }] : [],
           hints: [],
         },
         waitOutcome: outcome,

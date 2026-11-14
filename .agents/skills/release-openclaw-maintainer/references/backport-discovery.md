@@ -1,8 +1,13 @@
 # Evidence-Driven Backport Discovery
 
 Use this before selecting backports for any OpenClaw release line: regular
-beta/stable, extended-stable, or a release-repair branch. It is an audit before the candidate is
-mutated, not a title search and not permission to expand a frozen release.
+beta/stable, extended-stable, or a release-repair branch. Audit each selected fix
+before applying it; complete the full inventory before freezing the candidate.
+This is not a title search or permission to expand a frozen release.
+
+For an individual fix-status check or a verified cumulative source count, use
+[fix-inclusion tracing](fix-inclusion.md). Keep its source-to-carrier mapping in
+this inventory, not a second release-state store.
 
 ## Start from the shared ledger
 
@@ -85,20 +90,26 @@ for the batch:
 ```bash
 pnpm release:backport-probe -- \
   --baseline "$baseline_sha" \
+  --scan-end "$pinned_main_sha" \
   --candidate "$candidate_sha" > backport-probe.tsv
 ```
 
-The helper uses `git merge-tree --write-tree` with the candidate's parent as
-the explicit merge base, so it simulates that single patch without checking out
-or resetting a worktree. The TSV binds the resolved candidate and baseline,
-classification (`clean`, `conflicted`, or `already-covered`), conflict count,
-touched-file count, every touched path, and whether that path conflicts. It
-refuses root and merge commits whose cherry-pick mainline is ambiguous.
+The helper first requires every candidate to be reachable from the pinned scan
+end, then uses `git merge-tree --write-tree` with the candidate's parent as the
+explicit merge base. This simulates that single patch without checking out or
+resetting a worktree. The TSV binds the resolved candidate, baseline, and scan
+end; records reachability; and reports a patch classification (`clean`,
+`conflicted`, or `already-covered`), conflict count, touched-file count, every
+touched path, and whether that path conflicts. It refuses unreachable, root,
+and merge commits whose provenance or cherry-pick mainline is ambiguous.
 
-Record a failed probe with its exact reason. A clean probe is triage evidence
-only; it does not approve a backport. If the commit needs companions, probe and
-assess the smallest ordered final fix rather than treating each clean commit as
-an independent candidate.
+Every row remains `contract-review-required`: the mechanical probe cannot prove
+runtime reachability, caller-chain closure, or prerequisite dependencies. Record
+a failed probe with its exact reason. A clean patch classification is triage
+evidence only; it does not approve a backport. Trace callers and prerequisites
+under [Close Selected Contracts Before Qualification](#close-selected-contracts-before-qualification).
+If the commit needs companions, probe and assess the smallest ordered final fix
+rather than treating each clean commit as an independent candidate.
 
 ## Close Selected Contracts Before Qualification
 
@@ -193,8 +204,51 @@ That decision invalidates affected evidence; it never authorizes publication of
 untested changes.
 
 Before changing release refs, present the complete categorized ledger and the
-proposed set for maintainer approval. After approval, backport with provenance,
-update the ledger, run focused proof plus the release-appropriate validation,
+proposed set for maintainer approval unless selection authority was explicitly
+delegated. During open preparation, a maintainer may instead approve an exact,
+dependency-closed group while independent discovery continues. Record that
+approval and the unfinished audit scope; do not call the full inventory complete
+or advance its scan cursor until every entry is accounted for. Follow the
+[owner intake procedure](release-owner.md#prepare-and-admit-hotfixes) to integrate
+ready approved groups without waiting for unrelated audit lanes.
+
+After approval, apply each backport directly
+to the canonical release branch with `git cherry-pick -x`, one at a time in
+dependency order; do not open individual or combined backport PRs. Follow
+[backports and new fixes](../SKILL.md#backports-and-new-fixes) for CI recovery
+and fixes not yet on main. Update the ledger, run focused proof plus
+release-appropriate validation,
 and keep the final branch/tag/version/SHA identity in that record. Dispatch npm
 preflight only after the canonical release branch or tag has that exact final
 version and SHA.
+
+## Port with Bounded Workers
+
+Read-only audit lanes may fan out. Porting lanes write to the release candidate
+and share one host, so run at most eight concurrent writing workers, and do not
+launch or resume workers close to a session usage limit. A worker does not
+spawn its own agents unless its brief allows it. A 17-lane porting wave on
+2026.10.8 saturated the Mac and lost 16 lanes mid-port when the session limit
+hit. The lead keeps a watcher on every worker and never ends a turn waiting on
+one; once the required fixes and P0s are integrated, push and dispatch
+validation, and add stragglers in a later cycle.
+
+Every porting brief contains these steps for each pick, in order:
+
+1. Run the companion audit for the pick (`pnpm release:backport-companions`
+   above) and `git log <pinned-main-sha> --grep '#<PR>'`. List each later
+   follow-up and its disposition in the commit body. Missing follow-ups caused
+   most 2026.10.8 validation failures, including a macOS regression found only
+   after tagging.
+2. Confirm the defect exists on the baseline (`git show <baseline>:<path>`)
+   before porting.
+3. Cherry-pick with `-x`, resolve conflicts, and note any adaptation as
+   `Release adaptation:` in the commit body.
+4. Run targeted tests and typechecks for the touched owners only. Wrap every
+   local command in `timeout`; full local gates are not a worker's job.
+5. Commit, then append the pick's result to the lane report before the next
+   pick. Time-box a pick to about 40 minutes and report it as blocked rather
+   than continuing past that.
+
+Reuse the lead checkout's dependencies instead of a fresh install per lane when
+the lockfile matches.

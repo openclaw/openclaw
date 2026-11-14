@@ -11,6 +11,7 @@ import {
   installPlainHttpClipboardCapture,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
+import { installAssistantMediaCacheMiss } from "./chat-media-http-cache.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -45,6 +46,7 @@ suite.define(() => {
   it("renders relative assistant media through the session-scoped ticket route", async () => {
     const page = await newChatPage(suite);
     const source = "openclaw/tmp/github-panel/v2-proof/github-pr-diff-light.png";
+    const expired = ".openclaw/tmp/proof/expired.png";
     const caption = "Browser proof from this task's workspace.";
     const imageBytes = await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
     const requests: URL[] = [];
@@ -60,7 +62,14 @@ suite.define(() => {
           body: JSON.stringify(
             url.searchParams.get("source") === source
               ? mediaTicket("ticket-relative-image")
-              : { available: false, code: "file-not-found", reason: "File not found" },
+              : url.searchParams.get("source") === expired
+                ? {
+                    available: false,
+                    code: "artifact-file-expired",
+                    reason: "file expired (scratch cleaned after 24 h)",
+                    retryable: false,
+                  }
+                : { available: false, code: "file-not-found", reason: "File not found" },
           ),
         });
         return;
@@ -71,7 +80,9 @@ suite.define(() => {
       await route.fulfill({ contentType: "image/png", body: imageBytes });
     });
     await installMockGateway(page, {
-      historyMessages: assistantHistory(`${caption}\n\nMEDIA:${source}\n\nMEDIA:missing.png`),
+      historyMessages: assistantHistory(
+        `${caption}\n\nMEDIA:${source}\n\nMEDIA:missing.png\n\nMEDIA:${expired}`,
+      ),
     });
     await page.goto(`${suite.server.baseUrl}chat`);
     await page.getByText(caption, { exact: false }).first().waitFor();
@@ -86,6 +97,7 @@ suite.define(() => {
       )
       .toBeGreaterThan(0);
     await page.getByText("File not found", { exact: true }).waitFor();
+    await page.getByText("file expired (scratch cleaned after 24 h)", { exact: true }).waitFor();
     expect((await page.locator("body").textContent()) ?? "").not.toContain("MEDIA:");
     expect(requests.some((url) => url.searchParams.get("source") === "missing.png")).toBe(true);
   });
@@ -268,6 +280,7 @@ suite.define(() => {
         requestedMediaUrls.filter(
           (url) => !url.searchParams.has("variant") && !url.searchParams.has("meta"),
         );
+      await installAssistantMediaCacheMiss(page);
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         const request = route.request();
         const url = new URL(request.url());
@@ -317,6 +330,17 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}chat`);
       await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
+      if (boundedPreview && !previewFails) {
+        await expect
+          .poll(() => page.evaluate(() => document.documentElement.dataset.mediaCacheRead))
+          .toBe(
+            JSON.stringify({
+              cache: "only-if-cached",
+              mode: "same-origin",
+              credentials: "same-origin",
+            }),
+          );
+      }
       if (previewFails) {
         const retry = page.getByRole("button", { name: "Retry", exact: true });
         await retry.waitFor();
@@ -350,6 +374,7 @@ suite.define(() => {
       const image = page.locator("img.chat-message-image");
       await image.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => imageWidths(image)).toEqual([1]);
+      expect(requestedMediaUrls).toHaveLength(2);
       const previewRequest = requestedMediaUrls.find((url) => url.searchParams.get("meta") !== "1");
       expect(previewRequest?.searchParams.get("variant")).toBe(boundedPreview ? "thumbnail" : null);
       const inlineSource = await image.getAttribute("src");

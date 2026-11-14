@@ -1,0 +1,3 @@
+# Exact 157-line growth for ClawHub status lifecycle, no-progress threshold,
+# timestamp validation, and clean exact-tag roster boundary regressions in PR #195011.
+157

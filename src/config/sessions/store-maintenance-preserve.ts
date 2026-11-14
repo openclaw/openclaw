@@ -19,6 +19,8 @@ import type { SessionEntry } from "./types.js";
 
 type PreparedSessionMaintenancePreserveKeys = {
   capture(): Iterable<string> | undefined;
+  /** True while the provider cannot yet name every key it protects. */
+  isPending?(): boolean;
   refreshCandidates?(sessionKeys: readonly string[]): Iterable<string> | undefined;
   /** Release prepared source custody; this must not throw. */
   dispose(): void;
@@ -111,11 +113,13 @@ export async function prepareSessionMaintenancePreservation(
         personalPins.retainOperation(operation);
       }
       const keys = new Set<string>(personalPins.sessionKeys);
+      let archivingDeferred = false;
       addSessionMaintenancePreserveKeys(
         keys,
         iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex()),
       );
       for (const facts of prepared) {
+        archivingDeferred ||= facts.isPending?.() === true;
         const values =
           sessionKeys !== undefined && facts.refreshCandidates
             ? facts.refreshCandidates(sessionKeys)
@@ -129,6 +133,7 @@ export async function prepareSessionMaintenancePreservation(
           ...(collectSessionControllerTargets(undefined, storePath).get(storePath) ?? []),
         ].toSorted(),
         lifecycleIdentities: collectSessionMutationIdentities(storePath),
+        ...(archivingDeferred ? { archivingDeferred: true as const } : {}),
       };
     };
     return {
@@ -147,14 +152,15 @@ export async function collectSessionMaintenancePreserveKeysForStore(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
   baseKeys?: Iterable<string | undefined>;
-}): Promise<Set<string> | undefined> {
+}): Promise<{ keys: Set<string> | undefined; deferArchiving: boolean }> {
   const prepared = await prepareSessionMaintenancePreservation(params.storePath);
   try {
-    const keys = resolveSessionMaintenancePreserveKeys({
-      ...params,
-      snapshot: prepared.capture(),
-    });
-    return keys.size > 0 ? keys : undefined;
+    const snapshot = prepared.capture();
+    const keys = resolveSessionMaintenancePreserveKeys({ ...params, snapshot });
+    return {
+      keys: keys.size > 0 ? keys : undefined,
+      deferArchiving: snapshot.archivingDeferred === true,
+    };
   } finally {
     prepared.dispose();
   }

@@ -47,6 +47,7 @@ function makeRuntimeModel(id: string, overrides: Partial<Parameters<StreamFn>[0]
 function upstreamModel(id: string, overrides: Record<string, unknown> = {}) {
   return {
     id,
+    modalities: { input: ["text"], output: ["text"] },
     limit: { context: 262_144, output: 32_768 },
     ...overrides,
   };
@@ -161,6 +162,18 @@ describe("opencode-go provider plugin", () => {
     });
   }
 
+  it("keeps endpoint outages separate from authentication refusals", () => {
+    const outage = "Upstream request failed: Endpoint is unavailable.";
+    for (const [status, errorMessage, expected] of [
+      [403, outage, "server_error"],
+      [403, "Invalid API key", undefined],
+      [403, "You do not have permission to use this model", undefined],
+      [401, outage, undefined],
+    ] as const) {
+      expect(provider.classifyFailoverReason?.({ status, errorMessage })).toBe(expected);
+    }
+  });
+
   it.each(["deepseek-v4-pro", "deepseek-v4.1-flash", "kimi-k3"] as const)(
     "keeps %s thinking per invocation on one standalone completion wrapper",
     async (modelId) => {
@@ -250,16 +263,14 @@ describe("opencode-go provider plugin", () => {
       discoveryApiKey: "resolved-opencode-key",
       fetchGuard,
     });
-    expect(result.models).toMatchObject([
+    expect(result.models.filter((model) => model.inference?.chat !== false)).toMatchObject([
       { id: "known", name: "Enriched" },
-      {
-        id: "unknown",
-        provider: "opencode-go",
-        api: "openai-completions",
-        baseUrl: OPENAI_URL,
-        input: ["text"],
-      },
     ]);
+    expect(result.models.find((model) => model.id === "unknown")).toMatchObject({
+      inference: { chat: false },
+      api: "openai-completions",
+      baseUrl: OPENAI_URL,
+    });
     const listingRequest = fetchGuard.mock.calls.find(
       ([request]) => request.url === "https://opencode.ai/inference/go/v1/models",
     )?.[0];
@@ -352,12 +363,7 @@ describe("opencode-go provider plugin", () => {
         if (mode === "unrelated" || mode === "missing") {
           expect(result).toBeNull();
         } else {
-          expect(result).toMatchObject({
-            provider: {
-              apiKey,
-              models: expect.arrayContaining([expect.objectContaining({ id: "deepseek-v4-pro" })]),
-            },
-          });
+          expect(result).toMatchObject({ provider: { apiKey } });
         }
         if (mode === "unrelated") {
           expect(resolveProviderApiKey).not.toHaveBeenCalled();

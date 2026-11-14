@@ -28,7 +28,11 @@ import {
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
 import { assertAuthProfileMigrationReady } from "./auth-profiles/legacy-source-diagnostic.js";
-import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
+import {
+  buildOAuthRefreshFailureLoginCommand,
+  OAuthRefreshFailureError,
+} from "./auth-profiles/oauth-refresh-failure.js";
+import { isFailedOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { resolveAuthStorePathForDisplayAsync } from "./auth-profiles/paths.js";
 import { isNonSecretApiKeyMarker, resolveExplicitProviderNoAuth } from "./model-auth-markers.js";
@@ -222,6 +226,11 @@ export async function resolveApiKeyForProviderCore(input: {
   /** Keep SecretRef-backed model credentials opaque until a sentinel-aware transport boundary. */
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
+  if (resolveMergedModelProviderConfig(input.cfg, input.provider)?.auth === "native-command") {
+    throw new Error(
+      "Native command auth requires the Codex runtime; host credentials cannot be used.",
+    );
+  }
   input.signal?.throwIfAborted();
   const ownership = {
     provider: input.provider,
@@ -701,6 +710,21 @@ export async function resolveApiKeyForProviderCore(input: {
         providerGuidance: true,
       });
     }
+  }
+
+  // A sign-in whose refresh failed is kept as a failed refresh fence. It needs a new sign-in,
+  // not an API key, even when the run planned no profile fallback after skipping it.
+  const endedProfileId = listProfilesForProvider(store, provider).find((candidate) => {
+    const credential = store.profiles[candidate];
+    return credential?.type === "oauth" && isFailedOAuthRefreshFence(credential);
+  });
+  if (endedProfileId) {
+    throw new ProviderAuthError(
+      "missing-provider-auth",
+      provider,
+      `The ${provider} sign-in ${JSON.stringify(endedProfileId)} has ended or was rejected. Sign in again with ${buildOAuthRefreshFailureLoginCommand(provider, { profileId: endedProfileId })}.`,
+      { providerGuidance: true },
+    );
   }
 
   const authStorePath = await resolveAuthStorePathForDisplayAsync(agentDir);

@@ -67,7 +67,14 @@ it.each(["0", "1"])(
     trace.setLineFormatter((message) => message);
     expect(messages().at(-1)).toMatch(/ rssMb=128\.0 heapUsedMb=\d+\.\d workers=0 /);
 
-    await measureGatewayBootstrapStep("cli.bootstrap.admission.database-readiness", () => {});
+    await measureGatewayBootstrapStep(
+      "cli.bootstrap.admission.database-readiness",
+      () => {},
+      () => ({ stateIntegrityCheckCount: 1, stateIntegrityReason: "schema-mismatch" }),
+    );
+    expect(messages().at(-1)).toContain(
+      "stateIntegrityCheckCount=1 stateIntegrityReason=schema-mismatch",
+    );
     expect(messages().at(-1)).toMatch(/ rssMb=256\.0 heapUsedMb=\d+\.\d workers=0 /);
   },
 );

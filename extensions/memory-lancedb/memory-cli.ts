@@ -8,8 +8,8 @@ import {
   MEMORY_QUERY_COLUMNS,
   type MemoryQueryColumn,
   type MemoryQueryFilter,
-  type MemoryDB,
-} from "./lancedb-store.js";
+} from "./lancedb-schema.js";
+import type { MemoryDB } from "./lancedb-store.js";
 import { normalizeRecallQuery, projectMemorySearchResult } from "./memory-policy.js";
 import type { MemoryStatsSource } from "./memory-stats.js";
 

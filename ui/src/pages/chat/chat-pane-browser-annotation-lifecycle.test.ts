@@ -137,6 +137,7 @@ function mountedPanes(session = "current") {
       "openclaw-chat-runtime-test",
       ChatPaneRuntime,
     ) as unknown as TestChatPane;
+    onTestFinished(() => pane.disconnectedCallback());
     Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
     Object.assign(pane, { context, paneId: "p1", sessionKey: `agent:main:${key}` });
     const stopAfterRestore = new Error("stop after attachment restore");

@@ -283,3 +283,22 @@ it.each(["navigation", "preload"] as const)(
     expect(h.data()?.data.authStatus).toEqual(authStatus);
   },
 );
+
+it("adopts auth rows without waiting for a pending catalog", async () => {
+  const h = createModelsRouter();
+  const { started, response } = holdRequests(h, ["models.list"]);
+  const navigation = h.navigate();
+  await started.promise;
+  try {
+    await vi.waitFor(() => {
+      expect(h.data()?.data.authStatus).toEqual(authStatus);
+    });
+    expect(h.catalog()).toBeUndefined();
+    expect(h.data()?.catalog?.promise).toBeInstanceOf(Promise);
+  } finally {
+    response.resolve();
+    await navigation;
+  }
+  expect(await h.data()?.catalog?.promise).toMatchObject({ catalogError: null });
+  expect(h.catalog()).toEqual(catalog);
+});

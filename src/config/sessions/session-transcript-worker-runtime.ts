@@ -1,33 +1,41 @@
-import { hasSqliteDatabaseSchemaAdmissionForPath } from "../../infra/sqlite-database-admission.js";
+import {
+  getSqliteDatabaseAdmissionIdentityForPath,
+  hasSqliteDatabaseSchemaAdmissionForPath,
+  hasSqliteDatabaseSchemaAdmissionForIdentity,
+} from "../../infra/sqlite-database-admission.js";
+import { getArtifactPreservingSqliteRead } from "../../infra/sqlite-snapshot-source.js";
+import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions, WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runWithAgentDatabaseReadAdmissionTurn } from "../../state/agent-database-admission.js";
+import {
+  captureAgentDatabaseAdmission,
+  runWithAgentDatabaseReadAdmissionTurn,
+} from "../../state/agent-database-admission.js";
+import { getAgentDeletionDatabaseCleanup } from "../../state/agent-deletion-cleanup.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
 import { readSessionActorProjectionReceipt } from "./session-actor-replica.js";
 import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
-import {
-  createSessionHistoryWorkerReaders,
-  type SessionHistoryWorkerRequestRunner,
-} from "./session-transcript-worker-readers.js";
+import { createSessionHistoryWorkerReaders } from "./session-transcript-worker-readers.js";
 import {
   acquireHistoryDatabaseResource,
   armDatabaseWorkerIdleRetirement,
   clearDatabaseWorkerIdleRetirement,
   historyLane,
-  maintenanceLane,
+  sessionStoreLane,
   pruneHistoryDatabases,
   refreshDatabaseWorkerPressureSubscription,
   rotateDatabaseWorkers,
   settleSessionHistoryWorkerEviction,
-  targetDiscoveryLane,
   type HistoryDatabaseResource,
   type SessionHistoryDatabaseTarget,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import type {
+  SessionHistoryWorkerRequestRunner,
   SessionHistoryWorkerDatabase,
   SessionHistoryWorkerInput,
   SessionHistoryWorkerPreparedInput,
@@ -52,6 +60,7 @@ function projectionTarget(input: SessionHistoryWorkerPreparedInput) {
   switch (input.kind) {
     case "history-page":
       return input.request.kind === "active-accounting" ? input.target.transcript : undefined;
+    case "compaction-source":
     case "transcript-hydration":
     case "current-turn-entry":
     case "recent-active-events":
@@ -74,7 +83,7 @@ export function runSessionBranchSummaryWorkerRequest(
   return withSessionHistoryWorkerDatabase(
     database,
     (owner) => owner.readBranchSummaries({ request: read }, signal),
-    maintenanceLane,
+    sessionStoreLane,
   );
 }
 
@@ -131,6 +140,10 @@ export function retainSessionHistoryWorkerDatabase(
 ) {
   const owned = acquireHistoryDatabaseResource(options);
   const { database } = owned;
+  const assertAgentAdmitted = captureAgentDatabaseAdmission(database.agentId, {
+    env: options.env,
+    access: "read",
+  });
   let knownSource = false;
   const assertCurrent = () => {
     if (owned.revoked) {
@@ -162,9 +175,18 @@ export function retainSessionHistoryWorkerDatabase(
       timeoutMs = 60_000,
     ) => {
       let retirement: Promise<void> | undefined;
+      const preserveSourceArtifacts = isArtifactPreservingStateRead("agent", database.path);
+      let inspectionIdentity: DatabaseFileIdentity | undefined;
       const hostEffects = new Set<Promise<WorkerTaskResponse>>();
       /** Retain schema admission through reply processing without locking the consumer. */
-      const readAdmissionOptions = { ...options, ...database, lane };
+      const readAdmissionOptions = {
+        ...options,
+        ...database,
+        lane,
+        readIdentities: options.readIdentity
+          ? new Map([[database.path, options.readIdentity]])
+          : undefined,
+      };
       const readRequest = {
         knownSource,
         timeoutMs,
@@ -183,8 +205,11 @@ export function retainSessionHistoryWorkerDatabase(
       let additionalLane: SessionHistoryWorkerLane | undefined;
       try {
         const cold =
-          !readRequest.knownSource && !hasSqliteDatabaseSchemaAdmissionForPath(readOptions.path);
-        const requestLane = cold ? targetDiscoveryLane : requestedLane;
+          !readRequest.knownSource &&
+          !(options.readIdentity
+            ? hasSqliteDatabaseSchemaAdmissionForIdentity(options.readIdentity)
+            : hasSqliteDatabaseSchemaAdmissionForPath(readOptions.path));
+        const requestLane = cold ? sessionStoreLane : requestedLane;
         if (requestLane !== requestedLane) {
           clearDatabaseWorkerIdleRetirement(requestLane);
           requestLane.pending++;
@@ -220,7 +245,7 @@ export function retainSessionHistoryWorkerDatabase(
                 },
                 [],
                 admissionSignal,
-                options,
+                readAdmissionOptions,
               );
             } finally {
               clearTimeout(timer);
@@ -232,19 +257,52 @@ export function retainSessionHistoryWorkerDatabase(
         };
         try {
           const reply = await admit((requestSignal, remaining) => {
-            // A writer ahead of this read can renew the receipt during admission.
-            const validation = captureOpenClawAgentDatabaseReadValidation(
-              database,
-              owned.nativeLanes.has(requestLane) ? "retained" : "admission",
-            );
             return runWithAgentDatabaseReadAdmissionTurn(
               [database.path],
-              () =>
-                requestLane.pool.run(
+              () => {
+                // A preceding writer can renew this physical proof while admission waits.
+                const validation = preserveSourceArtifacts
+                  ? undefined
+                  : captureOpenClawAgentDatabaseReadValidation(
+                      database,
+                      owned.nativeLanes.has(requestLane) ? "retained" : "admission",
+                    );
+                return requestLane.pool.run(
                   () => {
                     assertCurrent();
+                    const cleanup = getAgentDeletionDatabaseCleanup(readOptions);
+                    if (cleanup) {
+                      cleanup.assertCurrentHost();
+                    } else if (!preserveSourceArtifacts) {
+                      assertAgentAdmitted();
+                    }
                     options.prepareRead?.();
                     const input = prepare();
+                    if (preserveSourceArtifacts && input.kind === "session-exact-entries") {
+                      inspectionIdentity =
+                        options.readIdentity ??
+                        getSqliteDatabaseAdmissionIdentityForPath(database.path);
+                      if (
+                        inspectionIdentity &&
+                        input.expectedIdentity &&
+                        (input.expectedIdentity.key !== inspectionIdentity.key ||
+                          input.expectedIdentity.birthtime !== inspectionIdentity.birthtime)
+                      ) {
+                        throw new Error(
+                          "Session authority inspection source changed before dispatch",
+                        );
+                      }
+                      input.preserveSourceArtifacts = true;
+                      input.inspectionSnapshot = getArtifactPreservingSqliteRead(database.path);
+                      input.inspectionSourcePath = options.readSourcePath;
+                      inspectionIdentity ??= input.expectedIdentity;
+                      if (inspectionIdentity) {
+                        input.expectedIdentity = {
+                          ...inspectionIdentity,
+                          canonicalPath: database.path,
+                        };
+                      }
+                    }
                     const projection = projectionTarget(input);
                     const projectionReceipt = projection?.sessionId
                       ? readSessionActorProjectionReceipt({
@@ -259,12 +317,16 @@ export function retainSessionHistoryWorkerDatabase(
                       ...input,
                       database,
                       validation: validation?.validation,
-                      projectionReceipt: projectionReceipt && {
-                        ...projectionReceipt,
-                        ...(input.kind === "history-page" && !projectionReceipt.entrySessionKey
-                          ? { contextOnly: true }
-                          : {}),
-                      },
+                      projectionReceipt:
+                        projectionReceipt &&
+                        (input.kind === "history-page"
+                          ? {
+                              ...projectionReceipt,
+                              entrySessionKey: undefined,
+                              facts: undefined,
+                              contextOnly: true,
+                            }
+                          : projectionReceipt),
                     } satisfies SessionTranscriptWorkerRequest;
                   },
                   {
@@ -295,10 +357,11 @@ export function retainSessionHistoryWorkerDatabase(
                       }
                     },
                   },
-                ),
+                );
+              },
               [],
               requestSignal,
-              options,
+              readAdmissionOptions,
             );
           });
           await retirement;
@@ -316,6 +379,30 @@ export function retainSessionHistoryWorkerDatabase(
             received.source
           ) {
             knownSource = true;
+          }
+          if (
+            typeof received === "object" &&
+            received !== null &&
+            !Array.isArray(received) &&
+            received.kind === "session-exact-entries" &&
+            received.snapshotSource
+          ) {
+            const source = received.snapshotSource;
+            assertCurrent();
+            const currentIdentity = getSqliteDatabaseAdmissionIdentityForPath(database.path);
+            if (
+              source.agentId !== database.agentId ||
+              source.path !== database.path ||
+              [inspectionIdentity, currentIdentity].some(
+                (identity) =>
+                  identity &&
+                  (`file:${source.databaseIdentity}` !== identity.key ||
+                    source.databaseBirthtime !== identity.birthtime),
+              )
+            ) {
+              throw new Error("Session authority snapshot lost its admitted original source");
+            }
+            // Physical revalidation belongs to the worker; this owner retains revocation custody.
           }
           // SAFETY: The pool pairs this reply with the exact prepared request above.
           const paired = received as SessionTranscriptWorkerValues[ReturnType<

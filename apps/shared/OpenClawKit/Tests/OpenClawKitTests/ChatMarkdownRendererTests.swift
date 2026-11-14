@@ -3,6 +3,77 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatMarkdownRendererTests {
+    @Test @MainActor func `retained preparation follows completion and late reference definitions`() throws {
+        let preparation = ChatMarkdownPreparation()
+        let fence = "```swift\nlet value = 1"
+        for isComplete in [false, true, false] {
+            let snapshot = preparation.snapshot(
+                text: fence,
+                isComplete: isComplete,
+                defaultDisclosureSummary: "Details")
+            guard case let .code(code) = try #require(snapshot.blocks.first) else {
+                Issue.record("expected code block")
+                return
+            }
+            #expect(code.code == "let value = 1")
+            #expect(code.isComplete == isComplete)
+        }
+
+        let prefix = "See [guide][g].\n\n# Section"
+        for destination in ["https://example.com/first", "https://example.com/second"] {
+            let snapshot = preparation.snapshot(
+                text: prefix + "\n\n[g]: " + destination,
+                isComplete: true,
+                defaultDisclosureSummary: "Details")
+            guard case let .prose(prose) = try #require(snapshot.blocks.first) else {
+                Issue.record("reference document must stay on the complete prose path")
+                return
+            }
+            let guide = try #require(prose.attributed.range(of: "guide"))
+            #expect(prose.attributed[guide].link == URL(string: destination))
+        }
+        let replacement = preparation.snapshot(
+            text: "Replacement **message**.",
+            isComplete: true,
+            defaultDisclosureSummary: "Details")
+        guard case let .prose(prose) = try #require(replacement.blocks.first) else {
+            Issue.record("expected replacement prose")
+            return
+        }
+        #expect(String(prose.attributed.characters) == "Replacement message.")
+    }
+
+    @Test @MainActor func `retained preparation refreshes default summaries and preserves authored summaries`() throws {
+        let preparation = ChatMarkdownPreparation()
+        let text = """
+        <details>
+
+        Body.
+
+        <details>
+        <summary>Authored summary</summary>
+
+        Nested body.
+
+        </details>
+        </details>
+        """
+        for summary in ["Details", "More information", "Details"] {
+            let snapshot = preparation.snapshot(
+                text: text,
+                isComplete: true,
+                defaultDisclosureSummary: summary)
+            guard case let .disclosure(outer) = try #require(snapshot.blocks.first),
+                  case let .disclosure(inner) = try #require(outer.blocks.last)
+            else {
+                Issue.record("expected nested disclosures")
+                return
+            }
+            #expect(String(outer.summary.attributed.characters) == summary)
+            #expect(String(inner.summary.attributed.characters) == "Authored summary")
+        }
+    }
+
     @Test(arguments: [false, true]) @MainActor
     func `paragraph before a list retains its break in stored and streaming messages`(isComplete: Bool) throws {
         let snapshot = ChatMarkdownRenderSnapshot(

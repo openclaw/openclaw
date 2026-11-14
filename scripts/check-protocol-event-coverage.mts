@@ -13,7 +13,8 @@
 // `.event == "..."` comparisons, and Kotlin `when (event) { "..." -> }` blocks
 // plus `event == "..."` comparisons scoped to `fun handle*Event(...)` bodies.
 // Swift case labels may use qualified static string constants; those are
-// resolved across the scanned source tree. Kotlin labels and comparisons may
+// resolved across the scanned source tree. Local String enums bound from .event
+// and dispatched in the same block are also recognized. Kotlin labels and comparisons may
 // likewise use generated enum `rawValue` constants. Events a client
 // intentionally does not consume live in scripts/protocol-event-coverage.allowlist.json.
 import fs from "node:fs";
@@ -47,6 +48,13 @@ const MIN_EXPECTED_GATEWAY_EVENTS = 10;
 const GATEWAY_EVENTS_BLOCK_RE = /export const GATEWAY_EVENTS = \[([\s\S]*?)\];/u;
 const SWIFT_EVENT_SWITCH_RE = /\bswitch\s+\w+(?:\.\w+)*\.event\s*\{/u;
 const SWIFT_CASE_LABEL_RE = /^\s*case\s+(.+?):/u;
+const SWIFT_STRING_ENUM_RE =
+  /^\s*(?:(?:private|fileprivate|internal|public)\s+)?enum\s+([A-Za-z_]\w*)\s*:\s*String\b[^\n{]*\{/gmu;
+const SWIFT_ENUM_MEMBER_RE = /^\s*case\s+([A-Za-z_]\w*)(?:\s*=\s*"([^"]+)")?\s*,?\s*(?:\/\/.*)?$/u;
+const SWIFT_EVENT_ENUM_BINDING_RE =
+  /^\s*guard\s+let\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\(\s*rawValue:\s*\w+(?:\.\w+)*\.event\s*\)\s+else\b/u;
+const SWIFT_BOUND_SWITCH_RE = /^\s*switch\s+([A-Za-z_]\w*)\s*\{/u;
+
 const SWIFT_TYPE_DECLARATION_RE =
   /^\s*(?:(?:private|fileprivate|internal|public)\s+)?(?:enum|struct|class|actor|extension)\s+([A-Za-z_]\w*)[^{]*\x7b/u;
 const SWIFT_STATIC_STRING_CONSTANT_RE = /^\s*static\s+let\s+([A-Za-z_]\w*)\s*=\s*"([^"]+)"/u;
@@ -413,6 +421,78 @@ export function extractKotlinEnumStringConstants(source: string): Map<string, st
   return constants;
 }
 
+function extractSwiftStringEnums(source: string): Map<string, StringConstants | undefined> {
+  const enums = new Map<string, StringConstants | undefined>();
+  for (const declaration of source.matchAll(SWIFT_STRING_ENUM_RE)) {
+    const name = requiredCapture(declaration, 1);
+    // Short names that denote multiple local types cannot establish a binding.
+    if (enums.has(name)) {
+      enums.set(name, undefined);
+      continue;
+    }
+    const members = new Map<string, string>();
+    const header = new RegExp(
+      "^\\s*(?:(?:private|fileprivate|internal|public)\\s+)?enum\\s+" +
+        name +
+        "\\s*:\\s*String\\b[^\\n{]*\\{",
+      "u",
+    );
+    collectBlockCaseLabels(source, header, (line) => {
+      const member = SWIFT_ENUM_MEMBER_RE.exec(line);
+      if (member) {
+        members.set(requiredCapture(member, 1), member[2] ?? requiredCapture(member, 1));
+      }
+    });
+    enums.set(name, members);
+  }
+  return enums;
+}
+
+// A raw-value declaration is not evidence of handling. Bind the event conversion
+// to a switch in the same lexical block, and count only its explicit cases.
+function extractSwiftEnumHandledEvents(source: string): string[] {
+  const enums = extractSwiftStringEnums(source);
+  const names: string[] = [];
+  const scopes: Array<{
+    bindings: Map<string, StringConstants>;
+    cases?: StringConstants;
+  }> = [{ bindings: new Map() }];
+  for (const line of source.split("\n")) {
+    const scope = scopes.at(-1);
+    if (!scope) {
+      break;
+    }
+    const binding = SWIFT_EVENT_ENUM_BINDING_RE.exec(line);
+    if (binding) {
+      const members = enums.get(requiredCapture(binding, 2));
+      if (members) {
+        scope.bindings.set(requiredCapture(binding, 1), members);
+      }
+    }
+    const dispatch = SWIFT_BOUND_SWITCH_RE.exec(line);
+    let cases = dispatch ? scope.bindings.get(requiredCapture(dispatch, 1)) : undefined;
+    const label = scope.cases ? SWIFT_CASE_LABEL_RE.exec(line) : null;
+    if (label) {
+      for (const expression of requiredCapture(label, 1).split(",")) {
+        const member = /^\s*\.([A-Za-z_]\w*)\s*$/u.exec(expression);
+        const value = member ? scope.cases?.get(requiredCapture(member, 1)) : undefined;
+        if (value) {
+          names.push(value);
+        }
+      }
+    }
+    for (const char of sanitizeLineForBraces(line)) {
+      if (char === "{") {
+        scopes.push({ bindings: new Map(), cases });
+        cases = undefined;
+      } else if (char === "}") {
+        scopes.pop();
+      }
+    }
+  }
+  return names;
+}
+
 /** Extracts Swift gateway-event case labels, including qualified constants. */
 export function extractSwiftHandledEvents(
   source: string,
@@ -432,6 +512,7 @@ export function extractSwiftHandledEvents(
       }
     }
   });
+  names.push(...extractSwiftEnumHandledEvents(source));
   for (const comparison of source.matchAll(SWIFT_EVENT_COMPARISON_RE)) {
     names.push(requiredCapture(comparison, 1));
   }

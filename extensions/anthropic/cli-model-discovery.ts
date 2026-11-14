@@ -1,5 +1,4 @@
 import { addAbortListener } from "node:events";
-import { requiresClaudeMandatoryAdaptiveThinking } from "openclaw/plugin-sdk/claude-model-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -90,6 +89,9 @@ export async function discoverClaudeCliModels(params: {
     // Claude Code lists its "default" alias first with a "Default (recommended)" label; the
     // explicit option for the same model carries the model's own name.
     const defaultAliasIds = new Set<string>();
+    // Claude Code owns what `fable`, `opus`, and `sonnet` mean; keep its selector
+    // values on the row they resolve to so runs can size context for an alias.
+    const nativeAliases = new Map<string, Set<string>>();
     for (const option of response.models) {
       if (
         !isRecord(option) ||
@@ -99,6 +101,10 @@ export async function discoverClaudeCliModels(params: {
         continue;
       }
       const id = option.resolvedModel.trim();
+      const value = typeof option.value === "string" ? option.value.trim() : "";
+      if (value && value !== "default" && value !== id) {
+        nativeAliases.set(id, (nativeAliases.get(id) ?? new Set()).add(value));
+      }
       const displayName = typeof option.displayName === "string" ? option.displayName : id;
       const existing = models.get(id);
       if (existing) {
@@ -121,14 +127,22 @@ export async function discoverClaudeCliModels(params: {
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         maxTokens: 128_000,
+        // Older menus omit these flags; Claude Code then still ignores an unsupported request.
+        ...(option.supportsFastMode === true ? { params: { claudeCodeFastMode: true } } : {}),
         thinkingLevelMap: {
-          off: requiresClaudeMandatoryAdaptiveThinking({ id }) ? null : "off",
+          off: option.supportsThinkingOff === false ? null : "off",
           minimal: null,
           ...Object.fromEntries(
             NATIVE_EFFORT_LEVELS.map((level) => [level, levels.includes(level) ? level : null]),
           ),
         },
       });
+    }
+    for (const [id, aliases] of nativeAliases) {
+      const model = models.get(id);
+      if (model) {
+        model.params = { ...model.params, nativeModelAliases: [...aliases].toSorted() };
+      }
     }
     return [...models.values()];
   } finally {

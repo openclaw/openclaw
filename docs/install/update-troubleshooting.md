@@ -114,6 +114,11 @@ it: `expired`, `replaced`, or `missing`. Expiry diagnostics include the recorded
 deadline, time since expiry, and age of the last heartbeat. A delayed native renewal
 timer also reports its measured lateness; a large delay can indicate event-loop
 starvation, but does not establish its cause. Replacement owners are redacted.
+Heartbeat renewal and verification failures also distinguish `storage-failed`
+from `admission-failed`. The heartbeat publishes its first observed cause before
+marking itself lost, so Doctor can retain that cause even when synchronous
+migration work delays worker message callbacks. This candidate-side diagnostic
+repair does not establish why an earlier update lost its lease.
 These diagnostics do not change lease duration or ownership checks. If state cannot
 be inspected safely, the original generic lease-loss error is preserved.
 
@@ -153,13 +158,26 @@ native output are excluded.
 
 ## Node and global install permissions
 
-If package recovery reports `nlink=2` (or another value above 1), let updater
+An updater containing the completed-journal repair automatically archives a
+multiply linked receipt from a completed, verified package update and reports a
+warning before continuing. Recovery evidence is preserved, not deleted. Runtime
+retention copies owner-private files so their link count and recovery fingerprint
+stay unchanged. In-flight recovery still requires a single-link journal; the
+completion receipt cannot authorize publication or rollback.
+
+If an older updater or in-flight package recovery reports `nlink=2` (or another value above 1), let updater
 workers finish, then run `openclaw doctor --fix` from the affected installation.
 Doctor can reclaim an abandoned updater runtime, including one retained in an
 npm prefix's `lib/` directory, and release its extra journal link. Then retry
 the update. Do not weaken recovery permissions or delete the activation journal;
 if Doctor reports a live owner or cannot identify the runtime, follow that
 diagnostic before retrying.
+
+If OpenClaw 2026.9.7 or 2026.9.8 reports `Package publication recovery permissions
+are unsafe`, Doctor cannot clear it: use the
+[manual procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+once. OpenClaw 2026.10.5 and later name the rejected object, its mode, and its
+link count.
 
 For `node-runtime-preflight`, upgrade the runtime named in the message to a
 version satisfying both the candidate's full engine range and the updater's

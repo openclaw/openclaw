@@ -9,7 +9,7 @@ import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/sessio
 import { resolveSessionTranscriptDatabasePath } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as transcriptAnchors from "../../config/sessions/session-transcript-anchor-read.js";
-import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -22,8 +22,8 @@ import { createChatReplySessionReader } from "./chat-send-reply-session.js";
 import { createChatSendWorkAdmission } from "./chat-send-work-admission.js";
 
 function observeTargetRequests(onKind: (kind: unknown) => void | Promise<void>) {
-  const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
-  return vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
+  const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+  return vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
     const reply = await run(...args);
     if (
       reply.ok &&

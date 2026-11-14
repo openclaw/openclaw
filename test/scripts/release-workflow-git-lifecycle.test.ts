@@ -55,9 +55,70 @@ function gitCommands(report: Awaited<ReturnType<typeof releaseRun>>) {
   return report.commands.filter(({ tool }) => tool === "git").map(({ args }) => args);
 }
 
+function selectedTagCheckout(signal: AbortSignal, options: RunOptions = {}) {
+  return runCiGitStep({
+    signal,
+    workflow: {
+      file: ".github/workflows/linux-app-release.yml",
+      job: "validate_release",
+      step: "Checkout selected tag",
+    },
+    fetchResults: [],
+    virtualBackoff: true,
+    ...options,
+    env: { CHECKOUT_KIND: "manual", RELEASE_TAG: releaseTag, ...options.env },
+    revisions: {
+      [`refs/tags/${releaseTag}^{commit}`]: sha,
+      HEAD: sha,
+      ...options.revisions,
+    },
+  });
+}
+
 const fetchMain = ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"];
 const head = ["rev-parse", "HEAD"];
 const onMain = (revision: string) => ["merge-base", "--is-ancestor", revision, "origin/main"];
+
+posixIt("retries selected-tag acquisition and checks out its exact commit", async ({ signal }) => {
+  const report = await selectedTagCheckout(signal, { fetchResults: [23, 23, 0] });
+  expect(report.code, report.output).toBe(0);
+  expect(
+    gitCommands(report).filter(([operation]) => operation === "fetch"),
+    report.output,
+  ).toEqual(
+    Array.from({ length: 3 }, () => [
+      "fetch",
+      "--force",
+      "--no-tags",
+      "origin",
+      `+refs/tags/${releaseTag}:refs/tags/${releaseTag}`,
+    ]),
+  );
+  expect(gitCommands(report)).toContainEqual(["checkout", "--detach", sha]);
+  expect(report.output).toContain("Selected release tag fetch attempt 2/3 failed; retrying.");
+});
+
+posixIt(
+  "fails closed when selected-tag acquisition exhausts its retry budget",
+  async ({ signal }) => {
+    const report = await selectedTagCheckout(signal, { fetchResults: [23, 23, 23] });
+    expect(report.code, report.output).not.toBe(0);
+    expect(gitCommands(report).filter(([operation]) => operation === "fetch")).toHaveLength(3);
+    expect(gitCommands(report).some(([operation]) => operation === "checkout")).toBe(false);
+    expect(report.output).toContain("Failed to fetch selected release tag after 3 attempts.");
+  },
+);
+
+posixIt(
+  "rejects a selected-tag checkout that does not retain the fetched commit",
+  async ({ signal }) => {
+    const report = await selectedTagCheckout(signal, { revisions: { HEAD: otherSha } });
+    expect(report.code, report.output).not.toBe(0);
+    expect(report.output).toContain(
+      "Selected release tag checkout did not preserve its exact commit.",
+    );
+  },
+);
 
 posixIt.for([releaseTag, `${releaseTag}-2`])(
   "Linux admits a stable tag from its matching release branch: %s",

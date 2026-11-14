@@ -3,6 +3,7 @@
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import * as toast from "../../lib/toast.ts";
 import {
   expectAbsent,
   expectContent,
@@ -14,9 +15,23 @@ import type { ModelProviderCard } from "./data.ts";
 import {
   ProviderAccountSummary,
   ProviderProfiles,
+  showProfileLogoutSuccess,
   type ProviderProfilesViewProps,
 } from "./profiles-view.tsx";
-import { card as viewCard, props } from "./view.test-support.tsx";
+import { ProviderRow } from "./provider-row.tsx";
+import { card as viewCard, props, text } from "./view.test-support.tsx";
+
+it("keeps visible sign-out success quiet and preserves warnings", () => {
+  const toastSpy = vi.spyOn(toast, "showToast").mockReturnValue(true);
+  showProfileLogoutSuccess();
+  expect(toastSpy).not.toHaveBeenCalled();
+  showProfileLogoutSuccess("A shared account is still in use.");
+  expect(toastSpy).toHaveBeenCalledWith({
+    message: "A shared account is still in use.",
+    severity: "warning",
+  });
+});
+
 function card(overrides: Partial<ModelProviderCard> = {}) {
   return viewCard({ apiKey: undefined, ...overrides });
 }
@@ -146,7 +161,7 @@ it("retains account summary focus while refreshed snapshots update account data 
   expect(updatedRows[0]).toBe(rows[0]);
   expect(updatedRows[1]).toBe(rows[1]);
   expectContent(rows[0]!, ["updated-one@example.invalid"]);
-  expectContent(rows[0]!, ["Credentials configured"]);
+  expectContent(rows[0]!, ["Account added"]);
   expectContent(rows[1]!, ["updated-two@example.invalid"]);
   expect(container.querySelector("p.muted")?.textContent).toBe("API key set in config");
   expectContent(container, [], ["EXAMPLE_API_KEY"]);
@@ -182,7 +197,7 @@ it("shows account provenance and removes drag handles for config-locked priority
   expectContent(document.body, [], ["Saved in OpenClaw"]);
   expectContent(document.body, ["Provider config"]);
   expectContent(document.body, ["Codex import"]);
-  expectContent(document.body, ["Shared credential"]);
+  expectContent(document.body, ["Shared account"]);
   expectContent(document.body, ["Priority is managed by provider configuration"]);
   expect(
     [...document.querySelectorAll("button")].map((button) => button.textContent),
@@ -226,10 +241,19 @@ it.each<[string, ModelProviderCard, string?, number?]>([
   ],
 ])("shows %s and blocks reordering", (message, providerCard, excluded, count = 0) => {
   const onProfileOrderChange = vi.fn();
-  const { container } = mount(providerCard, props({ onProfileOrderChange }));
+  const { container } = providerCard.apiKey
+    ? mountSolid(() => <ProviderRow {...props({ onProfileOrderChange })} card={providerCard} />)
+    : mount(providerCard, props({ onProfileOrderChange }));
+  if (providerCard.apiKey) {
+    container.querySelector<HTMLButtonElement>(".provider-row__summary")!.click();
+    flush();
+  }
   const grips = [...container.querySelectorAll<HTMLButtonElement>(gripSelector)];
   expect(grips).toHaveLength(count);
-  expectContent(container, [message]);
+  expectContent(
+    container,
+    providerCard.apiKey ? ["API key", "From environment (OPENAI_API_KEY)"] : [message],
+  );
   if (excluded) {
     expectContent(container, [], [excluded]);
   }
@@ -401,7 +425,14 @@ it.each([undefined, "auth-rejected"] as const)(
       status: "expired",
       expiry: { at: 1, remainingMs: -1, label: "0m" },
     });
-    const fenced = makeProfile("example:reconnect", { status: "expired", reasonCode: "expired" });
+    const refreshing = makeProfile("example:refreshing", {
+      status: "expired",
+      reasonCode: "expired",
+    });
+    const failed = makeProfile("example:reconnect", {
+      status: "expired",
+      reasonCode: "refresh_failed",
+    });
     const missing = makeProfile("example:missing", {
       status: "missing",
       reasonCode: "missing_credential",
@@ -410,6 +441,7 @@ it.each([undefined, "auth-rejected"] as const)(
       ...expired,
       profileId: "example:external",
       externallyManaged: true,
+      source: "external",
     });
     const staticToken = makeProfile("example:static", {
       type: "token",
@@ -419,7 +451,7 @@ it.each([undefined, "auth-rejected"] as const)(
     const providerCard = card({
       id: "example",
       catalogStatus,
-      profiles: [expiring, expired, fenced, missing, external, staticToken],
+      profiles: [expiring, expired, refreshing, failed, missing, external, staticToken],
     });
     const { container } = mount(providerCard);
     const summary = mountSolid(() => <ProviderAccountSummary cards={[providerCard]} />).container;
@@ -430,9 +462,14 @@ it.each([undefined, "auth-rejected"] as const)(
         "Access-token expiry alone does not mean you need to sign in again.",
       ]);
       expectContent(rowFor(root, expired.profileId), ["Access token expired"], ["Sign in again"]);
-      expectContent(rowFor(root, fenced.profileId), ["Sign-in unavailable"], ["Sign in again"]);
-      expectContent(rowFor(root, missing.profileId), ["Sign in again"]);
-      expectContent(rowFor(root, external.profileId), ["Managed externally"], ["Signed in"]);
+      expectContent(rowFor(root, refreshing.profileId), ["Refreshing"], ["Sign in again"]);
+      expectContent(rowFor(root, failed.profileId), ["Sign-in expired"]);
+      expectContent(rowFor(root, missing.profileId), ["Not signed in"]);
+      expectContent(
+        rowFor(root, external.profileId),
+        [root === container ? "External CLI" : "Managed externally"],
+        ["Signed in"],
+      );
       expectContent(
         rowFor(root, staticToken.profileId),
         ["Expired"],
@@ -441,3 +478,84 @@ it.each([undefined, "auth-rejected"] as const)(
     }
   },
 );
+
+it("offers Sign in again only on OAuth accounts whose grant is gone", () => {
+  const failed = makeProfile("openai:failed@example.com", {
+    email: "failed@example.com",
+    status: "expired",
+    reasonCode: "refresh_failed",
+  });
+  const missing = makeProfile("openai:missing@example.com", {
+    status: "missing",
+    reasonCode: "missing_credential",
+  });
+  const refreshing = makeProfile("openai:refreshing@example.com", {
+    status: "expired",
+    reasonCode: "expired",
+  });
+  const healthy = makeProfile("openai:healthy@example.com");
+  const staticToken = makeProfile("openai:token", {
+    type: "token",
+    status: "expired",
+    reasonCode: "expired",
+  });
+  const onSignInAgain = vi.fn();
+  const canSignInAgain = vi.fn(() => true);
+  const providerCard = card({
+    id: "openai",
+    profiles: [failed, missing, refreshing, healthy, staticToken],
+    profileProviderIds: Object.fromEntries(
+      [failed, missing, refreshing, healthy, staticToken].map((entry) => [
+        entry.profileId,
+        "openai",
+      ]),
+    ),
+  });
+  const viewProps = { ...props(), onSignInAgain, canSignInAgain };
+  const { container, update } = mount(providerCard, viewProps);
+  const button = (id: string) =>
+    rowFor(container, id).querySelector<HTMLButtonElement>("[data-models-sign-in-again]");
+
+  expect(button(failed.profileId)?.textContent).toBe("Sign in again");
+  expect(button(failed.profileId)?.getAttribute("aria-label")).toBe(
+    "Sign in again as failed@example.com",
+  );
+  expect(button(missing.profileId)).not.toBeNull();
+  for (const id of [refreshing.profileId, healthy.profileId, staticToken.profileId]) {
+    expect(button(id)).toBeNull();
+  }
+  button(failed.profileId)!.click();
+  expect(onSignInAgain).toHaveBeenCalledOnce();
+
+  // One sign-in at a time, and only with write access.
+  update(providerCard, { ...viewProps, loginBusy: true });
+  expect(button(failed.profileId)?.disabled).toBe(true);
+  update(providerCard, { ...viewProps, canMutate: false, mutationBlockedReason: "Read-only" });
+  expect(button(failed.profileId)?.disabled).toBe(true);
+  expect(button(failed.profileId)?.title).toBe("Read-only");
+
+  // A provider without a startable sign-in keeps the status but offers no dead button.
+  update(providerCard, { ...viewProps, canSignInAgain: () => false });
+  expect(button(failed.profileId)).toBeNull();
+  expect(text(rowFor(container, failed.profileId))).toContain("Sign-in expired");
+});
+
+it("starts the account's provider sign-in from its row", () => {
+  const failed = makeProfile("openai:failed@example.com", {
+    email: "failed@example.com",
+    status: "expired",
+    reasonCode: "refresh_failed",
+  });
+  const healthy = makeProfile("openai:healthy@example.com");
+  const providerCard = card({ id: "openai", profiles: [failed, healthy] });
+  const onConnect = vi.fn();
+  const { container } = mountSolid(() => (
+    <ProviderRow {...props({ onConnect, canConnect: () => true })} card={providerCard} />
+  ));
+  container.querySelector<HTMLButtonElement>(".provider-row__summary")?.click();
+  flush();
+  rowFor(container, failed.profileId)
+    .querySelector<HTMLButtonElement>("[data-models-sign-in-again]")!
+    .click();
+  expect(onConnect).toHaveBeenCalledWith(providerCard);
+});

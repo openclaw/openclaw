@@ -65,7 +65,7 @@ suite.define(() => {
         await page.locator("[data-settings-microphone]").selectOption("usb");
         await page.goto(`${suite.server.baseUrl}chat`);
         await page.getByRole("button", { name: "Tap to talk", exact: true }).click();
-        const alert = page.locator('.agent-chat__talk-status[role="alert"]');
+        const alert = page.locator(".agent-chat__composer-alert[role=alert]");
         await expect
           .poll(() => alert.textContent())
           .toContain("The selected microphone is unavailable");
@@ -93,7 +93,9 @@ suite.define(() => {
           await retiredButton!.evaluate((button) => (button as HTMLButtonElement).click());
           await retiredButton!.dispose();
           if (decision === "denied") {
-            await expect.poll(() => alert.textContent()).toContain("Microphone access is blocked");
+            await expect
+              .poll(() => page.locator(".agent-chat__composer-alert[role=status]").textContent())
+              .toContain("Microphone access is blocked");
             await expectNoSession();
           } else {
             // The error-state activity also renders a listening marker; it is not

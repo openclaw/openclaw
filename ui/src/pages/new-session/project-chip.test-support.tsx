@@ -1,6 +1,7 @@
 import { createMemo, createSignal } from "solid-js";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { resolveProjectChip } from "./project-chip.ts";
 import { ProjectChip } from "./project-chip.tsx";
@@ -37,4 +38,8 @@ export function mountProjectChip(
     });
     return <ProjectChip {...props()} />;
   });
+}
+
+export async function openProjectSearch(container: ParentNode) {
+  await waitForSolid(() => expect(container.querySelector('input[type="search"]')).not.toBeNull());
 }

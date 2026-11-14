@@ -43,6 +43,7 @@ function agentEffectiveToolsEventInvalidates(
 }
 
 type ReadOptions = {
+  canRead: () => boolean;
   scope: () => {
     client: GatewayBrowserClient | null;
     connected: boolean;
@@ -63,7 +64,9 @@ export function createAgentToolsCatalog(options: ReadOptions) {
     result: Promise<ToolsCatalogResult | null>;
   } | null>(null);
   const isCurrent = (current: CatalogRequest) =>
-    target === current && options.isCurrent(current.client, current.generation, current.agentId);
+    target === current &&
+    options.canRead() &&
+    options.isCurrent(current.client, current.generation, current.agentId);
   const read: () => ToolsCatalogResult | null = createMemo(async () => request()?.result ?? null);
   async function load(current: CatalogRequest) {
     try {
@@ -93,6 +96,10 @@ export function createAgentToolsCatalog(options: ReadOptions) {
     read,
     request,
     ensure(agentId: string) {
+      if (!options.canRead()) {
+        reset();
+        return;
+      }
       const { client, connected, requestGeneration: generation } = options.scope();
       if (!client || !connected) {
         return;
@@ -137,13 +144,17 @@ export function createAgentEffectiveTools(
 ) {
   let target: EffectiveRequest | null = null;
   let accepted: EffectiveRequest | null = null;
+  let presentationScope: EffectiveRequest | null = null;
   let cached: ToolsEffectiveResult | null = null;
   let refreshPending = false;
   const [request, setRequest] = createSignal<{
     result: Promise<ToolsEffectiveResult | null>;
+    scope: EffectiveRequest;
   } | null>(null);
   const isCurrent = (current: EffectiveRequest) =>
-    target === current && options.isCurrent(current.client, current.generation, current.agentId);
+    target === current &&
+    options.canRead() &&
+    options.isCurrent(current.client, current.generation, current.agentId);
   const read: () => ToolsEffectiveResult | null = createMemo(async () => request()?.result ?? null);
   async function load(current: EffectiveRequest) {
     try {
@@ -164,10 +175,17 @@ export function createAgentEffectiveTools(
         return null;
       }
       target = null;
+      accepted = null;
+      cached = null;
+      options.changed();
       throw error;
     }
   }
   function ensure(refresh = false) {
+    if (!options.canRead()) {
+      reset();
+      return;
+    }
     const {
       client,
       connected,
@@ -205,15 +223,19 @@ export function createAgentEffectiveTools(
     const previous = target ?? accepted;
     if (previous?.client !== client || previous.generation !== generation || previous.key !== key) {
       cached = null;
+      presentationScope = null;
     }
     target = { client, generation, agentId: resolvedAgentId, sessionKey: resolvedSessionKey, key };
     const result = load(target);
     void result.catch(() => undefined);
-    setRequest({ result });
+    // Same-query refreshes retain informational rows, not verified permission facts.
+    presentationScope ??= target;
+    setRequest({ result, scope: presentationScope });
   }
   function reset() {
     target = null;
     accepted = null;
+    presentationScope = null;
     cached = null;
     refreshPending = false;
     setRequest(null);

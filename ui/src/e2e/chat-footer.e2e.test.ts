@@ -157,11 +157,22 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
     .poll(() => chatThreadDistanceFromBottom(page))
     .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
   await waitForChatScrollIdle(page);
-  const boundary = await thread.evaluate((element) => ({
-    transcriptBottom: element.getBoundingClientRect().bottom,
-    footerTop: document.querySelector(".chat-footer")!.getBoundingClientRect().top,
-  }));
-  expect(boundary.transcriptBottom).toBeLessThanOrEqual(boundary.footerTop);
+  // The transcript runs under the composer's rounded top corners instead of
+  // stopping above them, while the latest turn still ends above the composer.
+  const boundary = await thread.evaluate((element) => {
+    const shell = document.querySelector(".chat-footer .agent-chat__composer-shell")!;
+    const input = shell.querySelector(".agent-chat__input")!;
+    const rows = element.querySelectorAll(".chat-virtual-row");
+    return {
+      overlap: element.getBoundingClientRect().bottom - shell.getBoundingClientRect().top,
+      radius: Number.parseFloat(getComputedStyle(input).borderTopLeftRadius),
+      clearance:
+        shell.getBoundingClientRect().top - rows[rows.length - 1]!.getBoundingClientRect().bottom,
+    };
+  });
+  expect(boundary.radius).toBeGreaterThan(0);
+  expect(boundary.overlap).toBeGreaterThanOrEqual(boundary.radius);
+  expect(boundary.clearance).toBeGreaterThanOrEqual(0);
 
   await gateway.setOnline(false);
   await gateway.closeLatest();

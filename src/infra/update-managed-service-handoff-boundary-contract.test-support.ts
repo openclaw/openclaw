@@ -2,6 +2,11 @@ import type { ManagedServiceManagerBoundaryOptions } from "./update-managed-serv
 import type { UpdateRunRecord } from "./update-run-record.js";
 
 export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions & {
+  updaterStopped?: "native" | "legacy";
+  interruptedUpdate?: "before" | "prepared" | "publishing" | "after" | "risk";
+  /** The killed updater reserved a cohort for this run or another; risk fails its repair. */
+  pluginCohort?: "own" | "foreign" | "risk";
+  finalizeFailure?: true;
   trigger?: "cli" | "api" | "campaign";
   origin?: UpdateRunRecord["origin"];
   controlDisconnect?: "transferred" | "unarmed" | "dead-parent";
@@ -22,6 +27,7 @@ export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions
   cancelDuringValidation?: boolean;
   systemScope?: true;
   cancelAtActivation?: "requester" | "inspection";
+  replaceLaunchdLeaseAfterInspection?: true;
   runnerFallback?: boolean;
   selectedDriver?: "2026.9.3";
   revokeWhileValidating?: boolean;

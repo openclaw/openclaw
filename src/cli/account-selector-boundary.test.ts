@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { registerChannelsCli } from "./channels-cli.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 import type { ProgramContext } from "./program/context.js";
 import { registerMessageCommands } from "./program/register.message.js";
 
@@ -36,9 +37,9 @@ async function createProgram(args: string[]) {
 describe("account selector option boundaries", () => {
   it.each(cases)("rejects blank input before $name startup", async ({ args }) => {
     const { program, startup } = await createProgram(args);
-    await expect(program.parseAsync([...args, "--account", ""], { from: "user" })).rejects.toThrow(
-      "--account must not be blank",
-    );
+    const parse = program.parseAsync([...args, "--account", ""], { from: "user" });
+    await expect(parse).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(parse).rejects.toThrow("--account must not be blank");
     expect(startup).not.toHaveBeenCalled();
   });
 });

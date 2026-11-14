@@ -8,11 +8,13 @@ import * as databaseProcessRole from "../infra/database-engine/admission-scope.j
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
+  beginGatewayShutdownCleanup,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
+import { registerOpenClawAgentDatabaseSyncResource } from "./openclaw-agent-db-resources.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import * as native from "./openclaw-agent-execution-native.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
@@ -34,6 +36,7 @@ let env: NodeJS.ProcessEnv;
 
 beforeEach(() => {
   vi.useFakeTimers();
+  vi.spyOn(databaseProcessRole, "getDatabaseProcessRole").mockReturnValue("gateway");
   env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-idle-")) };
   opened.length = 0;
   // Exercise the real borrow/release owner without booting native workers for timer tests.
@@ -132,11 +135,31 @@ it("retires a CLI one-shot's warm executor after the CLI window", async () => {
   expect(closedAgents()).toEqual(["one-shot"]);
 });
 
-it("closes all warm executors on restart drain", async () => {
-  await fillIdlePool();
-  expect(closedAgents()).toEqual([]);
+it("drains dependent readers before retiring warm executors during shutdown", async () => {
+  const first = await fillIdlePool();
+  const readerClosed = vi.fn();
+  registerOpenClawAgentDatabaseSyncResource({
+    agentId: first.agentId,
+    path: first.path,
+    revoke() {},
+    close: readerClosed,
+  });
+  const firstNative = opened[0];
+  assert(firstNative);
+  firstNative.close.mockImplementation(async () => {
+    expect(readerClosed).toHaveBeenCalledOnce();
+  });
+  const borrowing = capture("second");
+  await borrowing.prepare(source);
   markGatewayRestartDraining();
   await vi.advanceTimersByTimeAsync(0);
+  expect(closedAgents()).toEqual([]);
+  beginGatewayShutdownCleanup();
+  expect(closedAgents()).toEqual([]);
+  await borrowing.release();
+  await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS);
+  expect(closedAgents()).toEqual(["second"]);
+  await closeOpenClawAgentDatabasesAsync();
   expect(closedAgents()).toEqual(["first", "second", "third", "fourth"]);
   expect(opened.every(({ close }) => close.mock.calls.length === 1)).toBe(true);
 });

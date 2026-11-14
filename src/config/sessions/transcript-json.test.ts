@@ -2,12 +2,13 @@ import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import {
-  prepareCodeModeCheckpoint,
-  persistCodeModeCheckpoint,
-} from "../../agents/code-mode-checkpoint.js";
-import { normalizeTranscriptJsonValue } from "./transcript-json.js";
+  canonicalizePersistedUserMessageMedia,
+  readPersistedMediaFacts,
+} from "../../media/media-facts.js";
+import { normalizeTranscriptJsonValue } from "./transcript-json-normalize.js";
+import { cloneTranscriptEnvelope, isOwnedTranscriptPayload } from "./transcript-json.js";
 
-it.each(["exec", "wait"])("shares admitted %s payloads across checkpoint stamping", (toolName) => {
+it.each(["exec", "wait"])("shares admitted %s payloads across envelope copies", (toolName) => {
   const message = {
     role: "toolResult",
     toolName,
@@ -15,10 +16,9 @@ it.each(["exec", "wait"])("shares admitted %s payloads across checkpoint stampin
     content: [{ type: "text", text: "output 🦞\ud800" }],
     details: { nested: { values: [null, 7, "retained output"] } },
   };
-  prepareCodeModeCheckpoint(message, {});
   normalizeTranscriptJsonValue({ message }, "");
-  const stamped = persistCodeModeCheckpoint(message, message);
-  const expected = JSON.stringify({ ...message, __openclaw: { codeModeCheckpoint: null } });
+  const stamped = cloneTranscriptEnvelope(message);
+  const expected = JSON.stringify(message);
   const persisted = normalizeTranscriptJsonValue(stamped, "") as typeof stamped;
   expect(JSON.stringify(persisted)).toBe(expected);
   expect(persisted.content).toBe(message.content);
@@ -29,7 +29,40 @@ it.each(["exec", "wait"])("shares admitted %s payloads across checkpoint stampin
   expect(message).not.toHaveProperty("__openclaw");
 });
 
-it("does not admit arbitrary frozen payloads when copying a checkpoint envelope", () => {
+it("shares admitted payloads across media canonicalization and normalization", () => {
+  const message = {
+    role: "toolResult",
+    toolName: "exec",
+    toolCallId: "canonical-media-call",
+    content: [{ type: "text", text: "retained output" }],
+    details: { nested: { values: ["retained details"] } },
+    MediaPath: "/media/owned.png",
+    MediaType: "image/png",
+  };
+  normalizeTranscriptJsonValue({ message }, "");
+  const originalBytes = JSON.stringify(message);
+  expect(isOwnedTranscriptPayload(message)).toBe(true);
+
+  const canonical = canonicalizePersistedUserMessageMedia(message).message;
+  const canonicalBytes = JSON.stringify(canonical);
+  expect(canonical).not.toBe(message);
+  expect(Object.isFrozen(canonical)).toBe(false);
+  expect(isOwnedTranscriptPayload(canonical)).toBe(false);
+
+  const persisted = normalizeTranscriptJsonValue(canonical, "") as typeof canonical;
+  expect(persisted.content).toBe(message.content);
+  expect(persisted.details).toBe(message.details);
+  expect(Object.isFrozen(persisted)).toBe(false);
+  expect(JSON.stringify(persisted)).toBe(canonicalBytes);
+  expect(readPersistedMediaFacts(persisted)).toEqual([
+    expect.objectContaining({ path: "/media/owned.png", contentType: "image/png", kind: "image" }),
+  ]);
+  expect(persisted).not.toHaveProperty("MediaPath");
+  expect(persisted).not.toHaveProperty("MediaType");
+  expect(JSON.stringify(message)).toBe(originalBytes);
+});
+
+it("does not admit arbitrary frozen payloads when copying an envelope", () => {
   const content = Object.freeze([{ type: "text", text: "unadmitted output" }]);
   Object.freeze(content[0]);
   const message = Object.freeze({
@@ -38,8 +71,7 @@ it("does not admit arbitrary frozen payloads when copying a checkpoint envelope"
     toolCallId: "call",
     content,
   });
-  prepareCodeModeCheckpoint(message, {});
-  const stamped = persistCodeModeCheckpoint(message, message);
+  const stamped = cloneTranscriptEnvelope(message);
   const persisted = normalizeTranscriptJsonValue(stamped, "") as typeof stamped;
   expect(persisted.content).toEqual(content);
   expect(persisted.content).not.toBe(content);

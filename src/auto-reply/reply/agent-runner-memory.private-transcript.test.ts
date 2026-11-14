@@ -375,11 +375,15 @@ it.each(["completed", "interrupted"] as const)(
         const humanMessages = humanRequests[0]!.messages;
         const userIndex = humanMessages.findLastIndex(isHumanMessage);
         const nextUser = text(humanMessages[userIndex]?.content);
-        expect(humanMessages.filter(isModelRuntimeContextCarrier)).toHaveLength(1);
-        expect(text(humanMessages.find(isModelRuntimeContextCarrier)?.content)).toContain(
-          runtimeContext,
-        );
-        expect(humanMessages.findIndex(isModelRuntimeContextCarrier)).toBeGreaterThan(userIndex);
+        // #198100 retains earlier runtime carriers; inspect only the current human turn.
+        const currentRuntimeMessages = humanMessages
+          .slice(userIndex + 1)
+          .filter(isModelRuntimeContextCarrier);
+        expect(currentRuntimeMessages).toHaveLength(1);
+        expect(text(currentRuntimeMessages[0]?.content)).toContain(runtimeContext);
+        const humanRequestText = JSON.stringify(humanMessages);
+        expect(humanRequestText).not.toContain("Checkpoint durable notes. Reply NO_REPLY.");
+        expect(humanRequestText).not.toContain("Write durable notes only.");
         const canonicalHuman = SessionManager.open(scope)
           .buildSessionContext()
           .messages.findLast(

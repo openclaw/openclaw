@@ -25,6 +25,10 @@ Tail Gateway file logs over RPC. Works in remote mode.
 `--local-time` and `--utc` are mutually exclusive. Passing both fails before a log
 query; omitting both keeps local timestamps.
 
+`--limit`, `--max-bytes`, and `--interval` require positive integers. Invalid
+values exit with status `1` and name the option and accepted values on stderr,
+without requiring debug mode.
+
 Polling intervals larger than 2,147,000,000 ms are capped at that value to avoid timer overflow.
 
 ## Shared Gateway RPC options
@@ -59,6 +63,10 @@ openclaw logs --url ws://127.0.0.1:18789 --token "$OPENCLAW_GATEWAY_TOKEN"
 openclaw logs --url ws://127.0.0.1:18789 --password "$OPENCLAW_GATEWAY_PASSWORD"
 ```
 
+The command discovers the active file through the Gateway; local recovery uses
+the same log-path resolver. Default files live under the selected state
+directory's `logs/` directory, so `OPENCLAW_STATE_DIR` also isolates logs.
+See [log locations and upgrade guidance](/logging#where-logs-live).
 The selected root profile matches the Gateway's rolling file: the default
 profile uses `openclaw-YYYY-MM-DD.log`, while named profiles use
 `openclaw-<profile>-YYYY-MM-DD.log` (for example,
