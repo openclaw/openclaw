@@ -439,7 +439,9 @@ export function workerProbe(
     const entriesPresentAtCollection = [...tuiUrls,...setupUrls,retentionUrl,scriptUrl].every(url => fs.existsSync(new URL(url)));
     vi.mock('node:child_process', async (original) => {
       const actual = await original();
-      return {...actual, execFile: vi.fn(actual.execFile)};
+      // Observe the runtime default import and fixture named import with the same spy.
+      const execFile = vi.fn(actual.execFile);
+      return {...actual, execFile, default: {...actual.default, execFile}};
     });
     vi.mock('node:worker_threads', async (original) => {
       const actual = await original();

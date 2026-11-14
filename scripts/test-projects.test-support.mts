@@ -3220,7 +3220,6 @@ const dockerE2e = "docker-e2e-plan";
 const workflowGuards = "ci-workflow-guards";
 const workflowPlanning = "ci-workflow-planning";
 const workflowEvidence = "ci-workflow-evidence";
-const pluginPrerelease = "plugin-prerelease-test-plan";
 const releaseCheck = "test/release-check.test.ts";
 const installDocker = "test-install-sh-docker";
 const changedScope = "src/scripts/ci-changed-scope.test.ts";
@@ -3306,7 +3305,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [".github/actions/setup-node-env/seed-bun-from-image.mjs", ["setup-node-env-bun"]],
   [".github/actions/setup-pnpm-store-cache/action.yml", [packageAcceptance, workflowGuards]],
   [".github/actions/setup-pnpm-store-cache/ensure-node.sh", ["setup-pnpm-store-cache-ensure-node"]],
-  ["test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts", [dockerE2e, pluginPrerelease]],
+  ["test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts", [dockerE2e]],
   ["scripts/e2e/lib/mcp-code-mode-probe-server.ts", ["mcp-code-mode-gateway-client"]],
   ["scripts/e2e/cron-cli-docker.sh", [dockerBuild, "docker-e2e-observability"]],
   ["scripts/ios-release-upload.sh", ["ios-release-wrapper-args", "ios-release-fastlane-gates"]],
@@ -3382,10 +3381,10 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ["scripts/openclaw-postpack.mjs", [TOOLING_VITEST_CONFIG]],
   ["scripts/package-manifest.mjs", ["test/openclaw-prepack.test.ts"]],
   ["scripts/openclaw-npm-prepublish-verify.ts", ["test/openclaw-npm-prepublish-verify.test.ts"]],
-  ["scripts/lib/docker-e2e-scenarios.mts", [dockerE2e, pluginPrerelease]],
+  ["scripts/lib/docker-e2e-scenarios.mts", [dockerE2e]],
   ["scripts/lib/upgrade-survivor-policy.mjs", [dockerE2e]],
   ["scripts/lib/upgrade-survivor-scenarios.json", [dockerE2e]],
-  ["scripts/e2e/kitchen-sink-rpc-walk.mts", ["kitchen-sink-rpc-walk", pluginPrerelease]],
+  ["scripts/e2e/kitchen-sink-rpc-walk.mts", ["kitchen-sink-rpc-walk"]],
   [
     "scripts/e2e/agents-delete-shared-workspace-docker.sh",
     [dockerE2e, changedScope, "src/commands/agents.delete.test.ts"],
@@ -3447,7 +3446,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ],
   [
     "scripts/e2e/bundled-plugin-install-uninstall-docker.sh",
-    [dockerBuild, dockerE2e, pluginPrerelease, "bundled-plugin-install-uninstall-probe"],
+    [dockerBuild, dockerE2e, "bundled-plugin-install-uninstall-probe"],
   ],
   ["scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh", ["plugin-update-unchanged-docker"]],
   ["scripts/e2e/lib/plugin-update/probe.mjs", ["plugin-update-unchanged-docker"]],
@@ -3527,7 +3526,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "changed-lanes",
       "check-workflows",
       "plugin-contract-test-plan",
-      pluginPrerelease,
       "verify-pr-hosted-gates",
     ],
   ],
@@ -3553,7 +3551,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "release-no-push-workflow",
       "release-ci-summary",
       packageAcceptance,
-      pluginPrerelease,
       "check-workflows",
     ],
   ],
@@ -3563,7 +3560,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^\.github\/workflows\/openclaw-release-checks\.yml$/u,
-    [packageAcceptance, crossOsReleaseChecks, pluginPrerelease, installDocker, workflowEvidence],
+    [packageAcceptance, crossOsReleaseChecks, installDocker, workflowEvidence],
   ],
   [
     /^\.github\/workflows\/docker-release(?:-prepare)?\.yml$/u,
@@ -3588,7 +3585,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^\.github\/workflows\/npm-placeholder-bootstrap\.yml$/u,
     ["release-workflow-git-lifecycle", "npm-placeholder-publication"],
   ],
-  [/^\.github\/workflows\/plugin-prerelease\.yml$/u, [pluginPrerelease]],
   [/^\.github\/workflows\/tui-pty\.yml$/u, [packageAcceptance]],
   [
     /^\.github\/workflows\/openclaw-cross-os-release-checks-reusable\.yml$/u,
@@ -3784,10 +3780,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ],
   ],
   [/^scripts\/lib\/android-version\.ts$/u, ["android-version", "android-pin-version"]],
-  [
-    /^scripts\/lib\/docker-e2e-plan\.(?:mjs|mts)$/u,
-    [dockerE2e, "docker-all-scheduler", pluginPrerelease],
-  ],
+  [/^scripts\/lib\/docker-e2e-plan\.(?:mjs|mts)$/u, [dockerE2e, "docker-all-scheduler"]],
   [
     new RegExp(
       [
@@ -3920,22 +3913,21 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^scripts\/e2e\/mcp-channels-docker\.sh$/u,
-    [dockerBuild, "docker-e2e-observability", dockerE2e, pluginPrerelease],
+    [dockerBuild, "docker-e2e-observability", dockerE2e],
   ],
   [
     /^scripts\/e2e\/cron-mcp-cleanup-docker\.sh$/u,
-    [dockerBuild, "docker-e2e-observability", dockerE2e, pluginPrerelease],
+    [dockerBuild, "docker-e2e-observability", dockerE2e],
   ],
   [
     /^scripts\/e2e\/(?:mcp-code-mode-gateway-(?:live-)?docker|lib\/mcp-code-mode\/scenario)\.sh$/u,
-    [dockerBuild, dockerE2e, pluginPrerelease, "mcp-code-mode-gateway-client"],
+    [dockerBuild, dockerE2e, "mcp-code-mode-gateway-client"],
   ],
   [
     /^scripts\/e2e\/agent-bundle-mcp-tools-docker\.sh$/u,
     [
       dockerBuild,
       dockerE2e,
-      pluginPrerelease,
       "src/agents/agent-bundle-mcp-runtime.test.ts",
       "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
     ],
@@ -4012,8 +4004,8 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ),
     [dockerBuild, dockerE2e],
   ],
-  [/^scripts\/e2e\/kitchen-sink-rpc-docker\.sh$/u, [dockerBuild, pluginPrerelease]],
-  [/^scripts\/e2e\/kitchen-sink-plugin-docker\.sh$/u, [dockerBuild, pluginPrerelease]],
+  [/^scripts\/e2e\/kitchen-sink-rpc-docker\.sh$/u, [dockerBuild]],
+  [/^scripts\/e2e\/kitchen-sink-plugin-docker\.sh$/u, [dockerBuild]],
   [/^scripts\/e2e\/plugin-lifecycle-matrix-docker\.sh$/u, [dockerBuild]],
   [
     /^scripts\/e2e\/release-media-memory-docker\.sh$/u,
@@ -4118,7 +4110,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       ].join(""),
       "u",
     ),
-    [pluginPrerelease, dockerE2e],
+    [dockerE2e],
   ],
   [
     new RegExp(
@@ -4208,11 +4200,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["e2e-helper-env-limits"],
   ],
   [/^scripts\/e2e\/skill-install-docker\.sh$/u, ["e2e-shell-tempfiles"]],
-  [/^scripts\/e2e\/npm-onboard-channel-agent-docker\.sh$/u, [pluginPrerelease]],
-  [
-    /^scripts\/e2e\/lib\/clawhub-fixture-server\.cjs$/u,
-    ["clawhub-fixture-server", pluginPrerelease],
-  ],
+  [/^scripts\/e2e\/lib\/clawhub-fixture-server\.cjs$/u, ["clawhub-fixture-server"]],
   [
     /^scripts\/e2e\/lib\/codex-media-path\/jsonl-request-tail\.mts$/u,
     ["codex-media-path-client", "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts"],
