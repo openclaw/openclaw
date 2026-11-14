@@ -220,7 +220,11 @@ it("retains each profile attempt rather than deduplicating the whole completion"
         ? fixtures.isolatedErrorReply("429 Too many requests")
         : fixtures.isolatedReply(),
   });
-  await runCompletion();
+  await runOwnedCompletion();
+  await work.drain();
+  expect(fixtures.releaseRuntimeLease).toHaveBeenCalledOnce();
+  expect(fixtures.releaseRuntimeLease).toHaveResolvedTimes(1);
+  expect(attempts).toBe(2);
   expect(events).toHaveLength(2);
   expect(events[0]).toMatchObject({ completionId: events[1]?.completionId, usage: { total: 2 } });
   expect(events[0]?.attemptId).not.toBe(events[1]?.attemptId);
