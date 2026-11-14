@@ -311,6 +311,16 @@ function preserve(live: string, preserved: string): void {
   }
 }
 
+/** Create missing live parents with the modes the chain gave them in the shadow, not the umask. */
+function mkdirLike(live: string, shadow: string): void {
+  if (fs.existsSync(live)) {
+    return;
+  }
+  mkdirLike(path.dirname(live), path.dirname(shadow));
+  fs.mkdirSync(live);
+  fs.chmodSync(live, fs.statSync(shadow).mode & 0o7777);
+}
+
 /**
  * Apply a durable plan. Every step is idempotent, so a crash at any point is
  * finished by running this again with the same plan.
@@ -331,7 +341,7 @@ export function applyPlan(plan: UpgradePlan): void {
     if (op.kind === "remove") {
       fs.rmSync(op.live, { force: true });
     } else if (op.next && (fs.existsSync(op.next) || isSymlinkAt(op.next))) {
-      fs.mkdirSync(path.dirname(op.live), { recursive: true });
+      mkdirLike(path.dirname(op.live), path.dirname(op.next));
       fs.renameSync(op.next, op.live);
     }
   }

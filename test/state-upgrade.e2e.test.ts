@@ -130,13 +130,6 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
           recursive: true,
           force: true,
         });
-        // Releases write state owner-only; a checkout's directory modes follow its umask.
-        for (const { dirent, relativePath } of listDirectoryTreeStrictSync(instance.stateDir)) {
-          fs.chmodSync(
-            path.join(instance.stateDir, relativePath),
-            dirent.isDirectory() ? 0o700 : 0o600,
-          );
-        }
         restoreCorpusDeviceKeys(instance.stateDir);
         // The corpus was written in a container as /home/fixture.
         const corpus = fs

@@ -10,6 +10,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { buildStateDatabaseByCopy } from "./openclaw-state-db-swap.js";
 import { buildSqliteByCopy, type SqliteSwapTarget } from "./sqlite-copy-swap.js";
+import { applyPlan } from "./state-upgrade-tree.js";
 
 const corpusDir = fileURLToPath(
   new URL("../../test/fixtures/state-corpus-populated/", import.meta.url),
@@ -211,5 +212,20 @@ describe("generic rebuild data rules", () => {
     const mapped = build(sql, renamed, { columns: { "t.title": "name" } });
     expect(mapped.rows).toEqual([{ id: "a", name: "kept" }]);
     expect(droppedUserColumns(source, mapped.report)).toEqual([]);
+  });
+});
+
+describe("applyPlan", () => {
+  it("creates new live directories with the shadow's mode, not the umask", () => {
+    const root = tempDir();
+    const shadowFile = path.join(root, "shadow", "client", "credentials.sqlite");
+    fs.mkdirSync(path.dirname(shadowFile), { recursive: true });
+    // 0750 differs from what both the 022 and 077 umasks produce.
+    fs.chmodSync(path.dirname(shadowFile), 0o750);
+    fs.writeFileSync(shadowFile, "x");
+    const live = path.join(root, "live", "client", "credentials.sqlite");
+    fs.mkdirSync(path.join(root, "live"));
+    applyPlan({ appVersion: "test", ops: [{ kind: "add", live, next: shadowFile }] });
+    expect(fs.statSync(path.dirname(live)).mode & 0o777).toBe(0o750);
   });
 });
