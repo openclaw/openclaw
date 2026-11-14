@@ -38,6 +38,8 @@ export type ChatWelcomeIdentityProps = {
 export type ChatWelcomeProps = {
   /** Existing agent picker, shown in the new-session welcome heading. */
   assistantNameControl?: JSX.Element;
+  /** Replaces the plain welcome avatar when the new-session draft can switch agents from it. */
+  assistantAvatarControl?: JSX.Element;
   /** Hint owned by the new-session draft flow. */
   hint?: JSX.Element;
   /** Rendered between the hero and the recents (the new-session draft composer). */
@@ -73,13 +75,20 @@ export function ChatWelcome(
     >
       <div ref={welcomeRef} class="agent-chat__welcome" style="--agent-color: var(--accent)">
         <div class="agent-chat__welcome-identity">
-          <span
-            class="agent-chat__welcome-avatar"
-            role="img"
-            aria-label={props.assistantName || t("chat.messages.agentName")}
+          <Show
+            when={props.assistantAvatarControl}
+            fallback={
+              <span
+                class="agent-chat__welcome-avatar"
+                role="img"
+                aria-label={props.assistantName || t("chat.messages.agentName")}
+              >
+                <AgentIdentityAvatar agent={resolveAssistantDisplayAvatar(props)} />
+              </span>
+            }
           >
-            <AgentIdentityAvatar agent={resolveAssistantDisplayAvatar(props)} />
-          </span>
+            {props.assistantAvatarControl}
+          </Show>
           <div class="agent-chat__welcome-identity-copy">
             <h2 class={props.assistantNameControl ? "sr-only" : undefined}>
               {props.assistantName || t("chat.messages.agentName")}

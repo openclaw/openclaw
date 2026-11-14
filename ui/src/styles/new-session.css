@@ -174,6 +174,146 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   display: none;
 }
 
+/* The other agents wait on one arc behind the welcome avatar. Springs in agent-arc-motion.ts
+   own every face's transform, opacity and saturation; nothing here is a timed transition. */
+.agent-arc {
+  position: relative;
+  flex: none;
+}
+
+.agent-arc__face {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: inherit;
+  cursor: inherit;
+  -webkit-tap-highlight-color: transparent;
+  will-change: transform, opacity;
+  pointer-events: none;
+}
+
+.agent-arc__face > * {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.agent-arc__face:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* The pointer's reach while the arc is open: 22px above, 206px to each side and 18px below at 96px. */
+.agent-arc__zone {
+  position: absolute;
+  inset: -22.92% -214.58% -18.75%;
+  pointer-events: none;
+}
+
+.agent-arc[data-open="true"] .agent-arc__zone {
+  pointer-events: auto;
+}
+
+.agent-arc__hit {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  border-radius: 50%;
+}
+
+/* The name of the face under the pointer, in the tooltip look, above the face so it never covers the name below. */
+.agent-arc__tip {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 6;
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-tooltip);
+  corner-shape: superellipse(1.5);
+  background: var(--menu-surface);
+  color: var(--text);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.25;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(
+    calc(-50% + var(--agent-arc-tip-x, 0px)),
+    calc(var(--agent-arc-tip-y, 0px) - 100% - 9px)
+  );
+  transition: opacity 0.12s ease;
+}
+
+.agent-arc__tip.is-on {
+  opacity: 1;
+}
+
+.agent-chat__welcome-identity .agent-arc + .agent-chat__welcome-identity-copy {
+  position: relative;
+  z-index: 4;
+}
+
+/* Touch: the nearest neighbours stay beside the avatar and switch on tap. */
+.agent-arc[data-touch] .agent-arc__zone {
+  display: none;
+}
+
+.agent-arc[data-touch] .agent-arc__hit {
+  display: none;
+}
+
+.agent-arc[data-touch] .agent-arc__tip {
+  display: none;
+}
+
+.agent-arc[data-touch] .agent-arc__face:is([data-off="0"], [data-off="1"], [data-off="-1"]) {
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+/* The small faces keep a finger-sized target without growing: 9px around at 56px. */
+.agent-arc[data-touch] .agent-arc__face:is([data-off="1"], [data-off="-1"])::after {
+  content: "";
+  position: absolute;
+  inset: -16.07%;
+  border-radius: 50%;
+}
+
+/* The name swaps in place with the turn; the row keeps its height. */
+.agent-chat__welcome-name[data-agent-arc-turn] .agent-select__label {
+  animation: agent-arc-name-in 0.14s ease 0.15s both;
+}
+
+@keyframes agent-arc-name-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-arc__tip {
+    transition: none;
+  }
+
+  .agent-chat__welcome-name[data-agent-arc-turn] .agent-select__label {
+    animation: none;
+  }
+}
+
 /* Draft block inside the centered welcome column; the welcome centers text,
    so reset alignment for the controls and composer.
    The top margin is a paragraph break, not a nudge: the tagline is the last line

@@ -20,6 +20,7 @@ export function DraftWelcome(props: {
   options: DraftWelcomeOptions;
   composer?: JSX.Element;
   assistantNameControl?: JSX.Element;
+  assistantAvatarControl?: JSX.Element;
 }) {
   const source = createMemo(() => props.sessions);
   const sessions = createMemo(() => {
@@ -58,6 +59,7 @@ export function DraftWelcome(props: {
     <ChatWelcome
       {...options()}
       assistantNameControl={props.assistantNameControl}
+      assistantAvatarControl={props.assistantAvatarControl}
       composer={props.composer}
       preparedRecents={recents()}
     />
