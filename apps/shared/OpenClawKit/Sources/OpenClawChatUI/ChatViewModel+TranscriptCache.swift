@@ -11,12 +11,24 @@ extension OpenClawChatViewModel {
         guard previous.isTransportDetached, !self.isTransportDetached,
               self.messages.isEmpty, !self.hasAppliedLiveHistory,
               previous.canRetainTranscriptPresentation(
-                  sessionKey: self.sessionKey, agentID: self.activeAgentId,
+                  sessionKey: self.sessionKey,
+                  agentID: self.activeAgentId,
                   routingContract: self.sessionRoutingContract)
         else { return }
         self.replaceMessages(previous.retainedTranscriptPresentation)
         self.transcriptPresentationTarget = previous.transcriptPresentationTarget
         self.isShowingCachedTranscript = !self.messages.isEmpty
+    }
+
+    func recordTranscriptPresentationTarget(from payload: OpenClawChatHistoryPayload, isDelta: Bool) {
+        if let key = ChatPayloadDecoding.trimmedNonEmptyString(payload.sessionInfo?.key),
+           let agentID = ChatPayloadDecoding.trimmedNonEmptyString(payload.sessionInfo?.agentId)
+        {
+            self.transcriptPresentationTarget = OpenClawChatSessionTarget(
+                sessionKey: OpenClawChatSessionKey.comparisonKey(key), agentID: agentID.lowercased())
+        } else if !isDelta {
+            self.transcriptPresentationTarget = nil
+        }
     }
 
     var retainedTranscriptPresentation: [OpenClawChatMessage] {
@@ -31,8 +43,11 @@ extension OpenClawChatViewModel {
               let routing = OpenClawChatSessionRoutingContract.parse(routingContract)
         else { return false }
         let target = OpenClawChatSendOwnership.Scope(
-            sessionKey: sessionKey, agentID: agentID, scope: routing.scope,
-            mainKey: routing.mainKey, defaultAgentID: routing.defaultAgentID)
+            sessionKey: sessionKey,
+            agentID: agentID,
+            scope: routing.scope,
+            mainKey: routing.mainKey,
+            defaultAgentID: routing.defaultAgentID)
         return previous.sessionKey == target.sessionKey && previous.agentID == target.agentID
     }
 
@@ -52,11 +67,10 @@ extension OpenClawChatViewModel {
         guard self.messages != reconciled.messages || reconciled.changed else { return }
         self.messages = reconciled.messages
         self.seedInputHistory(from: reconciled.messages)
+        // A durable reply can land while pacing still holds back its last words. Show everything
+        // received, so the live bubble it supersedes leaves in this same update (`liveText`).
+        self.flushPendingStreamingAssistantDisplay()
         markTimelineChanged()
-    }
-
-    var liveAssistantDisplayText: String? {
-        self.liveText(self.displayedStreamingAssistantText)
     }
 
     /// A structural read must not subscribe the whole transcript to every new word.
